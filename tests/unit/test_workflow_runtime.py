@@ -2038,6 +2038,125 @@ def test_runtime_enforces_confirmation_gate_over_agent_baton(tmp_path: Path) -> 
     }
 
 
+@pytest.mark.parametrize(
+    ("decision", "correction", "completes"),
+    [("confirm", False, True), ("revise", True, False)],
+)
+def test_runtime_allows_only_a_non_correction_self_loop_confirmation_to_advance(
+    tmp_path: Path, decision: str, correction: bool, completes: bool
+) -> None:
+    """Only a non-correction self-loop decision may advance the approved output."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "confirmed-review"
+    issue_dir.mkdir(parents=True)
+    playbook = {
+        "playbook": {"id": "confirmed-review"},
+        "steps": {
+            "review": {
+                "skill": "cafe-spec",
+                "role": "reviewer",
+                "human_tasks": [
+                    {
+                        "trigger": "confirm_output",
+                        "task_id": "output-review",
+                        "outcomes": {decision: "review"},
+                    }
+                ],
+                "on": {"await_agent": "closeout", "confirm_output": "review"},
+            },
+            "closeout": {
+                "skill": "cafe-spec",
+                "role": "developer",
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("review", playbook_id="confirmed-review")
+    records = HumanTaskRecordStore(issue_dir)
+    task = records.materialize(
+        workflow_id=state.workflow_id,
+        step="review",
+        iteration=1,
+        trigger="confirm_output",
+        policy_id="output-review",
+        prompt="Confirm review output",
+        expected_result={"decisions": [{"id": decision, "correction": correction}]},
+        continuations={decision: "review"},
+        assignee_type="user",
+    )
+    records.complete(
+        workflow_id=state.workflow_id,
+        task_id=task.id,
+        payload={"task": "output-review", "decision": decision, "continuation": "review"},
+        source="test",
+    )
+    continuation_dir = issue_dir / "review" / "iteration_002"
+    continuation_dir.mkdir(parents=True)
+    (continuation_dir / "user_input.md").write_text(
+        "CAFE validated this HumanTask response for the continuation phase:\n"
+        + json.dumps(
+            {
+                "schema_version": 1,
+                "type": "human_task_completion",
+                "human_task_id": task.id,
+                "task": "output-review",
+                "decision": decision,
+                "continuation": "review",
+            }
+        ),
+        encoding="utf-8",
+    )
+    store.update_handoff_contract(
+        state,
+        from_step="review",
+        to_owner=HandoffOwner.AGENT,
+        to_step="review",
+        intent=HandoffIntent.AWAIT_AGENT,
+        source="human_task.test",
+    )
+
+    def executor(step_name: str, _step_def: dict, blackboard: object) -> StepExecutionResult:
+        if step_name == "review":
+            BlackboardStore(issue_dir).update_handoff_contract(
+                blackboard,
+                from_step="review",
+                to_owner=HandoffOwner.AGENT,
+                to_step="closeout",
+                intent=HandoffIntent.AWAIT_AGENT,
+                source="test.review_confirmed",
+            )
+        else:
+            BlackboardStore(issue_dir).update_handoff_contract(
+                blackboard,
+                from_step="closeout",
+                to_owner=HandoffOwner.DONE,
+                to_step="done",
+                intent=HandoffIntent.WORKFLOW_COMPLETE,
+                source="test.closeout",
+            )
+        return StepExecutionResult(response="complete", artifacts={})
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    ).run()
+
+    current = BlackboardStore(issue_dir).load_or_create("review")
+    assert result.completed is completes
+    if completes:
+        assert current.current_step == "done"
+        assert not [
+            event for event in current.events if event.event_type == "confirmation_gate_enforced"
+        ]
+    else:
+        assert result.final_status_code == "BATON_CONFIRM_OUTPUT"
+        assert current.current_step == "user"
+        assert [
+            event for event in current.events if event.event_type == "confirmation_gate_enforced"
+        ]
+
+
 def test_runtime_preserves_declared_manual_handoff_from_confirmation_gate(
     tmp_path: Path,
 ) -> None:

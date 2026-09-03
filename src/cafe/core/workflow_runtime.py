@@ -39,7 +39,12 @@ from cafe.core.human_task_notifications import (
     load_human_task_notification_settings,
     sanitize_human_task_metadata,
 )
-from cafe.core.human_task_records import HumanTask, HumanTaskRecordStore, HumanTaskStatus
+from cafe.core.human_task_records import (
+    HumanTask,
+    HumanTaskRecordError,
+    HumanTaskRecordStore,
+    HumanTaskStatus,
+)
 from cafe.core.human_tasks import (
     AGENT_EXECUTION_INTERRUPTED_TRIGGER,
     agent_execution_interrupted_human_task,
@@ -1002,6 +1007,74 @@ class BlackboardWorkflowRuntime:
             for event in self.blackboard.events
         )
 
+    def _has_confirmed_self_loop_continuation(self, *, current_step: str) -> bool:
+        """Return whether this iteration consumes one validated output confirmation.
+
+        A confirmation task may intentionally continue to its owning step so
+        the phase can finalize the approved output before advancing.  The
+        continuation receipt is only authoritative when it names the durable
+        task result for the immediately preceding iteration; plain phase input
+        must never bypass a confirmation gate.
+        """
+        iteration_dir = self._latest_iteration_dir(current_step)
+        if iteration_dir is None:
+            return False
+        try:
+            iteration = int(iteration_dir.name.removeprefix("iteration_"))
+            lines = (iteration_dir / "user_input.md").read_text(encoding="utf-8").splitlines()
+            if (
+                len(lines) < 2
+                or lines[0] != "CAFE validated this HumanTask response for the continuation phase:"
+            ):
+                return False
+            receipt = json.loads(lines[1])
+        except (OSError, ValueError, json.JSONDecodeError):
+            return False
+        if not isinstance(receipt, dict):
+            return False
+
+        task_id = receipt.get("human_task_id")
+        task_name = receipt.get("task")
+        decision = receipt.get("decision")
+        if (
+            receipt.get("schema_version") != 1
+            or receipt.get("type") != "human_task_completion"
+            or receipt.get("continuation") != current_step
+            or not all(isinstance(value, str) and value for value in (task_id, task_name, decision))
+        ):
+            return False
+
+        try:
+            records = HumanTaskRecordStore(self.issue_dir)
+            task = records.get_task(task_id)
+            result = records.get_result(task_id)
+        except HumanTaskRecordError:
+            return False
+        decisions = task.expected_result.get("decisions")
+        selected_decision = next(
+            (
+                item
+                for item in decisions
+                if isinstance(item, dict) and item.get("id") == decision
+            ),
+            None,
+        ) if isinstance(decisions, list) else None
+        return (
+            task.workflow_id == self.blackboard.workflow_id
+            and task.step == current_step
+            and task.iteration + 1 == iteration
+            and task.trigger == HandoffIntent.CONFIRM_OUTPUT.value
+            and task.policy_id == task_name
+            and task.status is HumanTaskStatus.COMPLETED
+            and task.continuations.get(decision) == current_step
+            and isinstance(selected_decision, dict)
+            and selected_decision.get("correction") is False
+            and result is not None
+            and result.payload.get("task") == task_name
+            and result.payload.get("decision") == decision
+            and result.payload.get("continuation") == current_step
+        )
+
     def _load_agent_written_handoff_contract(self, *, current_step: str) -> HandoffContract:
         """Load and normalize a baton written by a just-finished agent step.
 
@@ -1024,6 +1097,7 @@ class BlackboardWorkflowRuntime:
                 current_step=current_step,
                 contract=contract,
             )
+            and not self._has_confirmed_self_loop_continuation(current_step=current_step)
             and not (contract.to_owner is HandoffOwner.AGENT and contract.to_step == current_step)
         ):
             self.blackboard_store.record_event(
