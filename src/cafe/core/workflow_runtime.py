@@ -11,7 +11,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Mapping, Optional
 from uuid import uuid4
 
 from cafe.core.active_issue import clear_marker_if_matches
@@ -134,9 +134,7 @@ def _linked_worktree_canonical_root(active_root: Path) -> Path:
     if len(common_dir_lines) != 1 or len(worktree_gitfile_lines) != 1:
         return active_root
     common_dir = _resolve_git_metadata_path(common_dir_lines[0], relative_to=git_dir)
-    recorded_gitfile = _resolve_git_metadata_path(
-        worktree_gitfile_lines[0], relative_to=git_dir
-    )
+    recorded_gitfile = _resolve_git_metadata_path(worktree_gitfile_lines[0], relative_to=git_dir)
     if (
         common_dir is None
         or recorded_gitfile is None
@@ -389,6 +387,7 @@ class BlackboardWorkflowRuntime:
         playbook: Dict,
         executor: Any,
         automatic_registry: Optional[AutomaticExecutorRegistry] = None,
+        workflow_event_callback: Callable[[Mapping[str, Any]], None] | None = None,
     ) -> None:
         self.issue_dir = issue_dir
         self.playbook = playbook
@@ -409,6 +408,9 @@ class BlackboardWorkflowRuntime:
             tolerate_invalid_baton=True,
         )
         self._replaced_user_handoff: HandoffContract | None = None
+        self._workflow_event_callback = workflow_event_callback
+        self._pending_phase_terminal: Dict[str, Any] | None = None
+        self._observed_result_keys: set[tuple[str, str]] = set()
 
     def _validate_automatic_executor_declarations(self) -> None:
         """Reject unavailable automatic authority before recording a workflow visit."""
@@ -448,7 +450,7 @@ class BlackboardWorkflowRuntime:
     def _has_event(execution_result: Any, event_type: str) -> bool:
         events = getattr(execution_result, "events", None)
         if not isinstance(events, list):
-            return False
+            return None
         return any(isinstance(event, dict) and event.get("type") == event_type for event in events)
 
     @staticmethod
@@ -978,6 +980,15 @@ class BlackboardWorkflowRuntime:
                 "task_id": task.id,
             },
         )
+        self._dispatch_workflow_event(
+            "human_task",
+            {
+                "step": current_step,
+                "status_code": f"INTERRUPTED:{reason}",
+                "reason": reason,
+                "task_id": task.id,
+            },
+        )
         return PlaybookRunResult(
             final_step=current_step,
             final_status_code=f"INTERRUPTED:{reason}",
@@ -1051,14 +1062,18 @@ class BlackboardWorkflowRuntime:
         except HumanTaskRecordError:
             return False
         decisions = task.expected_result.get("decisions")
-        selected_decision = next(
-            (
-                item
-                for item in decisions
-                if isinstance(item, dict) and item.get("id") == decision
-            ),
-            None,
-        ) if isinstance(decisions, list) else None
+        selected_decision = (
+            next(
+                (
+                    item
+                    for item in decisions
+                    if isinstance(item, dict) and item.get("id") == decision
+                ),
+                None,
+            )
+            if isinstance(decisions, list)
+            else None
+        )
         return (
             task.workflow_id == self.blackboard.workflow_id
             and task.step == current_step
@@ -1510,6 +1525,14 @@ class BlackboardWorkflowRuntime:
                 "status_code": status_code,
                 "reason": "human_owner",
                 "runtime": runtime,
+            },
+        )
+        self._dispatch_workflow_event(
+            "human_task",
+            {
+                "step": current_step,
+                "status_code": status_code,
+                "task_id": task.id,
             },
         )
         return PlaybookRunResult(
@@ -2149,6 +2172,81 @@ class BlackboardWorkflowRuntime:
             event_type,
             payload,
         )
+        if self._pending_phase_terminal is not None:
+            self._flush_phase_terminal()
+        self._pending_phase_terminal = payload
+
+    def _dispatch_workflow_event(self, event_type: str, payload: Mapping[str, Any]) -> None:
+        """Dispatch a bounded callback envelope after its state is durable.
+
+        This runs after the individual blackboard mutation has committed.  The
+        callback is a one-way execution boundary: it receives no workflow
+        control result and must re-read durable state before taking any action.
+        """
+        step = payload.get("step")
+        status_code = payload.get("status_code")
+        if isinstance(step, str) and isinstance(status_code, str):
+            self._observed_result_keys.add((step, status_code))
+        if self._workflow_event_callback is None:
+            return
+        event: Dict[str, Any] = {
+            "workflow_id": self.blackboard.workflow_id,
+            "issue": self.issue_dir.name,
+            "event_type": event_type,
+        }
+        for field in ("step", "status_code", "runtime", "attempt", "hop", "reason", "task_id"):
+            value = payload.get(field)
+            if isinstance(value, (str, int)):
+                event[field] = value
+        try:
+            self._workflow_event_callback(event)
+        except Exception as exc:
+            try:
+                self.blackboard_store.record_event(
+                    self.blackboard,
+                    "workflow_event_callback_dispatch_failed",
+                    {"event_type": event_type, "error": type(exc).__name__},
+                )
+            except Exception:
+                pass
+
+    def _flush_phase_terminal(
+        self,
+        *,
+        event_type: str = "phase_terminal",
+        extra: Mapping[str, Any] | None = None,
+    ) -> bool:
+        payload = self._pending_phase_terminal
+        if payload is None:
+            return False
+        self._pending_phase_terminal = None
+        merged = dict(payload)
+        if extra:
+            merged.update(extra)
+        self._dispatch_workflow_event(event_type, merged)
+        return True
+
+    def _finalize_observed_result(self, result: PlaybookRunResult) -> PlaybookRunResult:
+        """Flush a durable phase boundary on every public runtime return path."""
+        pending = self._pending_phase_terminal
+        if (
+            pending is not None
+            and pending.get("step") == result.final_step
+            and pending.get("status_code") != result.final_status_code
+        ):
+            self._flush_phase_terminal(
+                event_type="workflow_completed" if result.completed else "workflow_interruption",
+                extra={"status_code": result.final_status_code},
+            )
+        else:
+            self._flush_phase_terminal()
+        result_key = (result.final_step, result.final_status_code)
+        if result_key not in self._observed_result_keys:
+            self._dispatch_workflow_event(
+                "workflow_completed" if result.completed else "workflow_interruption",
+                {"step": result.final_step, "status_code": result.final_status_code},
+            )
+        return result
 
     def _emit_pause(
         self,
@@ -2182,11 +2280,11 @@ class BlackboardWorkflowRuntime:
                 status_code=status_code,
                 source=contract_source,
             )
-        materialized_task = self._materialize_user_handoff_task(
+        materialized_task_id = self._materialize_user_handoff_task(
             current_step=current_step,
             replaced_handoff=replaced_handoff,
         )
-        if materialized_task:
+        if materialized_task_id:
             self._replaced_user_handoff = None
         if record_event:
             self.blackboard_store.record_event(
@@ -2200,6 +2298,29 @@ class BlackboardWorkflowRuntime:
                 },
             )
         self.blackboard_store.set_current_step(self.blackboard, "user")
+        if materialized_task_id:
+            flushed = self._flush_phase_terminal(
+                event_type="human_task",
+                extra={"task_id": materialized_task_id, "status_code": status_code},
+            )
+        else:
+            flushed = self._flush_phase_terminal(
+                event_type="workflow_interruption",
+                extra={"reason": reason, "status_code": status_code},
+            )
+        if not flushed:
+            self._dispatch_workflow_event(
+                "human_task" if materialized_task_id else "workflow_interruption",
+                {
+                    "step": current_step,
+                    "status_code": status_code,
+                    **(
+                        {"task_id": materialized_task_id}
+                        if materialized_task_id
+                        else {"reason": reason}
+                    ),
+                },
+            )
         return PlaybookRunResult(
             final_step=current_step,
             final_status_code=status_code,
@@ -2211,14 +2332,14 @@ class BlackboardWorkflowRuntime:
         *,
         current_step: str,
         replaced_handoff: HandoffContract | None = None,
-    ) -> bool:
+    ) -> str | None:
         """Create or recover a declared task before exposing the user pause."""
         step_def = self.steps.get(current_step)
         if not isinstance(step_def, dict):
-            return False
+            return None
         raw_bindings = step_def.get("human_tasks")
         if not isinstance(raw_bindings, (list, tuple)):
-            return False
+            return None
         contract = self.blackboard.handoff_contract
         if (
             contract is None
@@ -2226,7 +2347,7 @@ class BlackboardWorkflowRuntime:
             or contract.to_step != "user"
             or contract.from_step != current_step
         ):
-            return False
+            return None
         trigger = contract.intent.value
         iteration = self._human_task_iteration(current_step)
         records = HumanTaskRecordStore(self.issue_dir)
@@ -2251,7 +2372,7 @@ class BlackboardWorkflowRuntime:
                 "human_task_configuration_error",
                 {"step": current_step, "trigger": trigger, "reason": str(exc)},
             )
-            return False
+            return None
 
         if replaced_handoff is None:
             existing_task = next(
@@ -2298,7 +2419,7 @@ class BlackboardWorkflowRuntime:
                 "human_task_materialized",
                 {"step": current_step, "trigger": trigger, "task_id": task.id},
             )
-        return True
+        return task.id
 
     def _human_task_iteration(self, current_step: str) -> int:
         iteration_dir = self._latest_iteration_dir(current_step)
@@ -2471,6 +2592,11 @@ class BlackboardWorkflowRuntime:
         self.blackboard_store.set_current_step(self.blackboard, "done")
         cafe_dir = self.issue_dir.parent.parent
         clear_marker_if_matches(cafe_dir, self.issue_dir.name)
+        if not self._flush_phase_terminal(event_type="workflow_completed"):
+            self._dispatch_workflow_event(
+                "workflow_completed",
+                {"step": current_step, "status_code": status_code},
+            )
         return PlaybookRunResult(
             final_step=current_step,
             final_status_code=status_code,
@@ -2530,6 +2656,7 @@ class BlackboardWorkflowRuntime:
                 status_code=status_code,
                 source=contract_source,
             )
+        self._flush_phase_terminal()
 
     def _handle_post_contract(
         self,
@@ -3010,6 +3137,10 @@ class BlackboardWorkflowRuntime:
                             "runtime": runtime_label,
                         },
                     )
+                    self._dispatch_workflow_event(
+                        "workflow_interruption",
+                        {"step": current_step, "reason": si.reason},
+                    )
                     return PlaybookRunResult(
                         final_step=current_step,
                         final_status_code=f"INTERRUPTED:{si.reason}",
@@ -3124,6 +3255,13 @@ class BlackboardWorkflowRuntime:
                             },
                         )
                         self.blackboard_store.set_current_step(self.blackboard, "user")
+                        self._flush_phase_terminal(
+                            event_type="human_task",
+                            extra={
+                                "task_id": pending_approval["task_id"],
+                                "status_code": "CAPABILITY_APPROVAL_PENDING",
+                            },
+                        )
                         return PlaybookRunResult(
                             final_step=current_step,
                             final_status_code="CAPABILITY_APPROVAL_PENDING",
@@ -3311,6 +3449,10 @@ class BlackboardWorkflowRuntime:
                                 "runtime": runtime_label,
                             },
                         )
+                    self._dispatch_workflow_event(
+                        "workflow_interruption",
+                        {"step": current_step, "reason": si.reason},
+                    )
                     return PlaybookRunResult(
                         final_step=current_step,
                         final_status_code=f"INTERRUPTED:{si.reason}",
@@ -3706,7 +3848,7 @@ class BlackboardWorkflowRuntime:
             self._recover_unpublished_lifecycle_position() if start_step is None else None
         )
         if recovered_transition is not None and single_step:
-            return recovered_transition
+            return self._finalize_observed_result(recovered_transition)
         if single_step:
             resolution = (
                 RuntimePositionResolution(current_step=start_step)
@@ -3714,18 +3856,18 @@ class BlackboardWorkflowRuntime:
                 else self._resolve_runtime_position_from_handoff()
             )
             if resolution.realignment_result is not None:
-                return resolution.realignment_result
+                return self._finalize_observed_result(resolution.realignment_result)
             current_step = resolution.current_step
             terminal_result = self._result_from_terminal_position(current_step)
             if terminal_result is not None:
-                return terminal_result
+                return self._finalize_observed_result(terminal_result)
             if current_step not in self.steps:
                 raise ValueError(f"Unknown playbook step '{current_step}'")
             # Preserve a completed handoff from an interrupted executor before
             # an explicit start-step override replaces the baton.
             reconciled = self._try_reconcile_current_step(current_step=current_step)
             if reconciled is not None:
-                return reconciled
+                return self._finalize_observed_result(reconciled)
             if start_step is not None:
                 self._remember_replaced_user_handoff()
                 self.blackboard_store.set_current_step(self.blackboard, current_step)
@@ -3738,10 +3880,12 @@ class BlackboardWorkflowRuntime:
                     source="workflow.start_step_override",
                 )
                 try:
-                    return self._run_single_step(current_step=current_step)
+                    return self._finalize_observed_result(
+                        self._run_single_step(current_step=current_step)
+                    )
                 finally:
                     self._cancel_unresolved_replaced_user_handoff()
-            return self._run_single_step(current_step=current_step)
+            return self._finalize_observed_result(self._run_single_step(current_step=current_step))
 
         if self._should_attempt_resume_reconciliation(start_step=start_step):
             interrupted = self._latest_unreconciled_interrupted_step()
@@ -3756,7 +3900,7 @@ class BlackboardWorkflowRuntime:
                     self.blackboard.current_step == interrupted_step
                     or self.blackboard.current_step not in self.steps
                 ):
-                    return reconciled
+                    return self._finalize_observed_result(reconciled)
 
         resolution = (
             RuntimePositionResolution(current_step=start_step)
@@ -3764,11 +3908,11 @@ class BlackboardWorkflowRuntime:
             else self._resolve_runtime_position_from_handoff()
         )
         if resolution.realignment_result is not None and single_step:
-            return resolution.realignment_result
+            return self._finalize_observed_result(resolution.realignment_result)
         current_step = resolution.current_step
         terminal_result = self._result_from_terminal_position(current_step)
         if terminal_result is not None:
-            return terminal_result
+            return self._finalize_observed_result(terminal_result)
         if current_step not in self.steps:
             raise ValueError(f"Unknown playbook step '{current_step}'")
 
@@ -3776,7 +3920,7 @@ class BlackboardWorkflowRuntime:
         # an explicit start-step override replaces the baton.
         reconciled = self._try_reconcile_current_step(current_step=current_step)
         if reconciled is not None:
-            return reconciled
+            return self._finalize_observed_result(reconciled)
 
         if start_step is not None:
             self._remember_replaced_user_handoff()
@@ -3790,14 +3934,16 @@ class BlackboardWorkflowRuntime:
                 source="workflow.start_step_override",
             )
             try:
-                return self._run_from_current_step(
-                    current_step=current_step, max_transitions=max_transitions
+                return self._finalize_observed_result(
+                    self._run_from_current_step(
+                        current_step=current_step, max_transitions=max_transitions
+                    )
                 )
             finally:
                 self._cancel_unresolved_replaced_user_handoff()
 
-        return self._run_from_current_step(
-            current_step=current_step, max_transitions=max_transitions
+        return self._finalize_observed_result(
+            self._run_from_current_step(current_step=current_step, max_transitions=max_transitions)
         )
 
     def _run_from_current_step(

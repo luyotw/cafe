@@ -465,7 +465,7 @@ def test_kickoff_contract_documents_persisted_preflight_and_reconfirmation() -> 
     assert "freshly rendered kickoff contract" in normalized
 
 
-def test_kickoff_contract_formatter_accepts_each_applicable_driver_field(
+def test_kickoff_contract_formatter_accepts_event_driven_binding(
     tmp_path: Path,
 ) -> None:
     strategic_context = tmp_path / "strategic_context.yaml"
@@ -485,10 +485,10 @@ mandate:
         _kickoff_formatter_command(
             strategic_context,
             "--driver-mode",
-            "delegated",
-            "--delegated-cli",
+            "event-driven",
+            "--event-driver-cli",
             "codex",
-            "--delegated-model",
+            "--event-driver-model",
             "gpt-5.6-codex",
         ),
         cwd=PROJECT_ROOT,
@@ -498,7 +498,7 @@ mandate:
     )
 
     assert result.returncode == 0, result.stderr
-    assert "| driver.mode | delegated |" in result.stdout
+    assert "| driver.mode | event-driven |" in result.stdout
     assert "| driver.cli | codex |" in result.stdout
     assert "| driver.model | gpt-5.6-codex |" in result.stdout
 
@@ -515,7 +515,7 @@ mandate:
         ),
     ],
 )
-def test_kickoff_contract_formatter_rejects_invalid_driver_policy(
+def test_kickoff_contract_formatter_rejects_invalid_operating_mode(
     tmp_path: Path, extra_args: tuple[str, ...], expected_error: str
 ) -> None:
     strategic_context = tmp_path / "strategic_context.yaml"
@@ -1428,7 +1428,7 @@ def test_use_cafe_workflow_requires_confirmed_repository_content_locale() -> Non
     assert "not in issue-owned workflow state" in normalized
 
 
-def test_use_cafe_workflow_requires_v2_driver_policy_and_model_authority() -> None:
+def test_use_cafe_workflow_defines_event_driven_mode_and_model_authority() -> None:
     skill = _read_skill_resource("SKILL.md")
     kickoff = _read_skill_resource("references/kickoff.md")
     running = _read_skill_resource("references/running_workflow.md")
@@ -1439,52 +1439,46 @@ def test_use_cafe_workflow_requires_v2_driver_policy_and_model_authority() -> No
     normalized_skill = " ".join(skill.split())
 
     assert "references/model_selection.md" in skill
-    assert "exactly one version 2 driver form" in skill
-    assert "parameter-free unattended" in skill
-    assert "explicit exact model" in skill
-    assert "Never persist or infer execution" in skill
+    assert "attached with positive polling" in normalized_skill
+    assert "event-driven" in skill
+    assert "explicit exact model" in normalized_skill
     assert "cafe workflow --execute --mute-agent-output" in skill
-    assert "cafe workflow --execute --mute-agent-output --background" in running
+    assert "cafe workflow --issue <issue> --execute --mute-agent-output --background" in running
     assert "manual diagnostic `--single-step`" in normalized_skill
-    assert "provider narration is parsed and persisted" in normalized_running
-    assert "does not suppress workflow lifecycle events" in normalized_running
-    assert (
-        "`cafe make` does not expose that flag and remains a valid launcher"
-        in normalized_running
-    )
-    assert (
-        "--background` resumes the durable workflow through the fixed worker"
-        in normalized_running
-    )
-    assert (
-        "`--background --user-input '<exact payload>'` durably stages initial input"
-        in normalized_running
-    )
-    assert "must not start a worker" in normalized_running
-    assert "cafe update-driver-policy" in normalized_running
-    assert "--delegated-model <exact-model>" in normalized_running
+    assert "callbacks are best effort" in normalized_running
+    assert "No ordinary operating mode uses it" in normalized_running
+    assert "--on-workflow-event builtin:use-cafe-workflow:workflow_event_callback" in running
+    assert ".cafe/issues/<issue>/driver/config.yaml" in running
     assert "--advancement" not in normalized_running
     assert "--delegated-availability" not in normalized_running
-    assert "cafe show <step> streaming --iteration <n>" in normalized_running
-    assert ".cafe/issues/<issue>/<step>/iteration_NNN/streaming.jsonl" in normalized_running
     assert "persisted baton without forcing `--start-step`" in skill
-    assert "In attached mode" in normalized_running
-    assert "Start the timer when the process starts or resumes" in normalized_running
-    assert "Stop polling when the command exits" in normalized_running
-    assert "only newly materialized HumanTasks may notify" in normalized_running
-    assert (
-        "Permission needs, errors, and completion remain durable inspection outcomes"
-        in normalized_running
-    )
-    assert "promise only substantive lifecycle events" not in normalized_running
-    assert "exactly one driver form" in normalized_kickoff
-    assert "Do not infer, translate, prefill, or retain values" in normalized_kickoff
+    assert "Attached polling starts after the full confirmed interval" in normalized_running
+    assert "exactly one operating mode" in normalized_kickoff
+    assert "Do not put the mode, CLI, model, session" in normalized_kickoff
     assert "`model_adjustment_authority`" in kickoff
     assert "No provider or model is built into this skill" in normalized_models
     assert "The driver owns the capability-band classification" in normalized_models
     assert "scripts/preflight_cache.py" in models
     assert (SKILL_ROOT / "scripts" / "preflight_cache.py").is_file()
     assert "active worktree's `.cafe/phases.yaml`" in normalized_models
+
+
+def test_use_cafe_workflow_keeps_human_task_completion_in_the_interactive_driver() -> None:
+    skill = _read_skill_resource("SKILL.md")
+    running = _read_skill_resource("references/running_workflow.md")
+    handoffs = _read_skill_resource("references/handoffs_and_alignment.md")
+    normalized_running = " ".join(running.split())
+
+    assert "user-facing driver turn" in skill
+    assert "cafe task complete <task-id> --result '<json>' --no-resume --json" in running
+    assert (
+        "Direct `cafe task complete` users retain its normal automatic foreground-resume"
+        in normalized_running
+    )
+    assert "cannot wait for, collect, infer, or choose an answer for a mandatory" in normalized_running
+    assert "may instead be completed by any driver" in normalized_running
+    assert "cafe task complete <active-human-task-id>" in handoffs
+    assert '--user-input \'{"task":"output-review"' not in handoffs
 
 
 def test_use_cafe_workflow_never_shows_unmuted_driver_execution() -> None:

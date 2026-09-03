@@ -14,12 +14,195 @@ import pytest
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.human_tasks import HumanTaskBinding, HumanTaskDecision, HumanTaskPolicy
-from cafe.core.workflow_models import BatonRejected, StepExecutionResult
+from cafe.core.workflow_models import BatonRejected, PlaybookRunResult, StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.ui.human_tasks import resolve_step_human_task
 
 pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
+
+
+def test_event_callback_wakes_once_after_a_phase_transition(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "callback-transition"
+    events: list[dict[str, object]] = []
+    playbook = {
+        "playbook": {"id": "callback"},
+        "steps": {
+            "spec": {
+                "skill": "spec",
+                "role": "pm",
+                "on": {"await_agent": "develop"},
+            },
+            "develop": {
+                "skill": "develop",
+                "role": "developer",
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+
+    def executor(step_name: str, _step: dict, _state: object) -> StepExecutionResult:
+        if step_name == "spec":
+            _write_baton(
+                issue_dir,
+                from_step="spec",
+                to_owner="agent",
+                to_step="develop",
+                intent="await_agent",
+            )
+        else:
+            _write_baton(
+                issue_dir,
+                from_step="develop",
+                to_owner="done",
+                to_step="done",
+                intent="workflow_complete",
+            )
+        return StepExecutionResult(response="", artifacts={})
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+        workflow_event_callback=events.append,
+    ).run(start_step="spec")
+
+    assert result.completed is True
+    assert [event["event_type"] for event in events] == [
+        "phase_terminal",
+        "workflow_completed",
+    ]
+    assert events[0]["step"] == "spec"
+    assert events[1]["step"] == "develop"
+
+
+def test_event_callback_failure_never_blocks_workflow_advancement(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "callback-failure"
+    playbook = {
+        "playbook": {"id": "callback"},
+        "steps": {"spec": {"skill": "spec", "role": "pm", "on": {"await_agent": "_done"}}},
+    }
+
+    def executor(_step_name: str, _step: dict, _state: object) -> StepExecutionResult:
+        _write_baton(
+            issue_dir,
+            from_step="spec",
+            to_owner="done",
+            to_step="done",
+            intent="workflow_complete",
+        )
+        return StepExecutionResult(response="", artifacts={})
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+        workflow_event_callback=lambda _event: (_ for _ in ()).throw(OSError("offline")),
+    ).run(start_step="spec")
+
+    assert result.completed is True
+    events = BlackboardStore(issue_dir).load_or_create("spec").events
+    assert any(event.event_type == "workflow_event_callback_dispatch_failed" for event in events)
+
+
+def test_event_callback_diagnostic_failure_never_blocks_workflow_advancement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "callback-diagnostic-failure"
+    playbook = {
+        "playbook": {"id": "callback"},
+        "steps": {"spec": {"skill": "spec", "role": "pm", "on": {"await_agent": "_done"}}},
+    }
+
+    def executor(_step_name: str, _step: dict, _state: object) -> StepExecutionResult:
+        _write_baton(
+            issue_dir,
+            from_step="spec",
+            to_owner="done",
+            to_step="done",
+            intent="workflow_complete",
+        )
+        return StepExecutionResult(response="", artifacts={})
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+        workflow_event_callback=lambda _event: (_ for _ in ()).throw(OSError("offline")),
+    )
+    original_record = runtime.blackboard_store.record_event
+
+    def record_event(state, event_type, payload):
+        if event_type == "workflow_event_callback_dispatch_failed":
+            raise OSError("disk unavailable")
+        return original_record(state, event_type, payload)
+
+    monkeypatch.setattr(runtime.blackboard_store, "record_event", record_event)
+    assert runtime.run(start_step="spec").completed is True
+
+
+def test_pause_without_completed_phase_still_wakes_callback(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "callback-pause"
+    events: list[dict[str, object]] = []
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook={
+            "playbook": {"id": "callback"},
+            "steps": {"spec": {"skill": "spec", "role": "pm", "on": {}}},
+        },
+        executor=lambda *_args: None,
+        workflow_event_callback=events.append,
+    )
+
+    result = runtime._emit_pause(
+        current_step="spec", status_code="ITERATION_LIMIT_REACHED", runtime="test", reason="limit"
+    )
+
+    assert result.final_status_code == "ITERATION_LIMIT_REACHED"
+    assert events == [
+        {
+            "workflow_id": runtime.blackboard.workflow_id,
+            "issue": "callback-pause",
+            "event_type": "workflow_interruption",
+            "step": "spec",
+            "status_code": "ITERATION_LIMIT_REACHED",
+            "reason": "limit",
+        }
+    ]
+
+
+def test_terminal_status_rewrite_dispatches_one_callback(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "callback-no-baton"
+    callback_events: list[dict[str, object]] = []
+    playbook = {
+        "playbook": {"id": "callback"},
+        "steps": {"spec": {"skill": "spec", "role": "pm", "on": {}}},
+    }
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=lambda *_args: None,
+        workflow_event_callback=callback_events.append,
+    )
+
+    runtime._record_step_completion(
+        event_type="step_completed",
+        current_step="spec",
+        status_code="confirmed",
+        runtime="test",
+    )
+    result = runtime._finalize_observed_result(
+        PlaybookRunResult(
+            final_step="spec",
+            final_status_code="NO_BATON_TRANSITION",
+            completed=False,
+        )
+    )
+
+    assert result.final_status_code == "NO_BATON_TRANSITION"
+    assert len(callback_events) == 1
+    assert callback_events[0]["event_type"] == "workflow_interruption"
+    assert callback_events[0]["status_code"] == "NO_BATON_TRANSITION"
 
 
 def _notify_human_task_in_process(
@@ -209,10 +392,12 @@ def test_runtime_blocks_pr_done_without_publish_receipt(tmp_path: Path) -> None:
         )
         return StepExecutionResult(response="done", artifacts={"pr_result": "p1"})
 
+    callback_events: list[dict[str, object]] = []
     runtime = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
         playbook=playbook,
         executor=executor,
+        workflow_event_callback=callback_events.append,
     )
     result = runtime.run(start_step="pr")
 
@@ -221,6 +406,9 @@ def test_runtime_blocks_pr_done_without_publish_receipt(tmp_path: Path) -> None:
     assert result.final_status_code == "MISSING_CAPABILITY_RECEIPT"
     blackboard = BlackboardStore(issue_dir).load_or_create("pr")
     assert blackboard.current_step == "pr"
+    assert len(callback_events) == 1
+    assert callback_events[0]["event_type"] == "workflow_interruption"
+    assert callback_events[0]["status_code"] == "MISSING_CAPABILITY_RECEIPT"
 
 
 def test_runtime_missing_pr_config_does_not_require_publish_receipt(tmp_path: Path) -> None:
@@ -417,10 +605,12 @@ def test_runtime_pauses_on_distinct_capability_approval_task(tmp_path: Path) -> 
             ],
         )
 
+    callback_events: list[dict[str, object]] = []
     result = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
         playbook=playbook,
         executor=executor,
+        workflow_event_callback=callback_events.append,
     ).run(start_step="publish")
 
     assert result.final_status_code == "CAPABILITY_APPROVAL_PENDING"
@@ -429,6 +619,10 @@ def test_runtime_pauses_on_distinct_capability_approval_task(tmp_path: Path) -> 
     assert blackboard.current_step == "user"
     assert blackboard.handoff_contract is not None
     assert blackboard.handoff_contract.intent.value == "manual_handoff"
+    assert len(callback_events) == 1
+    assert callback_events[0]["event_type"] == "human_task"
+    assert callback_events[0]["status_code"] == "CAPABILITY_APPROVAL_PENDING"
+    assert callback_events[0]["task_id"] == "approval-task"
 
 
 def test_runtime_completes_declared_capability_step_with_receipt(tmp_path: Path) -> None:
@@ -3472,10 +3666,12 @@ def test_runtime_handles_agent_execution_error(
             raise AgentExecutionError("Rate limit exceeded", error_type="rate_limit")
         return StepExecutionResult(response="done", artifacts={}, status_code="confirmed")
 
+    callback_events: list[dict[str, object]] = []
     runtime = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
         playbook=playbook,
         executor=executor,
+        workflow_event_callback=callback_events.append,
     )
     notifications = []
     monkeypatch.setattr(runtime, "_notify_new_human_task", notifications.append)
@@ -3508,6 +3704,17 @@ def test_runtime_handles_agent_execution_error(
     assert task.policy_id == "agent-execution-interrupted"
     assert task.continuations == {"retry": "spec"}
     assert notifications == [task]
+    assert callback_events == [
+        {
+            "workflow_id": bb.workflow_id,
+            "issue": "demo-agent-error",
+            "event_type": "human_task",
+            "step": "spec",
+            "status_code": "INTERRUPTED:agent_rate_limit",
+            "reason": "agent_rate_limit",
+            "task_id": task.id,
+        }
+    ]
     assert not any(event.event_type == "step_reconciled" for event in bb.events)
 
     applied = apply_human_task_payload(

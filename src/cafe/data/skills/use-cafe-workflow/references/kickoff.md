@@ -97,9 +97,10 @@ obtain explicit user confirmation of:
   zero or more explicitly confirmed fallbacks;
 - `model_adjustment_authority`: either `driver_autonomous` or
   `user_approval_required`;
-- `contract_version: 2` and exactly one driver form: attached with a positive
-  `poll_interval_seconds`, parameter-free unattended, or delegated with one
-  supported CLI and the exact model selected by the user;
+- exactly one operating mode: attached with a positive `poll_interval_seconds`,
+  unattended, or event-driven with one supported CLI and the exact model selected
+  by the user. Event-driven's binding lives only in
+  `.cafe/issues/<issue>/driver/config.yaml`;
 - worktree choice and path when using a worktree.
 
 Attached polling applies to proactive `cafe status`, `cafe show`, blackboard,
@@ -174,10 +175,10 @@ and obtain confirmation before preparation or workflow execution.
    implying that mandatory stops are absent.
 
 If the playbook, effective conversation locale, repository content locale,
-driver policy, or candidate set changes, reconfirm the contract before the next
+operating mode, or candidate set changes, reconfirm the contract before the next
 workflow execution. A post-phase model-chain change follows the separately
 confirmed model-adjustment authority in `model_selection.md`; it does not
-silently change a delegated driver's exact model.
+silently change an event-driven driver's exact model.
 
 `need_clarification` and `need_permission` are reactive interruptions, not
 scheduled candidates. `manual_handoff` is routing, not a planned confirmation
@@ -206,10 +207,10 @@ python3 <skill-dir>/scripts/format_kickoff_contract.py <playbook-id> \
   --model-adjustment-authority <driver_autonomous|user_approval_required> \
   --update-preflight '<bounded runtime-update JSON>' \
   --catalog-preflight '<bounded all-catalog JSON>' \
-  --driver-mode <attached|unattended|delegated> \
+  --driver-mode <attached|unattended|event-driven> \
   [--poll-interval-seconds <positive-integer>] \
-  [--delegated-cli <claude|codex|gemini|copilot|cursor-agent> \
-   --delegated-model <exact-model>] \
+  [--event-driver-cli <claude|codex|gemini|copilot|cursor-agent> \
+   --event-driver-model <exact-model>] \
   --risk-factor "<risk factor; repeat as needed>" \
   --assessment-rationale "<repository evidence for nature and scale>" \
   --phase-rationale "<step>=<capability band, profile/risk evidence, and optional fallback justification>" \
@@ -253,7 +254,7 @@ Pass an option with no step values for an explicit empty list. The formatter
 validates the partition and includes every phase, role, skill, scheduled gate,
 owner, stop behavior, resolved skill execution profile, exact
 primary model, any configured fallbacks, their config source, autonomous
-adjustment authority, exact v2 driver policy, reactive policy,
+adjustment authority, exact operating mode, reactive policy,
 mandate boundary, conversation locale source, repository content locale, and
 worktree choice. It
 re-executes with the Python interpreter that owns `cafe` when the shell
@@ -291,8 +292,6 @@ for confirmation rather than asking again.
   cafe prepare <issue-name> --playbook <playbook-id> --no-interactive \
     --input-method=manual \
     --rigor=medium --spec-template=auto --plan-template=default \
-    --driver-contract-version=2 --driver-mode=<mode> \
-    <applicable-driver-options> \
     --worktree .cafe/worktrees/<issue-name>
   ```
 
@@ -302,9 +301,7 @@ for confirmation rather than asking again.
   ```bash
   cafe prepare <issue-name> --playbook <playbook-id> --no-interactive \
     --init-git --input-method=manual --rigor=medium \
-    --spec-template=auto --plan-template=default \
-    --driver-contract-version=2 --driver-mode=<mode> \
-    <applicable-driver-options>
+    --spec-template=auto --plan-template=default
   ```
 
   For a GitHub issue:
@@ -313,16 +310,14 @@ for confirmation rather than asking again.
   cafe prepare <issue-name> --playbook <playbook-id> --no-interactive \
     --input-method=github --issue-id=<number> --rigor=medium \
     --spec-template=auto --plan-template=default \
-    --driver-contract-version=2 --driver-mode=<mode> \
-    <applicable-driver-options> \
     --worktree .cafe/worktrees/<issue-name>
   ```
 
 - [ ] If the user declined a worktree, omit `--worktree`. Never silently fall
   back to the main checkout after worktree creation fails.
 - [ ] Enter the reported worktree before running workflow commands.
-- [ ] Verify that `cafe prepare` persisted the active `playbook_id` and exact
-  driver policy, then add the confirmation contract, reactive handoff policy,
+- [ ] Verify that `cafe prepare` persisted the active `playbook_id`, then add
+  the confirmation contract, reactive handoff policy,
   issue assessment, and model-adjustment authority to
   `.cafe/issues/<issue-name>/issue.yaml` in the active checkout before the first
   workflow execution:
@@ -367,17 +362,18 @@ for confirmation rather than asking again.
     authority: driver_autonomous
     confirmed_by: user
     confirmed_at: 2026-08-13
-  contract_version: 2
-  driver:
-    mode: delegated
-    cli: codex
-    model: gpt-5.6-codex
   ```
 
-  For an older prepared issue without a complete valid v2 policy, collect a
-  fresh explicit form and use `cafe update-driver-policy`. Do not infer,
-  translate, prefill, or retain values from `driver_execution` or any other
-  legacy shape.
+  When the confirmed mode is event-driven, create the separate skill-owned
+  binding after this file is written:
+
+  ```bash
+  python3 <skill-dir>/scripts/workflow_event_callback.py --write-config \
+    --issue-dir .cafe/issues/<issue-name> --cli <cli> --model <exact-model>
+  ```
+
+  Do not put the mode, CLI, model, session, callback, or any driver control
+  setting in `issue.yaml`.
 
 - [ ] Install the confirmed ordered phase chains in the active worktree with
   `scripts/write_phase_config.py`, then verify the effective config as described

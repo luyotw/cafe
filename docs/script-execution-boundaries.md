@@ -28,7 +28,8 @@ This inventory is executable documentation: the unit contract discovers every `s
 | `src/cafe/core/git.py::run_git` | Internal fixed Git command family |
 | `src/cafe/core/phase_review_mixin.py::_open_file_with_editor` | Explicit interactive editor |
 | `src/cafe/core/sandbox_execution.py::run` | Sandbox script adapter |
-| `src/cafe/orchestration/worker_launch.py::launch` | Internal fixed CAFE worker bootstrap |
+| `src/cafe/workflow_execution/worker_launch.py::launch` | Internal fixed CAFE worker bootstrap |
+| `src/cafe/workflow_execution/event_callback.py::dispatch_workflow_event_callback` | Trusted builtin asynchronous workflow event callback |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/format_kickoff_contract.py::_reexec_with_cafe_python` | Internal fixed Python re-exec |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/preflight_cache.py::_cli_fingerprint` | Internal version probe |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/preflight_cache.py::candidate_probe` | User-requested model availability probe |
@@ -54,6 +55,7 @@ This inventory is executable documentation: the unit contract discovers every `s
 | `src/cafe/ui/commands/workflow.py::make` | Internal fixed CAFE workflow command |
 | `src/cafe/ui/menu.py::_run_command` | Internal menu command dispatcher |
 | `src/cafe/utils/config.py::_get_issue_config` | Internal fixed Git query |
+| `src/cafe/utils/issue_config.py::_registered_worktree_paths` | Internal fixed Git worktree query |
 | `src/cafe/utils/git_utils.py::get_git_toplevel` | Internal fixed Git query |
 | `src/cafe/utils/git_utils.py::get_github_repo_name` | Internal fixed Git query |
 | `src/cafe/utils/git_utils.py::rewrite_commit_message` ×2 | Internal fixed Git command family |

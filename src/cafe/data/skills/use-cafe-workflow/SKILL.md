@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
-metadata: {version: 1.28.2}
+metadata: {version: 1.30.0}
 ---
 
 # Use CAFE Workflow
@@ -13,7 +13,6 @@ metadata: {version: 1.28.2}
   `.cafe/strategic_context.yaml`.
 - Preflight runtime updates and all three catalogs read-only; apply only exact, separately approved tokens and recheck afterward.
 - Prefer non-interactive commands so work can run unattended and resume cleanly.
-- Diagnose abnormal workflow behavior only far enough to choose the correct, safe repair layer.
 
 ## Progressive disclosure
 
@@ -57,10 +56,12 @@ If more than one situation applies, read every listed reference before acting; d
 - Validate issue-decomposition assessments before confirming spec or plan;
   coordinate any authorized split through existing authority boundaries and
   reconstruct linked-work position from durable records.
-- Resolve and persist exactly one version 2 driver form: attached with positive
-  polling, parameter-free unattended, or delegated with one supported CLI and
-  the user's explicit exact model. Never persist or infer execution,
-  advancement, hosting, availability, aliases, or legacy values.
+- Resolve exactly one workflow operating mode in the confirmed kickoff: attached
+  with positive polling, unattended background execution, or event-driven
+  background execution with one supported CLI and the user's explicit exact
+  model. Store an event-driven binding only under the active issue's
+  `.cafe/issues/<issue>/driver/`; CAFE core and `issue.yaml` do not contain
+  driver-mode policy.
 - Use `cafe workflow --execute --mute-agent-output` when the invocation needs
   direct workflow controls such as `--start-step` or a manual diagnostic
   `--single-step`. After `cafe prepare`, `cafe make` is also a valid launcher;
@@ -100,7 +101,6 @@ If more than one situation applies, read every listed reference before acting; d
 
 - [ ] Run runtime and combined catalog preflight before a new kickoff or stale
   resume; record unavailable status and keep both approval scopes separate.
-- [ ] Read the kickoff and strategic-context references.
 - [ ] Resolve or select the active playbook using `references/playbook_selection.md`,
   recording its rationale and independent-QA decision without creating a repository
   default; then resolve locale, confirmation gates, reactive handoffs, mandate, and worktree behavior.
@@ -108,23 +108,22 @@ If more than one situation applies, read every listed reference before acting; d
   capability band, exact primary and any fallbacks, rationale, cached or tested
   primary evidence, configured fallback smoke evidence, and adjustment authority.
 - [ ] Present the deterministic kickoff table and obtain explicit confirmation.
-- [ ] Persist the confirmed complete v2 driver form; require every applicable
-  field and never recommend a silent policy default.
-- [ ] Check Git state, initialize CAFE if needed, prepare the issue, enter the
-  recorded worktree, and persist the issue-owned contract.
+- [ ] Record the confirmed operating mode. For event-driven, create its exact
+  per-issue callback binding with the bundled callback script before launch.
 
 ### Run
 
-- [ ] Read the running-workflow reference.
 - [ ] Start or resume according to the confirmed driver mode and input; otherwise
   follow the persisted baton without forcing `--start-step`.
 - [ ] In attached mode, honor the full positive poll cadence from the first
   wait; transport-only yields continue the same deferred wait without inspection.
+- [ ] In event-driven mode, start the same continuous background worker as
+  unattended with the trusted callback. A callback is an asynchronous,
+  best-effort notification:
+  it never gates the next phase and must not use `--single-step`.
+- [ ] In a user-facing driver turn, relay only an explicit mandatory/user-required HumanTask answer with `cafe task complete --no-resume --json`, verify it durably, then resume using the confirmed mode; a confirmed `driver_confirmable` gate may be verified and completed by a driver, but detached callbacks cannot collect or infer user answers.
 - [ ] Timestamp proactive polls and user updates; handle substantive output, completion, errors, and HumanTasks immediately.
 - [ ] At each contract-defined pause or completion, inspect new phase evidence and revise only remaining model chains within confirmed authority.
-- [ ] Inspect progress through `cafe status` and `cafe show`; consult the
-  blackboard only when command output is insufficient, and inspect code only
-  when a bounded-diagnosis trigger above applies.
 - [ ] When CAFE pauses, classify the handoff before supplying any input.
 - [ ] When behavior is wrong, stop normal execution and use the bounded
   diagnosis reference.

@@ -444,7 +444,15 @@ def test_capability_task_cancel_command_persists_terminal_receipt(
 
     result = runner.invoke(
         app,
-        ["task", "cancel", task.id, "--reason", "operator stopped request", "--json"],
+        [
+            "task",
+            "cancel",
+            task.id,
+            "--reason",
+            "operator stopped request",
+            "--no-resume",
+            "--json",
+        ],
     )
     resumed = service.resume(
         task.id,

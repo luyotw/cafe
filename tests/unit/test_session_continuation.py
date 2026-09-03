@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from cafe.agents.cli.codex import CodexCLI
 from cafe.agents.executor import AgentExecutionError
 from cafe.agents.manager import AgentManager
@@ -111,20 +113,18 @@ def test_resume_exact_builds_codex_resume_command(tmp_path: Path, monkeypatch) -
     ]
 
 
-def test_unconfigured_exact_cli_degrades_to_new(tmp_path: Path, monkeypatch) -> None:
+def test_unconfigured_exact_cli_fails_closed(tmp_path: Path, monkeypatch) -> None:
     manager = _manager(tmp_path, monkeypatch)
 
-    config = manager.get_execution_config(
-        "David",
-        phase_name="develop",
-        continuation=SessionContinuation.resume_exact(
-            AgentCLI.CLAUDE,
-            "removed-session",
-        ),
-    )
-
-    assert config.cli == AgentCLI.CODEX
-    assert config.session_id is None
+    with pytest.raises(ValueError, match="not configured"):
+        manager.get_execution_config(
+            "David",
+            phase_name="develop",
+            continuation=SessionContinuation.resume_exact(
+                AgentCLI.CLAUDE,
+                "removed-session",
+            ),
+        )
 
 
 def test_empty_execution_chain_fails_closed_for_new(tmp_path: Path, monkeypatch) -> None:
@@ -254,9 +254,7 @@ def test_exact_backup_records_canonical_chain_in_active_cli(
             phase_specific_data={"step_name": "develop"},
         )
 
-    active = json.loads((phase.issue_dir / "active_clis.json").read_text(encoding="utf-8"))[
-        "David"
-    ]
+    active = json.loads((phase.issue_dir / "active_clis.json").read_text(encoding="utf-8"))["David"]
     assert active["cli"] == "gemini"
     assert [entry["cli"] for entry in active["chain"]] == ["codex", "gemini"]
 
@@ -330,9 +328,7 @@ def test_legacy_exact_backup_records_canonical_chain(
             phase_specific_data={"step_name": "develop"},
         )
 
-    active = json.loads((phase.issue_dir / "active_clis.json").read_text(encoding="utf-8"))[
-        "David"
-    ]
+    active = json.loads((phase.issue_dir / "active_clis.json").read_text(encoding="utf-8"))["David"]
     assert active["cli"] == "gemini"
     assert [entry["cli"] for entry in active["chain"]] == ["codex", "gemini"]
 

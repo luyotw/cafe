@@ -63,6 +63,7 @@ class AgentManager:
         self.current_agent_name: Optional[str] = None
         self._total_token_usage = TokenUsage()
         self._last_model: Optional[str] = None  # Track latest model used
+        self._last_reported_model: Optional[str] = None
         self._last_cli: Optional[AgentCLI] = None
         self._last_session_id: Optional[str] = None
         self._failed_attempts: List[Dict[str, object]] = []
@@ -319,7 +320,7 @@ class AgentManager:
                 None,
             )
             if exact_index is None:
-                continuation = SessionContinuation.new()
+                raise ValueError("exact continuation CLI is not configured for this agent")
             elif exact_index:
                 chain = [chain[exact_index], *chain[:exact_index], *chain[exact_index + 1 :]]
 
@@ -444,22 +445,24 @@ class AgentManager:
         self._failed_attempts = []
         base_executor = self.get_agent(agent_name)
 
+        effective_continuation = continuation or SessionContinuation.auto()
         try:
             execution_config = self.get_execution_config(
                 agent_name,
                 phase_name=phase_name,
-                continuation=continuation,
+                continuation=effective_continuation,
             )
         except Exception:
+            if effective_continuation.is_exact:
+                raise
             execution_config = self._base_config_for_continuation(
                 base_executor.config,
-                continuation or SessionContinuation.auto(),
+                effective_continuation,
             )
 
         if not self._config_is_equivalent(base_executor.config, execution_config):
             executor = AgentExecutor(execution_config)
             executor.stream_output = self.stream_agent_output
-            effective_continuation = continuation or SessionContinuation.auto()
             if effective_continuation.policy == SessionContinuationPolicy.AUTO:
                 self.agents[agent_name] = executor
         else:
@@ -504,7 +507,10 @@ class AgentManager:
                 )
                 # Handle session conflict (only retry once)
                 if (
-                    hasattr(e, "error_type") and e.error_type == "SESSION_CONFLICT" and not retried
+                    hasattr(e, "error_type")
+                    and e.error_type == "SESSION_CONFLICT"
+                    and not retried
+                    and not effective_continuation.is_exact
                 ):
                     retried = True
                     # Clear session ID to force creation of new session on next execution
@@ -520,14 +526,12 @@ class AgentManager:
                         f"⚠️  {executor.config.cli.value} connection closed unexpectedly, "
                         "retrying once..."
                     )
-                elif (
-                    getattr(e, "error_type", None) == "provider_overloaded"
-                    and provider_overload_retries
-                    < len(self.PROVIDER_OVERLOAD_RETRY_DELAYS_SECONDS)
+                elif getattr(
+                    e, "error_type", None
+                ) == "provider_overloaded" and provider_overload_retries < len(
+                    self.PROVIDER_OVERLOAD_RETRY_DELAYS_SECONDS
                 ):
-                    delay = self.PROVIDER_OVERLOAD_RETRY_DELAYS_SECONDS[
-                        provider_overload_retries
-                    ]
+                    delay = self.PROVIDER_OVERLOAD_RETRY_DELAYS_SECONDS[provider_overload_retries]
                     provider_overload_retries += 1
                     primary_attempt += 1
                     print(
@@ -536,7 +540,11 @@ class AgentManager:
                         f"{len(self.PROVIDER_OVERLOAD_RETRY_DELAYS_SECONDS)})..."
                     )
                     time.sleep(delay)
-                elif hasattr(e, "error_type") and e.error_type in self.FALLBACKABLE_ERROR_TYPES:
+                elif (
+                    not effective_continuation.is_exact
+                    and hasattr(e, "error_type")
+                    and e.error_type in self.FALLBACKABLE_ERROR_TYPES
+                ):
                     # Try backup agents
                     agent_response = self._try_backup_agents(
                         primary_error=e,
@@ -561,7 +569,8 @@ class AgentManager:
         permission_denials = agent_response.permission_denials
         cli_command_args = agent_response.cli_command_args
         streaming_log = agent_response.streaming_log
-        model = agent_response.model
+        reported_model = agent_response.model
+        model = reported_model
         actual_cli = agent_response.cli or executor.config.cli
         actual_session_id = agent_response.session_id
         if model is None and actual_cli == executor.config.cli:
@@ -569,6 +578,7 @@ class AgentManager:
 
         self._last_cli = actual_cli
         self._last_session_id = actual_session_id
+        self._last_reported_model = reported_model
 
         # Save session ID if it was created during execution
         if actual_session_id:
@@ -807,10 +817,10 @@ class AgentManager:
                             f"⚠️  {entry.cli.value} connection closed unexpectedly, retrying once..."
                         )
                         continue
-                    if (
-                        getattr(backup_error, "error_type", None) == "provider_overloaded"
-                        and provider_overload_retries
-                        < len(self.PROVIDER_OVERLOAD_RETRY_DELAYS_SECONDS)
+                    if getattr(
+                        backup_error, "error_type", None
+                    ) == "provider_overloaded" and provider_overload_retries < len(
+                        self.PROVIDER_OVERLOAD_RETRY_DELAYS_SECONDS
                     ):
                         delay = self.PROVIDER_OVERLOAD_RETRY_DELAYS_SECONDS[
                             provider_overload_retries
@@ -1071,9 +1081,7 @@ class AgentManager:
         return str(entry.path)
 
     @classmethod
-    def read_agent_file(
-        cls, agent_name: str, role: str, cafe_dir: str = None
-    ) -> tuple[str, str]:
+    def read_agent_file(cls, agent_name: str, role: str, cafe_dir: str = None) -> tuple[str, str]:
         """Resolve and read an agent definition under one shared catalog lock."""
         from cafe.catalogs.resolver import (
             CatalogResolver,

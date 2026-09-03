@@ -1418,7 +1418,7 @@ class AgentExecutor:
                 f"{cli_name} execution exceeded its bounded decision budget",
                 error_type="execution_limit",
                 display_message=(
-                    f"{cli_name} exceeded the delegated decision time or output limit."
+                    f"{cli_name} exceeded the configured response time or output limit."
                 ),
             )
             err.cli_command_args = cmd[1:]
