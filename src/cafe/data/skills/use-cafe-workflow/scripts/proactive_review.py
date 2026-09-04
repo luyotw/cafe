@@ -39,6 +39,7 @@ except ImportError:  # pragma: no cover - workflow driver persistence is POSIX-h
 CONTRACT_FILENAME = "contract.yaml"
 STATE_FILENAME = "state.yaml"
 REPLACEMENT_FILENAME = "replacement.yaml"
+ACTIVATION_FILENAME = "activation.yaml"
 SCHEMA_VERSION = 1
 MAX_DURABLE_OUTPUT_BYTES = 1_048_576
 MAX_STATE_BYTES = 262_144
@@ -834,6 +835,33 @@ def _pending_replacement_bytes(
     return encoded
 
 
+def _activation_marker_bytes() -> bytes:
+    """Encode proof that this persistence directory has held confirmed authority."""
+    return _bounded_yaml_bytes(
+        {"schema_version": SCHEMA_VERSION},
+        label="proactive review activation marker",
+        maximum=MAX_STATE_BYTES,
+    )
+
+
+def _has_activation_marker(directory_descriptor: int) -> bool:
+    """Distinguish legacy empty directories from a lost confirmed contract."""
+    content = _read_persistence_entry(
+        directory_descriptor, ACTIVATION_FILENAME, maximum=MAX_STATE_BYTES
+    )
+    if content is None:
+        return False
+    try:
+        marker = _mapping(
+            yaml.safe_load(content.decode("utf-8")), label="proactive review activation marker"
+        )
+        if marker != {"schema_version": SCHEMA_VERSION}:
+            raise ValueError("invalid proactive review activation marker")
+    except (UnicodeError, ValueError, yaml.YAMLError) as exc:
+        raise StaleContractError("proactive review activation marker is invalid") from exc
+    return True
+
+
 def _load_pending_replacement(content: bytes) -> tuple[str, str, bytes | None]:
     """Read a single bounded recovery record without accepting arbitrary state."""
     try:
@@ -924,12 +952,12 @@ def _atomic_yaml_write(
 
 
 @contextmanager
-def _contract_lock(issue_dir: Path) -> Iterator[int]:
-    """Serialize contract activation and shared state updates without new artifacts."""
+def _contract_lock(issue_dir: Path, *, create: bool = True) -> Iterator[int]:
+    """Serialize recovery, contract reads, and shared state updates."""
     if fcntl is None:  # pragma: no cover - CAFE's workflow driver is POSIX-hosted.
         raise RuntimeError("proactive review activation requires process file locking")
     with _IN_PROCESS_CONTRACT_LOCK:
-        with _proactive_review_directory(issue_dir) as descriptor:
+        with _proactive_review_directory(issue_dir, create=create) as descriptor:
             fcntl.flock(descriptor, fcntl.LOCK_EX)
             try:
                 _recover_pending_replacement(descriptor)
@@ -991,10 +1019,16 @@ def activate_contract(
         elif expected_active_digest is not None:
             raise StaleContractError("initial activation cannot compare an absent active contract")
         if not replacing:
+            _atomic_bytes_write_at(
+                directory_descriptor, ACTIVATION_FILENAME, _activation_marker_bytes()
+            )
             _atomic_yaml_write(
                 target, envelope, directory_descriptor=directory_descriptor
             )
         else:
+            _atomic_bytes_write_at(
+                directory_descriptor, ACTIVATION_FILENAME, _activation_marker_bytes()
+            )
             previous_state = _read_persistence_entry(
                 directory_descriptor, STATE_FILENAME, maximum=MAX_STATE_BYTES
             )
@@ -1020,19 +1054,17 @@ def activate_contract(
     return target
 
 
-def load_active_contract(*, issue_dir: Path, project_root: Path) -> dict[str, Any]:
-    """Load the active contract through the shared live identity/playbook check."""
-    issue_dir = _authorized_issue_dir(issue_dir=issue_dir, project_root=project_root)
-    try:
-        with _proactive_review_directory(issue_dir, create=False) as directory_descriptor:
-            _recover_pending_replacement(directory_descriptor)
-            content = _read_persistence_entry(
-                directory_descriptor, CONTRACT_FILENAME, maximum=MAX_STATE_BYTES
-            )
-    except FileNotFoundError as exc:
-        raise ContractNotFoundError("no active proactive review contract") from exc
-    if content is None:
+def _load_active_contract_from_descriptor(
+    *, issue_dir: Path, project_root: Path, directory_descriptor: int
+) -> dict[str, Any]:
+    """Validate one active contract while its recovery lock remains held."""
+    content = _read_persistence_entry(
+        directory_descriptor, CONTRACT_FILENAME, maximum=MAX_STATE_BYTES
+    )
+    if content is None and _has_activation_marker(directory_descriptor):
         raise StaleContractError("a confirmed proactive review contract is missing")
+    if content is None:
+        raise ContractNotFoundError("no active proactive review contract")
     try:
         value = yaml.safe_load(content.decode("utf-8"))
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
@@ -1059,6 +1091,20 @@ def load_active_contract(*, issue_dir: Path, project_root: Path) -> dict[str, An
     except ValueError as exc:
         raise StaleContractError("active proactive review contract is invalid") from exc
     return {**validated_confirmation, "policy": validated_policy}
+
+
+def load_active_contract(*, issue_dir: Path, project_root: Path) -> dict[str, Any]:
+    """Load the active contract through the shared live identity/playbook check."""
+    issue_dir = _authorized_issue_dir(issue_dir=issue_dir, project_root=project_root)
+    try:
+        with _contract_lock(issue_dir, create=False) as directory_descriptor:
+            return _load_active_contract_from_descriptor(
+                issue_dir=issue_dir,
+                project_root=project_root,
+                directory_descriptor=directory_descriptor,
+            )
+    except FileNotFoundError as exc:
+        raise ContractNotFoundError("no active proactive review contract") from exc
 
 
 def _empty_review_state(proposal_digest: str) -> dict[str, Any]:
@@ -1243,7 +1289,11 @@ def _mutate_review_state(
 ) -> T:
     """Apply one current-evidence transition under the issue-wide durable lock."""
     with _contract_lock(issue_dir) as directory_descriptor:
-        contract = load_active_contract(issue_dir=issue_dir, project_root=project_root)
+        contract = _load_active_contract_from_descriptor(
+            issue_dir=issue_dir,
+            project_root=project_root,
+            directory_descriptor=directory_descriptor,
+        )
         if (
             expected_proposal_digest is not None
             and contract["proposal_digest"] != expected_proposal_digest

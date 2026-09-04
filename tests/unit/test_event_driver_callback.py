@@ -346,3 +346,8 @@ def test_callback_prompt_reconciles_live_proactive_review_without_worker_control
     legacy_issue_dir.mkdir(parents=True)
     assert callback._proactive_review_reconciliation("legacy", repository_root=tmp_path) is None
     assert not (legacy_issue_dir / "driver").exists()
+
+    legacy_review_dir = legacy_issue_dir / "driver" / "proactive_review"
+    legacy_review_dir.mkdir(parents=True)
+    assert callback._proactive_review_reconciliation("legacy", repository_root=tmp_path) is None
+    assert list(legacy_review_dir.iterdir()) == []

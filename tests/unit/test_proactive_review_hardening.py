@@ -615,6 +615,139 @@ module.activate_contract(
     assert not (module.contract_path(issue_dir).parent / module.REPLACEMENT_FILENAME).exists()
 
 
+def test_public_load_waits_for_replacement_recovery_before_writer_crash(
+    tmp_path: Path,
+) -> None:
+    """U8 — a concurrent public reader preserves the complete prior generation."""
+    module = _module()
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    issue_dir, _ = _activate(module, project_root)
+    active = module.load_active_contract(issue_dir=issue_dir, project_root=project_root)
+    output, requirements, upstream, evidence = _review_inputs(issue_dir, project_root)
+    module.prepare_review_inputs(
+        issue_dir=issue_dir,
+        project_root=project_root,
+        phase="develop",
+        output_path=output,
+        requirements=requirements,
+        upstream_artifacts=upstream,
+        repository_evidence=evidence,
+        correction_history=[],
+    )
+    replacement = _policy(project_root, "standard", marker="overlap replacement")
+    selected = next(entry for entry in replacement["phases"] if entry["selected"])
+    selected["reviewer"] = {"cli": "codex", "model": "gpt-5.6-terra"}
+    ready = tmp_path / "replacement-ready"
+    release = tmp_path / "replacement-release"
+    child = """
+import importlib.util
+import json
+import os
+import time
+from pathlib import Path
+
+spec = importlib.util.spec_from_file_location(
+    "overlap_proactive_review", os.environ["CAFE_PROACTIVE_REVIEW"]
+)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+original_write = module._atomic_yaml_write
+ready = Path(os.environ["CAFE_REPLACEMENT_READY"])
+release = Path(os.environ["CAFE_REPLACEMENT_RELEASE"])
+
+def stop_after_state(path, value, **kwargs):
+    original_write(path, value, **kwargs)
+    if path.name == module.STATE_FILENAME:
+        ready.write_text("ready", encoding="utf-8")
+        while not release.exists():
+            time.sleep(0.01)
+        os._exit(77)
+
+module._atomic_yaml_write = stop_after_state
+issue_dir = Path(os.environ["CAFE_ISSUE_DIR"])
+policy = json.loads(os.environ["CAFE_REPLACEMENT_POLICY"])
+module.activate_contract(
+    issue_dir=issue_dir,
+    project_root=Path(os.environ["CAFE_PROJECT_ROOT"]),
+    policy=policy,
+    confirmation={
+        "schema_version": 1,
+        "issue_name": issue_dir.name,
+        "playbook_id": policy["playbook_id"],
+        "proposal_digest": module.policy_digest(policy),
+        "confirmed_by": "user",
+        "confirmed_at": "2026-09-04T12:00:00+00:00",
+    },
+    expected_active_digest=os.environ["CAFE_ACTIVE_DIGEST"],
+)
+"""
+    process = subprocess.Popen(
+        [sys.executable, "-c", child],
+        cwd=PROJECT_ROOT,
+        env={
+            **os.environ,
+            "CAFE_ACTIVE_DIGEST": active["proposal_digest"],
+            "CAFE_ISSUE_DIR": str(issue_dir),
+            "CAFE_PROJECT_ROOT": str(project_root),
+            "CAFE_PROACTIVE_REVIEW": str(
+                SKILL_ROOT / "scripts" / "proactive_review.py"
+            ),
+            "CAFE_REPLACEMENT_POLICY": json.dumps(replacement),
+            "CAFE_REPLACEMENT_READY": str(ready),
+            "CAFE_REPLACEMENT_RELEASE": str(release),
+        },
+    )
+    reader: threading.Thread | None = None
+    try:
+        deadline = time.monotonic() + 5
+        while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert ready.exists()
+
+        reader_started = threading.Event()
+        reader_finished = threading.Event()
+        reader_result: dict[str, object] = {}
+
+        def load_contract() -> None:
+            reader_started.set()
+            try:
+                reader_result["contract"] = module.load_active_contract(
+                    issue_dir=issue_dir, project_root=project_root
+                )
+            except BaseException as exc:
+                reader_result["error"] = exc
+            finally:
+                reader_finished.set()
+
+        reader = threading.Thread(target=load_contract)
+        reader.start()
+        assert reader_started.wait(timeout=1)
+        assert not reader_finished.wait(timeout=0.2)
+
+        release.write_text("release", encoding="utf-8")
+        assert process.wait(timeout=5) == 77
+        reader.join(timeout=5)
+        assert reader_finished.is_set()
+        assert "error" not in reader_result
+        assert reader_result["contract"]["proposal_digest"] == active["proposal_digest"]
+        state = module.load_review_state(issue_dir=issue_dir, project_root=project_root)
+        assert state["proposal_digest"] == active["proposal_digest"]
+        assert state["episodes"]["develop"]["status"] == "pending"
+        assert not (module.contract_path(issue_dir).parent / module.REPLACEMENT_FILENAME).exists()
+    finally:
+        if not release.exists():
+            release.write_text("release", encoding="utf-8")
+        if process.poll() is None:
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+        if reader is not None:
+            reader.join(timeout=5)
+
+
 def test_obligation_reconciliation_reuses_one_repository_snapshot(
     tmp_path: Path, monkeypatch
 ) -> None:
