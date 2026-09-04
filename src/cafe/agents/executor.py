@@ -175,6 +175,7 @@ class AgentExecutor:
         allowed_directories: Optional[List[str]] = None,
         streaming_output_file: Optional[str] = None,
         execution_control: AgentExecutionControl | None = None,
+        exact_session: bool = False,
     ) -> AgentResponse:
         """Execute the agent with given prompt.
 
@@ -292,6 +293,7 @@ class AgentExecutor:
                     env=env,
                     process_cwd=process_cwd,
                     execution_control=execution_control,
+                    allow_session_recovery=not exact_session,
                 )
             else:
                 # Only use response parser for stream-json formats
@@ -510,6 +512,7 @@ class AgentExecutor:
         update_cmd_with_session_fn: Callable[[List[str], str], List[str]],
         max_retries: int = 3,
         _retry_count: int = 0,
+        allow_session_recovery: bool = True,
         **streaming_kwargs,
     ) -> AgentResponse:
         """Generic session recovery wrapper for all CLIs with session support.
@@ -555,6 +558,11 @@ class AgentExecutor:
             is_session_error = any(phrase in error_msg for phrase in session_error_phrases)
 
             if is_session_error or is_prompt_too_long:
+                if not allow_session_recovery:
+                    # An exact continuation names a caller-owned conversation.
+                    # Retrying cold could create a different thread and deliver
+                    # a callback to the wrong user-facing session.
+                    raise
                 # Check if we've exceeded max retries
                 if _retry_count >= max_retries:
                     print(f"\n❌ Could not recover from error after {max_retries} attempts\n")
@@ -604,6 +612,7 @@ class AgentExecutor:
                     update_cmd_with_session_fn=update_cmd_with_session_fn,
                     max_retries=max_retries,
                     _retry_count=_retry_count + 1,
+                    allow_session_recovery=allow_session_recovery,
                     **streaming_kwargs,
                 )
             else:
@@ -715,9 +724,7 @@ class AgentExecutor:
     ) -> tuple[Optional[str], Optional[str]]:
         """Classify CLI execution errors into workflow-level retry categories."""
         if self._is_provider_overloaded_error(error_text):
-            return "provider_overloaded", self._format_provider_overloaded_display_message(
-                cli_name
-            )
+            return "provider_overloaded", self._format_provider_overloaded_display_message(cli_name)
         if self._is_rate_limit_error(error_text):
             return "rate_limit", self._format_rate_limit_display_message(cli_name, error_text)
         if self._is_cli_unavailable_error(error_text):
@@ -1238,7 +1245,9 @@ class AgentExecutor:
                                 # Extract error message from response text
                                 error_text = response_text or ""
                                 message = data.get("message")
-                                if isinstance(message, dict) and isinstance(message.get("content"), list):
+                                if isinstance(message, dict) and isinstance(
+                                    message.get("content"), list
+                                ):
                                     for content_block in message["content"]:
                                         if not isinstance(content_block, dict):
                                             continue
@@ -1327,7 +1336,9 @@ class AgentExecutor:
                                 # Default Claude format extractor
                                 # Extract content from message.content[] (new Claude format)
                                 message = data.get("message")
-                                if isinstance(message, dict) and isinstance(message.get("content"), list):
+                                if isinstance(message, dict) and isinstance(
+                                    message.get("content"), list
+                                ):
                                     for content_block in message["content"]:
                                         if not isinstance(content_block, dict):
                                             continue

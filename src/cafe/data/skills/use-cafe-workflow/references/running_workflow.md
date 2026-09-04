@@ -36,9 +36,13 @@ cafe workflow --issue <issue> --execute --mute-agent-output --background \
 ```
 
 The callback uses `.cafe/issues/<issue>/driver/config.yaml`, `session.json`,
-and `session.lock`. They keep the exact CLI/model/session isolated per issue.
-It resumes the existing session when available and refuses to replace its
-identity. It is an ordinary driver and uses only existing kickoff authority:
+and `session.lock`. When the launch comes from the Codex App with `cli: codex`,
+the binding records that visible Codex thread and the callback resumes it; it
+does **not** create a separate `__cafe_event_driver__` session. `session.json`
+then records that same thread as the workflow's exact identity. A terminal or
+non-Codex launch without a host-thread binding retains the existing per-issue
+driver session behavior. Every path refuses to replace an acquired identity.
+It is an ordinary driver and uses only existing kickoff authority:
 confirmation contract, mandatory HumanTask stops, reactive user handoffs,
 mandate, and model-adjustment authority.
 

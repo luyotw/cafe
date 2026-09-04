@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+from cafe.agents.executor import AgentExecutionError
 from cafe.core.types import AgentCLI
 
 
@@ -20,6 +22,12 @@ def _callback_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.fixture(autouse=True)
+def _clear_host_session_binding(monkeypatch) -> None:
+    """Keep the test process's Codex App thread out of ordinary callback tests."""
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
 
 
 def test_event_driver_config_is_per_issue_and_cannot_replace_session(tmp_path: Path) -> None:
@@ -111,6 +119,93 @@ def test_callback_acquires_then_exactly_resumes_its_session(tmp_path: Path, monk
     assert continuations[0].is_exact is False
     assert continuations[1].is_exact is True
     assert continuations[1].session_id == "session-1"
+
+
+def test_callback_resumes_the_bound_codex_host_thread(tmp_path: Path, monkeypatch) -> None:
+    callback = _callback_module()
+    monkeypatch.setenv("CODEX_THREAD_ID", "visible-thread")
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue456"
+    callback.write_config(issue_dir, cli="codex", model="exact")
+    assert callback._load_config(issue_dir / "driver")["host_session"] == {
+        "kind": "codex",
+        "thread_id": "visible-thread",
+    }
+
+    from cafe.core.blackboard import BlackboardStore
+
+    workflow_id = BlackboardStore(issue_dir).load_or_create("spec").workflow_id
+    continuations = []
+
+    class FakeManager:
+        def __init__(self, *, session_manager, **_kwargs):
+            self.session_manager = session_manager
+            self._last_cli = AgentCLI.CODEX
+            self._last_reported_model = None
+            self._last_session_id = "visible-thread"
+
+        def register_agent(self, _config):
+            pass
+
+        def execute(self, _name, _prompt, *, continuation, **_kwargs):
+            continuations.append(continuation)
+            self.session_manager.save_session(
+                callback.DRIVER_AGENT_NAME, AgentCLI.CODEX, "visible-thread"
+            )
+
+    monkeypatch.setattr(callback, "AgentManager", FakeManager)
+    event = {"issue": "issue456", "workflow_id": workflow_id, "event_type": "human_task"}
+    callback.run_callback(event, repository_root=tmp_path)
+
+    assert len(continuations) == 1
+    assert continuations[0].is_exact is True
+    assert continuations[0].session_id == "visible-thread"
+    stored = callback.EventDriverSessionStore(
+        issue_dir / "driver", workflow_id=workflow_id, cli=AgentCLI.CODEX, model="exact"
+    ).load_session(callback.DRIVER_AGENT_NAME, AgentCLI.CODEX)
+    assert stored is not None
+    assert stored.session_id == "visible-thread"
+
+
+def test_bound_host_thread_never_recovers_by_creating_a_new_session(
+    tmp_path: Path, monkeypatch
+) -> None:
+    callback = _callback_module()
+    monkeypatch.setenv("CODEX_THREAD_ID", "visible-thread")
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue456"
+    callback.write_config(issue_dir, cli="codex", model="exact")
+    from cafe.core.blackboard import BlackboardStore
+
+    workflow_id = BlackboardStore(issue_dir).load_or_create("spec").workflow_id
+    launches: list[tuple[list[str], dict]] = []
+
+    def popen(command, **kwargs):
+        launches.append((command, kwargs))
+        process = MagicMock()
+        process.stdout.readline.side_effect = [""]
+        process.stderr.read.return_value = "thread/resume failed: no rollout found"
+        process.wait.return_value = 1
+        return process
+
+    with patch("subprocess.Popen", side_effect=popen):
+        with patch("sys.platform", "win32"):
+            with pytest.raises(AgentExecutionError, match="no rollout found"):
+                callback.run_callback(
+                    {
+                        "issue": "issue456",
+                        "workflow_id": workflow_id,
+                        "event_type": "human_task",
+                    },
+                    repository_root=tmp_path,
+                )
+
+    assert len(launches) == 1
+    command, kwargs = launches[0]
+    assert command[command.index("resume") + 1] == "visible-thread"
+    assert all(
+        key not in kwargs["env"]
+        for key in ("CODEX_REMOTE_PAYLOAD", "CODEX_SESSION_ID", "CODEX_THREAD_ID")
+    )
+    assert not (issue_dir / "driver" / "session.json").exists()
 
 
 def test_callback_identity_mismatch_keeps_existing_session(tmp_path: Path, monkeypatch) -> None:

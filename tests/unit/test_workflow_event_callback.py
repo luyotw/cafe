@@ -14,7 +14,10 @@ from cafe.workflow_execution.event_callback import (
 )
 
 
-def test_dispatch_detaches_one_opaque_durable_event(tmp_path: Path) -> None:
+def test_dispatch_detaches_one_opaque_durable_event(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("CODEX_REMOTE_PAYLOAD", "host-bootstrap")
+    monkeypatch.setenv("CODEX_SESSION_ID", "host-session")
+    monkeypatch.setenv("CODEX_THREAD_ID", "host-thread")
     captured: dict[str, object] = {}
 
     def popen(command, **kwargs):
@@ -39,6 +42,10 @@ def test_dispatch_detaches_one_opaque_durable_event(tmp_path: Path) -> None:
     assert kwargs["stdin"] is not None
     assert kwargs["stdout"] is not None
     assert kwargs["stderr"] is not None
+    assert all(
+        key not in kwargs["env"]
+        for key in ("CODEX_REMOTE_PAYLOAD", "CODEX_SESSION_ID", "CODEX_THREAD_ID")
+    )
 
 
 def test_callback_event_envelope_is_one_way_and_bounded(tmp_path: Path) -> None:

@@ -490,12 +490,16 @@ class AgentManager:
                     if execution_control is not None
                     else {}
                 )
+                exact_session_kwargs = (
+                    {"exact_session": True} if effective_continuation.is_exact else {}
+                )
                 agent_response = executor.execute(
                     attempt_prompt,
                     allowed_tools,
                     allowed_directories,
                     streaming_output_file,
                     **control_kwargs,
+                    **exact_session_kwargs,
                 )
                 break  # Success, exit loop
             except AgentExecutionError as e:

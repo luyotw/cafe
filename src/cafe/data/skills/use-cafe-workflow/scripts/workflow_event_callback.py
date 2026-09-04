@@ -34,6 +34,7 @@ DRIVER_AGENT_NAME = "__cafe_event_driver__"
 CONFIG_FILENAME = "config.yaml"
 SESSION_FILENAME = "session.json"
 LOCK_FILENAME = "session.lock"
+_HOST_SESSION_KIND = "codex"
 
 
 def _now() -> str:
@@ -84,6 +85,19 @@ def _driver_dir(issue_dir: Path) -> Path:
     return issue_dir / "driver"
 
 
+def _current_host_session_binding() -> dict[str, str] | None:
+    """Return the current Codex App thread without retaining host controls.
+
+    A thread ID is enough for ``codex exec resume``.  In particular, never
+    persist ``CODEX_REMOTE_PAYLOAD``: it is a host transport bootstrap control,
+    not an identity or a callback credential.
+    """
+    thread_id = os.environ.get("CODEX_THREAD_ID", "").strip()
+    if not thread_id:
+        return None
+    return {"kind": _HOST_SESSION_KIND, "thread_id": thread_id}
+
+
 def write_config(issue_dir: Path, *, cli: str, model: str) -> None:
     """Create the one skill-owned event-driven binding for an issue."""
     try:
@@ -96,6 +110,13 @@ def write_config(issue_dir: Path, *, cli: str, model: str) -> None:
     with _session_lock(driver_dir):
         existing = _load_config(driver_dir)
         proposed = {"schema_version": 1, "mode": "event-driven", "cli": cli, "model": model}
+        # When a user launches CAFE from the Codex App, wake that visible
+        # conversation.  The callback still receives only an opaque thread ID;
+        # provider transport controls are deliberately not inherited.
+        if cli == AgentCLI.CODEX.value:
+            host_session = _current_host_session_binding()
+            if host_session is not None:
+                proposed = {**proposed, "schema_version": 2, "host_session": host_session}
         if existing is not None and existing != proposed:
             session_path = driver_dir / SESSION_FILENAME
             if session_path.exists():
@@ -106,7 +127,7 @@ def write_config(issue_dir: Path, *, cli: str, model: str) -> None:
         )
 
 
-def _load_config(driver_dir: Path) -> dict[str, str] | None:
+def _load_config(driver_dir: Path) -> dict[str, Any] | None:
     path = driver_dir / CONFIG_FILENAME
     if not path.is_file() or path.is_symlink():
         return None
@@ -117,22 +138,43 @@ def _load_config(driver_dir: Path) -> dict[str, str] | None:
     if not isinstance(loaded, dict):
         raise ValueError("event-driven config must be a mapping")
     expected = {"schema_version", "mode", "cli", "model"}
-    if (
-        set(loaded) != expected
-        or loaded.get("schema_version") != 1
-        or loaded.get("mode") != "event-driven"
-    ):
+    schema_version = loaded.get("schema_version")
+    valid_schema = (schema_version == 1 and set(loaded) == expected) or (
+        schema_version == 2 and set(loaded) == expected | {"host_session"}
+    )
+    if not valid_schema or loaded.get("mode") != "event-driven":
         raise ValueError("event-driven config is invalid")
     cli = loaded.get("cli")
     model = loaded.get("model")
     if not isinstance(cli, str) or not isinstance(model, str) or not model.strip():
         raise ValueError("event-driven config is invalid")
     AgentCLI(cli)
-    return {"schema_version": 1, "mode": "event-driven", "cli": cli, "model": model}
+    result: dict[str, Any] = {
+        "schema_version": schema_version,
+        "mode": "event-driven",
+        "cli": cli,
+        "model": model,
+    }
+    host_session = loaded.get("host_session")
+    if host_session is not None:
+        if (
+            cli != AgentCLI.CODEX.value
+            or not isinstance(host_session, dict)
+            or set(host_session) != {"kind", "thread_id"}
+            or host_session.get("kind") != _HOST_SESSION_KIND
+            or not isinstance(host_session.get("thread_id"), str)
+            or not host_session["thread_id"].strip()
+        ):
+            raise ValueError("event-driven host session binding is invalid")
+        result["host_session"] = {
+            "kind": _HOST_SESSION_KIND,
+            "thread_id": host_session["thread_id"],
+        }
+    return result
 
 
 class EventDriverSessionStore(SessionStore):
-    """Persist exactly one callback driver session below its issue skill state."""
+    """Persist exactly one callback target session below its issue skill state."""
 
     def __init__(self, driver_dir: Path, *, workflow_id: str, cli: AgentCLI, model: str) -> None:
         self.driver_dir = driver_dir
@@ -286,11 +328,18 @@ def run_callback(event: dict[str, Any], *, repository_root: Path) -> None:
             model=config["model"],
         )
         existing = store.load_session(DRIVER_AGENT_NAME, cli)
-        continuation = (
-            SessionContinuation.resume_exact(cli, existing.session_id)
-            if existing is not None
-            else SessionContinuation.new()
-        )
+        host_session = config.get("host_session")
+        host_thread_id = host_session["thread_id"] if isinstance(host_session, dict) else None
+        if host_thread_id is not None:
+            if existing is not None and existing.session_id != host_thread_id:
+                raise ValueError("event-driven host session identity cannot be replaced")
+            continuation = SessionContinuation.resume_exact(cli, host_thread_id)
+        else:
+            continuation = (
+                SessionContinuation.resume_exact(cli, existing.session_id)
+                if existing is not None
+                else SessionContinuation.new()
+            )
         manager = AgentManager(session_manager=store, issue_name=None, stream_agent_output=False)
         manager.register_agent(
             AgentConfig(
@@ -313,6 +362,7 @@ def run_callback(event: dict[str, Any], *, repository_root: Path) -> None:
             or (reported_model is not None and reported_model != config["model"])
             or not manager._last_session_id
             or (existing is not None and manager._last_session_id != existing.session_id)
+            or (host_thread_id is not None and manager._last_session_id != host_thread_id)
         ):
             raise ValueError("event-driven driver identity mismatch")
         store.commit()

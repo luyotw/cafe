@@ -373,7 +373,9 @@ for confirmation rather than asking again.
   ```
 
   Do not put the mode, CLI, model, session, callback, or any driver control
-  setting in `issue.yaml`.
+  setting in `issue.yaml`. When this command is run from a Codex App thread
+  with `cli: codex`, it records that thread only in the skill-owned binding so
+  later callbacks return to the same visible conversation.
 
 - [ ] Install the confirmed ordered phase chains in the active worktree with
   `scripts/write_phase_config.py`, then verify the effective config as described

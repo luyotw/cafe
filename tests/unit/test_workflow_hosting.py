@@ -50,6 +50,31 @@ def test_fixed_worker_launch_passes_an_opaque_child_token(tmp_path: Path) -> Non
     )
 
 
+def test_fixed_worker_launch_drops_parent_host_session_controls(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("CODEX_REMOTE_PAYLOAD", "host-bootstrap")
+    monkeypatch.setenv("CODEX_SESSION_ID", "host-session")
+    monkeypatch.setenv("CODEX_THREAD_ID", "host-thread")
+    monkeypatch.setenv("CODEX_HOME", "/provider-config")
+    launches: list[dict] = []
+
+    def popen(_command, **kwargs):
+        launches.append(kwargs)
+        return type("Process", (), {"pid": 4321})()
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue432"
+    record = WorkerLaunchStore(issue_dir).start()
+    FixedWorkerLauncher(issue_dir, popen_factory=popen).launch(record)
+
+    environment = launches[0]["env"]
+    assert all(
+        key not in environment
+        for key in ("CODEX_REMOTE_PAYLOAD", "CODEX_SESSION_ID", "CODEX_THREAD_ID")
+    )
+    assert environment["CODEX_HOME"] == "/provider-config"
+
+
 def test_invalid_worker_handshake_fails_closed(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "issue458"
     store = WorkerLaunchStore(issue_dir)

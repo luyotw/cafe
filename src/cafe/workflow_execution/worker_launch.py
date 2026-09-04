@@ -8,6 +8,7 @@ initialising or mutating workflow-core state.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -31,12 +32,25 @@ except ImportError:  # pragma: no cover - unavailable on non-Windows.
 
 
 LAUNCH_RECORD_FILENAME = ".workflow-worker-launches.json"
+_HOST_SESSION_ENVIRONMENT_KEYS = (
+    "CODEX_REMOTE_PAYLOAD",
+    "CODEX_SESSION_ID",
+    "CODEX_THREAD_ID",
+)
 _thread_locks: dict[Path, threading.RLock] = {}
 _thread_locks_guard = threading.Lock()
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def detached_child_environment() -> dict[str, str]:
+    """Return provider configuration without parent host-session controls."""
+    environment = os.environ.copy()
+    for key in _HOST_SESSION_ENVIRONMENT_KEYS:
+        environment.pop(key, None)
+    return environment
 
 
 class WorkerLaunchStore:
@@ -231,6 +245,7 @@ class FixedWorkerLauncher:
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
                 close_fds=True,
+                env=detached_child_environment(),
             )
         except OSError:
             self.store.mark(worker_id, "startup_failed", error_code="spawn_failed")

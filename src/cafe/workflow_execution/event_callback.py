@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from cafe.skills.loader import SkillLoader
+from cafe.workflow_execution.worker_launch import detached_child_environment
 
 
 _CALLBACK_ID = re.compile(r"^builtin:([a-z0-9][a-z0-9-]*):([a-z][a-z0-9_]*)$")
@@ -81,6 +82,7 @@ def dispatch_workflow_event_callback(
         "stderr": subprocess.DEVNULL,
         "start_new_session": True,
         "close_fds": True,
+        "env": detached_child_environment(),
     }
     if popen_factory is not None:
         popen_factory(arguments, **kwargs)
