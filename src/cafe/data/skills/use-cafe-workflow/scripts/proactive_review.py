@@ -755,7 +755,13 @@ def _bounded_yaml_bytes(value: Mapping[str, Any], *, label: str, maximum: int) -
     return encoded
 
 
-def _atomic_bytes_write_at(directory_descriptor: int, name: str, content: bytes) -> None:
+def _atomic_bytes_write_at(
+    directory_descriptor: int,
+    name: str,
+    content: bytes,
+    *,
+    verify_live_authority: Callable[[], Any] | None = None,
+) -> None:
     """Atomically replace one checked target through its held directory descriptor."""
     _persistence_entry_exists(directory_descriptor, name)
     temporary = ""
@@ -784,6 +790,8 @@ def _atomic_bytes_write_at(directory_descriptor: int, name: str, content: bytes)
             handle.flush()
             os.fsync(handle.fileno())
         _persistence_entry_exists(directory_descriptor, name)
+        if verify_live_authority is not None:
+            verify_live_authority()
         os.replace(
             temporary,
             name,
@@ -803,16 +811,27 @@ def _atomic_bytes_write_at(directory_descriptor: int, name: str, content: bytes)
 
 
 def _restore_persistence_entry(
-    directory_descriptor: int, name: str, original: bytes | None
+    directory_descriptor: int,
+    name: str,
+    original: bytes | None,
+    *,
+    verify_live_authority: Callable[[], Any] | None = None,
 ) -> None:
     if original is None:
         try:
+            if verify_live_authority is not None:
+                verify_live_authority()
             os.unlink(name, dir_fd=directory_descriptor)
         except FileNotFoundError:
             return
         os.fsync(directory_descriptor)
         return
-    _atomic_bytes_write_at(directory_descriptor, name, original)
+    _atomic_bytes_write_at(
+        directory_descriptor,
+        name,
+        original,
+        verify_live_authority=verify_live_authority,
+    )
 
 
 def _pending_replacement_bytes(
@@ -906,18 +925,29 @@ def _load_pending_replacement(content: bytes) -> tuple[str, str, bytes | None]:
         raise StaleContractError("proactive review replacement recovery is invalid") from exc
 
 
-def _delete_persistence_entry(directory_descriptor: int, name: str) -> None:
+def _delete_persistence_entry(
+    directory_descriptor: int,
+    name: str,
+    *,
+    verify_live_authority: Callable[[], Any] | None = None,
+) -> None:
     if not _persistence_entry_exists(directory_descriptor, name):
         return
     try:
+        if verify_live_authority is not None:
+            verify_live_authority()
         os.unlink(name, dir_fd=directory_descriptor)
         os.fsync(directory_descriptor)
     except OSError as exc:
         raise StaleContractError("proactive review persistence target cannot be removed") from exc
 
 
-def _recover_pending_replacement(directory_descriptor: int) -> None:
+def _recover_pending_replacement(
+    directory_descriptor: int, *, verify_live_authority: Callable[[], Any] | None = None
+) -> None:
     """Finish or roll back an interrupted replacement at its durable commit point."""
+    if verify_live_authority is not None:
+        verify_live_authority()
     content = _read_persistence_entry(
         directory_descriptor, REPLACEMENT_FILENAME, maximum=MAX_REPLACEMENT_BYTES
     )
@@ -926,27 +956,56 @@ def _recover_pending_replacement(directory_descriptor: int) -> None:
     previous_digest, replacement_digest, previous_state = _load_pending_replacement(content)
     active_digest = _active_contract_digest(directory_descriptor)
     if active_digest == previous_digest:
-        _restore_persistence_entry(directory_descriptor, STATE_FILENAME, previous_state)
+        if verify_live_authority is not None:
+            verify_live_authority()
+        _restore_persistence_entry(
+            directory_descriptor,
+            STATE_FILENAME,
+            previous_state,
+            verify_live_authority=verify_live_authority,
+        )
     elif active_digest == replacement_digest:
         replacement_state = _bounded_yaml_bytes(
             _empty_review_state(replacement_digest),
             label="durable proactive review state",
             maximum=MAX_STATE_BYTES,
         )
-        _atomic_bytes_write_at(directory_descriptor, STATE_FILENAME, replacement_state)
+        if verify_live_authority is not None:
+            verify_live_authority()
+        _atomic_bytes_write_at(
+            directory_descriptor,
+            STATE_FILENAME,
+            replacement_state,
+            verify_live_authority=verify_live_authority,
+        )
     else:
         raise StaleContractError("proactive review replacement has an unknown contract generation")
-    _delete_persistence_entry(directory_descriptor, REPLACEMENT_FILENAME)
+    if verify_live_authority is not None:
+        verify_live_authority()
+    _delete_persistence_entry(
+        directory_descriptor,
+        REPLACEMENT_FILENAME,
+        verify_live_authority=verify_live_authority,
+    )
 
 
 def _atomic_yaml_write(
-    path: Path, value: Mapping[str, Any], *, directory_descriptor: int | None = None
+    path: Path,
+    value: Mapping[str, Any],
+    *,
+    directory_descriptor: int | None = None,
+    verify_live_authority: Callable[[], Any] | None = None,
 ) -> None:
     encoded = _bounded_yaml_bytes(
         value, label="durable proactive review state", maximum=MAX_STATE_BYTES
     )
     if directory_descriptor is not None:
-        _atomic_bytes_write_at(directory_descriptor, path.name, encoded)
+        _atomic_bytes_write_at(
+            directory_descriptor,
+            path.name,
+            encoded,
+            verify_live_authority=verify_live_authority,
+        )
         return
     if path.is_symlink() or (path.exists() and not path.is_file()):
         raise StaleContractError("proactive review persistence target is invalid")
@@ -959,6 +1018,8 @@ def _atomic_yaml_write(
             handle.write(encoded.decode("utf-8"))
             handle.flush()
             os.fsync(handle.fileno())
+        if verify_live_authority is not None:
+            verify_live_authority()
         os.replace(temporary, path)
     finally:
         if os.path.exists(temporary):
@@ -1003,6 +1064,22 @@ def _active_contract_digest(directory_descriptor: int) -> str:
         raise StaleContractError("active proactive review contract is invalid") from exc
 
 
+def _activation_envelope(
+    *, issue_dir: Path, project_root: Path, policy: Any, confirmation: Any
+) -> tuple[str, dict[str, Any]]:
+    """Resolve a confirmed activation against the issue's current authority."""
+    playbook_id = _read_issue_playbook_id(issue_dir)
+    live = _live_playbook(issue_dir=issue_dir, project_root=project_root, playbook_id=playbook_id)
+    validated_policy = validate_policy(policy, playbook=live)
+    validated_confirmation = _validate_confirmation(
+        confirmation, issue_dir=issue_dir, policy=validated_policy
+    )
+    return validated_confirmation["proposal_digest"], {
+        **validated_confirmation,
+        "policy": validated_policy,
+    }
+
+
 def activate_contract(
     *,
     issue_dir: Path,
@@ -1015,35 +1092,32 @@ def activate_contract(
     issue_dir = _authorized_issue_dir(issue_dir=issue_dir, project_root=project_root)
     if not issue_dir.is_dir():
         raise ValueError("proactive review activation requires an already prepared issue directory")
-    playbook_id = _read_issue_playbook_id(issue_dir)
-    live = _live_playbook(issue_dir=issue_dir, project_root=project_root, playbook_id=playbook_id)
-    validated_policy = validate_policy(policy, playbook=live)
-    _validate_confirmation(
-        confirmation, issue_dir=issue_dir, policy=validated_policy
+    _activation_envelope(
+        issue_dir=issue_dir,
+        project_root=project_root,
+        policy=policy,
+        confirmation=confirmation,
     )
     target = contract_path(issue_dir)
     with _contract_lock(issue_dir, recover=False) as directory_descriptor:
-        try:
-            locked_playbook_id = _read_issue_playbook_id(issue_dir)
-            locked_live = _live_playbook(
-                issue_dir=issue_dir,
-                project_root=project_root,
-                playbook_id=locked_playbook_id,
-            )
-            locked_policy = validate_policy(policy, playbook=locked_live)
-            locked_confirmation = _validate_confirmation(
-                confirmation, issue_dir=issue_dir, policy=locked_policy
-            )
-        except (StaleContractError, ValueError) as exc:
-            raise StaleContractError(
-                "activation inputs no longer match the live issue playbook"
-            ) from exc
-        digest = locked_confirmation["proposal_digest"]
-        envelope = {
-            **locked_confirmation,
-            "policy": locked_policy,
-        }
-        _recover_pending_replacement(directory_descriptor)
+        def locked_activation_envelope() -> tuple[str, dict[str, Any]]:
+            try:
+                return _activation_envelope(
+                    issue_dir=issue_dir,
+                    project_root=project_root,
+                    policy=policy,
+                    confirmation=confirmation,
+                )
+            except (StaleContractError, ValueError) as exc:
+                raise StaleContractError(
+                    "activation inputs no longer match the live issue playbook"
+                ) from exc
+
+        locked_activation_envelope()
+        _recover_pending_replacement(
+            directory_descriptor, verify_live_authority=locked_activation_envelope
+        )
+        digest, envelope = locked_activation_envelope()
         replacing = _persistence_entry_exists(directory_descriptor, CONTRACT_FILENAME)
         if replacing:
             existing_digest = _active_contract_digest(directory_descriptor)
@@ -1053,14 +1127,23 @@ def activate_contract(
             raise StaleContractError("initial activation cannot compare an absent active contract")
         if not replacing:
             _atomic_bytes_write_at(
-                directory_descriptor, ACTIVATION_FILENAME, _activation_marker_bytes()
+                directory_descriptor,
+                ACTIVATION_FILENAME,
+                _activation_marker_bytes(),
+                verify_live_authority=locked_activation_envelope,
             )
             _atomic_yaml_write(
-                target, envelope, directory_descriptor=directory_descriptor
+                target,
+                envelope,
+                directory_descriptor=directory_descriptor,
+                verify_live_authority=locked_activation_envelope,
             )
         else:
             _atomic_bytes_write_at(
-                directory_descriptor, ACTIVATION_FILENAME, _activation_marker_bytes()
+                directory_descriptor,
+                ACTIVATION_FILENAME,
+                _activation_marker_bytes(),
+                verify_live_authority=locked_activation_envelope,
             )
             previous_state = _read_persistence_entry(
                 directory_descriptor, STATE_FILENAME, maximum=MAX_STATE_BYTES
@@ -1070,20 +1153,33 @@ def activate_contract(
                 replacement_digest=digest,
                 previous_state=previous_state,
             )
-            _atomic_bytes_write_at(directory_descriptor, REPLACEMENT_FILENAME, recovery)
+            _atomic_bytes_write_at(
+                directory_descriptor,
+                REPLACEMENT_FILENAME,
+                recovery,
+                verify_live_authority=locked_activation_envelope,
+            )
             try:
                 _atomic_yaml_write(
                     state_path(issue_dir),
                     _empty_review_state(digest),
                     directory_descriptor=directory_descriptor,
+                    verify_live_authority=locked_activation_envelope,
                 )
                 _atomic_yaml_write(
-                    target, envelope, directory_descriptor=directory_descriptor
+                    target,
+                    envelope,
+                    directory_descriptor=directory_descriptor,
+                    verify_live_authority=locked_activation_envelope,
                 )
             except BaseException:
                 _recover_pending_replacement(directory_descriptor)
                 raise
-            _delete_persistence_entry(directory_descriptor, REPLACEMENT_FILENAME)
+            _delete_persistence_entry(
+                directory_descriptor,
+                REPLACEMENT_FILENAME,
+                verify_live_authority=locked_activation_envelope,
+            )
     return target
 
 

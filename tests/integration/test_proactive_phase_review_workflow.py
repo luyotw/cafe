@@ -230,6 +230,100 @@ def test_replacement_revalidates_live_authority_after_acquiring_contract_lock(
     assert module.state_path(issue_dir).read_bytes() == original_state
 
 
+@pytest.mark.parametrize("live_drift", ["issue_playbook", "effective_inventory"])
+@pytest.mark.parametrize("drift_boundary", ["recovery", "publication"])
+def test_replacement_revalidates_live_authority_after_locked_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    live_drift: str,
+    drift_boundary: str,
+) -> None:
+    """I3, U8 — authority drift before publication cannot replace active evidence."""
+    module = _module()
+    issue_dir = tmp_path / ".cafe" / "issues" / "publication-replacement"
+    issue_dir.mkdir(parents=True)
+    issue_file = issue_dir / "issue.yaml"
+    issue_file.write_text("playbook_id: standard\n", encoding="utf-8")
+    initial_policy = _policy(selected="develop")
+    contract_path = module.activate_contract(
+        issue_dir=issue_dir,
+        project_root=tmp_path,
+        policy=initial_policy,
+        confirmation=_confirmation("publication-replacement", initial_policy),
+    )
+    output = issue_dir / "develop" / "iteration_001" / "output.md"
+    output.parent.mkdir(parents=True)
+    output.write_text("pending output", encoding="utf-8")
+    requirements, upstream, evidence = _review_evidence(issue_dir, tmp_path)
+    module.prepare_review_inputs(
+        issue_dir=issue_dir,
+        project_root=tmp_path,
+        phase="develop",
+        output_path=output,
+        requirements=requirements,
+        upstream_artifacts=upstream,
+        repository_evidence=evidence,
+        correction_history=[],
+    )
+    original_contract = contract_path.read_bytes()
+    original_state = module.state_path(issue_dir).read_bytes()
+    initial_digest = module.policy_digest(initial_policy)
+    replacement_policy = _policy(selected="review")
+    original_live_playbook = module._live_playbook
+    original_recovery = module._recover_pending_replacement
+    authority_changed = False
+
+    def changed_live_playbook(**kwargs):
+        if authority_changed and live_drift == "effective_inventory":
+            return SimpleNamespace(
+                playbook=SimpleNamespace(id="standard"),
+                steps={},
+            )
+        return original_live_playbook(**kwargs)
+
+    def change_live_authority() -> None:
+        nonlocal authority_changed
+        authority_changed = True
+        if live_drift == "issue_playbook":
+            issue_file.write_text("playbook_id: simple\n", encoding="utf-8")
+
+    def change_live_authority_after_locked_validation(directory_descriptor, **kwargs):
+        if drift_boundary == "recovery":
+            change_live_authority()
+        original_recovery(directory_descriptor, **kwargs)
+
+    original_atomic_write = module._atomic_bytes_write_at
+
+    def change_live_authority_before_publish(directory_descriptor, name, content, **kwargs):
+        if drift_boundary == "publication" and name == module.ACTIVATION_FILENAME:
+            change_live_authority()
+        return original_atomic_write(directory_descriptor, name, content, **kwargs)
+
+    monkeypatch.setattr(module, "_live_playbook", changed_live_playbook)
+    monkeypatch.setattr(
+        module,
+        "_recover_pending_replacement",
+        change_live_authority_after_locked_validation,
+    )
+    monkeypatch.setattr(
+        module,
+        "_atomic_bytes_write_at",
+        change_live_authority_before_publish,
+    )
+
+    with pytest.raises(module.StaleContractError):
+        module.activate_contract(
+            issue_dir=issue_dir,
+            project_root=tmp_path,
+            policy=replacement_policy,
+            confirmation=_confirmation("publication-replacement", replacement_policy),
+            expected_active_digest=initial_digest,
+        )
+
+    assert contract_path.read_bytes() == original_contract
+    assert module.state_path(issue_dir).read_bytes() == original_state
+
+
 def test_blocking_review_correction_converges_to_one_clean_current_episode(tmp_path: Path) -> None:
     """I4 — a corrected durable output is re-reviewed as a whole and compacts on clean."""
     module = _module()
