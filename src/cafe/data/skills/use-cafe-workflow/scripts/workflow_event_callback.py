@@ -530,9 +530,11 @@ def _acquire_v3_session(
     event_id: str,
     index: int,
     repository_root: Path,
-    executor_factory=AgentExecutor,
+    executor_factory=None,
 ) -> tuple[dict[str, Any], str]:
     """Acquire and atomically persist one provider-owned session."""
+    if executor_factory is None:
+        executor_factory = AgentExecutor
     entry = state["entries"][index]
     if entry["session"] is not None:
         return state, "acquired"
@@ -784,6 +786,241 @@ def _queue_host_callback(
     )
 
 
+def _accept_delivery(
+    driver_dir: Path,
+    state: dict[str, Any],
+    *,
+    event_id: str,
+    index: int,
+    session_id: str,
+) -> dict[str, Any]:
+    updated = copy.deepcopy(state)
+    event_state = updated["events"][event_id]
+    attempt = event_state["attempts"][-1]
+    if attempt.get("stage") != "delivery" or attempt.get("status") != "pending":
+        raise ValueError("event-driven delivery attempt is not pending")
+    now = _now()
+    attempt.update(
+        {
+            "status": "accepted",
+            "outcome": "durable_acceptance",
+            "reason": "provider_acknowledgement",
+            "session_id": session_id,
+            "finished_at": now,
+        }
+    )
+    event_state["status"] = "accepted"
+    event_state["accepted_index"] = index
+    event_state["recovery_pending"] = False
+    starting_index = event_state["starting_index"]
+    if index > starting_index:
+        prior_failure = next(
+            (
+                item
+                for item in reversed(event_state["attempts"][:-1])
+                if item.get("outcome") == "conclusive_nonacceptance"
+            ),
+            None,
+        )
+        event_state["takeover"] = {
+            "event_id": event_id,
+            "sequence": event_state["event"]["sequence"],
+            "occurred_at": event_state["event"]["occurred_at"],
+            "from_index": starting_index,
+            "to_index": index,
+            "eligible_reason": prior_failure.get("reason") if prior_failure else None,
+            "accepted_at": now,
+        }
+    updated["active_index"] = index
+    return _write_dispatch_state(driver_dir, updated)
+
+
+def _deliver_v3_callback(
+    driver_dir: Path,
+    state: dict[str, Any],
+    event: dict[str, Any],
+    *,
+    index: int,
+    repository_root: Path,
+    executor_factory=None,
+) -> tuple[dict[str, Any], str]:
+    if executor_factory is None:
+        executor_factory = AgentExecutor
+    event_id = event["event_id"]
+    entry = state["entries"][index]
+    session = entry.get("session")
+    if not isinstance(session, dict):
+        raise ValueError("actual callback requires durable session provenance")
+    attempts = state["events"][event_id]["attempts"]
+    if attempts and attempts[-1].get("status") == "pending":
+        return state, "ambiguous"
+
+    state = _append_pending_attempt(
+        driver_dir,
+        state,
+        event_id=event_id,
+        index=index,
+        stage="delivery",
+    )
+    session_id = session["id"]
+    try:
+        if index == 0 and session.get("source") == "host_session":
+            _queue_host_callback(
+                _callback_prompt(event, repository_root=repository_root),
+                thread_id=session_id,
+                model=entry["model"],
+                repository_root=repository_root,
+            )
+            accepted = True
+            records: Any = ()
+            reported_session_id = session_id
+        else:
+            executor = executor_factory(
+                AgentConfig(
+                    name=DRIVER_AGENT_NAME,
+                    cli=AgentCLI(entry["cli"]),
+                    model=entry["model"],
+                    session_id=session_id,
+                    clis=[],
+                    backup_clis=[],
+                ),
+                stream_output=False,
+            )
+            result = executor.execute_event_driver(
+                _callback_prompt(event, repository_root=repository_root),
+                expected_session_id=session_id,
+                event_id=event_id,
+                allowed_tools=["Read", "Grep", "Glob", "Bash"],
+                allowed_directories=[str(repository_root)],
+                execution_control=AgentExecutionControl(
+                    max_duration_seconds=60,
+                    max_output_bytes=64 * 1024,
+                    max_output_lines=128,
+                ),
+            )
+            accepted = bool(getattr(result, "accepted", False))
+            records = getattr(result, "records", ())
+            reported_session_id = getattr(result, "session_id", None)
+    except Exception as exc:
+        classification = _classify_provider_failure(exc)
+        state = _finish_pending_attempt(
+            driver_dir,
+            state,
+            event_id=event_id,
+            status="failed" if classification == "conclusive_nonacceptance" else "ambiguous",
+            outcome=classification,
+            reason=getattr(exc, "error_type", None) or type(exc).__name__,
+            session_id=session_id,
+            recovery_pending=classification == "ambiguous",
+        )
+        return state, classification
+
+    if accepted and reported_session_id == session_id:
+        return (
+            _accept_delivery(
+                driver_dir,
+                state,
+                event_id=event_id,
+                index=index,
+                session_id=session_id,
+            ),
+            "accepted",
+        )
+
+    observed_ids = _observed_session_ids(records)
+    conflicting = bool(observed_ids and observed_ids != {session_id})
+    classification = "ambiguous" if accepted or conflicting else "conclusive_nonacceptance"
+    state = _finish_pending_attempt(
+        driver_dir,
+        state,
+        event_id=event_id,
+        status="ambiguous" if classification == "ambiguous" else "failed",
+        outcome=classification,
+        reason="conflicting_session_evidence" if conflicting else "invalid_acknowledgement",
+        session_id=session_id,
+        recovery_pending=classification == "ambiguous",
+    )
+    return state, classification
+
+
+def _exhaust_event(
+    driver_dir: Path,
+    state: dict[str, Any],
+    *,
+    event_id: str,
+) -> dict[str, Any]:
+    updated = copy.deepcopy(state)
+    event_state = updated["events"][event_id]
+    event_state["status"] = "exhausted"
+    event_state["recovery_pending"] = True
+    return _write_dispatch_state(driver_dir, updated)
+
+
+def _run_v3_callback(
+    driver_dir: Path,
+    state: dict[str, Any],
+    event: dict[str, Any],
+    *,
+    repository_root: Path,
+    executor_factory=None,
+) -> dict[str, Any]:
+    """Run serial acquisition/delivery attempts until first acceptance or recovery."""
+    if executor_factory is None:
+        executor_factory = AgentExecutor
+    event_id = event["event_id"]
+    event_state = state["events"][event_id]
+    if event_state["status"] in {"accepted", "exhausted", "recovery_pending"}:
+        return state
+    attempts = event_state["attempts"]
+    if attempts and attempts[-1].get("status") == "pending":
+        return state
+    index = event_state["starting_index"]
+    if attempts:
+        last = attempts[-1]
+        index = last["index"]
+        if last.get("outcome") == "conclusive_nonacceptance":
+            index += 1
+
+    while index < len(state["entries"]):
+        state, acquisition = _acquire_v3_session(
+            driver_dir,
+            state,
+            event_id=event_id,
+            index=index,
+            repository_root=repository_root,
+            executor_factory=executor_factory,
+        )
+        if acquisition == "ambiguous":
+            return state
+        if acquisition == "conclusive_nonacceptance":
+            index += 1
+            continue
+
+        state, delivery = _deliver_v3_callback(
+            driver_dir,
+            state,
+            event,
+            index=index,
+            repository_root=repository_root,
+            executor_factory=executor_factory,
+        )
+        if delivery in {"accepted", "ambiguous"}:
+            return state
+        index += 1
+
+    return _exhaust_event(driver_dir, state, event_id=event_id)
+
+
+def _event_is_durable(blackboard, event: dict[str, Any]) -> bool:
+    return any(
+        entry.event_type == "workflow_event_callback_enqueued"
+        and entry.data.get("event_id") == event.get("event_id")
+        and entry.data.get("sequence") == event.get("sequence")
+        and entry.data.get("occurred_at") == event.get("occurred_at")
+        for entry in blackboard.events
+    )
+
+
 def run_callback(event: dict[str, Any], *, repository_root: Path) -> None:
     issue_name = event.get("issue")
     workflow_id = event.get("workflow_id")
@@ -803,10 +1040,19 @@ def run_callback(event: dict[str, Any], *, repository_root: Path) -> None:
         if blackboard.workflow_id != workflow_id:
             raise ValueError("workflow event callback is stale")
         if config["schema_version"] == 3:
-            _load_or_initialize_dispatch_state(
+            if not _event_is_durable(blackboard, event):
+                raise ValueError("workflow event callback is not durable")
+            state = _load_or_initialize_dispatch_state(
                 driver_dir,
                 workflow_id=workflow_id,
                 config=config,
+            )
+            state = _ensure_dispatch_event(driver_dir, state, event)
+            _run_v3_callback(
+                driver_dir,
+                state,
+                event,
+                repository_root=repository_root,
             )
             return
         cli = AgentCLI(config["cli"])

@@ -463,6 +463,353 @@ def test_session_persistence_failure_never_launches_actual_callback(
     assert calls == ['say "HI"']
 
 
+def test_actual_callback_starts_only_after_session_is_durable(tmp_path: Path) -> None:
+    callback = _callback_module()
+    driver_dir, state, event = _v3_event_context(callback, tmp_path, [("claude", "exact")])
+    calls = []
+
+    class FakeExecutor:
+        def __init__(self, config, **_kwargs):
+            self.config = config
+
+        def execute_event_driver(self, prompt, **kwargs):
+            calls.append((prompt, kwargs))
+            if kwargs.get("expected_session_id") is None:
+                return SimpleNamespace(session_id="provider-session", accepted=False, records=())
+            persisted = json.loads((driver_dir / "dispatch_state.json").read_text())
+            assert persisted["entries"][0]["session"]["id"] == "provider-session"
+            assert kwargs["expected_session_id"] == "provider-session"
+            assert event["event_id"] in prompt
+            return SimpleNamespace(
+                session_id="provider-session",
+                accepted=True,
+                records=({"type": "system", "subtype": "init", "session_id": "provider-session"},),
+            )
+
+    updated = callback._run_v3_callback(
+        driver_dir,
+        state,
+        event,
+        repository_root=tmp_path,
+        executor_factory=FakeExecutor,
+    )
+
+    assert [call[0] for call in calls][0] == 'say "HI"'
+    assert calls[0][1].get("event_id") is None
+    assert calls[1][1]["event_id"] == event["event_id"]
+    event_state = updated["events"][event["event_id"]]
+    assert [attempt["stage"] for attempt in event_state["attempts"]] == [
+        "bootstrap",
+        "delivery",
+    ]
+    assert event_state["status"] == "accepted"
+    assert event_state["accepted_index"] == 0
+
+
+def test_multi_hop_delivery_is_serial_forward_only_and_sticky(tmp_path: Path) -> None:
+    callback = _callback_module()
+    chain = [("codex", "one"), ("claude", "two"), ("gemini", "three")]
+    driver_dir, state, event = _v3_event_context(callback, tmp_path, chain)
+    calls = []
+
+    class FakeExecutor:
+        def __init__(self, config, **_kwargs):
+            self.config = config
+
+        def execute_event_driver(self, prompt, **kwargs):
+            stage = "delivery" if kwargs.get("expected_session_id") else "bootstrap"
+            calls.append((self.config.cli.value, stage, kwargs.get("event_id")))
+            session_id = f"{self.config.cli.value}-session"
+            return SimpleNamespace(
+                session_id=session_id,
+                accepted=stage == "delivery" and self.config.cli is AgentCLI.GEMINI,
+                records=(),
+            )
+
+    updated = callback._run_v3_callback(
+        driver_dir,
+        state,
+        event,
+        repository_root=tmp_path,
+        executor_factory=FakeExecutor,
+    )
+
+    assert [(cli, stage) for cli, stage, _event_id in calls] == [
+        ("codex", "bootstrap"),
+        ("codex", "delivery"),
+        ("claude", "bootstrap"),
+        ("claude", "delivery"),
+        ("gemini", "bootstrap"),
+        ("gemini", "delivery"),
+    ]
+    assert {event_id for _cli, stage, event_id in calls if stage == "delivery"} == {
+        event["event_id"]
+    }
+    assert updated["active_index"] == 2
+    takeover = updated["events"][event["event_id"]]["takeover"]
+    assert takeover["from_index"] == 0
+    assert takeover["to_index"] == 2
+
+    replayed = callback._run_v3_callback(
+        driver_dir,
+        updated,
+        event,
+        repository_root=tmp_path,
+        executor_factory=FakeExecutor,
+    )
+    assert replayed == updated
+    assert len(calls) == 6
+
+    from cafe.core.blackboard import BlackboardStore
+
+    issue_dir = driver_dir.parent
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("spec")
+    later_event = store.prepare_workflow_callback_event(
+        blackboard,
+        {
+            "workflow_id": state["workflow_id"],
+            "issue": issue_dir.name,
+            "event_type": "workflow_completed",
+            "step": "review",
+            "status_code": "ok",
+        },
+    )
+    later_state = callback._ensure_dispatch_event(driver_dir, updated, later_event)
+    later_state = callback._run_v3_callback(
+        driver_dir,
+        later_state,
+        later_event,
+        repository_root=tmp_path,
+        executor_factory=FakeExecutor,
+    )
+    assert calls[-1][:2] == ("gemini", "delivery")
+    assert later_state["active_index"] == 2
+
+
+def test_ambiguous_actual_delivery_stops_before_later_entry(tmp_path: Path) -> None:
+    callback = _callback_module()
+    driver_dir, state, event = _v3_event_context(
+        callback, tmp_path, [("codex", "one"), ("claude", "two")]
+    )
+    calls = []
+
+    class FakeExecutor:
+        def __init__(self, config, **_kwargs):
+            self.config = config
+
+        def execute_event_driver(self, prompt, **kwargs):
+            calls.append((self.config.cli.value, prompt))
+            if kwargs.get("expected_session_id") is None:
+                return SimpleNamespace(session_id="codex-session", accepted=False, records=())
+            raise callback.AgentExecutionError("truncated", error_type="incomplete_stream")
+
+    updated = callback._run_v3_callback(
+        driver_dir,
+        state,
+        event,
+        repository_root=tmp_path,
+        executor_factory=FakeExecutor,
+    )
+
+    assert [cli for cli, _prompt in calls] == ["codex", "codex"]
+    event_state = updated["events"][event["event_id"]]
+    assert event_state["status"] == "recovery_pending"
+    assert event_state["attempts"][-1]["stage"] == "delivery"
+    assert event_state["attempts"][-1]["outcome"] == "ambiguous"
+
+
+def test_exhausted_suffix_retains_event_and_active_index(tmp_path: Path) -> None:
+    callback = _callback_module()
+    driver_dir, state, event = _v3_event_context(
+        callback, tmp_path, [("claude", "one"), ("gemini", "two")]
+    )
+    calls = []
+
+    class FakeExecutor:
+        def __init__(self, config, **_kwargs):
+            self.config = config
+
+        def execute_event_driver(self, _prompt, **kwargs):
+            calls.append((self.config.cli.value, bool(kwargs.get("expected_session_id"))))
+            return SimpleNamespace(
+                session_id=f"{self.config.cli.value}-session",
+                accepted=False,
+                records=(),
+            )
+
+    updated = callback._run_v3_callback(
+        driver_dir,
+        state,
+        event,
+        repository_root=tmp_path,
+        executor_factory=FakeExecutor,
+    )
+
+    event_state = updated["events"][event["event_id"]]
+    assert event_state["status"] == "exhausted"
+    assert event_state["recovery_pending"] is True
+    assert updated["active_index"] == 0
+    assert len(calls) == 4
+
+
+def test_acceptance_write_failure_reloads_as_pending_and_never_falls_forward(
+    tmp_path: Path,
+) -> None:
+    callback = _callback_module()
+    driver_dir, state, event = _v3_event_context(
+        callback, tmp_path, [("cursor-agent", "one"), ("gemini", "two")]
+    )
+    calls = []
+
+    class FakeExecutor:
+        def __init__(self, config, **_kwargs):
+            self.config = config
+
+        def execute_event_driver(self, _prompt, **kwargs):
+            calls.append(self.config.cli.value)
+            return SimpleNamespace(
+                session_id="cursor-session",
+                accepted=kwargs.get("expected_session_id") is not None,
+                records=(),
+            )
+
+    original_atomic_write = callback._atomic_write
+    writes = 0
+
+    def fail_acceptance(path, payload):
+        nonlocal writes
+        writes += 1
+        if writes == 4:
+            raise OSError("acceptance replace failed")
+        original_atomic_write(path, payload)
+
+    with patch.object(callback, "_atomic_write", side_effect=fail_acceptance):
+        with pytest.raises(OSError):
+            callback._run_v3_callback(
+                driver_dir,
+                state,
+                event,
+                repository_root=tmp_path,
+                executor_factory=FakeExecutor,
+            )
+
+    persisted = callback._load_or_initialize_dispatch_state(
+        driver_dir,
+        workflow_id=state["workflow_id"],
+        config=state["policy"],
+    )
+    event_state = persisted["events"][event["event_id"]]
+    assert event_state["attempts"][-1]["stage"] == "delivery"
+    assert event_state["attempts"][-1]["status"] == "pending"
+
+    replayed = callback._run_v3_callback(
+        driver_dir,
+        persisted,
+        event,
+        repository_root=tmp_path,
+        executor_factory=FakeExecutor,
+    )
+    assert replayed == persisted
+    assert calls == ["cursor-agent", "cursor-agent"]
+
+
+def test_bound_codex_delivery_uses_queue_without_bootstrap(tmp_path: Path, monkeypatch) -> None:
+    callback = _callback_module()
+    monkeypatch.setenv("CODEX_THREAD_ID", "bound-session")
+    driver_dir, state, event = _v3_event_context(
+        callback, tmp_path, [("codex", "exact"), ("claude", "fallback")]
+    )
+
+    class ForbiddenExecutor:
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("bound Codex must use its host queue")
+
+    with patch.object(callback, "_queue_host_callback") as queue:
+        updated = callback._run_v3_callback(
+            driver_dir,
+            state,
+            event,
+            repository_root=tmp_path,
+            executor_factory=ForbiddenExecutor,
+        )
+
+    assert queue.call_count == 1
+    assert queue.call_args.kwargs["thread_id"] == "bound-session"
+    assert updated["events"][event["event_id"]]["status"] == "accepted"
+    assert updated["entries"][1]["session"] is None
+
+
+def test_conclusive_bootstrap_failure_moves_to_next_entry(tmp_path: Path) -> None:
+    callback = _callback_module()
+    driver_dir, state, event = _v3_event_context(
+        callback, tmp_path, [("codex", "one"), ("claude", "two")]
+    )
+    calls = []
+
+    class FakeExecutor:
+        def __init__(self, config, **_kwargs):
+            self.config = config
+
+        def execute_event_driver(self, _prompt, **kwargs):
+            stage = "delivery" if kwargs.get("expected_session_id") else "bootstrap"
+            calls.append((self.config.cli.value, stage))
+            if self.config.cli is AgentCLI.CODEX:
+                raise callback.AgentExecutionError(
+                    "exact model unavailable", error_type="model_not_found"
+                )
+            return SimpleNamespace(
+                session_id="claude-session",
+                accepted=stage == "delivery",
+                records=(),
+            )
+
+    updated = callback._run_v3_callback(
+        driver_dir,
+        state,
+        event,
+        repository_root=tmp_path,
+        executor_factory=FakeExecutor,
+    )
+
+    assert calls == [
+        ("codex", "bootstrap"),
+        ("claude", "bootstrap"),
+        ("claude", "delivery"),
+    ]
+    assert updated["active_index"] == 1
+    assert updated["events"][event["event_id"]]["attempts"][0]["stage"] == "bootstrap"
+
+
+def test_public_callback_path_executes_version_three_lifecycle(tmp_path: Path, monkeypatch) -> None:
+    callback = _callback_module()
+    driver_dir, state, event = _v3_event_context(callback, tmp_path, [("gemini", "exact")])
+    calls = []
+
+    class FakeExecutor:
+        def __init__(self, config, **_kwargs):
+            self.config = config
+
+        def execute_event_driver(self, _prompt, **kwargs):
+            calls.append(kwargs.get("expected_session_id"))
+            return SimpleNamespace(
+                session_id="gemini-session",
+                accepted=kwargs.get("expected_session_id") is not None,
+                records=(),
+            )
+
+    monkeypatch.setattr(callback, "AgentExecutor", FakeExecutor)
+    callback.run_callback(event, repository_root=tmp_path)
+
+    persisted = callback._load_or_initialize_dispatch_state(
+        driver_dir,
+        workflow_id=state["workflow_id"],
+        config=state["policy"],
+    )
+    assert calls == [None, "gemini-session"]
+    assert persisted["events"][event["event_id"]]["status"] == "accepted"
+
+
 def test_event_driver_session_rejects_a_different_workflow(tmp_path: Path) -> None:
     callback = _callback_module()
     driver_dir = tmp_path / "driver"
