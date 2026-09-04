@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import os
+import stat
 import subprocess
 import threading
 import time
@@ -466,6 +467,67 @@ def test_untracked_repository_content_drift_keeps_review_result_pending(tmp_path
     )
 
     untracked.write_text("BEHAVIOR = 2\n", encoding="utf-8")
+    stale = module.record_review_result(
+        issue_dir=issue_dir,
+        project_root=project_root,
+        phase="develop",
+        output_identity=manifest["output_identity"],
+        review_input_identity=manifest["review_input_identity"],
+        reviewer={"cli": "codex", "model": "gpt-5.6-sol"},
+        result=_complete_result(),
+        authorized_routes=[],
+    )
+
+    assert stale["status"] == "pending"
+    assert stale["pending_reason"] == "review_inputs_stale"
+
+
+def test_untracked_repository_content_boundary_keeps_review_result_pending(
+    tmp_path: Path,
+) -> None:
+    """BLK-004 — content framing distinguishes two-file untracked states."""
+    module = _module()
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    subprocess.run(["git", "init", "-q", str(project_root)], check=True)
+    subprocess.run(
+        ["git", "-C", str(project_root), "config", "user.email", "test@example.com"], check=True
+    )
+    subprocess.run(["git", "-C", str(project_root), "config", "user.name", "CAFE Test"], check=True)
+    tracked = project_root / "src" / "driver.py"
+    tracked.parent.mkdir()
+    tracked.write_text("VERSION = 1\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(project_root), "add", "src/driver.py"], check=True)
+    subprocess.run(["git", "-C", str(project_root), "commit", "-qm", "Initial driver"], check=True)
+
+    issue_dir, _ = _activate(module, project_root)
+    output, requirements, upstream, evidence = _review_inputs(issue_dir, project_root)
+    first = project_root / "src" / "a.py"
+    second = project_root / "src" / "b.py"
+    first.write_bytes(b"")
+    second.write_bytes(b"placeholder")
+    raw_name = os.fsencode(second.relative_to(project_root))
+    entry_prefix = (
+        b"\0untracked\0"
+        + len(raw_name).to_bytes(8, "big")
+        + raw_name
+        + stat.S_IMODE(second.stat().st_mode).to_bytes(4, "big")
+        + b"file\0"
+    )
+    second.write_bytes(b"X" + entry_prefix + b"Y")
+    manifest = module.prepare_review_inputs(
+        issue_dir=issue_dir,
+        project_root=project_root,
+        phase="develop",
+        output_path=output,
+        requirements=requirements,
+        upstream_artifacts=upstream,
+        repository_evidence=evidence,
+        correction_history=[],
+    )
+
+    first.write_bytes(entry_prefix + b"X")
+    second.write_bytes(b"Y")
     stale = module.record_review_result(
         issue_dir=issue_dir,
         project_root=project_root,

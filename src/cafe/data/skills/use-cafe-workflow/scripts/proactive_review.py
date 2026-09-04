@@ -256,6 +256,7 @@ def _hash_untracked_files(
                     "repository current state exceeds the supported evidence limit"
                 )
             digest.update(b"link\0")
+            digest.update(len(content).to_bytes(8, "big"))
             digest.update(content)
             remaining -= len(content)
             continue
@@ -278,6 +279,7 @@ def _hash_untracked_files(
                 ):
                     raise ReviewStateError("repository current state cannot be read")
                 digest.update(b"file\0")
+                digest.update(opened.st_size.to_bytes(8, "big"))
                 while True:
                     chunk = handle.read(min(64 * 1024, remaining + 1))
                     if not chunk:
