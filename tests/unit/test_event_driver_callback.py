@@ -300,7 +300,7 @@ def test_callback_prompt_reconciles_live_proactive_review_without_worker_control
     }
     proactive.activate_contract(
         issue_dir=issue_dir,
-        project_root=Path(__file__).parents[2],
+        project_root=tmp_path,
         policy=policy,
         confirmation={
             "schema_version": 1,
@@ -320,3 +320,10 @@ def test_callback_prompt_reconciles_live_proactive_review_without_worker_control
     assert "proactive review obligations" in prompt
     assert "non_gating" in prompt
     assert "not a workflow advancement gate" in prompt
+
+    proactive.contract_path(issue_dir).write_text("[]\n", encoding="utf-8")
+    stale_prompt = callback._callback_prompt(
+        {"issue": "issue456", "workflow_id": "workflow", "event_type": "phase_terminal"},
+        repository_root=tmp_path,
+    )
+    assert "reconfirmation-required" in stale_prompt

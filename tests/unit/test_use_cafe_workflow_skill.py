@@ -1,5 +1,6 @@
 """Tests for bundled use-cafe-workflow skill guidance."""
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -99,6 +100,11 @@ def _read_skill_resource(path: str) -> str:
 
 
 def _kickoff_formatter_command(strategic_context: Path, *extra_args: str) -> list[str]:
+    proactive_review_args = (
+        []
+        if "--proactive-review-json" in extra_args
+        else ["--proactive-review-json", json.dumps(_proactive_review_policy())]
+    )
     return [
         sys.executable,
         str(SKILL_ROOT / "scripts" / "format_kickoff_contract.py"),
@@ -119,6 +125,7 @@ def _kickoff_formatter_command(strategic_context: Path, *extra_args: str) -> lis
         "--driver-mode",
         "unattended",
         *extra_args,
+        *proactive_review_args,
         *_preflight_args(),
         "--risk-factor",
         "public contract",
@@ -572,6 +579,8 @@ def test_kickoff_contract_formatter_accepts_primary_only_chains(tmp_path: Path) 
                 "user_approval_required",
                 "--driver-mode",
                 "unattended",
+                "--proactive-review-json",
+                json.dumps(_proactive_review_policy()),
                 *_preflight_args(),
             "--risk-factor",
             "none",
@@ -941,6 +950,8 @@ def test_kickoff_contract_formatter_rejects_incomplete_gate_partition(
             "user_approval_required",
             "--driver-mode",
             "unattended",
+            "--proactive-review-json",
+            json.dumps(_proactive_review_policy()),
             *_preflight_args(),
             "--risk-factor",
             "none",
@@ -1026,6 +1037,8 @@ def test_kickoff_contract_formatter_uses_cafe_python_when_site_packages_are_miss
             "user_approval_required",
             "--driver-mode",
             "unattended",
+            "--proactive-review-json",
+            json.dumps(_proactive_review_policy()),
             *_preflight_args(),
             "--risk-factor",
             "none",
@@ -1129,6 +1142,12 @@ entry_point: audit
             "driver_autonomous",
             "--driver-mode",
             "unattended",
+            "--proactive-review-json",
+            json.dumps(
+                _proactive_review_policy(
+                    playbook_id="custom-audit", project_root=tmp_path, selected_phase="audit"
+                )
+            ),
             *_preflight_args(),
             "--risk-factor",
             "security boundary",
@@ -1186,6 +1205,8 @@ def test_kickoff_formatter_rejects_unresolved_phase_models(tmp_path: Path) -> No
             "user_approval_required",
             "--driver-mode",
             "unattended",
+            "--proactive-review-json",
+            json.dumps(_proactive_review_policy(playbook_id="simple")),
             *_preflight_args(),
             "--risk-factor",
             "none",
@@ -1238,6 +1259,8 @@ def test_kickoff_formatter_rejects_missing_phase_rationale(tmp_path: Path) -> No
             "user_approval_required",
             "--driver-mode",
             "unattended",
+            "--proactive-review-json",
+            json.dumps(_proactive_review_policy(playbook_id="simple")),
             *_preflight_args(),
             "--risk-factor",
             "none",
@@ -1602,10 +1625,18 @@ mandate:
         )
 
 
-def _proactive_review_policy(*, selected_phase: str = "develop") -> dict[str, object]:
-    """A complete proposal for the builtin standard agent-phase inventory."""
+def _proactive_review_policy(
+    *,
+    selected_phase: str = "develop",
+    playbook_id: str = "standard",
+    project_root: Path = PROJECT_ROOT,
+) -> dict[str, object]:
+    """A complete proposal for a builtin playbook's agent-phase inventory."""
     phases = []
-    for phase in ("spec", "plan", "develop", "review", "pr"):
+    model = PlaybookLoader(project_root=project_root).load_model(playbook_id).model
+    for phase, step in model.steps.items():
+        if step.assignee_type not in {"agent", "hybrid"}:
+            continue
         entry: dict[str, object] = {
             "phase": phase,
             "selected": phase == selected_phase,
@@ -1636,7 +1667,7 @@ def _proactive_review_policy(*, selected_phase: str = "develop") -> dict[str, ob
                 }
             )
         phases.append(entry)
-    return {"playbook_id": "standard", "phases": phases}
+    return {"playbook_id": playbook_id, "phases": phases}
 
 
 def _proactive_review_module():
@@ -1663,7 +1694,9 @@ def test_proactive_review_policy_validates_complete_selected_and_empty_inventory
         module.validate_policy(duplicate, playbook=model)
 
 
-def test_proactive_review_rendering_is_mutation_free_and_binds_a_policy_digest(tmp_path: Path) -> None:
+def test_proactive_review_rendering_is_mutation_free_and_binds_a_policy_digest(
+    tmp_path: Path,
+) -> None:
     """U2–U6 — rendering shows a validated policy without creating issue state."""
     strategic_context = tmp_path / "strategic_context.yaml"
     strategic_context.write_text(
@@ -1686,6 +1719,19 @@ def test_proactive_review_rendering_is_mutation_free_and_binds_a_policy_digest(t
     assert "proposal_digest" in result.stdout
     assert not (tmp_path / ".cafe" / "issues").exists()
 
+    missing_policy_command = _kickoff_formatter_command(strategic_context)
+    option_index = missing_policy_command.index("--proactive-review-json")
+    del missing_policy_command[option_index : option_index + 2]
+    missing_policy = subprocess.run(
+        missing_policy_command,
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert missing_policy.returncode == 2
+    assert "--proactive-review-json" in missing_policy.stderr
+
 
 def test_proactive_review_activation_requires_complete_confirmation_and_preserves_active_contract(
     tmp_path: Path, monkeypatch
@@ -1707,12 +1753,12 @@ def test_proactive_review_activation_requires_complete_confirmation_and_preserve
 
     contract_path = module.activate_contract(
         issue_dir=issue_dir,
-        project_root=PROJECT_ROOT,
+        project_root=tmp_path,
         policy=policy,
         confirmation=confirmation,
     )
     original = contract_path.read_bytes()
-    active = module.load_active_contract(issue_dir=issue_dir, project_root=PROJECT_ROOT)
+    active = module.load_active_contract(issue_dir=issue_dir, project_root=tmp_path)
 
     assert active["issue_name"] == "issue464"
     assert set(active) == {
@@ -1727,7 +1773,7 @@ def test_proactive_review_activation_requires_complete_confirmation_and_preserve
     with pytest.raises(ValueError):
         module.activate_contract(
             issue_dir=issue_dir,
-            project_root=PROJECT_ROOT,
+            project_root=tmp_path,
             policy=policy,
             confirmation={**confirmation, "confirmed_at": "2026-09-04T12:00:00"},
             expected_active_digest=active["proposal_digest"],
@@ -1737,7 +1783,7 @@ def test_proactive_review_activation_requires_complete_confirmation_and_preserve
     with pytest.raises(module.StaleContractError):
         module.activate_contract(
             issue_dir=issue_dir,
-            project_root=PROJECT_ROOT,
+            project_root=tmp_path,
             policy=policy,
             confirmation={**confirmation, "proposal_digest": "wrong"},
             expected_active_digest=active["proposal_digest"],
@@ -1749,7 +1795,7 @@ def test_proactive_review_activation_requires_complete_confirmation_and_preserve
     with pytest.raises(OSError):
         module.activate_contract(
             issue_dir=issue_dir,
-            project_root=PROJECT_ROOT,
+            project_root=tmp_path,
             policy=replacement,
             confirmation={
                 **confirmation,
@@ -1791,7 +1837,7 @@ def test_proactive_review_rejects_incomplete_or_unbound_confirmation_before_writ
         with pytest.raises((ValueError, module.StaleContractError)):
             module.activate_contract(
                 issue_dir=issue_dir,
-                project_root=PROJECT_ROOT,
+                project_root=tmp_path,
                 policy=policy,
                 confirmation=confirmation,
             )
@@ -1801,7 +1847,7 @@ def test_proactive_review_rejects_incomplete_or_unbound_confirmation_before_writ
     with pytest.raises(ValueError):
         module.activate_contract(
             issue_dir=tmp_path / ".cafe" / "issues" / "unprepared",
-            project_root=PROJECT_ROOT,
+            project_root=tmp_path,
             policy=policy,
             confirmation={**valid, "issue_name": "unprepared"},
         )
@@ -1814,7 +1860,7 @@ def _activate_proactive_review_for_evidence(module, tmp_path: Path) -> Path:
     policy = _proactive_review_policy()
     module.activate_contract(
         issue_dir=issue_dir,
-        project_root=PROJECT_ROOT,
+        project_root=tmp_path,
         policy=policy,
         confirmation={
             "schema_version": 1,
@@ -1840,35 +1886,56 @@ def _complete_review_result(*, blockers: list[dict[str, object]]) -> dict[str, o
     }
 
 
+def _review_evidence(
+    issue_dir: Path, project_root: Path
+) -> tuple[list[dict[str, str]], list[dict[str, str]], list[dict[str, str]]]:
+    paths = (
+        issue_dir / "spec" / "iteration_001" / "output.md",
+        issue_dir / "plan" / "iteration_001" / "output.md",
+        project_root / "repository-evidence.md",
+    )
+    for path, content in zip(paths, ("requirement", "accepted plan", "repository evidence")):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    identities = [
+        {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+        for path in paths
+    ]
+    return [identities[0]], [identities[1]], [identities[2]]
+
+
 def test_proactive_review_converges_current_evidence_without_reviewer_substitution(
     tmp_path: Path,
 ) -> None:
     """U9–U12 — one current episode converges only for its confirmed reviewer/output."""
     module = _proactive_review_module()
     issue_dir = _activate_proactive_review_for_evidence(module, tmp_path)
-    output = tmp_path / "develop-output.md"
+    output = issue_dir / "develop" / "iteration_001" / "output.md"
+    output.parent.mkdir(parents=True)
     output.write_text("initial output", encoding="utf-8")
+    requirements, upstream, evidence = _review_evidence(issue_dir, tmp_path)
 
     manifest = module.prepare_review_inputs(
         issue_dir=issue_dir,
-        project_root=PROJECT_ROOT,
+        project_root=tmp_path,
         phase="develop",
         output_path=output,
-        requirements=["confirmed requirement"],
-        upstream_artifacts=["accepted plan"],
-        repository_evidence=["relevant contract"],
+        requirements=requirements,
+        upstream_artifacts=upstream,
+        repository_evidence=evidence,
         correction_history=[],
     )
     assert manifest["output_identity"]["sha256"]
-    assert module.load_review_state(issue_dir=issue_dir, project_root=PROJECT_ROOT)["episodes"][
+    assert module.load_review_state(issue_dir=issue_dir, project_root=tmp_path)["episodes"][
         "develop"
     ]["status"] == "pending"
 
     pending = module.record_review_result(
         issue_dir=issue_dir,
-        project_root=PROJECT_ROOT,
+        project_root=tmp_path,
         phase="develop",
         output_identity=manifest["output_identity"],
+        review_input_identity=manifest["review_input_identity"],
         reviewer={"cli": "claude", "model": "another"},
         result=_complete_review_result(blockers=[]),
         authorized_routes=[],
@@ -1877,9 +1944,10 @@ def test_proactive_review_converges_current_evidence_without_reviewer_substituti
 
     blocking = module.record_review_result(
         issue_dir=issue_dir,
-        project_root=PROJECT_ROOT,
+        project_root=tmp_path,
         phase="develop",
         output_identity=manifest["output_identity"],
+        review_input_identity=manifest["review_input_identity"],
         reviewer={"cli": "codex", "model": "gpt-5.6-sol"},
         result=_complete_review_result(
             blockers=[
@@ -1900,7 +1968,7 @@ def test_proactive_review_converges_current_evidence_without_reviewer_substituti
 
     invalidated = module.mark_downstream_invalidated(
         issue_dir=issue_dir,
-        project_root=PROJECT_ROOT,
+        project_root=tmp_path,
         phase="develop",
         affected_downstream=["review output"],
     )
@@ -1909,24 +1977,25 @@ def test_proactive_review_converges_current_evidence_without_reviewer_substituti
     output.write_text("corrected output", encoding="utf-8")
     corrected = module.prepare_review_inputs(
         issue_dir=issue_dir,
-        project_root=PROJECT_ROOT,
+        project_root=tmp_path,
         phase="develop",
         output_path=output,
-        requirements=["confirmed requirement"],
-        upstream_artifacts=["accepted plan"],
-        repository_evidence=["relevant contract"],
+        requirements=requirements,
+        upstream_artifacts=upstream,
+        repository_evidence=evidence,
         correction_history=[{"id": "missing-proof", "status": "resolved"}],
     )
     assert corrected["output_identity"] != manifest["output_identity"]
-    assert module.load_review_state(issue_dir=issue_dir, project_root=PROJECT_ROOT)["episodes"][
+    assert module.load_review_state(issue_dir=issue_dir, project_root=tmp_path)["episodes"][
         "develop"
     ]["status"] == "corrected_awaiting_rereview"
 
     clean = module.record_review_result(
         issue_dir=issue_dir,
-        project_root=PROJECT_ROOT,
+        project_root=tmp_path,
         phase="develop",
         output_identity=corrected["output_identity"],
+        review_input_identity=corrected["review_input_identity"],
         reviewer={"cli": "codex", "model": "gpt-5.6-sol"},
         result=_complete_review_result(blockers=[]),
         authorized_routes=[],
@@ -1943,24 +2012,27 @@ def test_proactive_review_stale_contract_and_missing_route_never_become_clean(
     """U10 and U13 — live validation fails closed and routes only through authority."""
     module = _proactive_review_module()
     issue_dir = _activate_proactive_review_for_evidence(module, tmp_path)
-    output = tmp_path / "develop-output.md"
+    output = issue_dir / "develop" / "iteration_001" / "output.md"
+    output.parent.mkdir(parents=True)
     output.write_text("durable output", encoding="utf-8")
+    requirements, upstream, evidence = _review_evidence(issue_dir, tmp_path)
     manifest = module.prepare_review_inputs(
         issue_dir=issue_dir,
-        project_root=PROJECT_ROOT,
+        project_root=tmp_path,
         phase="develop",
         output_path=output,
-        requirements=["confirmed requirement"],
-        upstream_artifacts=["accepted plan"],
-        repository_evidence=["relevant contract"],
+        requirements=requirements,
+        upstream_artifacts=upstream,
+        repository_evidence=evidence,
         correction_history=[],
     )
 
     stopped = module.record_review_result(
         issue_dir=issue_dir,
-        project_root=PROJECT_ROOT,
+        project_root=tmp_path,
         phase="develop",
         output_identity=manifest["output_identity"],
+        review_input_identity=manifest["review_input_identity"],
         reviewer={"cli": "codex", "model": "gpt-5.6-sol"},
         result=_complete_review_result(
             blockers=[
@@ -1987,11 +2059,11 @@ def test_proactive_review_stale_contract_and_missing_route_never_become_clean(
     with pytest.raises(module.StaleContractError):
         module.prepare_review_inputs(
             issue_dir=copied_issue,
-            project_root=PROJECT_ROOT,
+            project_root=tmp_path,
             phase="develop",
             output_path=output,
-            requirements=["confirmed requirement"],
-            upstream_artifacts=["accepted plan"],
-            repository_evidence=["relevant contract"],
+            requirements=requirements,
+            upstream_artifacts=upstream,
+            repository_evidence=evidence,
             correction_history=[],
         )

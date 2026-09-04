@@ -361,6 +361,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--proactive-review-json",
         type=_json_mapping,
+        required=True,
         help=(
             "Complete issue-specific proactive phase-review policy. Rendering validates "
             "and digests it without writing issue state."

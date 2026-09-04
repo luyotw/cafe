@@ -79,6 +79,24 @@ def _confirmation(issue_name: str, policy: dict[str, object]) -> dict[str, objec
     }
 
 
+def _review_evidence(
+    issue_dir: Path, project_root: Path
+) -> tuple[list[dict[str, str]], list[dict[str, str]], list[dict[str, str]]]:
+    paths = (
+        issue_dir / "spec" / "iteration_001" / "output.md",
+        issue_dir / "plan" / "iteration_001" / "output.md",
+        project_root / "repository-evidence.md",
+    )
+    for path, content in zip(paths, ("requirement", "accepted plan", "repository evidence")):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    identities = [
+        {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+        for path in paths
+    ]
+    return [identities[0]], [identities[1]], [identities[2]]
+
+
 @pytest.mark.parametrize("selected", ["develop", None])
 def test_confirmed_initial_policy_activates_only_after_issue_preparation(
     tmp_path: Path, selected: str | None
@@ -90,7 +108,7 @@ def test_confirmed_initial_policy_activates_only_after_issue_preparation(
     with pytest.raises(ValueError):
         module.activate_contract(
             issue_dir=issue_dir,
-            project_root=PROJECT_ROOT,
+            project_root=tmp_path,
             policy=policy,
             confirmation=_confirmation("journey", policy),
         )
@@ -100,7 +118,7 @@ def test_confirmed_initial_policy_activates_only_after_issue_preparation(
     (issue_dir / "issue.yaml").write_text("playbook_id: standard\n", encoding="utf-8")
     contract_path = module.activate_contract(
         issue_dir=issue_dir,
-        project_root=PROJECT_ROOT,
+        project_root=tmp_path,
         policy=policy,
         confirmation=_confirmation("journey", policy),
     )
@@ -121,7 +139,7 @@ def test_reconfirmed_replacement_leaves_prior_contract_untouched_until_atomic_su
     initial_policy = _policy(selected="develop")
     first = module.activate_contract(
         issue_dir=issue_dir,
-        project_root=PROJECT_ROOT,
+        project_root=tmp_path,
         policy=initial_policy,
         confirmation=_confirmation("replacement", initial_policy),
     )
@@ -129,7 +147,7 @@ def test_reconfirmed_replacement_leaves_prior_contract_untouched_until_atomic_su
     with pytest.raises(ValueError):
         module.activate_contract(
             issue_dir=issue_dir,
-            project_root=PROJECT_ROOT,
+            project_root=tmp_path,
             policy=_policy(selected="review"),
             confirmation=_confirmation("replacement", initial_policy),
             expected_active_digest="wrong",
@@ -146,27 +164,30 @@ def test_blocking_review_correction_converges_to_one_clean_current_episode(tmp_p
     policy = _policy(selected="develop")
     module.activate_contract(
         issue_dir=issue_dir,
-        project_root=PROJECT_ROOT,
+        project_root=tmp_path,
         policy=policy,
         confirmation=_confirmation("convergence", policy),
     )
-    output = tmp_path / "develop.md"
+    output = issue_dir / "develop" / "iteration_001" / "output.md"
+    output.parent.mkdir(parents=True)
     output.write_text("first output", encoding="utf-8")
+    requirements, upstream, evidence = _review_evidence(issue_dir, tmp_path)
     first = module.prepare_review_inputs(
         issue_dir=issue_dir,
-        project_root=PROJECT_ROOT,
+        project_root=tmp_path,
         phase="develop",
         output_path=output,
-        requirements=["confirmed requirement"],
-        upstream_artifacts=["accepted plan"],
-        repository_evidence=["current repository contract"],
+        requirements=requirements,
+        upstream_artifacts=upstream,
+        repository_evidence=evidence,
         correction_history=[],
     )
     module.record_review_result(
         issue_dir=issue_dir,
-        project_root=PROJECT_ROOT,
+        project_root=tmp_path,
         phase="develop",
         output_identity=first["output_identity"],
+        review_input_identity=first["review_input_identity"],
         reviewer={"cli": "codex", "model": "gpt-5.6-sol"},
         result={
             "complete": True,
@@ -191,19 +212,20 @@ def test_blocking_review_correction_converges_to_one_clean_current_episode(tmp_p
     output.write_text("corrected output", encoding="utf-8")
     second = module.prepare_review_inputs(
         issue_dir=issue_dir,
-        project_root=PROJECT_ROOT,
+        project_root=tmp_path,
         phase="develop",
         output_path=output,
-        requirements=["confirmed requirement"],
-        upstream_artifacts=["accepted plan"],
-        repository_evidence=["current repository contract"],
+        requirements=requirements,
+        upstream_artifacts=upstream,
+        repository_evidence=evidence,
         correction_history=[{"id": "scope-gap", "status": "resolved"}],
     )
     clean = module.record_review_result(
         issue_dir=issue_dir,
-        project_root=PROJECT_ROOT,
+        project_root=tmp_path,
         phase="develop",
         output_identity=second["output_identity"],
+        review_input_identity=second["review_input_identity"],
         reviewer={"cli": "codex", "model": "gpt-5.6-sol"},
         result={
             "complete": True,
@@ -214,7 +236,7 @@ def test_blocking_review_correction_converges_to_one_clean_current_episode(tmp_p
     )
 
     assert clean["status"] == "clean"
-    assert module.load_review_state(issue_dir=issue_dir, project_root=PROJECT_ROOT)["episodes"] == {
+    assert module.load_review_state(issue_dir=issue_dir, project_root=tmp_path)["episodes"] == {
         "develop": clean
     }
 
@@ -235,7 +257,7 @@ def test_post_confirmation_activation_command_persists_only_the_confirmed_envelo
             "--issue-dir",
             str(issue_dir),
             "--project-root",
-            str(PROJECT_ROOT),
+            str(tmp_path),
             "--policy-json",
             json.dumps(policy),
             "--confirmation-json",
