@@ -129,6 +129,21 @@ def _current_host_session_binding() -> dict[str, str] | None:
     return {"kind": _HOST_SESSION_KIND, "thread_id": thread_id}
 
 
+def _prepared_workflow_id(issue_dir: Path) -> str:
+    """Read the WorkflowInstance identity established by ``cafe prepare``."""
+    path = issue_dir / "blackboard.json"
+    if not path.is_file() or path.is_symlink():
+        raise ValueError("event-driven ordered policy requires a prepared workflow")
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("event-driven workflow state is unreadable") from exc
+    workflow_id = document.get("workflow_id") if isinstance(document, dict) else None
+    if not isinstance(workflow_id, str) or not workflow_id.strip():
+        raise ValueError("event-driven ordered policy requires a prepared workflow")
+    return workflow_id
+
+
 def _normalize_cli_entries(clis: Sequence[tuple[str, str]]) -> list[dict[str, str]]:
     if not clis:
         raise ValueError("event-driven clis must be non-empty")
@@ -190,10 +205,19 @@ def write_config(
                 if clis is not None:
                     proposed["schema_version"] = 3
         if existing is not None and existing != proposed:
-            if (driver_dir / SESSION_FILENAME).exists() or (
-                driver_dir / DISPATCH_STATE_FILENAME
-            ).exists():
-                raise ValueError("event-driven binding cannot change after session acquisition")
+            if (
+                proposed["schema_version"] == 3
+                or existing["schema_version"] == 3
+                or (driver_dir / SESSION_FILENAME).exists()
+                or (driver_dir / DISPATCH_STATE_FILENAME).exists()
+            ):
+                raise ValueError("event-driven binding cannot change within a prepared workflow")
+        if proposed["schema_version"] == 3:
+            _load_or_initialize_dispatch_state(
+                driver_dir,
+                workflow_id=_prepared_workflow_id(issue_dir),
+                config=proposed,
+            )
         _atomic_write(
             driver_dir / CONFIG_FILENAME,
             yaml.safe_dump(proposed, sort_keys=True).encode("utf-8"),
@@ -274,6 +298,219 @@ def _load_config(driver_dir: Path) -> dict[str, Any] | None:
     return result
 
 
+def _valid_nonempty_string(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _validate_dispatch_attempt(
+    attempt: Any,
+    *,
+    entries: list[dict[str, Any]],
+) -> tuple[int, str, str]:
+    expected = {
+        "index",
+        "stage",
+        "status",
+        "outcome",
+        "reason",
+        "session_id",
+        "started_at",
+        "finished_at",
+    }
+    if not isinstance(attempt, dict) or set(attempt) != expected:
+        raise ValueError("event-driven dispatch attempt is invalid")
+    index = attempt.get("index")
+    stage = attempt.get("stage")
+    status = attempt.get("status")
+    if (
+        not isinstance(index, int)
+        or isinstance(index, bool)
+        or not 0 <= index < len(entries)
+        or stage not in {"bootstrap", "delivery"}
+        or status not in {"pending", "acquired", "accepted", "failed", "ambiguous"}
+        or not _valid_nonempty_string(attempt.get("started_at"))
+    ):
+        raise ValueError("event-driven dispatch attempt is invalid")
+
+    outcome = attempt.get("outcome")
+    reason = attempt.get("reason")
+    session_id = attempt.get("session_id")
+    finished_at = attempt.get("finished_at")
+    if status == "pending":
+        valid_transition = all(
+            value is None for value in (outcome, reason, session_id, finished_at)
+        )
+    elif status == "acquired":
+        valid_transition = (
+            stage == "bootstrap"
+            and outcome == "session_acquired"
+            and reason == "provider_evidence"
+            and _valid_nonempty_string(session_id)
+            and _valid_nonempty_string(finished_at)
+        )
+    elif status == "accepted":
+        valid_transition = (
+            stage == "delivery"
+            and outcome == "durable_acceptance"
+            and reason == "provider_acknowledgement"
+            and _valid_nonempty_string(session_id)
+            and _valid_nonempty_string(finished_at)
+        )
+    else:
+        valid_transition = (
+            outcome == ("conclusive_nonacceptance" if status == "failed" else "ambiguous")
+            and _valid_nonempty_string(reason)
+            and _valid_nonempty_string(finished_at)
+            and (session_id is None if stage == "bootstrap" else _valid_nonempty_string(session_id))
+        )
+    if not valid_transition:
+        raise ValueError("event-driven dispatch attempt transition is invalid")
+
+    if status in {"acquired", "accepted", "failed", "ambiguous"} and stage == "delivery":
+        session = entries[index].get("session")
+        if not isinstance(session, dict) or session.get("id") != session_id:
+            raise ValueError("event-driven delivery session provenance is invalid")
+    if status == "acquired":
+        session = entries[index].get("session")
+        if not isinstance(session, dict) or session.get("id") != session_id:
+            raise ValueError("event-driven bootstrap session provenance is invalid")
+    return index, stage, status
+
+
+def _validate_dispatch_events(state: dict[str, Any]) -> None:
+    entries = state["entries"]
+    workflow_id = state["workflow_id"]
+    accepted_indexes: list[int] = []
+    sequences: set[int] = set()
+    expected_event_fields = {
+        "event",
+        "starting_index",
+        "status",
+        "attempts",
+        "accepted_index",
+        "takeover",
+        "recovery_pending",
+    }
+    for event_id, event_state in state["events"].items():
+        if (
+            not _valid_nonempty_string(event_id)
+            or not isinstance(event_state, dict)
+            or set(event_state) != expected_event_fields
+        ):
+            raise ValueError("event-driven dispatch event is invalid")
+        event = event_state.get("event")
+        sequence = event.get("sequence") if isinstance(event, dict) else None
+        if (
+            not isinstance(event, dict)
+            or event.get("workflow_id") != workflow_id
+            or event.get("event_id") != event_id
+            or not isinstance(sequence, int)
+            or isinstance(sequence, bool)
+            or sequence <= 0
+            or sequence in sequences
+            or not _valid_nonempty_string(event.get("occurred_at"))
+        ):
+            raise ValueError("event-driven dispatch event identity is invalid")
+        sequences.add(sequence)
+
+        starting_index = event_state.get("starting_index")
+        attempts = event_state.get("attempts")
+        status = event_state.get("status")
+        if (
+            not isinstance(starting_index, int)
+            or isinstance(starting_index, bool)
+            or not 0 <= starting_index < len(entries)
+            or not isinstance(attempts, list)
+            or status not in {"routing", "accepted", "recovery_pending", "exhausted"}
+            or not isinstance(event_state.get("recovery_pending"), bool)
+        ):
+            raise ValueError("event-driven dispatch event is invalid")
+
+        previous: tuple[int, str, str] | None = None
+        for position, attempt in enumerate(attempts):
+            current = _validate_dispatch_attempt(attempt, entries=entries)
+            index, stage, attempt_status = current
+            if previous is None:
+                valid_order = index == starting_index
+            else:
+                prior_index, prior_stage, prior_status = previous
+                if prior_stage == "bootstrap" and prior_status == "acquired":
+                    valid_order = index == prior_index and stage == "delivery"
+                elif prior_status == "failed":
+                    valid_order = index == prior_index + 1
+                else:
+                    valid_order = False
+            if not valid_order or (
+                attempt_status in {"pending", "accepted", "ambiguous"}
+                and position != len(attempts) - 1
+            ):
+                raise ValueError("event-driven dispatch attempt order is invalid")
+            previous = current
+
+        accepted_index = event_state.get("accepted_index")
+        takeover = event_state.get("takeover")
+        recovery_pending = event_state["recovery_pending"]
+        last_status = previous[2] if previous is not None else None
+        last_index = previous[0] if previous is not None else None
+        if status == "accepted":
+            if (
+                not isinstance(accepted_index, int)
+                or isinstance(accepted_index, bool)
+                or accepted_index != last_index
+                or last_status != "accepted"
+                or recovery_pending
+            ):
+                raise ValueError("event-driven accepted event is inconsistent")
+            accepted_indexes.append(accepted_index)
+            if accepted_index > starting_index:
+                prior_failure = next(
+                    (
+                        attempt
+                        for attempt in reversed(attempts[:-1])
+                        if attempt.get("outcome") == "conclusive_nonacceptance"
+                    ),
+                    None,
+                )
+                expected_takeover = {
+                    "event_id",
+                    "sequence",
+                    "occurred_at",
+                    "from_index",
+                    "to_index",
+                    "eligible_reason",
+                    "accepted_at",
+                }
+                if (
+                    not isinstance(takeover, dict)
+                    or set(takeover) != expected_takeover
+                    or takeover.get("event_id") != event_id
+                    or takeover.get("sequence") != sequence
+                    or takeover.get("occurred_at") != event["occurred_at"]
+                    or takeover.get("from_index") != starting_index
+                    or takeover.get("to_index") != accepted_index
+                    or prior_failure is None
+                    or takeover.get("eligible_reason") != prior_failure.get("reason")
+                    or not _valid_nonempty_string(takeover.get("accepted_at"))
+                ):
+                    raise ValueError("event-driven takeover record is invalid")
+            elif takeover is not None:
+                raise ValueError("event-driven primary acceptance cannot record takeover")
+        elif accepted_index is not None or takeover is not None:
+            raise ValueError("event-driven unaccepted event has acceptance state")
+        elif status == "recovery_pending":
+            if last_status != "ambiguous" or not recovery_pending:
+                raise ValueError("event-driven recovery event is inconsistent")
+        elif status == "exhausted":
+            if last_status != "failed" or last_index != len(entries) - 1 or not recovery_pending:
+                raise ValueError("event-driven exhausted event is inconsistent")
+        elif recovery_pending or last_status in {"accepted", "ambiguous"}:
+            raise ValueError("event-driven routing event is inconsistent")
+
+    expected_active = max(accepted_indexes, default=0)
+    if state["active_index"] != expected_active:
+        raise ValueError("event-driven active entry is inconsistent")
+
+
 def _load_or_initialize_dispatch_state(
     driver_dir: Path,
     *,
@@ -333,10 +570,16 @@ def _load_or_initialize_dispatch_state(
             elif isinstance(session, dict) and session.get("source") == "host_session":
                 raise ValueError("event-driven host session cannot bind a fallback")
         active_index = state.get("active_index")
-        if not isinstance(active_index, int) or not 0 <= active_index < len(entries):
+        if (
+            not isinstance(active_index, int)
+            or isinstance(active_index, bool)
+            or not 0 <= active_index < len(entries)
+            or not _valid_nonempty_string(state.get("updated_at"))
+        ):
             raise ValueError("event-driven dispatch state is invalid")
         if not isinstance(state.get("events"), dict):
             raise ValueError("event-driven dispatch state is invalid")
+        _validate_dispatch_events(state)
         return state
     if path.exists():
         raise ValueError("event-driven dispatch state is invalid")

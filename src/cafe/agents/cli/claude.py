@@ -261,8 +261,15 @@ class ClaudeCLI(AbstractCLI):
             field="session_id",
         )
 
-    def accepts_event_driver_callback(self, records, *, session_id: str) -> bool:
-        return self.extract_event_driver_session(records) == session_id
+    def accepts_event_driver_callback(self, records, *, session_id: str, event_id: str) -> bool:
+        return self._verified_event_driver_acceptance(
+            records,
+            matches=lambda record: record.get("type") == "system"
+            and record.get("subtype") == "init",
+            session_field="session_id",
+            session_id=session_id,
+            event_id=event_id,
+        )
 
     def create_session(self) -> str:
         """Claude sessions are created by the real prompt execution."""

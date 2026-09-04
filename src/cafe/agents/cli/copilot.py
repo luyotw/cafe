@@ -1,6 +1,6 @@
 """Copilot CLI tool implementation."""
 
-import json
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 from cafe.agents.cli.abstract import AbstractCLI
@@ -220,6 +220,15 @@ class CopilotCLI(AbstractCLI):
         command.append("--output-format=json")
         return command
 
+    def record_existing_sessions(self) -> None:
+        """Snapshot ordinary Copilot sessions before its plain-text command runs."""
+        session_dir = Path.home() / ".copilot" / "session-state"
+        self._existing_sessions = (
+            {entry.name for entry in session_dir.iterdir() if entry.is_file() or entry.is_dir()}
+            if session_dir.exists()
+            else set()
+        )
+
     def extract_event_driver_session(self, records) -> Optional[str]:
         if not records or records[-1].get("type") != "result":
             return None
@@ -233,22 +242,26 @@ class CopilotCLI(AbstractCLI):
             field="sessionId",
         )
 
-    def accepts_event_driver_callback(self, records, *, session_id: str) -> bool:
-        observed = self._verified_event_driver_session(
+    def accepts_event_driver_callback(
+        self, records, *, session_id: str, event_id: str
+    ) -> bool:
+        return self._verified_event_driver_acceptance(
             records,
             matches=lambda record: record.get("type") == "session.start",
-            field="sessionId",
+            session_field="sessionId",
+            session_id=session_id,
+            event_id=event_id,
         )
-        return observed == session_id
 
     def extract_session_id(self, output_lines: List[str]) -> Optional[str]:
-        """Extract a provider-created ID from one successful terminal JSON record."""
-        records = []
-        for line in output_lines:
-            try:
-                record = json.loads(line)
-            except (json.JSONDecodeError, TypeError):
-                continue
-            if isinstance(record, dict):
-                records.append(record)
-        return self.extract_event_driver_session(records)
+        """Discover the session created by ordinary plain-text Copilot execution."""
+        session_dir = Path.home() / ".copilot" / "session-state"
+        if not session_dir.exists():
+            return None
+        current = {
+            entry.name for entry in session_dir.iterdir() if entry.is_file() or entry.is_dir()
+        }
+        created = current - getattr(self, "_existing_sessions", set())
+        if len(created) != 1:
+            return None
+        return next(iter(created)).removesuffix(".jsonl")

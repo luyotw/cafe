@@ -1549,6 +1549,8 @@ def test_event_driver_documentation_defines_the_full_v3_lifecycle() -> None:
     assert "actual callback durable acceptance" in contract
     assert "Copilot never receives a caller-selected new-session ID" in contract
     assert "one authoritative `dispatch_state.json`" in contract
+    assert "bound to the prepared WorkflowInstance when configuration is written" in contract
+    assert "provider acknowledgement is bound to the exact event identity" in contract
     assert "no session-file discovery, directory diff, sleep, polling, or watcher" in contract
     assert "ambiguous outcome stops forward routing" in contract
     assert "transport-local" in contract

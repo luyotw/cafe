@@ -36,11 +36,13 @@ cafe workflow --issue <issue> --execute --mute-agent-output --background \
 ```
 
 Version 3 uses `.cafe/issues/<issue>/driver/config.yaml`, `session.lock`, and
-one authoritative `dispatch_state.json`; it creates no session sidecar. Policy order, per-entry
+one authoritative `dispatch_state.json`; it creates no session sidecar. The
+confirmed policy is bound to the prepared WorkflowInstance when configuration
+is written, before the first callback can run. Policy order, per-entry
 transport-local session provenance, attempt history, the sticky active index,
 takeover, exhaustion, and recovery state all live in that one state file. The
-shared lifecycle uses no session-file discovery, directory diff, sleep, polling,
-or watcher.
+event-driver lifecycle uses no session-file discovery, directory diff, sleep,
+polling, or watcher.
 
 Session acquisition and actual delivery are separate boundaries. Every
 unacquired, unbound entry first runs a provider request exactly equivalent to
@@ -57,8 +59,9 @@ uses `codex queue`; no fallback inherits it. Otherwise the actual callback
 resumes only that entry's persisted provider session. Bootstrap never counts as
 event delivery or acceptance. Only actual callback durable acceptance stops
 forward routing, makes that entry active for later events, and records a
-takeover. This is transport acceptance and does not wait for or infer success
-from model output.
+takeover. The provider acknowledgement is bound to the exact event identity in
+the dispatched invocation before it can satisfy acceptance. This is transport
+acceptance and does not wait for or infer success from model output.
 
 Entries are attempted serially from the sticky active index. Only a conclusive
 pre-acceptance nonacceptance may move to the next later entry. An ambiguous

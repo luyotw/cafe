@@ -1096,46 +1096,69 @@ class BlackboardStore:
                 and supplied_identity["occurred_at"]
             ):
                 raise ValueError("workflow callback replay identity is incomplete")
-            for entry in reversed(state.events):
-                if (
-                    entry.event_type == "workflow_event_callback_enqueued"
-                    and entry.data.get("event_id") == supplied_identity["event_id"]
-                ):
-                    if all(
-                        entry.data.get(key) == value for key, value in supplied_identity.items()
-                    ):
-                        return dict(entry.data)
-                    raise ValueError("workflow callback replay identity conflicts with durable state")
-            raise ValueError("workflow callback replay identity is not durable")
 
-        sequence = 1 + max(
-            (
-                entry.data["sequence"]
-                for entry in state.events
-                if entry.event_type == "workflow_event_callback_enqueued"
-                and isinstance(entry.data.get("sequence"), int)
-                and not isinstance(entry.data["sequence"], bool)
-            ),
-            default=0,
-        )
-        occurred_at = _now_iso()
-        durable_payload = {
-            **payload,
-            "event_id": str(uuid.uuid4()),
-            "sequence": sequence,
-            "occurred_at": occurred_at,
-        }
-        state.events.append(
-            EventEntry(
-                timestamp=occurred_at,
-                step=str(payload.get("step", state.current_step)),
-                event_type="workflow_event_callback_enqueued",
-                message=json.dumps(durable_payload, ensure_ascii=False),
-                data=durable_payload,
-            )
-        )
-        self.save(state)
-        return durable_payload
+        with self._thread_lock_for(self.file_path):
+            self.issue_dir.mkdir(parents=True, exist_ok=True)
+            with self.state_lock_path.open("a+", encoding="utf-8") as lock_file:
+                with _optional_process_file_lock(lock_file):
+                    if self.file_path.exists():
+                        raw = json.loads(self.file_path.read_text(encoding="utf-8"))
+                        persisted = BlackboardState.from_dict(raw, initial_step=state.current_step)
+                        if state._persisted_snapshot is not None:
+                            latest = _merge_generic_state(
+                                persisted=persisted,
+                                desired=state,
+                                baseline=state._persisted_snapshot,
+                                capability_receipts_authoritative=False,
+                            )
+                            state.__dict__.clear()
+                            state.__dict__.update(latest.__dict__)
+
+                    if supplied_identity["event_id"] is not None:
+                        for entry in reversed(state.events):
+                            if (
+                                entry.event_type == "workflow_event_callback_enqueued"
+                                and entry.data.get("event_id")
+                                == supplied_identity["event_id"]
+                            ):
+                                if all(
+                                    entry.data.get(key) == value
+                                    for key, value in supplied_identity.items()
+                                ):
+                                    return dict(entry.data)
+                                raise ValueError(
+                                    "workflow callback replay identity conflicts with durable state"
+                                )
+                        raise ValueError("workflow callback replay identity is not durable")
+
+                    sequence = 1 + max(
+                        (
+                            entry.data["sequence"]
+                            for entry in state.events
+                            if entry.event_type == "workflow_event_callback_enqueued"
+                            and isinstance(entry.data.get("sequence"), int)
+                            and not isinstance(entry.data["sequence"], bool)
+                        ),
+                        default=0,
+                    )
+                    occurred_at = _now_iso()
+                    durable_payload = {
+                        **payload,
+                        "event_id": str(uuid.uuid4()),
+                        "sequence": sequence,
+                        "occurred_at": occurred_at,
+                    }
+                    state.events.append(
+                        EventEntry(
+                            timestamp=occurred_at,
+                            step=str(payload.get("step", state.current_step)),
+                            event_type="workflow_event_callback_enqueued",
+                            message=json.dumps(durable_payload, ensure_ascii=False),
+                            data=durable_payload,
+                        )
+                    )
+                    self._save_unlocked(state)
+                    return durable_payload
 
     def get_events_since(self, state: BlackboardState, timestamp: str) -> List[EventEntry]:
         return [entry for entry in state.events if entry.timestamp >= timestamp]

@@ -146,9 +146,29 @@ class AbstractCLI(ABC):
         records: Sequence[Mapping[str, Any]],
         *,
         session_id: str,
+        event_id: str,
     ) -> bool:
         """Recognize durable callback acceptance for one exact resumed session."""
         return False
+
+    def _verified_event_driver_acceptance(
+        self,
+        records: Sequence[Mapping[str, Any]],
+        *,
+        matches: Callable[[Mapping[str, Any]], bool],
+        session_field: str,
+        session_id: str,
+        event_id: str,
+    ) -> bool:
+        """Bind provider acceptance evidence to one resumed session and event."""
+        if not event_id.strip():
+            return False
+        observed = self._verified_event_driver_session(
+            records,
+            matches=lambda record: record.get("_cafe_event_id") == event_id and matches(record),
+            field=session_field,
+        )
+        return observed == session_id
 
     def _verified_event_driver_session(
         self,

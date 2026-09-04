@@ -375,6 +375,10 @@ for confirmation rather than asking again.
     [--entry <fallback-cli>:<exact-model> ...]
   ```
 
+  Writing a version 3 binding also creates its authoritative dispatch state, so
+  the confirmed policy is bound to the prepared WorkflowInstance when
+  configuration is written rather than when the first callback happens.
+
   Do not put the mode, CLI, model, session, callback, or any driver control
   setting in `issue.yaml`. Confirm that every entry reports `event-driven
   session-and-dispatch: conforming` before accepting the contract. When the
@@ -389,8 +393,9 @@ for confirmation rather than asking again.
   sent. An existing acquired session or the first Codex entry's valid
   runtime-owned host binding is reused without bootstrap. The bootstrap never
   counts as event delivery or acceptance; only actual callback durable
-  acceptance can stop routing and select the sticky active entry. Copilot never
-  receives a caller-selected new-session ID.
+  acceptance can stop routing and select the sticky active entry. The provider
+  acknowledgement is bound to the exact event identity in that dispatched
+  invocation. Copilot never receives a caller-selected new-session ID.
 
 - [ ] Install the confirmed ordered phase chains in the active worktree with
   `scripts/write_phase_config.py`, then verify the effective config as described

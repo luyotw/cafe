@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from cafe.agents.cli.copilot import CopilotCLI
 from cafe.agents.executor import AgentExecutionControl, AgentExecutionError, AgentExecutor
 from cafe.core.types import AgentConfig, AgentCLI, AgentResponse, TokenUsage
 
@@ -863,6 +864,32 @@ class TestEventDriverObservation:
         assert run.call_args.kwargs["parse_stream_json"] is True
         assert run.call_args.kwargs["cmd"].count('say "HI"') == 1
 
+    def test_ordinary_copilot_preserves_provider_session_for_later_turns(self) -> None:
+        executor = AgentExecutor(
+            AgentConfig(name="ordinary", cli=AgentCLI.COPILOT, model="exact"),
+            stream_output=False,
+        )
+        response = AgentResponse(
+            response="plain response",
+            token_usage=TokenUsage(),
+            streaming_log=["plain response"],
+        )
+
+        with (
+            patch.object(CopilotCLI, "record_existing_sessions") as snapshot,
+            patch.object(
+                CopilotCLI,
+                "extract_session_id",
+                return_value="ordinary-session",
+            ),
+            patch.object(executor, "_execute_with_streaming", return_value=response),
+        ):
+            observed = executor.execute("ordinary prompt")
+
+        snapshot.assert_called_once_with()
+        assert observed.session_id == "ordinary-session"
+        assert executor.config.session_id == "ordinary-session"
+
     def test_actual_callback_uses_exact_session_and_ignores_model_output(self) -> None:
         executor = AgentExecutor(
             AgentConfig(
@@ -901,6 +928,26 @@ class TestEventDriverObservation:
         assert observed.event_id == "event-1"
         command = run.call_args.kwargs["cmd"]
         assert command[command.index("resume") + 1] == "provider-session"
+
+    def test_actual_callback_requires_its_event_identity_in_the_dispatched_prompt(
+        self,
+    ) -> None:
+        executor = AgentExecutor(
+            AgentConfig(
+                name="driver",
+                cli=AgentCLI.CODEX,
+                model="exact",
+                session_id="provider-session",
+            ),
+            stream_output=False,
+        )
+
+        with pytest.raises(ValueError, match="event identity"):
+            executor.execute_event_driver(
+                "callback for a different event",
+                expected_session_id="provider-session",
+                event_id="event-1",
+            )
 
     def test_actual_callback_notifies_acceptance_before_later_stream_output(self) -> None:
         executor = AgentExecutor(

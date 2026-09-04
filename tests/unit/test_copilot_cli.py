@@ -1,8 +1,6 @@
 """測試 CopilotCLI 實作."""
 
 import json
-from unittest.mock import MagicMock
-
 import pytest
 
 from cafe.agents.cli.copilot import CopilotCLI
@@ -256,10 +254,23 @@ class TestCopilotCLIExtractSessionId:
             ),
         ]
 
-        assert cli.extract_session_id(records) == "provider-session"
         assert cli.extract_event_driver_session([json.loads(line) for line in records]) == (
             "provider-session"
         )
+
+    def test_ordinary_execution_discovers_one_new_session(
+        self, copilot_config, tmp_path, monkeypatch
+    ):
+        session_dir = tmp_path / ".copilot" / "session-state"
+        session_dir.mkdir(parents=True)
+        (session_dir / "existing.jsonl").write_text("", encoding="utf-8")
+        monkeypatch.setattr("cafe.agents.cli.copilot.Path.home", lambda: tmp_path)
+        cli = CopilotCLI(copilot_config)
+
+        cli.record_existing_sessions()
+        (session_dir / "ordinary-session.jsonl").write_text("", encoding="utf-8")
+
+        assert cli.extract_session_id(["plain Copilot response"]) == "ordinary-session"
 
     @pytest.mark.parametrize(
         "records",
@@ -313,7 +324,23 @@ class TestCopilotCLIExtractSessionId:
         )
         terminal = {"type": "result", "status": "success", "sessionId": "session"}
         started = {"type": "session.start", "sessionId": "session", "model": "exact"}
+        accepted = {**started, "_cafe_event_id": "event-1"}
 
-        assert cli.accepts_event_driver_callback([terminal], session_id="session") is False
-        assert cli.accepts_event_driver_callback([started], session_id="session") is True
-        assert not hasattr(cli, "record_existing_sessions")
+        assert (
+            cli.accepts_event_driver_callback(
+                [terminal], session_id="session", event_id="event-1"
+            )
+            is False
+        )
+        assert (
+            cli.accepts_event_driver_callback(
+                [started], session_id="session", event_id="event-1"
+            )
+            is False
+        )
+        assert (
+            cli.accepts_event_driver_callback(
+                [accepted], session_id="session", event_id="event-1"
+            )
+            is True
+        )

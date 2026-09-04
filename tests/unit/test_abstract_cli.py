@@ -77,7 +77,12 @@ def test_concrete_cli_can_be_instantiated():
     assert cli.config.cli == AgentCLI.CLAUDE
     assert cli.event_driver_conforming is False
     assert cli.extract_event_driver_session([]) is None
-    assert cli.accepts_event_driver_callback([], session_id="session") is False
+    assert (
+        cli.accepts_event_driver_callback(
+            [], session_id="session", event_id="event-1"
+        )
+        is False
+    )
 
 
 @pytest.mark.parametrize(
@@ -108,9 +113,32 @@ def test_event_driver_adapters_require_verified_session_evidence(
 
     assert strategy.event_driver_conforming is True
     assert strategy.extract_event_driver_session([record]) == "session"
-    assert strategy.accepts_event_driver_callback([record], session_id="session") is True
+    assert (
+        strategy.accepts_event_driver_callback(
+            [record], session_id="session", event_id="event-1"
+        )
+        is False
+    )
+    acknowledgement = {**record, "_cafe_event_id": "event-1"}
+    assert (
+        strategy.accepts_event_driver_callback(
+            [acknowledgement], session_id="session", event_id="event-1"
+        )
+        is True
+    )
     assert strategy.extract_event_driver_session([{**record, "model": "wrong"}]) is None
-    assert strategy.accepts_event_driver_callback([record], session_id="other") is False
+    assert (
+        strategy.accepts_event_driver_callback(
+            [acknowledgement], session_id="other", event_id="event-1"
+        )
+        is False
+    )
+    assert (
+        strategy.accepts_event_driver_callback(
+            [acknowledgement], session_id="session", event_id="event-2"
+        )
+        is False
+    )
     assert strategy.extract_event_driver_session([{"type": "result", "session_id": "session"}]) is None
     empty_record = {
         key: ("" if key in {"session_id", "thread_id"} else value)

@@ -27,6 +27,12 @@ def _callback_module():
     return module
 
 
+def _prepare_issue(issue_dir: Path):
+    from cafe.core.blackboard import BlackboardStore
+
+    return BlackboardStore(issue_dir).load_or_create("spec")
+
+
 @pytest.fixture(autouse=True)
 def _clear_host_session_binding(monkeypatch) -> None:
     """Keep the test process's Codex App thread out of ordinary callback tests."""
@@ -54,6 +60,7 @@ def test_event_driver_config_is_per_issue_and_cannot_replace_session(tmp_path: P
 def test_version_three_config_preserves_order_and_exact_shape(tmp_path: Path) -> None:
     callback = _callback_module()
     issue_dir = tmp_path / ".cafe" / "issues" / "issue457"
+    blackboard = _prepare_issue(issue_dir)
 
     callback.write_config(
         issue_dir,
@@ -70,6 +77,48 @@ def test_version_three_config_preserves_order_and_exact_shape(tmp_path: Path) ->
             {"cli": "gemini", "model": "pro-exact"},
         ],
     }
+    state = callback._load_or_initialize_dispatch_state(
+        issue_dir / "driver",
+        workflow_id=blackboard.workflow_id,
+        config=config,
+    )
+    assert state["workflow_id"] == blackboard.workflow_id
+    assert state["policy"] == config
+
+
+def test_version_three_config_cannot_change_before_first_callback(tmp_path: Path) -> None:
+    callback = _callback_module()
+    issue_dir = tmp_path / ".cafe" / "issues" / "immutable-policy"
+    blackboard = _prepare_issue(issue_dir)
+    callback.write_config(
+        issue_dir,
+        clis=[("codex", "primary"), ("claude", "fallback")],
+    )
+
+    with pytest.raises(ValueError, match="cannot change"):
+        callback.write_config(issue_dir, clis=[("gemini", "replacement")])
+
+    config = callback._load_config(issue_dir / "driver")
+    state = callback._load_or_initialize_dispatch_state(
+        issue_dir / "driver",
+        workflow_id=blackboard.workflow_id,
+        config=config,
+    )
+    assert state["policy"]["clis"] == [
+        {"cli": "codex", "model": "primary"},
+        {"cli": "claude", "model": "fallback"},
+    ]
+
+
+def test_version_three_config_requires_a_prepared_workflow(tmp_path: Path) -> None:
+    callback = _callback_module()
+    issue_dir = tmp_path / ".cafe" / "issues" / "not-prepared"
+
+    with pytest.raises(ValueError, match="prepared workflow"):
+        callback.write_config(issue_dir, clis=[("codex", "primary")])
+
+    assert not (issue_dir / "driver" / "config.yaml").exists()
+    assert not (issue_dir / "driver" / "dispatch_state.json").exists()
 
 
 @pytest.mark.parametrize(
@@ -140,6 +189,7 @@ def test_version_three_host_binding_applies_only_to_first_codex_entry(
     callback = _callback_module()
     monkeypatch.setenv("CODEX_THREAD_ID", "runtime-thread")
     issue_dir = tmp_path / ".cafe" / "issues" / "bound"
+    _prepare_issue(issue_dir)
 
     callback.write_config(
         issue_dir,
@@ -162,12 +212,13 @@ def test_version_three_state_binds_immutable_policy_without_legacy_session_files
 ) -> None:
     callback = _callback_module()
     issue_dir = tmp_path / ".cafe" / "issues" / "state"
+    blackboard = _prepare_issue(issue_dir)
     callback.write_config(issue_dir, clis=[("codex", "one"), ("claude", "two")])
     driver_dir = issue_dir / "driver"
     config = callback._load_config(driver_dir)
 
     state = callback._load_or_initialize_dispatch_state(
-        driver_dir, workflow_id="workflow", config=config
+        driver_dir, workflow_id=blackboard.workflow_id, config=config
     )
     assert state["policy"] == config
     assert state["active_index"] == 0
@@ -178,7 +229,7 @@ def test_version_three_state_binds_immutable_policy_without_legacy_session_files
     changed["clis"][0] = {"cli": "codex", "model": "changed"}
     with pytest.raises(ValueError, match="policy"):
         callback._load_or_initialize_dispatch_state(
-            driver_dir, workflow_id="workflow", config=changed
+            driver_dir, workflow_id=blackboard.workflow_id, config=changed
         )
     with pytest.raises(ValueError, match="workflow"):
         callback._load_or_initialize_dispatch_state(
@@ -186,13 +237,95 @@ def test_version_three_state_binds_immutable_policy_without_legacy_session_files
         )
 
 
+def test_version_three_state_rejects_accepted_event_without_accepted_attempt(
+    tmp_path: Path,
+) -> None:
+    callback = _callback_module()
+    driver_dir, state, event = _v3_event_context(callback, tmp_path, [("codex", "one")])
+    invalid = json.loads(json.dumps(state))
+    invalid_event = invalid["events"][event["event_id"]]
+    invalid_event["status"] = "accepted"
+    invalid_event["accepted_index"] = 0
+    (driver_dir / "dispatch_state.json").write_text(json.dumps(invalid), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="event"):
+        callback._load_or_initialize_dispatch_state(
+            driver_dir,
+            workflow_id=state["workflow_id"],
+            config=state["policy"],
+        )
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    ["status", "accepted_index", "attempt_history", "takeover", "recovery"],
+)
+def test_version_three_state_rejects_inconsistent_event_transitions(
+    tmp_path: Path,
+    corruption: str,
+) -> None:
+    callback = _callback_module()
+    driver_dir, state, event = _v3_event_context(
+        callback, tmp_path, [("codex", "one"), ("claude", "two")]
+    )
+    for index, session_id in enumerate(("codex-session", "claude-session")):
+        state["entries"][index]["session"] = {
+            "id": session_id,
+            "source": "provider",
+            "acquired_at": "2026-09-04T00:00:00+00:00",
+        }
+
+    class FakeExecutor:
+        def __init__(self, config, **_kwargs):
+            self.config = config
+
+        def execute_event_driver(self, _prompt, **_kwargs):
+            if self.config.cli is AgentCLI.CODEX:
+                raise callback.AgentExecutionError(
+                    "rejected", error_type="transport_rejected"
+                )
+            return SimpleNamespace(
+                session_id="claude-session", accepted=True, records=()
+            )
+
+    accepted = callback._run_v3_callback(
+        driver_dir,
+        state,
+        event,
+        repository_root=tmp_path,
+        executor_factory=FakeExecutor,
+    )
+    invalid = json.loads(json.dumps(accepted))
+    event_state = invalid["events"][event["event_id"]]
+    if corruption == "status":
+        event_state["status"] = "routing"
+    elif corruption == "accepted_index":
+        event_state["accepted_index"] = 0
+    elif corruption == "attempt_history":
+        event_state["attempts"] = []
+    elif corruption == "takeover":
+        event_state["takeover"]["eligible_reason"] = "unrelated"
+    else:
+        event_state["recovery_pending"] = True
+    (driver_dir / "dispatch_state.json").write_text(
+        json.dumps(invalid), encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError):
+        callback._load_or_initialize_dispatch_state(
+            driver_dir,
+            workflow_id=state["workflow_id"],
+            config=state["policy"],
+        )
+
+
 def _v3_event_context(callback, tmp_path: Path, clis: list[tuple[str, str]]):
     from cafe.core.blackboard import BlackboardStore
 
     issue_dir = tmp_path / ".cafe" / "issues" / "issue457"
-    callback.write_config(issue_dir, clis=clis)
     store = BlackboardStore(issue_dir)
     blackboard = store.load_or_create("spec")
+    callback.write_config(issue_dir, clis=clis)
     event = store.prepare_workflow_callback_event(
         blackboard,
         {
@@ -853,6 +986,7 @@ def test_status_projects_order_conformance_and_unacquired_without_writing(
 ) -> None:
     callback = _callback_module()
     issue_dir = tmp_path / ".cafe" / "issues" / "issue457"
+    blackboard = _prepare_issue(issue_dir)
     callback.write_config(
         issue_dir,
         clis=[
@@ -876,7 +1010,7 @@ def test_status_projects_order_conformance_and_unacquired_without_writing(
     assert first == second
     assert first["configured"] is True
     assert first["schema_version"] == 3
-    assert first["workflow_id"] is None
+    assert first["workflow_id"] == blackboard.workflow_id
     assert first["active_index"] == 0
     assert [entry["cli"] for entry in first["entries"]] == [
         "codex",
@@ -900,7 +1034,7 @@ def test_status_projects_order_conformance_and_unacquired_without_writing(
     )
     assert first["events"] == []
     assert first["recovery_pending"] is False
-    assert not (driver_dir / "dispatch_state.json").exists()
+    assert (driver_dir / "dispatch_state.json").is_file()
     assert {
         path.name: (path.read_bytes(), path.stat().st_mtime_ns)
         for path in driver_dir.iterdir()
@@ -913,6 +1047,7 @@ def test_status_projects_acquisition_delivery_takeover_and_recovery(
 ) -> None:
     callback = _callback_module()
     issue_dir = tmp_path / ".cafe" / "issues" / "issue457"
+    blackboard = _prepare_issue(issue_dir)
     callback.write_config(
         issue_dir,
         clis=[("codex", "one"), ("claude", "two"), ("gemini", "three")],
@@ -921,10 +1056,15 @@ def test_status_projects_acquisition_delivery_takeover_and_recovery(
     config = callback._load_config(driver_dir)
     state = callback._load_or_initialize_dispatch_state(
         driver_dir,
-        workflow_id="workflow",
+        workflow_id=blackboard.workflow_id,
         config=config,
     )
     state["active_index"] = 1
+    state["entries"][0]["session"] = {
+        "id": "codex-session",
+        "source": "provider",
+        "acquired_at": "2026-09-04T00:00:00+00:00",
+    }
     state["entries"][1]["session"] = {
         "id": "claude-session",
         "source": "provider",
@@ -933,7 +1073,7 @@ def test_status_projects_acquisition_delivery_takeover_and_recovery(
     state["events"] = {
         "bootstrap-pending": {
             "event": {
-                "workflow_id": "workflow",
+                "workflow_id": blackboard.workflow_id,
                 "issue": "issue457",
                 "event_type": "phase_terminal",
                 "event_id": "bootstrap-pending",
@@ -960,7 +1100,7 @@ def test_status_projects_acquisition_delivery_takeover_and_recovery(
         },
         "delivery-pending": {
             "event": {
-                "workflow_id": "workflow",
+                "workflow_id": blackboard.workflow_id,
                 "issue": "issue457",
                 "event_type": "phase_terminal",
                 "event_id": "delivery-pending",
@@ -976,7 +1116,7 @@ def test_status_projects_acquisition_delivery_takeover_and_recovery(
                     "status": "pending",
                     "outcome": None,
                     "reason": None,
-                    "session_id": "claude-session",
+                    "session_id": None,
                     "started_at": "2026-09-04T00:00:04+00:00",
                     "finished_at": None,
                 }
@@ -987,7 +1127,7 @@ def test_status_projects_acquisition_delivery_takeover_and_recovery(
         },
         "accepted": {
             "event": {
-                "workflow_id": "workflow",
+                "workflow_id": blackboard.workflow_id,
                 "issue": "issue457",
                 "event_type": "phase_terminal",
                 "event_id": "accepted",
@@ -1032,7 +1172,7 @@ def test_status_projects_acquisition_delivery_takeover_and_recovery(
         },
         "exhausted": {
             "event": {
-                "workflow_id": "workflow",
+                "workflow_id": blackboard.workflow_id,
                 "issue": "issue457",
                 "event_type": "workflow_completed",
                 "event_id": "exhausted",
@@ -1051,7 +1191,17 @@ def test_status_projects_acquisition_delivery_takeover_and_recovery(
                     "session_id": "claude-session",
                     "started_at": "2026-09-04T00:00:11+00:00",
                     "finished_at": "2026-09-04T00:00:12+00:00",
-                }
+                },
+                {
+                    "index": 2,
+                    "stage": "bootstrap",
+                    "status": "failed",
+                    "outcome": "conclusive_nonacceptance",
+                    "reason": "queue_rejected",
+                    "session_id": None,
+                    "started_at": "2026-09-04T00:00:13+00:00",
+                    "finished_at": "2026-09-04T00:00:14+00:00",
+                },
             ],
             "accepted_index": None,
             "takeover": None,
@@ -1068,9 +1218,9 @@ def test_status_projects_acquisition_delivery_takeover_and_recovery(
     repeated = callback.read_status(issue_dir)
 
     assert repeated == status
-    assert status["workflow_id"] == "workflow"
+    assert status["workflow_id"] == blackboard.workflow_id
     assert status["active_index"] == 1
-    assert status["entries"][0]["acquisition"]["status"] == "bootstrap_pending"
+    assert status["entries"][0]["acquisition"]["status"] == "acquired"
     assert status["entries"][1]["acquisition"] == {
         "status": "acquired",
         "session": {
@@ -1079,7 +1229,7 @@ def test_status_projects_acquisition_delivery_takeover_and_recovery(
             "acquired_at": "2026-09-04T00:00:00+00:00",
         },
     }
-    assert status["entries"][2]["acquisition"]["status"] == "unacquired"
+    assert status["entries"][2]["acquisition"]["status"] == "bootstrap_failed"
     by_id = {event["event_id"]: event for event in status["events"]}
     assert by_id["delivery-pending"]["attempts"][0]["status"] == "pending"
     assert by_id["accepted"]["attempts"][0]["status"] == "failed"

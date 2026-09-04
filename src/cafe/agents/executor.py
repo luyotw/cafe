@@ -216,6 +216,8 @@ class AgentExecutor:
             decision_only = allowed_tools == [] and allowed_directories == []
             if self.config.cli == AgentCLI.GEMINI and not decision_only:
                 cli_strategy.ensure_geminiignore()
+            if self.config.cli == AgentCLI.COPILOT:
+                cli_strategy.record_existing_sessions()
 
             # Translate allowed tools using CLI-specific logic
             cli_translated_tools = (
@@ -394,6 +396,10 @@ class AgentExecutor:
         if expected_session_id is not None:
             if not expected_session_id.strip():
                 raise ValueError("event-driver exact session must be non-empty")
+            if not isinstance(event_id, str) or not event_id.strip():
+                raise ValueError("event-driver delivery requires an event identity")
+            if event_id not in prompt:
+                raise ValueError("event-driver prompt does not contain its event identity")
             self.config.session_id = expected_session_id
 
         translated_tools = self._translate_tool_names(allowed_tools)
@@ -414,14 +420,20 @@ class AgentExecutor:
         records: list[dict[str, Any]] = []
         acceptance_observed = False
 
+        def event_bound_records() -> tuple[dict[str, Any], ...]:
+            if event_id is None:
+                return tuple(records)
+            return tuple({**record, "_cafe_event_id": event_id} for record in records)
+
         def observe_record(_record: dict[str, Any]) -> None:
             nonlocal acceptance_observed
             if (
                 expected_session_id is not None
                 and not acceptance_observed
                 and strategy.accepts_event_driver_callback(
-                    records,
+                    event_bound_records(),
                     session_id=expected_session_id,
+                    event_id=event_id,
                 )
             ):
                 if on_acceptance is not None:
@@ -447,8 +459,9 @@ class AgentExecutor:
         else:
             session_id = expected_session_id
             accepted = acceptance_observed or strategy.accepts_event_driver_callback(
-                bounded_records,
+                tuple({**record, "_cafe_event_id": event_id} for record in bounded_records),
                 session_id=expected_session_id,
+                event_id=event_id,
             )
         return EventDriverExecutionResult(
             session_id=session_id,

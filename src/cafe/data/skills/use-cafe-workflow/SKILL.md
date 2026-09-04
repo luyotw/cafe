@@ -58,7 +58,7 @@ If more than one situation applies, read every listed reference before acting; d
   coordinate any authorized split through existing authority boundaries and
   reconstruct linked-work position from durable records.
 - Resolve exactly one workflow operating mode in the confirmed kickoff: attached with positive polling, unattended background execution, or event-driven background execution with a non-empty ordered chain of distinct conforming CLIs and one explicit exact model per entry. Store its binding only under `.cafe/issues/<issue>/driver/`; CAFE core and `issue.yaml` do not contain driver-mode policy.
-- In version 3 event-driven mode, session acquisition and actual callback durable acceptance are separate boundaries: every unbound entry bootstraps with a request exactly equivalent to `say "HI"`, persists the provider-created session ID before actual delivery, and never counts bootstrap as event delivery or acceptance. An ambiguous outcome stops forward routing.
+- In version 3 event-driven mode, bind the confirmed policy to the prepared WorkflowInstance when configuration is written. Session acquisition and actual callback durable acceptance are separate boundaries: every unbound entry bootstraps with a request exactly equivalent to `say "HI"`, persists the provider-created session ID before actual delivery, and never counts bootstrap as event delivery or acceptance. Bind the provider acknowledgement to the exact callback event identity; an ambiguous outcome stops forward routing.
 - Use `cafe workflow --execute --mute-agent-output` when the invocation needs
   direct workflow controls such as `--start-step` or a manual diagnostic
   `--single-step`. After `cafe prepare`, `cafe make` is also a valid launcher;

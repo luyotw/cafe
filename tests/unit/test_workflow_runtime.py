@@ -79,6 +79,33 @@ def test_event_callback_wakes_once_after_a_phase_transition(tmp_path: Path) -> N
     assert all(event["occurred_at"] for event in events)
 
 
+def test_callback_sequence_is_allocated_from_latest_durable_state(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "concurrent-callbacks"
+    first_store = BlackboardStore(issue_dir)
+    first_state = first_store.load_or_create("spec")
+    stale_store = BlackboardStore(issue_dir)
+    stale_state = stale_store.load_or_create("spec")
+    payload = {
+        "workflow_id": first_state.workflow_id,
+        "issue": issue_dir.name,
+        "event_type": "phase_terminal",
+        "step": "spec",
+    }
+
+    first = first_store.prepare_workflow_callback_event(first_state, payload)
+    second = stale_store.prepare_workflow_callback_event(stale_state, payload)
+
+    durable = BlackboardStore(issue_dir).load_or_create("spec")
+    callback_events = [
+        event.data
+        for event in durable.events
+        if event.event_type == "workflow_event_callback_enqueued"
+    ]
+    assert first["sequence"] == 1
+    assert second["sequence"] == 2
+    assert [event["sequence"] for event in callback_events] == [1, 2]
+
+
 def test_legacy_blackboard_events_load_without_callback_identity(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "legacy-events"
     issue_dir.mkdir(parents=True)
