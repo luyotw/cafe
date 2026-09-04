@@ -9,7 +9,7 @@ import re
 import stat
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -231,6 +231,42 @@ class HumanTaskSlackMessage:
         return {"text": text}
 
 
+@dataclass(frozen=True)
+class WorkflowCallbackFailureSlackMessage:
+    """Readable, secret-free notification for an asynchronous callback failure."""
+
+    repository: str
+    issue: str
+    step: str
+    event_type: str
+    error_code: str
+
+    def to_slack_payload(self) -> dict[str, str]:
+        repository = _readable_metadata(self.repository, fallback="目前專案")
+        issue = _readable_metadata(self.issue, fallback="未命名工作項目")
+        step = HUMAN_TASK_STEP_LABELS.get(self.step, self.step or "未知階段")
+        event_type = _readable_metadata(self.event_type, fallback="未知事件")
+        error_code = _readable_metadata(self.error_code, fallback="未知錯誤")
+        text = "\n".join(
+            (
+                "CAFE event callback 執行失敗",
+                f"專案：{repository}",
+                f"對話：{issue}",
+                f"目前階段：{step}",
+                f"事件：{event_type}",
+                f"錯誤：{error_code}",
+                f"工作流程狀態已保存，請回到 CAFE 的「{issue}」工作項目查看。",
+            )
+        )
+        return {"text": text}
+
+
+class SlackPayloadMessage(Protocol):
+    """Minimal message contract accepted by the trusted Slack transport."""
+
+    def to_slack_payload(self) -> dict[str, str]: ...
+
+
 def build_human_task_message(
     *,
     repository: str,
@@ -254,6 +290,19 @@ def build_human_task_message(
         task_id=task_id,
         step=step,
         task_type=task_type,
+    )
+
+
+def build_workflow_callback_failure_message(
+    *, repository: str, issue: str, step: str, event_type: str, error_code: str
+) -> WorkflowCallbackFailureSlackMessage:
+    """Build a bounded callback-failure notification without raw exception text."""
+    return WorkflowCallbackFailureSlackMessage(
+        repository=sanitize_human_task_metadata(repository),
+        issue=sanitize_human_task_metadata(issue),
+        step=sanitize_human_task_metadata(step),
+        event_type=sanitize_human_task_metadata(event_type),
+        error_code=sanitize_human_task_metadata(error_code),
     )
 
 
@@ -467,7 +516,7 @@ def _open_slack_request(request: Request, *, timeout: float):
 
 def post_slack_notification(
     webhook_url: str,
-    message: HumanTaskSlackMessage,
+    message: SlackPayloadMessage,
     *,
     timeout_sec: float,
 ) -> None:
@@ -480,7 +529,9 @@ def post_slack_notification(
         method="POST",
     )
     try:
-        with _open_slack_request(request, timeout=timeout_sec) as response:  # noqa: S310 - URL is fixed/validated.
+        with _open_slack_request(
+            request, timeout=timeout_sec
+        ) as response:  # noqa: S310 - URL is fixed/validated.
             status = response.status
             body = response.read(64).decode("utf-8", errors="replace").strip()
     except HTTPError as exc:
