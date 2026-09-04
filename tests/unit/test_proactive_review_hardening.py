@@ -11,6 +11,7 @@ import threading
 import time
 import tracemalloc
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -184,11 +185,11 @@ def test_contract_replacement_is_root_bound_and_compare_and_swap(
     first_write = threading.Event()
     allow_first_write = threading.Event()
 
-    def delayed_write(path: Path, value: object) -> None:
-        if path == module.contract_path(issue_dir) and not first_write.is_set():
+    def delayed_write(path: Path, value: object, **kwargs: object) -> None:
+        if not first_write.is_set():
             first_write.set()
             assert allow_first_write.wait(timeout=3)
-        original_write(path, value)
+        original_write(path, value, **kwargs)
 
     monkeypatch.setattr(module, "_atomic_yaml_write", delayed_write)
     results: list[object] = []
@@ -360,6 +361,231 @@ def test_contract_rejects_an_aggregate_larger_than_its_durable_reader(tmp_path: 
         )
 
     assert not module.contract_path(issue_dir).exists()
+
+
+def test_before_next_phase_requires_an_unconditional_output_boundary() -> None:
+    """U4 — one conditional stop cannot describe an automatic continuation as gated."""
+    module = _module()
+
+    def policy() -> dict[str, object]:
+        return {
+            "playbook_id": "boundary",
+            "phases": [
+                {
+                    "phase": "develop",
+                    "selected": True,
+                    "rationale": "phase-specific assessment",
+                    "factors": {
+                        factor: "assessed"
+                        for factor in (
+                            "ambiguity",
+                            "novelty",
+                            "blast_radius",
+                            "protected_risk",
+                            "durable_contract",
+                            "downstream_review",
+                            "late_correction",
+                            "cost",
+                        )
+                    },
+                    "reviewer": {"cli": "codex", "model": "gpt-5.6-sol"},
+                    "ordering": "before_next_phase",
+                    "initial_review_cost": {
+                        "tokens": {"estimate": "2k"},
+                        "latency": {"estimate": "one minute"},
+                        "assumptions": "one complete output",
+                        "delay_impact": "existing confirmation boundary",
+                    },
+                    "rereview_cost": {"foreseeable": False, "reason": "unknown"},
+                }
+            ],
+        }
+
+    def playbook(*, auto_continue: bool) -> SimpleNamespace:
+        on = {"confirm_output": "develop"}
+        if auto_continue:
+            on["await_agent"] = "review"
+        return SimpleNamespace(
+            playbook=SimpleNamespace(id="boundary"),
+            steps={
+                "develop": SimpleNamespace(
+                    assignee_type="agent", output_artifact="code", on=on
+                )
+            },
+        )
+
+    assert module.validate_policy(policy(), playbook=playbook(auto_continue=False))[
+        "phases"
+    ][0]["ordering"] == "before_next_phase"
+    with pytest.raises(ValueError):
+        module.validate_policy(policy(), playbook=playbook(auto_continue=True))
+
+
+def test_activation_rejects_a_symlinked_issue_local_persistence_directory(tmp_path: Path) -> None:
+    """U8 — public activation cannot publish contract or state through a directory link."""
+    module = _module()
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    issue_dir = project_root / ".cafe" / "issues" / "linked"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text("playbook_id: standard\n", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (issue_dir / "driver").mkdir()
+    os.symlink(outside, issue_dir / "driver" / "proactive_review", target_is_directory=True)
+    policy = _policy(project_root, "standard")
+
+    with pytest.raises(module.StaleContractError):
+        module.activate_contract(
+            issue_dir=issue_dir,
+            project_root=project_root,
+            policy=policy,
+            confirmation=_confirmation(module, issue_dir.name, policy),
+        )
+
+    assert not (outside / module.CONTRACT_FILENAME).exists()
+    assert not (outside / module.STATE_FILENAME).exists()
+
+
+def test_replacement_keeps_the_active_pair_when_resetting_state_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """U8 — a state-write failure leaves the prior contract and current evidence intact."""
+    module = _module()
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    issue_dir, _ = _activate(module, project_root)
+    active = module.load_active_contract(issue_dir=issue_dir, project_root=project_root)
+    original_contract = module.contract_path(issue_dir).read_bytes()
+    original_state = module.state_path(issue_dir).read_bytes()
+    replacement = _policy(project_root, "standard", marker="replacement")
+    selected = next(entry for entry in replacement["phases"] if entry["selected"])
+    selected["reviewer"] = {"cli": "codex", "model": "gpt-5.6-terra"}
+    original_write = module._atomic_yaml_write
+
+    def fail_state(path, value, **kwargs):
+        if path.name == module.STATE_FILENAME:
+            raise OSError("state device unavailable")
+        return original_write(path, value, **kwargs)
+
+    monkeypatch.setattr(module, "_atomic_yaml_write", fail_state)
+    with pytest.raises(OSError):
+        module.activate_contract(
+            issue_dir=issue_dir,
+            project_root=project_root,
+            policy=replacement,
+            confirmation=_confirmation(module, issue_dir.name, replacement),
+            expected_active_digest=active["proposal_digest"],
+        )
+
+    assert module.contract_path(issue_dir).read_bytes() == original_contract
+    assert module.state_path(issue_dir).read_bytes() == original_state
+
+
+def test_clean_evidence_is_revalidated_before_obligations_are_reported(tmp_path: Path) -> None:
+    """U9–U11 — public callback reconciliation never trusts a stored clean episode."""
+    module = _module()
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    subprocess.run(["git", "init", "-q", str(project_root)], check=True)
+    subprocess.run(
+        ["git", "-C", str(project_root), "config", "user.email", "test@example.com"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(project_root), "config", "user.name", "CAFE Test"], check=True
+    )
+    tracked = project_root / "src" / "driver.py"
+    tracked.parent.mkdir()
+    tracked.write_text("VERSION = 1\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(project_root), "add", "src/driver.py"], check=True)
+    subprocess.run(["git", "-C", str(project_root), "commit", "-qm", "Initial driver"], check=True)
+
+    issue_dir, policy = _activate(module, project_root)
+    output, requirements, upstream, evidence = _review_inputs(issue_dir, project_root)
+    manifest = module.prepare_review_inputs(
+        issue_dir=issue_dir,
+        project_root=project_root,
+        phase="develop",
+        output_path=output,
+        requirements=requirements,
+        upstream_artifacts=upstream,
+        repository_evidence=evidence,
+        correction_history=[],
+    )
+    clean = module.record_review_result(
+        issue_dir=issue_dir,
+        project_root=project_root,
+        phase="develop",
+        output_identity=manifest["output_identity"],
+        review_input_identity=manifest["review_input_identity"],
+        reviewer={"cli": "codex", "model": "gpt-5.6-sol"},
+        result=_complete_result(),
+        authorized_routes=[],
+    )
+    assert clean["status"] == "clean"
+
+    output.write_text("changed durable output", encoding="utf-8")
+    obligations = module.review_obligations(issue_dir=issue_dir, project_root=project_root)
+    assert obligations == [
+        {
+            "phase": "develop",
+            "ordering": "non_gating",
+            "reviewer": {"cli": "codex", "model": "gpt-5.6-sol"},
+            "status": "pending",
+        }
+    ]
+    episode = module.load_review_state(issue_dir=issue_dir, project_root=project_root)["episodes"][
+        "develop"
+    ]
+    assert episode["pending_reason"] == "output_identity_stale"
+
+    refreshed = module.prepare_review_inputs(
+        issue_dir=issue_dir,
+        project_root=project_root,
+        phase="develop",
+        output_path=output,
+        requirements=requirements,
+        upstream_artifacts=upstream,
+        repository_evidence=evidence,
+        correction_history=[],
+    )
+    module.record_review_result(
+        issue_dir=issue_dir,
+        project_root=project_root,
+        phase="develop",
+        output_identity=refreshed["output_identity"],
+        review_input_identity=refreshed["review_input_identity"],
+        reviewer={"cli": "codex", "model": "gpt-5.6-sol"},
+        result=_complete_result(),
+        authorized_routes=[],
+    )
+    tracked.write_text("VERSION = 2\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(project_root), "add", "src/driver.py"], check=True)
+    subprocess.run(["git", "-C", str(project_root), "commit", "-qm", "Changed driver"], check=True)
+    repository_drift = module.review_obligations(
+        issue_dir=issue_dir, project_root=project_root
+    )
+    assert repository_drift[0]["status"] == "pending"
+    assert module.load_review_state(issue_dir=issue_dir, project_root=project_root)[
+        "episodes"
+    ]["develop"]["pending_reason"] == "review_inputs_stale"
+
+    module.state_path(issue_dir).write_text(
+        module.yaml.safe_dump(
+            {
+                "schema_version": module.SCHEMA_VERSION,
+                "proposal_digest": module.policy_digest(policy),
+                "episodes": {"develop": {"status": "clean"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    malformed = module.review_obligations(issue_dir=issue_dir, project_root=project_root)
+    assert malformed[0]["status"] == "pending"
+    assert module.load_review_state(issue_dir=issue_dir, project_root=project_root)["episodes"][
+        "develop"
+    ]["pending_reason"] == "review_episode_invalid"
 
 
 def test_repository_head_drift_keeps_review_result_pending(tmp_path: Path) -> None:

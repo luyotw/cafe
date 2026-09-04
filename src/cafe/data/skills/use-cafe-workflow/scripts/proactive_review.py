@@ -13,6 +13,7 @@ import hashlib
 import json
 import math
 import os
+import secrets
 import selectors
 import stat
 import subprocess
@@ -480,15 +481,12 @@ def _agent_phase_names(playbook: Any) -> tuple[str, ...]:
 
 
 def _enforceable_boundary(playbook: Any, phase: str) -> bool:
-    """Whether the playbook exposes an existing post-output pause boundary.
-
-    A driver must not manufacture a worker gate.  Existing confirmation or
-    explicit manual-handoff outcomes are the only boundaries this helper treats
-    as enforceable before the next automated phase.
-    """
+    """Whether every normal output route stops at an existing human boundary."""
     step = playbook.steps[phase]
-    return step.output_artifact is not None and (
-        "confirm_output" in step.on or "manual_handoff" in step.on
+    return (
+        step.output_artifact is not None
+        and "confirm_output" in step.on
+        and "await_agent" not in step.on
     )
 
 
@@ -658,11 +656,159 @@ def _validate_confirmation(
     }
 
 
-def _atomic_yaml_write(path: Path, value: Mapping[str, Any]) -> None:
+def _persistence_open_flags() -> int:
+    return os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+
+
+def _open_child_directory(parent_descriptor: int, name: str) -> int:
+    """Open one persistence directory without following a pre-existing link."""
+    try:
+        return os.open(name, _persistence_open_flags(), dir_fd=parent_descriptor)
+    except FileNotFoundError:
+        try:
+            os.mkdir(name, mode=0o700, dir_fd=parent_descriptor)
+        except FileExistsError:
+            pass
+        try:
+            return os.open(name, _persistence_open_flags(), dir_fd=parent_descriptor)
+        except OSError as exc:
+            raise StaleContractError("proactive review persistence directory is invalid") from exc
+    except OSError as exc:
+        raise StaleContractError("proactive review persistence directory is invalid") from exc
+
+
+@contextmanager
+def _proactive_review_directory(issue_dir: Path) -> Iterator[int]:
+    """Hold a descriptor for the issue-local non-symlink persistence directory."""
+    try:
+        issue_descriptor = os.open(issue_dir, _persistence_open_flags())
+    except OSError as exc:
+        raise StaleContractError("proactive review issue directory is invalid") from exc
+    driver_descriptor = None
+    review_descriptor = None
+    try:
+        driver_descriptor = _open_child_directory(issue_descriptor, "driver")
+        review_descriptor = _open_child_directory(driver_descriptor, "proactive_review")
+        yield review_descriptor
+    finally:
+        if review_descriptor is not None:
+            os.close(review_descriptor)
+        if driver_descriptor is not None:
+            os.close(driver_descriptor)
+        os.close(issue_descriptor)
+
+
+def _persistence_entry_exists(directory_descriptor: int, name: str) -> bool:
+    """Require an existing persistence target to be a regular non-symlink file."""
+    try:
+        entry = os.stat(name, dir_fd=directory_descriptor, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise StaleContractError("proactive review persistence target is invalid") from exc
+    if stat.S_ISLNK(entry.st_mode) or not stat.S_ISREG(entry.st_mode):
+        raise StaleContractError("proactive review persistence target is invalid")
+    return True
+
+
+def _read_persistence_entry(
+    directory_descriptor: int, name: str, *, maximum: int
+) -> bytes | None:
+    if not _persistence_entry_exists(directory_descriptor, name):
+        return None
+    try:
+        descriptor = os.open(
+            name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=directory_descriptor
+        )
+    except OSError as exc:
+        raise StaleContractError("proactive review persistence target is unreadable") from exc
+    try:
+        entry = os.fstat(descriptor)
+        if not stat.S_ISREG(entry.st_mode) or entry.st_size > maximum:
+            raise StaleContractError("proactive review persistence target is invalid")
+        content = bytearray()
+        while len(content) <= maximum:
+            chunk = os.read(descriptor, min(64 * 1024, maximum + 1 - len(content)))
+            if not chunk:
+                break
+            content.extend(chunk)
+        if len(content) > maximum:
+            raise StaleContractError("proactive review persistence target is invalid")
+        return bytes(content)
+    finally:
+        os.close(descriptor)
+
+
+def _atomic_bytes_write_at(directory_descriptor: int, name: str, content: bytes) -> None:
+    """Atomically replace one checked target through its held directory descriptor."""
+    _persistence_entry_exists(directory_descriptor, name)
+    temporary = ""
+    descriptor = -1
+    try:
+        for _ in range(8):
+            temporary = f".{name}.{secrets.token_hex(12)}.tmp"
+            try:
+                descriptor = os.open(
+                    temporary,
+                    os.O_WRONLY
+                    | os.O_CREAT
+                    | os.O_EXCL
+                    | getattr(os, "O_NOFOLLOW", 0),
+                    0o600,
+                    dir_fd=directory_descriptor,
+                )
+                break
+            except FileExistsError:
+                continue
+        if descriptor < 0:
+            raise OSError("could not reserve proactive review temporary file")
+        with os.fdopen(descriptor, "wb") as handle:
+            descriptor = -1
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        _persistence_entry_exists(directory_descriptor, name)
+        os.replace(
+            temporary,
+            name,
+            src_dir_fd=directory_descriptor,
+            dst_dir_fd=directory_descriptor,
+        )
+        temporary = ""
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if temporary:
+            try:
+                os.unlink(temporary, dir_fd=directory_descriptor)
+            except FileNotFoundError:
+                pass
+
+
+def _restore_persistence_entry(
+    directory_descriptor: int, name: str, original: bytes | None
+) -> None:
+    if original is None:
+        try:
+            os.unlink(name, dir_fd=directory_descriptor)
+        except FileNotFoundError:
+            return
+        return
+    _atomic_bytes_write_at(directory_descriptor, name, original)
+
+
+def _atomic_yaml_write(
+    path: Path, value: Mapping[str, Any], *, directory_descriptor: int | None = None
+) -> None:
     _ensure_bounded_value(value, label="durable proactive review state")
     encoded = yaml.safe_dump(dict(value), allow_unicode=True, sort_keys=True).encode("utf-8")
     if len(encoded) > MAX_STATE_BYTES:
         raise ValueError("durable proactive review state exceeds the supported byte limit")
+    if directory_descriptor is not None:
+        _atomic_bytes_write_at(directory_descriptor, path.name, encoded)
+        return
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise StaleContractError("proactive review persistence target is invalid")
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary = tempfile.mkstemp(
         prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
@@ -679,22 +825,17 @@ def _atomic_yaml_write(path: Path, value: Mapping[str, Any]) -> None:
 
 
 @contextmanager
-def _contract_lock(issue_dir: Path) -> Iterator[None]:
+def _contract_lock(issue_dir: Path) -> Iterator[int]:
     """Serialize contract activation and shared state updates without new artifacts."""
     if fcntl is None:  # pragma: no cover - CAFE's workflow driver is POSIX-hosted.
         raise RuntimeError("proactive review activation requires process file locking")
     with _IN_PROCESS_CONTRACT_LOCK:
-        driver_dir = issue_dir / "driver"
-        driver_dir.mkdir(parents=True, exist_ok=True)
-        if driver_dir.is_symlink() or not driver_dir.is_dir():
-            raise StaleContractError("proactive review driver directory is invalid")
-        descriptor = os.open(driver_dir, os.O_RDONLY)
-        try:
+        with _proactive_review_directory(issue_dir) as descriptor:
             fcntl.flock(descriptor, fcntl.LOCK_EX)
-            yield
-        finally:
-            fcntl.flock(descriptor, fcntl.LOCK_UN)
-            os.close(descriptor)
+            try:
+                yield descriptor
+            finally:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
 
 
 def _active_contract_digest(target: Path) -> str:
@@ -743,17 +884,30 @@ def activate_contract(
         **validated_confirmation,
         "policy": validated_policy,
     }
-    with _contract_lock(issue_dir):
-        if target.exists():
+    with _contract_lock(issue_dir) as directory_descriptor:
+        if _persistence_entry_exists(directory_descriptor, CONTRACT_FILENAME):
             existing_digest = _active_contract_digest(target)
             if not expected_active_digest or expected_active_digest != existing_digest:
                 raise StaleContractError("replacement requires the expected active proposal digest")
         elif expected_active_digest is not None:
             raise StaleContractError("initial activation cannot compare an absent active contract")
-        _atomic_yaml_write(target, envelope)
-        existing_state = state_path(issue_dir)
-        if existing_state.is_file() and not existing_state.is_symlink():
-            _atomic_yaml_write(existing_state, _empty_review_state(digest))
+        previous_state = _read_persistence_entry(
+            directory_descriptor, STATE_FILENAME, maximum=MAX_STATE_BYTES
+        )
+        _atomic_yaml_write(
+            state_path(issue_dir),
+            _empty_review_state(digest),
+            directory_descriptor=directory_descriptor,
+        )
+        try:
+            _atomic_yaml_write(
+                target, envelope, directory_descriptor=directory_descriptor
+            )
+        except BaseException:
+            _restore_persistence_entry(
+                directory_descriptor, STATE_FILENAME, previous_state
+            )
+            raise
     return target
 
 
@@ -958,8 +1112,12 @@ def _load_state_for_contract(*, issue_dir: Path, contract: Mapping[str, Any]) ->
         raise ReviewStateError("proactive review state has an invalid envelope") from exc
 
 
-def _write_review_state(issue_dir: Path, state: Mapping[str, Any]) -> None:
-    _atomic_yaml_write(state_path(issue_dir), state)
+def _write_review_state(
+    issue_dir: Path, state: Mapping[str, Any], *, directory_descriptor: int
+) -> None:
+    _atomic_yaml_write(
+        state_path(issue_dir), state, directory_descriptor=directory_descriptor
+    )
 
 
 def _mutate_review_state(
@@ -970,7 +1128,7 @@ def _mutate_review_state(
     mutation: Callable[[dict[str, Any], dict[str, Any]], tuple[T, bool]],
 ) -> T:
     """Apply one current-evidence transition under the issue-wide durable lock."""
-    with _contract_lock(issue_dir):
+    with _contract_lock(issue_dir) as directory_descriptor:
         contract = load_active_contract(issue_dir=issue_dir, project_root=project_root)
         if (
             expected_proposal_digest is not None
@@ -980,12 +1138,15 @@ def _mutate_review_state(
         state = _load_state_for_contract(issue_dir=issue_dir, contract=contract)
         result, changed = mutation(contract, state)
         if changed:
-            _write_review_state(issue_dir, state)
+            _write_review_state(
+                issue_dir, state, directory_descriptor=directory_descriptor
+            )
         return result
 
 
 def load_review_state(*, issue_dir: Path, project_root: Path) -> dict[str, Any]:
-    """Load bounded current evidence only after live contract validation."""
+    """Load bounded current evidence only after reconciling clean episodes."""
+    review_obligations(issue_dir=issue_dir, project_root=project_root)
     contract = load_active_contract(issue_dir=issue_dir, project_root=project_root)
     return _load_state_for_contract(issue_dir=issue_dir, contract=contract)
 
@@ -1165,6 +1326,92 @@ def _pending_episode(episode: Mapping[str, Any], *, reason: str) -> dict[str, An
     return {**episode, "status": "pending", "pending_reason": reason}
 
 
+def _clean_episode_staleness(
+    *,
+    episode: Mapping[str, Any],
+    selected: Mapping[str, Any],
+    contract: Mapping[str, Any],
+    issue_dir: Path,
+    project_root: Path,
+) -> str | None:
+    """Return the fail-closed reason when persisted clean evidence is no longer current."""
+    try:
+        if set(episode) != {
+            "status",
+            "proposal_digest",
+            "output_identity",
+            "reviewer",
+            "review_inputs",
+            "review_input_identity",
+            "scope_adequacy",
+            "resolved_summary",
+        }:
+            raise ValueError("clean episode has an invalid envelope")
+        if (
+            episode["status"] != "clean"
+            or episode["proposal_digest"] != contract["proposal_digest"]
+        ):
+            raise ValueError("clean episode is for another contract")
+        identity = _mapping(episode["output_identity"], label="clean output identity")
+        if set(identity) != {"path", "sha256"}:
+            raise ValueError("clean output identity is invalid")
+        if _output_identity(
+            output_path=Path(_non_empty(identity["path"], label="clean output path")),
+            issue_dir=issue_dir,
+            phase=selected["phase"],
+        ) != identity:
+            return "output_identity_stale"
+        if _reviewer_identity(episode["reviewer"]) != selected["reviewer"]:
+            raise ValueError("clean episode reviewer is invalid")
+        stored_inputs = _mapping(episode["review_inputs"], label="clean review inputs")
+        if set(stored_inputs) != {
+            "requirements",
+            "upstream_artifacts",
+            "repository_evidence",
+            "repository_state",
+            "correction_history",
+        }:
+            raise ValueError("clean review inputs are invalid")
+        stored_state = _mapping(stored_inputs["repository_state"], label="repository state")
+        if set(stored_state) != {"head", "changed_state_sha256"}:
+            raise ValueError("clean repository state is invalid")
+        expected_identity = _non_empty(
+            episode["review_input_identity"], label="clean review input identity"
+        )
+        current_identity = _review_input_identity(
+            requirements=_evidence_items(
+                stored_inputs["requirements"], label="confirmed requirements", root=issue_dir
+            ),
+            upstream_artifacts=_evidence_items(
+                stored_inputs["upstream_artifacts"],
+                label="accepted upstream artifacts",
+                root=issue_dir,
+            ),
+            repository_evidence=_evidence_items(
+                stored_inputs["repository_evidence"],
+                label="repository evidence",
+                root=project_root,
+            ),
+            repository_state=_repository_state_identity(project_root),
+            correction_history=_correction_history(stored_inputs["correction_history"]),
+        )
+        _scope_adequacy(episode["scope_adequacy"])
+        summary = _mapping(episode["resolved_summary"], label="resolved summary")
+        if (
+            set(summary) != {"count", "digest"}
+            or isinstance(summary["count"], bool)
+            or not isinstance(summary["count"], int)
+            or summary["count"] < 0
+            or len(_non_empty(summary["digest"], label="resolved summary digest")) != 64
+        ):
+            raise ValueError("resolved summary is invalid")
+    except (ReviewStateError, ValueError, TypeError):
+        return "review_episode_invalid"
+    if current_identity != expected_identity:
+        return "review_inputs_stale"
+    return None
+
+
 def _bounded_items(value: Any, *, label: str) -> list[Any]:
     if not isinstance(value, list) or not value or len(value) > MAX_EVIDENCE_ITEMS:
         raise ReviewStateError(f"{label} requires a bounded non-empty list")
@@ -1303,6 +1550,8 @@ def record_review_result(
                 "proposal_digest": contract["proposal_digest"],
                 "output_identity": dict(identity),
                 "reviewer": actual_reviewer,
+                "review_inputs": dict(stored_inputs),
+                "review_input_identity": expected_input_identity,
                 "scope_adequacy": scope,
                 "resolved_summary": {
                     "count": len(prior),
@@ -1320,6 +1569,8 @@ def record_review_result(
             "proposal_digest": contract["proposal_digest"],
             "output_identity": dict(identity),
             "reviewer": actual_reviewer,
+            "review_inputs": dict(stored_inputs),
+            "review_input_identity": expected_input_identity,
             "scope_adequacy": scope,
             "blockers": [dict(blocker, status="still_failing") for blocker in blockers],
             "route": route,
@@ -1373,25 +1624,48 @@ def mark_downstream_invalidated(
 
 
 def review_obligations(*, issue_dir: Path, project_root: Path) -> list[dict[str, Any]]:
-    """Return bounded current obligations for driver resume/callback reconciliation."""
-    contract = load_active_contract(issue_dir=issue_dir, project_root=project_root)
-    state = _load_state_for_contract(issue_dir=issue_dir, contract=contract)
-    obligations: list[dict[str, Any]] = []
-    for entry in contract["policy"]["phases"]:
-        if not entry["selected"]:
-            continue
-        episode = state["episodes"].get(entry["phase"])
-        obligations.append(
-            {
-                "phase": entry["phase"],
-                "ordering": entry["ordering"],
-                "reviewer": entry["reviewer"],
-                "status": episode.get("status", "not_started")
-                if isinstance(episode, Mapping)
-                else "not_started",
-            }
-        )
-    return obligations
+    """Return obligations only after reconciling persisted clean evidence."""
+    issue_dir = _authorized_issue_dir(issue_dir=issue_dir, project_root=project_root)
+
+    def reconcile(
+        contract: dict[str, Any], state: dict[str, Any]
+    ) -> tuple[list[dict[str, Any]], bool]:
+        changed = False
+        obligations: list[dict[str, Any]] = []
+        for entry in contract["policy"]["phases"]:
+            if not entry["selected"]:
+                continue
+            episode = state["episodes"].get(entry["phase"])
+            if isinstance(episode, Mapping) and episode.get("status") == "clean":
+                reason = _clean_episode_staleness(
+                    episode=episode,
+                    selected=entry,
+                    contract=contract,
+                    issue_dir=issue_dir,
+                    project_root=project_root,
+                )
+                if reason is not None:
+                    episode = _pending_episode(episode, reason=reason)
+                    state["episodes"][entry["phase"]] = episode
+                    changed = True
+            obligations.append(
+                {
+                    "phase": entry["phase"],
+                    "ordering": entry["ordering"],
+                    "reviewer": entry["reviewer"],
+                    "status": episode.get("status", "not_started")
+                    if isinstance(episode, Mapping)
+                    else "not_started",
+                }
+            )
+        return obligations, changed
+
+    return _mutate_review_state(
+        issue_dir=issue_dir,
+        project_root=project_root,
+        expected_proposal_digest=None,
+        mutation=reconcile,
+    )
 
 
 def _json_mapping(value: str) -> dict[str, Any]:

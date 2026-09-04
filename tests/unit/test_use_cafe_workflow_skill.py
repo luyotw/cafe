@@ -1790,7 +1790,11 @@ def test_proactive_review_activation_requires_complete_confirmation_and_preserve
         )
     assert contract_path.read_bytes() == original
 
-    monkeypatch.setattr(module.os, "replace", lambda *_args: (_ for _ in ()).throw(OSError()))
+    monkeypatch.setattr(
+        module.os,
+        "replace",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError()),
+    )
     replacement = _proactive_review_policy(selected_phase="review")
     with pytest.raises(OSError):
         module.activate_contract(
