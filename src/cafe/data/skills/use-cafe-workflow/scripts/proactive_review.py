@@ -13,9 +13,12 @@ import hashlib
 import json
 import math
 import os
+import selectors
+import stat
 import subprocess
 import tempfile
 import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -155,47 +158,224 @@ def _read_bounded_file(path: Path, *, label: str, maximum: int, error: type[Valu
     return content
 
 
+def _run_bounded_git(
+    command: list[str],
+    *,
+    maximum: int,
+    consumer: Callable[[bytes], None] | None = None,
+) -> tuple[int, bytes, int]:
+    """Run fixed Git argv while retaining no more than its bounded output."""
+    process = None
+    output = bytearray()
+    try:
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+        if process.stdout is None:  # pragma: no cover - subprocess.PIPE guarantees stdout.
+            raise ReviewStateError("repository current state cannot be read")
+        consumed = 0
+        deadline = time.monotonic() + 5
+        with selectors.DefaultSelector() as selector:
+            selector.register(process.stdout, selectors.EVENT_READ)
+            while selector.get_map():
+                timeout = deadline - time.monotonic()
+                if timeout <= 0 or not selector.select(timeout):
+                    raise subprocess.TimeoutExpired(command, 5)
+                chunk = os.read(
+                    process.stdout.fileno(), min(64 * 1024, maximum - consumed + 1)
+                )
+                if not chunk:
+                    selector.unregister(process.stdout)
+                    continue
+                consumed += len(chunk)
+                if consumed > maximum:
+                    raise ReviewStateError(
+                        "repository current state exceeds the supported evidence limit"
+                    )
+                if consumer is None:
+                    output.extend(chunk)
+                else:
+                    consumer(chunk)
+        timeout = deadline - time.monotonic()
+        if timeout <= 0:
+            raise subprocess.TimeoutExpired(command, 5)
+        returncode = process.wait(timeout=timeout)
+        return returncode, bytes(output), consumed
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ReviewStateError("repository current state cannot be read") from exc
+    finally:
+        if process is not None:
+            if process.poll() is None:
+                try:
+                    process.kill()
+                except OSError:
+                    pass
+            try:
+                process.wait(timeout=5)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+            if process.stdout is not None:
+                process.stdout.close()
+
+
+def _hash_untracked_files(
+    *, root: Path, names: bytes, remaining: int, digest: Any
+) -> int:
+    """Bind bounded untracked file content without following paths outside the root."""
+    for raw_name in names.split(b"\0"):
+        if not raw_name:
+            continue
+        relative = Path(os.fsdecode(raw_name))
+        if relative.is_absolute() or ".." in relative.parts:
+            raise ReviewStateError("repository current state cannot be read")
+        candidate = root / relative
+        try:
+            parent = candidate.parent.resolve()
+        except OSError as exc:
+            raise ReviewStateError("repository current state cannot be read") from exc
+        if parent != root and root not in parent.parents:
+            raise ReviewStateError("repository current state cannot be read")
+        try:
+            metadata = candidate.lstat()
+        except OSError as exc:
+            raise ReviewStateError("repository current state cannot be read") from exc
+        digest.update(b"\0untracked\0")
+        digest.update(len(raw_name).to_bytes(8, "big"))
+        digest.update(raw_name)
+        digest.update(stat.S_IMODE(metadata.st_mode).to_bytes(4, "big"))
+        if stat.S_ISLNK(metadata.st_mode):
+            try:
+                content = os.fsencode(os.readlink(candidate))
+            except OSError as exc:
+                raise ReviewStateError("repository current state cannot be read") from exc
+            if len(content) > remaining:
+                raise ReviewStateError(
+                    "repository current state exceeds the supported evidence limit"
+                )
+            digest.update(b"link\0")
+            digest.update(content)
+            remaining -= len(content)
+            continue
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ReviewStateError("repository current state cannot be read")
+        if metadata.st_size > remaining:
+            raise ReviewStateError("repository current state exceeds the supported evidence limit")
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(candidate, flags)
+        except OSError as exc:
+            raise ReviewStateError("repository current state cannot be read") from exc
+        try:
+            with os.fdopen(descriptor, "rb") as handle:
+                opened = os.fstat(handle.fileno())
+                if (
+                    not stat.S_ISREG(opened.st_mode)
+                    or (opened.st_dev, opened.st_ino) != (metadata.st_dev, metadata.st_ino)
+                    or opened.st_size > remaining
+                ):
+                    raise ReviewStateError("repository current state cannot be read")
+                digest.update(b"file\0")
+                while True:
+                    chunk = handle.read(min(64 * 1024, remaining + 1))
+                    if not chunk:
+                        break
+                    if len(chunk) > remaining:
+                        raise ReviewStateError(
+                            "repository current state exceeds the supported evidence limit"
+                        )
+                    digest.update(chunk)
+                    remaining -= len(chunk)
+                refreshed = os.fstat(handle.fileno())
+        except OSError as exc:
+            raise ReviewStateError("repository current state cannot be read") from exc
+        if (
+            refreshed.st_size != opened.st_size
+            or refreshed.st_mtime_ns != opened.st_mtime_ns
+            or refreshed.st_ctime_ns != opened.st_ctime_ns
+        ):
+            raise ReviewStateError("repository current state cannot be read")
+    return remaining
+
+
 def _repository_state_identity(project_root: Path) -> dict[str, str]:
     """Capture bounded Git state needed to reject a review of a changed repository."""
     root = project_root.resolve()
     try:
-        inside = subprocess.run(
+        inside_returncode, inside_stdout, _ = _run_bounded_git(
             ["git", "-C", str(root), "rev-parse", "--is-inside-work-tree"],
-            capture_output=True,
-            check=False,
-            timeout=5,
+            maximum=128,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except ReviewStateError:
         return {"head": "unavailable", "changed_state_sha256": "unavailable"}
-    if inside.returncode != 0 or inside.stdout.strip() != b"true":
+    if inside_returncode != 0 or inside_stdout.strip() != b"true":
         return {"head": "unavailable", "changed_state_sha256": "unavailable"}
-    try:
-        head = subprocess.run(
-            ["git", "-C", str(root), "rev-parse", "--verify", "HEAD"],
-            capture_output=True,
-            check=False,
-            timeout=5,
+    digest = hashlib.sha256()
+    remaining = MAX_REPOSITORY_STATE_BYTES
+
+    def consume(command: list[str], *, label: bytes, output: bytearray | None = None) -> int:
+        nonlocal remaining
+        digest.update(label)
+
+        def update(chunk: bytes) -> None:
+            digest.update(chunk)
+            if output is not None:
+                output.extend(chunk)
+
+        returncode, _, consumed = _run_bounded_git(
+            command, maximum=remaining, consumer=update
         )
-        diff = subprocess.run(
-            ["git", "-C", str(root), "diff", "--binary", "--no-ext-diff", "HEAD"],
-            capture_output=True,
-            check=False,
-            timeout=5,
-        )
-        status = subprocess.run(
-            ["git", "-C", str(root), "status", "--porcelain=v1", "-z"],
-            capture_output=True,
-            check=False,
-            timeout=5,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise ReviewStateError("repository current state cannot be read") from exc
-    if status.returncode != 0 or len(diff.stdout) > MAX_REPOSITORY_STATE_BYTES:
-        raise ReviewStateError("repository current state exceeds the supported evidence limit")
-    head_identity = head.stdout.strip().decode("ascii") if head.returncode == 0 else "unborn"
-    if len(status.stdout) > MAX_REPOSITORY_STATE_BYTES:
-        raise ReviewStateError("repository current state exceeds the supported evidence limit")
-    changed_state = hashlib.sha256(status.stdout + b"\0" + diff.stdout).hexdigest()
+        remaining -= consumed
+        return returncode
+
+    head = bytearray()
+    head_returncode = consume(
+        ["git", "-C", str(root), "rev-parse", "--verify", "HEAD"],
+        label=b"head\0",
+        output=head,
+    )
+    diff_returncode = consume(
+        ["git", "-C", str(root), "diff", "--binary", "--no-ext-diff", "HEAD"],
+        label=b"diff\0",
+    )
+    status_returncode = consume(
+        [
+            "git",
+            "-C",
+            str(root),
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=no",
+        ],
+        label=b"tracked_status\0",
+    )
+    untracked = bytearray()
+    untracked_returncode = consume(
+        [
+            "git",
+            "-C",
+            str(root),
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            "--",
+            ".",
+            ":(exclude).cafe/**",
+        ],
+        label=b"untracked_paths\0",
+        output=untracked,
+    )
+    if diff_returncode != 0 or status_returncode != 0 or untracked_returncode != 0:
+        raise ReviewStateError("repository current state cannot be read")
+    remaining = _hash_untracked_files(
+        root=root, names=bytes(untracked), remaining=remaining, digest=digest
+    )
+    head_identity = bytes(head).strip().decode("ascii") if head_returncode == 0 else "unborn"
+    changed_state = digest.hexdigest()
     return {"head": head_identity, "changed_state_sha256": changed_state}
 
 

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import os
 import subprocess
 import threading
 import time
+import tracemalloc
 from pathlib import Path
 
 import pytest
@@ -430,6 +432,81 @@ def test_repository_head_drift_keeps_review_result_pending(tmp_path: Path) -> No
 
     assert dirty["status"] == "pending"
     assert dirty["pending_reason"] == "review_inputs_stale"
+
+
+def test_untracked_repository_content_drift_keeps_review_result_pending(tmp_path: Path) -> None:
+    """BLK-004 — current identity binds the contents of untracked source files."""
+    module = _module()
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    subprocess.run(["git", "init", "-q", str(project_root)], check=True)
+    subprocess.run(
+        ["git", "-C", str(project_root), "config", "user.email", "test@example.com"], check=True
+    )
+    subprocess.run(["git", "-C", str(project_root), "config", "user.name", "CAFE Test"], check=True)
+    tracked = project_root / "src" / "driver.py"
+    tracked.parent.mkdir()
+    tracked.write_text("VERSION = 1\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(project_root), "add", "src/driver.py"], check=True)
+    subprocess.run(["git", "-C", str(project_root), "commit", "-qm", "Initial driver"], check=True)
+
+    issue_dir, _ = _activate(module, project_root)
+    output, requirements, upstream, evidence = _review_inputs(issue_dir, project_root)
+    untracked = project_root / "src" / "untracked_behavior.py"
+    untracked.write_text("BEHAVIOR = 1\n", encoding="utf-8")
+    manifest = module.prepare_review_inputs(
+        issue_dir=issue_dir,
+        project_root=project_root,
+        phase="develop",
+        output_path=output,
+        requirements=requirements,
+        upstream_artifacts=upstream,
+        repository_evidence=evidence,
+        correction_history=[],
+    )
+
+    untracked.write_text("BEHAVIOR = 2\n", encoding="utf-8")
+    stale = module.record_review_result(
+        issue_dir=issue_dir,
+        project_root=project_root,
+        phase="develop",
+        output_identity=manifest["output_identity"],
+        review_input_identity=manifest["review_input_identity"],
+        reviewer={"cli": "codex", "model": "gpt-5.6-sol"},
+        result=_complete_result(),
+        authorized_routes=[],
+    )
+
+    assert stale["status"] == "pending"
+    assert stale["pending_reason"] == "review_inputs_stale"
+
+
+def test_repository_state_identity_bounds_git_output_before_capture(tmp_path: Path) -> None:
+    """BLK-011 — Git evidence exceeds its aggregate budget without large retention."""
+    module = _module()
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    subprocess.run(["git", "init", "-q", str(project_root)], check=True)
+    subprocess.run(
+        ["git", "-C", str(project_root), "config", "user.email", "test@example.com"], check=True
+    )
+    subprocess.run(["git", "-C", str(project_root), "config", "user.name", "CAFE Test"], check=True)
+    source = project_root / "src" / "large.bin"
+    source.parent.mkdir()
+    source.write_bytes(os.urandom(2_000_000))
+    subprocess.run(["git", "-C", str(project_root), "add", "src/large.bin"], check=True)
+    subprocess.run(["git", "-C", str(project_root), "commit", "-qm", "Initial binary"], check=True)
+    source.write_bytes(os.urandom(2_000_000))
+
+    tracemalloc.start()
+    try:
+        with pytest.raises(module.ReviewStateError):
+            module._repository_state_identity(project_root)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert peak <= module.MAX_REPOSITORY_STATE_BYTES * 4
 
 
 def test_concurrent_phase_preparation_preserves_each_current_episode(
