@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import subprocess
@@ -15,6 +16,7 @@ from typing import Any, Iterator, Optional, Sequence
 
 import yaml
 
+from cafe.agents.executor import AgentExecutionControl, AgentExecutionError, AgentExecutor
 from cafe.agents.manager import AgentManager
 from cafe.core.session import SessionStore
 from cafe.core.session_continuation import SessionContinuation
@@ -313,6 +315,23 @@ def _load_or_initialize_dispatch_state(
                 or entry.get("model") != policy_entry["model"]
             ):
                 raise ValueError("event-driven dispatch session provenance is invalid")
+            session = entry.get("session")
+            if session is not None and (
+                not isinstance(session, dict)
+                or set(session) != {"id", "source", "acquired_at"}
+                or not isinstance(session.get("id"), str)
+                or not session["id"].strip()
+                or session.get("source") not in {"host_session", "provider"}
+                or not isinstance(session.get("acquired_at"), str)
+                or not session["acquired_at"]
+            ):
+                raise ValueError("event-driven dispatch session provenance is invalid")
+            host_session = config.get("host_session")
+            if index == 0 and isinstance(host_session, dict):
+                if session is None or session.get("id") != host_session["thread_id"]:
+                    raise ValueError("event-driven host session conflicts with dispatch state")
+            elif isinstance(session, dict) and session.get("source") == "host_session":
+                raise ValueError("event-driven host session cannot bind a fallback")
         active_index = state.get("active_index")
         if not isinstance(active_index, int) or not 0 <= active_index < len(entries):
             raise ValueError("event-driven dispatch state is invalid")
@@ -345,6 +364,262 @@ def _load_or_initialize_dispatch_state(
     }
     _atomic_write(path, json.dumps(state, sort_keys=True).encode("utf-8"))
     return state
+
+
+def _write_dispatch_state(driver_dir: Path, state: dict[str, Any]) -> dict[str, Any]:
+    updated = copy.deepcopy(state)
+    updated["updated_at"] = _now()
+    _atomic_write(
+        driver_dir / DISPATCH_STATE_FILENAME,
+        json.dumps(updated, sort_keys=True).encode("utf-8"),
+    )
+    return updated
+
+
+def _bounded_event(event: dict[str, Any]) -> dict[str, Any]:
+    allowed = {
+        "workflow_id",
+        "issue",
+        "event_type",
+        "event_id",
+        "sequence",
+        "occurred_at",
+        "step",
+        "status_code",
+        "runtime",
+        "attempt",
+        "hop",
+        "reason",
+        "task_id",
+    }
+    return {key: value for key, value in event.items() if key in allowed}
+
+
+def _ensure_dispatch_event(
+    driver_dir: Path,
+    state: dict[str, Any],
+    event: dict[str, Any],
+) -> dict[str, Any]:
+    event_id = event.get("event_id")
+    sequence = event.get("sequence")
+    occurred_at = event.get("occurred_at")
+    if (
+        not isinstance(event_id, str)
+        or not event_id
+        or not isinstance(sequence, int)
+        or isinstance(sequence, bool)
+        or sequence <= 0
+        or not isinstance(occurred_at, str)
+        or not occurred_at
+        or event.get("workflow_id") != state["workflow_id"]
+    ):
+        raise ValueError("workflow callback event identity is invalid")
+    bounded = _bounded_event(event)
+    existing = state["events"].get(event_id)
+    if existing is not None:
+        if not isinstance(existing, dict) or existing.get("event") != bounded:
+            raise ValueError("workflow callback event conflicts with dispatch state")
+        return state
+
+    updated = copy.deepcopy(state)
+    updated["events"][event_id] = {
+        "event": bounded,
+        "starting_index": state["active_index"],
+        "status": "routing",
+        "attempts": [],
+        "accepted_index": None,
+        "takeover": None,
+        "recovery_pending": False,
+    }
+    return _write_dispatch_state(driver_dir, updated)
+
+
+def _classify_provider_failure(error: BaseException) -> str:
+    conclusive = {
+        "cli_not_found",
+        "cli_unavailable",
+        "authentication",
+        "model_not_found",
+        "provider_overloaded",
+        "rate_limit",
+        "session_not_found",
+        "transport_rejected",
+        "queue_rejected",
+        "invalid_acknowledgement",
+    }
+    if isinstance(error, AgentExecutionError) and error.error_type in conclusive:
+        return "conclusive_nonacceptance"
+    if isinstance(error, (FileNotFoundError, subprocess.CalledProcessError)):
+        return "conclusive_nonacceptance"
+    return "ambiguous"
+
+
+def _append_pending_attempt(
+    driver_dir: Path,
+    state: dict[str, Any],
+    *,
+    event_id: str,
+    index: int,
+    stage: str,
+) -> dict[str, Any]:
+    updated = copy.deepcopy(state)
+    attempts = updated["events"][event_id]["attempts"]
+    attempts.append(
+        {
+            "index": index,
+            "stage": stage,
+            "status": "pending",
+            "outcome": None,
+            "reason": None,
+            "session_id": None,
+            "started_at": _now(),
+            "finished_at": None,
+        }
+    )
+    return _write_dispatch_state(driver_dir, updated)
+
+
+def _finish_pending_attempt(
+    driver_dir: Path,
+    state: dict[str, Any],
+    *,
+    event_id: str,
+    status: str,
+    outcome: str,
+    reason: str,
+    session_id: str | None = None,
+    recovery_pending: bool = False,
+) -> dict[str, Any]:
+    updated = copy.deepcopy(state)
+    attempt = updated["events"][event_id]["attempts"][-1]
+    if attempt.get("status") != "pending":
+        raise ValueError("event-driven dispatch attempt is not pending")
+    attempt.update(
+        {
+            "status": status,
+            "outcome": outcome,
+            "reason": reason,
+            "session_id": session_id,
+            "finished_at": _now(),
+        }
+    )
+    if recovery_pending:
+        updated["events"][event_id]["status"] = "recovery_pending"
+        updated["events"][event_id]["recovery_pending"] = True
+    return _write_dispatch_state(driver_dir, updated)
+
+
+def _observed_session_ids(records: Any) -> set[str]:
+    result: set[str] = set()
+    if not isinstance(records, (list, tuple)):
+        return result
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        for field in ("thread_id", "session_id", "sessionId"):
+            value = record.get(field)
+            if isinstance(value, str) and value.strip():
+                result.add(value.strip())
+    return result
+
+
+def _acquire_v3_session(
+    driver_dir: Path,
+    state: dict[str, Any],
+    *,
+    event_id: str,
+    index: int,
+    repository_root: Path,
+    executor_factory=AgentExecutor,
+) -> tuple[dict[str, Any], str]:
+    """Acquire and atomically persist one provider-owned session."""
+    entry = state["entries"][index]
+    if entry["session"] is not None:
+        return state, "acquired"
+    event_state = state["events"].get(event_id)
+    if not isinstance(event_state, dict):
+        raise ValueError("event-driven dispatch event is missing")
+    attempts = event_state.get("attempts")
+    if isinstance(attempts, list) and attempts and attempts[-1].get("status") == "pending":
+        return state, "ambiguous"
+
+    state = _append_pending_attempt(
+        driver_dir,
+        state,
+        event_id=event_id,
+        index=index,
+        stage="bootstrap",
+    )
+    executor = executor_factory(
+        AgentConfig(
+            name=DRIVER_AGENT_NAME,
+            cli=AgentCLI(entry["cli"]),
+            model=entry["model"],
+            clis=[],
+            backup_clis=[],
+        ),
+        stream_output=False,
+    )
+    try:
+        with tempfile.TemporaryDirectory(prefix="cafe-event-bootstrap-") as temporary:
+            result = executor.execute_event_driver(
+                'say "HI"',
+                allowed_tools=[],
+                allowed_directories=[],
+                execution_control=AgentExecutionControl(
+                    working_directory=Path(temporary),
+                    max_duration_seconds=60,
+                    max_output_bytes=64 * 1024,
+                    max_output_lines=128,
+                ),
+            )
+    except Exception as exc:
+        classification = _classify_provider_failure(exc)
+        state = _finish_pending_attempt(
+            driver_dir,
+            state,
+            event_id=event_id,
+            status="failed" if classification == "conclusive_nonacceptance" else "ambiguous",
+            outcome=classification,
+            reason=getattr(exc, "error_type", None) or type(exc).__name__,
+            recovery_pending=classification == "ambiguous",
+        )
+        return state, classification
+
+    session_id = getattr(result, "session_id", None)
+    records = getattr(result, "records", ())
+    if not isinstance(session_id, str) or not session_id.strip():
+        observed_ids = _observed_session_ids(records)
+        classification = "ambiguous" if len(observed_ids) > 1 else "conclusive_nonacceptance"
+        state = _finish_pending_attempt(
+            driver_dir,
+            state,
+            event_id=event_id,
+            status="failed" if classification == "conclusive_nonacceptance" else "ambiguous",
+            outcome=classification,
+            reason="invalid_session_result",
+            recovery_pending=classification == "ambiguous",
+        )
+        return state, classification
+
+    updated = copy.deepcopy(state)
+    now = _now()
+    updated["entries"][index]["session"] = {
+        "id": session_id.strip(),
+        "source": "provider",
+        "acquired_at": now,
+    }
+    attempt = updated["events"][event_id]["attempts"][-1]
+    attempt.update(
+        {
+            "status": "acquired",
+            "outcome": "session_acquired",
+            "reason": "provider_evidence",
+            "session_id": session_id.strip(),
+            "finished_at": now,
+        }
+    )
+    return _write_dispatch_state(driver_dir, updated), "acquired"
 
 
 class EventDriverSessionStore(SessionStore):

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -182,6 +184,283 @@ def test_version_three_state_binds_immutable_policy_without_legacy_session_files
         callback._load_or_initialize_dispatch_state(
             driver_dir, workflow_id="foreign", config=config
         )
+
+
+def _v3_event_context(callback, tmp_path: Path, clis: list[tuple[str, str]]):
+    from cafe.core.blackboard import BlackboardStore
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue457"
+    callback.write_config(issue_dir, clis=clis)
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("spec")
+    event = store.prepare_workflow_callback_event(
+        blackboard,
+        {
+            "workflow_id": blackboard.workflow_id,
+            "issue": issue_dir.name,
+            "event_type": "phase_terminal",
+            "step": "develop",
+            "status_code": "ok",
+        },
+    )
+    driver_dir = issue_dir / "driver"
+    state = callback._load_or_initialize_dispatch_state(
+        driver_dir,
+        workflow_id=blackboard.workflow_id,
+        config=callback._load_config(driver_dir),
+    )
+    state = callback._ensure_dispatch_event(driver_dir, state, event)
+    return driver_dir, state, event
+
+
+@pytest.mark.parametrize("cli", list(AgentCLI))
+def test_every_unbound_entry_bootstraps_without_event_authority(
+    tmp_path: Path, cli: AgentCLI
+) -> None:
+    callback = _callback_module()
+    driver_dir, state, event = _v3_event_context(callback, tmp_path, [(cli.value, "exact")])
+    calls = []
+
+    class FakeExecutor:
+        def __init__(self, config, **_kwargs):
+            self.config = config
+
+        def execute_event_driver(self, prompt, **kwargs):
+            calls.append((self.config, prompt, kwargs))
+            return SimpleNamespace(
+                session_id=f"{self.config.cli.value}-provider-session",
+                records=(),
+            )
+
+    updated, outcome = callback._acquire_v3_session(
+        driver_dir,
+        state,
+        event_id=event["event_id"],
+        index=0,
+        repository_root=tmp_path,
+        executor_factory=FakeExecutor,
+    )
+
+    assert outcome == "acquired"
+    assert calls[0][1] == 'say "HI"'
+    assert calls[0][2]["allowed_tools"] == []
+    assert calls[0][2]["allowed_directories"] == []
+    assert event["event_id"] not in calls[0][1]
+    persisted = json.loads((driver_dir / "dispatch_state.json").read_text())
+    assert persisted["entries"][0]["session"]["id"] == updated["entries"][0]["session"]["id"]
+    assert persisted["events"][event["event_id"]]["attempts"][-1]["stage"] == "bootstrap"
+    assert not (driver_dir / "session.json").exists()
+
+
+def test_bound_or_acquired_session_skips_bootstrap_and_binding_never_spreads(
+    tmp_path: Path, monkeypatch
+) -> None:
+    callback = _callback_module()
+    monkeypatch.setenv("CODEX_THREAD_ID", "bound-session")
+    driver_dir, state, event = _v3_event_context(
+        callback,
+        tmp_path,
+        [("codex", "exact"), ("claude", "fallback")],
+    )
+
+    class ForbiddenExecutor:
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("an acquired session must not bootstrap")
+
+    updated, outcome = callback._acquire_v3_session(
+        driver_dir,
+        state,
+        event_id=event["event_id"],
+        index=0,
+        repository_root=tmp_path,
+        executor_factory=ForbiddenExecutor,
+    )
+
+    assert outcome == "acquired"
+    assert updated["entries"][0]["session"]["id"] == "bound-session"
+    assert updated["entries"][1]["session"] is None
+
+    raw = json.loads((driver_dir / "dispatch_state.json").read_text())
+    raw["entries"][0]["session"]["id"] = "conflict"
+    (driver_dir / "dispatch_state.json").write_text(json.dumps(raw))
+    with pytest.raises(ValueError, match="host session"):
+        callback._load_or_initialize_dispatch_state(
+            driver_dir,
+            workflow_id=state["workflow_id"],
+            config=state["policy"],
+        )
+
+
+@pytest.mark.parametrize(
+    ("error_type", "expected"),
+    [
+        ("cli_not_found", "conclusive_nonacceptance"),
+        ("cli_unavailable", "conclusive_nonacceptance"),
+        ("model_not_found", "conclusive_nonacceptance"),
+        ("rate_limit", "conclusive_nonacceptance"),
+        ("session_not_found", "conclusive_nonacceptance"),
+        ("incomplete_stream", "ambiguous"),
+        ("timeout", "ambiguous"),
+        (None, "ambiguous"),
+    ],
+)
+def test_provider_failure_classification_is_fail_closed(error_type, expected) -> None:
+    callback = _callback_module()
+    error = callback.AgentExecutionError("provider failed", error_type=error_type)
+
+    assert callback._classify_provider_failure(error) == expected
+
+
+@pytest.mark.parametrize(
+    ("result_or_error", "expected", "recovery_pending"),
+    [
+        (
+            lambda callback: callback.AgentExecutionError(
+                "model unavailable", error_type="model_not_found"
+            ),
+            "conclusive_nonacceptance",
+            False,
+        ),
+        (
+            lambda callback: callback.AgentExecutionError(
+                "truncated", error_type="incomplete_stream"
+            ),
+            "ambiguous",
+            True,
+        ),
+        (
+            lambda _callback: SimpleNamespace(
+                session_id=None,
+                records=({"type": "result", "status": "success"},),
+            ),
+            "conclusive_nonacceptance",
+            False,
+        ),
+        (
+            lambda _callback: SimpleNamespace(
+                session_id=None,
+                records=(
+                    {"type": "init", "session_id": "one"},
+                    {"type": "init", "session_id": "two"},
+                ),
+            ),
+            "ambiguous",
+            True,
+        ),
+    ],
+)
+def test_bootstrap_outcomes_never_create_event_delivery(
+    tmp_path: Path, result_or_error, expected: str, recovery_pending: bool
+) -> None:
+    callback = _callback_module()
+    driver_dir, state, event = _v3_event_context(callback, tmp_path, [("gemini", "exact")])
+    outcome_value = result_or_error(callback)
+
+    class FakeExecutor:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def execute_event_driver(self, *_args, **_kwargs):
+            if isinstance(outcome_value, BaseException):
+                raise outcome_value
+            return outcome_value
+
+    updated, outcome = callback._acquire_v3_session(
+        driver_dir,
+        state,
+        event_id=event["event_id"],
+        index=0,
+        repository_root=tmp_path,
+        executor_factory=FakeExecutor,
+    )
+
+    event_state = updated["events"][event["event_id"]]
+    assert outcome == expected
+    assert updated["entries"][0]["session"] is None
+    assert event_state["accepted_index"] is None
+    assert event_state["attempts"][-1]["stage"] == "bootstrap"
+    assert event_state["recovery_pending"] is recovery_pending
+
+
+def test_bootstrap_intent_write_failure_prevents_provider_launch(tmp_path: Path) -> None:
+    callback = _callback_module()
+    driver_dir, state, event = _v3_event_context(callback, tmp_path, [("cursor-agent", "exact")])
+    launched = False
+
+    class FakeExecutor:
+        def __init__(self, *_args, **_kwargs):
+            nonlocal launched
+            launched = True
+
+    with patch.object(callback, "_atomic_write", side_effect=OSError("replace failed")):
+        with pytest.raises(OSError):
+            callback._acquire_v3_session(
+                driver_dir,
+                state,
+                event_id=event["event_id"],
+                index=0,
+                repository_root=tmp_path,
+                executor_factory=FakeExecutor,
+            )
+
+    assert launched is False
+
+
+def test_session_persistence_failure_never_launches_actual_callback(
+    tmp_path: Path,
+) -> None:
+    callback = _callback_module()
+    driver_dir, state, event = _v3_event_context(callback, tmp_path, [("claude", "exact")])
+    calls = []
+
+    class FakeExecutor:
+        def __init__(self, config, **_kwargs):
+            self.config = config
+
+        def execute_event_driver(self, prompt, **_kwargs):
+            calls.append(prompt)
+            return SimpleNamespace(session_id="provider-session", records=())
+
+    original_atomic_write = callback._atomic_write
+    writes = 0
+
+    def fail_second_write(path, payload):
+        nonlocal writes
+        writes += 1
+        if writes == 2:
+            raise OSError("replace failed")
+        original_atomic_write(path, payload)
+
+    with patch.object(callback, "_atomic_write", side_effect=fail_second_write):
+        with pytest.raises(OSError):
+            callback._acquire_v3_session(
+                driver_dir,
+                state,
+                event_id=event["event_id"],
+                index=0,
+                repository_root=tmp_path,
+                executor_factory=FakeExecutor,
+            )
+
+    persisted = callback._load_or_initialize_dispatch_state(
+        driver_dir,
+        workflow_id=state["workflow_id"],
+        config=state["policy"],
+    )
+    assert persisted["entries"][0]["session"] is None
+    assert persisted["events"][event["event_id"]]["attempts"][-1]["status"] == "pending"
+
+    reloaded, outcome = callback._acquire_v3_session(
+        driver_dir,
+        persisted,
+        event_id=event["event_id"],
+        index=0,
+        repository_root=tmp_path,
+        executor_factory=FakeExecutor,
+    )
+    assert outcome == "ambiguous"
+    assert reloaded["entries"][0]["session"] is None
+    assert calls == ['say "HI"']
 
 
 def test_event_driver_session_rejects_a_different_workflow(tmp_path: Path) -> None:

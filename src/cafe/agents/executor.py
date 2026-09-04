@@ -401,18 +401,14 @@ class AgentExecutor:
             if translated_tools is not None
             else None
         )
-        command = strategy.build_event_driver_command(
+        command, process_cwd = self._build_controlled_command(
+            strategy,
             prompt,
             provider_tools,
             allowed_directories,
+            execution_control,
+            event_driver=True,
         )
-        process_cwd = (
-            execution_control.working_directory.expanduser().resolve()
-            if execution_control is not None and execution_control.working_directory is not None
-            else None
-        )
-        if process_cwd is not None:
-            process_cwd.mkdir(parents=True, exist_ok=True)
 
         records: list[dict[str, Any]] = []
         self._execute_with_streaming(
@@ -424,6 +420,7 @@ class AgentExecutor:
             process_cwd=process_cwd,
             execution_control=execution_control,
             structured_records=records,
+            require_terminal_stream_event=True,
         )
         bounded_records = tuple(records[:64])
         if expected_session_id is None:
@@ -477,9 +474,16 @@ class AgentExecutor:
         allowed_tools: Optional[List[str]],
         allowed_directories: Optional[List[str]],
         execution_control: AgentExecutionControl | None,
+        *,
+        event_driver: bool = False,
     ) -> tuple[List[str], Path | None]:
         """Build a command and preserve an explicit empty capability scope."""
-        cmd = cli_strategy.build_command(prompt, allowed_tools, allowed_directories)
+        builder = (
+            cli_strategy.build_event_driver_command
+            if event_driver
+            else cli_strategy.build_command
+        )
+        cmd = builder(prompt, allowed_tools, allowed_directories)
         process_cwd = None
         if execution_control is not None and execution_control.working_directory is not None:
             process_cwd = execution_control.working_directory.expanduser().resolve()
@@ -1051,6 +1055,7 @@ class AgentExecutor:
         process_cwd: Path | None = None,
         execution_control: AgentExecutionControl | None = None,
         structured_records: list[dict[str, Any]] | None = None,
+        require_terminal_stream_event: bool = False,
     ) -> AgentResponse:
         """Execute command with streaming output.
 
@@ -1191,7 +1196,9 @@ class AgentExecutor:
         # iteration rather than mistaking partial work for a completed handoff.
         terminal_stream_event_types = {"result", "turn.completed"}
         received_terminal_stream_event = False
-        requires_terminal_stream_event = parse_stream_json and streaming_output_file is not None
+        requires_terminal_stream_event = parse_stream_json and (
+            streaming_output_file is not None or require_terminal_stream_event
+        )
 
         # Open streaming output file if provided
         streaming_file_handle = None
