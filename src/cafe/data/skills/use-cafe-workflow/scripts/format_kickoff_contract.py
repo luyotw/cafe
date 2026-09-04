@@ -94,7 +94,7 @@ def _driver_policy_rows(args: argparse.Namespace) -> list[list[Any]]:
     if args.driver_mode == "attached":
         if args.poll_interval_seconds is None:
             raise ValueError("attached driver requires --poll-interval-seconds")
-        if args.event_driver_cli is not None or args.event_driver_model is not None:
+        if args.event_driver:
             raise ValueError("attached driver rejects event-driven fields")
         rows.extend(
             [
@@ -110,29 +110,62 @@ def _driver_policy_rows(args: argparse.Namespace) -> list[list[Any]]:
             ]
         )
     elif args.driver_mode == "unattended":
-        if any(
-            value is not None
-            for value in (
-                args.poll_interval_seconds,
-                args.event_driver_cli,
-                args.event_driver_model,
-            )
-        ):
+        if args.poll_interval_seconds is not None or args.event_driver:
             raise ValueError("unattended driver accepts no mode-specific fields")
     else:
         if args.poll_interval_seconds is not None:
             raise ValueError("event-driven driver rejects attached polling")
-        if args.event_driver_cli is None or not args.event_driver_model:
-            raise ValueError(
-                "event-driven driver requires --event-driver-cli and --event-driver-model"
+        entries = _parse_event_driver_entries(args.event_driver)
+        rows.append(["driver.schema_version", 3])
+        for index, (cli, model) in enumerate(entries):
+            rows.extend(
+                [
+                    [f"driver.clis[{index}]", f"{cli}:{model}"],
+                    [
+                        f"driver.clis[{index}].contract",
+                        "event-driven session-and-dispatch: conforming",
+                    ],
+                ]
             )
+        bound = entries[0][0] == AgentCLI.CODEX.value and bool(
+            os.environ.get("CODEX_THREAD_ID", "").strip()
+        )
         rows.extend(
             [
-                ["driver.cli", args.event_driver_cli],
-                ["driver.model", args.event_driver_model],
+                [
+                    "driver.host_session",
+                    "runtime-owned first Codex entry only" if bound else "unbound",
+                ],
+                [
+                    "driver.authority",
+                    "callback scope only; does not grant HumanTask, permission, or capability authority",
+                ],
             ]
         )
     return rows
+
+
+def _parse_event_driver_entries(values: Iterable[str] | None) -> ModelChain:
+    entries: ModelChain = []
+    seen: set[str] = set()
+    for value in values or ():
+        raw_cli, separator, raw_model = value.partition(":")
+        cli, model = raw_cli.strip(), raw_model.strip()
+        if not separator or not cli or not model:
+            raise ValueError("event-driven entries must use CLI:MODEL")
+        try:
+            cli = AgentCLI(cli).value
+        except ValueError as exc:
+            raise ValueError(f"unsupported event-driven CLI '{cli}'") from exc
+        if cli not in _EVENT_DRIVEN_CLIS:
+            raise ValueError(f"CLI '{cli}' lacks the event-driven contract")
+        if cli in seen:
+            raise ValueError(f"duplicate event-driven CLI '{cli}'")
+        seen.add(cli)
+        entries.append((cli, model))
+    if not entries:
+        raise ValueError("event-driven driver requires at least one --event-driver CLI:MODEL")
+    return entries
 
 
 def _cell(value: Any) -> str:
@@ -328,6 +361,7 @@ def _resolve_configured_chain(
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
+        allow_abbrev=False,
         description="Format a structurally validated CAFE kickoff contract as Markdown tables."
     )
     parser.add_argument("playbook_id")
@@ -352,8 +386,12 @@ def _parser() -> argparse.ArgumentParser:
         "--poll-interval-seconds",
         type=_positive_seconds,
     )
-    parser.add_argument("--event-driver-cli", choices=tuple(sorted(_EVENT_DRIVEN_CLIS)))
-    parser.add_argument("--event-driver-model")
+    parser.add_argument(
+        "--event-driver",
+        action="append",
+        default=[],
+        metavar="CLI:MODEL",
+    )
     parser.add_argument("--risk-factor", action="append", required=True)
     parser.add_argument("--assessment-rationale", required=True)
     parser.add_argument(

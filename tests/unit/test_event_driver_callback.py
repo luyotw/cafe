@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+import yaml
 
 from cafe.core.types import AgentCLI
 
@@ -46,6 +47,141 @@ def test_event_driver_config_is_per_issue_and_cannot_replace_session(tmp_path: P
     store.commit()
     with pytest.raises(ValueError, match="cannot change"):
         callback.write_config(issue_dir, cli="codex", model="another-model")
+
+
+def test_version_three_config_preserves_order_and_exact_shape(tmp_path: Path) -> None:
+    callback = _callback_module()
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue457"
+
+    callback.write_config(
+        issue_dir,
+        clis=[("codex", "gpt-exact"), ("claude", "opus-exact"), ("gemini", "pro-exact")],
+    )
+
+    config = callback._load_config(issue_dir / "driver")
+    assert config == {
+        "schema_version": 3,
+        "mode": "event-driven",
+        "clis": [
+            {"cli": "codex", "model": "gpt-exact"},
+            {"cli": "claude", "model": "opus-exact"},
+            {"cli": "gemini", "model": "pro-exact"},
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    ("document", "expected"),
+    [
+        (
+            "schema_version: 1\nmode: event-driven\ncli: claude\nmodel: exact\n",
+            {
+                "schema_version": 1,
+                "mode": "event-driven",
+                "cli": "claude",
+                "model": "exact",
+            },
+        ),
+        (
+            "schema_version: 2\nmode: event-driven\ncli: codex\nmodel: exact\nhost_session: null\n",
+            {
+                "schema_version": 2,
+                "mode": "event-driven",
+                "cli": "codex",
+                "model": "exact",
+            },
+        ),
+    ],
+)
+def test_legacy_config_shapes_remain_single_transport_compatible(
+    tmp_path: Path, document: str, expected: dict[str, object]
+) -> None:
+    callback = _callback_module()
+    driver_dir = tmp_path / "driver"
+    driver_dir.mkdir()
+    path = driver_dir / "config.yaml"
+    path.write_text(document, encoding="utf-8")
+
+    assert callback._load_config(driver_dir) == expected
+    assert path.read_text(encoding="utf-8") == document
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        "schema_version: 3\nmode: event-driven\nclis: []\n",
+        "schema_version: 3\nmode: event-driven\nclis: null\n",
+        "schema_version: 3\nmode: event-driven\nclis: codex\n",
+        "schema_version: 3\nmode: event-driven\nclis:\n  - cli: codex\n",
+        "schema_version: 3\nmode: event-driven\nclis:\n  - cli: codex\n    model: x\n    extra: y\n",
+        "schema_version: 3\nmode: event-driven\nclis:\n  - cli: codex\n    model: x\n  - cli: codex\n    model: y\n",
+        "schema_version: 3\nmode: event-driven\ncli: codex\nmodel: x\nclis:\n  - cli: codex\n    model: x\n",
+        "schema_version: 2\nmode: event-driven\ncli: codex\nmodel: x\nclis: []\n",
+        "schema_version: 3\nmode: attached\nclis:\n  - cli: codex\n    model: x\n",
+        "schema_version: 3\nmode: event-driven\nclis:\n  - cli: codex\n    cli: claude\n    model: x\n",
+        "schema_version: true\nmode: event-driven\ncli: codex\nmodel: x\n",
+    ],
+)
+def test_version_three_config_rejects_non_exact_forms(tmp_path: Path, document: str) -> None:
+    callback = _callback_module()
+    driver_dir = tmp_path / "driver"
+    driver_dir.mkdir()
+    (driver_dir / "config.yaml").write_text(document, encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        callback._load_config(driver_dir)
+
+
+def test_version_three_host_binding_applies_only_to_first_codex_entry(
+    tmp_path: Path, monkeypatch
+) -> None:
+    callback = _callback_module()
+    monkeypatch.setenv("CODEX_THREAD_ID", "runtime-thread")
+    issue_dir = tmp_path / ".cafe" / "issues" / "bound"
+
+    callback.write_config(
+        issue_dir,
+        clis=[("codex", "exact"), ("claude", "fallback")],
+    )
+
+    assert callback._load_config(issue_dir / "driver")["host_session"] == {
+        "kind": "codex",
+        "thread_id": "runtime-thread",
+    }
+    loaded = yaml.safe_load((issue_dir / "driver" / "config.yaml").read_text())
+    loaded["clis"] = [loaded["clis"][1], loaded["clis"][0]]
+    (issue_dir / "driver" / "config.yaml").write_text(yaml.safe_dump(loaded))
+    with pytest.raises(ValueError, match="host session"):
+        callback._load_config(issue_dir / "driver")
+
+
+def test_version_three_state_binds_immutable_policy_without_legacy_session_files(
+    tmp_path: Path,
+) -> None:
+    callback = _callback_module()
+    issue_dir = tmp_path / ".cafe" / "issues" / "state"
+    callback.write_config(issue_dir, clis=[("codex", "one"), ("claude", "two")])
+    driver_dir = issue_dir / "driver"
+    config = callback._load_config(driver_dir)
+
+    state = callback._load_or_initialize_dispatch_state(
+        driver_dir, workflow_id="workflow", config=config
+    )
+    assert state["policy"] == config
+    assert state["active_index"] == 0
+    assert not (driver_dir / "session.json").exists()
+    assert not (driver_dir / "sessions").exists()
+
+    changed = {**config, "clis": [*config["clis"]]}
+    changed["clis"][0] = {"cli": "codex", "model": "changed"}
+    with pytest.raises(ValueError, match="policy"):
+        callback._load_or_initialize_dispatch_state(
+            driver_dir, workflow_id="workflow", config=changed
+        )
+    with pytest.raises(ValueError, match="workflow"):
+        callback._load_or_initialize_dispatch_state(
+            driver_dir, workflow_id="foreign", config=config
+        )
 
 
 def test_event_driver_session_rejects_a_different_workflow(tmp_path: Path) -> None:

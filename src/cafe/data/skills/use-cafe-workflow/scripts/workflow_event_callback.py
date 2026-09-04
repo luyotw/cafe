@@ -11,7 +11,7 @@ import tempfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, Optional
+from typing import Any, Iterator, Optional, Sequence
 
 import yaml
 
@@ -34,8 +34,36 @@ except ImportError:  # pragma: no cover - unavailable outside Windows.
 DRIVER_AGENT_NAME = "__cafe_event_driver__"
 CONFIG_FILENAME = "config.yaml"
 SESSION_FILENAME = "session.json"
+DISPATCH_STATE_FILENAME = "dispatch_state.json"
 LOCK_FILENAME = "session.lock"
 _HOST_SESSION_KIND = "codex"
+
+
+class _ExactSafeLoader(yaml.SafeLoader):
+    """Safe YAML loader that rejects duplicate mapping keys."""
+
+
+def _construct_exact_mapping(
+    loader: _ExactSafeLoader, node: yaml.MappingNode, deep: bool = False
+) -> dict[Any, Any]:
+    mapping: dict[Any, Any] = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in mapping:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                f"duplicate key: {key}",
+                key_node.start_mark,
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+_ExactSafeLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+    _construct_exact_mapping,
+)
 
 
 def _now() -> str:
@@ -99,28 +127,70 @@ def _current_host_session_binding() -> dict[str, str] | None:
     return {"kind": _HOST_SESSION_KIND, "thread_id": thread_id}
 
 
-def write_config(issue_dir: Path, *, cli: str, model: str) -> None:
+def _normalize_cli_entries(clis: Sequence[tuple[str, str]]) -> list[dict[str, str]]:
+    if not clis:
+        raise ValueError("event-driven clis must be non-empty")
+    normalized: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for raw_cli, raw_model in clis:
+        if not isinstance(raw_cli, str) or not isinstance(raw_model, str) or not raw_model.strip():
+            raise ValueError("event-driven CLI entries require exact cli and model values")
+        try:
+            cli = AgentCLI(raw_cli).value
+        except ValueError as exc:
+            raise ValueError("event-driven CLI is not supported") from exc
+        if cli in seen:
+            raise ValueError("event-driven clis must use distinct CLIs")
+        seen.add(cli)
+        normalized.append({"cli": cli, "model": raw_model})
+    return normalized
+
+
+def write_config(
+    issue_dir: Path,
+    *,
+    cli: str | None = None,
+    model: str | None = None,
+    clis: Sequence[tuple[str, str]] | None = None,
+) -> None:
     """Create the one skill-owned event-driven binding for an issue."""
-    try:
-        AgentCLI(cli)
-    except ValueError as exc:
-        raise ValueError("event-driven CLI is not supported") from exc
-    if not model.strip():
-        raise ValueError("event-driven model must be exact and non-empty")
+    if clis is not None:
+        if cli is not None or model is not None:
+            raise ValueError("event-driven config cannot mix legacy and ordered forms")
+        entries = _normalize_cli_entries(clis)
+        proposed: dict[str, Any] = {
+            "schema_version": 3,
+            "mode": "event-driven",
+            "clis": entries,
+        }
+        primary_cli = entries[0]["cli"]
+    else:
+        if not isinstance(cli, str) or not isinstance(model, str):
+            raise ValueError("event-driven legacy config requires cli and model")
+        try:
+            AgentCLI(cli)
+        except ValueError as exc:
+            raise ValueError("event-driven CLI is not supported") from exc
+        if not model.strip():
+            raise ValueError("event-driven model must be exact and non-empty")
+        proposed = {"schema_version": 1, "mode": "event-driven", "cli": cli, "model": model}
+        primary_cli = cli
     driver_dir = _driver_dir(issue_dir)
     with _session_lock(driver_dir):
         existing = _load_config(driver_dir)
-        proposed = {"schema_version": 1, "mode": "event-driven", "cli": cli, "model": model}
         # When a user launches CAFE from the Codex App, wake that visible
         # conversation.  The callback still receives only an opaque thread ID;
         # provider transport controls are deliberately not inherited.
-        if cli == AgentCLI.CODEX.value:
+        if primary_cli == AgentCLI.CODEX.value:
             host_session = _current_host_session_binding()
             if host_session is not None:
                 proposed = {**proposed, "schema_version": 2, "host_session": host_session}
+                if clis is not None:
+                    proposed["schema_version"] = 3
         if existing is not None and existing != proposed:
-            session_path = driver_dir / SESSION_FILENAME
-            if session_path.exists():
+            if (driver_dir / SESSION_FILENAME).exists() or (
+                driver_dir / DISPATCH_STATE_FILENAME
+            ).exists():
                 raise ValueError("event-driven binding cannot change after session acquisition")
         _atomic_write(
             driver_dir / CONFIG_FILENAME,
@@ -133,33 +203,59 @@ def _load_config(driver_dir: Path) -> dict[str, Any] | None:
     if not path.is_file() or path.is_symlink():
         return None
     try:
-        loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+        loaded = yaml.load(path.read_text(encoding="utf-8"), Loader=_ExactSafeLoader)
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
         raise ValueError("event-driven config is unreadable") from exc
     if not isinstance(loaded, dict):
         raise ValueError("event-driven config must be a mapping")
-    expected = {"schema_version", "mode", "cli", "model"}
     schema_version = loaded.get("schema_version")
-    valid_schema = (schema_version == 1 and set(loaded) == expected) or (
-        schema_version == 2 and set(loaded) == expected | {"host_session"}
-    )
-    if not valid_schema or loaded.get("mode") != "event-driven":
+    if not isinstance(schema_version, int) or isinstance(schema_version, bool):
         raise ValueError("event-driven config is invalid")
-    cli = loaded.get("cli")
-    model = loaded.get("model")
-    if not isinstance(cli, str) or not isinstance(model, str) or not model.strip():
+    legacy_fields = {"schema_version", "mode", "cli", "model"}
+    if loaded.get("mode") != "event-driven":
         raise ValueError("event-driven config is invalid")
-    AgentCLI(cli)
-    result: dict[str, Any] = {
-        "schema_version": schema_version,
-        "mode": "event-driven",
-        "cli": cli,
-        "model": model,
-    }
+    if schema_version == 3:
+        if set(loaded) not in (
+            {"schema_version", "mode", "clis"},
+            {"schema_version", "mode", "clis", "host_session"},
+        ):
+            raise ValueError("event-driven config is invalid")
+        raw_entries = loaded.get("clis")
+        if not isinstance(raw_entries, list) or not raw_entries:
+            raise ValueError("event-driven config clis are invalid")
+        tuples: list[tuple[str, str]] = []
+        for entry in raw_entries:
+            if not isinstance(entry, dict) or set(entry) != {"cli", "model"}:
+                raise ValueError("event-driven config clis are invalid")
+            raw_cli, raw_model = entry.get("cli"), entry.get("model")
+            if not isinstance(raw_cli, str) or not isinstance(raw_model, str):
+                raise ValueError("event-driven config clis are invalid")
+            tuples.append((raw_cli, raw_model))
+        entries = _normalize_cli_entries(tuples)
+        result = {"schema_version": 3, "mode": "event-driven", "clis": entries}
+        primary_cli = entries[0]["cli"]
+    else:
+        valid_schema = (schema_version == 1 and set(loaded) == legacy_fields) or (
+            schema_version == 2 and set(loaded) == legacy_fields | {"host_session"}
+        )
+        if not valid_schema:
+            raise ValueError("event-driven config is invalid")
+        cli = loaded.get("cli")
+        model = loaded.get("model")
+        if not isinstance(cli, str) or not isinstance(model, str) or not model.strip():
+            raise ValueError("event-driven config is invalid")
+        AgentCLI(cli)
+        result = {
+            "schema_version": schema_version,
+            "mode": "event-driven",
+            "cli": cli,
+            "model": model,
+        }
+        primary_cli = cli
     host_session = loaded.get("host_session")
-    if host_session is not None:
+    if "host_session" in loaded and host_session is not None:
         if (
-            cli != AgentCLI.CODEX.value
+            primary_cli != AgentCLI.CODEX.value
             or not isinstance(host_session, dict)
             or set(host_session) != {"kind", "thread_id"}
             or host_session.get("kind") != _HOST_SESSION_KIND
@@ -171,7 +267,84 @@ def _load_config(driver_dir: Path) -> dict[str, Any] | None:
             "kind": _HOST_SESSION_KIND,
             "thread_id": host_session["thread_id"],
         }
+    elif schema_version == 3 and "host_session" in loaded:
+        raise ValueError("event-driven host session binding is invalid")
     return result
+
+
+def _load_or_initialize_dispatch_state(
+    driver_dir: Path,
+    *,
+    workflow_id: str,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    """Load the one authoritative version 3 state and enforce immutable policy."""
+    if config.get("schema_version") != 3:
+        raise ValueError("event-driven dispatch state requires schema version 3")
+    path = driver_dir / DISPATCH_STATE_FILENAME
+    if path.is_file() and not path.is_symlink():
+        try:
+            state = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ValueError("event-driven dispatch state is unreadable") from exc
+        if not isinstance(state, dict) or set(state) != {
+            "schema_version",
+            "workflow_id",
+            "policy",
+            "active_index",
+            "entries",
+            "events",
+            "updated_at",
+        }:
+            raise ValueError("event-driven dispatch state is invalid")
+        if state.get("schema_version") != 1 or state.get("workflow_id") != workflow_id:
+            raise ValueError("event-driven dispatch state belongs to another workflow")
+        if state.get("policy") != config:
+            raise ValueError("event-driven dispatch policy cannot change within a workflow")
+        entries = state.get("entries")
+        if not isinstance(entries, list) or len(entries) != len(config["clis"]):
+            raise ValueError("event-driven dispatch state is invalid")
+        for index, (entry, policy_entry) in enumerate(zip(entries, config["clis"])):
+            if not isinstance(entry, dict) or set(entry) != {"index", "cli", "model", "session"}:
+                raise ValueError("event-driven dispatch state is invalid")
+            if (
+                entry.get("index") != index
+                or entry.get("cli") != policy_entry["cli"]
+                or entry.get("model") != policy_entry["model"]
+            ):
+                raise ValueError("event-driven dispatch session provenance is invalid")
+        active_index = state.get("active_index")
+        if not isinstance(active_index, int) or not 0 <= active_index < len(entries):
+            raise ValueError("event-driven dispatch state is invalid")
+        if not isinstance(state.get("events"), dict):
+            raise ValueError("event-driven dispatch state is invalid")
+        return state
+    if path.exists():
+        raise ValueError("event-driven dispatch state is invalid")
+
+    now = _now()
+    host_session = config.get("host_session")
+    entries = []
+    for index, policy_entry in enumerate(config["clis"]):
+        session = None
+        if index == 0 and isinstance(host_session, dict):
+            session = {
+                "id": host_session["thread_id"],
+                "source": "host_session",
+                "acquired_at": now,
+            }
+        entries.append({"index": index, **policy_entry, "session": session})
+    state = {
+        "schema_version": 1,
+        "workflow_id": workflow_id,
+        "policy": config,
+        "active_index": 0,
+        "entries": entries,
+        "events": {},
+        "updated_at": now,
+    }
+    _atomic_write(path, json.dumps(state, sort_keys=True).encode("utf-8"))
+    return state
 
 
 class EventDriverSessionStore(SessionStore):
@@ -354,6 +527,13 @@ def run_callback(event: dict[str, Any], *, repository_root: Path) -> None:
         blackboard = BlackboardStore(issue_dir).load_or_create("spec")
         if blackboard.workflow_id != workflow_id:
             raise ValueError("workflow event callback is stale")
+        if config["schema_version"] == 3:
+            _load_or_initialize_dispatch_state(
+                driver_dir,
+                workflow_id=workflow_id,
+                config=config,
+            )
+            return
         cli = AgentCLI(config["cli"])
         store = EventDriverSessionStore(
             driver_dir,
@@ -417,11 +597,25 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--issue-dir")
     parser.add_argument("--cli")
     parser.add_argument("--model")
+    parser.add_argument("--entry", action="append", default=[])
     args = parser.parse_args(argv)
     if args.write_config:
-        if not args.issue_dir or not args.cli or not args.model:
-            parser.error("--write-config requires --issue-dir, --cli, and --model")
-        write_config(Path(args.issue_dir), cli=args.cli, model=args.model)
+        if not args.issue_dir:
+            parser.error("--write-config requires --issue-dir")
+        if args.entry:
+            if args.cli is not None or args.model is not None:
+                parser.error("--entry cannot be combined with --cli or --model")
+            entries: list[tuple[str, str]] = []
+            for value in args.entry:
+                cli, separator, model = value.partition(":")
+                if not separator or not cli or not model:
+                    parser.error("--entry requires CLI:MODEL")
+                entries.append((cli, model))
+            write_config(Path(args.issue_dir), clis=entries)
+        else:
+            if not args.cli or not args.model:
+                parser.error("--write-config requires --entry or --cli and --model")
+            write_config(Path(args.issue_dir), cli=args.cli, model=args.model)
         return 0
     if not args.workflow_event:
         parser.error("--workflow-event is required")

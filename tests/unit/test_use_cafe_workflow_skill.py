@@ -486,10 +486,12 @@ mandate:
             strategic_context,
             "--driver-mode",
             "event-driven",
-            "--event-driver-cli",
-            "codex",
-            "--event-driver-model",
-            "gpt-5.6-codex",
+            "--event-driver",
+            "codex:gpt-5.6-codex",
+            "--event-driver",
+            "claude:claude-opus-exact",
+            "--event-driver",
+            "gemini:gemini-pro-exact",
         ),
         cwd=PROJECT_ROOT,
         text=True,
@@ -499,8 +501,75 @@ mandate:
 
     assert result.returncode == 0, result.stderr
     assert "| driver.mode | event-driven |" in result.stdout
-    assert "| driver.cli | codex |" in result.stdout
-    assert "| driver.model | gpt-5.6-codex |" in result.stdout
+    positions = [
+        result.stdout.index("codex:gpt-5.6-codex"),
+        result.stdout.index("claude:claude-opus-exact"),
+        result.stdout.index("gemini:gemini-pro-exact"),
+    ]
+    assert positions == sorted(positions)
+    assert result.stdout.count("event-driven session-and-dispatch: conforming") == 3
+    assert "runtime-owned" in result.stdout
+    assert "does not grant HumanTask, permission, or capability authority" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "extra_args",
+    [
+        ("--driver-mode", "event-driven"),
+        ("--driver-mode", "event-driven", "--event-driver", "codex:"),
+        (
+            "--driver-mode",
+            "event-driven",
+            "--event-driver",
+            "codex:one",
+            "--event-driver",
+            "codex:two",
+        ),
+        ("--driver-mode", "attached", "--event-driver", "codex:one"),
+        ("--driver-mode", "unattended", "--event-driver", "codex:one"),
+        ("--driver-mode", "event-driven", "--event-driver", "unsupported:one"),
+    ],
+)
+def test_kickoff_contract_rejects_nonconforming_event_driver_chains(
+    tmp_path: Path, extra_args: tuple[str, ...]
+) -> None:
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text("version: 1\n", encoding="utf-8")
+
+    result = subprocess.run(
+        _kickoff_formatter_command(strategic_context, *extra_args),
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+
+
+def test_kickoff_contract_accepts_one_event_driver_entry(tmp_path: Path) -> None:
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text(
+        "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        _kickoff_formatter_command(
+            strategic_context,
+            "--driver-mode",
+            "event-driven",
+            "--event-driver",
+            "copilot:exact-model",
+        ),
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "| driver.clis[0] | copilot:exact-model |" in result.stdout
 
 
 @pytest.mark.parametrize(
