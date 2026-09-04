@@ -241,7 +241,8 @@ class HumanTaskNotificationDispatcher:
     def _notification_inputs(self, task: HumanTask) -> dict[str, str]:
         """Return the closed safe payload shared by receipts and capability requests."""
         return {
-            "repository": sanitize_human_task_metadata(self._repository_root().name),
+            "repository": sanitize_human_task_metadata(self._repository_root().resolve().name),
+            "issue": sanitize_human_task_metadata(self.issue_dir.name),
             "workflow_id": sanitize_human_task_metadata(task.workflow_id),
             "task_id": sanitize_human_task_metadata(task.id),
             "step": sanitize_human_task_metadata(task.step),

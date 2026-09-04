@@ -1128,6 +1128,7 @@ def _notify_slack_human_task_adapter(
     del manifest, output_file
     message = build_human_task_message(
         repository=str(request.args["repository"]),
+        issue=str(request.args["issue"]),
         workflow_id=str(request.args["workflow_id"]),
         task_id=str(request.args["task_id"]),
         step=str(request.args["step"]),

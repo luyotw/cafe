@@ -54,7 +54,8 @@ configuration.
    while a malformed sibling route cannot suppress another repository's fixed
    fallback credential.
 
-3. Create the fixed user-owned credential file and restrict it to your account:
+3. Create the fixed user-owned credential file for normal HumanTasks and
+   restrict it to your account:
 
    ```bash
    install -m 600 /dev/null ~/.slack-webhook
@@ -88,25 +89,21 @@ supply a URL, channel, or credential path from a project or environment value.
 
 ## What the notification contains
 
-The notification identifies the repository, workflow ID, step, HumanTask ID,
-and task type. It also includes the supported commands:
-
-```text
-cafe task inspect <task-id>
-cafe task complete <task-id>
-```
-
-Use `cafe task ls` to find other pending work. Slack is a discovery aid only;
-it cannot inspect, answer, approve, cancel, or complete a task.
+The notification identifies the repository and CAFE issue, then presents the
+current phase and required action in readable language. Workflow IDs, HumanTask
+IDs, raw task-type identifiers, and terminal commands are intentionally omitted
+from Slack. Use CAFE's task inbox to find and complete pending work; Slack is a
+discovery aid only and cannot inspect, answer, approve, cancel, or complete a
+task.
 
 ## Trust and credential boundary
 
-The package-owned `cafe.slack.human_task` capability declares exactly five
-non-secret inputs: repository, workflow ID, step, task ID, and task type. Its
-registered network effect is fixed to `hooks.slack.com`, and its symbolic
-credential is `slack_human_task_webhook`. Prompts, raw agent output, task
-feedback, project-defined fields, and credential values are never passed to the
-capability, notification, or receipt.
+The package-owned `cafe.slack.human_task` capability declares exactly six
+non-secret inputs: repository, CAFE issue, workflow ID, step, task ID, and task
+type. Its registered network effect is fixed to `hooks.slack.com`, and its
+symbolic credential is `slack_human_task_webhook`. Prompts, raw agent output,
+task feedback, project-defined fields, and credential values are never passed
+to the capability, notification, or receipt.
 
 The trusted package adapter first checks for an exact path route in the private
 machine config and otherwise reads the fallback `~/.slack-webhook` credential;

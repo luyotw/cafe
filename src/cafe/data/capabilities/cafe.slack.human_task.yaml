@@ -2,9 +2,10 @@ id: cafe.slack.human_task
 version: 1
 implementation: notify_slack_human_task
 arguments:
-  required: [repository, workflow_id, task_id, step, task_type]
+  required: [repository, issue, workflow_id, task_id, step, task_type]
   properties:
     repository: {type: string}
+    issue: {type: string}
     workflow_id: {type: string}
     task_id: {type: string}
     step: {type: string}

@@ -52,6 +52,9 @@ def _write_credential(home: Path, value: str = VALID_WEBHOOK) -> Path:
     credential = home / ".slack-webhook"
     credential.write_text(value, encoding="utf-8")
     credential.chmod(0o600)
+    test_credential = home / ".slack-webhook-test"
+    test_credential.write_text(value, encoding="utf-8")
+    test_credential.chmod(0o600)
     return credential
 
 
@@ -103,6 +106,7 @@ def test_clean_repository_notification_succeeds(
 
     repo_root = tmp_path / "clean-repository"
     issue_dir = repo_root / ".cafe" / "issues" / "success"
+    repo_root.mkdir()
     home = tmp_path / "home-success"
     home.mkdir()
     _write_credential(home)
@@ -114,8 +118,9 @@ def test_clean_repository_notification_succeeds(
         return _SlackResponse()
 
     monkeypatch.setattr(notification_mod, "_open_slack_request", _open_slack_request)
+    monkeypatch.chdir(repo_root)
 
-    result = _pause_for_output_review(issue_dir)
+    result = _pause_for_output_review(Path(".cafe") / "issues" / "success")
 
     task = HumanTaskRecordStore(issue_dir).tasks()[0]
     state = BlackboardStore(issue_dir).load_or_create("spec")
@@ -129,10 +134,11 @@ def test_clean_repository_notification_succeeds(
     assert posts[0][0].full_url == VALID_WEBHOOK
     assert posts[0][1] == 5.0
     assert repo_root.name in payload["text"]
-    assert task.workflow_id in payload["text"]
-    assert task.id in payload["text"]
-    assert f"cafe task inspect {task.id}" in payload["text"]
-    assert f"cafe task complete {task.id}" in payload["text"]
+    assert issue_dir.name in payload["text"]
+    assert task.workflow_id not in payload["text"]
+    assert task.id not in payload["text"]
+    assert task.policy_id not in payload["text"]
+    assert "cafe task" not in payload["text"]
     assert receipt["success"] is True
     assert receipt["workflow_id"] == task.workflow_id
     assert receipt["task_id"] == task.id
@@ -173,8 +179,9 @@ def test_iteration_limit_materializes_and_notifies_a_resumable_human_task(
     assert state.handoff_contract.to_owner is HandoffOwner.USER
     assert state.handoff_contract.intent is HandoffIntent.MANUAL_HANDOFF
     assert len(posts) == 1
-    assert task.id in payload["text"]
-    assert f"cafe task complete {task.id}" in payload["text"]
+    assert issue_dir.name in payload["text"]
+    assert task.id not in payload["text"]
+    assert "需要你做的事：處理 CAFE 工作項目" in payload["text"]
 
 
 def test_project_content_cannot_redirect_or_gain_notification_authority(
