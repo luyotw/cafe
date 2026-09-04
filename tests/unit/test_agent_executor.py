@@ -992,6 +992,44 @@ class TestEventDriverObservation:
         assert observed.accepted is True
         assert order == ["accepted", "model-output"]
 
+    def test_copilot_accepts_captured_resume_shape_only_after_terminal_session(self) -> None:
+        executor = AgentExecutor(
+            AgentConfig(
+                name="driver",
+                cli=AgentCLI.COPILOT,
+                model="exact",
+                session_id="provider-session",
+            ),
+            stream_output=False,
+        )
+        order = []
+
+        def execute_stream(**kwargs):
+            user_message = {
+                "type": "user.message",
+                "data": {"content": "callback event-1"},
+            }
+            kwargs["structured_records"].append(user_message)
+            kwargs["structured_record_observer"](user_message)
+            assert order == []
+            terminal = {"type": "result", "sessionId": "provider-session"}
+            kwargs["structured_records"].append(terminal)
+            kwargs["structured_record_observer"](terminal)
+            assert order == ["accepted"]
+            return AgentResponse(response="", token_usage=TokenUsage())
+
+        with patch.object(executor, "_execute_with_streaming", side_effect=execute_stream):
+            observed = executor.execute_event_driver(
+                "callback event-1",
+                expected_session_id="provider-session",
+                event_id="event-1",
+                on_acceptance=lambda: order.append("accepted"),
+            )
+
+        assert observed.accepted is True
+        assert observed.session_id == "provider-session"
+        assert order == ["accepted"]
+
     def test_eventless_provider_init_does_not_accept_actual_callback(self) -> None:
         executor = AgentExecutor(
             AgentConfig(

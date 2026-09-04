@@ -1,7 +1,7 @@
 """Copilot CLI tool implementation."""
 
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, List, Mapping, Optional, Sequence, Tuple
 
 from cafe.agents.cli.abstract import AbstractCLI
 from cafe.core.types import PermissionDenial, TokenUsage
@@ -229,30 +229,64 @@ class CopilotCLI(AbstractCLI):
             else set()
         )
 
-    def extract_event_driver_session(self, records) -> Optional[str]:
-        if not records or records[-1].get("type") != "result":
+    def _event_driver_terminal_session(
+        self, records: Sequence[Mapping[str, Any]]
+    ) -> Optional[str]:
+        if (
+            not records
+            or not isinstance(records[-1], Mapping)
+            or records[-1].get("type") != "result"
+        ):
             return None
-        terminal_records = [record for record in records if record.get("type") == "result"]
-        if len(terminal_records) != 1 or terminal_records[0].get("status") != "success":
+        terminal_records = [
+            record
+            for record in records
+            if isinstance(record, Mapping) and record.get("type") == "result"
+        ]
+        if len(terminal_records) != 1:
+            return None
+        for record in records:
+            if not isinstance(record, Mapping):
+                return None
+            status = record.get("status")
+            if isinstance(status, str) and status.lower() in {
+                "error",
+                "failed",
+                "failure",
+                "cancelled",
+                "canceled",
+            }:
+                return None
+            error = record.get("error")
+            if record.get("type") == "error" or record.get("is_error") is True:
+                return None
+            if error is not None and error is not False and error != "":
+                return None
+        terminal_status = terminal_records[0].get("status")
+        if terminal_status not in (None, "success"):
             return None
         return self._verified_event_driver_session(
             terminal_records,
-            matches=lambda record: record.get("type") == "result"
-            and record.get("status") == "success",
+            matches=lambda record: record.get("type") == "result",
             field="sessionId",
         )
+
+    def extract_event_driver_session(self, records) -> Optional[str]:
+        return self._event_driver_terminal_session(records)
 
     def accepts_event_driver_callback(
         self, records, *, session_id: str, event_id: str
     ) -> bool:
-        return self._verified_event_driver_acceptance(
-            records,
-            session_matches=lambda record: record.get("type") == "session.start",
-            acceptance_matches=lambda record: record.get("type") == "user.message"
-            and self._event_driver_record_contains_text(record.get("data"), event_id),
-            session_field="sessionId",
-            session_id=session_id,
-            event_id=event_id,
+        if (
+            not event_id.strip()
+            or self._event_driver_terminal_session(records) != session_id
+        ):
+            return False
+        return any(
+            isinstance(record, Mapping)
+            and record.get("type") == "user.message"
+            and self._event_driver_record_contains_text(record.get("data"), event_id)
+            for record in records[:-1]
         )
 
     def extract_session_id(self, output_lines: List[str]) -> Optional[str]:

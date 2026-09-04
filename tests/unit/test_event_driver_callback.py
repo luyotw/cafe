@@ -12,7 +12,7 @@ from unittest.mock import patch
 import pytest
 import yaml
 
-from cafe.core.types import AgentCLI
+from cafe.core.types import AgentCLI, AgentResponse, TokenUsage
 
 
 def _callback_module():
@@ -675,6 +675,49 @@ def test_actual_acceptance_is_durable_before_downstream_output_finishes(
 
     assert outcome == "accepted"
     assert updated["events"][event["event_id"]]["status"] == "accepted"
+
+
+def test_copilot_captured_acceptance_stops_before_fallback(tmp_path: Path) -> None:
+    callback = _callback_module()
+    driver_dir, state, event = _v3_event_context(
+        callback, tmp_path, [("copilot", "exact"), ("claude", "fallback")]
+    )
+    state["entries"][0]["session"] = {
+        "id": "provider-session",
+        "source": "provider",
+        "acquired_at": "2026-09-04T00:00:00+00:00",
+    }
+    (driver_dir / "dispatch_state.json").write_text(json.dumps(state), encoding="utf-8")
+    calls = []
+
+    def execute_stream(**kwargs):
+        calls.append(kwargs["cmd"])
+        for record in (
+            {
+                "type": "user.message",
+                "data": {"content": f"callback {event['event_id']}"},
+            },
+            {"type": "result", "sessionId": "provider-session"},
+        ):
+            kwargs["structured_records"].append(record)
+            kwargs["structured_record_observer"](record)
+        return AgentResponse(response="", token_usage=TokenUsage())
+
+    with patch.object(
+        callback.AgentExecutor, "_execute_with_streaming", side_effect=execute_stream
+    ):
+        updated = callback._run_v3_callback(
+            driver_dir,
+            state,
+            event,
+            repository_root=tmp_path,
+        )
+
+    assert len(calls) == 1
+    assert calls[0][calls[0].index("--resume") + 1] == "provider-session"
+    assert updated["events"][event["event_id"]]["status"] == "accepted"
+    assert updated["events"][event["event_id"]]["accepted_index"] == 0
+    assert updated["entries"][1]["session"] is None
 
 
 def test_multi_hop_delivery_is_serial_forward_only_and_sticky(tmp_path: Path) -> None:

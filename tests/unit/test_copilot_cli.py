@@ -245,18 +245,22 @@ class TestCopilotCLIParseResponse:
 class TestCopilotCLIExtractSessionId:
     """測試 extract_session_id() 方法."""
 
-    def test_extracts_only_one_successful_terminal_provider_session(self, copilot_config):
+    def test_extracts_one_final_terminal_provider_session_from_captured_shapes(
+        self, copilot_config
+    ):
         cli = CopilotCLI(copilot_config)
-        records = [
-            json.dumps({"type": "assistant.message", "data": {"content": "HI"}}),
-            json.dumps(
-                {"type": "result", "status": "success", "sessionId": "provider-session"}
-            ),
-        ]
+        for terminal in (
+            {"type": "result", "sessionId": "provider-session"},
+            {"type": "result", "status": None, "sessionId": "provider-session"},
+        ):
+            records = [
+                json.dumps({"type": "assistant.message", "data": {"content": "HI"}}),
+                json.dumps(terminal),
+            ]
 
-        assert cli.extract_event_driver_session([json.loads(line) for line in records]) == (
-            "provider-session"
-        )
+            assert cli.extract_event_driver_session(
+                [json.loads(line) for line in records]
+            ) == "provider-session"
 
     def test_ordinary_execution_discovers_one_new_session(
         self, copilot_config, tmp_path, monkeypatch
@@ -277,14 +281,17 @@ class TestCopilotCLIExtractSessionId:
         [
             [],
             [{"type": "result", "status": "failed", "sessionId": "session"}],
-            [{"type": "result", "status": "success", "sessionId": ""}],
-            [{"type": "result", "status": "success"}],
+            [{"type": "result", "status": "error", "sessionId": "session"}],
+            [{"type": "result", "is_error": True, "sessionId": "session"}],
+            [{"type": "result", "error": {"message": "failed"}, "sessionId": "session"}],
+            [{"type": "result", "sessionId": ""}],
+            [{"type": "result"}],
             [
-                {"type": "result", "status": "success", "sessionId": "one"},
-                {"type": "result", "status": "success", "sessionId": "two"},
+                {"type": "result", "sessionId": "one"},
+                {"type": "result", "sessionId": "two"},
             ],
             [
-                {"type": "result", "status": "success", "sessionId": "session"},
+                {"type": "result", "sessionId": "session"},
                 {"type": "assistant.message", "data": {"content": "late"}},
             ],
         ],
@@ -318,12 +325,11 @@ class TestCopilotCLIExtractSessionId:
         assert command[command.index("--resume") + 1] == "provider-session"
         assert "--session-id" not in command
 
-    def test_actual_callback_requires_user_message_after_session_start(self):
+    def test_actual_callback_requires_event_message_and_matching_final_result(self):
         cli = CopilotCLI(
             AgentConfig(name="driver", cli=AgentCLI.COPILOT, model="exact")
         )
-        terminal = {"type": "result", "status": "success", "sessionId": "session"}
-        started = {"type": "session.start", "sessionId": "session", "model": "exact"}
+        terminal = {"type": "result", "sessionId": "session"}
         accepted = {
             "type": "user.message",
             "data": {"content": "callback event-1"},
@@ -337,19 +343,33 @@ class TestCopilotCLIExtractSessionId:
         )
         assert (
             cli.accepts_event_driver_callback(
-                [started], session_id="session", event_id="event-1"
+                [accepted], session_id="session", event_id="event-1"
             )
             is False
         )
         assert (
             cli.accepts_event_driver_callback(
-                [started, accepted], session_id="session", event_id="event-1"
+                [accepted, terminal], session_id="session", event_id="event-1"
             )
             is True
         )
         assert (
             cli.accepts_event_driver_callback(
-                [started, accepted], session_id="session", event_id="event-2"
+                [accepted, terminal], session_id="session", event_id="event-2"
+            )
+            is False
+        )
+        assert (
+            cli.accepts_event_driver_callback(
+                [accepted, terminal], session_id="other-session", event_id="event-1"
+            )
+            is False
+        )
+        assert (
+            cli.accepts_event_driver_callback(
+                [accepted, {**terminal, "status": "failed"}],
+                session_id="session",
+                event_id="event-1",
             )
             is False
         )
