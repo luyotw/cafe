@@ -862,6 +862,20 @@ def _has_activation_marker(directory_descriptor: int) -> bool:
     return True
 
 
+def _ensure_activation_marker(directory_descriptor: int) -> None:
+    """Migrate a valid pre-marker contract before relying on loss detection."""
+    if _has_activation_marker(directory_descriptor):
+        return
+    try:
+        _atomic_bytes_write_at(
+            directory_descriptor, ACTIVATION_FILENAME, _activation_marker_bytes()
+        )
+    except OSError as exc:
+        raise StaleContractError(
+            "proactive review activation evidence cannot be established"
+        ) from exc
+
+
 def _load_pending_replacement(content: bytes) -> tuple[str, str, bytes | None]:
     """Read a single bounded recovery record without accepting arbitrary state."""
     try:
@@ -1090,6 +1104,7 @@ def _load_active_contract_from_descriptor(
         raise
     except ValueError as exc:
         raise StaleContractError("active proactive review contract is invalid") from exc
+    _ensure_activation_marker(directory_descriptor)
     return {**validated_confirmation, "policy": validated_policy}
 
 

@@ -321,6 +321,40 @@ def test_callback_prompt_reconciles_live_proactive_review_without_worker_control
     assert "non_gating" in prompt
     assert "not a workflow advancement gate" in prompt
 
+    # A pre-marker active contract is valid after upgrade. Its first current
+    # read must establish loss-detection evidence before any later deletion.
+    activation_marker = proactive.contract_path(issue_dir).with_name(
+        proactive.ACTIVATION_FILENAME
+    )
+    activation_marker.unlink()
+    upgraded_prompt = callback._callback_prompt(
+        {"issue": "issue456", "workflow_id": "workflow", "event_type": "phase_terminal"},
+        repository_root=tmp_path,
+    )
+    assert "proactive review obligations" in upgraded_prompt
+    assert activation_marker.is_file()
+
+    proactive.contract_path(issue_dir).unlink()
+    upgraded_missing_contract_prompt = callback._callback_prompt(
+        {"issue": "issue456", "workflow_id": "workflow", "event_type": "phase_terminal"},
+        repository_root=tmp_path,
+    )
+    assert "reconfirmation-required" in upgraded_missing_contract_prompt
+
+    proactive.activate_contract(
+        issue_dir=issue_dir,
+        project_root=tmp_path,
+        policy=policy,
+        confirmation={
+            "schema_version": 1,
+            "issue_name": "issue456",
+            "playbook_id": "standard",
+            "proposal_digest": proactive.policy_digest(policy),
+            "confirmed_by": "user",
+            "confirmed_at": "2026-09-04T12:00:00+00:00",
+        },
+    )
+
     proactive.contract_path(issue_dir).write_text("[]\n", encoding="utf-8")
     stale_prompt = callback._callback_prompt(
         {"issue": "issue456", "workflow_id": "workflow", "event_type": "phase_terminal"},
