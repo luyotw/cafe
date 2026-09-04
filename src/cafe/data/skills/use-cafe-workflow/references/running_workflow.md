@@ -37,7 +37,9 @@ cafe workflow --issue <issue> --execute --mute-agent-output --background \
 
 The callback uses `.cafe/issues/<issue>/driver/config.yaml`, `session.json`,
 and `session.lock`. When the launch comes from the Codex App with `cli: codex`,
-the binding records that visible Codex thread and the callback resumes it; it
+the binding records that visible Codex thread and the callback uses `codex queue`
+to wake it through the existing host daemon. If the thread is busy, the notice
+runs after its current turn; if it is idle, the notice wakes it. The callback
 does **not** create a separate `__cafe_event_driver__` session. `session.json`
 then records that same thread as the workflow's exact identity. A terminal or
 non-Codex launch without a host-thread binding retains the existing per-issue

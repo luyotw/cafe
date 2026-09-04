@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import tempfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -88,7 +89,7 @@ def _driver_dir(issue_dir: Path) -> Path:
 def _current_host_session_binding() -> dict[str, str] | None:
     """Return the current Codex App thread without retaining host controls.
 
-    A thread ID is enough for ``codex exec resume``.  In particular, never
+    A thread ID is enough for ``codex queue``.  In particular, never
     persist ``CODEX_REMOTE_PAYLOAD``: it is a host transport bootstrap control,
     not an identity or a callback credential.
     """
@@ -292,13 +293,46 @@ def _callback_prompt(event: dict[str, Any], *, repository_root: Path) -> str:
             "You are the event-driven CAFE workflow driver.",
             "This is an asynchronous wake notification, not a workflow advancement gate.",
             "Read the builtin use-cafe-workflow skill and follow its current confirmed contract.",
-            "First inspect current durable state with cafe status/show before acting; the event may be stale.",
-            "Do not answer mandatory, user-required, clarification, permission, or capability tasks; only a user-facing driver turn may relay an explicit answer.",
-            "You may complete a declared driver_confirmable task only after verifying its confirmed contract and evidence. Do not grant permissions/capabilities or wait for this callback.",
-            "Do not assume you own a running background process. Only use an already reliable, authorized control path.",
+            "First inspect current durable state with cafe status/show before acting; "
+            "the event may be stale.",
+            "Do not answer mandatory, user-required, clarification, permission, or "
+            "capability tasks; only a user-facing driver turn may relay an explicit answer.",
+            "You may complete a declared driver_confirmable task only after verifying its "
+            "confirmed contract and evidence. Do not grant permissions/capabilities or wait "
+            "for this callback.",
+            "Do not assume you own a running background process. Only use an already "
+            "reliable, authorized control path.",
             f"Repository: {repository_root}",
             f"Wake notice: {notice}",
         )
+    )
+
+
+def _queue_host_callback(
+    prompt: str,
+    *,
+    thread_id: str,
+    model: str,
+    repository_root: Path,
+) -> None:
+    """Ask the Codex host daemon to wake its existing visible session."""
+    subprocess.run(
+        [
+            "codex",
+            "queue",
+            "--thread",
+            thread_id,
+            "--message",
+            prompt,
+            "--model",
+            model,
+            "--cd",
+            str(repository_root),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
 
 
@@ -333,13 +367,21 @@ def run_callback(event: dict[str, Any], *, repository_root: Path) -> None:
         if host_thread_id is not None:
             if existing is not None and existing.session_id != host_thread_id:
                 raise ValueError("event-driven host session identity cannot be replaced")
-            continuation = SessionContinuation.resume_exact(cli, host_thread_id)
-        else:
-            continuation = (
-                SessionContinuation.resume_exact(cli, existing.session_id)
-                if existing is not None
-                else SessionContinuation.new()
+            _queue_host_callback(
+                _callback_prompt(event, repository_root=repository_root),
+                thread_id=host_thread_id,
+                model=config["model"],
+                repository_root=repository_root,
             )
+            if existing is None:
+                store.save_session(DRIVER_AGENT_NAME, cli, host_thread_id)
+            store.commit()
+            return
+        continuation = (
+            SessionContinuation.resume_exact(cli, existing.session_id)
+            if existing is not None
+            else SessionContinuation.new()
+        )
         manager = AgentManager(session_manager=store, issue_name=None, stream_agent_output=False)
         manager.register_agent(
             AgentConfig(
