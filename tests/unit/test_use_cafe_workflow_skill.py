@@ -1600,3 +1600,147 @@ mandate:
             "| driver.poll_timestamp | capture and print current system time "
             "with every proactive poll |" in result.stdout
         )
+
+
+def _proactive_review_policy(*, selected_phase: str = "develop") -> dict[str, object]:
+    """A complete proposal for the builtin standard agent-phase inventory."""
+    phases = []
+    for phase in ("spec", "plan", "develop", "review", "pr"):
+        entry: dict[str, object] = {
+            "phase": phase,
+            "selected": phase == selected_phase,
+            "rationale": "Phase-specific risk and timely downstream coverage were assessed.",
+            "factors": {
+                "ambiguity": "assessed",
+                "novelty": "assessed",
+                "blast_radius": "assessed",
+                "protected_risk": "assessed",
+                "durable_contract": "assessed",
+                "downstream_review": "assessed",
+                "late_correction": "assessed",
+                "cost": "assessed",
+            },
+        }
+        if phase == selected_phase:
+            entry.update(
+                {
+                    "reviewer": {"cli": "codex", "model": "gpt-5.6-sol"},
+                    "ordering": "non_gating",
+                    "initial_review_cost": {
+                        "tokens": {"estimate": "2k tokens"},
+                        "latency": {"band": {"minimum": 30, "maximum": 90, "unit": "seconds"}},
+                        "assumptions": "one durable artifact and bounded repository evidence",
+                        "delay_impact": "may delay driver acceptance and user presentation",
+                    },
+                    "rereview_cost": {"foreseeable": False, "reason": "blockers are unknown"},
+                }
+            )
+        phases.append(entry)
+    return {"playbook_id": "standard", "phases": phases}
+
+
+def _proactive_review_module():
+    return _load_script_module(
+        SKILL_ROOT / "scripts" / "proactive_review.py", "proactive_review_contract_test"
+    )
+
+
+def test_proactive_review_policy_validates_complete_selected_and_empty_inventory() -> None:
+    """U1–U5 — policy is structural, phase-complete, and never judges prose quality."""
+    module = _proactive_review_module()
+    model = PlaybookLoader(project_root=PROJECT_ROOT).load_model("standard").model
+
+    selected = module.validate_policy(_proactive_review_policy(), playbook=model)
+    empty = _proactive_review_policy(selected_phase="missing")
+    empty = module.validate_policy(empty, playbook=model)
+
+    assert selected["phases"][2]["reviewer"] == {"cli": "codex", "model": "gpt-5.6-sol"}
+    assert all(not entry["selected"] for entry in empty["phases"])
+
+    duplicate = _proactive_review_policy()
+    duplicate["phases"].append(dict(duplicate["phases"][0]))
+    with pytest.raises(ValueError):
+        module.validate_policy(duplicate, playbook=model)
+
+
+def test_proactive_review_rendering_is_mutation_free_and_binds_a_policy_digest(tmp_path: Path) -> None:
+    """U2–U6 — rendering shows a validated policy without creating issue state."""
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text(
+        "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
+        encoding="utf-8",
+    )
+    policy = _proactive_review_policy()
+    result = subprocess.run(
+        _kickoff_formatter_command(
+            strategic_context, "--proactive-review-json", json.dumps(policy)
+        ),
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "### Proactive phase reviews — driver-assessed" in result.stdout
+    assert "proposal_digest" in result.stdout
+    assert not (tmp_path / ".cafe" / "issues").exists()
+
+
+def test_proactive_review_activation_requires_complete_confirmation_and_preserves_active_contract(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """U7–U8 — activation is identity-bound, live-validated, and atomic."""
+    module = _proactive_review_module()
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue464"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text("playbook_id: standard\n", encoding="utf-8")
+    policy = _proactive_review_policy()
+    confirmation = {
+        "schema_version": 1,
+        "issue_name": "issue464",
+        "playbook_id": "standard",
+        "confirmed_by": "user",
+        "confirmed_at": "2026-09-04T12:00:00+00:00",
+    }
+
+    contract_path = module.activate_contract(
+        issue_dir=issue_dir,
+        project_root=PROJECT_ROOT,
+        policy=policy,
+        confirmation=confirmation,
+    )
+    original = contract_path.read_bytes()
+    active = module.load_active_contract(issue_dir=issue_dir, project_root=PROJECT_ROOT)
+
+    assert active["issue_name"] == "issue464"
+    assert set(active) == {
+        "schema_version",
+        "issue_name",
+        "playbook_id",
+        "proposal_digest",
+        "confirmed_by",
+        "confirmed_at",
+        "policy",
+    }
+    with pytest.raises(ValueError):
+        module.activate_contract(
+            issue_dir=issue_dir,
+            project_root=PROJECT_ROOT,
+            policy=policy,
+            confirmation={**confirmation, "confirmed_at": "2026-09-04T12:00:00"},
+            expected_active_digest=active["proposal_digest"],
+        )
+    assert contract_path.read_bytes() == original
+
+    monkeypatch.setattr(module.os, "replace", lambda *_args: (_ for _ in ()).throw(OSError()))
+    replacement = _proactive_review_policy(selected_phase="review")
+    with pytest.raises(OSError):
+        module.activate_contract(
+            issue_dir=issue_dir,
+            project_root=PROJECT_ROOT,
+            policy=replacement,
+            confirmation=confirmation,
+            expected_active_digest=active["proposal_digest"],
+        )
+    assert contract_path.read_bytes() == original

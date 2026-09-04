@@ -58,6 +58,8 @@ except ModuleNotFoundError:
     _reexec_with_cafe_python()
     raise
 
+from proactive_review import policy_digest, validate_policy
+
 
 ModelChain = list[tuple[str, str]]
 
@@ -357,6 +359,14 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--risk-factor", action="append", required=True)
     parser.add_argument("--assessment-rationale", required=True)
     parser.add_argument(
+        "--proactive-review-json",
+        type=_json_mapping,
+        help=(
+            "Complete issue-specific proactive phase-review policy. Rendering validates "
+            "and digests it without writing issue state."
+        ),
+    )
+    parser.add_argument(
         "--phase-chain",
         action="append",
         default=[],
@@ -401,6 +411,11 @@ def render(args: argparse.Namespace) -> str:
     playbook_loader = PlaybookLoader(project_root=project_root)
     loaded = playbook_loader.load_model(args.playbook_id)
     model = loaded.model
+    proactive_policy = (
+        validate_policy(args.proactive_review_json, playbook=model)
+        if args.proactive_review_json is not None
+        else None
+    )
     skill_loader = SkillLoader(project_root=project_root)
     candidates = confirmation_gate_steps(model)
     mandatory_human_tasks = mandatory_confirmation_gate_steps(model)
@@ -642,6 +657,58 @@ def render(args: argparse.Namespace) -> str:
         ],
     )
 
+    proactive_section: list[str] = []
+    if proactive_policy is not None:
+        proactive_rows: list[list[Any]] = []
+        for entry in proactive_policy["phases"]:
+            if entry["selected"]:
+                reviewer = entry["reviewer"]
+                initial = entry["initial_review_cost"]
+                rereview = entry["rereview_cost"]
+                reviewer_label = f"{reviewer['cli']}:{reviewer['model']}"
+                initial_label = json.dumps(initial, ensure_ascii=False, sort_keys=True)
+                rereview_label = json.dumps(rereview, ensure_ascii=False, sort_keys=True)
+                ordering = entry["ordering"]
+                decision = "selected"
+            else:
+                reviewer_label = "—"
+                ordering = "—"
+                initial_label = "—"
+                rereview_label = "—"
+                decision = "excluded"
+            proactive_rows.append(
+                [
+                    entry["phase"],
+                    decision,
+                    entry["rationale"],
+                    reviewer_label,
+                    ordering,
+                    initial_label,
+                    rereview_label,
+                ]
+            )
+        proactive_section = [
+            "### Proactive phase reviews — driver-assessed",
+            _table(
+                [
+                    "Phase",
+                    "Decision",
+                    "Selection rationale",
+                    "Exact reviewer",
+                    "Ordering",
+                    "Initial review cost and delay impact",
+                    "Correction/re-review cost",
+                ],
+                proactive_rows,
+            ),
+            f"proposal_digest: `{policy_digest(proactive_policy)}`",
+            (
+                "The user confirms this complete review plan with the kickoff contract. "
+                "A clean proactive review is quality evidence only and never completes a "
+                "HumanTask, permission, capability, scope, or authority decision."
+            ),
+        ]
+
     return "\n\n".join(
         [
             title,
@@ -673,6 +740,7 @@ def render(args: argparse.Namespace) -> str:
             "### Mandate",
             mandate_summary,
             _table(["Axis", "Level", "Grounds"], mandate_rows),
+            *proactive_section,
         ]
     )
 

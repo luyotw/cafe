@@ -103,6 +103,50 @@ obtain explicit user confirmation of:
   `.cafe/issues/<issue>/driver/config.yaml`;
 - worktree choice and path when using a worktree.
 
+### Phase-scoped proactive review plan
+
+Before presenting kickoff, enumerate every resolved `agent` or `hybrid` phase
+in playbook order. For each phase, the driver records either a selected or
+excluded decision after considering ambiguity, novelty, blast radius,
+architecture/security/permission/persistence/concurrency/migration risk,
+durable or public contracts, equivalent downstream independent coverage, late
+correction or discarded work, and token/latency cost. Make a phase-specific
+smallest-sufficient judgment: neither selecting every phase nor selecting none
+is a default. The structural helper does not score wording or choose the set.
+
+Every selected row names one exact supported `CLI:model`, truthful ordering,
+and separately disclosed initial and possible correction/re-review token and
+latency cost. Use `before_next_phase` only at an existing enforceable graph
+boundary; otherwise state `non_gating`, including that worker advancement may
+continue while acceptance and confirmation presentation wait for clean current
+evidence. An empty selection is valid only when every exclusion is present and
+explained. The user confirms the complete phase inventory and review plan as
+part of the existing kickoff contract.
+
+Pass the complete proposal as JSON to the formatter:
+
+```bash
+python3 <skill-dir>/scripts/format_kickoff_contract.py <playbook-id> \
+  ... --proactive-review-json '<complete-policy-json>'
+```
+
+Formatting validates and renders the proposal digest but makes no writes and
+must not create an issue directory, candidate file, transcript, catalog
+snapshot, or review history. After the user has explicitly confirmed the whole
+kickoff, run `cafe prepare`, then activate that exact digest-bound policy with
+explicit `confirmed_by=user` and timezone-aware `confirmed_at` metadata. The
+only persisted active contract is
+`.cafe/issues/<issue>/driver/proactive_review/contract.yaml`; it contains the
+minimal confirmation envelope and policy. No `candidate.yaml`, kickoff
+transcript, or append-only contract history is allowed.
+
+When selection, exact reviewer identity, ordering, or a material cost/latency
+assumption changes, retain the active contract while rendering a complete
+replacement. Obtain complete reconfirmation and then atomically replace it only
+after re-resolving the active issue's current playbook, ordered agent/hybrid
+inventory, and claimed boundaries. Invalid, interrupted, or stale replacement
+attempts leave the old contract unchanged.
+
 Attached polling applies to proactive `cafe status`, `cafe show`, blackboard,
 artifact, or similar liveness checks. Start the timer when a workflow process
 starts or resumes, and apply the full confirmed interval before the very first
