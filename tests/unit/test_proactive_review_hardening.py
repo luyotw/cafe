@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 import os
 import stat
 import subprocess
+import sys
 import threading
 import time
 import tracemalloc
@@ -523,6 +525,94 @@ def test_replacement_keeps_the_active_pair_when_resetting_state_fails(
 
     assert module.contract_path(issue_dir).read_bytes() == original_contract
     assert module.state_path(issue_dir).read_bytes() == original_state
+
+
+def test_replacement_recovers_the_prior_pair_after_a_state_publication_crash(
+    tmp_path: Path,
+) -> None:
+    """U8 — a crash before contract publication restores the complete prior pair."""
+    module = _module()
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    issue_dir, _ = _activate(module, project_root)
+    active = module.load_active_contract(issue_dir=issue_dir, project_root=project_root)
+    output, requirements, upstream, evidence = _review_inputs(issue_dir, project_root)
+    module.prepare_review_inputs(
+        issue_dir=issue_dir,
+        project_root=project_root,
+        phase="develop",
+        output_path=output,
+        requirements=requirements,
+        upstream_artifacts=upstream,
+        repository_evidence=evidence,
+        correction_history=[],
+    )
+    original_contract = module.contract_path(issue_dir).read_bytes()
+    original_state = module.state_path(issue_dir).read_bytes()
+    replacement = _policy(project_root, "standard", marker="crash replacement")
+    selected = next(entry for entry in replacement["phases"] if entry["selected"])
+    selected["reviewer"] = {"cli": "codex", "model": "gpt-5.6-terra"}
+    child = """
+import importlib.util
+import json
+import os
+from pathlib import Path
+
+spec = importlib.util.spec_from_file_location(
+    "crash_proactive_review", os.environ["CAFE_PROACTIVE_REVIEW"]
+)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+original_write = module._atomic_yaml_write
+
+def stop_after_state(path, value, **kwargs):
+    original_write(path, value, **kwargs)
+    if path.name == module.STATE_FILENAME:
+        os._exit(77)
+
+module._atomic_yaml_write = stop_after_state
+issue_dir = Path(os.environ["CAFE_ISSUE_DIR"])
+policy = json.loads(os.environ["CAFE_REPLACEMENT_POLICY"])
+module.activate_contract(
+    issue_dir=issue_dir,
+    project_root=Path(os.environ["CAFE_PROJECT_ROOT"]),
+    policy=policy,
+    confirmation={
+        "schema_version": 1,
+        "issue_name": issue_dir.name,
+        "playbook_id": policy["playbook_id"],
+        "proposal_digest": module.policy_digest(policy),
+        "confirmed_by": "user",
+        "confirmed_at": "2026-09-04T12:00:00+00:00",
+    },
+    expected_active_digest=os.environ["CAFE_ACTIVE_DIGEST"],
+)
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", child],
+        cwd=PROJECT_ROOT,
+        env={
+            **os.environ,
+            "CAFE_ACTIVE_DIGEST": active["proposal_digest"],
+            "CAFE_ISSUE_DIR": str(issue_dir),
+            "CAFE_PROJECT_ROOT": str(project_root),
+            "CAFE_PROACTIVE_REVIEW": str(
+                SKILL_ROOT / "scripts" / "proactive_review.py"
+            ),
+            "CAFE_REPLACEMENT_POLICY": json.dumps(replacement),
+        },
+        check=False,
+    )
+
+    assert completed.returncode == 77
+    assert module.contract_path(issue_dir).read_bytes() == original_contract
+    assert module.state_path(issue_dir).read_bytes() != original_state
+
+    recovered = module.load_active_contract(issue_dir=issue_dir, project_root=project_root)
+
+    assert recovered["proposal_digest"] == active["proposal_digest"]
+    assert module.state_path(issue_dir).read_bytes() == original_state
+    assert not (module.contract_path(issue_dir).parent / module.REPLACEMENT_FILENAME).exists()
 
 
 def test_obligation_reconciliation_reuses_one_repository_snapshot(

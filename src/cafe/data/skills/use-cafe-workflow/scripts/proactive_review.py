@@ -9,6 +9,7 @@ structure, current playbook binding, and atomic persistence boundaries.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import math
@@ -37,9 +38,11 @@ except ImportError:  # pragma: no cover - workflow driver persistence is POSIX-h
 
 CONTRACT_FILENAME = "contract.yaml"
 STATE_FILENAME = "state.yaml"
+REPLACEMENT_FILENAME = "replacement.yaml"
 SCHEMA_VERSION = 1
 MAX_DURABLE_OUTPUT_BYTES = 1_048_576
 MAX_STATE_BYTES = 262_144
+MAX_REPLACEMENT_BYTES = MAX_STATE_BYTES * 2
 MAX_REPOSITORY_STATE_BYTES = 262_144
 MAX_EVIDENCE_ITEMS = 32
 MAX_COLLECTION_ITEMS = 64
@@ -743,6 +746,14 @@ def _read_persistence_entry(
         os.close(descriptor)
 
 
+def _bounded_yaml_bytes(value: Mapping[str, Any], *, label: str, maximum: int) -> bytes:
+    _ensure_bounded_value(value, label=label)
+    encoded = yaml.safe_dump(dict(value), allow_unicode=True, sort_keys=True).encode("utf-8")
+    if len(encoded) > maximum:
+        raise ValueError(f"{label} exceeds the supported byte limit")
+    return encoded
+
+
 def _atomic_bytes_write_at(directory_descriptor: int, name: str, content: bytes) -> None:
     """Atomically replace one checked target through its held directory descriptor."""
     _persistence_entry_exists(directory_descriptor, name)
@@ -778,6 +789,7 @@ def _atomic_bytes_write_at(directory_descriptor: int, name: str, content: bytes)
             src_dir_fd=directory_descriptor,
             dst_dir_fd=directory_descriptor,
         )
+        os.fsync(directory_descriptor)
         temporary = ""
     finally:
         if descriptor >= 0:
@@ -797,17 +809,100 @@ def _restore_persistence_entry(
             os.unlink(name, dir_fd=directory_descriptor)
         except FileNotFoundError:
             return
+        os.fsync(directory_descriptor)
         return
     _atomic_bytes_write_at(directory_descriptor, name, original)
+
+
+def _pending_replacement_bytes(
+    *, previous_digest: str, replacement_digest: str, previous_state: bytes | None
+) -> bytes:
+    """Encode the bounded recovery record for one replacement transaction."""
+    record = {
+        "schema_version": SCHEMA_VERSION,
+        "previous_digest": previous_digest,
+        "replacement_digest": replacement_digest,
+        "previous_state": (
+            base64.b64encode(previous_state).decode("ascii")
+            if previous_state is not None
+            else None
+        ),
+    }
+    encoded = yaml.safe_dump(record, allow_unicode=True, sort_keys=True).encode("utf-8")
+    if len(encoded) > MAX_REPLACEMENT_BYTES:
+        raise ValueError("proactive review replacement recovery exceeds the supported byte limit")
+    return encoded
+
+
+def _load_pending_replacement(content: bytes) -> tuple[str, str, bytes | None]:
+    """Read a single bounded recovery record without accepting arbitrary state."""
+    try:
+        record = _mapping(yaml.safe_load(content.decode("utf-8")), label="replacement recovery")
+        if set(record) != {
+            "schema_version",
+            "previous_digest",
+            "replacement_digest",
+            "previous_state",
+        }:
+            raise ValueError("invalid replacement recovery envelope")
+        if record["schema_version"] != SCHEMA_VERSION:
+            raise ValueError("invalid replacement recovery schema")
+        previous_digest = _non_empty(record["previous_digest"], label="previous proposal digest")
+        replacement_digest = _non_empty(
+            record["replacement_digest"], label="replacement proposal digest"
+        )
+        encoded_state = record["previous_state"]
+        if encoded_state is None:
+            return previous_digest, replacement_digest, None
+        if not isinstance(encoded_state, str) or len(encoded_state) > MAX_REPLACEMENT_BYTES:
+            raise ValueError("invalid replacement recovery state")
+        previous_state = base64.b64decode(encoded_state.encode("ascii"), validate=True)
+        if len(previous_state) > MAX_STATE_BYTES:
+            raise ValueError("replacement recovery state exceeds the supported byte limit")
+        return previous_digest, replacement_digest, previous_state
+    except (UnicodeError, ValueError, yaml.YAMLError) as exc:
+        raise StaleContractError("proactive review replacement recovery is invalid") from exc
+
+
+def _delete_persistence_entry(directory_descriptor: int, name: str) -> None:
+    if not _persistence_entry_exists(directory_descriptor, name):
+        return
+    try:
+        os.unlink(name, dir_fd=directory_descriptor)
+        os.fsync(directory_descriptor)
+    except OSError as exc:
+        raise StaleContractError("proactive review persistence target cannot be removed") from exc
+
+
+def _recover_pending_replacement(directory_descriptor: int) -> None:
+    """Finish or roll back an interrupted replacement at its durable commit point."""
+    content = _read_persistence_entry(
+        directory_descriptor, REPLACEMENT_FILENAME, maximum=MAX_REPLACEMENT_BYTES
+    )
+    if content is None:
+        return
+    previous_digest, replacement_digest, previous_state = _load_pending_replacement(content)
+    active_digest = _active_contract_digest(directory_descriptor)
+    if active_digest == previous_digest:
+        _restore_persistence_entry(directory_descriptor, STATE_FILENAME, previous_state)
+    elif active_digest == replacement_digest:
+        replacement_state = _bounded_yaml_bytes(
+            _empty_review_state(replacement_digest),
+            label="durable proactive review state",
+            maximum=MAX_STATE_BYTES,
+        )
+        _atomic_bytes_write_at(directory_descriptor, STATE_FILENAME, replacement_state)
+    else:
+        raise StaleContractError("proactive review replacement has an unknown contract generation")
+    _delete_persistence_entry(directory_descriptor, REPLACEMENT_FILENAME)
 
 
 def _atomic_yaml_write(
     path: Path, value: Mapping[str, Any], *, directory_descriptor: int | None = None
 ) -> None:
-    _ensure_bounded_value(value, label="durable proactive review state")
-    encoded = yaml.safe_dump(dict(value), allow_unicode=True, sort_keys=True).encode("utf-8")
-    if len(encoded) > MAX_STATE_BYTES:
-        raise ValueError("durable proactive review state exceeds the supported byte limit")
+    encoded = _bounded_yaml_bytes(
+        value, label="durable proactive review state", maximum=MAX_STATE_BYTES
+    )
     if directory_descriptor is not None:
         _atomic_bytes_write_at(directory_descriptor, path.name, encoded)
         return
@@ -837,6 +932,7 @@ def _contract_lock(issue_dir: Path) -> Iterator[int]:
         with _proactive_review_directory(issue_dir) as descriptor:
             fcntl.flock(descriptor, fcntl.LOCK_EX)
             try:
+                _recover_pending_replacement(descriptor)
                 yield descriptor
             finally:
                 fcntl.flock(descriptor, fcntl.LOCK_UN)
@@ -902,20 +998,25 @@ def activate_contract(
             previous_state = _read_persistence_entry(
                 directory_descriptor, STATE_FILENAME, maximum=MAX_STATE_BYTES
             )
-            _atomic_yaml_write(
-                state_path(issue_dir),
-                _empty_review_state(digest),
-                directory_descriptor=directory_descriptor,
+            recovery = _pending_replacement_bytes(
+                previous_digest=existing_digest,
+                replacement_digest=digest,
+                previous_state=previous_state,
             )
+            _atomic_bytes_write_at(directory_descriptor, REPLACEMENT_FILENAME, recovery)
             try:
+                _atomic_yaml_write(
+                    state_path(issue_dir),
+                    _empty_review_state(digest),
+                    directory_descriptor=directory_descriptor,
+                )
                 _atomic_yaml_write(
                     target, envelope, directory_descriptor=directory_descriptor
                 )
             except BaseException:
-                _restore_persistence_entry(
-                    directory_descriptor, STATE_FILENAME, previous_state
-                )
+                _recover_pending_replacement(directory_descriptor)
                 raise
+            _delete_persistence_entry(directory_descriptor, REPLACEMENT_FILENAME)
     return target
 
 
@@ -924,13 +1025,14 @@ def load_active_contract(*, issue_dir: Path, project_root: Path) -> dict[str, An
     issue_dir = _authorized_issue_dir(issue_dir=issue_dir, project_root=project_root)
     try:
         with _proactive_review_directory(issue_dir, create=False) as directory_descriptor:
+            _recover_pending_replacement(directory_descriptor)
             content = _read_persistence_entry(
                 directory_descriptor, CONTRACT_FILENAME, maximum=MAX_STATE_BYTES
             )
     except FileNotFoundError as exc:
         raise ContractNotFoundError("no active proactive review contract") from exc
     if content is None:
-        raise ContractNotFoundError("no active proactive review contract")
+        raise StaleContractError("a confirmed proactive review contract is missing")
     try:
         value = yaml.safe_load(content.decode("utf-8"))
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
@@ -1643,6 +1745,7 @@ def mark_downstream_invalidated(
 def review_obligations(*, issue_dir: Path, project_root: Path) -> list[dict[str, Any]]:
     """Return obligations only after reconciling persisted clean evidence."""
     issue_dir = _authorized_issue_dir(issue_dir=issue_dir, project_root=project_root)
+    load_active_contract(issue_dir=issue_dir, project_root=project_root)
 
     def reconcile(
         contract: dict[str, Any], state: dict[str, Any]

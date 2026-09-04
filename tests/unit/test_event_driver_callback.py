@@ -329,9 +329,20 @@ def test_callback_prompt_reconciles_live_proactive_review_without_worker_control
     assert "reconfirmation-required" in stale_prompt
 
     proactive.contract_path(issue_dir).unlink()
+    missing_contract_prompt = callback._callback_prompt(
+        {"issue": "issue456", "workflow_id": "workflow", "event_type": "phase_terminal"},
+        repository_root=tmp_path,
+    )
+    assert "reconfirmation-required" in missing_contract_prompt
+
     proactive.contract_path(issue_dir).mkdir()
     malformed_path_prompt = callback._callback_prompt(
         {"issue": "issue456", "workflow_id": "workflow", "event_type": "phase_terminal"},
         repository_root=tmp_path,
     )
     assert "reconfirmation-required" in malformed_path_prompt
+
+    legacy_issue_dir = tmp_path / ".cafe" / "issues" / "legacy"
+    legacy_issue_dir.mkdir(parents=True)
+    assert callback._proactive_review_reconciliation("legacy", repository_root=tmp_path) is None
+    assert not (legacy_issue_dir / "driver").exists()
