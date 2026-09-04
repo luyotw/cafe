@@ -7,7 +7,7 @@ import json
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
@@ -715,6 +715,53 @@ def test_copilot_captured_acceptance_stops_before_fallback(tmp_path: Path) -> No
 
     assert len(calls) == 1
     assert calls[0][calls[0].index("--resume") + 1] == "provider-session"
+    assert updated["events"][event["event_id"]]["status"] == "accepted"
+    assert updated["events"][event["event_id"]]["accepted_index"] == 0
+    assert updated["entries"][1]["session"] is None
+
+
+def test_copilot_acceptance_at_record_65_stops_before_fallback(tmp_path: Path) -> None:
+    callback = _callback_module()
+    driver_dir, state, event = _v3_event_context(
+        callback, tmp_path, [("copilot", "exact"), ("claude", "fallback")]
+    )
+    state["entries"][0]["session"] = {
+        "id": "provider-session",
+        "source": "provider",
+        "acquired_at": "2026-09-04T00:00:00+00:00",
+    }
+    (driver_dir / "dispatch_state.json").write_text(json.dumps(state), encoding="utf-8")
+    records = [
+        {
+            "type": "user.message",
+            "data": {"content": f"callback {event['event_id']}"},
+        },
+        *(
+            {"type": "assistant.message", "index": index}
+            for index in range(63)
+        ),
+        {"type": "result", "sessionId": "provider-session"},
+    ]
+    process = MagicMock()
+    process.stdout.readline.side_effect = [
+        *(f"{json.dumps(record)}\n" for record in records),
+        "",
+    ]
+    process.stderr.read.return_value = ""
+    process.wait.return_value = 0
+
+    with (
+        patch("subprocess.Popen", return_value=process) as popen,
+        patch("sys.platform", "win32"),
+    ):
+        updated = callback._run_v3_callback(
+            driver_dir,
+            state,
+            event,
+            repository_root=tmp_path,
+        )
+
+    assert popen.call_count == 1
     assert updated["events"][event["event_id"]]["status"] == "accepted"
     assert updated["events"][event["event_id"]]["accepted_index"] == 0
     assert updated["entries"][1]["session"] is None

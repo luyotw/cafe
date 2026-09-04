@@ -53,6 +53,18 @@ class EventDriverExecutionResult:
     records: tuple[dict[str, Any], ...]
 
 
+def _structured_record_limit(
+    execution_control: AgentExecutionControl | None,
+) -> int:
+    """Keep observer evidence aligned with the process output boundary."""
+    if (
+        execution_control is not None
+        and execution_control.max_output_lines is not None
+    ):
+        return execution_control.max_output_lines
+    return 64
+
+
 class AgentExecutor:
     """Executes AI agents and handles their responses."""
 
@@ -418,6 +430,7 @@ class AgentExecutor:
         )
 
         records: list[dict[str, Any]] = []
+        structured_record_limit = _structured_record_limit(execution_control)
         acceptance_observed = False
 
         def observe_record(_record: dict[str, Any]) -> None:
@@ -447,7 +460,7 @@ class AgentExecutor:
             structured_record_observer=observe_record,
             require_terminal_stream_event=True,
         )
-        bounded_records = tuple(records[:64])
+        bounded_records = tuple(records[:structured_record_limit])
         if expected_session_id is None:
             session_id = strategy.extract_event_driver_session(bounded_records)
             accepted = False
@@ -1180,6 +1193,7 @@ class AgentExecutor:
         permission_denials: List[PermissionDenial] = []
         retained_output_bytes = 0
         retained_output_lines = 0
+        structured_record_limit = _structured_record_limit(execution_control)
         execution_limit_reached = Event()
 
         def trigger_execution_limit() -> None:
@@ -1335,7 +1349,7 @@ class AgentExecutor:
                             data = json.loads(line.strip())
 
                             if isinstance(data, dict) and structured_records is not None:
-                                if len(structured_records) < 64:
+                                if len(structured_records) < structured_record_limit:
                                     structured_records.append(dict(data))
                                     if structured_record_observer is not None:
                                         structured_record_observer(dict(data))
