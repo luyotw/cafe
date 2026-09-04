@@ -1327,11 +1327,82 @@ def _mutate_review_state(
         return result
 
 
+def _reconcile_review_obligations(
+    *,
+    issue_dir: Path,
+    project_root: Path,
+    contract: Mapping[str, Any],
+    state: dict[str, Any],
+) -> tuple[list[dict[str, Any]], bool]:
+    """Reconcile clean evidence while the caller holds one contract/state generation."""
+    changed = False
+    obligations: list[dict[str, Any]] = []
+    current_repository_state: dict[str, str] | None = None
+
+    def repository_state() -> dict[str, str]:
+        nonlocal current_repository_state
+        if current_repository_state is None:
+            current_repository_state = _repository_state_identity(project_root)
+        return current_repository_state
+
+    for entry in contract["policy"]["phases"]:
+        if not entry["selected"]:
+            continue
+        episode = state["episodes"].get(entry["phase"])
+        if isinstance(episode, Mapping) and episode.get("status") == "clean":
+            reason = _clean_episode_staleness(
+                episode=episode,
+                selected=entry,
+                contract=contract,
+                issue_dir=issue_dir,
+                project_root=project_root,
+                repository_state=repository_state,
+            )
+            if reason is not None:
+                episode = _pending_episode(episode, reason=reason)
+                state["episodes"][entry["phase"]] = episode
+                changed = True
+        obligations.append(
+            {
+                "phase": entry["phase"],
+                "ordering": entry["ordering"],
+                "reviewer": entry["reviewer"],
+                "status": episode.get("status", "not_started")
+                if isinstance(episode, Mapping)
+                else "not_started",
+            }
+        )
+    return obligations, changed
+
+
 def load_review_state(*, issue_dir: Path, project_root: Path) -> dict[str, Any]:
-    """Load bounded current evidence only after reconciling clean episodes."""
-    review_obligations(issue_dir=issue_dir, project_root=project_root)
-    contract = load_active_contract(issue_dir=issue_dir, project_root=project_root)
-    return _load_state_for_contract(issue_dir=issue_dir, contract=contract)
+    """Load and reconcile one complete current contract/state generation."""
+    issue_dir = _authorized_issue_dir(issue_dir=issue_dir, project_root=project_root)
+    try:
+        with _contract_lock(issue_dir, create=False) as directory_descriptor:
+            contract = _load_active_contract_from_descriptor(
+                issue_dir=issue_dir,
+                project_root=project_root,
+                directory_descriptor=directory_descriptor,
+            )
+            state = _load_state_for_contract(
+                issue_dir=issue_dir,
+                contract=contract,
+                directory_descriptor=directory_descriptor,
+            )
+            _, changed = _reconcile_review_obligations(
+                issue_dir=issue_dir,
+                project_root=project_root,
+                contract=contract,
+                state=state,
+            )
+            if changed:
+                _write_review_state(
+                    issue_dir, state, directory_descriptor=directory_descriptor
+                )
+            return state
+    except FileNotFoundError as exc:
+        raise ContractNotFoundError("no active proactive review contract") from exc
 
 
 def prepare_review_inputs(
@@ -1815,44 +1886,12 @@ def review_obligations(*, issue_dir: Path, project_root: Path) -> list[dict[str,
     def reconcile(
         contract: dict[str, Any], state: dict[str, Any]
     ) -> tuple[list[dict[str, Any]], bool]:
-        changed = False
-        obligations: list[dict[str, Any]] = []
-        current_repository_state: dict[str, str] | None = None
-
-        def repository_state() -> dict[str, str]:
-            nonlocal current_repository_state
-            if current_repository_state is None:
-                current_repository_state = _repository_state_identity(project_root)
-            return current_repository_state
-
-        for entry in contract["policy"]["phases"]:
-            if not entry["selected"]:
-                continue
-            episode = state["episodes"].get(entry["phase"])
-            if isinstance(episode, Mapping) and episode.get("status") == "clean":
-                reason = _clean_episode_staleness(
-                    episode=episode,
-                    selected=entry,
-                    contract=contract,
-                    issue_dir=issue_dir,
-                    project_root=project_root,
-                    repository_state=repository_state,
-                )
-                if reason is not None:
-                    episode = _pending_episode(episode, reason=reason)
-                    state["episodes"][entry["phase"]] = episode
-                    changed = True
-            obligations.append(
-                {
-                    "phase": entry["phase"],
-                    "ordering": entry["ordering"],
-                    "reviewer": entry["reviewer"],
-                    "status": episode.get("status", "not_started")
-                    if isinstance(episode, Mapping)
-                    else "not_started",
-                }
-            )
-        return obligations, changed
+        return _reconcile_review_obligations(
+            issue_dir=issue_dir,
+            project_root=project_root,
+            contract=contract,
+            state=state,
+        )
 
     return _mutate_review_state(
         issue_dir=issue_dir,

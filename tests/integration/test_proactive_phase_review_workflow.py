@@ -7,6 +7,8 @@ import importlib.util
 import json
 import subprocess
 import sys
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -239,6 +241,127 @@ def test_blocking_review_correction_converges_to_one_clean_current_episode(tmp_p
     assert module.load_review_state(issue_dir=issue_dir, project_root=tmp_path)["episodes"] == {
         "develop": clean
     }
+
+
+def test_later_driver_snapshot_never_mixes_contract_and_state_generations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """I6, U9 — a public later-driver snapshot is one complete durable generation."""
+    module = _module()
+    issue_dir = tmp_path / ".cafe" / "issues" / "snapshot"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text("playbook_id: standard\n", encoding="utf-8")
+    initial_policy = _policy(selected="develop")
+    module.activate_contract(
+        issue_dir=issue_dir,
+        project_root=tmp_path,
+        policy=initial_policy,
+        confirmation=_confirmation("snapshot", initial_policy),
+    )
+    output = issue_dir / "develop" / "iteration_001" / "output.md"
+    output.parent.mkdir(parents=True)
+    output.write_text("pending output", encoding="utf-8")
+    requirements, upstream, evidence = _review_evidence(issue_dir, tmp_path)
+    module.prepare_review_inputs(
+        issue_dir=issue_dir,
+        project_root=tmp_path,
+        phase="develop",
+        output_path=output,
+        requirements=requirements,
+        upstream_artifacts=upstream,
+        repository_evidence=evidence,
+        correction_history=[],
+    )
+    old_digest = module.load_active_contract(
+        issue_dir=issue_dir, project_root=tmp_path
+    )["proposal_digest"]
+    replacement_policy = _policy(selected="review")
+    replacement_digest = module.policy_digest(replacement_policy)
+    final_state_read = threading.Event()
+    continue_snapshot = threading.Event()
+    replacement_started = threading.Event()
+    replacement_lock_acquired = threading.Event()
+    replacement_completed = threading.Event()
+    original_load_state = module._load_state_for_contract
+    original_contract_lock = module._contract_lock
+    state_read_under_generation_lock: list[bool] = []
+
+    def pause_final_state_read(**kwargs):
+        if not state_read_under_generation_lock:
+            state_read_under_generation_lock.append(
+                kwargs.get("directory_descriptor") is not None
+            )
+            final_state_read.set()
+            assert continue_snapshot.wait(timeout=30)
+        return original_load_state(**kwargs)
+
+    @contextmanager
+    def observe_contract_lock(*args, **kwargs):
+        with original_contract_lock(*args, **kwargs) as directory_descriptor:
+            if replacement_started.is_set():
+                replacement_lock_acquired.set()
+            yield directory_descriptor
+
+    monkeypatch.setattr(module, "review_obligations", lambda **_kwargs: [])
+    monkeypatch.setattr(module, "_load_state_for_contract", pause_final_state_read)
+    monkeypatch.setattr(module, "_contract_lock", observe_contract_lock)
+    outcome: dict[str, object] = {}
+    errors: list[BaseException] = []
+
+    def load_snapshot() -> None:
+        try:
+            outcome["state"] = module.load_review_state(
+                issue_dir=issue_dir, project_root=tmp_path
+            )
+        except BaseException as exc:  # pragma: no cover - assertion below reports it.
+            errors.append(exc)
+
+    def replace_contract() -> None:
+        replacement_started.set()
+        try:
+            module.activate_contract(
+                issue_dir=issue_dir,
+                project_root=tmp_path,
+                policy=replacement_policy,
+                confirmation=_confirmation("snapshot", replacement_policy),
+                expected_active_digest=old_digest,
+            )
+        except BaseException as exc:  # pragma: no cover - assertion below reports it.
+            errors.append(exc)
+        finally:
+            replacement_completed.set()
+
+    reader = threading.Thread(target=load_snapshot)
+    reader.start()
+    assert final_state_read.wait(timeout=30)
+    replacement = threading.Thread(target=replace_contract)
+    replacement.start()
+    assert replacement_started.wait(timeout=5)
+    if state_read_under_generation_lock[0]:
+        assert not replacement_lock_acquired.wait(timeout=0.1)
+    else:
+        assert replacement_lock_acquired.wait(timeout=30)
+        assert replacement_completed.wait(timeout=30)
+    continue_snapshot.set()
+    reader.join(timeout=30)
+    replacement.join(timeout=30)
+
+    assert not reader.is_alive()
+    assert not replacement.is_alive()
+    assert not errors
+    assert module.load_active_contract(
+        issue_dir=issue_dir, project_root=tmp_path
+    )["proposal_digest"] == replacement_digest
+    snapshot = outcome["state"]
+    assert isinstance(snapshot, dict)
+    if snapshot["proposal_digest"] == old_digest:
+        assert snapshot["episodes"]["develop"]["status"] == "pending"
+    else:
+        assert snapshot == {
+            "schema_version": 1,
+            "proposal_digest": replacement_digest,
+            "episodes": {},
+        }
 
 
 def test_post_confirmation_activation_command_persists_only_the_confirmed_envelope(
