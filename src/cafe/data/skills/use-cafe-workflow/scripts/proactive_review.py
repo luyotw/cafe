@@ -660,11 +660,13 @@ def _persistence_open_flags() -> int:
     return os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
 
 
-def _open_child_directory(parent_descriptor: int, name: str) -> int:
+def _open_child_directory(parent_descriptor: int, name: str, *, create: bool) -> int:
     """Open one persistence directory without following a pre-existing link."""
     try:
         return os.open(name, _persistence_open_flags(), dir_fd=parent_descriptor)
     except FileNotFoundError:
+        if not create:
+            raise
         try:
             os.mkdir(name, mode=0o700, dir_fd=parent_descriptor)
         except FileExistsError:
@@ -678,7 +680,7 @@ def _open_child_directory(parent_descriptor: int, name: str) -> int:
 
 
 @contextmanager
-def _proactive_review_directory(issue_dir: Path) -> Iterator[int]:
+def _proactive_review_directory(issue_dir: Path, *, create: bool = True) -> Iterator[int]:
     """Hold a descriptor for the issue-local non-symlink persistence directory."""
     try:
         issue_descriptor = os.open(issue_dir, _persistence_open_flags())
@@ -687,8 +689,10 @@ def _proactive_review_directory(issue_dir: Path) -> Iterator[int]:
     driver_descriptor = None
     review_descriptor = None
     try:
-        driver_descriptor = _open_child_directory(issue_descriptor, "driver")
-        review_descriptor = _open_child_directory(driver_descriptor, "proactive_review")
+        driver_descriptor = _open_child_directory(issue_descriptor, "driver", create=create)
+        review_descriptor = _open_child_directory(
+            driver_descriptor, "proactive_review", create=create
+        )
         yield review_descriptor
     finally:
         if review_descriptor is not None:
@@ -838,17 +842,15 @@ def _contract_lock(issue_dir: Path) -> Iterator[int]:
                 fcntl.flock(descriptor, fcntl.LOCK_UN)
 
 
-def _active_contract_digest(target: Path) -> str:
+def _active_contract_digest(directory_descriptor: int) -> str:
     """Read just enough incumbent state for a locked compare-and-swap check."""
     try:
-        envelope = yaml.safe_load(
-            _read_bounded_file(
-                target,
-                label="active proactive review contract",
-                maximum=MAX_STATE_BYTES,
-                error=StaleContractError,
-            ).decode("utf-8")
+        content = _read_persistence_entry(
+            directory_descriptor, CONTRACT_FILENAME, maximum=MAX_STATE_BYTES
         )
+        if content is None:
+            raise StaleContractError("active proactive review contract is absent")
+        envelope = yaml.safe_load(content.decode("utf-8"))
         _ensure_bounded_value(envelope, label="active proactive review contract")
         mapping = _mapping(envelope, label="active proactive review contract")
         if set(mapping) != _ENVELOPE_FIELDS:
@@ -885,49 +887,52 @@ def activate_contract(
         "policy": validated_policy,
     }
     with _contract_lock(issue_dir) as directory_descriptor:
-        if _persistence_entry_exists(directory_descriptor, CONTRACT_FILENAME):
-            existing_digest = _active_contract_digest(target)
+        replacing = _persistence_entry_exists(directory_descriptor, CONTRACT_FILENAME)
+        if replacing:
+            existing_digest = _active_contract_digest(directory_descriptor)
             if not expected_active_digest or expected_active_digest != existing_digest:
                 raise StaleContractError("replacement requires the expected active proposal digest")
         elif expected_active_digest is not None:
             raise StaleContractError("initial activation cannot compare an absent active contract")
-        previous_state = _read_persistence_entry(
-            directory_descriptor, STATE_FILENAME, maximum=MAX_STATE_BYTES
-        )
-        _atomic_yaml_write(
-            state_path(issue_dir),
-            _empty_review_state(digest),
-            directory_descriptor=directory_descriptor,
-        )
-        try:
+        if not replacing:
             _atomic_yaml_write(
                 target, envelope, directory_descriptor=directory_descriptor
             )
-        except BaseException:
-            _restore_persistence_entry(
-                directory_descriptor, STATE_FILENAME, previous_state
+        else:
+            previous_state = _read_persistence_entry(
+                directory_descriptor, STATE_FILENAME, maximum=MAX_STATE_BYTES
             )
-            raise
+            _atomic_yaml_write(
+                state_path(issue_dir),
+                _empty_review_state(digest),
+                directory_descriptor=directory_descriptor,
+            )
+            try:
+                _atomic_yaml_write(
+                    target, envelope, directory_descriptor=directory_descriptor
+                )
+            except BaseException:
+                _restore_persistence_entry(
+                    directory_descriptor, STATE_FILENAME, previous_state
+                )
+                raise
     return target
 
 
 def load_active_contract(*, issue_dir: Path, project_root: Path) -> dict[str, Any]:
     """Load the active contract through the shared live identity/playbook check."""
     issue_dir = _authorized_issue_dir(issue_dir=issue_dir, project_root=project_root)
-    target = contract_path(issue_dir)
-    if not target.exists() and not target.is_symlink():
-        raise ContractNotFoundError("no active proactive review contract")
-    if not target.is_file() or target.is_symlink():
-        raise StaleContractError("active proactive review contract is not a regular file")
     try:
-        value = yaml.safe_load(
-            _read_bounded_file(
-                target,
-                label="active proactive review contract",
-                maximum=MAX_STATE_BYTES,
-                error=StaleContractError,
-            ).decode("utf-8")
-        )
+        with _proactive_review_directory(issue_dir, create=False) as directory_descriptor:
+            content = _read_persistence_entry(
+                directory_descriptor, CONTRACT_FILENAME, maximum=MAX_STATE_BYTES
+            )
+    except FileNotFoundError as exc:
+        raise ContractNotFoundError("no active proactive review contract") from exc
+    if content is None:
+        raise ContractNotFoundError("no active proactive review contract")
+    try:
+        value = yaml.safe_load(content.decode("utf-8"))
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
         raise StaleContractError("active proactive review contract is unreadable") from exc
     try:
@@ -1070,21 +1075,28 @@ def _selected_phase(contract: Mapping[str, Any], phase: str) -> dict[str, Any]:
     raise ReviewStateError("phase is not covered by the active proactive review contract")
 
 
-def _load_state_for_contract(*, issue_dir: Path, contract: Mapping[str, Any]) -> dict[str, Any]:
-    target = state_path(issue_dir)
-    if not target.exists():
-        return _empty_review_state(contract["proposal_digest"])
-    if not target.is_file() or target.is_symlink():
-        raise ReviewStateError("proactive review state is not a regular file")
+def _load_state_for_contract(
+    *,
+    issue_dir: Path,
+    contract: Mapping[str, Any],
+    directory_descriptor: int | None = None,
+) -> dict[str, Any]:
     try:
-        raw = yaml.safe_load(
-            _read_bounded_file(
-                target,
-                label="proactive review state",
-                maximum=MAX_STATE_BYTES,
-                error=ReviewStateError,
-            ).decode("utf-8")
-        )
+        if directory_descriptor is None:
+            with _proactive_review_directory(issue_dir, create=False) as descriptor:
+                content = _read_persistence_entry(
+                    descriptor, STATE_FILENAME, maximum=MAX_STATE_BYTES
+                )
+        else:
+            content = _read_persistence_entry(
+                directory_descriptor, STATE_FILENAME, maximum=MAX_STATE_BYTES
+            )
+    except (FileNotFoundError, StaleContractError) as exc:
+        raise ReviewStateError("proactive review state persistence is invalid") from exc
+    if content is None:
+        return _empty_review_state(contract["proposal_digest"])
+    try:
+        raw = yaml.safe_load(content.decode("utf-8"))
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
         raise ReviewStateError("proactive review state is unreadable") from exc
     try:
@@ -1135,7 +1147,11 @@ def _mutate_review_state(
             and contract["proposal_digest"] != expected_proposal_digest
         ):
             raise StaleContractError("active contract changed during proactive review update")
-        state = _load_state_for_contract(issue_dir=issue_dir, contract=contract)
+        state = _load_state_for_contract(
+            issue_dir=issue_dir,
+            contract=contract,
+            directory_descriptor=directory_descriptor,
+        )
         result, changed = mutation(contract, state)
         if changed:
             _write_review_state(
@@ -1333,6 +1349,7 @@ def _clean_episode_staleness(
     contract: Mapping[str, Any],
     issue_dir: Path,
     project_root: Path,
+    repository_state: Callable[[], dict[str, str]],
 ) -> str | None:
     """Return the fail-closed reason when persisted clean evidence is no longer current."""
     try:
@@ -1392,7 +1409,7 @@ def _clean_episode_staleness(
                 label="repository evidence",
                 root=project_root,
             ),
-            repository_state=_repository_state_identity(project_root),
+            repository_state=repository_state(),
             correction_history=_correction_history(stored_inputs["correction_history"]),
         )
         _scope_adequacy(episode["scope_adequacy"])
@@ -1632,6 +1649,14 @@ def review_obligations(*, issue_dir: Path, project_root: Path) -> list[dict[str,
     ) -> tuple[list[dict[str, Any]], bool]:
         changed = False
         obligations: list[dict[str, Any]] = []
+        current_repository_state: dict[str, str] | None = None
+
+        def repository_state() -> dict[str, str]:
+            nonlocal current_repository_state
+            if current_repository_state is None:
+                current_repository_state = _repository_state_identity(project_root)
+            return current_repository_state
+
         for entry in contract["policy"]["phases"]:
             if not entry["selected"]:
                 continue
@@ -1643,6 +1668,7 @@ def review_obligations(*, issue_dir: Path, project_root: Path) -> list[dict[str,
                     contract=contract,
                     issue_dir=issue_dir,
                     project_root=project_root,
+                    repository_state=repository_state,
                 )
                 if reason is not None:
                     episode = _pending_episode(episode, reason=reason)

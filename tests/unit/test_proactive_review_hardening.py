@@ -447,6 +447,38 @@ def test_activation_rejects_a_symlinked_issue_local_persistence_directory(tmp_pa
     assert not (outside / module.STATE_FILENAME).exists()
 
 
+def test_shared_load_rejects_a_replaced_persistence_parent(tmp_path: Path) -> None:
+    """U8 — existing contract and state reads never traverse a parent directory link."""
+    module = _module()
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    issue_dir, _ = _activate(module, project_root)
+    contract = module.load_active_contract(issue_dir=issue_dir, project_root=project_root)
+    persistence_directory = module.contract_path(issue_dir).parent
+    outside = tmp_path / "outside"
+    persistence_directory.rename(outside)
+    os.symlink(outside, persistence_directory, target_is_directory=True)
+
+    with pytest.raises(module.StaleContractError):
+        module.load_active_contract(issue_dir=issue_dir, project_root=project_root)
+    with pytest.raises(module.ReviewStateError):
+        module._load_state_for_contract(issue_dir=issue_dir, contract=contract)
+
+
+def test_initial_activation_defers_state_until_a_review_obligation_exists(tmp_path: Path) -> None:
+    """U9 — activation persists authority only; phase work creates review state."""
+    module = _module()
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    issue_dir, _ = _activate(module, project_root)
+
+    assert module.contract_path(issue_dir).is_file()
+    assert not module.state_path(issue_dir).exists()
+    state = module.load_review_state(issue_dir=issue_dir, project_root=project_root)
+    assert state["episodes"] == {}
+    assert not module.state_path(issue_dir).exists()
+
+
 def test_replacement_keeps_the_active_pair_when_resetting_state_fails(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -456,6 +488,17 @@ def test_replacement_keeps_the_active_pair_when_resetting_state_fails(
     project_root.mkdir()
     issue_dir, _ = _activate(module, project_root)
     active = module.load_active_contract(issue_dir=issue_dir, project_root=project_root)
+    output, requirements, upstream, evidence = _review_inputs(issue_dir, project_root)
+    module.prepare_review_inputs(
+        issue_dir=issue_dir,
+        project_root=project_root,
+        phase="develop",
+        output_path=output,
+        requirements=requirements,
+        upstream_artifacts=upstream,
+        repository_evidence=evidence,
+        correction_history=[],
+    )
     original_contract = module.contract_path(issue_dir).read_bytes()
     original_state = module.state_path(issue_dir).read_bytes()
     replacement = _policy(project_root, "standard", marker="replacement")
@@ -480,6 +523,79 @@ def test_replacement_keeps_the_active_pair_when_resetting_state_fails(
 
     assert module.contract_path(issue_dir).read_bytes() == original_contract
     assert module.state_path(issue_dir).read_bytes() == original_state
+
+
+def test_obligation_reconciliation_reuses_one_repository_snapshot(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """U9–U11/U14 — one callback render shares one current repository identity."""
+    module = _module()
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    issue_dir, policy = _activate(module, project_root)
+    active = module.load_active_contract(issue_dir=issue_dir, project_root=project_root)
+    review_phase = next(entry for entry in policy["phases"] if entry["phase"] == "review")
+    review_phase.update(
+        {
+            "selected": True,
+            "reviewer": {"cli": "codex", "model": "gpt-5.6-sol"},
+            "ordering": "non_gating",
+            "initial_review_cost": {
+                "tokens": {"estimate": "2k"},
+                "latency": {"estimate": "one minute"},
+                "assumptions": "one complete output",
+                "delay_impact": "driver acceptance only",
+            },
+            "rereview_cost": {"foreseeable": False, "reason": "unknown"},
+        }
+    )
+    module.activate_contract(
+        issue_dir=issue_dir,
+        project_root=project_root,
+        policy=policy,
+        confirmation=_confirmation(module, issue_dir.name, policy),
+        expected_active_digest=active["proposal_digest"],
+    )
+    output, requirements, upstream, evidence = _review_inputs(issue_dir, project_root)
+    review_output = issue_dir / "review" / "iteration_001" / "output.md"
+    review_output.parent.mkdir(parents=True)
+    review_output.write_text("durable review output", encoding="utf-8")
+    for phase, phase_output in (("develop", output), ("review", review_output)):
+        manifest = module.prepare_review_inputs(
+            issue_dir=issue_dir,
+            project_root=project_root,
+            phase=phase,
+            output_path=phase_output,
+            requirements=requirements,
+            upstream_artifacts=upstream,
+            repository_evidence=evidence,
+            correction_history=[],
+        )
+        result = module.record_review_result(
+            issue_dir=issue_dir,
+            project_root=project_root,
+            phase=phase,
+            output_identity=manifest["output_identity"],
+            review_input_identity=manifest["review_input_identity"],
+            reviewer={"cli": "codex", "model": "gpt-5.6-sol"},
+            result=_complete_result(),
+            authorized_routes=[],
+        )
+        assert result["status"] == "clean"
+
+    calls = 0
+    original_identity = module._repository_state_identity
+
+    def counted_identity(root: Path) -> dict[str, str]:
+        nonlocal calls
+        calls += 1
+        return original_identity(root)
+
+    monkeypatch.setattr(module, "_repository_state_identity", counted_identity)
+    obligations = module.review_obligations(issue_dir=issue_dir, project_root=project_root)
+
+    assert [obligation["status"] for obligation in obligations] == ["clean", "clean"]
+    assert calls == 1
 
 
 def test_clean_evidence_is_revalidated_before_obligations_are_reported(tmp_path: Path) -> None:
