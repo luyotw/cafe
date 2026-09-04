@@ -327,3 +327,11 @@ def test_callback_prompt_reconciles_live_proactive_review_without_worker_control
         repository_root=tmp_path,
     )
     assert "reconfirmation-required" in stale_prompt
+
+    proactive.contract_path(issue_dir).unlink()
+    proactive.contract_path(issue_dir).mkdir()
+    malformed_path_prompt = callback._callback_prompt(
+        {"issue": "issue456", "workflow_id": "workflow", "event_type": "phase_terminal"},
+        repository_root=tmp_path,
+    )
+    assert "reconfirmation-required" in malformed_path_prompt

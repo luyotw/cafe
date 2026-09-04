@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -331,3 +332,194 @@ def test_review_evidence_is_current_bounded_and_convergent(tmp_path: Path) -> No
     module.state_path(issue_dir).write_bytes(b"x" * (module.MAX_STATE_BYTES + 1))
     with pytest.raises(module.ReviewStateError):
         module.load_review_state(issue_dir=issue_dir, project_root=project_root)
+
+
+def test_contract_rejects_an_aggregate_larger_than_its_durable_reader(tmp_path: Path) -> None:
+    """BLK-008 — activation must not publish an envelope its loader cannot read."""
+    module = _module()
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    issue_dir = project_root / ".cafe" / "issues" / "oversized"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text("playbook_id: standard\n", encoding="utf-8")
+    policy = _policy(project_root, "standard")
+    for phase in policy["phases"][:2]:
+        phase["factors"] = {
+            factor: "x" * module.MAX_STRING_CHARS for factor in phase["factors"]
+        }
+
+    with pytest.raises(ValueError):
+        module.activate_contract(
+            issue_dir=issue_dir,
+            project_root=project_root,
+            policy=policy,
+            confirmation=_confirmation(module, issue_dir.name, policy),
+        )
+
+    assert not module.contract_path(issue_dir).exists()
+
+
+def test_repository_head_drift_keeps_review_result_pending(tmp_path: Path) -> None:
+    """BLK-004 — current repository identity is part of clean-result freshness."""
+    module = _module()
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    subprocess.run(["git", "init", "-q", str(project_root)], check=True)
+    subprocess.run(
+        ["git", "-C", str(project_root), "config", "user.email", "test@example.com"],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(project_root), "config", "user.name", "CAFE Test"], check=True)
+    source = project_root / "src" / "driver.py"
+    source.parent.mkdir()
+    source.write_text("VERSION = 1\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(project_root), "add", "src/driver.py"], check=True)
+    subprocess.run(["git", "-C", str(project_root), "commit", "-qm", "Initial driver"], check=True)
+
+    issue_dir, _ = _activate(module, project_root)
+    output, requirements, upstream, evidence = _review_inputs(issue_dir, project_root)
+    manifest = module.prepare_review_inputs(
+        issue_dir=issue_dir,
+        project_root=project_root,
+        phase="develop",
+        output_path=output,
+        requirements=requirements,
+        upstream_artifacts=upstream,
+        repository_evidence=evidence,
+        correction_history=[],
+    )
+
+    source.write_text("VERSION = 2\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(project_root), "add", "src/driver.py"], check=True)
+    subprocess.run(["git", "-C", str(project_root), "commit", "-qm", "Change driver"], check=True)
+    stale = module.record_review_result(
+        issue_dir=issue_dir,
+        project_root=project_root,
+        phase="develop",
+        output_identity=manifest["output_identity"],
+        review_input_identity=manifest["review_input_identity"],
+        reviewer={"cli": "codex", "model": "gpt-5.6-sol"},
+        result=_complete_result(),
+        authorized_routes=[],
+    )
+
+    assert stale["status"] == "pending"
+    assert stale["pending_reason"] == "review_inputs_stale"
+
+    refreshed = module.prepare_review_inputs(
+        issue_dir=issue_dir,
+        project_root=project_root,
+        phase="develop",
+        output_path=output,
+        requirements=requirements,
+        upstream_artifacts=upstream,
+        repository_evidence=evidence,
+        correction_history=[],
+    )
+    source.write_text("VERSION = 3\n", encoding="utf-8")
+    dirty = module.record_review_result(
+        issue_dir=issue_dir,
+        project_root=project_root,
+        phase="develop",
+        output_identity=refreshed["output_identity"],
+        review_input_identity=refreshed["review_input_identity"],
+        reviewer={"cli": "codex", "model": "gpt-5.6-sol"},
+        result=_complete_result(),
+        authorized_routes=[],
+    )
+
+    assert dirty["status"] == "pending"
+    assert dirty["pending_reason"] == "review_inputs_stale"
+
+
+def test_concurrent_phase_preparation_preserves_each_current_episode(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """BLK-010 — public state transitions serialize the full read-modify-write span."""
+    module = _module()
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    issue_dir, policy = _activate(module, project_root)
+    review_phase = next(item for item in policy["phases"] if item["phase"] == "review")
+    review_phase.update(
+        {
+            "selected": True,
+            "reviewer": {"cli": "codex", "model": "gpt-5.6-sol"},
+            "ordering": "non_gating",
+            "initial_review_cost": {
+                "tokens": {"estimate": "2k"},
+                "latency": {"estimate": "one minute"},
+                "assumptions": "one complete output",
+                "delay_impact": "driver acceptance only",
+            },
+            "rereview_cost": {"foreseeable": False, "reason": "unknown"},
+        }
+    )
+    active = module.load_active_contract(issue_dir=issue_dir, project_root=project_root)
+    module.activate_contract(
+        issue_dir=issue_dir,
+        project_root=project_root,
+        policy=policy,
+        confirmation=_confirmation(module, issue_dir.name, policy),
+        expected_active_digest=active["proposal_digest"],
+    )
+    output, requirements, upstream, evidence = _review_inputs(issue_dir, project_root)
+    review_output = issue_dir / "review" / "iteration_001" / "output.md"
+    review_output.parent.mkdir(parents=True)
+    review_output.write_text("durable review output", encoding="utf-8")
+
+    original_load = module._load_state_for_contract
+    snapshots_ready = threading.Event()
+    release_snapshots = threading.Event()
+    snapshots = 0
+    snapshot_guard = threading.Lock()
+
+    def synchronized_load(*args, **kwargs):
+        nonlocal snapshots
+        state = original_load(*args, **kwargs)
+        with snapshot_guard:
+            snapshots += 1
+            if snapshots == 2:
+                snapshots_ready.set()
+        if snapshots <= 2:
+            assert release_snapshots.wait(timeout=3)
+        return state
+
+    monkeypatch.setattr(module, "_load_state_for_contract", synchronized_load)
+    failures: list[Exception] = []
+
+    def prepare(phase: str, phase_output: Path) -> None:
+        try:
+            module.prepare_review_inputs(
+                issue_dir=issue_dir,
+                project_root=project_root,
+                phase=phase,
+                output_path=phase_output,
+                requirements=requirements,
+                upstream_artifacts=upstream,
+                repository_evidence=evidence,
+                correction_history=[],
+            )
+        except Exception as exc:  # Preserve exceptions for the parent assertion.
+            failures.append(exc)
+
+    with module._contract_lock(issue_dir):
+        first = threading.Thread(target=prepare, args=("develop", output))
+        second = threading.Thread(target=prepare, args=("review", review_output))
+        first.start()
+        second.start()
+        snapshots_ready.wait(timeout=0.25)
+        release_snapshots.set()
+    first.join(timeout=20)
+    second.join(timeout=20)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert not failures
+    current_episodes = module.load_review_state(
+        issue_dir=issue_dir, project_root=project_root
+    )["episodes"]
+    assert set(current_episodes) == {
+        "develop",
+        "review",
+    }

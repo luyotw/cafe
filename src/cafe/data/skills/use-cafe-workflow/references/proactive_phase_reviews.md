@@ -39,7 +39,9 @@ stale issue/playbook/inventory/boundary contract is reconfirmation-required,
 never an empty plan or clean result. Supply the confirmed policy and exact
 reviewer, output identity and complete output, confirmed requirements, accepted
 upstream artifacts, bounded relevant repository evidence, and the current
-correction history. Missing or stale inputs make the obligation pending.
+correction history. Bind the current repository HEAD and changed-state identity
+to those inputs so later repository drift makes the obligation pending.
+Missing or stale inputs make the obligation pending.
 
 The confirmed reviewer performs a fresh whole-artifact pass. It assesses:
 
@@ -70,7 +72,9 @@ review. Keep one current episode per selected phase with unresolved blockers,
 the immediately relevant resolution status, correction delta, changed
 assumptions, evidence to recheck, and affected downstream work. Compact clean
 episodes to the current output, reviewer, scope assessment, and a resolved
-summary digest. Do not create per-output reports or append-only history.
+summary digest. Serialize each shared state read-modify-write transition so
+concurrent selected phases cannot discard one another's current evidence. Do
+not create per-output reports or append-only history.
 
 `before_next_phase` may delay only at an existing graph boundary. `non_gating`
 never controls a continuous worker or callback, but either ordering requires

@@ -13,11 +13,13 @@ import hashlib
 import json
 import math
 import os
+import subprocess
 import tempfile
+import threading
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterator, Mapping
+from typing import Any, Callable, Iterator, Mapping, TypeVar
 
 import yaml
 
@@ -34,6 +36,7 @@ STATE_FILENAME = "state.yaml"
 SCHEMA_VERSION = 1
 MAX_DURABLE_OUTPUT_BYTES = 1_048_576
 MAX_STATE_BYTES = 262_144
+MAX_REPOSITORY_STATE_BYTES = 262_144
 MAX_EVIDENCE_ITEMS = 32
 MAX_COLLECTION_ITEMS = 64
 MAX_NESTING = 8
@@ -61,6 +64,8 @@ _ENVELOPE_FIELDS = frozenset(
         "policy",
     }
 )
+T = TypeVar("T")
+_IN_PROCESS_CONTRACT_LOCK = threading.RLock()
 
 
 class ContractNotFoundError(ValueError):
@@ -148,6 +153,50 @@ def _read_bounded_file(path: Path, *, label: str, maximum: int, error: type[Valu
     if len(content) > maximum:
         raise error(f"{label} exceeds the supported byte limit")
     return content
+
+
+def _repository_state_identity(project_root: Path) -> dict[str, str]:
+    """Capture bounded Git state needed to reject a review of a changed repository."""
+    root = project_root.resolve()
+    try:
+        inside = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--is-inside-work-tree"],
+            capture_output=True,
+            check=False,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {"head": "unavailable", "changed_state_sha256": "unavailable"}
+    if inside.returncode != 0 or inside.stdout.strip() != b"true":
+        return {"head": "unavailable", "changed_state_sha256": "unavailable"}
+    try:
+        head = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--verify", "HEAD"],
+            capture_output=True,
+            check=False,
+            timeout=5,
+        )
+        diff = subprocess.run(
+            ["git", "-C", str(root), "diff", "--binary", "--no-ext-diff", "HEAD"],
+            capture_output=True,
+            check=False,
+            timeout=5,
+        )
+        status = subprocess.run(
+            ["git", "-C", str(root), "status", "--porcelain=v1", "-z"],
+            capture_output=True,
+            check=False,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ReviewStateError("repository current state cannot be read") from exc
+    if status.returncode != 0 or len(diff.stdout) > MAX_REPOSITORY_STATE_BYTES:
+        raise ReviewStateError("repository current state exceeds the supported evidence limit")
+    head_identity = head.stdout.strip().decode("ascii") if head.returncode == 0 else "unborn"
+    if len(status.stdout) > MAX_REPOSITORY_STATE_BYTES:
+        raise ReviewStateError("repository current state exceeds the supported evidence limit")
+    changed_state = hashlib.sha256(status.stdout + b"\0" + diff.stdout).hexdigest()
+    return {"head": head_identity, "changed_state_sha256": changed_state}
 
 
 def _authorized_issue_dir(*, issue_dir: Path, project_root: Path) -> Path:
@@ -429,13 +478,16 @@ def _validate_confirmation(
 
 def _atomic_yaml_write(path: Path, value: Mapping[str, Any]) -> None:
     _ensure_bounded_value(value, label="durable proactive review state")
+    encoded = yaml.safe_dump(dict(value), allow_unicode=True, sort_keys=True).encode("utf-8")
+    if len(encoded) > MAX_STATE_BYTES:
+        raise ValueError("durable proactive review state exceeds the supported byte limit")
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary = tempfile.mkstemp(
         prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
     )
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            yaml.safe_dump(dict(value), handle, allow_unicode=True, sort_keys=True)
+            handle.write(encoded.decode("utf-8"))
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)
@@ -446,20 +498,21 @@ def _atomic_yaml_write(path: Path, value: Mapping[str, Any]) -> None:
 
 @contextmanager
 def _contract_lock(issue_dir: Path) -> Iterator[None]:
-    """Serialize activation without adding another durable contract artifact."""
+    """Serialize contract activation and shared state updates without new artifacts."""
     if fcntl is None:  # pragma: no cover - CAFE's workflow driver is POSIX-hosted.
         raise RuntimeError("proactive review activation requires process file locking")
-    driver_dir = issue_dir / "driver"
-    driver_dir.mkdir(parents=True, exist_ok=True)
-    if driver_dir.is_symlink() or not driver_dir.is_dir():
-        raise StaleContractError("proactive review driver directory is invalid")
-    descriptor = os.open(driver_dir, os.O_RDONLY)
-    try:
-        fcntl.flock(descriptor, fcntl.LOCK_EX)
-        yield
-    finally:
-        fcntl.flock(descriptor, fcntl.LOCK_UN)
-        os.close(descriptor)
+    with _IN_PROCESS_CONTRACT_LOCK:
+        driver_dir = issue_dir / "driver"
+        driver_dir.mkdir(parents=True, exist_ok=True)
+        if driver_dir.is_symlink() or not driver_dir.is_dir():
+            raise StaleContractError("proactive review driver directory is invalid")
+        descriptor = os.open(driver_dir, os.O_RDONLY)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
 
 
 def _active_contract_digest(target: Path) -> str:
@@ -526,8 +579,10 @@ def load_active_contract(*, issue_dir: Path, project_root: Path) -> dict[str, An
     """Load the active contract through the shared live identity/playbook check."""
     issue_dir = _authorized_issue_dir(issue_dir=issue_dir, project_root=project_root)
     target = contract_path(issue_dir)
-    if not target.is_file() or target.is_symlink():
+    if not target.exists() and not target.is_symlink():
         raise ContractNotFoundError("no active proactive review contract")
+    if not target.is_file() or target.is_symlink():
+        raise StaleContractError("active proactive review contract is not a regular file")
     try:
         value = yaml.safe_load(
             _read_bounded_file(
@@ -655,6 +710,7 @@ def _review_input_identity(
     requirements: list[dict[str, str]],
     upstream_artifacts: list[dict[str, str]],
     repository_evidence: list[dict[str, str]],
+    repository_state: Mapping[str, str],
     correction_history: list[dict[str, str]],
 ) -> str:
     return policy_digest(
@@ -662,6 +718,7 @@ def _review_input_identity(
             "requirements": requirements,
             "upstream_artifacts": upstream_artifacts,
             "repository_evidence": repository_evidence,
+            "repository_state": dict(repository_state),
             "correction_history": correction_history,
         }
     )
@@ -723,6 +780,28 @@ def _write_review_state(issue_dir: Path, state: Mapping[str, Any]) -> None:
     _atomic_yaml_write(state_path(issue_dir), state)
 
 
+def _mutate_review_state(
+    *,
+    issue_dir: Path,
+    project_root: Path,
+    expected_proposal_digest: str | None,
+    mutation: Callable[[dict[str, Any], dict[str, Any]], tuple[T, bool]],
+) -> T:
+    """Apply one current-evidence transition under the issue-wide durable lock."""
+    with _contract_lock(issue_dir):
+        contract = load_active_contract(issue_dir=issue_dir, project_root=project_root)
+        if (
+            expected_proposal_digest is not None
+            and contract["proposal_digest"] != expected_proposal_digest
+        ):
+            raise StaleContractError("active contract changed during proactive review update")
+        state = _load_state_for_contract(issue_dir=issue_dir, contract=contract)
+        result, changed = mutation(contract, state)
+        if changed:
+            _write_review_state(issue_dir, state)
+        return result
+
+
 def load_review_state(*, issue_dir: Path, project_root: Path) -> dict[str, Any]:
     """Load bounded current evidence only after live contract validation."""
     contract = load_active_contract(issue_dir=issue_dir, project_root=project_root)
@@ -761,33 +840,34 @@ def prepare_review_inputs(
     evidence = _evidence_items(
         repository_evidence, label="repository evidence", root=project_root
     )
+    repository_state = _repository_state_identity(project_root)
     history = _correction_history(correction_history)
     inputs = {
         "requirements": required,
         "upstream_artifacts": upstream,
         "repository_evidence": evidence,
+        "repository_state": repository_state,
         "correction_history": history,
     }
     input_identity = _review_input_identity(**inputs)
 
-    state = _load_state_for_contract(issue_dir=issue_dir, contract=contract)
-    previous = state["episodes"].get(selected["phase"])
-    if (
-        isinstance(previous, Mapping)
-        and previous.get("output_identity") == identity
-        and previous.get("review_input_identity") == input_identity
-    ):
-        episode = previous
-    else:
+    def prepare_episode(
+        active_contract: dict[str, Any], state: dict[str, Any]
+    ) -> tuple[dict[str, Any], bool]:
+        previous = state["episodes"].get(selected["phase"])
+        if (
+            isinstance(previous, Mapping)
+            and previous.get("output_identity") == identity
+            and previous.get("review_input_identity") == input_identity
+        ):
+            return dict(previous), False
         was_blocking = isinstance(previous, Mapping) and previous.get("status") in {
             "blocking",
             "downstream_invalidated",
             "user_stop",
         }
         prior_blockers = previous.get("blockers", []) if isinstance(previous, Mapping) else []
-        correction_statuses = {
-            item["id"]: item["status"] for item in history
-        }
+        correction_statuses = {item["id"]: item["status"] for item in history}
         preceding = [
             {
                 **dict(blocker),
@@ -800,7 +880,7 @@ def prepare_review_inputs(
         ]
         episode = {
             "status": "corrected_awaiting_rereview" if was_blocking else "pending",
-            "proposal_digest": contract["proposal_digest"],
+            "proposal_digest": active_contract["proposal_digest"],
             "output_identity": identity,
             "reviewer": selected["reviewer"],
             "review_inputs": inputs,
@@ -808,7 +888,14 @@ def prepare_review_inputs(
             "preceding_blocker_statuses": preceding,
         }
         state["episodes"][selected["phase"]] = episode
-        _write_review_state(issue_dir, state)
+        return episode, True
+
+    _mutate_review_state(
+        issue_dir=issue_dir,
+        project_root=project_root,
+        expected_proposal_digest=contract["proposal_digest"],
+        mutation=prepare_episode,
+    )
 
     return {
         "contract": contract,
@@ -821,6 +908,7 @@ def prepare_review_inputs(
         "requirements": required,
         "upstream_artifacts": upstream,
         "repository_evidence": evidence,
+        "repository_state": repository_state,
         "correction_history": history,
     }
 
@@ -923,146 +1011,146 @@ def record_review_result(
     obligation.  Only a complete result from the confirmed reviewer for the
     current output can compact the episode to clean evidence.
     """
-    contract = load_active_contract(issue_dir=issue_dir, project_root=project_root)
     issue_dir = _authorized_issue_dir(issue_dir=issue_dir, project_root=project_root)
-    selected = _selected_phase(contract, phase)
-    state = _load_state_for_contract(issue_dir=issue_dir, contract=contract)
-    episode = state["episodes"].get(selected["phase"])
-    if not isinstance(episode, Mapping):
-        raise ReviewStateError("review input preparation is required before recording a result")
-    identity = _mapping(output_identity, label="review output identity")
-    if identity != episode.get("output_identity"):
-        pending = _pending_episode(episode, reason="output_identity_mismatch")
-        state["episodes"][selected["phase"]] = pending
-        _write_review_state(issue_dir, state)
-        return pending
-    try:
-        current_identity = _output_identity(
-            output_path=Path(str(identity.get("path", ""))),
-            issue_dir=issue_dir,
-            phase=selected["phase"],
-        )
-    except ReviewStateError:
-        current_identity = None
-    if current_identity != identity:
-        pending = _pending_episode(episode, reason="output_identity_stale")
-        state["episodes"][selected["phase"]] = pending
-        _write_review_state(issue_dir, state)
-        return pending
-    try:
-        expected_input_identity = _non_empty(
-            review_input_identity, label="review input identity"
-        )
-        stored_inputs = _mapping(episode.get("review_inputs"), label="review inputs")
-        if set(stored_inputs) != {
-            "requirements",
-            "upstream_artifacts",
-            "repository_evidence",
-            "correction_history",
-        }:
-            raise ValueError("invalid review input envelope")
-        current_input_identity = _review_input_identity(
-            requirements=_evidence_items(
-                stored_inputs["requirements"], label="confirmed requirements", root=issue_dir
-            ),
-            upstream_artifacts=_evidence_items(
-                stored_inputs["upstream_artifacts"],
-                label="accepted upstream artifacts",
-                root=issue_dir,
-            ),
-            repository_evidence=_evidence_items(
-                stored_inputs["repository_evidence"],
-                label="repository evidence",
-                root=project_root,
-            ),
-            correction_history=_correction_history(stored_inputs["correction_history"]),
-        )
-    except (ReviewStateError, ValueError):
-        current_input_identity = None
-        expected_input_identity = ""
-    if (
-        expected_input_identity != episode.get("review_input_identity")
-        or current_input_identity != expected_input_identity
-    ):
-        pending = _pending_episode(episode, reason="review_inputs_stale")
-        state["episodes"][selected["phase"]] = pending
-        _write_review_state(issue_dir, state)
-        return pending
-    try:
-        actual_reviewer = _reviewer_identity(reviewer)
-    except ReviewStateError:
-        pending = _pending_episode(episode, reason="reviewer_unavailable")
-        state["episodes"][selected["phase"]] = pending
-        _write_review_state(issue_dir, state)
-        return pending
-    if actual_reviewer != selected["reviewer"]:
-        pending = _pending_episode(episode, reason="reviewer_mismatch")
-        state["episodes"][selected["phase"]] = pending
-        _write_review_state(issue_dir, state)
-        return pending
-    try:
-        _ensure_bounded_value(result, label="review result")
-    except ValueError:
-        result = None
-    if not isinstance(result, Mapping) or result.get("complete") is not True:
-        pending = _pending_episode(episode, reason="incomplete_or_failed_execution")
-        state["episodes"][selected["phase"]] = pending
-        _write_review_state(issue_dir, state)
-        return pending
-    if set(result) != {"complete", "scope_adequacy", "blockers"}:
-        pending = _pending_episode(episode, reason="incomplete_result")
-        state["episodes"][selected["phase"]] = pending
-        _write_review_state(issue_dir, state)
-        return pending
-    try:
-        scope = _scope_adequacy(result["scope_adequacy"])
-        blockers = _blockers(result["blockers"])
-    except ReviewStateError:
-        pending = _pending_episode(episode, reason="incomplete_result")
-        state["episodes"][selected["phase"]] = pending
-        _write_review_state(issue_dir, state)
-        return pending
-    if not blockers:
-        prior = episode.get("preceding_blocker_statuses", episode.get("blockers", []))
-        if not isinstance(prior, list) or any(
-            not isinstance(item, Mapping) or item.get("status") != "resolved" for item in prior
-        ):
-            pending = _pending_episode(episode, reason="unresolved_preceding_blockers")
+    def apply_result(
+        contract: dict[str, Any], state: dict[str, Any]
+    ) -> tuple[dict[str, Any], bool]:
+        selected = _selected_phase(contract, phase)
+        episode = state["episodes"].get(selected["phase"])
+        if not isinstance(episode, Mapping):
+            raise ReviewStateError("review input preparation is required before recording a result")
+        identity = _mapping(output_identity, label="review output identity")
+        if identity != episode.get("output_identity"):
+            pending = _pending_episode(episode, reason="output_identity_mismatch")
             state["episodes"][selected["phase"]] = pending
-            _write_review_state(issue_dir, state)
-            return pending
-        resolved_summary = {
-            "count": len(prior),
-            "digest": policy_digest({"resolved": prior}),
-        }
-        clean = {
-            "status": "clean",
+            return pending, True
+        try:
+            current_identity = _output_identity(
+                output_path=Path(str(identity.get("path", ""))),
+                issue_dir=issue_dir,
+                phase=selected["phase"],
+            )
+        except ReviewStateError:
+            current_identity = None
+        if current_identity != identity:
+            pending = _pending_episode(episode, reason="output_identity_stale")
+            state["episodes"][selected["phase"]] = pending
+            return pending, True
+        try:
+            expected_input_identity = _non_empty(
+                review_input_identity, label="review input identity"
+            )
+            stored_inputs = _mapping(episode.get("review_inputs"), label="review inputs")
+            if set(stored_inputs) != {
+                "requirements",
+                "upstream_artifacts",
+                "repository_evidence",
+                "repository_state",
+                "correction_history",
+            }:
+                raise ValueError("invalid review input envelope")
+            current_input_identity = _review_input_identity(
+                requirements=_evidence_items(
+                    stored_inputs["requirements"], label="confirmed requirements", root=issue_dir
+                ),
+                upstream_artifacts=_evidence_items(
+                    stored_inputs["upstream_artifacts"],
+                    label="accepted upstream artifacts",
+                    root=issue_dir,
+                ),
+                repository_evidence=_evidence_items(
+                    stored_inputs["repository_evidence"],
+                    label="repository evidence",
+                    root=project_root,
+                ),
+                repository_state=_repository_state_identity(project_root),
+                correction_history=_correction_history(stored_inputs["correction_history"]),
+            )
+        except (ReviewStateError, ValueError):
+            current_input_identity = None
+            expected_input_identity = ""
+        if (
+            expected_input_identity != episode.get("review_input_identity")
+            or current_input_identity != expected_input_identity
+        ):
+            pending = _pending_episode(episode, reason="review_inputs_stale")
+            state["episodes"][selected["phase"]] = pending
+            return pending, True
+        try:
+            actual_reviewer = _reviewer_identity(reviewer)
+        except ReviewStateError:
+            pending = _pending_episode(episode, reason="reviewer_unavailable")
+            state["episodes"][selected["phase"]] = pending
+            return pending, True
+        if actual_reviewer != selected["reviewer"]:
+            pending = _pending_episode(episode, reason="reviewer_mismatch")
+            state["episodes"][selected["phase"]] = pending
+            return pending, True
+        try:
+            _ensure_bounded_value(result, label="review result")
+        except ValueError:
+            complete_result = None
+        else:
+            complete_result = result
+        if not isinstance(complete_result, Mapping) or complete_result.get("complete") is not True:
+            pending = _pending_episode(episode, reason="incomplete_or_failed_execution")
+            state["episodes"][selected["phase"]] = pending
+            return pending, True
+        if set(complete_result) != {"complete", "scope_adequacy", "blockers"}:
+            pending = _pending_episode(episode, reason="incomplete_result")
+            state["episodes"][selected["phase"]] = pending
+            return pending, True
+        try:
+            scope = _scope_adequacy(complete_result["scope_adequacy"])
+            blockers = _blockers(complete_result["blockers"])
+        except ReviewStateError:
+            pending = _pending_episode(episode, reason="incomplete_result")
+            state["episodes"][selected["phase"]] = pending
+            return pending, True
+        if not blockers:
+            prior = episode.get("preceding_blocker_statuses", episode.get("blockers", []))
+            if not isinstance(prior, list) or any(
+                not isinstance(item, Mapping) or item.get("status") != "resolved"
+                for item in prior
+            ):
+                pending = _pending_episode(episode, reason="unresolved_preceding_blockers")
+                state["episodes"][selected["phase"]] = pending
+                return pending, True
+            clean = {
+                "status": "clean",
+                "proposal_digest": contract["proposal_digest"],
+                "output_identity": dict(identity),
+                "reviewer": actual_reviewer,
+                "scope_adequacy": scope,
+                "resolved_summary": {
+                    "count": len(prior),
+                    "digest": policy_digest({"resolved": prior}),
+                },
+            }
+            state["episodes"][selected["phase"]] = clean
+            return clean, True
+
+        route = _authorized_route(
+            correction_route=correction_route, authorized_routes=authorized_routes
+        )
+        blocked = {
+            "status": "blocking" if route is not None else "user_stop",
             "proposal_digest": contract["proposal_digest"],
             "output_identity": dict(identity),
             "reviewer": actual_reviewer,
             "scope_adequacy": scope,
-            "resolved_summary": resolved_summary,
+            "blockers": [dict(blocker, status="still_failing") for blocker in blockers],
+            "route": route,
         }
-        state["episodes"][selected["phase"]] = clean
-        _write_review_state(issue_dir, state)
-        return clean
+        state["episodes"][selected["phase"]] = blocked
+        return blocked, True
 
-    route = _authorized_route(
-        correction_route=correction_route, authorized_routes=authorized_routes
+    return _mutate_review_state(
+        issue_dir=issue_dir,
+        project_root=project_root,
+        expected_proposal_digest=None,
+        mutation=apply_result,
     )
-    current = [dict(blocker, status="still_failing") for blocker in blockers]
-    blocked = {
-        "status": "blocking" if route is not None else "user_stop",
-        "proposal_digest": contract["proposal_digest"],
-        "output_identity": dict(identity),
-        "reviewer": actual_reviewer,
-        "scope_adequacy": scope,
-        "blockers": current,
-        "route": route,
-    }
-    state["episodes"][selected["phase"]] = blocked
-    _write_review_state(issue_dir, state)
-    return blocked
 
 
 def mark_downstream_invalidated(
@@ -1073,17 +1161,33 @@ def mark_downstream_invalidated(
     affected_downstream: list[Any],
 ) -> dict[str, Any]:
     """Record that downstream work needs its existing owner to revalidate it."""
-    contract = load_active_contract(issue_dir=issue_dir, project_root=project_root)
-    selected = _selected_phase(contract, phase)
-    state = _load_state_for_contract(issue_dir=issue_dir, contract=contract)
-    episode = state["episodes"].get(selected["phase"])
-    if not isinstance(episode, Mapping) or episode.get("status") not in {"blocking", "user_stop"}:
-        raise ReviewStateError("only a current blocking episode can invalidate downstream work")
-    downstream = _bounded_items(affected_downstream, label="affected downstream work")
-    invalidated = {**episode, "status": "downstream_invalidated", "affected_downstream": downstream}
-    state["episodes"][selected["phase"]] = invalidated
-    _write_review_state(issue_dir, state)
-    return invalidated
+    issue_dir = _authorized_issue_dir(issue_dir=issue_dir, project_root=project_root)
+
+    def invalidate(
+        contract: dict[str, Any], state: dict[str, Any]
+    ) -> tuple[dict[str, Any], bool]:
+        selected = _selected_phase(contract, phase)
+        episode = state["episodes"].get(selected["phase"])
+        if not isinstance(episode, Mapping) or episode.get("status") not in {
+            "blocking",
+            "user_stop",
+        }:
+            raise ReviewStateError("only a current blocking episode can invalidate downstream work")
+        downstream = _bounded_items(affected_downstream, label="affected downstream work")
+        invalidated = {
+            **episode,
+            "status": "downstream_invalidated",
+            "affected_downstream": downstream,
+        }
+        state["episodes"][selected["phase"]] = invalidated
+        return invalidated, True
+
+    return _mutate_review_state(
+        issue_dir=issue_dir,
+        project_root=project_root,
+        expected_proposal_digest=None,
+        mutation=invalidate,
+    )
 
 
 def review_obligations(*, issue_dir: Path, project_root: Path) -> list[dict[str, Any]]:
