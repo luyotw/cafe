@@ -1481,6 +1481,23 @@ def test_use_cafe_workflow_keeps_human_task_completion_in_the_interactive_driver
     assert '--user-input \'{"task":"output-review"' not in handoffs
 
 
+def test_use_cafe_workflow_makes_user_handoffs_self_contained() -> None:
+    skill = _read_skill_resource("SKILL.md")
+    handoffs = _read_skill_resource("references/handoffs_and_alignment.md")
+
+    assert "self-contained in conversation" in skill
+    assert "no terminal" in skill
+    assert "## Present a self-contained user decision" in handoffs
+    assert "Render every current question in the conversation" in handoffs
+    assert "Never ask the user to open `questions.xml`" in handoffs
+    assert "reply `all`" in handoffs
+    assert "For every option, state its downstream effect" in handoffs
+    assert "`requires_feedback`, `requires_target`, and" in handoffs
+    assert "`correction` requirements" in handoffs
+    assert "every `allowed_targets` value" in handoffs
+    assert "valid reply example" in handoffs
+
+
 def test_use_cafe_workflow_never_shows_unmuted_driver_execution() -> None:
     offenders = []
     paths = [SKILL_ROOT / "SKILL.md", *sorted((SKILL_ROOT / "references").glob("*.md"))]

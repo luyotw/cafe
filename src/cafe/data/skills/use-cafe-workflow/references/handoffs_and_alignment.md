@@ -50,6 +50,38 @@ Then route by intent:
   checkpoint is evidence, not proof the user must decide.
 - any other user-owned pause: stop. Unknown handoffs are not driver-confirmable.
 
+## Present a self-contained user decision
+
+Before asking the user to answer a HumanTask, clarification, permission, or
+confirmation, prepare the response from the current task schema and phase
+evidence. Assume the user has no terminal, repository checkout, or artifact
+viewer.
+
+- State the workflow phase, what completed, why it paused, and what will happen
+  after the answer.
+- Render every current question in the conversation, including its human-readable
+  title, identifier when one exists, whether it is single-select, multi-select,
+  free text, or a confirmation, and every available option.
+- Number options and give a simple reply format with an example. For a
+  multi-select question, explicitly say that the user may choose all options
+  (for example, reply `all`) when that is valid; do not choose on the user's
+  behalf.
+- For every option, state its downstream effect and every option-specific
+  required field. Render `requires_feedback`, `requires_target`, and
+  `correction` requirements when present; list every `allowed_targets` value
+  and show a valid reply example that includes the required feedback or target.
+- Explain technical labels in plain language when needed to make the choice
+  meaningful. Keep the request focused on the active task rather than dumping
+  unrelated workflow files or raw runtime JSON.
+- Never ask the user to open `questions.xml`, run a command, or inspect an
+  artifact to discover the choices. You may link the generated artifact only as
+  optional supporting material after reproducing the decision-relevant content
+  in the message.
+
+If an artifact is unusually long, summarize its relevant effects and still
+render every decision option. Ask a follow-up only when the task schema itself
+requires information not available in the current handoff.
+
 Driver-confirmable means the driver verifies and resumes; it does not let a
 phase agent approve itself. If the declared outcome continues to an agent
 phase, first reassess and configure that phase's model chain, because the
