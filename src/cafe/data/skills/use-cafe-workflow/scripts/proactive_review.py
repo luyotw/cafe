@@ -763,7 +763,9 @@ def _atomic_bytes_write_at(
     verify_live_authority: Callable[[], Any] | None = None,
 ) -> None:
     """Atomically replace one checked target through its held directory descriptor."""
-    _persistence_entry_exists(directory_descriptor, name)
+    original = _read_persistence_entry(
+        directory_descriptor, name, maximum=MAX_STATE_BYTES
+    )
     temporary = ""
     descriptor = -1
     try:
@@ -800,6 +802,12 @@ def _atomic_bytes_write_at(
         )
         os.fsync(directory_descriptor)
         temporary = ""
+        if verify_live_authority is not None:
+            try:
+                verify_live_authority()
+            except BaseException:
+                _restore_persistence_entry(directory_descriptor, name, original)
+                raise
     finally:
         if descriptor >= 0:
             os.close(descriptor)
@@ -1092,7 +1100,7 @@ def activate_contract(
     issue_dir = _authorized_issue_dir(issue_dir=issue_dir, project_root=project_root)
     if not issue_dir.is_dir():
         raise ValueError("proactive review activation requires an already prepared issue directory")
-    _activation_envelope(
+    digest, envelope = _activation_envelope(
         issue_dir=issue_dir,
         project_root=project_root,
         policy=policy,
@@ -1113,11 +1121,10 @@ def activate_contract(
                     "activation inputs no longer match the live issue playbook"
                 ) from exc
 
-        locked_activation_envelope()
-        _recover_pending_replacement(
-            directory_descriptor, verify_live_authority=locked_activation_envelope
-        )
-        digest, envelope = locked_activation_envelope()
+        _recover_pending_replacement(directory_descriptor)
+        def verify_final_authority() -> None:
+            locked_activation_envelope()
+
         replacing = _persistence_entry_exists(directory_descriptor, CONTRACT_FILENAME)
         if replacing:
             existing_digest = _active_contract_digest(directory_descriptor)
@@ -1130,20 +1137,18 @@ def activate_contract(
                 directory_descriptor,
                 ACTIVATION_FILENAME,
                 _activation_marker_bytes(),
-                verify_live_authority=locked_activation_envelope,
             )
             _atomic_yaml_write(
                 target,
                 envelope,
                 directory_descriptor=directory_descriptor,
-                verify_live_authority=locked_activation_envelope,
+                verify_live_authority=verify_final_authority,
             )
         else:
             _atomic_bytes_write_at(
                 directory_descriptor,
                 ACTIVATION_FILENAME,
                 _activation_marker_bytes(),
-                verify_live_authority=locked_activation_envelope,
             )
             previous_state = _read_persistence_entry(
                 directory_descriptor, STATE_FILENAME, maximum=MAX_STATE_BYTES
@@ -1157,20 +1162,18 @@ def activate_contract(
                 directory_descriptor,
                 REPLACEMENT_FILENAME,
                 recovery,
-                verify_live_authority=locked_activation_envelope,
             )
             try:
                 _atomic_yaml_write(
                     state_path(issue_dir),
                     _empty_review_state(digest),
                     directory_descriptor=directory_descriptor,
-                    verify_live_authority=locked_activation_envelope,
                 )
                 _atomic_yaml_write(
                     target,
                     envelope,
                     directory_descriptor=directory_descriptor,
-                    verify_live_authority=locked_activation_envelope,
+                    verify_live_authority=verify_final_authority,
                 )
             except BaseException:
                 _recover_pending_replacement(directory_descriptor)
@@ -1178,7 +1181,6 @@ def activate_contract(
             _delete_persistence_entry(
                 directory_descriptor,
                 REPLACEMENT_FILENAME,
-                verify_live_authority=locked_activation_envelope,
             )
     return target
 

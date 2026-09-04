@@ -231,7 +231,7 @@ def test_replacement_revalidates_live_authority_after_acquiring_contract_lock(
 
 
 @pytest.mark.parametrize("live_drift", ["issue_playbook", "effective_inventory"])
-@pytest.mark.parametrize("drift_boundary", ["recovery", "publication"])
+@pytest.mark.parametrize("drift_boundary", ["recovery", "publication", "contract"])
 def test_replacement_revalidates_live_authority_after_locked_validation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -299,6 +299,13 @@ def test_replacement_revalidates_live_authority_after_locked_validation(
             change_live_authority()
         return original_atomic_write(directory_descriptor, name, content, **kwargs)
 
+    original_replace = module.os.replace
+
+    def change_live_authority_before_contract_replace(source, destination, **kwargs):
+        if drift_boundary == "contract" and destination == module.CONTRACT_FILENAME:
+            change_live_authority()
+        return original_replace(source, destination, **kwargs)
+
     monkeypatch.setattr(module, "_live_playbook", changed_live_playbook)
     monkeypatch.setattr(
         module,
@@ -310,6 +317,7 @@ def test_replacement_revalidates_live_authority_after_locked_validation(
         "_atomic_bytes_write_at",
         change_live_authority_before_publish,
     )
+    monkeypatch.setattr(module.os, "replace", change_live_authority_before_contract_replace)
 
     with pytest.raises(module.StaleContractError):
         module.activate_contract(
@@ -322,6 +330,7 @@ def test_replacement_revalidates_live_authority_after_locked_validation(
 
     assert contract_path.read_bytes() == original_contract
     assert module.state_path(issue_dir).read_bytes() == original_state
+    assert not (contract_path.parent / module.REPLACEMENT_FILENAME).exists()
 
 
 def test_blocking_review_correction_converges_to_one_clean_current_episode(tmp_path: Path) -> None:
