@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
-from cafe.agents.executor import AgentExecutionError
 from cafe.core.types import AgentCLI
 
 
@@ -121,7 +121,7 @@ def test_callback_acquires_then_exactly_resumes_its_session(tmp_path: Path, monk
     assert continuations[1].session_id == "session-1"
 
 
-def test_callback_resumes_the_bound_codex_host_thread(tmp_path: Path, monkeypatch) -> None:
+def test_callback_queues_the_bound_codex_host_thread(tmp_path: Path, monkeypatch) -> None:
     callback = _callback_module()
     monkeypatch.setenv("CODEX_THREAD_ID", "visible-thread")
     issue_dir = tmp_path / ".cafe" / "issues" / "issue456"
@@ -134,31 +134,23 @@ def test_callback_resumes_the_bound_codex_host_thread(tmp_path: Path, monkeypatc
     from cafe.core.blackboard import BlackboardStore
 
     workflow_id = BlackboardStore(issue_dir).load_or_create("spec").workflow_id
-    continuations = []
-
-    class FakeManager:
-        def __init__(self, *, session_manager, **_kwargs):
-            self.session_manager = session_manager
-            self._last_cli = AgentCLI.CODEX
-            self._last_reported_model = None
-            self._last_session_id = "visible-thread"
-
-        def register_agent(self, _config):
-            pass
-
-        def execute(self, _name, _prompt, *, continuation, **_kwargs):
-            continuations.append(continuation)
-            self.session_manager.save_session(
-                callback.DRIVER_AGENT_NAME, AgentCLI.CODEX, "visible-thread"
-            )
-
-    monkeypatch.setattr(callback, "AgentManager", FakeManager)
     event = {"issue": "issue456", "workflow_id": workflow_id, "event_type": "human_task"}
-    callback.run_callback(event, repository_root=tmp_path)
+    with patch.object(callback.subprocess, "run") as run:
+        callback.run_callback(event, repository_root=tmp_path)
 
-    assert len(continuations) == 1
-    assert continuations[0].is_exact is True
-    assert continuations[0].session_id == "visible-thread"
+    command = run.call_args.args[0]
+    assert command[:4] == ["codex", "queue", "--thread", "visible-thread"]
+    assert command[command.index("--model") + 1] == "exact"
+    assert command[command.index("--cd") + 1] == str(tmp_path)
+    prompt = command[command.index("--message") + 1]
+    assert "event-driven CAFE workflow driver" in prompt
+    assert '"event_type": "human_task"' in prompt
+    assert run.call_args.kwargs == {
+        "check": True,
+        "capture_output": True,
+        "text": True,
+        "timeout": 30,
+    }
     stored = callback.EventDriverSessionStore(
         issue_dir / "driver", workflow_id=workflow_id, cli=AgentCLI.CODEX, model="exact"
     ).load_session(callback.DRIVER_AGENT_NAME, AgentCLI.CODEX)
@@ -166,7 +158,7 @@ def test_callback_resumes_the_bound_codex_host_thread(tmp_path: Path, monkeypatc
     assert stored.session_id == "visible-thread"
 
 
-def test_bound_host_thread_never_recovers_by_creating_a_new_session(
+def test_bound_host_thread_queue_failure_never_creates_a_new_session(
     tmp_path: Path, monkeypatch
 ) -> None:
     callback = _callback_module()
@@ -176,35 +168,19 @@ def test_bound_host_thread_never_recovers_by_creating_a_new_session(
     from cafe.core.blackboard import BlackboardStore
 
     workflow_id = BlackboardStore(issue_dir).load_or_create("spec").workflow_id
-    launches: list[tuple[list[str], dict]] = []
+    failure = subprocess.CalledProcessError(1, ["codex", "queue"], stderr="not found")
+    with patch.object(callback.subprocess, "run", side_effect=failure) as run:
+        with pytest.raises(subprocess.CalledProcessError):
+            callback.run_callback(
+                {
+                    "issue": "issue456",
+                    "workflow_id": workflow_id,
+                    "event_type": "human_task",
+                },
+                repository_root=tmp_path,
+            )
 
-    def popen(command, **kwargs):
-        launches.append((command, kwargs))
-        process = MagicMock()
-        process.stdout.readline.side_effect = [""]
-        process.stderr.read.return_value = "thread/resume failed: no rollout found"
-        process.wait.return_value = 1
-        return process
-
-    with patch("subprocess.Popen", side_effect=popen):
-        with patch("sys.platform", "win32"):
-            with pytest.raises(AgentExecutionError, match="no rollout found"):
-                callback.run_callback(
-                    {
-                        "issue": "issue456",
-                        "workflow_id": workflow_id,
-                        "event_type": "human_task",
-                    },
-                    repository_root=tmp_path,
-                )
-
-    assert len(launches) == 1
-    command, kwargs = launches[0]
-    assert command[command.index("resume") + 1] == "visible-thread"
-    assert all(
-        key not in kwargs["env"]
-        for key in ("CODEX_REMOTE_PAYLOAD", "CODEX_SESSION_ID", "CODEX_THREAD_ID")
-    )
+    assert run.call_count == 1
     assert not (issue_dir / "driver" / "session.json").exists()
 
 
@@ -250,8 +226,8 @@ def test_callback_session_conflict_keeps_existing_session(tmp_path: Path, monkey
     callback = _callback_module()
     issue_dir = tmp_path / ".cafe" / "issues" / "issue456"
     callback.write_config(issue_dir, cli="codex", model="exact")
-    from cafe.core.blackboard import BlackboardStore
     from cafe.agents.executor import AgentExecutionError
+    from cafe.core.blackboard import BlackboardStore
 
     workflow_id = BlackboardStore(issue_dir).load_or_create("spec").workflow_id
     store = callback.EventDriverSessionStore(

@@ -1449,6 +1449,7 @@ def test_use_cafe_workflow_defines_event_driven_mode_and_model_authority() -> No
     assert "No ordinary operating mode uses it" in normalized_running
     assert "--on-workflow-event builtin:use-cafe-workflow:workflow_event_callback" in running
     assert ".cafe/issues/<issue>/driver/config.yaml" in running
+    assert "`codex queue`" in running
     assert "--advancement" not in normalized_running
     assert "--delegated-availability" not in normalized_running
     assert "persisted baton without forcing `--start-step`" in skill
