@@ -10,6 +10,7 @@ import sys
 import threading
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -155,6 +156,78 @@ def test_reconfirmed_replacement_leaves_prior_contract_untouched_until_atomic_su
             expected_active_digest="wrong",
         )
     assert first.read_bytes() == original
+
+
+@pytest.mark.parametrize("live_drift", ["issue_playbook", "effective_inventory"])
+def test_replacement_revalidates_live_authority_after_acquiring_contract_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, live_drift: str
+) -> None:
+    """I3, U8 — lock-wait live-authority drift cannot publish a replacement."""
+    module = _module()
+    issue_dir = tmp_path / ".cafe" / "issues" / "live-replacement"
+    issue_dir.mkdir(parents=True)
+    issue_file = issue_dir / "issue.yaml"
+    issue_file.write_text("playbook_id: standard\n", encoding="utf-8")
+    initial_policy = _policy(selected="develop")
+    contract_path = module.activate_contract(
+        issue_dir=issue_dir,
+        project_root=tmp_path,
+        policy=initial_policy,
+        confirmation=_confirmation("live-replacement", initial_policy),
+    )
+    output = issue_dir / "develop" / "iteration_001" / "output.md"
+    output.parent.mkdir(parents=True)
+    output.write_text("pending output", encoding="utf-8")
+    requirements, upstream, evidence = _review_evidence(issue_dir, tmp_path)
+    module.prepare_review_inputs(
+        issue_dir=issue_dir,
+        project_root=tmp_path,
+        phase="develop",
+        output_path=output,
+        requirements=requirements,
+        upstream_artifacts=upstream,
+        repository_evidence=evidence,
+        correction_history=[],
+    )
+    original_contract = contract_path.read_bytes()
+    original_state = module.state_path(issue_dir).read_bytes()
+    initial_digest = module.policy_digest(initial_policy)
+    replacement_policy = _policy(selected="review")
+    original_contract_lock = module._contract_lock
+    original_live_playbook = module._live_playbook
+    authority_changed = False
+
+    def changed_live_playbook(**kwargs):
+        if authority_changed and live_drift == "effective_inventory":
+            return SimpleNamespace(
+                playbook=SimpleNamespace(id="standard"),
+                steps={},
+            )
+        return original_live_playbook(**kwargs)
+
+    @contextmanager
+    def change_live_authority_before_lock(*args, **kwargs):
+        nonlocal authority_changed
+        authority_changed = True
+        if live_drift == "issue_playbook":
+            issue_file.write_text("playbook_id: simple\n", encoding="utf-8")
+        with original_contract_lock(*args, **kwargs) as directory_descriptor:
+            yield directory_descriptor
+
+    monkeypatch.setattr(module, "_live_playbook", changed_live_playbook)
+    monkeypatch.setattr(module, "_contract_lock", change_live_authority_before_lock)
+
+    with pytest.raises(module.StaleContractError):
+        module.activate_contract(
+            issue_dir=issue_dir,
+            project_root=tmp_path,
+            policy=replacement_policy,
+            confirmation=_confirmation("live-replacement", replacement_policy),
+            expected_active_digest=initial_digest,
+        )
+
+    assert contract_path.read_bytes() == original_contract
+    assert module.state_path(issue_dir).read_bytes() == original_state
 
 
 def test_blocking_review_correction_converges_to_one_clean_current_episode(tmp_path: Path) -> None:

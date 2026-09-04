@@ -966,7 +966,9 @@ def _atomic_yaml_write(
 
 
 @contextmanager
-def _contract_lock(issue_dir: Path, *, create: bool = True) -> Iterator[int]:
+def _contract_lock(
+    issue_dir: Path, *, create: bool = True, recover: bool = True
+) -> Iterator[int]:
     """Serialize recovery, contract reads, and shared state updates."""
     if fcntl is None:  # pragma: no cover - CAFE's workflow driver is POSIX-hosted.
         raise RuntimeError("proactive review activation requires process file locking")
@@ -974,7 +976,8 @@ def _contract_lock(issue_dir: Path, *, create: bool = True) -> Iterator[int]:
         with _proactive_review_directory(issue_dir, create=create) as descriptor:
             fcntl.flock(descriptor, fcntl.LOCK_EX)
             try:
-                _recover_pending_replacement(descriptor)
+                if recover:
+                    _recover_pending_replacement(descriptor)
                 yield descriptor
             finally:
                 fcntl.flock(descriptor, fcntl.LOCK_UN)
@@ -1015,16 +1018,32 @@ def activate_contract(
     playbook_id = _read_issue_playbook_id(issue_dir)
     live = _live_playbook(issue_dir=issue_dir, project_root=project_root, playbook_id=playbook_id)
     validated_policy = validate_policy(policy, playbook=live)
-    validated_confirmation = _validate_confirmation(
+    _validate_confirmation(
         confirmation, issue_dir=issue_dir, policy=validated_policy
     )
-    digest = validated_confirmation["proposal_digest"]
     target = contract_path(issue_dir)
-    envelope = {
-        **validated_confirmation,
-        "policy": validated_policy,
-    }
-    with _contract_lock(issue_dir) as directory_descriptor:
+    with _contract_lock(issue_dir, recover=False) as directory_descriptor:
+        try:
+            locked_playbook_id = _read_issue_playbook_id(issue_dir)
+            locked_live = _live_playbook(
+                issue_dir=issue_dir,
+                project_root=project_root,
+                playbook_id=locked_playbook_id,
+            )
+            locked_policy = validate_policy(policy, playbook=locked_live)
+            locked_confirmation = _validate_confirmation(
+                confirmation, issue_dir=issue_dir, policy=locked_policy
+            )
+        except (StaleContractError, ValueError) as exc:
+            raise StaleContractError(
+                "activation inputs no longer match the live issue playbook"
+            ) from exc
+        digest = locked_confirmation["proposal_digest"]
+        envelope = {
+            **locked_confirmation,
+            "policy": locked_policy,
+        }
+        _recover_pending_replacement(directory_descriptor)
         replacing = _persistence_entry_exists(directory_descriptor, CONTRACT_FILENAME)
         if replacing:
             existing_digest = _active_contract_digest(directory_descriptor)
