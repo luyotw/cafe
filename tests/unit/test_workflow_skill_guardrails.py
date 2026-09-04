@@ -50,7 +50,7 @@ def test_behaviorally_changed_skills_have_minor_version_bumps() -> None:
         "cafe-review": "1.13.0",
         "cafe-pr": "1.4.0",
         "cafe-workflow-common": "1.8.0",
-        "use-cafe-workflow": "1.31.0",
+        "use-cafe-workflow": "1.32.0",
     }
     for name, version in expected_versions.items():
         assert f"version: {version}" in _skill_text(builtin_root, name)
@@ -97,3 +97,15 @@ def test_develop_and_review_check_long_running_resource_amplification() -> None:
             encoding="utf-8"
         )
         assert expected in reference
+
+
+def test_workflow_skill_indexes_the_proactive_review_contract() -> None:
+    skill_root = PROJECT_ROOT / "src" / "cafe" / "data" / "skills" / "use-cafe-workflow"
+    skill = (skill_root / "SKILL.md").read_text(encoding="utf-8")
+    reference = (skill_root / "references" / "proactive_phase_reviews.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "proactive_phase_reviews.md" in skill
+    assert "smallest sufficient" in reference
+    assert "does not satisfy" in reference

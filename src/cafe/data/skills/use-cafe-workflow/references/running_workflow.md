@@ -59,6 +59,19 @@ gain a safe stop channel. An existing reliable, authorized control may be used
 only after verification; this feature creates no PID registry, cancellation API,
 recovery protocol, or stop guarantee.
 
+When a confirmed proactive-review contract exists, callback and resumed-driver
+reconciliation reload it through the skill-local live validator before reading
+current review obligations. A copied, malformed, issue/playbook/inventory/order
+stale contract is reconfirmation-required work, never an empty plan or clean
+evidence. Valid obligations may be reported and reconciled from bounded state;
+the callback remains notification-only and must not wait, gate advancement,
+answer a user task, substitute a reviewer, or control the worker. `non_gating`
+allows continuous advancement but still withholds driver acceptance and
+confirmation presentation until the current output has clean review evidence.
+Delayed, duplicate, or stale notices trigger this same durable recheck. If a
+late blocker invalidates downstream work, the existing owner revalidates,
+corrects, or discards it through its authorized path.
+
 ## Completing a HumanTask
 
 The callback is not an interaction channel. A mandatory, `user_required`,

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
+import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SKILL_ROOT = PROJECT_ROOT / "src" / "cafe" / "data" / "skills" / "use-cafe-workflow"
@@ -61,11 +64,16 @@ def _policy(*, selected: str | None) -> dict[str, object]:
     return {"playbook_id": "standard", "phases": phases}
 
 
-def _confirmation(issue_name: str) -> dict[str, object]:
+def _confirmation(issue_name: str, policy: dict[str, object]) -> dict[str, object]:
     return {
         "schema_version": 1,
         "issue_name": issue_name,
         "playbook_id": "standard",
+        "proposal_digest": hashlib.sha256(
+            json.dumps(policy, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
+                "utf-8"
+            )
+        ).hexdigest(),
         "confirmed_by": "user",
         "confirmed_at": "2026-09-04T12:00:00+00:00",
     }
@@ -78,12 +86,13 @@ def test_confirmed_initial_policy_activates_only_after_issue_preparation(
     """I1–I2 — both selected and empty plans persist only the active envelope."""
     module = _module()
     issue_dir = tmp_path / ".cafe" / "issues" / "journey"
+    policy = _policy(selected=selected)
     with pytest.raises(ValueError):
         module.activate_contract(
             issue_dir=issue_dir,
             project_root=PROJECT_ROOT,
-            policy=_policy(selected=selected),
-            confirmation=_confirmation("journey"),
+            policy=policy,
+            confirmation=_confirmation("journey", policy),
         )
     assert not issue_dir.exists()
 
@@ -92,8 +101,8 @@ def test_confirmed_initial_policy_activates_only_after_issue_preparation(
     contract_path = module.activate_contract(
         issue_dir=issue_dir,
         project_root=PROJECT_ROOT,
-        policy=_policy(selected=selected),
-        confirmation=_confirmation("journey"),
+        policy=policy,
+        confirmation=_confirmation("journey", policy),
     )
 
     assert contract_path.is_file()
@@ -109,11 +118,12 @@ def test_reconfirmed_replacement_leaves_prior_contract_untouched_until_atomic_su
     issue_dir = tmp_path / ".cafe" / "issues" / "replacement"
     issue_dir.mkdir(parents=True)
     (issue_dir / "issue.yaml").write_text("playbook_id: standard\n", encoding="utf-8")
+    initial_policy = _policy(selected="develop")
     first = module.activate_contract(
         issue_dir=issue_dir,
         project_root=PROJECT_ROOT,
-        policy=_policy(selected="develop"),
-        confirmation=_confirmation("replacement"),
+        policy=initial_policy,
+        confirmation=_confirmation("replacement", initial_policy),
     )
     original = first.read_bytes()
     with pytest.raises(ValueError):
@@ -121,7 +131,122 @@ def test_reconfirmed_replacement_leaves_prior_contract_untouched_until_atomic_su
             issue_dir=issue_dir,
             project_root=PROJECT_ROOT,
             policy=_policy(selected="review"),
-            confirmation=_confirmation("replacement"),
+            confirmation=_confirmation("replacement", initial_policy),
             expected_active_digest="wrong",
         )
     assert first.read_bytes() == original
+
+
+def test_blocking_review_correction_converges_to_one_clean_current_episode(tmp_path: Path) -> None:
+    """I4 — a corrected durable output is re-reviewed as a whole and compacts on clean."""
+    module = _module()
+    issue_dir = tmp_path / ".cafe" / "issues" / "convergence"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text("playbook_id: standard\n", encoding="utf-8")
+    policy = _policy(selected="develop")
+    module.activate_contract(
+        issue_dir=issue_dir,
+        project_root=PROJECT_ROOT,
+        policy=policy,
+        confirmation=_confirmation("convergence", policy),
+    )
+    output = tmp_path / "develop.md"
+    output.write_text("first output", encoding="utf-8")
+    first = module.prepare_review_inputs(
+        issue_dir=issue_dir,
+        project_root=PROJECT_ROOT,
+        phase="develop",
+        output_path=output,
+        requirements=["confirmed requirement"],
+        upstream_artifacts=["accepted plan"],
+        repository_evidence=["current repository contract"],
+        correction_history=[],
+    )
+    module.record_review_result(
+        issue_dir=issue_dir,
+        project_root=PROJECT_ROOT,
+        phase="develop",
+        output_identity=first["output_identity"],
+        reviewer={"cli": "codex", "model": "gpt-5.6-sol"},
+        result={
+            "complete": True,
+            "scope_adequacy": {
+                "missing": ["proof"],
+                "excess": ["unused layer"],
+                "proportionality": "not proportionate",
+            },
+            "blockers": [
+                {
+                    "id": "scope-gap",
+                    "evidence": "current artifact omits proof and adds unused work",
+                    "violated_constraint": "confirmed requirement",
+                    "expected_outcome": "bounded implementation with proof",
+                    "focused_verification": "review the full corrected artifact",
+                }
+            ],
+        },
+        authorized_routes=[{"to_owner": "agent", "to_step": "develop", "intent": "await_agent"}],
+        correction_route={"to_owner": "agent", "to_step": "develop", "intent": "await_agent"},
+    )
+    output.write_text("corrected output", encoding="utf-8")
+    second = module.prepare_review_inputs(
+        issue_dir=issue_dir,
+        project_root=PROJECT_ROOT,
+        phase="develop",
+        output_path=output,
+        requirements=["confirmed requirement"],
+        upstream_artifacts=["accepted plan"],
+        repository_evidence=["current repository contract"],
+        correction_history=[{"id": "scope-gap", "status": "resolved"}],
+    )
+    clean = module.record_review_result(
+        issue_dir=issue_dir,
+        project_root=PROJECT_ROOT,
+        phase="develop",
+        output_identity=second["output_identity"],
+        reviewer={"cli": "codex", "model": "gpt-5.6-sol"},
+        result={
+            "complete": True,
+            "scope_adequacy": {"missing": [], "excess": [], "proportionality": "proportionate"},
+            "blockers": [],
+        },
+        authorized_routes=[],
+    )
+
+    assert clean["status"] == "clean"
+    assert module.load_review_state(issue_dir=issue_dir, project_root=PROJECT_ROOT)["episodes"] == {
+        "develop": clean
+    }
+
+
+def test_post_confirmation_activation_command_persists_only_the_confirmed_envelope(
+    tmp_path: Path,
+) -> None:
+    """I1 — the public post-prepare command preserves the rendered proposal binding."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "command"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text("playbook_id: standard\n", encoding="utf-8")
+    policy = _policy(selected="develop")
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SKILL_ROOT / "scripts" / "proactive_review.py"),
+            "activate",
+            "--issue-dir",
+            str(issue_dir),
+            "--project-root",
+            str(PROJECT_ROOT),
+            "--policy-json",
+            json.dumps(policy),
+            "--confirmation-json",
+            json.dumps(_confirmation("command", policy)),
+        ],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (issue_dir / "driver" / "proactive_review" / "contract.yaml").is_file()
+    assert not (issue_dir / "driver" / "proactive_review" / "candidate.yaml").exists()

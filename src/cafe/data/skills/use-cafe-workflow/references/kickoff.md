@@ -140,6 +140,19 @@ only persisted active contract is
 minimal confirmation envelope and policy. No `candidate.yaml`, kickoff
 transcript, or append-only contract history is allowed.
 
+Activate only the exact rendered digest after preparation and user confirmation:
+
+```bash
+python3 <skill-dir>/scripts/proactive_review.py activate \
+  --issue-dir .cafe/issues/<issue> --project-root . \
+  --policy-json '<rendered-policy-json>' \
+  --confirmation-json '<schema/issue/playbook/proposal_digest/user/time JSON>'
+```
+
+For a reconfirmed replacement, provide `--expected-active-digest` with the
+currently loaded contract digest. Do not create or persist a proposal before
+this explicit post-confirmation command.
+
 When selection, exact reviewer identity, ordering, or a material cost/latency
 assumption changes, retain the active contract while rendering a complete
 replacement. Obtain complete reconfirmation and then atomically replace it only

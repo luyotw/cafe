@@ -33,6 +33,21 @@ by assigning a stronger model.
 
 ## Resolve phase execution requirements
 
+### Proactive-review reviewer selection
+
+The kickoff review plan is a separate per-issue decision from phase execution
+chains. For each proactively selected phase, choose one exact supported
+CLI/model based on the phase's risk and evidence; do not infer a provider or
+model default from the phase chain. The identity is confirmed with the complete
+kickoff and may change only through full reconfirmation. Reviewer unavailability
+keeps the obligation pending and never authorizes a fallback reviewer.
+
+The driver, not a helper, judges whether the selected set is the smallest
+sufficient independent coverage. Record phase-specific consideration of
+ambiguity, novelty, blast radius, protected/durable boundaries, timely
+downstream coverage, late correction cost, and review token/latency tradeoffs.
+Read `proactive_phase_reviews.md` for the complete contract and correction path.
+
 Every phase skill should declare a provider-neutral
 `workflow.execution_profile`:
 

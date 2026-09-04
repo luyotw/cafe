@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
-metadata: {version: 1.31.0}
+metadata: {version: 1.32.0}
 ---
 
 # Use CAFE Workflow
@@ -13,15 +13,14 @@ metadata: {version: 1.31.0}
   `.cafe/strategic_context.yaml`.
 - Preflight runtime updates and all three catalogs read-only; apply only exact, separately approved tokens and recheck afterward.
 - Prefer non-interactive commands so work can run unattended and resume cleanly.
-
 ## Progressive disclosure
 
 Read this file completely, then load only the references required by the current situation. Resolve every path relative to this `SKILL.md`.
-
 | Situation | Read before acting |
 | --- | --- |
-| Start or resume workflow execution; answer a locale, playbook-selection, or kickoff question | `references/project_global_skill_sync.md`, `references/playbook_selection.md`, `references/kickoff.md`, `references/model_selection.md`, and `references/strategic_context.md` |
+| Start or resume workflow execution; answer a locale, playbook-selection, or kickoff question | `references/project_global_skill_sync.md`, `references/playbook_selection.md`, `references/kickoff.md`, `references/model_selection.md`, `references/proactive_phase_reviews.md`, and `references/strategic_context.md` |
 | Run, resume, inspect, retry, or recover ordinary workflow work | `references/running_workflow.md` |
+| Reconcile a selected phase's proactive review, correction, or current evidence | `references/proactive_phase_reviews.md`, `references/handoffs_and_alignment.md`, and `references/running_workflow.md` |
 | Handle `to_owner=user`, confirmation, clarification, permission, or alignment | `references/handoffs_and_alignment.md`; also read `references/strategic_context.md` |
 | Start or resume linked work; confirm a spec or plan with an issue-decomposition assessment | `references/issue_decomposition.md`; also read `references/strategic_context.md` and `references/handoffs_and_alignment.md` |
 | Diagnose incorrect workflow behavior or choose a repair layer | `references/diagnosis_and_repair.md`; also read the relevant runtime reference above |
@@ -29,7 +28,6 @@ Read this file completely, then load only the references required by the current
 | Measure fresh-versus-resumed correction efficiency | `references/correction_ab_experiment.md` |
 
 If more than one situation applies, read every listed reference before acting; do not preload unrelated references.
-
 ## Core invariants
 
 - The complete kickoff contract is the first blocking gate. Do not run `cafe
@@ -77,7 +75,11 @@ If more than one situation applies, read every listed reference before acting; d
   unless the user explicitly authorizes that source change.
 - A phase or PR reporting success is evidence, not final proof. Ship only after
   the independent driver review has no unresolved in-mandate blockers.
-
+- For each kickoff, assess every agent-executed phase for the smallest useful
+  independent proactive-review set. A clean selected-phase review is quality
+  evidence only: it cannot satisfy a HumanTask, confirmation, permission,
+  capability, scope, or authority decision, and it never replaces the ordinary
+  review phase or final convergent PR review.
 ## Driver and phase-agent responsibility boundary
 
 - The phase agent owns implementation exploration: reading source code and
@@ -96,10 +98,8 @@ If more than one situation applies, read every listed reference before acting; d
 - After the PR phase, perform the independent convergent review once, in a
   batch. That final review deliberately inspects the implementation and is not
   replaced by process-only monitoring.
-
 ## Driver checklist
 ### Start or resume
-
 - [ ] Run runtime and combined catalog preflight before a new kickoff or stale
   resume; record unavailable status and keep both approval scopes separate.
 - [ ] Resolve or select the active playbook using `references/playbook_selection.md`,
@@ -109,11 +109,10 @@ If more than one situation applies, read every listed reference before acting; d
   capability band, exact primary and any fallbacks, rationale, cached or tested
   primary evidence, configured fallback smoke evidence, and adjustment authority.
 - [ ] Present the deterministic kickoff table and obtain explicit confirmation.
+- [ ] Render every agent/hybrid phase's explained proactive-review decision; confirm its exact reviewers, ordering, and cost disclosures with the rest of kickoff, then activate only the confirmed issue-local contract.
 - [ ] Record the confirmed operating mode. For event-driven, create its exact
   per-issue callback binding with the bundled callback script before launch.
-
 ### Run
-
 - [ ] Start or resume according to the confirmed driver mode and input; otherwise
   follow the persisted baton without forcing `--start-step`.
 - [ ] In attached mode, honor the full positive poll cadence from the first
@@ -125,23 +124,22 @@ If more than one situation applies, read every listed reference before acting; d
 - [ ] In a user-facing driver turn, relay only an explicit mandatory/user-required HumanTask answer with `cafe task complete --no-resume --json`, verify it durably, then resume using the confirmed mode; a confirmed `driver_confirmable` gate may be verified and completed by a driver, but detached callbacks cannot collect or infer user answers.
 - [ ] Timestamp proactive polls and user updates; handle substantive output, completion, errors, and HumanTasks immediately.
 - [ ] At each contract-defined pause or completion, inspect new phase evidence and revise only remaining model chains within confirmed authority.
+- [ ] Reconcile selected proactive-review obligations from the live issue contract; keep incomplete, stale, failed, or wrong-reviewer work pending and use only an existing correction route or a user stop for blockers.
 - [ ] When CAFE pauses, classify the handoff before supplying any input.
-- [ ] When behavior is wrong, stop normal execution and use the bounded
-  diagnosis reference.
-
+- [ ] When behavior is wrong, stop normal execution and use the bounded diagnosis reference.
 ### Complete
 - [ ] Confirm the terminal state is `Workflow completed ... next=done`.
 - [ ] Read the convergent PR review reference and finish its full review matrix.
 - [ ] Merge only after all blockers are resolved, close the linked issue, run
   `cafe close`, and confirm the issue is absent from `cafe ls`.
 - [ ] Report the relevant test evidence and final state in the effective locale.
-
 ## Reference index
 - `references/kickoff.md` — locale, confirmation contract, formatter, prepare.
 - `references/project_global_skill_sync.md` — silent check and approved updates.
 - `references/strategic_context.md` — documents, mandate, protected overrides.
 - `references/running_workflow.md` — commands, inspection, retries, operating rules.
 - `references/model_selection.md` — phase profiles, model preflight, and reassessment.
+- `references/proactive_phase_reviews.md` — phase selection, independent review, bounded evidence, correction convergence, and authority limits.
 - `references/phases_yaml.md` — confirmed-chain writer contract and non-authoritative field guidance.
 - `references/handoffs_and_alignment.md` — user pauses and driver decisions.
 - `references/diagnosis_and_repair.md` — bounded classification and disposition.

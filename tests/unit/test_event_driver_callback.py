@@ -254,3 +254,69 @@ def test_callback_session_conflict_keeps_existing_session(tmp_path: Path, monkey
             repository_root=tmp_path,
         )
     assert store.path.read_bytes() == original
+
+
+def test_callback_prompt_reconciles_live_proactive_review_without_worker_control(
+    tmp_path: Path,
+) -> None:
+    """U14 — a wakeup reports current review work but remains notification-only."""
+    callback = _callback_module()
+    proactive = callback._proactive_review_module()
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue456"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text("playbook_id: standard\n", encoding="utf-8")
+    policy = {
+        "playbook_id": "standard",
+        "phases": [
+            {
+                "phase": phase,
+                "selected": phase == "develop",
+                "rationale": "The driver assessed this phase.",
+                "factors": {
+                    name: "assessed"
+                    for name in (
+                        "ambiguity", "novelty", "blast_radius", "protected_risk",
+                        "durable_contract", "downstream_review", "late_correction", "cost",
+                    )
+                },
+                **(
+                    {
+                        "reviewer": {"cli": "codex", "model": "gpt-5.6-sol"},
+                        "ordering": "non_gating",
+                        "initial_review_cost": {
+                            "tokens": {"estimate": "2k"},
+                            "latency": {"estimate": "one minute"},
+                            "assumptions": "one output",
+                            "delay_impact": "acceptance only",
+                        },
+                        "rereview_cost": {"foreseeable": False, "reason": "unknown"},
+                    }
+                    if phase == "develop"
+                    else {}
+                ),
+            }
+            for phase in ("spec", "plan", "develop", "review", "pr")
+        ],
+    }
+    proactive.activate_contract(
+        issue_dir=issue_dir,
+        project_root=Path(__file__).parents[2],
+        policy=policy,
+        confirmation={
+            "schema_version": 1,
+            "issue_name": "issue456",
+            "playbook_id": "standard",
+            "proposal_digest": proactive.policy_digest(policy),
+            "confirmed_by": "user",
+            "confirmed_at": "2026-09-04T12:00:00+00:00",
+        },
+    )
+
+    prompt = callback._callback_prompt(
+        {"issue": "issue456", "workflow_id": "workflow", "event_type": "phase_terminal"},
+        repository_root=tmp_path,
+    )
+
+    assert "proactive review obligations" in prompt
+    assert "non_gating" in prompt
+    assert "not a workflow advancement gate" in prompt

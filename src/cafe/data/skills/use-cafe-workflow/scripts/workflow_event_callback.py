@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import subprocess
@@ -36,6 +37,47 @@ CONFIG_FILENAME = "config.yaml"
 SESSION_FILENAME = "session.json"
 LOCK_FILENAME = "session.lock"
 _HOST_SESSION_KIND = "codex"
+
+
+def _proactive_review_module():
+    """Load the sibling skill helper when this script is imported directly in tests."""
+    path = Path(__file__).with_name("proactive_review.py")
+    spec = importlib.util.spec_from_file_location("cafe_proactive_review", path)
+    if spec is None or spec.loader is None:  # pragma: no cover - static bundled path.
+        raise RuntimeError("proactive review helper is unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _proactive_review_reconciliation(issue_name: Any, *, repository_root: Path) -> str | None:
+    """Render bounded live-contract context without creating a worker gate."""
+    if not isinstance(issue_name, str) or not issue_name or Path(issue_name).name != issue_name:
+        return None
+    module = _proactive_review_module()
+    issue_dir = repository_root / ".cafe" / "issues" / issue_name
+    try:
+        obligations = module.review_obligations(issue_dir=issue_dir, project_root=repository_root)
+    except module.ContractNotFoundError:
+        return None
+    except (module.StaleContractError, module.ReviewStateError):
+        return (
+            "The proactive review contract is stale or incomplete. Preserve its current "
+            "state as reconfirmation-required; do not treat it as empty or clean. Present "
+            "a complete proposal and obtain user reconfirmation through the existing path."
+        )
+    if not obligations:
+        return "The confirmed proactive review policy selects no phases. Do not infer a reviewer."
+    summary = "; ".join(
+        f"{item['phase']}={item['status']} ({item['ordering']}, "
+        f"{item['reviewer']['cli']}:{item['reviewer']['model']})"
+        for item in obligations
+    )
+    return (
+        "Reconcile these current proactive review obligations from durable state: "
+        f"{summary}. They are quality evidence only: do not use a clean review to answer "
+        "a HumanTask, confirmation, permission, capability, scope, or authority decision."
+    )
 
 
 def _now() -> str:
@@ -288,24 +330,28 @@ class EventDriverSessionStore(SessionStore):
 
 def _callback_prompt(event: dict[str, Any], *, repository_root: Path) -> str:
     notice = json.dumps(event, ensure_ascii=False, sort_keys=True)
-    return "\n".join(
-        (
-            "You are the event-driven CAFE workflow driver.",
-            "This is an asynchronous wake notification, not a workflow advancement gate.",
-            "Read the builtin use-cafe-workflow skill and follow its current confirmed contract.",
-            "First inspect current durable state with cafe status/show before acting; "
-            "the event may be stale.",
-            "Do not answer mandatory, user-required, clarification, permission, or "
-            "capability tasks; only a user-facing driver turn may relay an explicit answer.",
-            "You may complete a declared driver_confirmable task only after verifying its "
-            "confirmed contract and evidence. Do not grant permissions/capabilities or wait "
-            "for this callback.",
-            "Do not assume you own a running background process. Only use an already "
-            "reliable, authorized control path.",
-            f"Repository: {repository_root}",
-            f"Wake notice: {notice}",
-        )
+    lines = [
+        "You are the event-driven CAFE workflow driver.",
+        "This is an asynchronous wake notification, not a workflow advancement gate.",
+        "Read the builtin use-cafe-workflow skill and follow its current confirmed contract.",
+        "First inspect current durable state with cafe status/show before acting; "
+        "the event may be stale.",
+        "Do not answer mandatory, user-required, clarification, permission, or "
+        "capability tasks; only a user-facing driver turn may relay an explicit answer.",
+        "You may complete a declared driver_confirmable task only after verifying its "
+        "confirmed contract and evidence. Do not grant permissions/capabilities or wait "
+        "for this callback.",
+        "Do not assume you own a running background process. Only use an already "
+        "reliable, authorized control path.",
+        f"Repository: {repository_root}",
+        f"Wake notice: {notice}",
+    ]
+    reconciliation = _proactive_review_reconciliation(
+        event.get("issue"), repository_root=repository_root
     )
+    if reconciliation is not None:
+        lines.append(reconciliation)
+    return "\n".join(lines)
 
 
 def _queue_host_callback(

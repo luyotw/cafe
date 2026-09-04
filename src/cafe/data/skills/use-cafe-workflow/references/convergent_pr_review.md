@@ -4,6 +4,11 @@ Use this protocol for the driver-owned review after the PR phase. Its purpose is
 to preserve the independent final quality gate without dripping findings across
 many develop-review-PR cycles.
 
+This final review remains distinct from selected proactive phase reviews. The
+latter provide earlier issue-local evidence and correction convergence; neither
+their clean result nor their reviewer report replaces, shortens, or recursively
+reviews this convergent PR pass.
+
 ## 1. Establish one review baseline
 
 - Record the PR HEAD being reviewed.

@@ -1700,6 +1700,7 @@ def test_proactive_review_activation_requires_complete_confirmation_and_preserve
         "schema_version": 1,
         "issue_name": "issue464",
         "playbook_id": "standard",
+        "proposal_digest": module.policy_digest(policy),
         "confirmed_by": "user",
         "confirmed_at": "2026-09-04T12:00:00+00:00",
     }
@@ -1733,6 +1734,16 @@ def test_proactive_review_activation_requires_complete_confirmation_and_preserve
         )
     assert contract_path.read_bytes() == original
 
+    with pytest.raises(module.StaleContractError):
+        module.activate_contract(
+            issue_dir=issue_dir,
+            project_root=PROJECT_ROOT,
+            policy=policy,
+            confirmation={**confirmation, "proposal_digest": "wrong"},
+            expected_active_digest=active["proposal_digest"],
+        )
+    assert contract_path.read_bytes() == original
+
     monkeypatch.setattr(module.os, "replace", lambda *_args: (_ for _ in ()).throw(OSError()))
     replacement = _proactive_review_policy(selected_phase="review")
     with pytest.raises(OSError):
@@ -1740,7 +1751,247 @@ def test_proactive_review_activation_requires_complete_confirmation_and_preserve
             issue_dir=issue_dir,
             project_root=PROJECT_ROOT,
             policy=replacement,
-            confirmation=confirmation,
+            confirmation={
+                **confirmation,
+                "proposal_digest": module.policy_digest(replacement),
+            },
             expected_active_digest=active["proposal_digest"],
         )
     assert contract_path.read_bytes() == original
+
+
+def test_proactive_review_rejects_incomplete_or_unbound_confirmation_before_writing(
+    tmp_path: Path,
+) -> None:
+    """U7–U8 — every envelope decision is explicit and failures create no contract."""
+    module = _proactive_review_module()
+    issue_dir = tmp_path / ".cafe" / "issues" / "activation"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text("playbook_id: standard\n", encoding="utf-8")
+    policy = _proactive_review_policy()
+    valid = {
+        "schema_version": 1,
+        "issue_name": "activation",
+        "playbook_id": "standard",
+        "proposal_digest": module.policy_digest(policy),
+        "confirmed_by": "user",
+        "confirmed_at": "2026-09-04T12:00:00+00:00",
+    }
+    invalid = [
+        {key: value for key, value in valid.items() if key != "proposal_digest"},
+        {**valid, "issue_name": "another-issue"},
+        {**valid, "confirmed_by": "agent"},
+        {**valid, "confirmed_at": ""},
+        {**valid, "confirmed_at": "not-a-timestamp"},
+        {**valid, "confirmed_at": "2026-09-04T12:00:00"},
+        {**valid, "proposal_digest": "not-the-policy"},
+    ]
+
+    for confirmation in invalid:
+        with pytest.raises((ValueError, module.StaleContractError)):
+            module.activate_contract(
+                issue_dir=issue_dir,
+                project_root=PROJECT_ROOT,
+                policy=policy,
+                confirmation=confirmation,
+            )
+        assert not module.contract_path(issue_dir).exists()
+        assert list(module.contract_path(issue_dir).parent.glob("*.tmp")) == []
+
+    with pytest.raises(ValueError):
+        module.activate_contract(
+            issue_dir=tmp_path / ".cafe" / "issues" / "unprepared",
+            project_root=PROJECT_ROOT,
+            policy=policy,
+            confirmation={**valid, "issue_name": "unprepared"},
+        )
+
+
+def _activate_proactive_review_for_evidence(module, tmp_path: Path) -> Path:
+    issue_dir = tmp_path / ".cafe" / "issues" / "evidence"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text("playbook_id: standard\n", encoding="utf-8")
+    policy = _proactive_review_policy()
+    module.activate_contract(
+        issue_dir=issue_dir,
+        project_root=PROJECT_ROOT,
+        policy=policy,
+        confirmation={
+            "schema_version": 1,
+            "issue_name": "evidence",
+            "playbook_id": "standard",
+            "proposal_digest": module.policy_digest(policy),
+            "confirmed_by": "user",
+            "confirmed_at": "2026-09-04T12:00:00+00:00",
+        },
+    )
+    return issue_dir
+
+
+def _complete_review_result(*, blockers: list[dict[str, object]]) -> dict[str, object]:
+    return {
+        "complete": True,
+        "scope_adequacy": {
+            "missing": [],
+            "excess": [],
+            "proportionality": "proportionate to the confirmed objective",
+        },
+        "blockers": blockers,
+    }
+
+
+def test_proactive_review_converges_current_evidence_without_reviewer_substitution(
+    tmp_path: Path,
+) -> None:
+    """U9–U12 — one current episode converges only for its confirmed reviewer/output."""
+    module = _proactive_review_module()
+    issue_dir = _activate_proactive_review_for_evidence(module, tmp_path)
+    output = tmp_path / "develop-output.md"
+    output.write_text("initial output", encoding="utf-8")
+
+    manifest = module.prepare_review_inputs(
+        issue_dir=issue_dir,
+        project_root=PROJECT_ROOT,
+        phase="develop",
+        output_path=output,
+        requirements=["confirmed requirement"],
+        upstream_artifacts=["accepted plan"],
+        repository_evidence=["relevant contract"],
+        correction_history=[],
+    )
+    assert manifest["output_identity"]["sha256"]
+    assert module.load_review_state(issue_dir=issue_dir, project_root=PROJECT_ROOT)["episodes"][
+        "develop"
+    ]["status"] == "pending"
+
+    pending = module.record_review_result(
+        issue_dir=issue_dir,
+        project_root=PROJECT_ROOT,
+        phase="develop",
+        output_identity=manifest["output_identity"],
+        reviewer={"cli": "claude", "model": "another"},
+        result=_complete_review_result(blockers=[]),
+        authorized_routes=[],
+    )
+    assert pending["status"] == "pending"
+
+    blocking = module.record_review_result(
+        issue_dir=issue_dir,
+        project_root=PROJECT_ROOT,
+        phase="develop",
+        output_identity=manifest["output_identity"],
+        reviewer={"cli": "codex", "model": "gpt-5.6-sol"},
+        result=_complete_review_result(
+            blockers=[
+                {
+                    "id": "missing-proof",
+                    "evidence": "The required proof is absent.",
+                    "violated_constraint": "confirmed requirement",
+                    "expected_outcome": "include the proof",
+                    "focused_verification": "inspect the corrected artifact",
+                }
+            ]
+        ),
+        authorized_routes=[{"to_owner": "agent", "to_step": "develop", "intent": "await_agent"}],
+        correction_route={"to_owner": "agent", "to_step": "develop", "intent": "await_agent"},
+    )
+    assert blocking["status"] == "blocking"
+    assert blocking["blockers"][0]["status"] == "still_failing"
+
+    invalidated = module.mark_downstream_invalidated(
+        issue_dir=issue_dir,
+        project_root=PROJECT_ROOT,
+        phase="develop",
+        affected_downstream=["review output"],
+    )
+    assert invalidated["status"] == "downstream_invalidated"
+
+    output.write_text("corrected output", encoding="utf-8")
+    corrected = module.prepare_review_inputs(
+        issue_dir=issue_dir,
+        project_root=PROJECT_ROOT,
+        phase="develop",
+        output_path=output,
+        requirements=["confirmed requirement"],
+        upstream_artifacts=["accepted plan"],
+        repository_evidence=["relevant contract"],
+        correction_history=[{"id": "missing-proof", "status": "resolved"}],
+    )
+    assert corrected["output_identity"] != manifest["output_identity"]
+    assert module.load_review_state(issue_dir=issue_dir, project_root=PROJECT_ROOT)["episodes"][
+        "develop"
+    ]["status"] == "corrected_awaiting_rereview"
+
+    clean = module.record_review_result(
+        issue_dir=issue_dir,
+        project_root=PROJECT_ROOT,
+        phase="develop",
+        output_identity=corrected["output_identity"],
+        reviewer={"cli": "codex", "model": "gpt-5.6-sol"},
+        result=_complete_review_result(blockers=[]),
+        authorized_routes=[],
+    )
+    assert clean["status"] == "clean"
+    assert "blockers" not in clean
+    assert clean["resolved_summary"]["count"] == 1
+    assert not (issue_dir / "driver" / "proactive_review" / "reports").exists()
+
+
+def test_proactive_review_stale_contract_and_missing_route_never_become_clean(
+    tmp_path: Path,
+) -> None:
+    """U10 and U13 — live validation fails closed and routes only through authority."""
+    module = _proactive_review_module()
+    issue_dir = _activate_proactive_review_for_evidence(module, tmp_path)
+    output = tmp_path / "develop-output.md"
+    output.write_text("durable output", encoding="utf-8")
+    manifest = module.prepare_review_inputs(
+        issue_dir=issue_dir,
+        project_root=PROJECT_ROOT,
+        phase="develop",
+        output_path=output,
+        requirements=["confirmed requirement"],
+        upstream_artifacts=["accepted plan"],
+        repository_evidence=["relevant contract"],
+        correction_history=[],
+    )
+
+    stopped = module.record_review_result(
+        issue_dir=issue_dir,
+        project_root=PROJECT_ROOT,
+        phase="develop",
+        output_identity=manifest["output_identity"],
+        reviewer={"cli": "codex", "model": "gpt-5.6-sol"},
+        result=_complete_review_result(
+            blockers=[
+                {
+                    "id": "unroutable",
+                    "evidence": "observable gap",
+                    "violated_constraint": "confirmed requirement",
+                    "expected_outcome": "user-owned decision",
+                    "focused_verification": "confirm the decision",
+                }
+            ]
+        ),
+        authorized_routes=[],
+    )
+    assert stopped["status"] == "user_stop"
+    assert stopped["route"] is None
+
+    copied_issue = tmp_path / ".cafe" / "issues" / "copied"
+    copied_issue.mkdir(parents=True)
+    (copied_issue / "issue.yaml").write_text("playbook_id: standard\n", encoding="utf-8")
+    target = module.contract_path(copied_issue)
+    target.parent.mkdir(parents=True)
+    target.write_bytes(module.contract_path(issue_dir).read_bytes())
+    with pytest.raises(module.StaleContractError):
+        module.prepare_review_inputs(
+            issue_dir=copied_issue,
+            project_root=PROJECT_ROOT,
+            phase="develop",
+            output_path=output,
+            requirements=["confirmed requirement"],
+            upstream_artifacts=["accepted plan"],
+            repository_evidence=["relevant contract"],
+            correction_history=[],
+        )

@@ -101,6 +101,22 @@ approval would change requirements beyond authority, public positioning,
 business/legal/pricing decisions, production access, destructive operations,
 or an ambiguous strategic tradeoff.
 
+## Proactive review findings preserve handoff authority
+
+Selected-phase reviews are independent quality evidence, not a new authority
+channel. A clean result does not satisfy `user_required`, `driver_confirmable`,
+mandatory HumanTask, permission, capability, scope, or alignment decisions.
+For `driver_confirmable` work, still verify the declared evidence and respond
+through its existing task contract. For user-owned work, render the real task
+to the user as usual.
+
+When a complete review reports blockers, pass the consolidated findings only to
+an already authorized correction route in the current playbook/handoff. Do not
+target the proactive-review report, invent an intent/phase, or edit generated
+artifacts. If no current route can carry a blocker, stop for a self-contained
+user decision. If correction invalidates downstream output, the existing owner
+must revalidate, replace, or discard it before it supports acceptance.
+
 ## Driver-owned alignment
 
 Bundled playbooks omit `alignment:` configuration, so the globally registered
