@@ -2198,7 +2198,15 @@ class BlackboardWorkflowRuntime:
             value = payload.get(field)
             if isinstance(value, (str, int)):
                 event[field] = value
+        for field in ("event_id", "occurred_at"):
+            value = payload.get(field)
+            if isinstance(value, str):
+                event[field] = value
+        sequence = payload.get("sequence")
+        if isinstance(sequence, int) and not isinstance(sequence, bool):
+            event["sequence"] = sequence
         try:
+            event = self.blackboard_store.prepare_workflow_callback_event(self.blackboard, event)
             self._workflow_event_callback(event)
         except Exception as exc:
             try:
