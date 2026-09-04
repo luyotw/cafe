@@ -420,18 +420,13 @@ class AgentExecutor:
         records: list[dict[str, Any]] = []
         acceptance_observed = False
 
-        def event_bound_records() -> tuple[dict[str, Any], ...]:
-            if event_id is None:
-                return tuple(records)
-            return tuple({**record, "_cafe_event_id": event_id} for record in records)
-
         def observe_record(_record: dict[str, Any]) -> None:
             nonlocal acceptance_observed
             if (
                 expected_session_id is not None
                 and not acceptance_observed
                 and strategy.accepts_event_driver_callback(
-                    event_bound_records(),
+                    tuple(records),
                     session_id=expected_session_id,
                     event_id=event_id,
                 )
@@ -459,7 +454,7 @@ class AgentExecutor:
         else:
             session_id = expected_session_id
             accepted = acceptance_observed or strategy.accepts_event_driver_callback(
-                tuple({**record, "_cafe_event_id": event_id} for record in bounded_records),
+                bounded_records,
                 session_id=expected_session_id,
                 event_id=event_id,
             )

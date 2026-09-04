@@ -228,7 +228,10 @@ class GeminiCLI(AbstractCLI):
     def accepts_event_driver_callback(self, records, *, session_id: str, event_id: str) -> bool:
         return self._verified_event_driver_acceptance(
             records,
-            matches=lambda record: record.get("type") == "init",
+            session_matches=lambda record: record.get("type") == "init",
+            acceptance_matches=lambda record: record.get("type") == "message"
+            and record.get("role") == "user"
+            and self._event_driver_record_contains_text(record.get("content"), event_id),
             session_field="session_id",
             session_id=session_id,
             event_id=event_id,

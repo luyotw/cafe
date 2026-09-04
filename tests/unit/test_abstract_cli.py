@@ -86,28 +86,45 @@ def test_concrete_cli_can_be_instantiated():
 
 
 @pytest.mark.parametrize(
-    ("strategy_type", "agent_cli", "record"),
+    ("strategy_type", "agent_cli", "record", "acceptance"),
     [
-        (CodexCLI, AgentCLI.CODEX, {"type": "thread.started", "thread_id": "session"}),
+        (
+            CodexCLI,
+            AgentCLI.CODEX,
+            {"type": "thread.started", "thread_id": "session"},
+            {"type": "turn.started"},
+        ),
         (
             ClaudeCLI,
             AgentCLI.CLAUDE,
             {"type": "system", "subtype": "init", "session_id": "session", "model": "exact"},
+            {"type": "stream_event", "event": {"type": "message_start"}},
         ),
         (
             GeminiCLI,
             AgentCLI.GEMINI,
             {"type": "init", "session_id": "session", "model": "exact"},
+            {"type": "message", "role": "user", "content": "callback event-1"},
         ),
         (
             CursorCLI,
             AgentCLI.CURSOR,
             {"type": "system", "subtype": "init", "session_id": "session", "model": "exact"},
+            {
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "callback event-1"}],
+                },
+            },
         ),
     ],
 )
 def test_event_driver_adapters_require_verified_session_evidence(
-    strategy_type, agent_cli: AgentCLI, record: dict[str, object]
+    strategy_type,
+    agent_cli: AgentCLI,
+    record: dict[str, object],
+    acceptance: dict[str, object],
 ) -> None:
     strategy = strategy_type(AgentConfig(name="driver", cli=agent_cli, model="exact"))
 
@@ -119,26 +136,32 @@ def test_event_driver_adapters_require_verified_session_evidence(
         )
         is False
     )
-    acknowledgement = {**record, "_cafe_event_id": "event-1"}
     assert (
         strategy.accepts_event_driver_callback(
-            [acknowledgement], session_id="session", event_id="event-1"
+            [record, acceptance], session_id="session", event_id="event-1"
         )
         is True
     )
     assert strategy.extract_event_driver_session([{**record, "model": "wrong"}]) is None
     assert (
         strategy.accepts_event_driver_callback(
-            [acknowledgement], session_id="other", event_id="event-1"
+            [record, acceptance], session_id="other", event_id="event-1"
         )
         is False
     )
     assert (
         strategy.accepts_event_driver_callback(
-            [acknowledgement], session_id="session", event_id="event-2"
+            [record, acceptance], session_id="session", event_id=""
         )
         is False
     )
+    if agent_cli in {AgentCLI.GEMINI, AgentCLI.CURSOR}:
+        assert (
+            strategy.accepts_event_driver_callback(
+                [record, acceptance], session_id="session", event_id="event-2"
+            )
+            is False
+        )
     assert strategy.extract_event_driver_session([{"type": "result", "session_id": "session"}]) is None
     empty_record = {
         key: ("" if key in {"session_id", "thread_id"} else value)

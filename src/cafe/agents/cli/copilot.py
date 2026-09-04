@@ -247,7 +247,9 @@ class CopilotCLI(AbstractCLI):
     ) -> bool:
         return self._verified_event_driver_acceptance(
             records,
-            matches=lambda record: record.get("type") == "session.start",
+            session_matches=lambda record: record.get("type") == "session.start",
+            acceptance_matches=lambda record: record.get("type") == "user.message"
+            and self._event_driver_record_contains_text(record.get("data"), event_id),
             session_field="sessionId",
             session_id=session_id,
             event_id=event_id,

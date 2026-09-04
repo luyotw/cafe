@@ -981,6 +981,40 @@ def test_public_callback_path_executes_version_three_lifecycle(tmp_path: Path, m
     assert persisted["events"][event["event_id"]]["status"] == "accepted"
 
 
+def test_public_callback_path_rejects_eventless_provider_init(
+    tmp_path: Path, monkeypatch
+) -> None:
+    callback = _callback_module()
+    driver_dir, state, event = _v3_event_context(callback, tmp_path, [("claude", "exact")])
+    state["entries"][0]["session"] = {
+        "id": "provider-session",
+        "source": "provider",
+        "acquired_at": "2026-09-04T00:00:00+00:00",
+    }
+    callback._write_dispatch_state(driver_dir, state)
+
+    def emit_init_only(_executor, **kwargs):
+        init = {
+            "type": "system",
+            "subtype": "init",
+            "session_id": "provider-session",
+        }
+        kwargs["structured_records"].append(init)
+        kwargs["structured_record_observer"](init)
+
+    monkeypatch.setattr(callback.AgentExecutor, "_execute_with_streaming", emit_init_only)
+    callback.run_callback(event, repository_root=tmp_path)
+
+    persisted = callback._load_or_initialize_dispatch_state(
+        driver_dir,
+        workflow_id=state["workflow_id"],
+        config=state["policy"],
+    )
+    event_state = persisted["events"][event["event_id"]]
+    assert event_state["status"] == "exhausted"
+    assert event_state["accepted_index"] is None
+
+
 def test_status_projects_order_conformance_and_unacquired_without_writing(
     tmp_path: Path,
 ) -> None:

@@ -209,7 +209,8 @@ class CodexCLI(AbstractCLI):
     def accepts_event_driver_callback(self, records, *, session_id: str, event_id: str) -> bool:
         return self._verified_event_driver_acceptance(
             records,
-            matches=lambda record: record.get("type") == "thread.started",
+            session_matches=lambda record: record.get("type") == "thread.started",
+            acceptance_matches=lambda record: record.get("type") == "turn.started",
             session_field="thread_id",
             session_id=session_id,
             event_id=event_id,

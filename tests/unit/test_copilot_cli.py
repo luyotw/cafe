@@ -318,13 +318,16 @@ class TestCopilotCLIExtractSessionId:
         assert command[command.index("--resume") + 1] == "provider-session"
         assert "--session-id" not in command
 
-    def test_actual_callback_requires_session_start_not_terminal_result(self):
+    def test_actual_callback_requires_user_message_after_session_start(self):
         cli = CopilotCLI(
             AgentConfig(name="driver", cli=AgentCLI.COPILOT, model="exact")
         )
         terminal = {"type": "result", "status": "success", "sessionId": "session"}
         started = {"type": "session.start", "sessionId": "session", "model": "exact"}
-        accepted = {**started, "_cafe_event_id": "event-1"}
+        accepted = {
+            "type": "user.message",
+            "data": {"content": "callback event-1"},
+        }
 
         assert (
             cli.accepts_event_driver_callback(
@@ -340,7 +343,13 @@ class TestCopilotCLIExtractSessionId:
         )
         assert (
             cli.accepts_event_driver_callback(
-                [accepted], session_id="session", event_id="event-1"
+                [started, accepted], session_id="session", event_id="event-1"
             )
             is True
+        )
+        assert (
+            cli.accepts_event_driver_callback(
+                [started, accepted], session_id="session", event_id="event-2"
+            )
+            is False
         )

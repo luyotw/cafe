@@ -155,20 +155,48 @@ class AbstractCLI(ABC):
         self,
         records: Sequence[Mapping[str, Any]],
         *,
-        matches: Callable[[Mapping[str, Any]], bool],
+        session_matches: Callable[[Mapping[str, Any]], bool],
+        acceptance_matches: Callable[[Mapping[str, Any]], bool],
         session_field: str,
         session_id: str,
         event_id: str,
     ) -> bool:
-        """Bind provider acceptance evidence to one resumed session and event."""
+        """Verify a provider turn acknowledgement after exact-session evidence."""
         if not event_id.strip():
             return False
         observed = self._verified_event_driver_session(
             records,
-            matches=lambda record: record.get("_cafe_event_id") == event_id and matches(record),
+            matches=session_matches,
             field=session_field,
         )
-        return observed == session_id
+        if observed != session_id:
+            return False
+
+        session_observed = False
+        for record in records:
+            if not isinstance(record, Mapping):
+                continue
+            if session_matches(record):
+                session_observed = True
+                continue
+            if session_observed and acceptance_matches(record):
+                return True
+        return False
+
+    def _event_driver_record_contains_text(self, value: Any, expected: str) -> bool:
+        """Recognize an exact event token inside a provider-owned user record."""
+        if isinstance(value, str):
+            return expected in value
+        if isinstance(value, Mapping):
+            return any(
+                self._event_driver_record_contains_text(item, expected)
+                for item in value.values()
+            )
+        if isinstance(value, Sequence):
+            return any(
+                self._event_driver_record_contains_text(item, expected) for item in value
+            )
+        return False
 
     def _verified_event_driver_session(
         self,

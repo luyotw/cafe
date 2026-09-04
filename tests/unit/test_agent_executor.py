@@ -905,6 +905,7 @@ class TestEventDriverObservation:
             kwargs["structured_records"].extend(
                 [
                     {"type": "thread.started", "thread_id": "provider-session"},
+                    {"type": "turn.started"},
                     {"type": "item.completed", "item": {"type": "agent_message"}},
                 ]
             )
@@ -969,6 +970,13 @@ class TestEventDriverObservation:
             }
             kwargs["structured_records"].append(init)
             kwargs["structured_record_observer"](init)
+            assert order == []
+            turn_started = {
+                "type": "stream_event",
+                "event": {"type": "message_start"},
+            }
+            kwargs["structured_records"].append(turn_started)
+            kwargs["structured_record_observer"](turn_started)
             assert order == ["accepted"]
             order.append("model-output")
             return AgentResponse(response="later", token_usage=TokenUsage())
@@ -983,6 +991,39 @@ class TestEventDriverObservation:
 
         assert observed.accepted is True
         assert order == ["accepted", "model-output"]
+
+    def test_eventless_provider_init_does_not_accept_actual_callback(self) -> None:
+        executor = AgentExecutor(
+            AgentConfig(
+                name="driver",
+                cli=AgentCLI.CLAUDE,
+                model="exact",
+                session_id="provider-session",
+            ),
+            stream_output=False,
+        )
+        accepted = []
+
+        def execute_stream(**kwargs):
+            init = {
+                "type": "system",
+                "subtype": "init",
+                "session_id": "provider-session",
+            }
+            kwargs["structured_records"].append(init)
+            kwargs["structured_record_observer"](init)
+            return AgentResponse(response="", token_usage=TokenUsage())
+
+        with patch.object(executor, "_execute_with_streaming", side_effect=execute_stream):
+            observed = executor.execute_event_driver(
+                "callback event-1",
+                expected_session_id="provider-session",
+                event_id="event-1",
+                on_acceptance=lambda: accepted.append(True),
+            )
+
+        assert observed.accepted is False
+        assert accepted == []
 
     def test_callback_observer_bounds_provider_records(self) -> None:
         executor = AgentExecutor(
