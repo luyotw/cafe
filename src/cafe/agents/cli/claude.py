@@ -249,6 +249,21 @@ class ClaudeCLI(AbstractCLI):
                 continue
         return None
 
+    @property
+    def event_driver_conforming(self) -> bool:
+        return True
+
+    def extract_event_driver_session(self, records) -> Optional[str]:
+        return self._verified_event_driver_session(
+            records,
+            matches=lambda record: record.get("type") == "system"
+            and record.get("subtype") == "init",
+            field="session_id",
+        )
+
+    def accepts_event_driver_callback(self, records, *, session_id: str) -> bool:
+        return self.extract_event_driver_session(records) == session_id
+
     def create_session(self) -> str:
         """Claude sessions are created by the real prompt execution."""
         return ""

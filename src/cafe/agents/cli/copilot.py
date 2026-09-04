@@ -1,8 +1,7 @@
 """Copilot CLI tool implementation."""
 
-import time
-from pathlib import Path
-from typing import List, Optional, Set, Tuple
+import json
+from typing import List, Optional, Tuple
 
 from cafe.agents.cli.abstract import AbstractCLI
 from cafe.core.types import PermissionDenial, TokenUsage
@@ -10,15 +9,6 @@ from cafe.core.types import PermissionDenial, TokenUsage
 
 class CopilotCLI(AbstractCLI):
     """Concrete implementation of Copilot CLI tool."""
-
-    def __init__(self, config):
-        """Initialize Copilot CLI.
-
-        Args:
-            config: Agent configuration
-        """
-        super().__init__(config)
-        self._existing_sessions: Set[str] = set()
 
     def build_command(
         self,
@@ -216,51 +206,49 @@ class CopilotCLI(AbstractCLI):
         # Copilot doesn't use output format parameter
         return []
 
-    def record_existing_sessions(self) -> None:
-        """Record session files that existed before execution.
+    @property
+    def event_driver_conforming(self) -> bool:
+        return True
 
-        Used to later detect newly created sessions.
-        """
-        copilot_session_dir = Path.home() / ".copilot" / "session-state"
+    def build_event_driver_command(
+        self,
+        prompt: str,
+        allowed_tools: Optional[List[str]] = None,
+        allowed_directories: Optional[List[str]] = None,
+    ) -> List[str]:
+        command = self.build_command(prompt, allowed_tools, allowed_directories)
+        command.append("--output-format=json")
+        return command
 
-        if copilot_session_dir.exists():
-            self._existing_sessions = {
-                f.name for f in copilot_session_dir.iterdir() if f.is_file() or f.is_dir()
-            }
-        else:
-            self._existing_sessions = set()
+    def extract_event_driver_session(self, records) -> Optional[str]:
+        if not records or records[-1].get("type") != "result":
+            return None
+        terminal_records = [record for record in records if record.get("type") == "result"]
+        if len(terminal_records) != 1 or terminal_records[0].get("status") != "success":
+            return None
+        return self._verified_event_driver_session(
+            terminal_records,
+            matches=lambda record: record.get("type") == "result"
+            and record.get("status") == "success",
+            field="sessionId",
+        )
+
+    def accepts_event_driver_callback(self, records, *, session_id: str) -> bool:
+        observed = self._verified_event_driver_session(
+            records,
+            matches=lambda record: record.get("type") == "session.start",
+            field="sessionId",
+        )
+        return observed == session_id
 
     def extract_session_id(self, output_lines: List[str]) -> Optional[str]:
-        """Extract newly created session ID from file system.
-
-        Copilot automatically creates session directories, need to detect from file system.
-
-        Args:
-            output_lines: List of lines from CLI output (not used here)
-
-        Returns:
-            Session ID, or None if not found
-        """
-        copilot_session_dir = Path.home() / ".copilot" / "session-state"
-
-        if not copilot_session_dir.exists():
-            return None
-
-        # Wait for file system to update
-        time.sleep(0.1)
-
-        # Get current session files and directories
-        current_sessions = {
-            f.name for f in copilot_session_dir.iterdir() if f.is_file() or f.is_dir()
-        }
-
-        # Find newly created sessions
-        new_sessions = current_sessions - self._existing_sessions
-
-        if len(new_sessions) == 1:
-            session_name = next(iter(new_sessions))
-            # Remove .jsonl extension if present (for file-based sessions)
-            session_id = session_name.replace(".jsonl", "")
-            return session_id
-
-        return None
+        """Extract a provider-created ID from one successful terminal JSON record."""
+        records = []
+        for line in output_lines:
+            try:
+                record = json.loads(line)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if isinstance(record, dict):
+                records.append(record)
+        return self.extract_event_driver_session(records)

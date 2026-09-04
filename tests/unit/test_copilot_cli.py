@@ -1,6 +1,7 @@
 """測試 CopilotCLI 實作."""
 
-from unittest.mock import MagicMock, patch
+import json
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -246,138 +247,73 @@ class TestCopilotCLIParseResponse:
 class TestCopilotCLIExtractSessionId:
     """測試 extract_session_id() 方法."""
 
-    @patch("cafe.agents.cli.copilot.Path")
-    @patch("cafe.agents.cli.copilot.time.sleep")
-    def test_extract_session_id_from_filesystem(self, mock_sleep, mock_path_class, copilot_config):
-        """測試從檔案系統提取 session ID."""
+    def test_extracts_only_one_successful_terminal_provider_session(self, copilot_config):
         cli = CopilotCLI(copilot_config)
+        records = [
+            json.dumps({"type": "assistant.message", "data": {"content": "HI"}}),
+            json.dumps(
+                {"type": "result", "status": "success", "sessionId": "provider-session"}
+            ),
+        ]
 
-        # Mock Path.home() 和 session directory
-        mock_home = MagicMock()
-        mock_path_class.home.return_value = mock_home
+        assert cli.extract_session_id(records) == "provider-session"
+        assert cli.extract_event_driver_session([json.loads(line) for line in records]) == (
+            "provider-session"
+        )
 
-        mock_session_dir = MagicMock()
-        mock_session_dir.exists.return_value = True
-
-        # Mock 初始檔案列表 (只有舊 session)
-        mock_file1 = MagicMock()
-        mock_file1.name = "old-session.jsonl"
-        mock_file1.is_file.return_value = True
-
-        # 設定 Path.home() / ".copilot" / "session-state" 回傳 mock_session_dir
-        mock_home.__truediv__.return_value.__truediv__.return_value = mock_session_dir
-
-        # 第一次呼叫 iterdir (record_existing_sessions)
-        mock_session_dir.iterdir.return_value = [mock_file1]
-
-        # 記錄初始 sessions
-        cli.record_existing_sessions()
-
-        # Mock 新檔案
-        mock_file2 = MagicMock()
-        mock_file2.name = "new-session-uuid.jsonl"
-        mock_file2.is_file.return_value = True
-
-        # 第二次呼叫 iterdir (extract_session_id) - 新增了 session
-        mock_session_dir.iterdir.return_value = [mock_file1, mock_file2]
-
-        output_lines = []
-        session_id = cli.extract_session_id(output_lines)
-
-        # 應該提取新的 session ID (去除 .jsonl)
-        assert session_id == "new-session-uuid"
-
-    @patch("cafe.agents.cli.copilot.Path")
-    def test_extract_session_id_no_new_session(self, mock_path_class, copilot_config):
-        """測試沒有新 session 時回傳 None."""
-        cli = CopilotCLI(copilot_config)
-
-        mock_home = MagicMock()
-        mock_path_class.home.return_value = mock_home
-
-        mock_session_dir = MagicMock()
-        mock_session_dir.exists.return_value = True
-
-        mock_file1 = MagicMock()
-        mock_file1.name = "existing-session.jsonl"
-        mock_file1.is_file.return_value = True
-
-        mock_session_dir.iterdir.return_value = [mock_file1]
-
-        mock_home.__truediv__.return_value.__truediv__.return_value = mock_session_dir
-
-        # 記錄初始 sessions
-        cli.record_existing_sessions()
-
-        # 沒有新增 session
-        output_lines = []
-        session_id = cli.extract_session_id(output_lines)
-
-        assert session_id is None
-
-    @patch("cafe.agents.cli.copilot.Path")
-    @patch("cafe.agents.cli.copilot.time.sleep")
-    def test_extract_session_id_rejects_ambiguous_new_sessions(
-        self, mock_sleep, mock_path_class, copilot_config
+    @pytest.mark.parametrize(
+        "records",
+        [
+            [],
+            [{"type": "result", "status": "failed", "sessionId": "session"}],
+            [{"type": "result", "status": "success", "sessionId": ""}],
+            [{"type": "result", "status": "success"}],
+            [
+                {"type": "result", "status": "success", "sessionId": "one"},
+                {"type": "result", "status": "success", "sessionId": "two"},
+            ],
+            [
+                {"type": "result", "status": "success", "sessionId": "session"},
+                {"type": "assistant.message", "data": {"content": "late"}},
+            ],
+        ],
+    )
+    def test_rejects_invalid_or_contradictory_terminal_records(
+        self, copilot_config, records
     ):
         cli = CopilotCLI(copilot_config)
-        mock_home = MagicMock()
-        mock_path_class.home.return_value = mock_home
-        mock_session_dir = MagicMock()
-        mock_session_dir.exists.return_value = True
-        mock_home.__truediv__.return_value.__truediv__.return_value = mock_session_dir
-        mock_session_dir.iterdir.return_value = []
-        cli.record_existing_sessions()
 
-        entries = []
-        for name in ("session-a.jsonl", "session-b.jsonl"):
-            entry = MagicMock()
-            entry.name = name
-            entry.is_file.return_value = True
-            entries.append(entry)
-        mock_session_dir.iterdir.return_value = entries
+        assert cli.extract_event_driver_session(records) is None
 
-        assert cli.extract_session_id([]) is None
+    def test_event_driver_command_uses_provider_created_then_exact_resume(self):
+        fresh = CopilotCLI(
+            AgentConfig(name="driver", cli=AgentCLI.COPILOT, model="exact")
+        )
+        bootstrap = fresh.build_event_driver_command('say "HI"', [], [])
+        assert bootstrap[bootstrap.index("-p") + 1] == 'say "HI"'
+        assert "--output-format=json" in bootstrap
+        assert "--resume" not in bootstrap
+        assert "--session-id" not in bootstrap
 
-    @patch("cafe.agents.cli.copilot.Path")
-    @patch("cafe.agents.cli.copilot.time.sleep")
-    def test_extract_session_id_from_directories(self, mock_sleep, mock_path_class, copilot_config):
-        """Test extracting session ID from newly created session directories."""
-        cli = CopilotCLI(copilot_config)
+        resumed = CopilotCLI(
+            AgentConfig(
+                name="driver",
+                cli=AgentCLI.COPILOT,
+                model="exact",
+                session_id="provider-session",
+            )
+        )
+        command = resumed.build_event_driver_command("callback", [], [])
+        assert command[command.index("--resume") + 1] == "provider-session"
+        assert "--session-id" not in command
 
-        # Mock Path.home() and session directory
-        mock_home = MagicMock()
-        mock_path_class.home.return_value = mock_home
+    def test_actual_callback_requires_session_start_not_terminal_result(self):
+        cli = CopilotCLI(
+            AgentConfig(name="driver", cli=AgentCLI.COPILOT, model="exact")
+        )
+        terminal = {"type": "result", "status": "success", "sessionId": "session"}
+        started = {"type": "session.start", "sessionId": "session", "model": "exact"}
 
-        mock_session_dir = MagicMock()
-        mock_session_dir.exists.return_value = True
-
-        # Mock initial file and directory
-        mock_file1 = MagicMock()
-        mock_file1.name = "old-session.jsonl"
-        mock_file1.is_file.return_value = True
-        mock_file1.is_dir.return_value = False
-
-        # Set up Path.home() / ".copilot" / "session-state" to return mock_session_dir
-        mock_home.__truediv__.return_value.__truediv__.return_value = mock_session_dir
-
-        # First call to iterdir (record_existing_sessions)
-        mock_session_dir.iterdir.return_value = [mock_file1]
-
-        # Record initial sessions
-        cli.record_existing_sessions()
-
-        # Mock newly created session directory
-        mock_dir2 = MagicMock()
-        mock_dir2.name = "87bd54bf-2d9f-4ac6-9a53-3827a30c1e19"
-        mock_dir2.is_file.return_value = False
-        mock_dir2.is_dir.return_value = True
-
-        # Second call to iterdir (extract_session_id) - new session directory added
-        mock_session_dir.iterdir.return_value = [mock_file1, mock_dir2]
-
-        output_lines = []
-        session_id = cli.extract_session_id(output_lines)
-
-        # Should extract new session ID from directory name
-        assert session_id == "87bd54bf-2d9f-4ac6-9a53-3827a30c1e19"
+        assert cli.accepts_event_driver_callback([terminal], session_id="session") is False
+        assert cli.accepts_event_driver_callback([started], session_id="session") is True
+        assert not hasattr(cli, "record_existing_sessions")

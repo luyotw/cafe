@@ -840,6 +840,90 @@ class TestCopilotTokenUsageExtraction:
             assert "Usage by model:" not in agent_response.response
 
 
+class TestEventDriverObservation:
+    """測試 callback-only provider evidence 觀察邊界。"""
+
+    def test_bootstrap_extracts_provider_session_without_delivery(self) -> None:
+        executor = AgentExecutor(
+            AgentConfig(name="driver", cli=AgentCLI.CODEX, model="exact"),
+            stream_output=False,
+        )
+
+        def execute_stream(**kwargs):
+            kwargs["structured_records"].append(
+                {"type": "thread.started", "thread_id": "provider-session"}
+            )
+            return AgentResponse(response="HI", token_usage=TokenUsage())
+
+        with patch.object(executor, "_execute_with_streaming", side_effect=execute_stream) as run:
+            observed = executor.execute_event_driver('say "HI"')
+
+        assert observed.session_id == "provider-session"
+        assert observed.accepted is False
+        assert run.call_args.kwargs["parse_stream_json"] is True
+        assert run.call_args.kwargs["cmd"].count('say "HI"') == 1
+
+    def test_actual_callback_uses_exact_session_and_ignores_model_output(self) -> None:
+        executor = AgentExecutor(
+            AgentConfig(
+                name="driver",
+                cli=AgentCLI.CODEX,
+                model="exact",
+                session_id="provider-session",
+            ),
+            stream_output=False,
+        )
+
+        def execute_stream(**kwargs):
+            kwargs["structured_records"].extend(
+                [
+                    {"type": "thread.started", "thread_id": "provider-session"},
+                    {"type": "item.completed", "item": {"type": "agent_message"}},
+                ]
+            )
+            return AgentResponse(response="", token_usage=TokenUsage())
+
+        with (
+            patch.object(executor, "_execute_with_streaming", side_effect=execute_stream) as run,
+            patch.object(
+                executor,
+                "_execute_with_session_recovery",
+                side_effect=AssertionError("cold retry is forbidden"),
+            ),
+        ):
+            observed = executor.execute_event_driver(
+                "callback event-1",
+                expected_session_id="provider-session",
+                event_id="event-1",
+            )
+
+        assert observed.accepted is True
+        assert observed.event_id == "event-1"
+        command = run.call_args.kwargs["cmd"]
+        assert command[command.index("resume") + 1] == "provider-session"
+
+    def test_callback_observer_bounds_provider_records(self) -> None:
+        executor = AgentExecutor(
+            AgentConfig(name="driver", cli=AgentCLI.CODEX, model="exact"),
+            stream_output=False,
+        )
+
+        def execute_stream(**kwargs):
+            kwargs["structured_records"].append(
+                {"type": "thread.started", "thread_id": "provider-session"}
+            )
+            kwargs["structured_records"].extend(
+                {"type": "noise", "index": index} for index in range(100)
+            )
+            return AgentResponse(response="", token_usage=TokenUsage())
+
+        with patch.object(executor, "_execute_with_streaming", side_effect=execute_stream):
+            observed = executor.execute_event_driver('say "HI"')
+
+        assert len(observed.records) == 64
+        assert observed.session_id == "provider-session"
+
+
 class TestStreamingExecution:
     """測試 streaming 輸出功能"""
 

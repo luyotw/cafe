@@ -1,10 +1,15 @@
 """測試 AbstractCLI 抽象基底類別."""
 
+import json
 from abc import ABC
 
 import pytest
 
 from cafe.agents.cli.abstract import AbstractCLI
+from cafe.agents.cli.claude import ClaudeCLI
+from cafe.agents.cli.codex import CodexCLI
+from cafe.agents.cli.cursor import CursorCLI
+from cafe.agents.cli.gemini import GeminiCLI
 from cafe.core.types import AgentCLI, AgentConfig, TokenUsage
 
 
@@ -70,6 +75,51 @@ def test_concrete_cli_can_be_instantiated():
     assert cli.config == config
     assert cli.config.name == "test"
     assert cli.config.cli == AgentCLI.CLAUDE
+    assert cli.event_driver_conforming is False
+    assert cli.extract_event_driver_session([]) is None
+    assert cli.accepts_event_driver_callback([], session_id="session") is False
+
+
+@pytest.mark.parametrize(
+    ("strategy_type", "agent_cli", "record"),
+    [
+        (CodexCLI, AgentCLI.CODEX, {"type": "thread.started", "thread_id": "session"}),
+        (
+            ClaudeCLI,
+            AgentCLI.CLAUDE,
+            {"type": "system", "subtype": "init", "session_id": "session", "model": "exact"},
+        ),
+        (
+            GeminiCLI,
+            AgentCLI.GEMINI,
+            {"type": "init", "session_id": "session", "model": "exact"},
+        ),
+        (
+            CursorCLI,
+            AgentCLI.CURSOR,
+            {"type": "system", "subtype": "init", "session_id": "session", "model": "exact"},
+        ),
+    ],
+)
+def test_event_driver_adapters_require_verified_session_evidence(
+    strategy_type, agent_cli: AgentCLI, record: dict[str, object]
+) -> None:
+    strategy = strategy_type(AgentConfig(name="driver", cli=agent_cli, model="exact"))
+
+    assert strategy.event_driver_conforming is True
+    assert strategy.extract_event_driver_session([record]) == "session"
+    assert strategy.accepts_event_driver_callback([record], session_id="session") is True
+    assert strategy.extract_event_driver_session([{**record, "model": "wrong"}]) is None
+    assert strategy.accepts_event_driver_callback([record], session_id="other") is False
+    assert strategy.extract_event_driver_session([{"type": "result", "session_id": "session"}]) is None
+    empty_record = {
+        key: ("" if key in {"session_id", "thread_id"} else value)
+        for key, value in record.items()
+    }
+    assert strategy.extract_event_driver_session([empty_record]) is None
+
+    encoded = [json.dumps(record)]
+    assert strategy.extract_session_id(encoded) == "session"
 
 
 @pytest.mark.parametrize(

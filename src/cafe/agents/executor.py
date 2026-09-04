@@ -6,7 +6,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event, Timer
-from typing import Callable, List, Optional
+from typing import Any, Callable, List, Optional
 
 from cafe.agents.cli import AbstractCLI, ClaudeCLI, CodexCLI, CopilotCLI, CursorCLI, GeminiCLI
 from cafe.agents.diagnostics import sanitize_error_excerpt
@@ -41,6 +41,16 @@ class AgentExecutionControl:
             value = getattr(self, name)
             if value is not None and value <= 0:
                 raise ValueError(f"{name} must be positive when configured")
+
+
+@dataclass(frozen=True)
+class EventDriverExecutionResult:
+    """Bounded provider evidence for one callback-only process."""
+
+    session_id: str | None
+    accepted: bool
+    event_id: str | None
+    records: tuple[dict[str, Any], ...]
 
 
 class AgentExecutor:
@@ -137,6 +147,10 @@ class AgentExecutor:
         else:
             raise AgentExecutionError(f"Unsupported agent CLI: {self.config.cli}")
 
+    def supports_event_driver(self) -> bool:
+        """Return the adapter's explicit event-driver contract opt-in."""
+        return self._get_cli_strategy().event_driver_conforming
+
     def _translate_tool_names(self, tools: Optional[List[str]]) -> Optional[List[str]]:
         """Translate tool names from Claude convention to current CLI convention.
 
@@ -202,10 +216,6 @@ class AgentExecutor:
             decision_only = allowed_tools == [] and allowed_directories == []
             if self.config.cli == AgentCLI.GEMINI and not decision_only:
                 cli_strategy.ensure_geminiignore()
-
-            # For Copilot, record existing sessions before execution
-            if self.config.cli == AgentCLI.COPILOT:
-                cli_strategy.record_existing_sessions()
 
             # Translate allowed tools using CLI-specific logic
             cli_translated_tools = (
@@ -362,6 +372,75 @@ class AgentExecutor:
             raise
         except Exception as e:
             raise AgentExecutionError(f"Agent execution failed: {e}") from e
+
+    def execute_event_driver(
+        self,
+        prompt: str,
+        *,
+        expected_session_id: str | None = None,
+        event_id: str | None = None,
+        allowed_tools: Optional[List[str]] = None,
+        allowed_directories: Optional[List[str]] = None,
+        execution_control: AgentExecutionControl | None = None,
+    ) -> EventDriverExecutionResult:
+        """Run one callback process without ordinary session recovery semantics."""
+        strategy = self._get_cli_strategy()
+        if not strategy.event_driver_conforming:
+            raise AgentExecutionError(
+                f"{self.config.cli.value} lacks the event-driven callback contract",
+                error_type="event_driver_nonconforming",
+            )
+        if expected_session_id is not None:
+            if not expected_session_id.strip():
+                raise ValueError("event-driver exact session must be non-empty")
+            self.config.session_id = expected_session_id
+
+        translated_tools = self._translate_tool_names(allowed_tools)
+        provider_tools = (
+            strategy.translate_allowed_tools(translated_tools)
+            if translated_tools is not None
+            else None
+        )
+        command = strategy.build_event_driver_command(
+            prompt,
+            provider_tools,
+            allowed_directories,
+        )
+        process_cwd = (
+            execution_control.working_directory.expanduser().resolve()
+            if execution_control is not None and execution_control.working_directory is not None
+            else None
+        )
+        if process_cwd is not None:
+            process_cwd.mkdir(parents=True, exist_ok=True)
+
+        records: list[dict[str, Any]] = []
+        self._execute_with_streaming(
+            cmd=command,
+            cli_name=self.config.cli.value.capitalize(),
+            parse_stream_json=True,
+            json_content_extractor=lambda _record: None,
+            env=strategy.build_environment(),
+            process_cwd=process_cwd,
+            execution_control=execution_control,
+            structured_records=records,
+        )
+        bounded_records = tuple(records[:64])
+        if expected_session_id is None:
+            session_id = strategy.extract_event_driver_session(bounded_records)
+            accepted = False
+        else:
+            session_id = expected_session_id
+            accepted = strategy.accepts_event_driver_callback(
+                bounded_records,
+                session_id=expected_session_id,
+            )
+        return EventDriverExecutionResult(
+            session_id=session_id,
+            accepted=accepted,
+            event_id=event_id,
+            records=bounded_records,
+        )
 
     def preview_cli_command_args(
         self,
@@ -971,6 +1050,7 @@ class AgentExecutor:
         streaming_output_file: Optional[str] = None,
         process_cwd: Path | None = None,
         execution_control: AgentExecutionControl | None = None,
+        structured_records: list[dict[str, Any]] | None = None,
     ) -> AgentResponse:
         """Execute command with streaming output.
 
@@ -1219,6 +1299,10 @@ class AgentExecutor:
                         # Parse stream-json format
                         try:
                             data = json.loads(line.strip())
+
+                            if isinstance(data, dict) and structured_records is not None:
+                                if len(structured_records) < 64:
+                                    structured_records.append(dict(data))
 
                             # Always collect the line for response_parser (e.g., Gemini needs last line)
                             output_lines.append(line)

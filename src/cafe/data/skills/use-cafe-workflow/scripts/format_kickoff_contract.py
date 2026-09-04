@@ -49,7 +49,8 @@ try:
         confirmation_gate_steps,
         mandatory_confirmation_gate_steps,
     )
-    from cafe.core.types import AgentCLI
+    from cafe.agents.executor import AgentExecutor
+    from cafe.core.types import AgentCLI, AgentConfig
     from cafe.playbooks.loader import PlaybookLoader
     from cafe.skills.execution_profile import resolve_execution_profile
     from cafe.skills.loader import SkillLoader
@@ -157,7 +158,10 @@ def _parse_event_driver_entries(values: Iterable[str] | None) -> ModelChain:
             cli = AgentCLI(cli).value
         except ValueError as exc:
             raise ValueError(f"unsupported event-driven CLI '{cli}'") from exc
-        if cli not in _EVENT_DRIVEN_CLIS:
+        if cli not in _EVENT_DRIVEN_CLIS or not AgentExecutor(
+            AgentConfig(name="__cafe_event_driver__", cli=AgentCLI(cli), model=model),
+            stream_output=False,
+        ).supports_event_driver():
             raise ValueError(f"CLI '{cli}' lacks the event-driven contract")
         if cli in seen:
             raise ValueError(f"duplicate event-driven CLI '{cli}'")
