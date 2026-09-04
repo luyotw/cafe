@@ -28,25 +28,60 @@ before launch:
 ```bash
 python3 <skill-dir>/scripts/workflow_event_callback.py --write-config \
   --issue-dir .cafe/issues/<issue> \
-  --cli <claude|codex|gemini|copilot|cursor-agent> \
-  --model <exact-model>
+  --entry <primary-cli>:<exact-model> \
+  [--entry <fallback-cli>:<exact-model> ...]
 
 cafe workflow --issue <issue> --execute --mute-agent-output --background \
   --on-workflow-event builtin:use-cafe-workflow:workflow_event_callback
 ```
 
-The callback uses `.cafe/issues/<issue>/driver/config.yaml`, `session.json`,
-and `session.lock`. When the launch comes from the Codex App with `cli: codex`,
-the binding records that visible Codex thread and the callback uses `codex queue`
-to wake it through the existing host daemon. If the thread is busy, the notice
-runs after its current turn; if it is idle, the notice wakes it. The callback
-does **not** create a separate `__cafe_event_driver__` session. `session.json`
-then records that same thread as the workflow's exact identity. A terminal or
-non-Codex launch without a host-thread binding retains the existing per-issue
-driver session behavior. Every path refuses to replace an acquired identity.
-It is an ordinary driver and uses only existing kickoff authority:
-confirmation contract, mandatory HumanTask stops, reactive user handoffs,
-mandate, and model-adjustment authority.
+Version 3 uses `.cafe/issues/<issue>/driver/config.yaml`, `session.lock`, and
+one authoritative `dispatch_state.json`; it creates no session sidecar. Policy order, per-entry
+transport-local session provenance, attempt history, the sticky active index,
+takeover, exhaustion, and recovery state all live in that one state file. The
+shared lifecycle uses no session-file discovery, directory diff, sleep, polling,
+or watcher.
+
+Session acquisition and actual delivery are separate boundaries. Every
+unacquired, unbound entry first runs a provider request exactly equivalent to
+`say "HI"` with no workflow event or driver authority. Codex, Claude, Gemini,
+Cursor, and Copilot each supply a provider-created session ID from their
+verified structured or terminal evidence. The callback persists that ID in
+`dispatch_state.json` before the actual callback. An existing acquired session
+is reused without bootstrap. Copilot has the same lifecycle and never receives
+a caller-selected new-session ID.
+
+When the first entry is Codex and configuration runs from the Codex App, the
+first Codex entry's valid runtime-owned host binding is already acquired and
+uses `codex queue`; no fallback inherits it. Otherwise the actual callback
+resumes only that entry's persisted provider session. Bootstrap never counts as
+event delivery or acceptance. Only actual callback durable acceptance stops
+forward routing, makes that entry active for later events, and records a
+takeover. This is transport acceptance and does not wait for or infer success
+from model output.
+
+Entries are attempted serially from the sticky active index. Only a conclusive
+pre-acceptance nonacceptance may move to the next later entry. An ambiguous
+outcome stops forward routing and remains recovery-visible. Exhaustion retains
+the event and all attempts for existing explicit recovery; it does not roll
+back completed phase work or block normal phase advancement. A cross-provider
+takeover is transport-local and does not merge conversations or promise that
+the initiating conversation continues elsewhere.
+
+Inspect this state without acquiring a callback lock or modifying any driver
+file:
+
+```bash
+python3 <skill-dir>/scripts/workflow_event_callback.py \
+  --status --issue-dir .cafe/issues/<issue>
+```
+
+The projection reports confirmed order/conformance, acquisition separately
+from delivery, the active transport, takeover, exhaustion, and recovery. It
+does not infer delivery from model output or claim cross-provider context
+continuity. The callback remains an ordinary driver and uses only existing
+kickoff authority: confirmation contract, mandatory HumanTask stops, reactive
+user handoffs, mandate, and model-adjustment authority.
 
 The callback receives only an asynchronous durable-event notice. It must
 re-check `cafe status`/`cafe show`; a notice can be stale. It may diagnose and

@@ -379,6 +379,7 @@ class AgentExecutor:
         *,
         expected_session_id: str | None = None,
         event_id: str | None = None,
+        on_acceptance: Callable[[], None] | None = None,
         allowed_tools: Optional[List[str]] = None,
         allowed_directories: Optional[List[str]] = None,
         execution_control: AgentExecutionControl | None = None,
@@ -411,6 +412,22 @@ class AgentExecutor:
         )
 
         records: list[dict[str, Any]] = []
+        acceptance_observed = False
+
+        def observe_record(_record: dict[str, Any]) -> None:
+            nonlocal acceptance_observed
+            if (
+                expected_session_id is not None
+                and not acceptance_observed
+                and strategy.accepts_event_driver_callback(
+                    records,
+                    session_id=expected_session_id,
+                )
+            ):
+                if on_acceptance is not None:
+                    on_acceptance()
+                acceptance_observed = True
+
         self._execute_with_streaming(
             cmd=command,
             cli_name=self.config.cli.value.capitalize(),
@@ -420,6 +437,7 @@ class AgentExecutor:
             process_cwd=process_cwd,
             execution_control=execution_control,
             structured_records=records,
+            structured_record_observer=observe_record,
             require_terminal_stream_event=True,
         )
         bounded_records = tuple(records[:64])
@@ -428,7 +446,7 @@ class AgentExecutor:
             accepted = False
         else:
             session_id = expected_session_id
-            accepted = strategy.accepts_event_driver_callback(
+            accepted = acceptance_observed or strategy.accepts_event_driver_callback(
                 bounded_records,
                 session_id=expected_session_id,
             )
@@ -1055,6 +1073,7 @@ class AgentExecutor:
         process_cwd: Path | None = None,
         execution_control: AgentExecutionControl | None = None,
         structured_records: list[dict[str, Any]] | None = None,
+        structured_record_observer: Callable[[dict[str, Any]], None] | None = None,
         require_terminal_stream_event: bool = False,
     ) -> AgentResponse:
         """Execute command with streaming output.
@@ -1310,6 +1329,8 @@ class AgentExecutor:
                             if isinstance(data, dict) and structured_records is not None:
                                 if len(structured_records) < 64:
                                     structured_records.append(dict(data))
+                                    if structured_record_observer is not None:
+                                        structured_record_observer(dict(data))
 
                             # Always collect the line for response_parser (e.g., Gemini needs last line)
                             output_lines.append(line)
@@ -1505,6 +1526,13 @@ class AgentExecutor:
         except BaseException:
             if execution_timer is not None:
                 execution_timer.cancel()
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=2)
             raise
 
         if execution_timer is not None:

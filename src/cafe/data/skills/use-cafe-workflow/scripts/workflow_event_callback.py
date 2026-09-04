@@ -376,6 +376,274 @@ def _write_dispatch_state(driver_dir: Path, state: dict[str, Any]) -> dict[str, 
     return updated
 
 
+def _entry_is_conforming(entry: dict[str, str]) -> bool:
+    executor = AgentExecutor(
+        AgentConfig(
+            name=DRIVER_AGENT_NAME,
+            cli=AgentCLI(entry["cli"]),
+            model=entry["model"],
+            clis=[],
+            backup_clis=[],
+        ),
+        stream_output=False,
+    )
+    return executor.supports_event_driver()
+
+
+def _read_legacy_session(
+    driver_dir: Path,
+    config: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Read and validate legacy session provenance without updating it."""
+    path = driver_dir / SESSION_FILENAME
+    if not path.is_file() or path.is_symlink():
+        if path.exists():
+            raise ValueError("event-driven session is invalid")
+        return None
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("event-driven session is unreadable") from exc
+    expected = {
+        "schema_version",
+        "workflow_id",
+        "cli",
+        "model",
+        "session_id",
+        "created_at",
+        "last_used_at",
+    }
+    if (
+        not isinstance(raw, dict)
+        or set(raw) != expected
+        or raw.get("schema_version") != 1
+        or raw.get("cli") != config["cli"]
+        or raw.get("model") != config["model"]
+        or not isinstance(raw.get("workflow_id"), str)
+        or not raw["workflow_id"]
+        or not isinstance(raw.get("session_id"), str)
+        or not raw["session_id"]
+        or not isinstance(raw.get("created_at"), str)
+        or not isinstance(raw.get("last_used_at"), str)
+    ):
+        raise ValueError("event-driven session is invalid")
+    return raw
+
+
+def _project_attempt(
+    attempt: Any,
+    *,
+    entries: list[dict[str, Any]],
+) -> dict[str, Any]:
+    expected = {
+        "index",
+        "stage",
+        "status",
+        "outcome",
+        "reason",
+        "session_id",
+        "started_at",
+        "finished_at",
+    }
+    if not isinstance(attempt, dict) or set(attempt) != expected:
+        raise ValueError("event-driven dispatch attempt is invalid")
+    index = attempt.get("index")
+    if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < len(entries):
+        raise ValueError("event-driven dispatch attempt is invalid")
+    if attempt.get("stage") not in {"bootstrap", "delivery"}:
+        raise ValueError("event-driven dispatch attempt is invalid")
+    if attempt.get("status") not in {"pending", "acquired", "accepted", "failed", "ambiguous"}:
+        raise ValueError("event-driven dispatch attempt is invalid")
+    return {
+        "index": index,
+        "cli": entries[index]["cli"],
+        "stage": attempt["stage"],
+        "status": attempt["status"],
+        "outcome": attempt.get("outcome"),
+        "reason": attempt.get("reason"),
+        "session_id": attempt.get("session_id"),
+        "started_at": attempt.get("started_at"),
+        "finished_at": attempt.get("finished_at"),
+    }
+
+
+def _project_v3_events(state: dict[str, Any]) -> list[dict[str, Any]]:
+    projected: list[dict[str, Any]] = []
+    entries = state["entries"]
+    expected = {
+        "event",
+        "starting_index",
+        "status",
+        "attempts",
+        "accepted_index",
+        "takeover",
+        "recovery_pending",
+    }
+    for event_id, event_state in state["events"].items():
+        if not isinstance(event_id, str) or not event_id:
+            raise ValueError("event-driven dispatch event is invalid")
+        if not isinstance(event_state, dict) or set(event_state) != expected:
+            raise ValueError("event-driven dispatch event is invalid")
+        event = event_state.get("event")
+        attempts = event_state.get("attempts")
+        if (
+            not isinstance(event, dict)
+            or event.get("event_id") != event_id
+            or not isinstance(event.get("sequence"), int)
+            or isinstance(event.get("sequence"), bool)
+            or not isinstance(event.get("occurred_at"), str)
+            or not isinstance(attempts, list)
+        ):
+            raise ValueError("event-driven dispatch event is invalid")
+        starting_index = event_state.get("starting_index")
+        accepted_index = event_state.get("accepted_index")
+        if (
+            not isinstance(starting_index, int)
+            or isinstance(starting_index, bool)
+            or not 0 <= starting_index < len(entries)
+            or (
+                accepted_index is not None
+                and (
+                    not isinstance(accepted_index, int)
+                    or isinstance(accepted_index, bool)
+                    or not 0 <= accepted_index < len(entries)
+                )
+            )
+            or not isinstance(event_state.get("recovery_pending"), bool)
+        ):
+            raise ValueError("event-driven dispatch event is invalid")
+        projected.append(
+            {
+                "event_id": event_id,
+                "sequence": event["sequence"],
+                "occurred_at": event["occurred_at"],
+                "event_type": event.get("event_type"),
+                "status": event_state.get("status"),
+                "starting_index": starting_index,
+                "accepted_index": accepted_index,
+                "attempts": [
+                    _project_attempt(attempt, entries=entries) for attempt in attempts
+                ],
+                "takeover": copy.deepcopy(event_state.get("takeover")),
+                "recovery_pending": event_state["recovery_pending"],
+            }
+        )
+    return sorted(projected, key=lambda item: (item["sequence"], item["event_id"]))
+
+
+def read_status(issue_dir: Path) -> dict[str, Any]:
+    """Project exact event-driver state without locks, writes, or output inference."""
+    driver_dir = _driver_dir(issue_dir)
+    config = _load_config(driver_dir)
+    if config is None:
+        return {
+            "configured": False,
+            "schema_version": None,
+            "mode": None,
+            "workflow_id": None,
+            "active_index": None,
+            "entries": [],
+            "events": [],
+            "recovery_pending": False,
+        }
+
+    if config["schema_version"] in {1, 2}:
+        session = _read_legacy_session(driver_dir, config)
+        host_session = config.get("host_session")
+        if session is not None:
+            provenance = {
+                "id": session["session_id"],
+                "source": "legacy_session",
+                "created_at": session["created_at"],
+                "last_used_at": session["last_used_at"],
+            }
+        elif isinstance(host_session, dict):
+            provenance = {"id": host_session["thread_id"], "source": "host_session"}
+        else:
+            provenance = None
+        entry = {"cli": config["cli"], "model": config["model"]}
+        return {
+            "configured": True,
+            "schema_version": config["schema_version"],
+            "mode": "legacy_single_transport",
+            "workflow_id": session["workflow_id"] if session is not None else None,
+            "active_index": 0,
+            "entries": [
+                {
+                    "index": 0,
+                    **entry,
+                    "conforming": _entry_is_conforming(entry),
+                    "active": True,
+                    "acquisition": {
+                        "status": "acquired" if provenance is not None else "unacquired",
+                        "session": provenance,
+                    },
+                }
+            ],
+            "events": [],
+            "recovery_pending": False,
+        }
+
+    state_path = driver_dir / DISPATCH_STATE_FILENAME
+    if not state_path.is_file() or state_path.is_symlink():
+        if state_path.exists():
+            raise ValueError("event-driven dispatch state is invalid")
+        state = None
+    else:
+        try:
+            raw_state = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ValueError("event-driven dispatch state is unreadable") from exc
+        workflow_id = raw_state.get("workflow_id") if isinstance(raw_state, dict) else None
+        if not isinstance(workflow_id, str) or not workflow_id:
+            raise ValueError("event-driven dispatch state is invalid")
+        state = _load_or_initialize_dispatch_state(
+            driver_dir,
+            workflow_id=workflow_id,
+            config=config,
+        )
+
+    policy_entries = config["clis"]
+    state_entries = state["entries"] if state is not None else [
+        {"index": index, **entry, "session": None}
+        for index, entry in enumerate(policy_entries)
+    ]
+    events = _project_v3_events(state) if state is not None else []
+    active_index = state["active_index"] if state is not None else 0
+    entries: list[dict[str, Any]] = []
+    for index, (policy, state_entry) in enumerate(zip(policy_entries, state_entries)):
+        session = copy.deepcopy(state_entry["session"])
+        acquisition_status = "acquired" if session is not None else "unacquired"
+        if session is None:
+            bootstrap_attempts = [
+                attempt
+                for event in events
+                for attempt in event["attempts"]
+                if attempt["index"] == index and attempt["stage"] == "bootstrap"
+            ]
+            if bootstrap_attempts:
+                acquisition_status = f"bootstrap_{bootstrap_attempts[-1]['status']}"
+        entries.append(
+            {
+                "index": index,
+                **policy,
+                "conforming": _entry_is_conforming(policy),
+                "active": index == active_index,
+                "acquisition": {"status": acquisition_status, "session": session},
+            }
+        )
+    return {
+        "configured": True,
+        "schema_version": 3,
+        "mode": "ordered_transport_chain",
+        "workflow_id": state["workflow_id"] if state is not None else None,
+        "active_index": active_index,
+        "entries": entries,
+        "events": events,
+        "recovery_pending": any(event["recovery_pending"] for event in events),
+    }
+
+
 def _bounded_event(event: dict[str, Any]) -> dict[str, Any]:
     allowed = {
         "workflow_id",
@@ -863,6 +1131,26 @@ def _deliver_v3_callback(
         stage="delivery",
     )
     session_id = session["id"]
+    acceptance_persisted = False
+    acceptance_write_failed = False
+
+    def persist_acceptance() -> None:
+        nonlocal state, acceptance_persisted, acceptance_write_failed
+        if acceptance_persisted:
+            return
+        try:
+            state = _accept_delivery(
+                driver_dir,
+                state,
+                event_id=event_id,
+                index=index,
+                session_id=session_id,
+            )
+        except Exception:
+            acceptance_write_failed = True
+            raise
+        acceptance_persisted = True
+
     try:
         if index == 0 and session.get("source") == "host_session":
             _queue_host_callback(
@@ -890,6 +1178,7 @@ def _deliver_v3_callback(
                 _callback_prompt(event, repository_root=repository_root),
                 expected_session_id=session_id,
                 event_id=event_id,
+                on_acceptance=persist_acceptance,
                 allowed_tools=["Read", "Grep", "Glob", "Bash"],
                 allowed_directories=[str(repository_root)],
                 execution_control=AgentExecutionControl(
@@ -902,6 +1191,10 @@ def _deliver_v3_callback(
             records = getattr(result, "records", ())
             reported_session_id = getattr(result, "session_id", None)
     except Exception as exc:
+        if acceptance_write_failed:
+            raise
+        if acceptance_persisted:
+            return state, "accepted"
         classification = _classify_provider_failure(exc)
         state = _finish_pending_attempt(
             driver_dir,
@@ -915,6 +1208,8 @@ def _deliver_v3_callback(
         )
         return state, classification
 
+    if acceptance_persisted:
+        return state, "accepted"
     if accepted and reported_session_id == session_id:
         return (
             _accept_delivery(
@@ -1115,11 +1410,17 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--workflow-event")
     parser.add_argument("--write-config", action="store_true")
+    parser.add_argument("--status", action="store_true")
     parser.add_argument("--issue-dir")
     parser.add_argument("--cli")
     parser.add_argument("--model")
     parser.add_argument("--entry", action="append", default=[])
     args = parser.parse_args(argv)
+    if args.status:
+        if args.write_config or args.workflow_event or not args.issue_dir:
+            parser.error("--status requires only --issue-dir")
+        print(json.dumps(read_status(Path(args.issue_dir)), ensure_ascii=False, sort_keys=True))
+        return 0
     if args.write_config:
         if not args.issue_dir:
             parser.error("--write-config requires --issue-dir")

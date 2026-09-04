@@ -1533,6 +1533,29 @@ def test_use_cafe_workflow_defines_event_driven_mode_and_model_authority() -> No
     assert "active worktree's `.cafe/phases.yaml`" in normalized_models
 
 
+def test_event_driver_documentation_defines_the_full_v3_lifecycle() -> None:
+    skill = _read_skill_resource("SKILL.md")
+    kickoff = _read_skill_resource("references/kickoff.md")
+    running = _read_skill_resource("references/running_workflow.md")
+    contract = " ".join((skill + kickoff + running).split())
+
+    assert 'exactly equivalent to `say "HI"`' in contract
+    assert "Codex, Claude, Gemini, Cursor, and Copilot" in contract
+    assert "provider-created session ID" in contract
+    assert "persisted in `dispatch_state.json` before the actual callback" in contract
+    assert "existing acquired session" in contract
+    assert "first Codex entry's valid runtime-owned host binding" in contract
+    assert "bootstrap never counts as event delivery or acceptance" in contract
+    assert "actual callback durable acceptance" in contract
+    assert "Copilot never receives a caller-selected new-session ID" in contract
+    assert "one authoritative `dispatch_state.json`" in contract
+    assert "no session-file discovery, directory diff, sleep, polling, or watcher" in contract
+    assert "ambiguous outcome stops forward routing" in contract
+    assert "transport-local" in contract
+    assert "does not merge conversations" in contract
+    assert "--status --issue-dir .cafe/issues/<issue>" in contract
+
+
 def test_use_cafe_workflow_keeps_human_task_completion_in_the_interactive_driver() -> None:
     skill = _read_skill_resource("SKILL.md")
     running = _read_skill_resource("references/running_workflow.md")

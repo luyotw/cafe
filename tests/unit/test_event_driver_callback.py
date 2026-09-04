@@ -506,6 +506,44 @@ def test_actual_callback_starts_only_after_session_is_durable(tmp_path: Path) ->
     assert event_state["accepted_index"] == 0
 
 
+def test_actual_acceptance_is_durable_before_downstream_output_finishes(
+    tmp_path: Path,
+) -> None:
+    callback = _callback_module()
+    driver_dir, state, event = _v3_event_context(callback, tmp_path, [("claude", "exact")])
+    state["entries"][0]["session"] = {
+        "id": "provider-session",
+        "source": "provider",
+        "acquired_at": "2026-09-04T00:00:00+00:00",
+    }
+    (driver_dir / "dispatch_state.json").write_text(json.dumps(state), encoding="utf-8")
+
+    class FakeExecutor:
+        def __init__(self, _config, **_kwargs):
+            pass
+
+        def execute_event_driver(self, _prompt, **kwargs):
+            kwargs["on_acceptance"]()
+            persisted = json.loads((driver_dir / "dispatch_state.json").read_text())
+            assert persisted["events"][event["event_id"]]["status"] == "accepted"
+            raise callback.AgentExecutionError(
+                "downstream output ended late",
+                error_type="incomplete_stream",
+            )
+
+    updated, outcome = callback._deliver_v3_callback(
+        driver_dir,
+        state,
+        event,
+        index=0,
+        repository_root=tmp_path,
+        executor_factory=FakeExecutor,
+    )
+
+    assert outcome == "accepted"
+    assert updated["events"][event["event_id"]]["status"] == "accepted"
+
+
 def test_multi_hop_delivery_is_serial_forward_only_and_sticky(tmp_path: Path) -> None:
     callback = _callback_module()
     chain = [("codex", "one"), ("claude", "two"), ("gemini", "three")]
@@ -808,6 +846,277 @@ def test_public_callback_path_executes_version_three_lifecycle(tmp_path: Path, m
     )
     assert calls == [None, "gemini-session"]
     assert persisted["events"][event["event_id"]]["status"] == "accepted"
+
+
+def test_status_projects_order_conformance_and_unacquired_without_writing(
+    tmp_path: Path,
+) -> None:
+    callback = _callback_module()
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue457"
+    callback.write_config(
+        issue_dir,
+        clis=[
+            ("codex", "one"),
+            ("claude", "two"),
+            ("gemini", "three"),
+            ("cursor-agent", "four"),
+            ("copilot", "five"),
+        ],
+    )
+    driver_dir = issue_dir / "driver"
+    before = {
+        path.name: (path.read_bytes(), path.stat().st_mtime_ns)
+        for path in driver_dir.iterdir()
+        if path.is_file()
+    }
+
+    first = callback.read_status(issue_dir)
+    second = callback.read_status(issue_dir)
+
+    assert first == second
+    assert first["configured"] is True
+    assert first["schema_version"] == 3
+    assert first["workflow_id"] is None
+    assert first["active_index"] == 0
+    assert [entry["cli"] for entry in first["entries"]] == [
+        "codex",
+        "claude",
+        "gemini",
+        "cursor-agent",
+        "copilot",
+    ]
+    assert [entry["model"] for entry in first["entries"]] == [
+        "one",
+        "two",
+        "three",
+        "four",
+        "five",
+    ]
+    assert all(entry["conforming"] is True for entry in first["entries"])
+    assert first["entries"][0]["active"] is True
+    assert all(
+        entry["acquisition"] == {"status": "unacquired", "session": None}
+        for entry in first["entries"]
+    )
+    assert first["events"] == []
+    assert first["recovery_pending"] is False
+    assert not (driver_dir / "dispatch_state.json").exists()
+    assert {
+        path.name: (path.read_bytes(), path.stat().st_mtime_ns)
+        for path in driver_dir.iterdir()
+        if path.is_file()
+    } == before
+
+
+def test_status_projects_acquisition_delivery_takeover_and_recovery(
+    tmp_path: Path,
+) -> None:
+    callback = _callback_module()
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue457"
+    callback.write_config(
+        issue_dir,
+        clis=[("codex", "one"), ("claude", "two"), ("gemini", "three")],
+    )
+    driver_dir = issue_dir / "driver"
+    config = callback._load_config(driver_dir)
+    state = callback._load_or_initialize_dispatch_state(
+        driver_dir,
+        workflow_id="workflow",
+        config=config,
+    )
+    state["active_index"] = 1
+    state["entries"][1]["session"] = {
+        "id": "claude-session",
+        "source": "provider",
+        "acquired_at": "2026-09-04T00:00:00+00:00",
+    }
+    state["events"] = {
+        "bootstrap-pending": {
+            "event": {
+                "workflow_id": "workflow",
+                "issue": "issue457",
+                "event_type": "phase_terminal",
+                "event_id": "bootstrap-pending",
+                "sequence": 1,
+                "occurred_at": "2026-09-04T00:00:01+00:00",
+            },
+            "starting_index": 0,
+            "status": "routing",
+            "attempts": [
+                {
+                    "index": 0,
+                    "stage": "bootstrap",
+                    "status": "pending",
+                    "outcome": None,
+                    "reason": None,
+                    "session_id": None,
+                    "started_at": "2026-09-04T00:00:02+00:00",
+                    "finished_at": None,
+                }
+            ],
+            "accepted_index": None,
+            "takeover": None,
+            "recovery_pending": False,
+        },
+        "delivery-pending": {
+            "event": {
+                "workflow_id": "workflow",
+                "issue": "issue457",
+                "event_type": "phase_terminal",
+                "event_id": "delivery-pending",
+                "sequence": 2,
+                "occurred_at": "2026-09-04T00:00:03+00:00",
+            },
+            "starting_index": 1,
+            "status": "routing",
+            "attempts": [
+                {
+                    "index": 1,
+                    "stage": "delivery",
+                    "status": "pending",
+                    "outcome": None,
+                    "reason": None,
+                    "session_id": "claude-session",
+                    "started_at": "2026-09-04T00:00:04+00:00",
+                    "finished_at": None,
+                }
+            ],
+            "accepted_index": None,
+            "takeover": None,
+            "recovery_pending": False,
+        },
+        "accepted": {
+            "event": {
+                "workflow_id": "workflow",
+                "issue": "issue457",
+                "event_type": "phase_terminal",
+                "event_id": "accepted",
+                "sequence": 3,
+                "occurred_at": "2026-09-04T00:00:05+00:00",
+            },
+            "starting_index": 0,
+            "status": "accepted",
+            "attempts": [
+                {
+                    "index": 0,
+                    "stage": "delivery",
+                    "status": "failed",
+                    "outcome": "conclusive_nonacceptance",
+                    "reason": "transport_rejected",
+                    "session_id": "codex-session",
+                    "started_at": "2026-09-04T00:00:06+00:00",
+                    "finished_at": "2026-09-04T00:00:07+00:00",
+                },
+                {
+                    "index": 1,
+                    "stage": "delivery",
+                    "status": "accepted",
+                    "outcome": "durable_acceptance",
+                    "reason": "provider_acknowledgement",
+                    "session_id": "claude-session",
+                    "started_at": "2026-09-04T00:00:08+00:00",
+                    "finished_at": "2026-09-04T00:00:09+00:00",
+                },
+            ],
+            "accepted_index": 1,
+            "takeover": {
+                "event_id": "accepted",
+                "sequence": 3,
+                "occurred_at": "2026-09-04T00:00:05+00:00",
+                "from_index": 0,
+                "to_index": 1,
+                "eligible_reason": "transport_rejected",
+                "accepted_at": "2026-09-04T00:00:09+00:00",
+            },
+            "recovery_pending": False,
+        },
+        "exhausted": {
+            "event": {
+                "workflow_id": "workflow",
+                "issue": "issue457",
+                "event_type": "workflow_completed",
+                "event_id": "exhausted",
+                "sequence": 4,
+                "occurred_at": "2026-09-04T00:00:10+00:00",
+            },
+            "starting_index": 1,
+            "status": "exhausted",
+            "attempts": [
+                {
+                    "index": 1,
+                    "stage": "delivery",
+                    "status": "failed",
+                    "outcome": "conclusive_nonacceptance",
+                    "reason": "queue_rejected",
+                    "session_id": "claude-session",
+                    "started_at": "2026-09-04T00:00:11+00:00",
+                    "finished_at": "2026-09-04T00:00:12+00:00",
+                }
+            ],
+            "accepted_index": None,
+            "takeover": None,
+            "recovery_pending": True,
+        },
+    }
+    (driver_dir / "dispatch_state.json").write_text(
+        json.dumps(state, sort_keys=True), encoding="utf-8"
+    )
+    watched = [driver_dir / "config.yaml", driver_dir / "dispatch_state.json"]
+    before = [(path.read_bytes(), path.stat().st_mtime_ns) for path in watched]
+
+    status = callback.read_status(issue_dir)
+    repeated = callback.read_status(issue_dir)
+
+    assert repeated == status
+    assert status["workflow_id"] == "workflow"
+    assert status["active_index"] == 1
+    assert status["entries"][0]["acquisition"]["status"] == "bootstrap_pending"
+    assert status["entries"][1]["acquisition"] == {
+        "status": "acquired",
+        "session": {
+            "id": "claude-session",
+            "source": "provider",
+            "acquired_at": "2026-09-04T00:00:00+00:00",
+        },
+    }
+    assert status["entries"][2]["acquisition"]["status"] == "unacquired"
+    by_id = {event["event_id"]: event for event in status["events"]}
+    assert by_id["delivery-pending"]["attempts"][0]["status"] == "pending"
+    assert by_id["accepted"]["attempts"][0]["status"] == "failed"
+    assert by_id["accepted"]["status"] == "accepted"
+    assert by_id["accepted"]["takeover"]["to_index"] == 1
+    assert by_id["exhausted"]["status"] == "exhausted"
+    assert by_id["exhausted"]["recovery_pending"] is True
+    assert status["recovery_pending"] is True
+    assert [(path.read_bytes(), path.stat().st_mtime_ns) for path in watched] == before
+
+
+@pytest.mark.parametrize("schema_version", [1, 2])
+def test_status_reads_legacy_binding_without_mutation(
+    tmp_path: Path, schema_version: int
+) -> None:
+    callback = _callback_module()
+    issue_dir = tmp_path / ".cafe" / "issues" / "legacy"
+    driver_dir = issue_dir / "driver"
+    driver_dir.mkdir(parents=True)
+    document = {
+        "schema_version": schema_version,
+        "mode": "event-driven",
+        "cli": "codex",
+        "model": "exact",
+    }
+    if schema_version == 2:
+        document["host_session"] = None
+    (driver_dir / "config.yaml").write_text(yaml.safe_dump(document), encoding="utf-8")
+    before = (driver_dir / "config.yaml").read_bytes()
+
+    status = callback.read_status(issue_dir)
+
+    assert status["schema_version"] == schema_version
+    assert status["mode"] == "legacy_single_transport"
+    assert status["entries"][0]["acquisition"]["status"] == "unacquired"
+    assert status["events"] == []
+    assert (driver_dir / "config.yaml").read_bytes() == before
 
 
 def test_event_driver_session_rejects_a_different_workflow(tmp_path: Path) -> None:

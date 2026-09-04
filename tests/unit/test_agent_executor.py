@@ -902,6 +902,41 @@ class TestEventDriverObservation:
         command = run.call_args.kwargs["cmd"]
         assert command[command.index("resume") + 1] == "provider-session"
 
+    def test_actual_callback_notifies_acceptance_before_later_stream_output(self) -> None:
+        executor = AgentExecutor(
+            AgentConfig(
+                name="driver",
+                cli=AgentCLI.CLAUDE,
+                model="exact",
+                session_id="provider-session",
+            ),
+            stream_output=False,
+        )
+        order = []
+
+        def execute_stream(**kwargs):
+            init = {
+                "type": "system",
+                "subtype": "init",
+                "session_id": "provider-session",
+            }
+            kwargs["structured_records"].append(init)
+            kwargs["structured_record_observer"](init)
+            assert order == ["accepted"]
+            order.append("model-output")
+            return AgentResponse(response="later", token_usage=TokenUsage())
+
+        with patch.object(executor, "_execute_with_streaming", side_effect=execute_stream):
+            observed = executor.execute_event_driver(
+                "callback event-1",
+                expected_session_id="provider-session",
+                event_id="event-1",
+                on_acceptance=lambda: order.append("accepted"),
+            )
+
+        assert observed.accepted is True
+        assert order == ["accepted", "model-output"]
+
     def test_callback_observer_bounds_provider_records(self) -> None:
         executor = AgentExecutor(
             AgentConfig(name="driver", cli=AgentCLI.CODEX, model="exact"),
