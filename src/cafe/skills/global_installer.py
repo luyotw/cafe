@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import ctypes
 import hashlib
-import json
 import os
 import shutil
 import sqlite3
+import subprocess
+import sys
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -14,6 +16,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Optional
 
+from cafe.catalogs.transactions import (
+    bound_directory,
+    entry_identity,
+    move_without_replacement,
+)
 from cafe.skills.loader import read_skill_frontmatter
 
 DEFAULT_GLOBAL_SKILLS = (
@@ -39,9 +46,9 @@ GLOBAL_CLI_EXECUTABLES = {
 }
 
 GlobalSkillSyncStatus = Literal["installed", "updated", "unchanged", "failed"]
-AUTO_SYNC_STATE_VERSION = 1
 EXPLICIT_SYNC_LOCK_TIMEOUT_SECONDS = 10
 AUTO_SYNC_LOCK_TIMEOUT_SECONDS = 0.05
+AUTOMATIC_GIT_DISCOVERY_TIMEOUT_SECONDS = 1.0
 
 
 class GlobalSkillSyncError(ValueError):
@@ -88,6 +95,32 @@ class GlobalSkillSyncSummary:
     def changed_count(self) -> int:
         return self.installed_count + self.updated_count
 
+    @property
+    def installed_skill_count(self) -> int:
+        return len(
+            {result.skill for result in self.results if result.status == "installed"}
+        )
+
+    @property
+    def changed_skill_count(self) -> int:
+        return len(
+            {
+                result.skill
+                for result in self.results
+                if result.status in {"installed", "updated"}
+            }
+        )
+
+    @property
+    def changed_cli_count(self) -> int:
+        return len(
+            {
+                result.cli
+                for result in self.results
+                if result.status in {"installed", "updated"}
+            }
+        )
+
     def _count(self, status: GlobalSkillSyncStatus) -> int:
         return sum(1 for result in self.results if result.status == status)
 
@@ -116,11 +149,285 @@ class _StagedGlobalSkillReplacement:
     staged: Path
     backup: Path
     had_destination: bool
+    require_missing: bool = False
     published: bool = False
+    preserve_workspace: bool = False
+
+
+@dataclass(frozen=True)
+class _WindowsDirectoryHandle:
+    """Identity-bound Windows directory handle used during publication."""
+
+    value: int
+    identity: tuple[int, int, int]
+
+
+def _raise_windows_path_error(error: int, path: Path) -> None:
+    message = ctypes.FormatError(error).strip()
+    if error in {2, 3}:
+        raise FileNotFoundError(error, message, str(path))
+    if error in {80, 183}:
+        raise FileExistsError(error, message, str(path))
+    raise OSError(error, message, str(path))
+
+
+def _open_windows_directory_handle(
+    path: Path,
+    *,
+    delete_access: bool,
+) -> _WindowsDirectoryHandle:
+    """Open one non-reparse directory and retain its filesystem identity."""
+    from ctypes import wintypes
+
+    class FileInformation(ctypes.Structure):
+        _fields_ = [
+            ("attributes", wintypes.DWORD),
+            ("creation_time", wintypes.FILETIME),
+            ("last_access_time", wintypes.FILETIME),
+            ("last_write_time", wintypes.FILETIME),
+            ("volume_serial", wintypes.DWORD),
+            ("file_size_high", wintypes.DWORD),
+            ("file_size_low", wintypes.DWORD),
+            ("number_of_links", wintypes.DWORD),
+            ("file_index_high", wintypes.DWORD),
+            ("file_index_low", wintypes.DWORD),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+    desired_access = 0x80 | (0x00010000 if delete_access else 0)
+    share_mode = 0x1 | 0x2 | 0x4
+    flags = 0x02000000 | 0x00200000
+    raw_handle = create_file(
+        str(path),
+        desired_access,
+        share_mode,
+        None,
+        3,
+        flags,
+        None,
+    )
+    invalid_handle = ctypes.c_void_p(-1).value
+    if raw_handle in {None, invalid_handle}:
+        _raise_windows_path_error(ctypes.get_last_error(), path)
+    handle_value = int(raw_handle)
+
+    get_information = kernel32.GetFileInformationByHandle
+    get_information.argtypes = [wintypes.HANDLE, ctypes.POINTER(FileInformation)]
+    get_information.restype = wintypes.BOOL
+    information = FileInformation()
+    if not get_information(wintypes.HANDLE(handle_value), ctypes.byref(information)):
+        error = ctypes.get_last_error()
+        kernel32.CloseHandle(wintypes.HANDLE(handle_value))
+        _raise_windows_path_error(error, path)
+    if not information.attributes & 0x10 or information.attributes & 0x400:
+        kernel32.CloseHandle(wintypes.HANDLE(handle_value))
+        raise OSError(f"Windows publication directory is unsafe: {path}")
+    return _WindowsDirectoryHandle(
+        value=handle_value,
+        identity=(
+            information.volume_serial,
+            information.file_index_high,
+            information.file_index_low,
+        ),
+    )
+
+
+def _close_windows_directory_handle(handle: _WindowsDirectoryHandle) -> None:
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+    close_handle(wintypes.HANDLE(handle.value))
+
+
+def _windows_handle_matches_path(
+    path: Path,
+    handle: _WindowsDirectoryHandle,
+) -> bool:
+    try:
+        current = _open_windows_directory_handle(path, delete_access=False)
+    except OSError:
+        return False
+    try:
+        return current.identity == handle.identity
+    finally:
+        _close_windows_directory_handle(current)
+
+
+def _rename_windows_directory_handle_without_replacement(
+    source: _WindowsDirectoryHandle,
+    destination_parent: _WindowsDirectoryHandle,
+    destination_name: str,
+) -> None:
+    """Rename a bound directory into a bound parent without replacement."""
+    from ctypes import wintypes
+
+    encoded_name = destination_name.encode("utf-16-le")
+    character_count = len(encoded_name) // 2
+
+    class FileRenameInformation(ctypes.Structure):
+        _fields_ = [
+            ("flags", wintypes.DWORD),
+            ("root_directory", wintypes.HANDLE),
+            ("file_name_length", wintypes.DWORD),
+            ("file_name", wintypes.WCHAR * character_count),
+        ]
+
+    information = FileRenameInformation()
+    information.flags = 0
+    information.root_directory = wintypes.HANDLE(destination_parent.value)
+    information.file_name_length = len(encoded_name)
+    information.file_name = destination_name
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    set_information = kernel32.SetFileInformationByHandle
+    set_information.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+    ]
+    set_information.restype = wintypes.BOOL
+    buffer_size = FileRenameInformation.file_name.offset + len(encoded_name)
+    if not set_information(
+        wintypes.HANDLE(source.value),
+        3,
+        ctypes.byref(information),
+        buffer_size,
+    ):
+        _raise_windows_path_error(ctypes.get_last_error(), Path(destination_name))
+
+
+def _move_windows_staged_directory_without_replacement(
+    operation: _StagedGlobalSkillReplacement,
+) -> None:
+    """Publish using handles so mutable paths cannot retarget either operand."""
+    source_handle = _open_windows_directory_handle(
+        operation.staged,
+        delete_access=True,
+    )
+    destination_handle: Optional[_WindowsDirectoryHandle] = None
+    try:
+        destination_handle = _open_windows_directory_handle(
+            operation.destination.parent,
+            delete_access=False,
+        )
+        if not _windows_handle_matches_path(operation.staged, source_handle):
+            raise OSError("Windows staged directory identity changed before publish")
+        if not _windows_handle_matches_path(
+            operation.destination.parent,
+            destination_handle,
+        ):
+            raise OSError("Windows destination parent identity changed before publish")
+        try:
+            _rename_windows_directory_handle_without_replacement(
+                source_handle,
+                destination_handle,
+                operation.destination.name,
+            )
+        except Exception:
+            source_is_bound = _windows_handle_matches_path(
+                operation.staged,
+                source_handle,
+            )
+            parent_is_bound = _windows_handle_matches_path(
+                operation.destination.parent,
+                destination_handle,
+            )
+            operation.preserve_workspace = not (source_is_bound and parent_is_bound)
+            raise
+
+        source_path_reappeared = (
+            operation.staged.exists() or operation.staged.is_symlink()
+        )
+        destination_is_bound = _windows_handle_matches_path(
+            operation.destination.parent,
+            destination_handle,
+        ) and _windows_handle_matches_path(operation.destination, source_handle)
+        operation.preserve_workspace = source_path_reappeared or not destination_is_bound
+        if not destination_is_bound:
+            raise OSError("Windows destination identity changed during publish")
+    finally:
+        if destination_handle is not None:
+            _close_windows_directory_handle(destination_handle)
+        _close_windows_directory_handle(source_handle)
 
 
 def _default_source_root() -> Path:
     return Path(__file__).resolve().parent.parent / "data" / "skills"
+
+
+def _discover_git_roots(checkout_root: Path) -> tuple[Path, Path]:
+    """Return active and canonical roots using read-only Git discovery."""
+    try:
+        result = subprocess.run(
+            ("git", "worktree", "list", "--porcelain", "-z"),
+            cwd=checkout_root,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=AUTOMATIC_GIT_DISCOVERY_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise GlobalSkillSyncError("Git root discovery timed out") from exc
+    except OSError as exc:
+        raise GlobalSkillSyncError(f"Git root discovery failed: {exc}") from exc
+
+    if result.returncode != 0:
+        raise GlobalSkillSyncError(
+            result.stderr.strip() or "Git root discovery failed"
+        )
+
+    worktrees = [
+        Path(field.removeprefix("worktree ")).resolve()
+        for field in result.stdout.split("\0")
+        if field.startswith("worktree ")
+    ]
+    active = checkout_root.resolve()
+    if not worktrees or active not in worktrees:
+        raise GlobalSkillSyncError(
+            f"Git worktree discovery did not include active checkout {active}"
+        )
+
+    return active, worktrees[0]
+
+
+def _trusted_automatic_source_root(bundled_root: Optional[Path] = None) -> Path:
+    """Resolve a released bundle or a checkout's canonical bundled catalog."""
+    source_root = (bundled_root or _default_source_root()).expanduser().resolve()
+    if len(source_root.parents) < 4 or source_root.parents[2].name != "src":
+        return source_root
+
+    checkout_root = source_root.parents[3]
+    if not (checkout_root / ".git").exists():
+        return source_root
+
+    active, canonical = _discover_git_roots(checkout_root)
+    if active != checkout_root:
+        raise GlobalSkillSyncError(
+            f"Git reported active checkout {active}, expected {checkout_root}"
+        )
+    canonical_source = (canonical / "src" / "cafe" / "data" / "skills").resolve()
+    try:
+        canonical_source.relative_to(canonical.resolve())
+    except ValueError as exc:
+        raise GlobalSkillSyncError(
+            f"Trusted automatic source escapes canonical checkout: {canonical_source}"
+        ) from exc
+    return canonical_source
 
 
 def _default_home_dir() -> Path:
@@ -184,6 +491,13 @@ def _validate_sources(source_root: Path, skill_names: Optional[list[str]]) -> li
         skill_file = source / "SKILL.md"
         if not source.is_dir() or not skill_file.is_file():
             raise GlobalSkillSyncError(f"Missing bundled skill '{name}' under {source_root}")
+        try:
+            source.resolve().relative_to(source_root)
+            skill_file.resolve().relative_to(source_root)
+        except ValueError as exc:
+            raise GlobalSkillSyncError(
+                f"Bundled skill '{name}' escapes source root {source_root}"
+            ) from exc
         metadata = read_skill_frontmatter(skill_file)
         if metadata.get("name") != name:
             raise GlobalSkillSyncError(
@@ -224,16 +538,6 @@ def _trees_equal(source: Path, destination: Path) -> bool:
     return _tree_manifest(source) == _tree_manifest(destination)
 
 
-def _source_fingerprint(source_root: Path, skill_names: list[str]) -> str:
-    payload = [(skill, _tree_manifest(source_root / skill)) for skill in skill_names]
-    serialized = json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
-    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
-
-
-def _auto_sync_state_file(home_dir: Path) -> Path:
-    return home_dir / ".cafe" / "cache" / "global-skills-sync.json"
-
-
 @contextmanager
 def _global_skill_sync_lock(
     home_dir: Path,
@@ -263,72 +567,13 @@ def _global_skill_destinations_exist(
     cli_names: list[str],
 ) -> bool:
     return all(
-        (home_dir / GLOBAL_CLI_SKILL_DIRS[cli] / skill / "SKILL.md").is_file()
+        (
+            (destination := home_dir / GLOBAL_CLI_SKILL_DIRS[cli] / skill).exists()
+            or destination.is_symlink()
+        )
         for cli in cli_names
         for skill in skill_names
     )
-
-
-def _build_auto_sync_state(
-    request: _ResolvedGlobalSkillSync,
-    fingerprint: str,
-) -> dict[str, object]:
-    return {
-        "version": AUTO_SYNC_STATE_VERSION,
-        "source_root": str(request.source_root),
-        "fingerprint": fingerprint,
-        "skills": request.skill_names,
-        "clis": request.cli_names,
-    }
-
-
-def _is_complete_default_sync(request: _ResolvedGlobalSkillSync) -> bool:
-    return request.skill_names == list(DEFAULT_GLOBAL_SKILLS) and request.default_cli_selection
-
-
-def _expected_auto_sync_state(
-    request: _ResolvedGlobalSkillSync,
-) -> dict[str, object]:
-    fingerprint = _source_fingerprint(request.source_root, request.skill_names)
-    return _build_auto_sync_state(request, fingerprint)
-
-
-def _auto_sync_state_matches(
-    state_file: Path,
-    expected_state: dict[str, object],
-) -> bool:
-    try:
-        state: object = json.loads(state_file.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return False
-    if not isinstance(state, dict):
-        return False
-
-    # ``source_root`` records which checkout last published this content, but
-    # it is not part of cache validity. Linked worktrees with identical helper
-    # skills must share the same per-machine fingerprint fast path.
-    validity_keys = ("version", "fingerprint", "skills", "clis")
-    return all(state.get(key) == expected_state.get(key) for key in validity_keys)
-
-
-def _write_auto_sync_state(
-    state_file: Path,
-    state: dict[str, object],
-) -> None:
-    state_file.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{state_file.name}.",
-        dir=state_file.parent,
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(state, handle, sort_keys=True)
-            handle.write("\n")
-        os.replace(temporary, state_file)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
 
 
 def _remove_path(path: Path) -> None:
@@ -345,6 +590,7 @@ def _stage_directory_replacement(
     source: Path,
     destination: Path,
     status: GlobalSkillSyncStatus,
+    require_missing: bool = False,
 ) -> _StagedGlobalSkillReplacement:
     """Copy one source beside its destination without publishing it."""
     skills_root = destination.parent
@@ -353,11 +599,13 @@ def _stage_directory_replacement(
     if skills_root.exists() and not skills_root.is_dir():
         raise NotADirectoryError(f"Skills path is not a directory: {skills_root}")
     skills_root.mkdir(parents=True, exist_ok=True)
+    had_destination = destination.exists() or destination.is_symlink()
+    if require_missing and had_destination:
+        raise FileExistsError(f"Destination appeared before staging: {destination}")
 
     workspace = Path(tempfile.mkdtemp(prefix=f".cafe-{destination.name}-", dir=skills_root))
     staged = workspace / "staged"
     backup = workspace / "previous"
-    had_destination = destination.exists() or destination.is_symlink()
 
     try:
         shutil.copytree(
@@ -366,6 +614,10 @@ def _stage_directory_replacement(
             symlinks=True,
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
         )
+        if require_missing and (destination.exists() or destination.is_symlink()):
+            raise FileExistsError(
+                f"Destination appeared while staging: {destination}"
+            )
     except Exception:
         shutil.rmtree(workspace, ignore_errors=True)
         raise
@@ -380,11 +632,43 @@ def _stage_directory_replacement(
         staged=staged,
         backup=backup,
         had_destination=had_destination,
+        require_missing=require_missing,
     )
 
 
 def _publish_staged_replacement(operation: _StagedGlobalSkillReplacement) -> None:
     """Publish one staged destination while retaining its rollback backup."""
+    if operation.require_missing:
+        skills_root = operation.destination.parent
+        try:
+            if sys.platform == "win32":
+                _move_windows_staged_directory_without_replacement(operation)
+            else:
+                with (
+                    bound_directory(
+                        skills_root,
+                        Path(operation.workspace.name),
+                    ) as source_directory,
+                    bound_directory(skills_root, Path(".")) as destination_directory,
+                ):
+                    source_identity = entry_identity(
+                        source_directory,
+                        operation.staged.name,
+                    )
+                    move_without_replacement(
+                        operation.staged.name,
+                        operation.destination.name,
+                        source_directory=source_directory,
+                        destination_directory=destination_directory,
+                        expected_source_identity=source_identity,
+                    )
+        except FileExistsError as exc:
+            raise FileExistsError(
+                f"Destination appeared before publish: {operation.destination}"
+            ) from exc
+        operation.published = True
+        return
+
     if operation.had_destination:
         operation.destination.rename(operation.backup)
     try:
@@ -402,6 +686,10 @@ def _rollback_staged_replacement(operation: _StagedGlobalSkillReplacement) -> No
     """Restore one previously published destination."""
     if not operation.published:
         return
+    if operation.require_missing:
+        # Once a missing helper is public, an external consumer may add content.
+        # Retaining it is safer than deleting data that the publisher no longer owns.
+        return
     _remove_path(operation.destination)
     if operation.had_destination:
         operation.backup.rename(operation.destination)
@@ -413,6 +701,8 @@ def _cleanup_staged_replacement(
     *,
     preserve_backup: bool = False,
 ) -> None:
+    if operation.preserve_workspace:
+        return
     if preserve_backup and (operation.backup.exists() or operation.backup.is_symlink()):
         return
     shutil.rmtree(operation.workspace, ignore_errors=True)
@@ -440,8 +730,12 @@ def _resolve_global_skill_sync(
     home_dir: Optional[Path] = None,
     skill_names: Optional[list[str]] = None,
     cli_names: Optional[list[str]] = None,
+    automatic: bool = False,
 ) -> _ResolvedGlobalSkillSync:
-    resolved_source_root = (source_root or _default_source_root()).expanduser().resolve()
+    if automatic and source_root is None:
+        resolved_source_root = _trusted_automatic_source_root()
+    else:
+        resolved_source_root = (source_root or _default_source_root()).expanduser().resolve()
     resolved_home_dir = (home_dir or _default_home_dir()).expanduser().resolve()
     return _ResolvedGlobalSkillSync(
         source_root=resolved_source_root,
@@ -458,6 +752,8 @@ def _resolve_global_skill_sync(
 
 def _sync_resolved_global_skills(
     request: _ResolvedGlobalSkillSync,
+    *,
+    replace_existing: bool = True,
 ) -> GlobalSkillSyncSummary:
     """Stage every change, then publish or roll back the complete batch."""
 
@@ -470,7 +766,9 @@ def _sync_resolved_global_skills(
             destination = skills_root / skill
             existed = destination.exists() or destination.is_symlink()
             try:
-                if existed and _trees_equal(source, destination):
+                if existed and (
+                    not replace_existing or _trees_equal(source, destination)
+                ):
                     entries.append(
                         GlobalSkillSyncResult(
                             cli=cli,
@@ -499,6 +797,7 @@ def _sync_resolved_global_skills(
                             source=source,
                             destination=destination,
                             status="updated" if existed else "installed",
+                            require_missing=not replace_existing,
                         )
                     )
             except Exception as exc:
@@ -553,13 +852,23 @@ def _sync_resolved_global_skills(
             break
 
     if publish_failure is not None:
-        reason = f"Batch publish rolled back: {publish_failure}"
+        retained = {
+            id(operation)
+            for operation in published
+            if operation.require_missing
+        }
+        reason = f"Batch publish failed: {publish_failure}"
+        if published and not retained:
+            reason = f"Batch publish rolled back: {publish_failure}"
         if rollback_failures:
             reason += f"; rollback failures: {', '.join(rollback_failures)}"
         for operation in operations:
             _cleanup_staged_replacement(operation, preserve_backup=True)
         results = [
-            _replacement_result(entry, status="failed", reason=reason)
+            _replacement_result(entry)
+            if isinstance(entry, _StagedGlobalSkillReplacement)
+            and id(entry) in retained
+            else _replacement_result(entry, status="failed", reason=reason)
             if isinstance(entry, _StagedGlobalSkillReplacement)
             else entry
             for entry in entries
@@ -614,16 +923,7 @@ def sync_global_skills(
         request.home_dir,
         timeout_seconds=EXPLICIT_SYNC_LOCK_TIMEOUT_SECONDS,
     ):
-        expected_state = (
-            _expected_auto_sync_state(request) if _is_complete_default_sync(request) else None
-        )
-        summary = _sync_resolved_global_skills(request)
-        if expected_state is not None and summary.failed_count == 0:
-            _write_auto_sync_state(
-                _auto_sync_state_file(request.home_dir),
-                expected_state,
-            )
-        return summary
+        return _sync_resolved_global_skills(request)
 
 
 def auto_sync_global_skills(
@@ -631,41 +931,32 @@ def auto_sync_global_skills(
     source_root: Optional[Path] = None,
     home_dir: Optional[Path] = None,
 ) -> Optional[GlobalSkillSyncSummary]:
-    """Synchronize defaults only when sources changed or an install is missing.
-
-    The per-machine fingerprint makes normal CAFE startup cheap while ensuring a
-    fresh checkout, package upgrade, or another machine installs the bundled
-    helper skills on its first invocation. Explicit ``sync-global`` remains the
-    recovery path for destination content that exists but was manually edited.
-    """
+    """Install missing defaults without changing any existing destination."""
     request = _resolve_global_skill_sync(
         source_root=source_root,
         home_dir=home_dir,
+        automatic=True,
     )
     if not request.cli_names:
+        return None
+    if _global_skill_destinations_exist(
+        request.home_dir,
+        request.skill_names,
+        request.cli_names,
+    ):
         return None
     try:
         with _global_skill_sync_lock(
             request.home_dir,
             timeout_seconds=AUTO_SYNC_LOCK_TIMEOUT_SECONDS,
         ):
-            state_file = _auto_sync_state_file(request.home_dir)
-            expected_state = _expected_auto_sync_state(request)
-
-            if _auto_sync_state_matches(
-                state_file,
-                expected_state,
-            ) and _global_skill_destinations_exist(
+            if _global_skill_destinations_exist(
                 request.home_dir,
                 request.skill_names,
                 request.cli_names,
             ):
                 return None
-
-            summary = _sync_resolved_global_skills(request)
-            if summary.failed_count == 0:
-                _write_auto_sync_state(state_file, expected_state)
-            return summary
+            return _sync_resolved_global_skills(request, replace_existing=False)
     except sqlite3.OperationalError as exc:
         if "locked" in str(exc).lower():
             return None
