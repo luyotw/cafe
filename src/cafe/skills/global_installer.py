@@ -7,6 +7,7 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import sys
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -426,24 +427,29 @@ def _publish_staged_replacement(operation: _StagedGlobalSkillReplacement) -> Non
     if operation.require_missing:
         skills_root = operation.destination.parent
         try:
-            with (
-                bound_directory(
-                    skills_root,
-                    Path(operation.workspace.name),
-                ) as source_directory,
-                bound_directory(skills_root, Path(".")) as destination_directory,
-            ):
-                source_identity = entry_identity(
-                    source_directory,
-                    operation.staged.name,
-                )
-                move_without_replacement(
-                    operation.staged.name,
-                    operation.destination.name,
-                    source_directory=source_directory,
-                    destination_directory=destination_directory,
-                    expected_source_identity=source_identity,
-                )
+            if sys.platform == "win32":
+                # Windows os.rename() fails rather than replacing an existing
+                # destination, so the complete staged directory is one atomic move.
+                operation.staged.rename(operation.destination)
+            else:
+                with (
+                    bound_directory(
+                        skills_root,
+                        Path(operation.workspace.name),
+                    ) as source_directory,
+                    bound_directory(skills_root, Path(".")) as destination_directory,
+                ):
+                    source_identity = entry_identity(
+                        source_directory,
+                        operation.staged.name,
+                    )
+                    move_without_replacement(
+                        operation.staged.name,
+                        operation.destination.name,
+                        source_directory=source_directory,
+                        destination_directory=destination_directory,
+                        expected_source_identity=source_identity,
+                    )
         except FileExistsError as exc:
             raise FileExistsError(
                 f"Destination appeared before publish: {operation.destination}"

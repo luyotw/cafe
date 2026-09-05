@@ -620,6 +620,62 @@ def test_auto_sync_atomically_publishes_a_complete_missing_tree(
     assert destination.read_text(encoding="utf-8") == "concurrent-existing\n"
 
 
+def test_auto_sync_publishes_complete_missing_trees_on_windows(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "bundled-skills"
+    home_dir = tmp_path / "home"
+    _write_default_sources(source_root)
+
+    with (
+        patch.object(global_installer, "detect_global_skill_clis", return_value=["codex"]),
+        patch.object(global_installer.sys, "platform", "win32"),
+        patch.object(
+            global_installer,
+            "bound_directory",
+            side_effect=AssertionError("POSIX publication used on Windows"),
+        ),
+    ):
+        summary = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
+
+    assert summary is not None
+    assert summary.installed_count == len(DEFAULT_GLOBAL_SKILLS)
+    assert summary.failed_count == 0
+    for skill in DEFAULT_GLOBAL_SKILLS:
+        destination = home_dir / ".codex/skills" / skill
+        assert (destination / "SKILL.md").is_file()
+        assert (destination / "references/guide.md").is_file()
+
+
+def test_auto_sync_windows_preserves_a_destination_that_wins_the_move(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "bundled-skills"
+    home_dir = tmp_path / "home"
+    _write_default_sources(source_root)
+
+    def concurrent_windows_rename(source, destination) -> None:
+        competing_destination = Path(destination)
+        competing_destination.mkdir()
+        (competing_destination / "SKILL.md").write_text(
+            "concurrent-existing\n", encoding="utf-8"
+        )
+        raise FileExistsError(destination)
+
+    with (
+        patch.object(global_installer, "detect_global_skill_clis", return_value=["codex"]),
+        patch.object(global_installer.sys, "platform", "win32"),
+        patch.object(global_installer.os, "rename", side_effect=concurrent_windows_rename),
+    ):
+        summary = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
+
+    destination = home_dir / ".codex/skills/use-cafe-workflow/SKILL.md"
+    assert summary is not None
+    assert summary.installed_count == 0
+    assert summary.failed_count == len(DEFAULT_GLOBAL_SKILLS)
+    assert destination.read_text(encoding="utf-8") == "concurrent-existing\n"
+
+
 def test_auto_sync_does_not_roll_back_a_published_tree_after_external_use(
     tmp_path: Path,
 ) -> None:
