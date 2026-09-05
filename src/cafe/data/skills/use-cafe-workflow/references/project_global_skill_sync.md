@@ -43,6 +43,33 @@ applicable, comparison token, effective catalog digests, decision, and any
 post-change evidence in the active issue's `preflight` mapping. Reuse a prior
 decision only when the complete bound token is unchanged.
 
+A changed comparison token invalidates reuse of its cached decision, but it is
+not by itself evidence that workflow behavior changed and must not by itself
+cause a kickoff reconfirmation. Re-run the check and classify the bounded delta:
+
+- Ask only for the exact separately scoped decision exposed by the fresh
+  result: applying an available runtime update or publishing reported catalog
+  differences. A fresh `current`, `identical`, or `no_project_entries` result
+  needs no user decision.
+- Compare the resolved playbook graph and gates, phase-skill instructions and
+  execution profiles, runtime entrypoint and dependency environment, and other
+  rendered kickoff inputs. Reconfirm when that semantic comparison changes the
+  confirmed contract, identifies any material runtime or dependency-environment
+  difference, or changes observable execution behavior. A material environment
+  difference requires reconfirmation before a probe happens to expose a failure.
+- Treat absolute checkout paths, canonical-plus-worktree root enumeration,
+  timestamps, caches, generated `__pycache__`, and a version label alone as
+  diagnostic metadata, not semantic change. Treat a file-mode difference as
+  non-semantic only after verifying that it changes no effective read, write,
+  or execute access for any runtime actor; otherwise fail closed and classify
+  it as semantic. When a runtime label differs, verify the interpreter,
+  imported source, dependency environment, required command preview, and
+  selected model probes before classifying it. Only verified label or path
+  noise may continue without reconfirmation.
+
+Record the classification and evidence. Do not ask the user to reconfirm an
+unchanged contract merely to acknowledge diagnostic noise.
+
 ## Apply only an exact approval
 
 Use the token and selection the user approved:
@@ -79,6 +106,10 @@ Catalog approval does not grant helper-publication approval.
 
 After an approved change, re-run both read-only checks and record the fresh
 results. Compare the effective workflow digests with the pre-change evidence.
-If effective behavior changed, re-render and reconfirm the kickoff contract
-before preparation, start, or resume. If it did not change, retain the
-post-change evidence and continue under the already confirmed contract.
+Digest changes trigger the bounded semantic comparison above rather than an
+automatic confirmation stop. Re-render and reconfirm the kickoff contract
+before preparation, start, or resume when that comparison finds a contract
+change, a material runtime or dependency-environment difference, or changed
+observable execution behavior. Otherwise retain the post-change evidence and
+continue under the already confirmed contract without another user
+confirmation.
