@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Barrier
 from time import monotonic
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -59,6 +60,28 @@ def _write_skill(source_root: Path, name: str, body: str) -> None:
 def _write_default_sources(source_root: Path) -> None:
     for name in DEFAULT_GLOBAL_SKILLS:
         _write_skill(source_root, name, f"{name} v1")
+
+
+def _open_fake_windows_directory_handle(path: Path, *, delete_access: bool):
+    resolved = Path(path)
+    metadata = resolved.stat()
+    return SimpleNamespace(
+        path=resolved,
+        identity=(metadata.st_dev, metadata.st_ino),
+        delete_access=delete_access,
+    )
+
+
+def _fake_windows_handle_matches_path(path: Path, handle) -> bool:
+    try:
+        metadata = Path(path).stat()
+    except FileNotFoundError:
+        return False
+    return (metadata.st_dev, metadata.st_ino) == handle.identity
+
+
+def _rename_fake_windows_directory_handle(source_handle, destination_handle, name) -> None:
+    source_handle.path.rename(destination_handle.path / name)
 
 
 def test_detect_global_skill_clis_uses_path_or_existing_non_cafe_state(
@@ -635,6 +658,22 @@ def test_auto_sync_publishes_complete_missing_trees_on_windows(
             "bound_directory",
             side_effect=AssertionError("POSIX publication used on Windows"),
         ),
+        patch.object(
+            global_installer,
+            "_open_windows_directory_handle",
+            side_effect=_open_fake_windows_directory_handle,
+        ),
+        patch.object(
+            global_installer,
+            "_windows_handle_matches_path",
+            side_effect=_fake_windows_handle_matches_path,
+        ),
+        patch.object(
+            global_installer,
+            "_rename_windows_directory_handle_without_replacement",
+            side_effect=_rename_fake_windows_directory_handle,
+        ),
+        patch.object(global_installer, "_close_windows_directory_handle"),
     ):
         summary = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
 
@@ -654,18 +693,33 @@ def test_auto_sync_windows_preserves_a_destination_that_wins_the_move(
     home_dir = tmp_path / "home"
     _write_default_sources(source_root)
 
-    def concurrent_windows_rename(source, destination) -> None:
-        competing_destination = Path(destination)
+    def concurrent_windows_rename(source_handle, destination_handle, name) -> None:
+        competing_destination = destination_handle.path / name
         competing_destination.mkdir()
         (competing_destination / "SKILL.md").write_text(
             "concurrent-existing\n", encoding="utf-8"
         )
-        raise FileExistsError(destination)
+        raise FileExistsError(competing_destination)
 
     with (
         patch.object(global_installer, "detect_global_skill_clis", return_value=["codex"]),
         patch.object(global_installer.sys, "platform", "win32"),
-        patch.object(global_installer.os, "rename", side_effect=concurrent_windows_rename),
+        patch.object(
+            global_installer,
+            "_open_windows_directory_handle",
+            side_effect=_open_fake_windows_directory_handle,
+        ),
+        patch.object(
+            global_installer,
+            "_windows_handle_matches_path",
+            side_effect=_fake_windows_handle_matches_path,
+        ),
+        patch.object(
+            global_installer,
+            "_rename_windows_directory_handle_without_replacement",
+            side_effect=concurrent_windows_rename,
+        ),
+        patch.object(global_installer, "_close_windows_directory_handle"),
     ):
         summary = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
 
@@ -674,6 +728,113 @@ def test_auto_sync_windows_preserves_a_destination_that_wins_the_move(
     assert summary.installed_count == 0
     assert summary.failed_count == len(DEFAULT_GLOBAL_SKILLS)
     assert destination.read_text(encoding="utf-8") == "concurrent-existing\n"
+
+
+def test_auto_sync_windows_publishes_the_bound_staged_source(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "bundled-skills"
+    home_dir = tmp_path / "home"
+    _write_default_sources(source_root)
+    intervened = False
+
+    def replace_staged_path_after_binding(source_handle, destination_handle, name) -> None:
+        nonlocal intervened
+        if not intervened:
+            intervened = True
+            held_source = source_handle.path.with_name("trusted-held")
+            source_handle.path.rename(held_source)
+            _write_skill(source_handle.path.parent, source_handle.path.name, "untrusted")
+            held_source.rename(destination_handle.path / name)
+            return
+        _rename_fake_windows_directory_handle(source_handle, destination_handle, name)
+
+    with (
+        patch.object(global_installer, "detect_global_skill_clis", return_value=["codex"]),
+        patch.object(global_installer.sys, "platform", "win32"),
+        patch.object(
+            global_installer,
+            "_open_windows_directory_handle",
+            side_effect=_open_fake_windows_directory_handle,
+        ),
+        patch.object(
+            global_installer,
+            "_windows_handle_matches_path",
+            side_effect=_fake_windows_handle_matches_path,
+        ),
+        patch.object(
+            global_installer,
+            "_rename_windows_directory_handle_without_replacement",
+            side_effect=replace_staged_path_after_binding,
+        ),
+        patch.object(global_installer, "_close_windows_directory_handle"),
+    ):
+        summary = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
+
+    destination = home_dir / ".codex/skills/use-cafe-workflow/SKILL.md"
+    assert summary is not None
+    assert summary.installed_count == len(DEFAULT_GLOBAL_SKILLS)
+    assert "use-cafe-workflow v1" in destination.read_text(encoding="utf-8")
+    assert "untrusted" not in destination.read_text(encoding="utf-8")
+
+
+def test_auto_sync_windows_fails_when_the_bound_destination_parent_moves(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "bundled-skills"
+    home_dir = tmp_path / "home"
+    detached_skills_root = tmp_path / "detached-skills"
+    _write_default_sources(source_root)
+    intervened = False
+
+    def replace_destination_parent_after_binding(
+        source_handle, destination_handle, name
+    ) -> None:
+        nonlocal intervened
+        if not intervened:
+            intervened = True
+            source_relative = source_handle.path.relative_to(destination_handle.path)
+            destination_handle.path.rename(detached_skills_root)
+            destination_handle.path.mkdir(parents=True)
+            _write_skill(
+                destination_handle.path / source_relative.parent,
+                source_relative.name,
+                "untrusted",
+            )
+            trusted_source = detached_skills_root / source_relative
+            trusted_source.rename(detached_skills_root / name)
+            return
+        _rename_fake_windows_directory_handle(source_handle, destination_handle, name)
+
+    with (
+        patch.object(global_installer, "detect_global_skill_clis", return_value=["codex"]),
+        patch.object(global_installer.sys, "platform", "win32"),
+        patch.object(
+            global_installer,
+            "_open_windows_directory_handle",
+            side_effect=_open_fake_windows_directory_handle,
+        ),
+        patch.object(
+            global_installer,
+            "_windows_handle_matches_path",
+            side_effect=_fake_windows_handle_matches_path,
+        ),
+        patch.object(
+            global_installer,
+            "_rename_windows_directory_handle_without_replacement",
+            side_effect=replace_destination_parent_after_binding,
+        ),
+        patch.object(global_installer, "_close_windows_directory_handle"),
+    ):
+        summary = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
+
+    assert summary is not None
+    assert summary.installed_count == 0
+    assert summary.failed_count == len(DEFAULT_GLOBAL_SKILLS)
+    assert not (home_dir / ".codex/skills/use-cafe-workflow").exists()
+    assert "use-cafe-workflow v1" in (
+        detached_skills_root / "use-cafe-workflow/SKILL.md"
+    ).read_text(encoding="utf-8")
 
 
 def test_auto_sync_does_not_roll_back_a_published_tree_after_external_use(

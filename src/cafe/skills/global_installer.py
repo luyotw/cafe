@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import os
 import shutil
@@ -150,6 +151,219 @@ class _StagedGlobalSkillReplacement:
     had_destination: bool
     require_missing: bool = False
     published: bool = False
+    preserve_workspace: bool = False
+
+
+@dataclass(frozen=True)
+class _WindowsDirectoryHandle:
+    """Identity-bound Windows directory handle used during publication."""
+
+    value: int
+    identity: tuple[int, int, int]
+
+
+def _raise_windows_path_error(error: int, path: Path) -> None:
+    message = ctypes.FormatError(error).strip()
+    if error in {2, 3}:
+        raise FileNotFoundError(error, message, str(path))
+    if error in {80, 183}:
+        raise FileExistsError(error, message, str(path))
+    raise OSError(error, message, str(path))
+
+
+def _open_windows_directory_handle(
+    path: Path,
+    *,
+    delete_access: bool,
+) -> _WindowsDirectoryHandle:
+    """Open one non-reparse directory and retain its filesystem identity."""
+    from ctypes import wintypes
+
+    class FileInformation(ctypes.Structure):
+        _fields_ = [
+            ("attributes", wintypes.DWORD),
+            ("creation_time", wintypes.FILETIME),
+            ("last_access_time", wintypes.FILETIME),
+            ("last_write_time", wintypes.FILETIME),
+            ("volume_serial", wintypes.DWORD),
+            ("file_size_high", wintypes.DWORD),
+            ("file_size_low", wintypes.DWORD),
+            ("number_of_links", wintypes.DWORD),
+            ("file_index_high", wintypes.DWORD),
+            ("file_index_low", wintypes.DWORD),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+    desired_access = 0x80 | (0x00010000 if delete_access else 0)
+    share_mode = 0x1 | 0x2 | 0x4
+    flags = 0x02000000 | 0x00200000
+    raw_handle = create_file(
+        str(path),
+        desired_access,
+        share_mode,
+        None,
+        3,
+        flags,
+        None,
+    )
+    invalid_handle = ctypes.c_void_p(-1).value
+    if raw_handle in {None, invalid_handle}:
+        _raise_windows_path_error(ctypes.get_last_error(), path)
+    handle_value = int(raw_handle)
+
+    get_information = kernel32.GetFileInformationByHandle
+    get_information.argtypes = [wintypes.HANDLE, ctypes.POINTER(FileInformation)]
+    get_information.restype = wintypes.BOOL
+    information = FileInformation()
+    if not get_information(wintypes.HANDLE(handle_value), ctypes.byref(information)):
+        error = ctypes.get_last_error()
+        kernel32.CloseHandle(wintypes.HANDLE(handle_value))
+        _raise_windows_path_error(error, path)
+    if not information.attributes & 0x10 or information.attributes & 0x400:
+        kernel32.CloseHandle(wintypes.HANDLE(handle_value))
+        raise OSError(f"Windows publication directory is unsafe: {path}")
+    return _WindowsDirectoryHandle(
+        value=handle_value,
+        identity=(
+            information.volume_serial,
+            information.file_index_high,
+            information.file_index_low,
+        ),
+    )
+
+
+def _close_windows_directory_handle(handle: _WindowsDirectoryHandle) -> None:
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+    close_handle(wintypes.HANDLE(handle.value))
+
+
+def _windows_handle_matches_path(
+    path: Path,
+    handle: _WindowsDirectoryHandle,
+) -> bool:
+    try:
+        current = _open_windows_directory_handle(path, delete_access=False)
+    except OSError:
+        return False
+    try:
+        return current.identity == handle.identity
+    finally:
+        _close_windows_directory_handle(current)
+
+
+def _rename_windows_directory_handle_without_replacement(
+    source: _WindowsDirectoryHandle,
+    destination_parent: _WindowsDirectoryHandle,
+    destination_name: str,
+) -> None:
+    """Rename a bound directory into a bound parent without replacement."""
+    from ctypes import wintypes
+
+    encoded_name = destination_name.encode("utf-16-le")
+    character_count = len(encoded_name) // 2
+
+    class FileRenameInformation(ctypes.Structure):
+        _fields_ = [
+            ("flags", wintypes.DWORD),
+            ("root_directory", wintypes.HANDLE),
+            ("file_name_length", wintypes.DWORD),
+            ("file_name", wintypes.WCHAR * character_count),
+        ]
+
+    information = FileRenameInformation()
+    information.flags = 0
+    information.root_directory = wintypes.HANDLE(destination_parent.value)
+    information.file_name_length = len(encoded_name)
+    information.file_name = destination_name
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    set_information = kernel32.SetFileInformationByHandle
+    set_information.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+    ]
+    set_information.restype = wintypes.BOOL
+    buffer_size = FileRenameInformation.file_name.offset + len(encoded_name)
+    if not set_information(
+        wintypes.HANDLE(source.value),
+        3,
+        ctypes.byref(information),
+        buffer_size,
+    ):
+        _raise_windows_path_error(ctypes.get_last_error(), Path(destination_name))
+
+
+def _move_windows_staged_directory_without_replacement(
+    operation: _StagedGlobalSkillReplacement,
+) -> None:
+    """Publish using handles so mutable paths cannot retarget either operand."""
+    source_handle = _open_windows_directory_handle(
+        operation.staged,
+        delete_access=True,
+    )
+    destination_handle: Optional[_WindowsDirectoryHandle] = None
+    try:
+        destination_handle = _open_windows_directory_handle(
+            operation.destination.parent,
+            delete_access=False,
+        )
+        if not _windows_handle_matches_path(operation.staged, source_handle):
+            raise OSError("Windows staged directory identity changed before publish")
+        if not _windows_handle_matches_path(
+            operation.destination.parent,
+            destination_handle,
+        ):
+            raise OSError("Windows destination parent identity changed before publish")
+        try:
+            _rename_windows_directory_handle_without_replacement(
+                source_handle,
+                destination_handle,
+                operation.destination.name,
+            )
+        except Exception:
+            source_is_bound = _windows_handle_matches_path(
+                operation.staged,
+                source_handle,
+            )
+            parent_is_bound = _windows_handle_matches_path(
+                operation.destination.parent,
+                destination_handle,
+            )
+            operation.preserve_workspace = not (source_is_bound and parent_is_bound)
+            raise
+
+        source_path_reappeared = (
+            operation.staged.exists() or operation.staged.is_symlink()
+        )
+        destination_is_bound = _windows_handle_matches_path(
+            operation.destination.parent,
+            destination_handle,
+        ) and _windows_handle_matches_path(operation.destination, source_handle)
+        operation.preserve_workspace = source_path_reappeared or not destination_is_bound
+        if not destination_is_bound:
+            raise OSError("Windows destination identity changed during publish")
+    finally:
+        if destination_handle is not None:
+            _close_windows_directory_handle(destination_handle)
+        _close_windows_directory_handle(source_handle)
 
 
 def _default_source_root() -> Path:
@@ -428,9 +642,7 @@ def _publish_staged_replacement(operation: _StagedGlobalSkillReplacement) -> Non
         skills_root = operation.destination.parent
         try:
             if sys.platform == "win32":
-                # Windows os.rename() fails rather than replacing an existing
-                # destination, so the complete staged directory is one atomic move.
-                operation.staged.rename(operation.destination)
+                _move_windows_staged_directory_without_replacement(operation)
             else:
                 with (
                     bound_directory(
@@ -489,6 +701,8 @@ def _cleanup_staged_replacement(
     *,
     preserve_backup: bool = False,
 ) -> None:
+    if operation.preserve_workspace:
+        return
     if preserve_backup and (operation.backup.exists() or operation.backup.is_symlink()):
         return
     shutil.rmtree(operation.workspace, ignore_errors=True)
