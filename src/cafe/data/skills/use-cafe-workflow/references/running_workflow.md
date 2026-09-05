@@ -7,10 +7,10 @@ execution and whenever agent work remains.
 Before every start or resume, follow `project_global_skill_sync.md`: validate
 the persisted runtime/catalog preflight against fresh read-only checks. A
 changed comparison token triggers the reference's bounded semantic comparison,
-not an automatic user stop. Request a fresh separately scoped approval only for
-an action reported by the new check. Reconfirm kickoff when the comparison
-finds a confirmed-contract change, a material runtime or dependency-environment
-difference, or changed observable execution behavior.
+not an automatic user stop. Request the exact separately scoped approval only
+for a fresh action, and reconfirm kickoff only for a material difference found
+by that comparison. Verified metadata-only churn may continue, while uncertain
+differences fail closed.
 
 ## Operating modes
 
