@@ -817,13 +817,23 @@ def resolve_prepare_config(model: PlaybookDefinition) -> PrepareConfig:
 
 
 def playbook_requests_capability(
-    model: PlaybookDefinition,
+    model: PlaybookDefinition | Mapping[str, Any],
     capability_id: str,
 ) -> bool:
     """Return whether any effective step requests ``capability_id``."""
+    steps = model.steps if isinstance(model, PlaybookDefinition) else model.get("steps", {})
+    if not isinstance(steps, Mapping):
+        return False
     return any(
-        capability_id in step.capability_requests
-        for step in model.steps.values()
+        capability_id
+        in (
+            step.capability_requests
+            if isinstance(step, StepConfig)
+            else step.get("capability_requests", [])
+            if isinstance(step, Mapping)
+            else []
+        )
+        for step in steps.values()
     )
 
 

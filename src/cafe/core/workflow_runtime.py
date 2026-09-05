@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional
 from uuid import uuid4
 
+import yaml
+
 from cafe.core.active_issue import clear_marker_if_matches
 from cafe.core.automatic_steps import (
     AutomaticExecutionResult,
@@ -50,7 +52,11 @@ from cafe.core.human_tasks import (
     agent_execution_interrupted_human_task,
     resolve_step_human_task,
 )
-from cafe.core.playbook import resolve_step_attempt_limit, resolve_step_behavior
+from cafe.core.playbook import (
+    playbook_requests_capability,
+    resolve_step_attempt_limit,
+    resolve_step_behavior,
+)
 from cafe.core.questions_schema import validate_questions_xml
 from cafe.core.status_codes import (
     PhaseStatusCode,
@@ -80,6 +86,7 @@ PAUSE_STATUS_CODES = {
 }
 SLACK_HUMAN_TASK_TIMEOUT_SEC = 5.0
 MAX_GIT_METADATA_BYTES = 8192
+MAX_ISSUE_CONFIG_BYTES = 131072
 
 
 def _read_git_metadata(path: Path) -> str | None:
@@ -432,6 +439,91 @@ class BlackboardWorkflowRuntime:
                     f"Step '{step_name}' has an invalid automatic executor declaration"
                 )
             self.automatic_registry.validate_inputs(executor_id, inputs)
+
+    def _publication_contract_error(self) -> tuple[str, str] | None:
+        """Validate the confirmed and persisted publication choice for this run."""
+        issue_yaml = self.issue_dir / "issue.yaml"
+        config: Mapping[str, Any] = {}
+        if issue_yaml.exists():
+            try:
+                if issue_yaml.stat().st_size > MAX_ISSUE_CONFIG_BYTES:
+                    return (
+                        "invalid_issue_config",
+                        "issue.yaml exceeds the bounded workflow configuration size",
+                    )
+                loaded = yaml.safe_load(issue_yaml.read_text(encoding="utf-8")) or {}
+            except (OSError, UnicodeError, yaml.YAMLError):
+                return ("invalid_issue_config", "issue.yaml could not be read as YAML")
+            if not isinstance(loaded, Mapping):
+                return ("invalid_issue_config", "issue.yaml must contain a mapping")
+            config = loaded
+
+        confirmation = config.get("confirmation_contract")
+        pr_config = config.get("pr")
+        confirmation_mapping = confirmation if isinstance(confirmation, Mapping) else {}
+        pr_mapping = pr_config if isinstance(pr_config, Mapping) else {}
+        confirmed_present = "pr_auto_create" in confirmation_mapping
+        persisted_present = "auto_create" in pr_mapping
+        has_publication_config = (
+            confirmed_present
+            or persisted_present
+            or "post_todo_list" in pr_mapping
+        )
+        capable = playbook_requests_capability(self.playbook, CAPABILITY_PR_PUBLISH_ID)
+
+        if not capable:
+            if has_publication_config:
+                return (
+                    "inapplicable_publication_config",
+                    "the effective playbook does not request cafe.pr.publish",
+                )
+            return None
+        if not confirmed_present:
+            return (
+                "missing_confirmed_choice",
+                "confirmation_contract.pr_auto_create is required",
+            )
+        confirmed = confirmation_mapping["pr_auto_create"]
+        if not isinstance(confirmed, bool):
+            return (
+                "invalid_confirmed_choice",
+                "confirmation_contract.pr_auto_create must be Boolean",
+            )
+        if not persisted_present:
+            return ("missing_persisted_choice", "pr.auto_create is required")
+        persisted = pr_mapping["auto_create"]
+        if not isinstance(persisted, bool):
+            return ("invalid_persisted_choice", "pr.auto_create must be Boolean")
+        if confirmed is not persisted:
+            return (
+                "publication_choice_mismatch",
+                "confirmation_contract.pr_auto_create must equal pr.auto_create",
+            )
+        return None
+
+    def _reject_invalid_publication_contract(
+        self,
+        *,
+        start_step: str | None,
+        error: tuple[str, str],
+    ) -> PlaybookRunResult:
+        reason, detail = error
+        current_step = start_step if start_step in self.steps else self.blackboard.current_step
+        if current_step not in self.steps:
+            current_step = self.start_step
+        self.blackboard_store.record_event(
+            self.blackboard,
+            "workflow_configuration_invalid",
+            {"step": current_step, "reason": reason, "detail": detail},
+        )
+        return self._finalize_observed_result(
+            PlaybookRunResult(
+                final_step=current_step,
+                final_status_code="INVALID_WORKFLOW_CONFIG",
+                completed=False,
+                detail=f"{reason}: {detail}",
+            )
+        )
 
     def _notify_new_human_task(self, task: HumanTask) -> None:
         HumanTaskNotificationDispatcher(
@@ -3861,6 +3953,12 @@ class BlackboardWorkflowRuntime:
         start_step: Optional[str] = None,
         single_step: bool = False,
     ) -> PlaybookRunResult:
+        publication_error = self._publication_contract_error()
+        if publication_error is not None:
+            return self._reject_invalid_publication_contract(
+                start_step=start_step,
+                error=publication_error,
+            )
         recovered_transition = (
             self._recover_unpublished_lifecycle_position() if start_step is None else None
         )
