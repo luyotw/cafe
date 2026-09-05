@@ -43,6 +43,16 @@ applicable, comparison token, effective catalog digests, decision, and any
 post-change evidence in the active issue's `preflight` mapping. Reuse a prior
 decision only when the complete bound token is unchanged.
 
+A changed comparison token invalidates its cached decision, but does not by
+itself show a semantic change or require kickoff reconfirmation. Re-run the
+check, handle only any separately scoped action it reports, and perform a
+bounded semantic comparison of the effective confirmed contract and execution
+behavior. Reconfirm only for a contract or observable-behavior change, or a
+material runtime, dependency, or permission difference. Verified metadata-only
+churn such as paths, timestamps, caches, or labels may continue after recording
+the classification and evidence. If the difference cannot be shown to be
+non-semantic, fail closed.
+
 ## Apply only an exact approval
 
 Use the token and selection the user approved:
@@ -79,6 +89,7 @@ Catalog approval does not grant helper-publication approval.
 
 After an approved change, re-run both read-only checks and record the fresh
 results. Compare the effective workflow digests with the pre-change evidence.
-If effective behavior changed, re-render and reconfirm the kickoff contract
-before preparation, start, or resume. If it did not change, retain the
-post-change evidence and continue under the already confirmed contract.
+Digest changes trigger the bounded semantic comparison above, not an automatic
+confirmation stop. When it finds a material difference, re-render and reconfirm
+the kickoff contract; otherwise retain the post-change evidence and continue
+under the confirmed contract.
