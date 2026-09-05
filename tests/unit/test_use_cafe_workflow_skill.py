@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -692,6 +693,19 @@ def test_proactive_review_contract_writer_preserves_one_confirmed_contract(
     assert recovered == "replaced"
     assert "playbook_id: standard" in target.read_text(encoding="utf-8")
 
+    stale_playbook_document = target.read_text(encoding="utf-8").replace(
+        "playbook_id: standard",
+        "playbook_id: removed-playbook",
+    )
+    target.write_text(stale_playbook_document, encoding="utf-8")
+    with pytest.raises(FileNotFoundError):
+        persist()
+    assert target.read_text(encoding="utf-8") == stale_playbook_document
+
+    recovered_stale_playbook = persist(replacement_confirmed=True)
+    assert recovered_stale_playbook == "replaced"
+    assert "playbook_id: standard" in target.read_text(encoding="utf-8")
+
 
 def test_proactive_review_contract_writer_reexecs_and_contains_issue_target(
     tmp_path: Path,
@@ -738,6 +752,27 @@ def test_proactive_review_contract_writer_reexecs_and_contains_issue_target(
     assert result.returncode == 2
     assert "issue name must be a single relative directory name" in result.stderr
     assert not (outside_issue / "driver" / "proactive_review.yaml").exists()
+
+    issue_directory = (
+        tmp_path / ".cafe" / "issues" / "issue346"
+    )
+    external_issue_directory = tmp_path.parent / f"{tmp_path.name}-external-issue"
+    external_issue_directory.mkdir()
+    shutil.rmtree(issue_directory)
+    issue_directory.symlink_to(external_issue_directory, target_is_directory=True)
+
+    result = subprocess.run(
+        [sys.executable, *command],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert not (
+        external_issue_directory / "driver" / "proactive_review.yaml"
+    ).exists()
 
 
 def test_kickoff_contract_documents_persisted_preflight_and_reconfirmation() -> None:
