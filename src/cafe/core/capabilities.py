@@ -519,6 +519,34 @@ class PrPublishRun:
     error_message: Optional[str]
 
 
+def pr_synced_event_from_receipt(receipt: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """Build the trusted PR event only from a successful receipt with a URL."""
+    if (
+        receipt.get("capability") != CAPABILITY_PR_PUBLISH_ID
+        or receipt.get("success") is not True
+    ):
+        return None
+    outputs = receipt.get("outputs")
+    if not isinstance(outputs, Mapping):
+        return None
+    pr_url = str(outputs.get("pr_url") or "").strip()
+    if not pr_url:
+        return None
+    pr_number = str(outputs.get("pr_number") or "").strip()
+    action = str(outputs.get("action") or "synced").strip()
+    return {
+        "type": "pr_synced",
+        "url": pr_url,
+        "pr_number": pr_number,
+        "action": action,
+        "source": "capability",
+        "display": {
+            "style": "green",
+            "lines": ["PR synced", f"  URL: {pr_url}"],
+        },
+    }
+
+
 def _base_receipt(
     *,
     correlation_id: str,
@@ -739,17 +767,7 @@ def run_pr_publish_capability(
             "action": action,
         },
     )
-    pr_synced = {
-        "type": "pr_synced",
-        "url": pr_url,
-        "pr_number": pr_number,
-        "action": action,
-        "source": "capability",
-        "display": {
-            "style": "green",
-            "lines": ["PR synced", f"  URL: {pr_url}"],
-        },
-    }
+    pr_synced = pr_synced_event_from_receipt(receipt)
     return PrPublishRun(receipt=receipt, pr_synced_event=pr_synced, error_message=None)
 
 
@@ -1326,6 +1344,8 @@ def dispatch_revalidated_capability_request(
         outputs=outputs,
         outcome="success",
     )
+    if request.capability == CAPABILITY_PR_PUBLISH_ID:
+        event = pr_synced_event_from_receipt(receipt)
     return PrPublishRun(receipt=receipt, pr_synced_event=event, error_message=None)
 
 

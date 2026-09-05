@@ -1231,6 +1231,7 @@ class GitHubPRCreator(NoOpHook):
             default_capability_definition_dirs,
             evaluate_capability_request,
             load_capability_registry,
+            pr_synced_event_from_receipt,
             run_capability_request,
             validation_rejection_receipt,
         )
@@ -1417,9 +1418,11 @@ class GitHubPRCreator(NoOpHook):
                 run_receipt = dict(execution) if isinstance(execution, dict) else receipt
                 run = PrPublishRun(
                     receipt=run_receipt,
-                    pr_synced_event=None,
+                    pr_synced_event=pr_synced_event_from_receipt(run_receipt),
                     error_message=None if run_receipt.get("success") else str(receipt["outcome"]),
                 )
+            if run.receipt.get("capability") == CAPABILITY_PR_PUBLISH_ID:
+                run.pr_synced_event = pr_synced_event_from_receipt(run.receipt)
             persist_receipt(run.receipt)
 
             if run.pr_synced_event is not None:

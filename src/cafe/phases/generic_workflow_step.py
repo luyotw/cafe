@@ -1283,6 +1283,13 @@ class GenericWorkflowStepExecutor(Phase):
             "behavior_completion": behavior.completion,
             "publish_confirmation": behavior.publish_confirmation,
         }
+        if behavior.publish_confirmation:
+            publication_choice = self._get_issue_config_value(
+                self.issue_dir / "issue.yaml",
+                "pr.auto_create",
+            )
+            if isinstance(publication_choice, bool):
+                context["pr_auto_create"] = str(publication_choice).lower()
 
         skill_name = self._resolve_skill_name(step_def, self.iteration)
         contract = self._get_skill_loader().get_workflow_contract(skill_name)

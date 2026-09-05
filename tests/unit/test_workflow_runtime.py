@@ -505,6 +505,113 @@ def test_runtime_reads_publication_contract_at_run_time(tmp_path: Path) -> None:
     assert calls == []
 
 
+@pytest.mark.parametrize("choice", [True, False])
+def test_local_review_task_reports_the_current_publication_outcome(
+    tmp_path: Path,
+    choice: bool,
+) -> None:
+    """Test List 6/7: durable review text matches the explicit workflow mode."""
+    issue_dir = tmp_path / ".cafe" / "issues" / f"review-outcome-{choice}"
+    _write_publication_contract(issue_dir, confirmed=choice, persisted=choice)
+    playbook = PlaybookLoader().load("standard")
+    url = "https://github.com/acme/widgets/pull/467"
+
+    def executor(step: str, *_args: object, **_kwargs: object) -> StepExecutionResult:
+        _write_baton(
+            issue_dir,
+            from_step=step,
+            to_owner="user",
+            to_step="user",
+            intent="confirm_output",
+        )
+        events = [{"type": "pr_synced", "url": url, "source": "capability"}] if choice else []
+        return StepExecutionResult(response="", artifacts={}, events=events)
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    runtime.blackboard_store.append_capability_receipt(
+        runtime.blackboard,
+        {
+            "capability": "cafe.pr.publish",
+            "success": True,
+            "outputs": {"pr_url": "https://github.com/stale/project/pull/1"},
+        },
+    )
+
+    result = runtime.run(start_step="pr")
+
+    assert result.final_status_code == "BATON_CONFIRM_OUTPUT"
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    if choice:
+        assert f"Verified PR URL: {url}" in task.prompt
+    else:
+        assert "Publication mode: local-only. No PR URL exists." in task.prompt
+        assert "https://github.com/stale/project/pull/1" not in task.prompt
+
+
+@pytest.mark.parametrize(
+    "events",
+    [
+        [
+            {
+                "type": "capability_receipt",
+                "capability": "cafe.pr.publish",
+                "success": True,
+            }
+        ],
+        [
+            {
+                "type": "capability_receipt",
+                "capability": "cafe.pr.publish",
+                "success": False,
+                "code": "policy_denied",
+            }
+        ],
+        [{"type": "pr_synced", "url": "", "source": "capability"}],
+    ],
+)
+def test_published_review_rejects_missing_or_failed_current_url_evidence(
+    tmp_path: Path,
+    events: list[dict[str, object]],
+) -> None:
+    """Test List 6/8: stale or generic receipts cannot create a success handoff."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "unverified-review"
+    _write_publication_contract(issue_dir, confirmed=True, persisted=True)
+
+    def executor(step: str, *_args: object, **_kwargs: object) -> StepExecutionResult:
+        _write_baton(
+            issue_dir,
+            from_step=step,
+            to_owner="user",
+            to_step="user",
+            intent="confirm_output",
+        )
+        return StepExecutionResult(response="", artifacts={}, events=events)
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=PlaybookLoader().load("standard"),
+        executor=executor,
+    )
+    runtime.blackboard_store.append_capability_receipt(
+        runtime.blackboard,
+        {
+            "capability": "cafe.pr.publish",
+            "success": True,
+            "outputs": {"pr_url": "https://github.com/stale/project/pull/1"},
+        },
+    )
+
+    result = runtime.run(start_step="pr")
+
+    assert result.completed is False
+    assert result.final_status_code == "MISSING_CAPABILITY_RECEIPT"
+    assert HumanTaskRecordStore(issue_dir).tasks() == ()
+
+
 def _write_iteration_evidence(
     issue_dir: Path,
     step: str,
@@ -721,7 +828,7 @@ def test_runtime_completes_pr_when_publish_receipt_exists(tmp_path: Path) -> Non
     assert result.final_status_code == "BATON_WORKFLOW_COMPLETE"
 
 
-def test_runtime_completes_pr_when_capability_receipt_success_exists(tmp_path: Path) -> None:
+def test_runtime_rejects_pr_capability_receipt_without_verified_url(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-pr-cap"
     _write_publication_contract(issue_dir, confirmed=True, persisted=True)
     playbook = {
@@ -763,8 +870,8 @@ def test_runtime_completes_pr_when_capability_receipt_success_exists(tmp_path: P
     )
     result = runtime.run(start_step="pr")
 
-    assert result.completed is True
-    assert result.final_status_code == "BATON_WORKFLOW_COMPLETE"
+    assert result.completed is False
+    assert result.final_status_code == "MISSING_CAPABILITY_RECEIPT"
 
 
 def test_runtime_blocks_declared_capability_step_without_receipt(tmp_path: Path) -> None:
@@ -3647,7 +3754,12 @@ def test_runtime_emits_expected_runtime_labels_per_path(tmp_path: Path) -> None:
         return StepExecutionResult(
             response="done",
             artifacts={},
-            events=[{"type": "pr_synced"}],
+            events=[
+                {
+                    "type": "pr_synced",
+                    "url": "https://github.com/test/repo/pull/467",
+                }
+            ],
         )
 
     pr_runtime = BlackboardWorkflowRuntime(

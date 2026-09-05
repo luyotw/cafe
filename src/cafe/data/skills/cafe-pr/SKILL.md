@@ -103,8 +103,10 @@ host-side `GitHubPRCreator` publish hook runs it after the PR artifact is ready,
 so GitHub/network access happens outside the agent sandbox.
 
 When the generic runtime includes a handoff block for the PR step, it repeats
-local-first completion and publish ordering; treat that text as authoritative
-alongside this skill.
+agent-local-first completion and the confirmed workflow publication mode; treat
+that text as authoritative alongside this skill. `pr.auto_create: false` means
+the workflow is `local-only`, while `true` means the host must publish before
+the review task can expose a verified PR URL.
 
 ## Instructions
 
@@ -126,13 +128,14 @@ alongside this skill.
 3. 不要直接呼叫 GitHub connector、GitHub API、`gh pr create`，也不要自行執行 `scripts/sync_pr.sh`
 4. 不要查詢或等待遠端 branch/PR；遠端 publish 是 agent 回傳後才由 host-side hook 執行
 5. 完成本地 PR artifact 與 checklist 後，依本輪注入的 `{step_transitions}` 選擇 next-step baton：宣告 `confirm_output` 時交給 `user` review；只有宣告 `workflow_complete→done` 時才直接完成；不得選擇未宣告的路由，也不得代替 user 處置 follow-up proposal
-6. CAFE host-side hook 會在有效 handoff 進入人工 review 或完成前執行 `scripts/sync_pr.sh --output {output_file}`，依 `issue.yaml` 的 `base_branch` 自動加上 `--base`
-7. Hook 會把 PR URL 作為 `pr_synced` event 回傳，CLI 會印出 PR URL
+6. 當 `pr.auto_create: true` 時，CAFE host-side hook 會在有效 handoff 進入人工 review 或完成前執行 `scripts/sync_pr.sh --output {output_file}`，依 `issue.yaml` 的 `base_branch` 自動加上 `--base`；只有本次成功且通過 output contract 的結果可產生 `pr_synced` evidence 與 review task 的 verified PR URL
+7. 當 `pr.auto_create: false` 時，workflow 是 `local-only`：hook 不發布、不沿用舊 URL，review task 明示 `Publication mode: local-only. No PR URL exists.`
 8. 當 `{step_transitions}` 宣告 `confirm_output` 時，只有綁定 HumanTask 的核准結果可以完成 workflow；PR agent 不得改寫成 `done` 或 `workflow_complete`
 
 ### Gotchas
 - Script 的 progress/error 輸出在 stderr，JSON result 在 stdout
 - PR 已存在時 script 會 update（idempotent），不會重複建立
+- 發布失敗、permission denied 或成功 receipt 缺少 URL 時，不得建立看似成功的 `local-review` handoff；approval resume 與直接成功使用同一個 validated `pr_synced` evidence contract
 - 對外網路、GitHub 憑證、push/create/update PR 都由 host-side hook 處理，避免 agent sandbox 阻擋
 - 如果遠端 branch/PR 尚不存在，這是 hook 執行前的正常狀態，不是 PR phase 未完成
 - 不要在回應中重述 PR 內容；用 blackboard 與 next-step baton 表達 handoff。

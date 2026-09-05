@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from cafe.core.capabilities import pr_synced_event_from_receipt
 from cafe.core.hooks.native import (
     GitHubIssueFetcher,
     GitHubPRCreator,
@@ -67,6 +68,30 @@ def _browser_phase(*, open_pr: bool) -> SimpleNamespace:
 def _enable_remote_pr(issue_dir: Path) -> None:
     issue_dir.mkdir(parents=True, exist_ok=True)
     (issue_dir / "issue.yaml").write_text("pr:\n  auto_create: true\n", encoding="utf-8")
+
+
+def test_successful_publish_receipt_yields_one_validated_pr_synced_event() -> None:
+    """Test List 6/8: direct and approval-resume receipts share URL validation."""
+    receipt = {
+        "capability": "cafe.pr.publish",
+        "success": True,
+        "outputs": {
+            "pr_url": "https://github.com/acme/widgets/pull/467",
+            "pr_number": "467",
+            "action": "updated",
+        },
+    }
+
+    event = pr_synced_event_from_receipt(receipt)
+
+    assert event is not None
+    assert event["type"] == "pr_synced"
+    assert event["url"] == "https://github.com/acme/widgets/pull/467"
+    assert event["source"] == "capability"
+    assert pr_synced_event_from_receipt({**receipt, "success": False}) is None
+    assert pr_synced_event_from_receipt(
+        {**receipt, "outputs": {"pr_number": "467"}}
+    ) is None
 
 
 class _FakePhase:

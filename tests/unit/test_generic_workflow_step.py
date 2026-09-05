@@ -1506,7 +1506,7 @@ def test_generic_workflow_step_pr_prompt_overrides_external_state_guardrail(
 
     prompt = agent_manager.prompts[-1]
     assert "Do not wait for, verify, or require a remote GitHub branch/PR" in prompt
-    assert "Remote PR publish happens later in the host-side publish_output hook." in prompt
+    assert "Remote PR publication, when enabled, happens later" in prompt
     assert (
         "Before updating the workflow baton, verify whether the requested state change has actually happened in files or external state relevant to this phase."
         not in prompt
