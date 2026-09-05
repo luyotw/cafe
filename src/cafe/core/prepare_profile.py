@@ -100,12 +100,12 @@ class PrepareProfile:
         spec["sync_github"] = sync.when_issue_id_present if has_issue_id else sync.when_manual_input
         plan["sync_github"] = sync.when_issue_id_present if has_issue_id else sync.when_manual_input
 
-        if self.supports_pr_config() and self.is_github_repo and quick.pr.auto_create_on_github_repo:
-            pr["auto_create"] = True
-            if quick.pr.post_todo_list_when_auto_create:
-                pr["post_todo_list"] = True
-        elif self.supports_pr_config():
-            pr["auto_create"] = False
+        if (
+            self.supports_pr_config()
+            and self.is_github_repo
+            and quick.pr.post_todo_list_when_auto_create
+        ):
+            pr["post_todo_list"] = True
 
         return PrepareIssueConfig(spec=spec, plan=plan, pr=pr)
 

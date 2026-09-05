@@ -401,6 +401,23 @@ def prepare(
 
         profile = PrepareProfile.from_playbook(loaded_playbook.model, is_github_repo())
         entry_step_name = str(loaded_playbook.model.entry_point)
+        from cafe.ui.prepare_field_renderer import (
+            NonInteractiveCliAnswers,
+            PrepareNonInteractiveError,
+            validate_publication_answers,
+        )
+
+        try:
+            validate_publication_answers(
+                profile,
+                NonInteractiveCliAnswers(
+                    auto_create_pr=auto_create_pr,
+                    post_pr_todo_list=post_pr_todo_list,
+                ),
+            )
+        except PrepareNonInteractiveError as exc:
+            console.print(f"[red]Error: {exc}[/red]")
+            raise typer.Exit(1)
 
         # 2. Determine interactive mode and config prompt behavior
         # should_prompt_for_config: Should we show config prompts?

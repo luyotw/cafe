@@ -120,7 +120,7 @@ class TestPreparePlaybookDriven:
         mock_phase_list.return_value = "2. GitHub issue"
         mock_cli_list.return_value = "Quick setup (use recommended defaults)"
 
-        result = runner.invoke(app, ["prepare"])
+        result = runner.invoke(app, ["prepare", "--auto-create-pr"])
 
         assert result.exit_code == 0
         config_file = temp_repo_dir / ".cafe" / "issues" / "parity-quick" / "issue.yaml"
@@ -153,6 +153,22 @@ class TestPreparePlaybookDriven:
         assert config_data["spec"]["template"] == "auto"
         assert config_data["plan"]["template"] == "default"
         assert not (temp_repo_dir / ".cafe" / "agents").exists()
+
+    def test_pr_capable_positional_prepare_requires_explicit_publication_choice(
+        self, temp_repo_dir, mock_git_ops
+    ) -> None:
+        """Integration 1: every public prepare shape requires the confirmed choice."""
+        result = runner.invoke(
+            app,
+            ["prepare", "probe-missing-choice", "--playbook", "standard", "--no-check"],
+        )
+
+        assert result.exit_code == 1
+        assert "--auto-create-pr or --no-auto-create-pr is required" in result.stdout
+        assert not (
+            temp_repo_dir / ".cafe" / "issues" / "probe-missing-choice" / "issue.yaml"
+        ).exists()
+        mock_git_ops.create_branch.assert_not_called()
 
     def test_cli_playbook_selection_is_persisted_without_repository_default(
         self, temp_repo_dir, mock_git_ops
@@ -298,7 +314,7 @@ commands:
         mock_prompt_text.return_value = "hotfix-issue"
         mock_prompt_confirm.return_value = False
 
-        result = runner.invoke(app, ["prepare"])
+        result = runner.invoke(app, ["prepare", "--no-auto-create-pr"])
 
         assert result.exit_code == 0
         assert "Pre-configure spec and plan phases" not in result.stdout
@@ -306,7 +322,7 @@ commands:
         config_data = yaml.safe_load(config_file.read_text(encoding="utf-8"))
         assert "spec" not in config_data
         assert "plan" not in config_data
-        assert "pr" not in config_data
+        assert config_data["pr"] == {"auto_create": False}
 
     @patch("cafe.ui.cli.prompt_confirm")
     @patch("cafe.ui.template_selector.prompt_list")

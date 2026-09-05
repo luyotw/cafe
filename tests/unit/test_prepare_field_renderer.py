@@ -349,6 +349,8 @@ class TestQuickDefaults:
         assert rendered.spec == legacy.spec
         assert rendered.plan == legacy.plan
         assert rendered.pr == legacy.pr
+        assert "auto_create" not in rendered.pr
+        assert rendered.pr["post_todo_list"] is True
 
     def test_manual_input_uses_manual_sync_defaults(self) -> None:
         parsed = _default_fields()

@@ -312,7 +312,7 @@ def _validate_declared_non_interactive_input(
         )
 
 
-def _validate_publication_answers(
+def validate_publication_answers(
     profile: PrepareProfile,
     answers: NonInteractiveCliAnswers,
 ) -> None:
@@ -360,7 +360,7 @@ def resolve_non_interactive_issue_config(
     deps: NonInteractiveResolverDeps,
 ) -> PrepareIssueConfig:
     """Resolve and validate non-interactive prepare config for issue.yaml."""
-    _validate_publication_answers(profile, answers)
+    validate_publication_answers(profile, answers)
     if parsed_fields is None:
         if not profile.prepare.prompt_for_spec_plan_config and profile.prepare.model_fields_set == {
             "prompt_for_spec_plan_config"
@@ -498,26 +498,9 @@ def apply_quick_defaults(
             continue
         if field.write is None:
             continue
+        if field.write == "pr.auto_create":
+            continue
         set_write_value(config, field.write, field.default)
-
-    if (
-        ctx.profile.supports_pr_config(parsed)
-        and ctx.is_github_repo
-        and "auto_create" not in config.pr
-    ):
-        auto_field = next(
-            (field for field in parsed.fields if field.write == "pr.auto_create"),
-            None,
-        )
-        if auto_field is not None and auto_field.default is not None:
-            set_write_value(config, "pr.auto_create", auto_field.default)
-            if config.pr.get("auto_create") and "post_todo_list" not in config.pr:
-                todo_field = next(
-                    (field for field in parsed.fields if field.write == "pr.post_todo_list"),
-                    None,
-                )
-                if todo_field is not None and todo_field.default is not None:
-                    set_write_value(config, "pr.post_todo_list", todo_field.default)
     return config
 
 

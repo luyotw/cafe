@@ -116,7 +116,7 @@ class TestPrepareProfileQuickSetup:
         assert result.spec["sync_github"] is False
         assert result.plan["sync_github"] is False
 
-    def test_github_repo_sets_pr_defaults_from_metadata(self) -> None:
+    def test_quick_setup_does_not_infer_a_publication_choice(self) -> None:
         profile = PrepareProfile.from_playbook(
             PlaybookDefinition.model_validate(
                 yaml.safe_load(_minimal_playbook_yaml(include_pr_step=True))
@@ -124,10 +124,10 @@ class TestPrepareProfileQuickSetup:
             is_github_repo=True,
         )
         result = profile.quick_setup_issue_config(issue_id=None)
-        assert result.pr["auto_create"] is True
+        assert "auto_create" not in result.pr
         assert result.pr["post_todo_list"] is True
 
-    def test_non_github_repo_skips_pr_auto_create(self) -> None:
+    def test_non_github_repo_does_not_infer_a_local_only_choice(self) -> None:
         profile = PrepareProfile.from_playbook(
             PlaybookDefinition.model_validate(
                 yaml.safe_load(_minimal_playbook_yaml(include_pr_step=True))
@@ -135,8 +135,7 @@ class TestPrepareProfileQuickSetup:
             is_github_repo=False,
         )
         result = profile.quick_setup_issue_config(issue_id=None)
-        assert result.pr["auto_create"] is False
-        assert "post_todo_list" not in result.pr
+        assert result.pr == {}
 
     def test_playbook_without_pr_step_omits_pr_config(self) -> None:
         profile = PrepareProfile.from_playbook(
