@@ -8,9 +8,10 @@ import os
 import shlex
 import shutil
 import sys
-import tempfile
+import uuid
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 
 def _reexec_with_cafe_python() -> None:
@@ -59,31 +60,54 @@ def _agent_phase_names(*, project_root: Path, playbook_id: str) -> tuple[str, ..
     )
 
 
-def _is_within(*, candidate: Path, parent: Path) -> bool:
+def _directory_open_flags() -> int:
+    if not hasattr(os, "O_DIRECTORY") or not hasattr(os, "O_NOFOLLOW"):
+        raise OSError("secure proactive review contract publication is unavailable")
+    return os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+
+def _open_or_create_directory(*, parent_fd: int, name: str) -> int:
+    flags = _directory_open_flags()
     try:
-        candidate.relative_to(parent)
-    except ValueError:
-        return False
-    return True
+        return os.open(name, flags, dir_fd=parent_fd)
+    except FileNotFoundError:
+        try:
+            os.mkdir(name, dir_fd=parent_fd)
+        except FileExistsError:
+            pass
+        return os.open(name, flags, dir_fd=parent_fd)
 
 
-def _ensure_contract_target_containment(*, project_root: Path, target: Path) -> None:
-    resolved_project_root = project_root.resolve()
-    resolved_issue_root = (resolved_project_root / ".cafe" / "issues").resolve()
-    resolved_target = target.resolve()
-    issue_root_is_contained = _is_within(
-        candidate=resolved_issue_root,
-        parent=resolved_project_root,
-    )
-    target_is_contained = _is_within(
-        candidate=resolved_target,
-        parent=resolved_issue_root,
-    )
-    if not issue_root_is_contained or not target_is_contained:
-        raise ValueError("proactive review contract target escapes the issue root")
+@contextmanager
+def _open_contract_directory(*, project_root: Path, issue_name: str) -> Iterator[int]:
+    directory_fd = os.open(project_root.resolve(), _directory_open_flags())
+    try:
+        for component in (".cafe", "issues", issue_name, "driver"):
+            child_fd = _open_or_create_directory(parent_fd=directory_fd, name=component)
+            os.close(directory_fd)
+            directory_fd = child_fd
+        yield directory_fd
+    finally:
+        os.close(directory_fd)
 
 
-def _contract_target(*, project_root: Path, issue_name: str) -> Path:
+def _open_temporary_contract_file(*, directory_fd: int, target_name: str) -> tuple[int, str]:
+    for _ in range(100):
+        temporary_name = f".{target_name}.{uuid.uuid4().hex}.tmp"
+        try:
+            descriptor = os.open(
+                temporary_name,
+                os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=directory_fd,
+            )
+        except FileExistsError:
+            continue
+        return descriptor, temporary_name
+    raise FileExistsError("could not reserve a temporary proactive review contract")
+
+
+def _normalized_issue_name(issue_name: str) -> str:
     normalized_name = issue_name.strip()
     candidate = Path(normalized_name)
     if (
@@ -93,16 +117,7 @@ def _contract_target(*, project_root: Path, issue_name: str) -> Path:
         or normalized_name in {".", ".."}
     ):
         raise ValueError("issue name must be a single relative directory name")
-    target = (
-        project_root
-        / ".cafe"
-        / "issues"
-        / normalized_name
-        / "driver"
-        / "proactive_review.yaml"
-    )
-    _ensure_contract_target_containment(project_root=project_root, target=target)
-    return target
+    return normalized_name
 
 
 def _candidate_document(
@@ -187,31 +202,52 @@ def _semantic_contract(document: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
-def _read_existing_contract(*, target: Path, project_root: Path) -> dict[str, Any]:
-    raw = yaml.safe_load(target.read_text(encoding="utf-8"))
+def _read_existing_contract(*, directory_fd: int, project_root: Path) -> dict[str, Any]:
+    descriptor = os.open(
+        "proactive_review.yaml",
+        os.O_RDONLY | os.O_NOFOLLOW,
+        dir_fd=directory_fd,
+    )
+    with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+        raw = yaml.safe_load(handle)
     return _validate_existing_document(document=raw, project_root=project_root)
 
 
-def _replace_document(*, target: Path, document: dict[str, Any], project_root: Path) -> None:
-    target.parent.mkdir(parents=True, exist_ok=True)
-    _ensure_contract_target_containment(project_root=project_root, target=target)
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        encoding="utf-8",
-        prefix=f".{target.name}.",
-        suffix=".tmp",
-        dir=target.parent,
-        delete=False,
-    ) as temporary:
-        temporary_path = Path(temporary.name)
-        yaml.safe_dump(document, temporary, sort_keys=False, allow_unicode=True)
+def _contract_exists(*, directory_fd: int) -> bool:
     try:
-        written = _read_existing_contract(target=temporary_path, project_root=project_root)
+        os.stat("proactive_review.yaml", dir_fd=directory_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def _replace_document(*, directory_fd: int, document: dict[str, Any], project_root: Path) -> None:
+    descriptor, temporary_name = _open_temporary_contract_file(
+        directory_fd=directory_fd,
+        target_name="proactive_review.yaml",
+    )
+    try:
+        with os.fdopen(descriptor, "w+", encoding="utf-8") as temporary:
+            yaml.safe_dump(document, temporary, sort_keys=False, allow_unicode=True)
+            temporary.flush()
+            temporary.seek(0)
+            written = _validate_existing_document(
+                document=yaml.safe_load(temporary),
+                project_root=project_root,
+            )
         if written != document:
             raise ValueError("proactive review contract did not validate after serialization")
-        os.replace(temporary_path, target)
+        os.replace(
+            temporary_name,
+            "proactive_review.yaml",
+            src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd,
+        )
     finally:
-        temporary_path.unlink(missing_ok=True)
+        try:
+            os.unlink(temporary_name, dir_fd=directory_fd)
+        except FileNotFoundError:
+            pass
 
 
 def write_proactive_review_contract(
@@ -225,7 +261,7 @@ def write_proactive_review_contract(
     replacement_confirmed: bool,
 ) -> str:
     """Create, reuse, or explicitly replace the one confirmed contract."""
-    target = _contract_target(project_root=project_root, issue_name=issue_name)
+    normalized_issue_name = _normalized_issue_name(issue_name)
     candidate = _candidate_document(
         project_root=project_root,
         playbook_id=playbook_id,
@@ -233,24 +269,52 @@ def write_proactive_review_contract(
         confirmed_by=confirmed_by,
         confirmed_at=confirmed_at,
     )
-    if not target.exists():
-        _replace_document(target=target, document=candidate, project_root=project_root)
-        return "created"
-    try:
-        existing = _read_existing_contract(target=target, project_root=project_root)
-    except (FileNotFoundError, ValueError, yaml.YAMLError):
+    with _open_contract_directory(
+        project_root=project_root,
+        issue_name=normalized_issue_name,
+    ) as directory_fd:
+        if not _contract_exists(directory_fd=directory_fd):
+            _replace_document(
+                directory_fd=directory_fd,
+                document=candidate,
+                project_root=project_root,
+            )
+            return "created"
+        try:
+            existing = _read_existing_contract(
+                directory_fd=directory_fd,
+                project_root=project_root,
+            )
+        except FileNotFoundError:
+            if not replacement_confirmed:
+                raise
+            _replace_document(
+                directory_fd=directory_fd,
+                document=candidate,
+                project_root=project_root,
+            )
+            return "replaced"
+        except (ValueError, yaml.YAMLError):
+            if not replacement_confirmed:
+                raise
+            _replace_document(
+                directory_fd=directory_fd,
+                document=candidate,
+                project_root=project_root,
+            )
+            return "replaced"
+        if _semantic_contract(existing) == _semantic_contract(candidate):
+            return "reused"
         if not replacement_confirmed:
-            raise
-        _replace_document(target=target, document=candidate, project_root=project_root)
-        return "replaced"
-    if _semantic_contract(existing) == _semantic_contract(candidate):
-        return "reused"
-    if not replacement_confirmed:
-        raise ValueError(
-            "changed proactive review contract requires complete replacement confirmation"
+            raise ValueError(
+                "changed proactive review contract requires complete replacement confirmation"
+            )
+        _replace_document(
+            directory_fd=directory_fd,
+            document=candidate,
+            project_root=project_root,
         )
-    _replace_document(target=target, document=candidate, project_root=project_root)
-    return "replaced"
+        return "replaced"
 
 
 def main() -> int:

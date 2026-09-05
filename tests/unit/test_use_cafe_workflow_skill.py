@@ -775,6 +775,52 @@ def test_proactive_review_contract_writer_reexecs_and_contains_issue_target(
     ).exists()
 
 
+def test_proactive_review_contract_writer_contains_directory_swap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    writer = _load_script_module(
+        SKILL_ROOT / "scripts" / "write_proactive_review_contract.py",
+        "proactive_review_contract_writer_directory_swap",
+    )
+    issue_directory = tmp_path / ".cafe" / "issues" / "issue346"
+    (issue_directory / "driver").mkdir(parents=True)
+    external_issue_directory = tmp_path.parent / f"{tmp_path.name}-external-issue"
+    external_target = external_issue_directory / "driver" / "proactive_review.yaml"
+    external_target.parent.mkdir(parents=True)
+    external_target.write_text("external sentinel\n", encoding="utf-8")
+
+    original_open = writer.os.open
+    swapped = False
+
+    def swap_before_temporary_open(path: object, *args: object, **kwargs: object) -> int:
+        nonlocal swapped
+        path_name = Path(os.fspath(path)).name
+        if not swapped and path_name.startswith(".proactive_review.yaml.") and path_name.endswith(
+            ".tmp"
+        ):
+            shutil.rmtree(issue_directory)
+            issue_directory.symlink_to(external_issue_directory, target_is_directory=True)
+            swapped = True
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(writer.os, "open", swap_before_temporary_open)
+
+    with pytest.raises(FileNotFoundError):
+        writer.write_proactive_review_contract(
+            project_root=tmp_path,
+            issue_name="issue346",
+            playbook_id="standard",
+            decision_values=_proactive_review_decision_args()[1::2],
+            confirmed_by="user",
+            confirmed_at="2026-09-05T12:00:00Z",
+            replacement_confirmed=False,
+        )
+
+    assert swapped
+    assert external_target.read_text(encoding="utf-8") == "external sentinel\n"
+
+
 def test_kickoff_contract_documents_persisted_preflight_and_reconfirmation() -> None:
     kickoff = _read_skill_resource("references/kickoff.md")
     normalized = " ".join(kickoff.split())
