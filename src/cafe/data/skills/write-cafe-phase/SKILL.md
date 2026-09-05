@@ -1,7 +1,7 @@
 ---
 name: write-cafe-phase
 description: Use this skill when creating, updating, or repairing a CAFE workflow phase or its supporting shared/chat skill under src/cafe/data/skills or .cafe/skills. Covers phase scope, SKILL.md structure, placeholders, plan handoffs, interruption-safe checkpoint/resume behavior, and runtime conventions, including declarative defects identified by use-cafe-workflow. Not for generic skill files, playbook YAML, driver skills, or CAFE core/runtime defects.
-version: 2.9.5
+version: 2.10.0
 ---
 
 # Write CAFE Phase Skill
@@ -69,6 +69,16 @@ version: 2.9.5
 - Keep `need_clarification`, `need_permission`, and `alignment_checkpoint` as reactive safety interruptions; they are not scheduled confirmation candidates.
 - The stop contract is step-level. If one phase contains multiple approval moments that must allow different user/driver ownership, split them into separate playbook steps instead of inventing pseudo-step gate names.
 - After adding or removing a planned gate, run `cafe playbook confirmation-gates <id>`, report the changed candidate set, and require the workflow driver to reconfirm any stale issue contract before the next `cafe make`.
+
+## Same-Phase Plan Direction Checkpoint
+
+- When the user explicitly requires solution alignment before the executable Plan is drafted, keep both stages in the same Plan phase by using one mandatory, user-owned `need_clarification` checkpoint. This is a narrow phase-internal decision checkpoint, not a planned output approval and not a kickoff-assignable confirmation gate; the completed Plan still uses the step's existing `confirm_output` gate.
+- Persist the current stage in the first non-blank line of `{output_file}` with a fixed marker, and the concise localized confirmation answer in the second non-blank line. Treat only those canonical positions as protocol evidence; marker-looking text in the development guide or other user content must not change stages.
+- In the direction stage, write a clearly unconfirmed, non-executable draft that preserves the development guide and states one recommended direction, included scope, excluded scope, and material tradeoffs. Do not write a Test List, implementation tasks, or file-by-file execution steps yet.
+- Put a bounded summary of the same direction and tradeoffs in one `questions.xml` question so every HumanTask surface is self-contained. Offer one exact confirmation answer and rely on the standard Other input for adjustments; do not manufacture an alternatives menu.
+- Advance to detailed planning only when the current HumanTask answer value, after trimming surrounding whitespace, exactly equals the canonical localized confirmation answer from the previous output. Substrings, negations, extra text, missing evidence, and Other answers fail closed in the direction stage.
+- Give the complete Plan a distinct canonical stage marker. A later revision of that complete Plan stays in detailed planning unless the feedback materially changes the solution direction; if it does, reopen the same user-owned checkpoint before rewriting the Plan.
+- Use this exception only when both stages share Plan ownership and the provisional `plan` artifact cannot reach an execute step before final `confirm_output`. If the stages need different ownership, independent reuse, or separately configurable planned gates, split them into separate playbook steps instead.
 
 ## Scope Rules
 - Define one coherent unit of work.
@@ -140,6 +150,7 @@ version: 2.9.5
 - A plan → execute pair uses `plan` as the artifact key, the execute skill declares `{plan_file}` in `## Context`, and no sidecar duplicates the plan task list.
 - A bridge phase that consumes one plan and produces the next clearly distinguishes incoming `{plan_file}` from next-plan `{output_file}`, completes the incoming checklist before handoff, and supports a `not_required` next plan.
 - Every planned output-confirmation route has a matching playbook `on.confirm_output` declaration and is classified as assignable or mandatory; reactive user interruptions are not mislabeled as kickoff candidates.
+- A same-phase Plan direction checkpoint, when explicitly required, is mandatory user-owned, uses canonical stage evidence and exact-answer matching, remains unreachable from execution until final `confirm_output`, and is not presented as a kickoff-assignable approval.
 - Mandatory tools are declared in `workflow.required_tools`; optional diagnostics are not made unconditional, and every binding playbook grants the declared tools.
 - An interruption-prone phase has an output-compatible durable progress owner, stable target identity, per-target/stage dependency fingerprints, bounded checkpoint unit, evidence-backed resume algorithm, final global sweep, non-self-referential versioned finalization digest, and post-success ledger retention/cleanup contract; it does not use runtime checklist state as per-target progress.
 - A repair intended to protect an existing iteration puts the critical rule in `SKILL.md`, relies on phase preparation to refresh the derived `checklist.md` while retaining only exactly unchanged completion, and defines evidence-only migration for work produced before the ledger existed.

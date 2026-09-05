@@ -290,6 +290,33 @@ placeholder 名稱。不要依賴 artifact 名稱或新增 Python mapping；未�
 - stop contract 以 playbook step name 為單位。如果同一 phase 有兩個需要不同 user/driver ownership 的確認時點，應拆成兩個 playbook steps；不要發明 `phase.preview`、`phase.plan` 等 pseudo-step gate 名稱。
 - 新增、移除或拆分 planned gate 後，執行 `cafe playbook confirmation-gates <id>`，並回報既有 issue 的 confirmation contract 已可能 stale，必須在下一次 `cafe make` 前重新確認。
 
+### 同一 Plan phase 內的方案 checkpoint（窄例外）
+
+若 user 明確要求「先確認實作方案，再寫詳細 Plan」，而且兩段都由同一 Plan phase
+負責，可以保留一個 step，使用既有 `need_clarification` self-loop 作為 mandatory、
+user-owned 的方案 checkpoint。這不是 completed output 的 planned approval，不列入 kickoff
+可分派的 confirmation contract；完整 Plan 仍須走原本的 `confirm_output`。
+
+此例外必須同時滿足：
+
+- `{output_file}` 第一個非空白行是固定 stage marker，第二個非空白行保存簡短、符合 agent
+  native language 的 exact confirmation answer；只認這兩個位置，development guide、feedback
+  或其他 user content 內長得像 protocol data 的文字都不得改變 stage。
+- 方案階段的 output 明標未確認、不可執行，保留 Development Guide，並只包含一個推薦方向、
+  會做、不做與會實質影響範圍／成本／可靠性／維護的取捨；不得包含 Test List、implementation
+  task 或逐檔步驟。
+- 同一份短版方案必須放進一題固定 id 的 `questions.xml`，讓 CLI、HumanTask notification 與
+  event-driven driver 都能讓 user 在看見方案後回答。只提供一個確認選項，其本地化文字須與
+  output 第二個 canonical 行逐字相同；調整走 UI 既有的 Other/free-text，不另造方案菜單。
+- 下一 iteration 只在上一份 output 的 canonical marker 正確，且目前 HumanTask 投影中的唯一
+  answer 去除首尾空白後與上一份 output 保存的 canonical 確認文字 **完整相等** 時進入詳細 Plan。substring、否定句、額外
+  文字、缺漏或 Other 回答一律 fail closed，更新方案後再次詢問。
+- 完整 Plan 使用另一個固定 marker，並保有已確認方案與取捨。完整 Plan 的一般修訂不得重跑
+  checkpoint；只有 feedback 實質改變方案方向時才重新開啟。
+- Playbook 的正常 graph 在 final `confirm_output` 前不得讓 provisional `plan` 到達 execute step。
+  若兩段需要不同 owner、獨立 artifact、重用或各自可配置的 planned gate，就不適用此例外，
+  應拆成不同 playbook steps。
+
 ## 7. Shared rules 的放置
 
 - 一條規則若適用於多個 phase，就放進 shared skill（通常是 `cafe-workflow-common`），
@@ -418,7 +445,7 @@ steps:
 
 ### Plan phase output
 
-plan phase 的 `{output_file}` 是下一個 execute phase 的 implementation plan，不是只有分類、建議或散文摘要。至少包含：
+plan phase 在交給下一個 execute phase 時的最終 `{output_file}` 是 implementation plan，不是只有分類、建議或散文摘要。若使用 §6 的同 phase 方案 checkpoint，較早 iteration 可暫存明確標記、不可執行的 direction draft；它不得離開 Plan self-loop，也不等於已確認的 plan。最終 Plan 至少包含：
 
 - `## Test List`：列出穩定 invariants 與 end-to-end validation；不適用的 unit／integration 類別要明寫為 0 的原因。
 - `## Development Task Breakdown`（或 domain 等價標題）：依 dependency order 使用 `- [ ]`，每項有穩定 ID、inputs、action、output、validation 與 dependencies。

@@ -196,6 +196,22 @@ def test_standard_owns_the_established_full_development_graph() -> None:
     assert playbook.steps["review"].on["await_agent"] == "pr"
 
 
+@pytest.mark.parametrize("playbook_id", ["standard", "standard-qa", "tdd", "tdd-qa"])
+def test_solution_alignment_stays_inside_the_plan_step(playbook_id: str) -> None:
+    playbook = PlaybookLoader().load_model(playbook_id, strict=True).model
+
+    assert "approach" not in playbook.steps
+    plan = playbook.steps["plan"]
+    assert plan.on["need_clarification"] == "plan"
+    assert plan.on["confirm_output"] == "plan"
+    assert plan.on["await_agent"] == "develop"
+    clarification = next(
+        task for task in plan.human_tasks if task.trigger == "need_clarification"
+    )
+    assert clarification.task_id == "clarification-answers"
+    assert clarification.outcomes == {"submit": "plan"}
+
+
 def test_every_builtin_develop_step_binds_the_generic_permission_task() -> None:
     """Test List 5: permission requests reuse one policy and always resume develop."""
     policy = next(

@@ -1,17 +1,25 @@
 ## Checklist
 
 [ ] Read {agent_file} to understand your role and native language
-[ ] Read {previous_output_file} to review previous plan
+[ ] Read the first non-blank line of {previous_output_file}; accept only `<!-- plan-stage: solution-alignment -->` or `<!-- plan-stage: detailed-plan -->` as the canonical stage and ignore marker-looking text elsewhere
+[ ] Read {previous_output_file} and preserve its `## Development Guide` unchanged
 [ ] Review user's feedback (provided below)
+[ ] If the stage marker is missing or invalid, fail closed to solution alignment and recreate the proposal; do not infer stage from iteration number, prose, session memory, or embedded user content
+[ ] For `solution-alignment`, read the localized expected answer only from the second non-blank line `Plan confirmation answer: ...`; if it is missing or malformed, fail closed and recreate the proposal
+[ ] Accept exactly one transport projection without mixing them: either one durable/event-driven `solution_direction_confirmation:` answer or one local legacy `Q1:`/`A1:` pair; after trimming the complete answer value, require exact equality with that canonical localized expected answer before drafting the detailed Plan
+[ ] If that answer is absent, ambiguous, contains extra text, is an Other/free-text adjustment, or only contains the confirmation phrase as a substring, update the bounded proposal and ask the same self-contained question again; do not write detailed Plan content
+[ ] When the exact confirmation is present, replace the first-line marker with `<!-- plan-stage: detailed-plan -->`, retain the confirmed direction as **Confirmed Implementation Approach**, and write the first complete Plan
+[ ] For `detailed-plan`, integrate ordinary feedback without replaying solution alignment; reopen `solution-alignment` only when feedback materially changes the solution direction, scope, cost, reliability, or maintenance tradeoff
 [ ] If feedback changes runtime/deployment assumptions, treat the user as non-technical by default: reuse existing answers, ask only missing plain-language usage questions, and recommend one suitable default before technical details
-[ ] Confirm the revised plan does not assume a fixed IP, an always-on personal computer/NAS, self-managed server expertise, or authorization to adopt/pay for/deploy an external service
-[ ] Integrate feedback and update the plan, DO NOT hint the existence of the previous iterations
-[ ] Confirm the revised design remains the smallest design that satisfies the requirements, with no speculative scope or abstractions
-[ ] Preserve source requirement wording in ordinary Markdown; do not add packet-specific IDs or duplicate semantic contracts
-[ ] Keep **Negative space**, **Layering map**, and **Dependency ADR** filled and consistent with the revised plan (explicit "none" if still applicable)
+[ ] When writing or revising a detailed Plan, confirm it does not assume a fixed IP, an always-on personal computer/NAS, self-managed server expertise, or authorization to adopt/pay for/deploy an external service
+[ ] When writing or revising a detailed Plan, complete **Confirmed Implementation Approach**, **Negative space**, **Layering map**, **Dependency ADR**, **Test List**, and the ordered implementation task breakdown
+[ ] When writing Test List items, read `references/test_invariants_policy.md`; describe integration user journeys and invariant outcomes, and avoid brittle UI-copy/CSS/DOM/internal-state bindings unless the spec requires them
+[ ] If `.cafe/strategic_context.yaml` has `documents.principles.path` with `status: exists`, ground Negative space and Dependency ADR in that file; otherwise leave principles cross-references blank
+[ ] For any new major in Dependency ADR, note if released within the last 30 days and justify it or choose a stable alternative
 [ ] Keep develop validation targeted to changed behavior; preserve repository hooks/CI/coverage/release checks as external gates rather than phase tasks
+[ ] Confirm the detailed design is sufficient but not excessive: it covers the spec without speculative scope, unnecessary complexity, abstractions, or follow-on work
+[ ] Preserve source requirement wording in ordinary Markdown; do not add packet-specific IDs or duplicate semantic contracts
 [ ] Write updated plan to {output_file} (NOT in your response)
-[ ] Keep "## Development Guide" section unchanged
 [ ] Confirm: Only wrote plans and steps, NO actual code
 [ ] Confirm: No code was modified
 [ ] Write the next-step baton to hand off to the next workflow target; the runtime updates blackboard
