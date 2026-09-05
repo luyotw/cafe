@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from cafe.core.capabilities import pr_synced_event_from_receipt
 from cafe.core.hooks.native import (
     GitHubIssueFetcher,
     GitHubPRCreator,
@@ -67,6 +68,30 @@ def _browser_phase(*, open_pr: bool) -> SimpleNamespace:
 def _enable_remote_pr(issue_dir: Path) -> None:
     issue_dir.mkdir(parents=True, exist_ok=True)
     (issue_dir / "issue.yaml").write_text("pr:\n  auto_create: true\n", encoding="utf-8")
+
+
+def test_successful_publish_receipt_yields_one_validated_pr_synced_event() -> None:
+    """Test List 6/8: direct and approval-resume receipts share URL validation."""
+    receipt = {
+        "capability": "cafe.pr.publish",
+        "success": True,
+        "outputs": {
+            "pr_url": "https://github.com/acme/widgets/pull/467",
+            "pr_number": "467",
+            "action": "updated",
+        },
+    }
+
+    event = pr_synced_event_from_receipt(receipt)
+
+    assert event is not None
+    assert event["type"] == "pr_synced"
+    assert event["url"] == "https://github.com/acme/widgets/pull/467"
+    assert event["source"] == "capability"
+    assert pr_synced_event_from_receipt({**receipt, "success": False}) is None
+    assert pr_synced_event_from_receipt(
+        {**receipt, "outputs": {"pr_number": "467"}}
+    ) is None
 
 
 class _FakePhase:
@@ -1812,18 +1837,36 @@ def test_github_pr_creator_publish_output_runs_from_legacy_done_baton(
     assert result.events[1]["type"] == "capability_receipt"
 
 
-def test_github_pr_creator_publish_output_skips_local_pr_mode(tmp_path: Path) -> None:
+def test_github_pr_creator_publish_output_uses_runtime_validated_local_mode(
+    tmp_path: Path,
+) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     phase_dir = issue_dir / "pr"
     output_file = phase_dir / "iteration_001" / "output.md"
     publish_request_file = phase_dir / "iteration_001" / "publish_request.json"
     output_file.parent.mkdir(parents=True, exist_ok=True)
     output_file.write_text("# Test PR\n\nBody\n", encoding="utf-8")
-    publish_request_file.write_text("{}", encoding="utf-8")
-    (issue_dir / "issue.yaml").write_text("pr:\n  auto_create: false\n", encoding="utf-8")
+    publish_request_file.write_text(
+        json.dumps(
+            {
+                "capability": "cafe.pr.publish",
+                "args": {
+                    "output": ".cafe/issues/demo/pr/iteration_001/output.md",
+                    "base": "develop",
+                },
+                "permissions": {
+                    "network": ["github.com", "api.github.com"],
+                    "writes": [".git", ".cafe/issues/demo"],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (issue_dir / "issue.yaml").write_text("pr:\n  auto_create: true\n", encoding="utf-8")
 
     phase = _FakePhase(phase_dir=phase_dir, iteration=1)
     phase.git_ops = MagicMock()
+    phase.git_ops.get_repo_root.return_value = tmp_path
 
     hook = GitHubPRCreator()
     with patch("cafe.core.capabilities.subprocess.run") as mock_run:
@@ -1835,6 +1878,7 @@ def test_github_pr_creator_publish_output_skips_local_pr_mode(tmp_path: Path) ->
             output_file=output_file,
             publish_request_file=publish_request_file,
             status_code=PhaseStatusCode.CONFIRMED,
+            validated_pr_auto_create=False,
         )
 
     mock_run.assert_not_called()

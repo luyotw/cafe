@@ -37,6 +37,17 @@ pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 runner = CliRunner()
 
 
+def _write_local_only_publication_contract(issue_dir: Path) -> None:
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    (issue_dir / "issue.yaml").write_text(
+        "confirmation_contract:\n"
+        "  pr_auto_create: false\n"
+        "pr:\n"
+        "  auto_create: false\n",
+        encoding="utf-8",
+    )
+
+
 def test_background_forwards_trusted_event_callback_to_the_fixed_worker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -237,6 +248,7 @@ def _handoff_to_step(
 
 
 def _pause_with_iteration_limit_task(issue_dir: Path):
+    _write_local_only_publication_contract(issue_dir)
     playbook = PlaybookLoader().load("standard")
     store = BlackboardStore(issue_dir)
     blackboard = store.load_or_create("review", playbook_id="standard")
@@ -318,6 +330,7 @@ def test_single_step_alias_updates_workflow_pointer_to_requested_step(
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-210"
     issue_dir.mkdir(parents=True, exist_ok=True)
+    _write_local_only_publication_contract(issue_dir)
     (issue_dir / "blackboard.json").write_text(
         json.dumps(
             {
@@ -445,6 +458,9 @@ steps:
 
 def test_workflow_command_runs_execute_mode(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
+    _write_local_only_publication_contract(
+        tmp_path / ".cafe" / "issues" / "issue-200"
+    )
     executed_steps: list[str] = []
 
     class FakeExecutor:
@@ -494,13 +510,22 @@ def test_single_step_uses_the_mode_neutral_core_in_the_foreground(
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-v2-public"
     issue_dir.mkdir(parents=True)
     (issue_dir / "issue.yaml").write_text(
-        "contract_version: 2\ndriver:\n  mode: unattended\n",
+        "contract_version: 2\n"
+        "driver:\n"
+        "  mode: unattended\n"
+        "confirmation_contract:\n"
+        "  pr_auto_create: false\n"
+        "pr:\n"
+        "  auto_create: false\n",
         encoding="utf-8",
     )
     captured: dict[str, object] = {}
 
     class FakeExecutor:
-        def execute_step(self, step_name, step_def, blackboard_state, **_kwargs):
+        def execute_step(self, step_name, step_def, blackboard_state, **kwargs):
+            captured["validated_pr_auto_create"] = kwargs.get(
+                "validated_pr_auto_create"
+            )
             return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
 
     class CapturingWorkflowHost:
@@ -531,6 +556,7 @@ def test_single_step_uses_the_mode_neutral_core_in_the_foreground(
 
     assert result.exit_code == 0, (result.stdout, result.exception)
     assert captured["hosting"] == "foreground"
+    assert captured["validated_pr_auto_create"] is False
 
 
 @pytest.mark.skip(reason="replaced by event-driven callback coverage")
@@ -1365,6 +1391,9 @@ def test_workflow_command_passes_initial_user_input_to_spec_step(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    _write_local_only_publication_contract(
+        tmp_path / ".cafe" / "issues" / "issue-201"
+    )
 
     class FakeExecutor:
         def execute_step(
@@ -1485,6 +1514,7 @@ def test_workflow_command_resume_user_input_targets_handoff_from_step(
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume-plan"
     issue_dir.mkdir(parents=True, exist_ok=True)
+    _write_local_only_publication_contract(issue_dir)
     questions_dir = issue_dir / "plan" / "iteration_001"
     questions_dir.mkdir(parents=True)
     (questions_dir / "questions.xml").write_text(
@@ -2676,6 +2706,9 @@ def test_workflow_accepts_add_dir_and_passes_through(tmp_path: Path, monkeypatch
     """workflow --add-dir should validate the directory and pass it to the builder."""
     monkeypatch.chdir(tmp_path)
     (tmp_path / "src").mkdir()
+    _write_local_only_publication_contract(
+        tmp_path / ".cafe" / "issues" / "issue-add-dir"
+    )
 
     class FakeExecutor:
         def execute_step(
@@ -2712,6 +2745,9 @@ def test_workflow_accepts_add_dir_and_passes_through(tmp_path: Path, monkeypatch
 
 def test_workflow_command_prints_generic_event_display(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
+    _write_local_only_publication_contract(
+        tmp_path / ".cafe" / "issues" / "issue-238"
+    )
     executed_steps: list[str] = []
 
     class FakeExecutor:
@@ -2760,6 +2796,9 @@ def test_workflow_command_does_not_duplicate_pr_url_without_display(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    _write_local_only_publication_contract(
+        tmp_path / ".cafe" / "issues" / "issue-277"
+    )
 
     class FakeExecutor:
         def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs):
@@ -2815,6 +2854,7 @@ def test_workflow_command_rejects_plain_text_chat_baton_before_execution(
 
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-205"
     issue_dir.mkdir(parents=True, exist_ok=True)
+    _write_local_only_publication_contract(issue_dir)
     (issue_dir / "blackboard.json").write_text(
         json.dumps(
             {
@@ -2926,6 +2966,7 @@ def test_workflow_command_rejects_invalid_chat_baton_step(tmp_path: Path, monkey
 
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-206"
     issue_dir.mkdir(parents=True, exist_ok=True)
+    _write_local_only_publication_contract(issue_dir)
     (issue_dir / "next_step.txt").write_text("qa\n", encoding="utf-8")
 
     with patch("cafe.ui.cli.GitOperations") as mock_git_cls:
@@ -2945,6 +2986,7 @@ def test_workflow_command_rejects_malformed_baton_json(tmp_path: Path, monkeypat
 
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-206b"
     issue_dir.mkdir(parents=True, exist_ok=True)
+    _write_local_only_publication_contract(issue_dir)
     (issue_dir / "next_step.txt").write_text("{not-json", encoding="utf-8")
 
     with patch("cafe.ui.cli.GitOperations") as mock_git_cls:
@@ -2964,6 +3006,7 @@ def test_workflow_command_start_step_rebuilds_stale_text_baton(tmp_path: Path, m
 
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-206c"
     issue_dir.mkdir(parents=True, exist_ok=True)
+    _write_local_only_publication_contract(issue_dir)
     (issue_dir / "blackboard.json").write_text(
         json.dumps(
             {
@@ -3144,6 +3187,9 @@ def test_workflow_command_prints_paused_when_human_input_is_needed(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    _write_local_only_publication_contract(
+        tmp_path / ".cafe" / "issues" / "issue-201"
+    )
 
     class FakeExecutor:
         def execute_step(
@@ -3207,6 +3253,7 @@ def test_workflow_command_prints_recovery_guidance_for_pr_baton_pause(
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-233"
     issue_dir.mkdir(parents=True, exist_ok=True)
+    _write_local_only_publication_contract(issue_dir)
     (issue_dir / "blackboard.json").write_text(
         json.dumps(
             {
@@ -3249,6 +3296,7 @@ def test_workflow_command_offers_recovery_menu_for_baton_pause_in_interactive_mo
     monkeypatch.setenv("CAFE_FORCE_INTERACTIVE", "1")
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-233"
     issue_dir.mkdir(parents=True, exist_ok=True)
+    _write_local_only_publication_contract(issue_dir)
     (issue_dir / "blackboard.json").write_text(
         json.dumps(
             {
@@ -3293,6 +3341,7 @@ def test_workflow_command_user_owner_can_set_next_phase(tmp_path: Path, monkeypa
 
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-207"
     issue_dir.mkdir(parents=True, exist_ok=True)
+    _write_local_only_publication_contract(issue_dir)
     (issue_dir / "blackboard.json").write_text(
         json.dumps(
             {
@@ -3645,6 +3694,7 @@ def test_workflow_command_user_owner_can_chat_and_resume_from_baton(
 
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-209"
     issue_dir.mkdir(parents=True, exist_ok=True)
+    _write_local_only_publication_contract(issue_dir)
     (issue_dir / "blackboard.json").write_text(
         json.dumps(
             {
@@ -3724,6 +3774,7 @@ def test_workflow_command_enters_user_phase_immediately_after_agent_handoff(
 
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-211"
     issue_dir.mkdir(parents=True, exist_ok=True)
+    _write_local_only_publication_contract(issue_dir)
     (issue_dir / "blackboard.json").write_text(
         json.dumps(
             {
@@ -3782,6 +3833,7 @@ def test_workflow_command_noninteractive_stops_after_agent_handoff_to_user(
 
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-211b"
     issue_dir.mkdir(parents=True, exist_ok=True)
+    _write_local_only_publication_contract(issue_dir)
     (issue_dir / "blackboard.json").write_text(
         json.dumps(
             {
@@ -3980,6 +4032,7 @@ def test_workflow_command_done_phase_can_restart_workflow(tmp_path: Path, monkey
 
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-222"
     issue_dir.mkdir(parents=True, exist_ok=True)
+    _write_local_only_publication_contract(issue_dir)
     (issue_dir / "blackboard.json").write_text(
         json.dumps(
             {
@@ -4050,6 +4103,7 @@ def test_workflow_command_resumes_incomplete_iteration_when_user_handoff_is_lega
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-224"
     spec_iteration = issue_dir / "spec" / "iteration_002"
     spec_iteration.mkdir(parents=True, exist_ok=True)
+    _write_local_only_publication_contract(issue_dir)
     (issue_dir / "blackboard.json").write_text(
         json.dumps(
             {
@@ -4130,6 +4184,7 @@ def test_workflow_user_handoff_precedes_incomplete_iteration_resume(
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-user-incomplete"
     develop_iteration = issue_dir / "develop" / "iteration_002"
     develop_iteration.mkdir(parents=True, exist_ok=True)
+    _write_local_only_publication_contract(issue_dir)
     (develop_iteration / "iteration.json").write_text(
         json.dumps(
             {
@@ -4204,6 +4259,7 @@ def test_nonmeaningful_user_handoff_does_not_hide_incomplete_iteration(
     """Bootstrap/default baton metadata cannot outrank runnable phase state."""
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / f"issue-{source.replace('.', '-')}"
+    _write_local_only_publication_contract(issue_dir)
     store = BlackboardStore(issue_dir)
     blackboard = store.load_or_create("spec", playbook_id="standard")
     store.set_current_step(blackboard, "user")
@@ -4260,6 +4316,7 @@ def test_workflow_alignment_decision_precedes_incomplete_iteration_resume(
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-align-incomplete"
     develop_iteration = issue_dir / "develop" / "iteration_002"
     develop_iteration.mkdir(parents=True, exist_ok=True)
+    _write_local_only_publication_contract(issue_dir)
     (develop_iteration / "iteration.json").write_text(
         json.dumps(
             {
@@ -4513,6 +4570,7 @@ def test_workflow_command_resumes_pr_when_external_feedback_arrives_while_done(
 
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-238"
     issue_dir.mkdir(parents=True, exist_ok=True)
+    _write_local_only_publication_contract(issue_dir)
     (issue_dir / "blackboard.json").write_text(
         json.dumps(
             {
@@ -4755,6 +4813,9 @@ steps:
 
 def test_workflow_command_runs_hotfix_playbook(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
+    _write_local_only_publication_contract(
+        tmp_path / ".cafe" / "issues" / "issue-203"
+    )
     executed_steps: list[str] = []
 
     with (

@@ -274,6 +274,7 @@ class GenericWorkflowStepExecutor(Phase):
         blackboard_state: BlackboardState,
         extra_prompt: Optional[str] = None,
         same_invocation_retry: bool = False,
+        validated_pr_auto_create: Optional[bool] = None,
     ) -> StepExecutionResult:
         hybrid_portion = step_def.get("hybrid_portion")
         is_hybrid_portion = isinstance(hybrid_portion, Mapping)
@@ -343,6 +344,7 @@ class GenericWorkflowStepExecutor(Phase):
             agent_name=agent_name,
             output_file=output_file,
             baton_path=portion_baton_path or baton_path,
+            validated_pr_auto_create=validated_pr_auto_create,
         )
         contract = self._get_skill_loader().get_workflow_contract(skill_name)
         self._template_allowed_directories = self._template_allowed_directories_for(
@@ -496,6 +498,7 @@ class GenericWorkflowStepExecutor(Phase):
                     else None
                 ),
                 "blackboard_state": blackboard_state,
+                "validated_pr_auto_create": validated_pr_auto_create,
                 "transform_runtime_context": transform_runtime_context,
             },
         )
@@ -1235,6 +1238,7 @@ class GenericWorkflowStepExecutor(Phase):
         agent_name: str,
         output_file: Path,
         baton_path: Optional[Path] = None,
+        validated_pr_auto_create: Optional[bool] = None,
     ) -> Dict[str, str]:
         role = str(step_def.get("role", "developer"))
         # 這條 playbook 實際可用的 to_step（= 所有 step 名 + 內建 user/done），
@@ -1283,6 +1287,15 @@ class GenericWorkflowStepExecutor(Phase):
             "behavior_completion": behavior.completion,
             "publish_confirmation": behavior.publish_confirmation,
         }
+        publication_choice = validated_pr_auto_create
+        if publication_choice is None:
+            publication_choice = self._get_issue_config_value(
+                self.issue_dir / "issue.yaml",
+                "pr.auto_create",
+            )
+        if behavior.publish_confirmation:
+            if isinstance(publication_choice, bool):
+                context["pr_auto_create"] = str(publication_choice).lower()
 
         skill_name = self._resolve_skill_name(step_def, self.iteration)
         contract = self._get_skill_loader().get_workflow_contract(skill_name)
@@ -1358,13 +1371,7 @@ class GenericWorkflowStepExecutor(Phase):
             base_branch = self._get_issue_config_value(self.issue_dir / "issue.yaml", "base_branch")
             resolved_base = str(base_branch or self.git_ops.get_default_base_branch())
             comparison_base = resolved_base
-            if (
-                self._get_issue_config_value(
-                    self.issue_dir / "issue.yaml",
-                    "pr.auto_create",
-                )
-                is True
-            ):
+            if publication_choice is True:
                 comparison_base = self.git_ops.ensure_remote_base_ancestor(
                     resolved_base,
                     "HEAD",
@@ -1381,8 +1388,7 @@ class GenericWorkflowStepExecutor(Phase):
             context["review_base"] = str(base_branch or self.git_ops.get_default_base_branch())
             context["review_head"] = "HEAD"
             context["review_required"] = str(
-                self._get_issue_config_value(self.issue_dir / "issue.yaml", "pr.auto_create")
-                is not True
+                publication_choice is not True
             ).lower()
 
         return context

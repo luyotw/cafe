@@ -104,6 +104,19 @@ obtain explicit user confirmation of:
   there is no fixed fallback limit. Event-driven's binding lives only in
   `.cafe/issues/<issue>/driver/config.yaml`;
 - worktree choice and path when using a worktree.
+- when any effective playbook step requests `cafe.pr.publish`, one explicit
+  Boolean `pr.auto_create` choice and its `confirmation_contract.pr_auto_create`
+  binding. `true` means the feature branch is pushed and the PR is created or
+  updated only after local material and authorization succeed, and the review
+  handoff receives a verified PR URL. `false` means `Publication mode:
+  local-only. No PR URL exists.`
+
+Derive this choice only from effective `steps.*.capability_requests`. A
+custom-named step requesting `cafe.pr.publish` is applicable; a step named `pr`
+without that request is not. A PR-capable contract must reject a missing or
+non-Boolean value. A non-PR-capable contract omits the choice and rejects any
+supplied value, including `false`. Re-resolve applicability and obtain a new
+confirmation whenever the effective playbook changes.
 
 Attached polling applies to proactive `cafe status`, `cafe show`, blackboard,
 artifact, or similar liveness checks. Start the timer when a workflow process
@@ -218,6 +231,7 @@ python3 <skill-dir>/scripts/format_kickoff_contract.py <playbook-id> \
   --effective-locale <locale> \
   --locale-source "<playbook or direct-user-override source>" \
   --repository-content-locale <locale> \
+  [--pr-auto-create <true|false> when cafe.pr.publish is requested] \
   --user-required <steps...> \
   --driver-confirmable <steps...> \
   --worktree .cafe/worktrees/<issue-name>
@@ -293,6 +307,7 @@ for confirmation rather than asking again.
   cafe prepare <issue-name> --playbook <playbook-id> --no-interactive \
     --input-method=manual \
     --rigor=medium --spec-template=auto --plan-template=default \
+    <--auto-create-pr|--no-auto-create-pr when cafe.pr.publish is requested> \
     --worktree .cafe/worktrees/<issue-name>
   ```
 
@@ -349,6 +364,7 @@ for confirmation rather than asking again.
   confirmation_contract:
     user_required: [spec, plan]
     driver_confirmable: []
+    pr_auto_create: false
     confirmed_by: user
     confirmed_at: 2026-07-16
   reactive_user_handoffs:
@@ -364,6 +380,14 @@ for confirmation rather than asking again.
     confirmed_by: user
     confirmed_at: 2026-08-13
   ```
+
+  For a playbook requesting `cafe.pr.publish`, verify that the prepare flag
+  persisted the exact confirmed Boolean at `pr.auto_create` before adding the
+  same value to `confirmation_contract.pr_auto_create`. For a playbook without
+  that capability, pass neither flag and verify that neither `pr.auto_create`
+  nor `confirmation_contract.pr_auto_create` exists. A missing, changed, or
+  stale value requires a freshly rendered and confirmed kickoff contract; do
+  not infer local-only from omission.
 
   When the confirmed mode is event-driven, create the separate skill-owned
   binding after this file is written:

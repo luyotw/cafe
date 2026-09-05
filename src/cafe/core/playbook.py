@@ -816,6 +816,27 @@ def resolve_prepare_config(model: PlaybookDefinition) -> PrepareConfig:
     return default_prepare_config()
 
 
+def playbook_requests_capability(
+    model: PlaybookDefinition | Mapping[str, Any],
+    capability_id: str,
+) -> bool:
+    """Return whether any effective step requests ``capability_id``."""
+    steps = model.steps if isinstance(model, PlaybookDefinition) else model.get("steps", {})
+    if not isinstance(steps, Mapping):
+        return False
+    return any(
+        capability_id
+        in (
+            step.capability_requests
+            if isinstance(step, StepConfig)
+            else step.get("capability_requests", [])
+            if isinstance(step, Mapping)
+            else []
+        )
+        for step in steps.values()
+    )
+
+
 def confirmation_gate_steps(model: PlaybookDefinition) -> tuple[str, ...]:
     """Return ordered confirmation gates assignable in the kickoff contract.
 

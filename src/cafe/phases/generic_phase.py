@@ -248,11 +248,22 @@ class GenericPhase:
             if canonical_skill_name(skill_name) == "cafe-pr":
                 runtime_context.extend(
                     [
-                        "For the PR phase, completion is local-only: finish the PR artifact and checklist, then update the workflow baton.",
+                        "For the PR agent phase, completion is local-first: finish the PR artifact and checklist, then update the workflow baton.",
                         "Do not wait for, verify, or require a remote GitHub branch/PR before updating the workflow baton.",
-                        "Remote PR publish happens later in the host-side publish_output hook.",
+                        "Remote PR publication, when enabled, happens later in the host-side publish_output hook.",
                     ]
                 )
+                publication_mode = str(context.get("pr_auto_create") or "").lower()
+                if publication_mode == "true":
+                    runtime_context.append(
+                        "The host must publish successfully after local completion; the "
+                        "published review handoff contains its verified PR URL."
+                    )
+                elif publication_mode == "false":
+                    runtime_context.append(
+                        "Workflow publication mode is local-only; the host-side hook will "
+                        "not publish, and No PR URL will exist."
+                    )
         if context and context.get("resume_input_artifacts"):
             runtime_context.extend(
                 [
