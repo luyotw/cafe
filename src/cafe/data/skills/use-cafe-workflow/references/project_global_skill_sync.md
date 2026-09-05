@@ -90,6 +90,6 @@ Catalog approval does not grant helper-publication approval.
 After an approved change, re-run both read-only checks and record the fresh
 results. Compare the effective workflow digests with the pre-change evidence.
 Digest changes trigger the bounded semantic comparison above, not an automatic
-confirmation stop. Re-render and reconfirm the kickoff contract when it finds a
-material difference; otherwise retain the post-change evidence and continue
+confirmation stop. When it finds a material difference, re-render and reconfirm
+the kickoff contract; otherwise retain the post-change evidence and continue
 under the confirmed contract.

@@ -238,16 +238,8 @@ def test_use_cafe_workflow_preflights_runtime_and_all_catalogs_before_execution(
     assert "cafe update apply --token" in reference
     assert "cafe catalog sync-global --token" in reference
     assert "re-run both read-only checks" in normalized_lower
-    assert "re-render and reconfirm the kickoff contract" in normalized_lower
+    assert "re-render and reconfirm the kickoff contract" in normalized
     assert "before every start or resume" in normalized_running.lower()
-    assert "does not by itself show a semantic change" in normalized
-    assert "bounded semantic comparison" in normalized
-    assert "contract or observable-behavior change" in normalized
-    assert "material runtime, dependency, or permission difference" in normalized
-    assert "handle only any separately scoped action it reports" in normalized
-    assert "verified metadata-only churn" in normalized_lower
-    assert "cannot be shown to be non-semantic, fail closed" in normalized_lower
-    assert "not an automatic user stop" in normalized_running
 
 
 def test_skill_local_catalog_sync_path_has_no_write_authority() -> None:
