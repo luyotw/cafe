@@ -28,6 +28,7 @@ def _minimal_playbook_yaml(*, prepare_block: str = "", include_pr_step: bool = F
   pr:
     role: developer
     skill: spec_first
+    capability_requests: [cafe.pr.publish]
     "on":
       await_agent: _done
 """
@@ -144,6 +145,24 @@ class TestPrepareProfileQuickSetup:
         )
         result = profile.quick_setup_issue_config(issue_id=None)
         assert result.pr == {}
+
+    def test_pr_config_support_follows_capability_instead_of_step_name(self) -> None:
+        capable = yaml.safe_load(_minimal_playbook_yaml())
+        capable["steps"]["spec"]["capability_requests"] = ["cafe.pr.publish"]
+        capable_profile = PrepareProfile.from_playbook(
+            PlaybookDefinition.model_validate(capable),
+            is_github_repo=True,
+        )
+
+        named_pr = yaml.safe_load(_minimal_playbook_yaml(include_pr_step=True))
+        named_pr["steps"]["pr"]["capability_requests"] = []
+        named_pr_profile = PrepareProfile.from_playbook(
+            PlaybookDefinition.model_validate(named_pr),
+            is_github_repo=True,
+        )
+
+        assert capable_profile.supports_pr_config() is True
+        assert named_pr_profile.supports_pr_config() is False
 
 
 class TestPrepareProfileNonInteractive:

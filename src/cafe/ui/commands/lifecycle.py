@@ -333,7 +333,10 @@ def prepare(
     auto_create_pr: Optional[bool] = typer.Option(
         None,
         "--auto-create-pr/--no-auto-create-pr",
-        help="Automatically create PR after development (default: False, GitHub repos only)",
+        help=(
+            "Required publication choice when the playbook requests cafe.pr.publish; "
+            "enabling requires a GitHub repository"
+        ),
     ),
     sync_spec_github: Optional[bool] = typer.Option(
         None,
@@ -773,8 +776,8 @@ def prepare(
         if auto_create_pr is not None:
             if not profile.supports_pr_config(parsed_fields):
                 console.print(
-                    "[red]Error: --auto-create-pr/--no-auto-create-pr requires a "
-                    "playbook with PR configuration.[/red]"
+                    "[red]Error: --auto-create-pr/--no-auto-create-pr is not applicable "
+                    "because the selected playbook does not request cafe.pr.publish.[/red]"
                 )
                 raise typer.Exit(1)
             if auto_create_pr and not profile.is_github_repo:
@@ -786,8 +789,9 @@ def prepare(
         if post_pr_todo_list is not None:
             if not profile.supports_pr_config(parsed_fields):
                 console.print(
-                    "[red]Error: --post-pr-todo-list/--no-post-pr-todo-list requires a "
-                    "playbook with PR configuration.[/red]"
+                    "[red]Error: --post-pr-todo-list/--no-post-pr-todo-list is not "
+                    "applicable because the selected playbook does not request "
+                    "cafe.pr.publish.[/red]"
                 )
                 raise typer.Exit(1)
             if auto_create_pr is not False:
