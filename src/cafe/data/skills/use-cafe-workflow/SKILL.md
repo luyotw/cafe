@@ -103,8 +103,9 @@ If more than one situation applies, read every listed reference before acting; d
 - [ ] Assess issue nature, scale, and risk; resolve every phase's execution profile,
   capability band, exact primary and any fallbacks, rationale, cached or tested
   primary evidence, configured fallback smoke evidence, and adjustment authority.
-- [ ] Assess every agent-executed phase for proactive review, render one `required` or `not_required` decision and rationale for each, then persist the user-confirmed contract in its skill-owned `driver/` area.
+- [ ] Assess every agent-executed phase for proactive review and render one `required` or `not_required` decision and rationale for each.
 - [ ] Present the deterministic kickoff table and obtain explicit confirmation.
+- [ ] Persist the user-confirmed contract in its skill-owned `driver/` area.
 - [ ] Record the confirmed operating mode. For event-driven, create its exact
   per-issue callback binding with the bundled callback script before launch.
 

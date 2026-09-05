@@ -5,28 +5,77 @@ from __future__ import annotations
 
 import argparse
 import os
+import shlex
+import shutil
 import sys
 import tempfile
 from pathlib import Path
 from typing import Any
 
-import yaml
+
+def _reexec_with_cafe_python() -> None:
+    """Restart this writer with the interpreter that owns the cafe command."""
+    if os.environ.get("CAFE_PROACTIVE_REVIEW_WRITER_REEXEC") == "1":
+        raise RuntimeError("cafe's Python environment cannot import writer dependencies")
+    cafe_command = shutil.which("cafe")
+    if cafe_command is None:
+        raise RuntimeError("cafe command not found; cannot load writer dependencies")
+    first_line = Path(cafe_command).read_text(encoding="utf-8").splitlines()[0]
+    if not first_line.startswith("#!"):
+        raise RuntimeError(f"cafe command has no interpreter shebang: {cafe_command}")
+    interpreter = shlex.split(first_line[2:].strip())
+    if not interpreter:
+        raise RuntimeError(f"cafe command has an empty interpreter shebang: {cafe_command}")
+    environment = dict(os.environ)
+    environment["CAFE_PROACTIVE_REVIEW_WRITER_REEXEC"] = "1"
+    os.execvpe(
+        interpreter[0],
+        [*interpreter, str(Path(__file__).resolve()), *sys.argv[1:]],
+        environment,
+    )
+
+
+try:
+    import yaml
+
+    from cafe.playbooks.loader import PlaybookLoader
+except ModuleNotFoundError:
+    _reexec_with_cafe_python()
+    raise
 
 _SCRIPT_DIRECTORY = Path(__file__).resolve().parent
 if str(_SCRIPT_DIRECTORY) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIRECTORY))
 
-from format_kickoff_contract import _parse_proactive_review_decisions
+from format_kickoff_contract import _parse_proactive_review_decisions  # noqa: E402
 
 
 def _agent_phase_names(*, project_root: Path, playbook_id: str) -> tuple[str, ...]:
-    from cafe.playbooks.loader import PlaybookLoader
-
     model = PlaybookLoader(project_root=project_root).load_model(playbook_id).model
     return tuple(
         step_name
         for step_name, step in model.steps.items()
         if step.assignee_type in {"agent", "hybrid"}
+    )
+
+
+def _contract_target(*, project_root: Path, issue_name: str) -> Path:
+    normalized_name = issue_name.strip()
+    candidate = Path(normalized_name)
+    if (
+        not normalized_name
+        or candidate.is_absolute()
+        or len(candidate.parts) != 1
+        or normalized_name in {".", ".."}
+    ):
+        raise ValueError("issue name must be a single relative directory name")
+    return (
+        project_root
+        / ".cafe"
+        / "issues"
+        / normalized_name
+        / "driver"
+        / "proactive_review.yaml"
     )
 
 
@@ -81,8 +130,12 @@ def _validate_existing_document(*, document: Any, project_root: Path) -> dict[st
         raise ValueError("proactive review contract has invalid confirmation metadata")
     decision_values: list[str] = []
     for decision in decisions:
-        if not isinstance(decision, dict):
-            raise ValueError("proactive review contract contains an invalid phase decision")
+        if not isinstance(decision, dict) or set(decision) != {
+            "phase",
+            "decision",
+            "rationale",
+        }:
+            raise ValueError("proactive review contract contains an invalid phase decision schema")
         phase = decision.get("phase")
         action = decision.get("decision")
         rationale = decision.get("rationale")
@@ -137,14 +190,15 @@ def _replace_document(*, target: Path, document: dict[str, Any], project_root: P
 def write_proactive_review_contract(
     *,
     project_root: Path,
+    issue_name: str,
     playbook_id: str,
     decision_values: list[str],
     confirmed_by: str,
     confirmed_at: str,
-    target: Path,
     replacement_confirmed: bool,
 ) -> str:
     """Create, reuse, or explicitly replace the one confirmed contract."""
+    target = _contract_target(project_root=project_root, issue_name=issue_name)
     candidate = _candidate_document(
         project_root=project_root,
         playbook_id=playbook_id,
@@ -155,7 +209,13 @@ def write_proactive_review_contract(
     if not target.exists():
         _replace_document(target=target, document=candidate, project_root=project_root)
         return "created"
-    existing = _read_existing_contract(target=target, project_root=project_root)
+    try:
+        existing = _read_existing_contract(target=target, project_root=project_root)
+    except (ValueError, yaml.YAMLError):
+        if not replacement_confirmed:
+            raise
+        _replace_document(target=target, document=candidate, project_root=project_root)
+        return "replaced"
     if _semantic_contract(existing) == _semantic_contract(candidate):
         return "reused"
     if not replacement_confirmed:
@@ -181,26 +241,17 @@ def main() -> int:
     )
     parser.add_argument("--confirmed-by", required=True)
     parser.add_argument("--confirmed-at", required=True)
-    parser.add_argument("--target", type=Path)
     parser.add_argument("--replacement-confirmed", action="store_true")
     args = parser.parse_args()
     project_root = args.project_root.resolve()
-    target = args.target or (
-        project_root
-        / ".cafe"
-        / "issues"
-        / args.issue_name
-        / "driver"
-        / "proactive_review.yaml"
-    )
     try:
         result = write_proactive_review_contract(
             project_root=project_root,
+            issue_name=args.issue_name,
             playbook_id=args.playbook_id,
             decision_values=args.proactive_review_decision,
             confirmed_by=args.confirmed_by,
             confirmed_at=args.confirmed_at,
-            target=target,
             replacement_confirmed=args.replacement_confirmed,
         )
     except (OSError, ValueError, yaml.YAMLError) as exc:

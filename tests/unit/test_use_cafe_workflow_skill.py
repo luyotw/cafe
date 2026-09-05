@@ -609,32 +609,30 @@ def test_proactive_review_contract_writer_preserves_one_confirmed_contract(
         SKILL_ROOT / "scripts" / "write_proactive_review_contract.py",
         "proactive_review_contract_writer",
     )
-    target = tmp_path / ".cafe" / "issues" / "issue346" / "driver" / "proactive_review.yaml"
+    project_root = tmp_path
+    target = project_root / ".cafe" / "issues" / "issue346" / "driver" / "proactive_review.yaml"
     decisions = _proactive_review_decision_args()
 
-    created = writer.write_proactive_review_contract(
-        project_root=PROJECT_ROOT,
-        playbook_id="standard",
-        decision_values=decisions[1::2],
-        confirmed_by="user",
-        confirmed_at="2026-09-05T12:00:00Z",
-        target=target,
-        replacement_confirmed=False,
-    )
+    def persist(**overrides: object) -> str:
+        arguments: dict[str, object] = {
+            "project_root": project_root,
+            "issue_name": "issue346",
+            "playbook_id": "standard",
+            "decision_values": decisions[1::2],
+            "confirmed_by": "user",
+            "confirmed_at": "2026-09-05T12:00:00Z",
+            "replacement_confirmed": False,
+        }
+        arguments.update(overrides)
+        return writer.write_proactive_review_contract(**arguments)
+
+    created = persist()
     assert created == "created"
     original = target.read_text(encoding="utf-8")
     assert "playbook_id: standard" in original
     assert "phase: spec" in original
 
-    reused = writer.write_proactive_review_contract(
-        project_root=PROJECT_ROOT,
-        playbook_id="standard",
-        decision_values=decisions[1::2],
-        confirmed_by="user",
-        confirmed_at="2026-09-05T12:01:00Z",
-        target=target,
-        replacement_confirmed=False,
-    )
+    reused = persist(confirmed_at="2026-09-05T12:01:00Z")
     assert reused == "reused"
     assert target.read_text(encoding="utf-8") == original
 
@@ -645,27 +643,28 @@ def test_proactive_review_contract_writer_preserves_one_confirmed_contract(
         for value in decisions[1::2]
     ]
     with pytest.raises(ValueError, match="requires complete replacement confirmation"):
-        writer.write_proactive_review_contract(
-            project_root=PROJECT_ROOT,
-            playbook_id="standard",
+        persist(
             decision_values=changed_rationale,
-            confirmed_by="user",
             confirmed_at="2026-09-05T12:02:00Z",
-            target=target,
-            replacement_confirmed=False,
         )
     with pytest.raises(ValueError, match="requires complete replacement confirmation"):
-        writer.write_proactive_review_contract(
-            project_root=PROJECT_ROOT,
+        persist(
             playbook_id="simple",
             decision_values=_proactive_review_decision_args(
                 SIMPLE_PROACTIVE_REVIEW_DECISIONS
             )[1::2],
-            confirmed_by="user",
             confirmed_at="2026-09-05T12:02:00Z",
-            target=target,
-            replacement_confirmed=False,
         )
+
+    extra_field_document = original.replace(
+        "  rationale:",
+        "  review_status: clean\n  rationale:",
+        1,
+    )
+    target.write_text(extra_field_document, encoding="utf-8")
+    with pytest.raises(ValueError, match="invalid phase decision schema"):
+        persist()
+    target.write_text(original, encoding="utf-8")
 
     changed_decisions = [
         value.replace("spec=required", "spec=not_required")
@@ -674,28 +673,71 @@ def test_proactive_review_contract_writer_preserves_one_confirmed_contract(
         for value in decisions[1::2]
     ]
     with pytest.raises(ValueError, match="requires complete replacement confirmation"):
-        writer.write_proactive_review_contract(
-            project_root=PROJECT_ROOT,
-            playbook_id="standard",
+        persist(
             decision_values=changed_decisions,
-            confirmed_by="user",
             confirmed_at="2026-09-05T12:03:00Z",
-            target=target,
-            replacement_confirmed=False,
         )
     assert target.read_text(encoding="utf-8") == original
 
-    replaced = writer.write_proactive_review_contract(
-        project_root=PROJECT_ROOT,
-        playbook_id="standard",
+    replaced = persist(
         decision_values=changed_decisions,
-        confirmed_by="user",
         confirmed_at="2026-09-05T12:04:00Z",
-        target=target,
         replacement_confirmed=True,
     )
     assert replaced == "replaced"
     assert "decision: not_required" in target.read_text(encoding="utf-8")
+
+    target.write_text("version: 2\n", encoding="utf-8")
+    recovered = persist(replacement_confirmed=True)
+    assert recovered == "replaced"
+    assert "playbook_id: standard" in target.read_text(encoding="utf-8")
+
+
+def test_proactive_review_contract_writer_reexecs_and_contains_issue_target(
+    tmp_path: Path,
+) -> None:
+    script = SKILL_ROOT / "scripts" / "write_proactive_review_contract.py"
+    command = [
+        str(script),
+        "--project-root",
+        str(tmp_path),
+        "--issue-name",
+        "issue346",
+        "--playbook-id",
+        "standard",
+        *_proactive_review_decision_args(),
+        "--confirmed-by",
+        "user",
+        "--confirmed-at",
+        "2026-09-05T12:00:00Z",
+    ]
+    result = subprocess.run(
+        [sys.executable, "-S", *command],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (
+        tmp_path / ".cafe" / "issues" / "issue346" / "driver" / "proactive_review.yaml"
+    ).is_file()
+
+    outside_issue = tmp_path / "outside"
+    outside_command = [*command]
+    outside_command[outside_command.index("issue346")] = str(outside_issue)
+    result = subprocess.run(
+        [sys.executable, *outside_command],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "issue name must be a single relative directory name" in result.stderr
+    assert not (outside_issue / "driver" / "proactive_review.yaml").exists()
 
 
 def test_kickoff_contract_documents_persisted_preflight_and_reconfirmation() -> None:
@@ -739,6 +781,9 @@ def test_use_cafe_workflow_defines_confirmed_proactive_driver_review_loop() -> N
     assert "does not replace `driver_confirmable` evidence" in normalized
     assert "user-owned authority" in normalized
     assert "attached, unattended, and event-driven" in normalized
+    assert skill.index("Present the deterministic kickoff table") < skill.index(
+        "Persist the user-confirmed contract"
+    )
 
 
 def test_kickoff_contract_formatter_accepts_event_driven_binding(
