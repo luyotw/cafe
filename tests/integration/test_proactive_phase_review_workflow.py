@@ -189,6 +189,98 @@ def test_initial_activation_authority_drift_leaves_no_persistence_artifacts(
     assert not (issue_dir / "driver").exists()
 
 
+def test_failed_initial_activation_cleanup_cannot_invalidate_next_activation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """I3, U8 — a failed initial activation cannot roll back the next generation."""
+    module = _module()
+    issue_dir = tmp_path / ".cafe" / "issues" / "initial-cleanup-overlap"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text("playbook_id: standard\n", encoding="utf-8")
+    policy = _policy(selected="develop")
+    confirmation = _confirmation("initial-cleanup-overlap", policy)
+    original_contract_lock = module._contract_lock
+    original_cleanup = module._cleanup_failed_initial_persistence
+    original_write = module._atomic_yaml_write
+    lock_holders: set[int] = set()
+    lock_guard = threading.Lock()
+    first_write_failed = threading.Event()
+    second_contract_write_ready = threading.Event()
+    cleanup_complete = threading.Event()
+    write_count = 0
+
+    @contextmanager
+    def tracked_contract_lock(*args, **kwargs):
+        with original_contract_lock(*args, **kwargs) as directory_descriptor:
+            with lock_guard:
+                lock_holders.add(threading.get_ident())
+            try:
+                yield directory_descriptor
+            finally:
+                with lock_guard:
+                    lock_holders.remove(threading.get_ident())
+
+    def controlled_write(*args, **kwargs):
+        nonlocal write_count
+        with lock_guard:
+            write_count += 1
+            current_write = write_count
+        if current_write == 1:
+            first_write_failed.set()
+            raise OSError("injected first activation write failure")
+        second_contract_write_ready.set()
+        assert cleanup_complete.wait(timeout=3)
+        return original_write(*args, **kwargs)
+
+    def synchronized_cleanup(*args, **kwargs):
+        with lock_guard:
+            cleanup_holds_contract_lock = threading.get_ident() in lock_holders
+        try:
+            if not cleanup_holds_contract_lock:
+                assert second_contract_write_ready.wait(timeout=3)
+            return original_cleanup(*args, **kwargs)
+        finally:
+            cleanup_complete.set()
+
+    monkeypatch.setattr(module, "_contract_lock", tracked_contract_lock)
+    monkeypatch.setattr(module, "_atomic_yaml_write", controlled_write)
+    monkeypatch.setattr(module, "_cleanup_failed_initial_persistence", synchronized_cleanup)
+    first_errors: list[BaseException] = []
+    second_errors: list[BaseException] = []
+    second_results: list[Path] = []
+
+    def activate(errors: list[BaseException], results: list[Path]) -> None:
+        try:
+            results.append(
+                module.activate_contract(
+                    issue_dir=issue_dir,
+                    project_root=tmp_path,
+                    policy=policy,
+                    confirmation=confirmation,
+                )
+            )
+        except BaseException as exc:  # Preserve the concurrent outcome for assertions.
+            errors.append(exc)
+
+    first = threading.Thread(target=activate, args=(first_errors, []))
+    first.start()
+    assert first_write_failed.wait(timeout=3)
+    second = threading.Thread(target=activate, args=(second_errors, second_results))
+    second.start()
+    first.join(timeout=20)
+    second.join(timeout=20)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert len(first_errors) == 1
+    assert not second_errors
+    assert len(second_results) == 1
+    assert second_results[0].is_file()
+    assert module.load_active_contract(issue_dir=issue_dir, project_root=tmp_path)[
+        "proposal_digest"
+    ] == module.policy_digest(policy)
+
+
 @pytest.mark.parametrize("live_drift", ["issue_playbook", "effective_inventory"])
 def test_replacement_revalidates_live_authority_after_acquiring_contract_lock(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, live_drift: str

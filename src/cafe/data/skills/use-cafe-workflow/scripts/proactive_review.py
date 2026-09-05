@@ -1164,88 +1164,14 @@ def activate_contract(
     review_directory_was_absent = not target.parent.exists()
     driver_directory_was_absent = not target.parent.parent.exists()
     activation_marker_was_absent = not (target.parent / ACTIVATION_FILENAME).exists()
-    try:
-        with _contract_lock(issue_dir, recover=False) as directory_descriptor:
-            def locked_activation_envelope() -> tuple[str, dict[str, Any]]:
-                try:
-                    return _activation_envelope(
-                        issue_dir=issue_dir,
-                        project_root=project_root,
-                        policy=policy,
-                        confirmation=confirmation,
-                    )
-                except (StaleContractError, ValueError) as exc:
-                    raise StaleContractError(
-                        "activation inputs no longer match the live issue playbook"
-                    ) from exc
+    cleanup_attempted = False
 
-            _recover_pending_replacement(directory_descriptor)
-
-            def verify_final_authority() -> None:
-                locked_activation_envelope()
-
-            replacing = _persistence_entry_exists(directory_descriptor, CONTRACT_FILENAME)
-            if replacing:
-                existing_digest = _active_contract_digest(directory_descriptor)
-                if not expected_active_digest or expected_active_digest != existing_digest:
-                    raise StaleContractError(
-                        "replacement requires the expected active proposal digest"
-                    )
-            elif expected_active_digest is not None:
-                raise StaleContractError(
-                    "initial activation cannot compare an absent active contract"
-                )
-            if not replacing:
-                _atomic_bytes_write_at(
-                    directory_descriptor,
-                    ACTIVATION_FILENAME,
-                    _activation_marker_bytes(),
-                )
-                _atomic_yaml_write(
-                    target,
-                    envelope,
-                    directory_descriptor=directory_descriptor,
-                    verify_live_authority=verify_final_authority,
-                )
-            else:
-                _atomic_bytes_write_at(
-                    directory_descriptor,
-                    ACTIVATION_FILENAME,
-                    _activation_marker_bytes(),
-                )
-                previous_state = _read_persistence_entry(
-                    directory_descriptor, STATE_FILENAME, maximum=MAX_STATE_BYTES
-                )
-                recovery = _pending_replacement_bytes(
-                    previous_digest=existing_digest,
-                    replacement_digest=digest,
-                    previous_state=previous_state,
-                )
-                _atomic_bytes_write_at(
-                    directory_descriptor,
-                    REPLACEMENT_FILENAME,
-                    recovery,
-                )
-                try:
-                    _atomic_yaml_write(
-                        state_path(issue_dir),
-                        _empty_review_state(digest),
-                        directory_descriptor=directory_descriptor,
-                    )
-                    _atomic_yaml_write(
-                        target,
-                        envelope,
-                        directory_descriptor=directory_descriptor,
-                        verify_live_authority=verify_final_authority,
-                    )
-                except BaseException:
-                    _recover_pending_replacement(directory_descriptor)
-                    raise
-                _delete_persistence_entry(
-                    directory_descriptor,
-                    REPLACEMENT_FILENAME,
-                )
-    except BaseException:
+    def cleanup_failed_initial_activation() -> None:
+        """Roll back only this failed initial activation while it remains serialized."""
+        nonlocal cleanup_attempted
+        if cleanup_attempted:
+            return
+        cleanup_attempted = True
         if initial_activation and not target.exists():
             _cleanup_failed_initial_persistence(
                 issue_dir,
@@ -1253,6 +1179,94 @@ def activate_contract(
                 remove_review_directory=review_directory_was_absent,
                 remove_driver_directory=driver_directory_was_absent,
             )
+
+    try:
+        with _contract_lock(issue_dir, recover=False) as directory_descriptor:
+            try:
+                def locked_activation_envelope() -> tuple[str, dict[str, Any]]:
+                    try:
+                        return _activation_envelope(
+                            issue_dir=issue_dir,
+                            project_root=project_root,
+                            policy=policy,
+                            confirmation=confirmation,
+                        )
+                    except (StaleContractError, ValueError) as exc:
+                        raise StaleContractError(
+                            "activation inputs no longer match the live issue playbook"
+                        ) from exc
+
+                _recover_pending_replacement(directory_descriptor)
+
+                def verify_final_authority() -> None:
+                    locked_activation_envelope()
+
+                replacing = _persistence_entry_exists(directory_descriptor, CONTRACT_FILENAME)
+                if replacing:
+                    existing_digest = _active_contract_digest(directory_descriptor)
+                    if not expected_active_digest or expected_active_digest != existing_digest:
+                        raise StaleContractError(
+                            "replacement requires the expected active proposal digest"
+                        )
+                elif expected_active_digest is not None:
+                    raise StaleContractError(
+                        "initial activation cannot compare an absent active contract"
+                    )
+                if not replacing:
+                    _atomic_bytes_write_at(
+                        directory_descriptor,
+                        ACTIVATION_FILENAME,
+                        _activation_marker_bytes(),
+                    )
+                    _atomic_yaml_write(
+                        target,
+                        envelope,
+                        directory_descriptor=directory_descriptor,
+                        verify_live_authority=verify_final_authority,
+                    )
+                else:
+                    _atomic_bytes_write_at(
+                        directory_descriptor,
+                        ACTIVATION_FILENAME,
+                        _activation_marker_bytes(),
+                    )
+                    previous_state = _read_persistence_entry(
+                        directory_descriptor, STATE_FILENAME, maximum=MAX_STATE_BYTES
+                    )
+                    recovery = _pending_replacement_bytes(
+                        previous_digest=existing_digest,
+                        replacement_digest=digest,
+                        previous_state=previous_state,
+                    )
+                    _atomic_bytes_write_at(
+                        directory_descriptor,
+                        REPLACEMENT_FILENAME,
+                        recovery,
+                    )
+                    try:
+                        _atomic_yaml_write(
+                            state_path(issue_dir),
+                            _empty_review_state(digest),
+                            directory_descriptor=directory_descriptor,
+                        )
+                        _atomic_yaml_write(
+                            target,
+                            envelope,
+                            directory_descriptor=directory_descriptor,
+                            verify_live_authority=verify_final_authority,
+                        )
+                    except BaseException:
+                        _recover_pending_replacement(directory_descriptor)
+                        raise
+                    _delete_persistence_entry(
+                        directory_descriptor,
+                        REPLACEMENT_FILENAME,
+                    )
+            except BaseException:
+                cleanup_failed_initial_activation()
+                raise
+    except BaseException:
+        cleanup_failed_initial_activation()
         raise
     return target
 
