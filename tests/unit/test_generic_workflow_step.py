@@ -24,7 +24,7 @@ from cafe.core.session_continuation import (
     SessionContinuationPolicy,
 )
 from cafe.core.status_codes import PhaseStatusCode
-from cafe.core.types import AgentCLI, AgentConfig, CliEntry, TokenUsage
+from cafe.core.types import AgentCLI, AgentConfig, AgentResponse, CliEntry, TokenUsage
 from cafe.phases.generic_phase import GenericPhase, GenericPhaseExecution
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
 from cafe.skills.exceptions import SkillDiscoveryError
@@ -4551,7 +4551,7 @@ mandate:
     assert agent_manager.prompts
 
 
-def test_completed_correction_selects_new_session_by_default(tmp_path: Path) -> None:
+def test_completed_correction_resumes_previous_session_by_default(tmp_path: Path) -> None:
     executor = _minimal_spec_executor(
         tmp_path,
         agent_manager=FakeAgentManager("confirmed"),
@@ -4576,10 +4576,12 @@ def test_completed_correction_selects_new_session_by_default(tmp_path: Path) -> 
         step_def=executor.playbook["steps"]["spec"],
     )
 
-    assert continuation.policy == SessionContinuationPolicy.NEW
+    assert continuation.policy == SessionContinuationPolicy.RESUME_EXACT
+    assert continuation.cli == AgentCLI.CODEX
+    assert continuation.session_id == "old-session"
 
 
-def test_completed_correction_ignores_resume_override(tmp_path: Path) -> None:
+def test_completed_correction_fresh_override_starts_new_session(tmp_path: Path) -> None:
     executor = _minimal_spec_executor(
         tmp_path,
         agent_manager=FakeAgentManager("confirmed"),
@@ -4600,7 +4602,7 @@ def test_completed_correction_ignores_resume_override(tmp_path: Path) -> None:
     executor.iteration = 2
     step_def = {
         **executor.playbook["steps"]["spec"],
-        "correction_session": "resume",
+        "correction_session": "fresh",
     }
 
     continuation = executor._select_session_continuation(
@@ -4609,6 +4611,73 @@ def test_completed_correction_ignores_resume_override(tmp_path: Path) -> None:
     )
 
     assert continuation.policy == SessionContinuationPolicy.NEW
+
+
+def test_exact_fallback_session_is_persisted_and_resumed_by_next_correction(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    manager = AgentManager(issue_name="issue-resume-input")
+    manager.register_agent(
+        AgentConfig(
+            name="Roger",
+            cli=AgentCLI.CODEX,
+            clis=[
+                CliEntry(cli=AgentCLI.CODEX, model="codex-model"),
+                CliEntry(cli=AgentCLI.GEMINI, model="gemini-model"),
+            ],
+        )
+    )
+    executor = _minimal_spec_executor(tmp_path, agent_manager=manager)
+    executor.phase_dir = executor.issue_dir / "spec"
+    executor.phase_dir.mkdir(parents=True)
+    executor.phase_name = "spec"
+    executor.iteration = 2
+    executor._session_continuation = SessionContinuation.resume_exact(
+        AgentCLI.CODEX,
+        "prior-codex",
+    )
+    attempts: list[tuple[AgentCLI, str | None]] = []
+
+    def execute(self, *args, **kwargs):
+        attempts.append((self.config.cli, self.config.session_id))
+        if self.config.cli == AgentCLI.CODEX:
+            raise AgentExecutionError("rate limit", error_type="rate_limit")
+        return AgentResponse(
+            response="confirmed",
+            token_usage=TokenUsage(),
+            cli=AgentCLI.GEMINI,
+            session_id="fallback-gemini",
+        )
+
+    with patch("cafe.agents.executor.AgentExecutor.execute", execute):
+        executor._execute_agent_iteration(
+            agent_name="Roger",
+            prompt="continue correction",
+            user_input="workflow execute",
+            valid_intents=[],
+            require_status_code=False,
+            allowed_tools=[],
+            phase_specific_data={"step_name": "spec"},
+            backup_context_callback=lambda _error: '{"operation":{"state":"running"}}',
+        )
+
+    iteration_data = json.loads(
+        (executor.phase_dir / "iteration_002" / "iteration.json").read_text(encoding="utf-8")
+    )
+    assert attempts == [(AgentCLI.CODEX, "prior-codex"), (AgentCLI.GEMINI, None)]
+    assert iteration_data["cli"] == "gemini"
+    assert iteration_data["session_id"] == "fallback-gemini"
+
+    executor.iteration = 3
+    continuation = executor._select_session_continuation(
+        agent_name="Roger",
+        step_def=executor.playbook["steps"]["spec"],
+    )
+    assert continuation.policy == SessionContinuationPolicy.RESUME_EXACT
+    assert continuation.cli == AgentCLI.GEMINI
+    assert continuation.session_id == "fallback-gemini"
 
 
 def test_incomplete_iteration_selects_exact_resume(tmp_path: Path) -> None:
@@ -4849,7 +4918,7 @@ def test_same_invocation_baton_retry_resumes_actual_session(
     assert "[BATON ERROR] repair next_step.txt" in snapshot.read_text(encoding="utf-8")
 
 
-def test_pre_step_baton_repair_after_prior_run_starts_new_session(
+def test_pre_step_baton_repair_after_prior_run_resumes_session(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -4890,7 +4959,8 @@ def test_pre_step_baton_repair_after_prior_run_starts_new_session(
         same_invocation_retry=False,
     )
 
-    assert manager.continuations[0].policy == SessionContinuationPolicy.NEW
+    assert manager.continuations[0].policy == SessionContinuationPolicy.RESUME_EXACT
+    assert manager.continuations[0].session_id == "prior-run-session"
 
 
 def test_correction_writes_and_inlines_delta_packet(

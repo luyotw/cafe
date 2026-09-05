@@ -545,9 +545,12 @@ class AgentManager:
                     )
                     time.sleep(delay)
                 elif (
-                    not effective_continuation.is_exact
-                    and hasattr(e, "error_type")
+                    hasattr(e, "error_type")
                     and e.error_type in self.FALLBACKABLE_ERROR_TYPES
+                    and (
+                        not effective_continuation.is_exact
+                        or backup_context_callback is not None
+                    )
                 ):
                     # Try backup agents
                     agent_response = self._try_backup_agents(
@@ -558,7 +561,7 @@ class AgentManager:
                         allowed_directories=allowed_directories,
                         streaming_output_file=streaming_output_file,
                         phase_name=phase_name,
-                        continuation=continuation,
+                        continuation=effective_continuation,
                         backup_context_callback=backup_context_callback,
                         execution_control=execution_control,
                     )
@@ -703,6 +706,10 @@ class AgentManager:
             AgentExecutionError: Raised when all agents (primary + backups) fail
         """
         config = primary_executor.config
+        requires_takeover_context = bool(continuation and continuation.is_exact)
+
+        if requires_takeover_context and backup_context_callback is None:
+            raise primary_error
 
         # Use clis chain when available; fall back to legacy backup_clis + models_config
         chain = config.clis
@@ -747,6 +754,7 @@ class AgentManager:
             # durable runtime snapshot at this last responsible moment instead
             # of carrying a provider session or an earlier in-memory summary.
             backup_prompt = prompt
+            takeover_context = ""
             if backup_context_callback is not None:
                 try:
                     takeover_context = backup_context_callback(takeover_error)
@@ -758,11 +766,19 @@ class AgentManager:
                         f"❌ {entry.cli.value} takeover context unavailable; trying next agent..."
                     )
                     continue
-                if takeover_context:
+                if isinstance(takeover_context, str) and takeover_context.strip():
                     backup_prompt = (
                         f"{prompt}\n\nCold backup takeover context (fresh, provider-neutral):\n"
                         f"{takeover_context}"
                     )
+                elif requires_takeover_context:
+                    failed_agents.append(
+                        f"{entry.cli.value} (takeover context unavailable: empty context)"
+                    )
+                    print(
+                        f"❌ {entry.cli.value} takeover context unavailable; trying next agent..."
+                    )
+                    continue
 
             # Explicit workflow policies never continue a different fallback
             # session. AUTO preserves legacy sticky-session behavior.
