@@ -9,7 +9,11 @@ from cafe.agents import manager as agent_manager
 from cafe.core import workflow_runtime
 from cafe.core.hooks import native as native_hooks
 from cafe.core.hooks.native import _publish_requested
-from cafe.core.playbook import PlaybookDefinition, resolve_step_behavior
+from cafe.core.playbook import (
+    PlaybookDefinition,
+    playbook_requests_capability,
+    resolve_step_behavior,
+)
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.phases import generic_phase, generic_workflow_step
 from cafe.playbooks.loader import PlaybookLoader
@@ -188,6 +192,24 @@ def test_publish_confirmation_requires_the_publish_capability():
 
     with pytest.raises(ValueError, match="cafe.pr.publish"):
         PlaybookDefinition.model_validate(payload)
+
+
+def test_publication_applicability_uses_effective_capability_declarations():
+    """Test List 1: capability applicability is independent of workflow names."""
+    payload = _playbook()
+    payload["playbook"]["id"] = "name-does-not-grant-publication"
+    payload["steps"]["build"]["capability_requests"] = ["cafe.pr.publish"]
+    payload["steps"]["verify"]["capability_requests"] = ["cafe.pr.publish"]
+    model = PlaybookDefinition.model_validate(payload)
+
+    assert playbook_requests_capability(model, "cafe.pr.publish") is True
+
+    payload["steps"]["build"]["capability_requests"] = []
+    payload["steps"]["verify"]["capability_requests"] = []
+    payload["steps"]["pr"] = payload["steps"].pop("build")
+    model = PlaybookDefinition.model_validate(payload)
+
+    assert playbook_requests_capability(model, "cafe.pr.publish") is False
 
 
 def test_baton_completion_requires_workflow_complete_for_terminal_transition():

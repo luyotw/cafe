@@ -816,6 +816,17 @@ def resolve_prepare_config(model: PlaybookDefinition) -> PrepareConfig:
     return default_prepare_config()
 
 
+def playbook_requests_capability(
+    model: PlaybookDefinition,
+    capability_id: str,
+) -> bool:
+    """Return whether any effective step requests ``capability_id``."""
+    return any(
+        capability_id in step.capability_requests
+        for step in model.steps.values()
+    )
+
+
 def confirmation_gate_steps(model: PlaybookDefinition) -> tuple[str, ...]:
     """Return ordered confirmation gates assignable in the kickoff contract.
 

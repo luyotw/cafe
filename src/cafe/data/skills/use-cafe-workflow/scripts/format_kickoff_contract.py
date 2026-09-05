@@ -48,6 +48,7 @@ try:
     from cafe.core.playbook import (
         confirmation_gate_steps,
         mandatory_confirmation_gate_steps,
+        playbook_requests_capability,
     )
     from cafe.agents.executor import AgentExecutor
     from cafe.core.types import AgentCLI, AgentConfig
@@ -85,6 +86,14 @@ def _positive_seconds(value: str) -> int:
     if seconds <= 0:
         raise argparse.ArgumentTypeError("must be greater than zero")
     return seconds
+
+
+def _strict_bool(value: str) -> bool:
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    raise argparse.ArgumentTypeError("must be exactly 'true' or 'false'")
 
 
 def _driver_policy_rows(args: argparse.Namespace) -> list[list[Any]]:
@@ -416,6 +425,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--effective-locale")
     parser.add_argument("--locale-source")
     parser.add_argument("--repository-content-locale", required=True)
+    parser.add_argument(
+        "--pr-auto-create",
+        type=_strict_bool,
+        metavar="true|false",
+        help="Explicit PR publication choice for playbooks requesting cafe.pr.publish.",
+    )
     parser.add_argument("--user-required", nargs="*", default=None)
     parser.add_argument("--driver-confirmable", nargs="*", default=None)
     parser.add_argument(
@@ -443,6 +458,7 @@ def render(args: argparse.Namespace) -> str:
     playbook_loader = PlaybookLoader(project_root=project_root)
     loaded = playbook_loader.load_model(args.playbook_id)
     model = loaded.model
+    publication_applicable = playbook_requests_capability(model, "cafe.pr.publish")
     skill_loader = SkillLoader(project_root=project_root)
     candidates = confirmation_gate_steps(model)
     mandatory_human_tasks = mandatory_confirmation_gate_steps(model)
@@ -540,9 +556,7 @@ def render(args: argparse.Namespace) -> str:
         reactive_title = "### Reactive user handoffs"
         reactive_headers = ["Intent", "Policy", "Scheduled gate"]
 
-    summary = _table(
-        summary_headers,
-        [
+    summary_rows: list[list[Any]] = [
             ["playbook_id", args.playbook_id],
             ["playbook_source", f"{loaded.source}: {loaded.path}"],
             ["playbook_selection_rationale", playbook_rationale],
@@ -563,8 +577,36 @@ def render(args: argparse.Namespace) -> str:
             ],
             ["worktree", worktree],
             ["mandate_source", mandate_source],
-        ],
-    )
+    ]
+    publication_contract = ""
+    if publication_applicable:
+        choice = str(args.pr_auto_create).lower()
+        summary_rows.extend(
+            [
+                ["pr.auto_create", choice],
+                ["confirmation_contract.pr_auto_create", choice],
+            ]
+        )
+        publication_contract = "\n\n".join(
+            [
+                "### PR publication choice",
+                _table(
+                    ["Value", "Observable outcome"],
+                    [
+                        [
+                            "true",
+                            "Push the feature branch and create or update the PR after local "
+                            "material and authorization succeed; review receives a verified PR URL.",
+                        ],
+                        [
+                            "false",
+                            "Publication mode: local-only. No PR URL exists.",
+                        ],
+                    ],
+                ),
+            ]
+        )
+    summary = _table(summary_headers, summary_rows)
     preflight = _table(
         summary_headers,
         [
@@ -652,6 +694,15 @@ def render(args: argparse.Namespace) -> str:
         raise ValueError(
             "phase rationale targets non-agent step: " + ", ".join(sorted(unused_rationales))
         )
+    if publication_applicable and args.pr_auto_create is None:
+        raise ValueError(
+            "--pr-auto-create is required when an effective step requests cafe.pr.publish"
+        )
+    if not publication_applicable and args.pr_auto_create is not None:
+        raise ValueError(
+            "--pr-auto-create is not applicable because no effective step requests "
+            "cafe.pr.publish"
+        )
 
     reactive = _table(
         reactive_headers,
@@ -688,6 +739,7 @@ def render(args: argparse.Namespace) -> str:
         [
             title,
             summary,
+            *([publication_contract] if publication_contract else []),
             "### Preflight evidence",
             preflight,
             "### Phases",

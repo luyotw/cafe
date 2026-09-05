@@ -98,11 +98,24 @@ def _read_skill_resource(path: str) -> str:
     return (SKILL_ROOT / path).read_text(encoding="utf-8")
 
 
-def _kickoff_formatter_command(strategic_context: Path, *extra_args: str) -> list[str]:
+def _kickoff_formatter_command(
+    strategic_context: Path,
+    *extra_args: str,
+    playbook_id: str = "standard",
+    pr_auto_create: bool | str | None = False,
+    phase_chains: dict[str, str] | None = None,
+    phase_rationales: dict[str, str] | None = None,
+    driver_confirmable: tuple[str, ...] = ("spec", "plan"),
+) -> list[str]:
+    pr_args = (
+        []
+        if pr_auto_create is None
+        else ["--pr-auto-create", str(pr_auto_create).lower()]
+    )
     return [
         sys.executable,
         str(SKILL_ROOT / "scripts" / "format_kickoff_contract.py"),
-        "standard",
+        playbook_id,
         "--issue-name",
         "issue346",
         "--playbook-rationale",
@@ -119,13 +132,14 @@ def _kickoff_formatter_command(strategic_context: Path, *extra_args: str) -> lis
         "--driver-mode",
         "unattended",
         *extra_args,
+        *pr_args,
         *_preflight_args(),
         "--risk-factor",
         "public contract",
         "--assessment-rationale",
         "Changes a public workflow contract across runtime and CLI.",
-        *_phase_chain_args(),
-        *_phase_rationale_args(),
+        *_phase_chain_args(phase_chains),
+        *_phase_rationale_args(phase_rationales),
         "--effective-locale",
         "zh-TW",
         "--locale-source",
@@ -134,8 +148,7 @@ def _kickoff_formatter_command(strategic_context: Path, *extra_args: str) -> lis
         "zh-TW",
         "--user-required",
         "--driver-confirmable",
-        "spec",
-        "plan",
+        *driver_confirmable,
         "--worktree",
         ".cafe/worktrees/issue346",
         "--strategic-context",
@@ -450,6 +463,109 @@ mandate:
     assert result.stdout.count("| playbook_id |") == 1
 
 
+@pytest.mark.parametrize("choice", [True, False])
+def test_kickoff_formatter_requires_and_binds_explicit_publication_choice(
+    tmp_path: Path,
+    choice: bool,
+) -> None:
+    """Test List 2: PR-capable kickoff binds one strict Boolean choice."""
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text(
+        "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        _kickoff_formatter_command(strategic_context, pr_auto_create=choice),
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    token = str(choice).lower()
+    assert result.stdout.count(f"| pr.auto_create | {token} |") == 1
+    assert f"| confirmation_contract.pr_auto_create | {token} |" in result.stdout
+    assert "verified PR URL" in result.stdout
+    assert "Publication mode: local-only. No PR URL exists." in result.stdout
+
+
+@pytest.mark.parametrize("choice", [None, "yes"])
+def test_kickoff_formatter_rejects_missing_or_malformed_publication_choice(
+    tmp_path: Path,
+    choice: str | None,
+) -> None:
+    """Test List 2: omission and truthy strings cannot imply publication intent."""
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text(
+        "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        _kickoff_formatter_command(strategic_context, pr_auto_create=choice),
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "pr-auto-create" in result.stderr
+
+
+def test_non_pr_playbook_omits_choice_and_rejects_supplied_false(tmp_path: Path) -> None:
+    """Test List 3: inapplicable publication config fails closed."""
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text(
+        "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
+        encoding="utf-8",
+    )
+    chains = {
+        step: f"gemini:{step}-main"
+        for step in ("brief", "draft", "review", "publish")
+    }
+    rationales = {
+        step: "balanced: bounded editorial work with an equivalent configured model"
+        for step in chains
+    }
+
+    supplied = subprocess.run(
+        _kickoff_formatter_command(
+            strategic_context,
+            playbook_id="editorial",
+            pr_auto_create=False,
+            phase_chains=chains,
+            phase_rationales=rationales,
+            driver_confirmable=("brief",),
+        ),
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    omitted = subprocess.run(
+        _kickoff_formatter_command(
+            strategic_context,
+            playbook_id="editorial",
+            pr_auto_create=None,
+            phase_chains=chains,
+            phase_rationales=rationales,
+            driver_confirmable=("brief",),
+        ),
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert supplied.returncode == 2
+    assert "not applicable" in supplied.stderr
+    assert omitted.returncode == 0, omitted.stderr
+    assert "pr.auto_create" not in omitted.stdout
+
+
 def test_kickoff_contract_documents_persisted_preflight_and_reconfirmation() -> None:
     kickoff = _read_skill_resource("references/kickoff.md")
     normalized = " ".join(kickoff.split())
@@ -641,7 +757,9 @@ def test_kickoff_contract_formatter_accepts_primary_only_chains(tmp_path: Path) 
                 "user_approval_required",
                 "--driver-mode",
                 "unattended",
-                *_preflight_args(),
+                "--pr-auto-create",
+                "false",
+                    *_preflight_args(),
             "--risk-factor",
             "none",
             "--assessment-rationale",
@@ -1008,9 +1126,11 @@ def test_kickoff_contract_formatter_rejects_incomplete_gate_partition(
             "small",
             "--model-adjustment-authority",
             "user_approval_required",
-            "--driver-mode",
-            "unattended",
-            *_preflight_args(),
+                "--driver-mode",
+                "unattended",
+                "--pr-auto-create",
+                "false",
+                *_preflight_args(),
             "--risk-factor",
             "none",
             "--assessment-rationale",
@@ -1095,6 +1215,8 @@ def test_kickoff_contract_formatter_uses_cafe_python_when_site_packages_are_miss
             "user_approval_required",
             "--driver-mode",
             "unattended",
+            "--pr-auto-create",
+            "false",
             *_preflight_args(),
             "--risk-factor",
             "none",
