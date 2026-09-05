@@ -73,6 +73,8 @@ Read your agent file: {agent_file}
 ## Instructions
 - Plan 必須在同一 phase 內依序完成兩個 stage，不得另建 phase：先完成 solution alignment，
   取得 user 明確確認後，才撰寫 detailed Plan。
+- Checklist 的 iteration selector 只區分首次進入與已有前次輸出的後續執行；它不代表
+  solution alignment 只能進行一輪，實際 stage 一律由下述 canonical marker 判斷。
 - `{output_file}` 第一個非空白行必須是唯一的 canonical marker：方案階段使用
   `<!-- plan-stage: solution-alignment -->`；完整計畫階段使用
   `<!-- plan-stage: detailed-plan -->`。只依第一個非空白行判斷 stage，不得從 Development

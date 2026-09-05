@@ -923,7 +923,8 @@ def test_write_cafe_phase_requires_playbook_declared_confirmation_gates() -> Non
     assert "playbook-only gate" in spec
     assert "`confirm_output: <current-step>`" in normalized_spec
     assert "`need_clarification`、`need_permission`、`alignment_checkpoint`" in spec
-    assert "同一 Plan phase 內的方案 checkpoint" in spec
+    assert "同一 phase 內的多階段 checkpoint" in spec
     assert "mandatory user-owned" in normalized_skill
-    assert "exact-answer matching" in normalized_skill
+    assert "durable stage evidence" in normalized_skill
+    assert "first-entry/resume routing" in normalized_skill
     assert "final `confirm_output`" in normalized_skill

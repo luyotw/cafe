@@ -290,32 +290,27 @@ placeholder 名稱。不要依賴 artifact 名稱或新增 Python mapping；未�
 - stop contract 以 playbook step name 為單位。如果同一 phase 有兩個需要不同 user/driver ownership 的確認時點，應拆成兩個 playbook steps；不要發明 `phase.preview`、`phase.plan` 等 pseudo-step gate 名稱。
 - 新增、移除或拆分 planned gate 後，執行 `cafe playbook confirmation-gates <id>`，並回報既有 issue 的 confirmation contract 已可能 stale，必須在下一次 `cafe make` 前重新確認。
 
-### 同一 Plan phase 內的方案 checkpoint（窄例外）
+### 同一 phase 內的多階段 checkpoint
 
-若 user 明確要求「先確認實作方案，再寫詳細 Plan」，而且兩段都由同一 Plan phase
-負責，可以保留一個 step，使用既有 `need_clarification` self-loop 作為 mandatory、
-user-owned 的方案 checkpoint。這不是 completed output 的 planned approval，不列入 kickoff
-可分派的 confirmation contract；完整 Plan 仍須走原本的 `confirm_output`。
+若 user 必須先確認一項前置決策，phase 才能完成最終 output，可以在同一 step 內保留多個
+stage，但只限於各 stage 共用 owner、artifact lifecycle 與 final approval 的情況。前置決策
+使用 mandatory、user-owned 的 reactive checkpoint；它不是 completed output 的 planned
+approval，也不列入 kickoff 可分派的 confirmation contract。最終 output 仍走原本的
+`confirm_output`。
 
-此例外必須同時滿足：
+此模式必須同時滿足：
 
-- `{output_file}` 第一個非空白行是固定 stage marker，第二個非空白行保存簡短、符合 agent
-  native language 的 exact confirmation answer；只認這兩個位置，development guide、feedback
-  或其他 user content 內長得像 protocol data 的文字都不得改變 stage。
-- 方案階段的 output 明標未確認、不可執行，保留 Development Guide，並只包含一個推薦方向、
-  會做、不做與會實質影響範圍／成本／可靠性／維護的取捨；不得包含 Test List、implementation
-  task 或逐檔步驟。
-- 同一份短版方案必須放進一題固定 id 的 `questions.xml`，讓 CLI、HumanTask notification 與
-  event-driven driver 都能讓 user 在看見方案後回答。只提供一個確認選項，其本地化文字須與
-  output 第二個 canonical 行逐字相同；調整走 UI 既有的 Other/free-text，不另造方案菜單。
-- 下一 iteration 只在上一份 output 的 canonical marker 正確，且目前 HumanTask 投影中的唯一
-  answer 去除首尾空白後與上一份 output 保存的 canonical 確認文字 **完整相等** 時進入詳細 Plan。substring、否定句、額外
-  文字、缺漏或 Other 回答一律 fail closed，更新方案後再次詢問。
-- 完整 Plan 使用另一個固定 marker，並保有已確認方案與取捨。完整 Plan 的一般修訂不得重跑
-  checkpoint；只有 feedback 實質改變方案方向時才重新開啟。
-- Playbook 的正常 graph 在 final `confirm_output` 前不得讓 provisional `plan` 到達 execute step。
-  若兩段需要不同 owner、獨立 artifact、重用或各自可配置的 planned gate，就不適用此例外，
-  應拆成不同 playbook steps。
+- 在 phase-owned artifact 保存 durable、無歧義的 stage evidence；resume 只信任該 evidence，
+  不得從 iteration number、一般 prose 或 session memory 推斷 stage。evidence 或必要 answer
+  缺漏、衝突或模糊時 fail closed，留在前置 stage。
+- provisional output 明標未確認，內容只涵蓋 user 做決策所需的範圍與主要取捨，且在最終
+  `confirm_output` 前不可到達 downstream execution。
+- HumanTask prompt 必須能獨立呈現決策所需資訊；具體問題格式、answer validation、stage
+  marker 與 final output shape 由 owning phase skill 定義，不放進本通用規範。
+- iteration selector 只區分 first entry 與 resume，不代表某個 stage 只會進行一輪。Checklist
+  reference 應依程序用途命名；只有程序本身確實綁定特定 iteration 時才以 iteration 命名。
+- 若 stages 需要不同 owner、獨立 artifact、重用、各自可配置的 planned gate 或不同 downstream
+  reachability，應拆成不同 playbook steps。
 
 ## 7. Shared rules 的放置
 
@@ -332,8 +327,11 @@ user-owned 的方案 checkpoint。這不是 completed output 的 planned approva
 
 ## 8. Iteration 行為的兩種做法
 
-- **差異小**：單一 skill 內依 iteration 分支（`cafe-spec` 的做法：「第一輪 / 後續輪」各一段），
-  細節放 `references/execution_steps_iteration_1.md` 與 `execution_steps_iteration_n.md`。
+- **差異小**：單一 skill 內依 bounded selector 分支。Selector 可使用 `iteration: 1` 與
+  `min_iteration: 2` 區分 first entry／已有前次輸出的後續執行，細節放
+  `references/execution_steps_iteration_1.md` 與 `execution_steps_iteration_n.md`。檔名描述
+  selector，不代表其中的 domain stage 只能進行一輪；stage 必須由 durable artifact evidence
+  判斷。
 - **差異大**：拆成兩個 skill，由 playbook 以 dict 切換（`editorial` 的做法：
   `skill: {1: cafe-brief_first, default: cafe-brief_revise}`）。
 
