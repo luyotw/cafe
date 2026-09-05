@@ -93,6 +93,9 @@ obtain explicit user confirmation of:
 - issue nature, scale, and risk factors;
 - every resolved phase-skill execution profile, including all possible
   iteration variants at kickoff;
+- one `required` or `not_required` proactive-review decision with an
+  issue-specific rationale for every distinct agent-executed phase that may
+  run, including a phase likely to be skipped on one route;
 - the exact ordered CLI/model chain for every phase, containing one primary and
   zero or more explicitly confirmed fallbacks;
 - `model_adjustment_authority`: either `driver_autonomous` or
@@ -260,6 +263,45 @@ worktree choice. It
 re-executes with the Python interpreter that owns `cafe` when the shell
 interpreter lacks CAFE dependencies.
 
+The rendered kickoff expresses the confirmed proposal as:
+
+```yaml
+proactive_review:
+  phase_decisions:
+    - phase: spec
+      decision: required
+      rationale: Public requirements need an additional scope check.
+  confirmed_by: user
+  confirmed_at: <timestamp>
+```
+
+For proactive driver review, assess the issue's scale, ambiguity, durable
+contract impact, blast radius, correction cost, and equivalent later review
+coverage for every agent-executed phase. Prefer the smallest useful set with
+material additional value rather than selecting every phase by convention.
+An all-`not_required` contract is valid. Pass one complete, issue-specific
+decision for every such phase:
+
+```bash
+--proactive-review-decision \
+  "<step>=<required|not_required>=<issue-specific rationale>"
+```
+
+The formatter rejects missing, duplicate, unknown, human-only, invalid, or
+rationale-free decisions and renders them in effective playbook order. The
+current Driver performs the review directly only for an executed required
+phase; it must not launch a separate reviewer, request reviewer-specific
+model, cost, fallback, or ordering data, or treat a proactive review result as
+another reviewable phase artifact.
+
+The user confirms the complete proactive-review proposal together with the
+rest of the kickoff contract. Do this before `cafe prepare`, any first workflow
+execution, or use of the proactive-review writer. A prior confirmed contract
+may be reused only when its semantics match exactly. Any phase coverage,
+decision, rationale, or active-playbook-derived change requires a complete
+replacement proposal and explicit user reconfirmation; until then, the earlier
+contract remains authoritative.
+
 If the user already chose values in the current request, render and restate them
 for confirmation rather than asking again.
 
@@ -363,6 +405,24 @@ for confirmation rather than asking again.
     confirmed_by: user
     confirmed_at: 2026-08-13
   ```
+
+  Do not put proactive-review policy in `issue.yaml`. After the complete
+  kickoff proposal is explicitly confirmed, persist its one skill-owned
+  contract before first workflow execution:
+
+  ```bash
+  python3 <skill-dir>/scripts/write_proactive_review_contract.py \
+    --issue-name <issue-name> --playbook-id <playbook-id> \
+    --proactive-review-decision "<step>=<required|not_required>=<rationale>" \
+    --confirmed-by user --confirmed-at <timestamp>
+  ```
+
+  The writer creates `.cafe/issues/<issue-name>/driver/proactive_review.yaml`,
+  reuses exact semantic matches without rewriting them, and rejects a changed
+  contract until the complete replacement proposal has been reconfirmed. Run
+  it with `--replacement-confirmed` only for that explicit reconfirmation; the
+  same one file is then replaced. It stores decisions, rationales, and
+  confirmation metadata only—never review status or correction history.
 
   When the confirmed mode is event-driven, create the separate skill-owned
   binding after this file is written:

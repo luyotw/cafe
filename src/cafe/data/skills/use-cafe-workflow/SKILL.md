@@ -32,15 +32,10 @@ If more than one situation applies, read every listed reference before acting; d
 
 ## Core invariants
 
-- The complete kickoff contract is the first blocking gate. Do not run `cafe
-  prepare`, mutate the repository, or execute the first workflow phase before the user confirms it.
+- The complete kickoff contract is the first blocking gate. Do not run `cafe prepare`, mutate the repository, or execute the first workflow phase before the user confirms it.
 - Resolve a playbook from explicit or durable authority; otherwise use `references/playbook_selection.md` to enumerate every effective candidate, filter by graph sufficiency, and compare valid applicability contracts. Record why the closest alternatives are insufficient. Never silently apply a common example or builtin default. Keep playbook selection issue-owned. Never write or update a playbook default in `.cafe/config.yaml` or `.cafe/strategic_context.yaml`; after kickoff confirmation, persist the selected `playbook_id` only in `.cafe/issues/<issue-name>/issue.yaml`.
-- Assess the issue nature, scale, and risk before kickoff. Include one exact
-  primary model with any user-approved fallbacks per phase and model-adjustment
-  authority in the contract. Resolve provider-neutral phase execution profiles from the active
-  playbook skills, classify the remaining work into a capability band, and
-  record a phase-specific selection rationale; no provider or model is built
-  into this driver skill.
+- Assess issue nature, scale, and risk before kickoff. Include one exact primary model with user-approved fallbacks and adjustment authority; resolve profiles, classify capability, and record a phase-specific rationale without built-in providers or models.
+- During that assessment, decide `required` or `not_required` proactive review for every agent-executed phase. Prefer the smallest useful set, give each an issue-specific rationale, and obtain complete user confirmation before preparation, execution, or persistence.
 - Resolve the effective conversation locale from a direct user override first,
   then a reliably inferred user preference from the current thread, and finally
   the active playbook. Use that locale for every driver-to-user message.
@@ -108,6 +103,7 @@ If more than one situation applies, read every listed reference before acting; d
 - [ ] Assess issue nature, scale, and risk; resolve every phase's execution profile,
   capability band, exact primary and any fallbacks, rationale, cached or tested
   primary evidence, configured fallback smoke evidence, and adjustment authority.
+- [ ] Assess every agent-executed phase for proactive review, render one `required` or `not_required` decision and rationale for each, then persist the user-confirmed contract in its skill-owned `driver/` area.
 - [ ] Present the deterministic kickoff table and obtain explicit confirmation.
 - [ ] Record the confirmed operating mode. For event-driven, create its exact
   per-issue callback binding with the bundled callback script before launch.
@@ -125,6 +121,7 @@ If more than one situation applies, read every listed reference before acting; d
 - [ ] In a user-facing driver turn, relay only an explicit mandatory/user-required HumanTask answer with `cafe task complete --no-resume --json`, verify it durably, then resume using the confirmed mode; a confirmed `driver_confirmable` gate may be verified and completed by a driver, but detached callbacks cannot collect or infer user answers.
 - [ ] Timestamp proactive polls and user updates; handle substantive output, completion, errors, and HumanTasks immediately.
 - [ ] At each contract-defined pause or completion, inspect new phase evidence and revise only remaining model chains within confirmed authority.
+- [ ] At a valid observation point for each executed required phase, the current Driver reviews its durable output directly, routes consolidated blockers through the existing correction path, and does not launch a separate reviewer or recursively review the result.
 - [ ] When CAFE pauses, classify the handoff before supplying any input.
 - [ ] When behavior is wrong, stop normal execution and use the bounded
   diagnosis reference.

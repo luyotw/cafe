@@ -50,6 +50,22 @@ Then route by intent:
   checkpoint is evidence, not proof the user must decide.
 - any other user-owned pause: stop. Unknown handoffs are not driver-confirmable.
 
+## Route proactive-review findings through existing handoffs
+
+When a current-Driver proactive review finds blockers, first finish the full
+review pass and consolidate every currently observable finding. State both
+missing necessary scope and excessive or unnecessary scope when applicable,
+then return the batch through the responsible phase's existing correction path.
+Do not edit the phase artifact, manufacture a replacement output, or turn the
+review result into a new recursive review target.
+
+If the existing path requires a clarification, permission, capability, scope
+choice, strategic decision, or other user-owned authority, stop and present the
+self-contained user decision above. A no-blocking driver review is quality
+evidence only, never user confirmation and never a substitute for
+`driver_confirmable` evidence. Re-review changed durable output through the
+same process; keep built-in review and final PR review obligations separate.
+
 ## Present a self-contained user decision
 
 Before asking the user to answer a HumanTask, clarification, permission, or

@@ -18,6 +18,7 @@ _MODEL_ADJUSTMENT_AUTHORITIES = {
 }
 _DRIVER_MODES = {"attached", "unattended", "event-driven"}
 _EVENT_DRIVEN_CLIS = {"claude", "codex", "gemini", "copilot", "cursor-agent"}
+_PROACTIVE_REVIEW_DECISIONS = {"required", "not_required"}
 
 
 def _reexec_with_cafe_python() -> None:
@@ -309,6 +310,51 @@ def _parse_phase_rationales(
     return parsed
 
 
+def _parse_proactive_review_decisions(
+    values: list[str],
+    *,
+    phase_names: set[str],
+    agent_phase_names: tuple[str, ...],
+) -> list[dict[str, str]]:
+    """Validate complete, ordered per-phase proactive review decisions."""
+    agent_phase_set = set(agent_phase_names)
+    parsed: dict[str, dict[str, str]] = {}
+    for value in values:
+        phase, separator, raw_decision = value.partition("=")
+        phase = phase.strip()
+        decision, rationale_separator, rationale = raw_decision.partition("=")
+        decision, rationale = decision.strip(), rationale.strip()
+        if not separator or not phase or not rationale_separator:
+            raise ValueError(
+                "invalid proactive review decision; expected STEP=required|not_required=RATIONALE"
+            )
+        if phase not in phase_names:
+            raise ValueError(f"unknown proactive review phase: {phase}")
+        if phase not in agent_phase_set:
+            raise ValueError(f"proactive review phase is not agent-executed: {phase}")
+        if phase in parsed:
+            raise ValueError(
+                f"duplicate proactive review decision for agent-executed step: {phase}"
+            )
+        if decision not in _PROACTIVE_REVIEW_DECISIONS:
+            raise ValueError(f"invalid proactive review decision for '{phase}': {decision}")
+        if not rationale:
+            raise ValueError(
+                f"proactive review decision for '{phase}' requires a non-empty rationale"
+            )
+        parsed[phase] = {
+            "phase": phase,
+            "decision": decision,
+            "rationale": rationale,
+        }
+    missing = [phase for phase in agent_phase_names if phase not in parsed]
+    if missing:
+        raise ValueError(
+            "missing proactive review decision for agent-executed step: " + ", ".join(missing)
+        )
+    return [parsed[phase] for phase in agent_phase_names]
+
+
 def _resolve_configured_chain(
     *,
     step_name: str,
@@ -370,6 +416,13 @@ def _parser() -> argparse.ArgumentParser:
         metavar="STEP=RATIONALE",
         help="Driver-assessed capability band and evidence for an agent-executed phase.",
     )
+    parser.add_argument(
+        "--proactive-review-decision",
+        action="append",
+        default=[],
+        metavar="STEP=required|not_required=RATIONALE",
+        help="Confirmed issue-specific proactive review decision for one agent-executed phase.",
+    )
     parser.add_argument("--phase-config", type=Path, default=Path(".cafe/phases.yaml"))
     parser.add_argument("--effective-locale")
     parser.add_argument("--locale-source")
@@ -425,6 +478,16 @@ def render(args: argparse.Namespace) -> str:
     phase_rationales = _parse_phase_rationales(
         args.phase_rationale,
         step_names=set(model.steps),
+    )
+    agent_phase_names = tuple(
+        step_name
+        for step_name, step in model.steps.items()
+        if step.assignee_type in {"agent", "hybrid"}
+    )
+    proactive_review_decisions = _parse_proactive_review_decisions(
+        args.proactive_review_decision,
+        phase_names=set(model.steps),
+        agent_phase_names=agent_phase_names,
     )
     update_preflight = _validate_preflight(
         args.update_preflight,
@@ -667,6 +730,14 @@ def render(args: argparse.Namespace) -> str:
             _table(
                 ["Phase", "Primary", "Fallbacks", "Source", "Selection rationale"],
                 model_rows,
+            ),
+            "### Proactive driver reviews",
+            _table(
+                ["Phase", "Decision", "Issue-specific rationale"],
+                [
+                    [item["phase"], item["decision"], item["rationale"]]
+                    for item in proactive_review_decisions
+                ],
             ),
             reactive_title,
             reactive,

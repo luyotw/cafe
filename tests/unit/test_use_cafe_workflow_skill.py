@@ -39,6 +39,39 @@ DEFAULT_PHASE_RATIONALES = {
     "pr": "efficiency: routine publication artifact with independent host validation; equivalent fallback",
 }
 
+DEFAULT_PROACTIVE_REVIEW_DECISIONS = [
+    (
+        "spec",
+        "required",
+        "The public requirements contract benefits from an independent scope check.",
+    ),
+    (
+        "plan",
+        "not_required",
+        "The required specification review and built-in review cover this planning risk.",
+    ),
+    (
+        "develop",
+        "required",
+        "Implementation changes have integration risk that warrants direct driver review.",
+    ),
+    (
+        "review",
+        "not_required",
+        "The built-in review already provides the equivalent phase-level scrutiny.",
+    ),
+    (
+        "pr",
+        "not_required",
+        "The final convergent review covers publication without duplicating it here.",
+    ),
+]
+
+SIMPLE_PROACTIVE_REVIEW_DECISIONS = [
+    (phase, "not_required", f"No additional review is needed for {phase}.")
+    for phase in ("spec", "develop", "qa", "pr")
+]
+
 PRIMARY_ONLY_PHASE_CHAINS = {
     "spec": "claude:requirements-main",
     "plan": "claude:planning-main",
@@ -59,6 +92,17 @@ def _phase_rationale_args(rationales: dict[str, str] | None = None) -> list[str]
     result: list[str] = []
     for step, rationale in (rationales or DEFAULT_PHASE_RATIONALES).items():
         result.extend(["--phase-rationale", f"{step}={rationale}"])
+    return result
+
+
+def _proactive_review_decision_args(
+    decisions: list[tuple[str, str, str]] | None = None,
+) -> list[str]:
+    result: list[str] = []
+    for phase, decision, rationale in decisions or DEFAULT_PROACTIVE_REVIEW_DECISIONS:
+        result.extend(
+            ["--proactive-review-decision", f"{phase}={decision}={rationale}"]
+        )
     return result
 
 
@@ -98,7 +142,11 @@ def _read_skill_resource(path: str) -> str:
     return (SKILL_ROOT / path).read_text(encoding="utf-8")
 
 
-def _kickoff_formatter_command(strategic_context: Path, *extra_args: str) -> list[str]:
+def _kickoff_formatter_command(
+    strategic_context: Path,
+    *extra_args: str,
+    proactive_review_decisions: list[tuple[str, str, str]] | None = None,
+) -> list[str]:
     return [
         sys.executable,
         str(SKILL_ROOT / "scripts" / "format_kickoff_contract.py"),
@@ -126,6 +174,7 @@ def _kickoff_formatter_command(strategic_context: Path, *extra_args: str) -> lis
         "Changes a public workflow contract across runtime and CLI.",
         *_phase_chain_args(),
         *_phase_rationale_args(),
+        *_proactive_review_decision_args(proactive_review_decisions),
         "--effective-locale",
         "zh-TW",
         "--locale-source",
@@ -430,6 +479,11 @@ mandate:
     assert "| catalog.effective_digests |" in result.stdout
     assert "playbook=playbook-digest" in result.stdout
     assert "### Phase model chains — driver-assessed" in result.stdout
+    assert "### Proactive driver reviews" in result.stdout
+    assert (
+        "| spec | required | The public requirements contract benefits from an independent scope check. |"
+        in result.stdout
+    )
     assert (
         "| develop | copilot:implementation-main | "
         "cursor-agent:implementation-fallback | --phase-chain | balanced:" in result.stdout
@@ -450,6 +504,200 @@ mandate:
     assert result.stdout.count("| playbook_id |") == 1
 
 
+def test_kickoff_formatter_requires_complete_proactive_review_decisions(
+    tmp_path: Path,
+) -> None:
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text(
+        "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
+        encoding="utf-8",
+    )
+
+    all_not_required = [
+        (phase, "not_required", f"No additional review is needed for {phase}.")
+        for phase, _, _ in DEFAULT_PROACTIVE_REVIEW_DECISIONS
+    ]
+    result = subprocess.run(
+        _kickoff_formatter_command(
+            strategic_context,
+            proactive_review_decisions=all_not_required,
+        ),
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.count("| not_required |") == len(all_not_required)
+
+    invalid_cases = [
+        (
+            DEFAULT_PROACTIVE_REVIEW_DECISIONS[:-1],
+            "missing proactive review decision for agent-executed step: pr",
+        ),
+        (
+            [
+                *DEFAULT_PROACTIVE_REVIEW_DECISIONS,
+                (
+                    "spec",
+                    "required",
+                    "A second assessment must not silently replace the first.",
+                ),
+            ],
+            "duplicate proactive review decision for agent-executed step: spec",
+        ),
+        (
+            [
+                *DEFAULT_PROACTIVE_REVIEW_DECISIONS,
+                ("unknown", "required", "This phase is not declared by the playbook."),
+            ],
+            "unknown proactive review phase: unknown",
+        ),
+        (
+            [
+                (phase, "always", rationale)
+                if phase == "spec"
+                else (phase, decision, rationale)
+                for phase, decision, rationale in DEFAULT_PROACTIVE_REVIEW_DECISIONS
+            ],
+            "invalid proactive review decision for 'spec': always",
+        ),
+        (
+            [
+                (phase, decision, "")
+                if phase == "spec"
+                else (phase, decision, rationale)
+                for phase, decision, rationale in DEFAULT_PROACTIVE_REVIEW_DECISIONS
+            ],
+            "proactive review decision for 'spec' requires a non-empty rationale",
+        ),
+    ]
+    for decisions, expected_error in invalid_cases:
+        result = subprocess.run(
+            _kickoff_formatter_command(
+                strategic_context,
+                proactive_review_decisions=decisions,
+            ),
+            cwd=PROJECT_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert result.returncode == 2
+        assert expected_error in result.stderr
+
+
+def test_proactive_review_helpers_reject_human_only_phases() -> None:
+    formatter = _load_script_module(
+        SKILL_ROOT / "scripts" / "format_kickoff_contract.py",
+        "proactive_review_formatter",
+    )
+
+    with pytest.raises(ValueError, match="proactive review phase is not agent-executed: user"):
+        formatter._parse_proactive_review_decisions(
+            ["spec=required=Requirements need direct review.", "user=not_required=User work has no output."],
+            phase_names={"spec", "user"},
+            agent_phase_names=("spec",),
+        )
+
+
+def test_proactive_review_contract_writer_preserves_one_confirmed_contract(
+    tmp_path: Path,
+) -> None:
+    writer = _load_script_module(
+        SKILL_ROOT / "scripts" / "write_proactive_review_contract.py",
+        "proactive_review_contract_writer",
+    )
+    target = tmp_path / ".cafe" / "issues" / "issue346" / "driver" / "proactive_review.yaml"
+    decisions = _proactive_review_decision_args()
+
+    created = writer.write_proactive_review_contract(
+        project_root=PROJECT_ROOT,
+        playbook_id="standard",
+        decision_values=decisions[1::2],
+        confirmed_by="user",
+        confirmed_at="2026-09-05T12:00:00Z",
+        target=target,
+        replacement_confirmed=False,
+    )
+    assert created == "created"
+    original = target.read_text(encoding="utf-8")
+    assert "playbook_id: standard" in original
+    assert "phase: spec" in original
+
+    reused = writer.write_proactive_review_contract(
+        project_root=PROJECT_ROOT,
+        playbook_id="standard",
+        decision_values=decisions[1::2],
+        confirmed_by="user",
+        confirmed_at="2026-09-05T12:01:00Z",
+        target=target,
+        replacement_confirmed=False,
+    )
+    assert reused == "reused"
+    assert target.read_text(encoding="utf-8") == original
+
+    changed_rationale = [
+        value.replace("independent scope check", "replacement scope check")
+        if value.startswith("spec=")
+        else value
+        for value in decisions[1::2]
+    ]
+    with pytest.raises(ValueError, match="requires complete replacement confirmation"):
+        writer.write_proactive_review_contract(
+            project_root=PROJECT_ROOT,
+            playbook_id="standard",
+            decision_values=changed_rationale,
+            confirmed_by="user",
+            confirmed_at="2026-09-05T12:02:00Z",
+            target=target,
+            replacement_confirmed=False,
+        )
+    with pytest.raises(ValueError, match="requires complete replacement confirmation"):
+        writer.write_proactive_review_contract(
+            project_root=PROJECT_ROOT,
+            playbook_id="simple",
+            decision_values=_proactive_review_decision_args(
+                SIMPLE_PROACTIVE_REVIEW_DECISIONS
+            )[1::2],
+            confirmed_by="user",
+            confirmed_at="2026-09-05T12:02:00Z",
+            target=target,
+            replacement_confirmed=False,
+        )
+
+    changed_decisions = [
+        value.replace("spec=required", "spec=not_required")
+        if value.startswith("spec=")
+        else value
+        for value in decisions[1::2]
+    ]
+    with pytest.raises(ValueError, match="requires complete replacement confirmation"):
+        writer.write_proactive_review_contract(
+            project_root=PROJECT_ROOT,
+            playbook_id="standard",
+            decision_values=changed_decisions,
+            confirmed_by="user",
+            confirmed_at="2026-09-05T12:03:00Z",
+            target=target,
+            replacement_confirmed=False,
+        )
+    assert target.read_text(encoding="utf-8") == original
+
+    replaced = writer.write_proactive_review_contract(
+        project_root=PROJECT_ROOT,
+        playbook_id="standard",
+        decision_values=changed_decisions,
+        confirmed_by="user",
+        confirmed_at="2026-09-05T12:04:00Z",
+        target=target,
+        replacement_confirmed=True,
+    )
+    assert replaced == "replaced"
+    assert "decision: not_required" in target.read_text(encoding="utf-8")
+
+
 def test_kickoff_contract_documents_persisted_preflight_and_reconfirmation() -> None:
     kickoff = _read_skill_resource("references/kickoff.md")
     normalized = " ".join(kickoff.split())
@@ -463,6 +711,34 @@ def test_kickoff_contract_documents_persisted_preflight_and_reconfirmation() -> 
     assert "post_change_evidence:" in kickoff
     assert "behavior_changed:" in kickoff
     assert "freshly rendered kickoff contract" in normalized
+
+
+def test_use_cafe_workflow_defines_confirmed_proactive_driver_review_loop() -> None:
+    skill = _read_skill_resource("SKILL.md")
+    kickoff = _read_skill_resource("references/kickoff.md")
+    running = _read_skill_resource("references/running_workflow.md")
+    handoffs = _read_skill_resource("references/handoffs_and_alignment.md")
+    normalized = " ".join((skill + kickoff + running + handoffs).split())
+
+    assert "proactive_review:" in kickoff
+    assert "--proactive-review-decision" in kickoff
+    assert "write_proactive_review_contract.py" in kickoff
+    assert "smallest useful set" in normalized
+    assert "all-`not_required`" in normalized
+    assert "current Driver performs the review directly" in normalized
+    assert "must not launch a separate reviewer" in normalized
+    assert "required phase" in normalized
+    assert "not_required" in normalized
+    assert "missing necessary scope" in normalized
+    assert "excessive or unnecessary scope" in normalized
+    assert "consolidate every currently observable blocker" in normalized
+    assert "re-review the changed durable artifact" in normalized
+    assert "exact current durable artifact" in normalized
+    assert "complete replacement proposal" in normalized
+    assert "no-blocking result is quality evidence only" in normalized
+    assert "does not replace `driver_confirmable` evidence" in normalized
+    assert "user-owned authority" in normalized
+    assert "attached, unattended, and event-driven" in normalized
 
 
 def test_kickoff_contract_formatter_accepts_event_driven_binding(
@@ -579,6 +855,7 @@ def test_kickoff_contract_formatter_accepts_primary_only_chains(tmp_path: Path) 
             "Focused behavior with bounded verification.",
             *_phase_chain_args(PRIMARY_ONLY_PHASE_CHAINS),
             *_phase_rationale_args(rationales),
+            *_proactive_review_decision_args(),
             "--repository-content-locale",
             "en-US",
             "--user-required",
@@ -1042,6 +1319,7 @@ def test_kickoff_contract_formatter_uses_cafe_python_when_site_packages_are_miss
             str(strategic_context),
             *_phase_chain_args(),
             *_phase_rationale_args(),
+            *_proactive_review_decision_args(),
         ],
         cwd=PROJECT_ROOT,
         text=True,
@@ -1138,6 +1416,8 @@ entry_point: audit
             "audit=gemini:audit-main,copilot:audit-fallback",
             "--phase-rationale",
             "audit=frontier: high security review with an equivalent independent fallback",
+            "--proactive-review-decision",
+            "audit=required=The custom security report needs direct scope review.",
             "--repository-content-locale",
             "en-US",
             "--current-checkout",
@@ -1191,6 +1471,7 @@ def test_kickoff_formatter_rejects_unresolved_phase_models(tmp_path: Path) -> No
             "none",
             "--assessment-rationale",
             "Focused behavior.",
+            *_proactive_review_decision_args(SIMPLE_PROACTIVE_REVIEW_DECISIONS),
             "--repository-content-locale",
             "en-US",
             "--user-required",
@@ -1245,6 +1526,7 @@ def test_kickoff_formatter_rejects_missing_phase_rationale(tmp_path: Path) -> No
             "Focused behavior.",
             "--phase-chain",
             "spec=gemini:requirements-main,copilot:requirements-fallback",
+            *_proactive_review_decision_args(SIMPLE_PROACTIVE_REVIEW_DECISIONS),
             "--repository-content-locale",
             "en-US",
             "--user-required",

@@ -8,7 +8,14 @@ from pathlib import Path
 def test_cafe_core_has_no_driver_mode_implementation() -> None:
     source_root = Path(__file__).parents[2] / "src" / "cafe"
     allowed_root = source_root / "data" / "skills" / "use-cafe-workflow"
-    forbidden = ("DriverPolicy", "driver_policy", "delegated", "driver_state")
+    forbidden = (
+        "DriverPolicy",
+        "driver_policy",
+        "delegated",
+        "driver_state",
+        "ProactiveReview",
+        "proactive_review",
+    )
     offenders: list[str] = []
 
     for path in source_root.rglob("*.py"):
