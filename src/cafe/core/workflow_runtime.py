@@ -6,6 +6,7 @@ primary source of truth for step transitions.
 
 from __future__ import annotations
 
+import inspect
 import json
 import re
 from dataclasses import dataclass, field
@@ -2163,25 +2164,30 @@ class BlackboardWorkflowRuntime:
         pending_feedback = feedback_ledger.pending(target_step=current_step)
 
         try:
+            execute_kwargs = {
+                "extra_prompt": extra_prompt,
+                "same_invocation_retry": same_invocation_retry,
+                "validated_pr_auto_create": self._validated_pr_auto_create,
+            }
             try:
-                execution_result = self.executor(
-                    current_step,
-                    step_def,
-                    self.blackboard,
-                    extra_prompt=extra_prompt,
-                    same_invocation_retry=same_invocation_retry,
-                    validated_pr_auto_create=self._validated_pr_auto_create,
-                )
-            except TypeError:
-                try:
-                    execution_result = self.executor(
-                        current_step,
-                        step_def,
-                        self.blackboard,
-                        extra_prompt=extra_prompt,
-                    )
-                except TypeError:
-                    execution_result = self.executor(current_step, step_def, self.blackboard)
+                execute_parameters = inspect.signature(self.executor).parameters
+            except (TypeError, ValueError):
+                execute_parameters = None
+            if execute_parameters is not None and not any(
+                parameter.kind == inspect.Parameter.VAR_KEYWORD
+                for parameter in execute_parameters.values()
+            ):
+                execute_kwargs = {
+                    name: value
+                    for name, value in execute_kwargs.items()
+                    if name in execute_parameters
+                }
+            execution_result = self.executor(
+                current_step,
+                step_def,
+                self.blackboard,
+                **execute_kwargs,
+            )
             delivered_feedback = []
             if getattr(execution_result, "agent_invoked", False):
                 delivered_feedback = feedback_ledger.consume_delivered(

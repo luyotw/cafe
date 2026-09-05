@@ -854,6 +854,7 @@ def workflow(
             blackboard_state: object,
             extra_prompt: Optional[str] = None,
             same_invocation_retry: bool = False,
+            validated_pr_auto_create: Optional[bool] = None,
         ) -> Any:
             iteration = next_runnable_iteration_number(issue_dir / step_name)
             console.print(f"[dim]Executing[/dim] step={step_name} iteration={iteration:03d}")
@@ -882,6 +883,11 @@ def workflow(
                 for parameter in execute_signature.parameters.values()
             ):
                 execute_kwargs["same_invocation_retry"] = same_invocation_retry
+            if "validated_pr_auto_create" in execute_signature.parameters or any(
+                parameter.kind == inspect.Parameter.VAR_KEYWORD
+                for parameter in execute_signature.parameters.values()
+            ):
+                execute_kwargs["validated_pr_auto_create"] = validated_pr_auto_create
             result = step_executor.execute_step(
                 step_name,
                 step_def,

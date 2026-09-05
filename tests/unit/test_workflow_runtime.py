@@ -4521,6 +4521,31 @@ def test_execute_one_iteration_no_extra_prompt_defaults_to_none(tmp_path: Path) 
     assert received_extra_prompts[0] is None
 
 
+def test_execute_one_iteration_does_not_retry_an_internal_executor_type_error(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "internal-type-error"
+    _write_publication_contract(issue_dir, confirmed=False, persisted=False)
+    playbook = _simple_playbook()
+    playbook["steps"]["spec"]["capability_requests"] = ["cafe.pr.publish"]
+    received_choices: list[object] = []
+
+    def executor(step_name: str, step_def: dict, state: object, **kwargs) -> StepExecutionResult:
+        received_choices.append(kwargs.get("validated_pr_auto_create"))
+        raise TypeError("executor implementation failed")
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+
+    result = runtime.run(start_step="spec", max_transitions=5)
+
+    assert result.completed is False
+    assert received_choices == [False]
+
+
 # ---------------------------------------------------------------------------
 # reject-and-retry 機制測試
 # ---------------------------------------------------------------------------
