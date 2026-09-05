@@ -88,6 +88,8 @@ def test_plan_and_review_checklists_require_minimal_sufficient_design() -> None:
         skills / "cafe-review" / "references" / "execution_steps.md"
     ).read_text(encoding="utf-8")
 
-    assert "smallest design that satisfies the requirements" in plan_first
-    assert "smallest design that satisfies the requirements" in plan_revise
+    assert "scope is sufficient but not excessive" in plan_first
+    assert "design is sufficient but not excessive" in plan_revise
+    assert "without speculative scope, unnecessary complexity, abstractions" in plan_first
+    assert "without speculative scope, unnecessary complexity, abstractions" in plan_revise
     assert "smallest design that satisfies the approved requirements" in review
