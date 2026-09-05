@@ -44,6 +44,7 @@ def _reexec_with_cafe_python() -> None:
 
 try:
     import yaml  # type: ignore[import-untyped]
+    from proactive_review import policy_digest, validate_policy
 
     from cafe.core.playbook import (
         confirmation_gate_steps,
@@ -57,9 +58,6 @@ try:
 except ModuleNotFoundError:
     _reexec_with_cafe_python()
     raise
-
-from proactive_review import policy_digest, validate_policy
-
 
 ModelChain = list[tuple[str, str]]
 

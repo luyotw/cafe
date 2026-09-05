@@ -158,6 +158,37 @@ def test_reconfirmed_replacement_leaves_prior_contract_untouched_until_atomic_su
     assert first.read_bytes() == original
 
 
+def test_initial_activation_authority_drift_leaves_no_persistence_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """I3, U8 — a stale initial activation creates no durable review state."""
+    module = _module()
+    issue_dir = tmp_path / ".cafe" / "issues" / "initial-live-drift"
+    issue_dir.mkdir(parents=True)
+    issue_file = issue_dir / "issue.yaml"
+    issue_file.write_text("playbook_id: standard\n", encoding="utf-8")
+    policy = _policy(selected="develop")
+    original_contract_lock = module._contract_lock
+
+    @contextmanager
+    def change_live_authority_before_lock(*args, **kwargs):
+        issue_file.write_text("playbook_id: simple\n", encoding="utf-8")
+        with original_contract_lock(*args, **kwargs) as directory_descriptor:
+            yield directory_descriptor
+
+    monkeypatch.setattr(module, "_contract_lock", change_live_authority_before_lock)
+
+    with pytest.raises(module.StaleContractError):
+        module.activate_contract(
+            issue_dir=issue_dir,
+            project_root=tmp_path,
+            policy=policy,
+            confirmation=_confirmation("initial-live-drift", policy),
+        )
+
+    assert not (issue_dir / "driver").exists()
+
+
 @pytest.mark.parametrize("live_drift", ["issue_playbook", "effective_inventory"])
 def test_replacement_revalidates_live_authority_after_acquiring_contract_lock(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, live_drift: str

@@ -706,6 +706,59 @@ def _proactive_review_directory(issue_dir: Path, *, create: bool = True) -> Iter
         os.close(issue_descriptor)
 
 
+def _cleanup_failed_initial_persistence(
+    issue_dir: Path,
+    *,
+    remove_marker: bool,
+    remove_review_directory: bool,
+    remove_driver_directory: bool,
+) -> None:
+    """Remove only empty persistence artifacts created by a failed initial activation."""
+    try:
+        issue_descriptor = os.open(issue_dir, _persistence_open_flags())
+    except OSError:
+        return
+    driver_descriptor = None
+    review_descriptor = None
+    try:
+        try:
+            driver_descriptor = _open_child_directory(
+                issue_descriptor, "driver", create=False
+            )
+            review_descriptor = _open_child_directory(
+                driver_descriptor, "proactive_review", create=False
+            )
+        except (FileNotFoundError, StaleContractError):
+            return
+        if remove_marker:
+            marker = _read_persistence_entry(
+                review_descriptor, ACTIVATION_FILENAME, maximum=MAX_STATE_BYTES
+            )
+            if marker is not None:
+                if marker != _activation_marker_bytes():
+                    return
+                os.unlink(ACTIVATION_FILENAME, dir_fd=review_descriptor)
+                os.fsync(review_descriptor)
+        if remove_review_directory and not os.listdir(review_descriptor):
+            os.close(review_descriptor)
+            review_descriptor = None
+            os.rmdir("proactive_review", dir_fd=driver_descriptor)
+            os.fsync(driver_descriptor)
+            if remove_driver_directory and not os.listdir(driver_descriptor):
+                os.close(driver_descriptor)
+                driver_descriptor = None
+                os.rmdir("driver", dir_fd=issue_descriptor)
+                os.fsync(issue_descriptor)
+    except OSError:
+        return
+    finally:
+        if review_descriptor is not None:
+            os.close(review_descriptor)
+        if driver_descriptor is not None:
+            os.close(driver_descriptor)
+        os.close(issue_descriptor)
+
+
 def _persistence_entry_exists(directory_descriptor: int, name: str) -> bool:
     """Require an existing persistence target to be a regular non-symlink file."""
     try:
@@ -1107,67 +1160,46 @@ def activate_contract(
         confirmation=confirmation,
     )
     target = contract_path(issue_dir)
-    with _contract_lock(issue_dir, recover=False) as directory_descriptor:
-        def locked_activation_envelope() -> tuple[str, dict[str, Any]]:
-            try:
-                return _activation_envelope(
-                    issue_dir=issue_dir,
-                    project_root=project_root,
-                    policy=policy,
-                    confirmation=confirmation,
-                )
-            except (StaleContractError, ValueError) as exc:
+    initial_activation = not target.exists()
+    review_directory_was_absent = not target.parent.exists()
+    driver_directory_was_absent = not target.parent.parent.exists()
+    activation_marker_was_absent = not (target.parent / ACTIVATION_FILENAME).exists()
+    try:
+        with _contract_lock(issue_dir, recover=False) as directory_descriptor:
+            def locked_activation_envelope() -> tuple[str, dict[str, Any]]:
+                try:
+                    return _activation_envelope(
+                        issue_dir=issue_dir,
+                        project_root=project_root,
+                        policy=policy,
+                        confirmation=confirmation,
+                    )
+                except (StaleContractError, ValueError) as exc:
+                    raise StaleContractError(
+                        "activation inputs no longer match the live issue playbook"
+                    ) from exc
+
+            _recover_pending_replacement(directory_descriptor)
+
+            def verify_final_authority() -> None:
+                locked_activation_envelope()
+
+            replacing = _persistence_entry_exists(directory_descriptor, CONTRACT_FILENAME)
+            if replacing:
+                existing_digest = _active_contract_digest(directory_descriptor)
+                if not expected_active_digest or expected_active_digest != existing_digest:
+                    raise StaleContractError(
+                        "replacement requires the expected active proposal digest"
+                    )
+            elif expected_active_digest is not None:
                 raise StaleContractError(
-                    "activation inputs no longer match the live issue playbook"
-                ) from exc
-
-        _recover_pending_replacement(directory_descriptor)
-        def verify_final_authority() -> None:
-            locked_activation_envelope()
-
-        replacing = _persistence_entry_exists(directory_descriptor, CONTRACT_FILENAME)
-        if replacing:
-            existing_digest = _active_contract_digest(directory_descriptor)
-            if not expected_active_digest or expected_active_digest != existing_digest:
-                raise StaleContractError("replacement requires the expected active proposal digest")
-        elif expected_active_digest is not None:
-            raise StaleContractError("initial activation cannot compare an absent active contract")
-        if not replacing:
-            _atomic_bytes_write_at(
-                directory_descriptor,
-                ACTIVATION_FILENAME,
-                _activation_marker_bytes(),
-            )
-            _atomic_yaml_write(
-                target,
-                envelope,
-                directory_descriptor=directory_descriptor,
-                verify_live_authority=verify_final_authority,
-            )
-        else:
-            _atomic_bytes_write_at(
-                directory_descriptor,
-                ACTIVATION_FILENAME,
-                _activation_marker_bytes(),
-            )
-            previous_state = _read_persistence_entry(
-                directory_descriptor, STATE_FILENAME, maximum=MAX_STATE_BYTES
-            )
-            recovery = _pending_replacement_bytes(
-                previous_digest=existing_digest,
-                replacement_digest=digest,
-                previous_state=previous_state,
-            )
-            _atomic_bytes_write_at(
-                directory_descriptor,
-                REPLACEMENT_FILENAME,
-                recovery,
-            )
-            try:
-                _atomic_yaml_write(
-                    state_path(issue_dir),
-                    _empty_review_state(digest),
-                    directory_descriptor=directory_descriptor,
+                    "initial activation cannot compare an absent active contract"
+                )
+            if not replacing:
+                _atomic_bytes_write_at(
+                    directory_descriptor,
+                    ACTIVATION_FILENAME,
+                    _activation_marker_bytes(),
                 )
                 _atomic_yaml_write(
                     target,
@@ -1175,13 +1207,53 @@ def activate_contract(
                     directory_descriptor=directory_descriptor,
                     verify_live_authority=verify_final_authority,
                 )
-            except BaseException:
-                _recover_pending_replacement(directory_descriptor)
-                raise
-            _delete_persistence_entry(
-                directory_descriptor,
-                REPLACEMENT_FILENAME,
+            else:
+                _atomic_bytes_write_at(
+                    directory_descriptor,
+                    ACTIVATION_FILENAME,
+                    _activation_marker_bytes(),
+                )
+                previous_state = _read_persistence_entry(
+                    directory_descriptor, STATE_FILENAME, maximum=MAX_STATE_BYTES
+                )
+                recovery = _pending_replacement_bytes(
+                    previous_digest=existing_digest,
+                    replacement_digest=digest,
+                    previous_state=previous_state,
+                )
+                _atomic_bytes_write_at(
+                    directory_descriptor,
+                    REPLACEMENT_FILENAME,
+                    recovery,
+                )
+                try:
+                    _atomic_yaml_write(
+                        state_path(issue_dir),
+                        _empty_review_state(digest),
+                        directory_descriptor=directory_descriptor,
+                    )
+                    _atomic_yaml_write(
+                        target,
+                        envelope,
+                        directory_descriptor=directory_descriptor,
+                        verify_live_authority=verify_final_authority,
+                    )
+                except BaseException:
+                    _recover_pending_replacement(directory_descriptor)
+                    raise
+                _delete_persistence_entry(
+                    directory_descriptor,
+                    REPLACEMENT_FILENAME,
+                )
+    except BaseException:
+        if initial_activation and not target.exists():
+            _cleanup_failed_initial_persistence(
+                issue_dir,
+                remove_marker=activation_marker_was_absent,
+                remove_review_directory=review_directory_was_absent,
+                remove_driver_directory=driver_directory_was_absent,
             )
+        raise
     return target
 
 
