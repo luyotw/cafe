@@ -14,6 +14,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Optional
 
+from cafe.catalogs.transactions import (
+    bound_directory,
+    entry_identity,
+    move_without_replacement,
+)
 from cafe.skills.loader import read_skill_frontmatter
 
 DEFAULT_GLOBAL_SKILLS = (
@@ -419,19 +424,31 @@ def _stage_directory_replacement(
 def _publish_staged_replacement(operation: _StagedGlobalSkillReplacement) -> None:
     """Publish one staged destination while retaining its rollback backup."""
     if operation.require_missing:
+        skills_root = operation.destination.parent
         try:
-            operation.destination.mkdir()
+            with (
+                bound_directory(
+                    skills_root,
+                    Path(operation.workspace.name),
+                ) as source_directory,
+                bound_directory(skills_root, Path(".")) as destination_directory,
+            ):
+                source_identity = entry_identity(
+                    source_directory,
+                    operation.staged.name,
+                )
+                move_without_replacement(
+                    operation.staged.name,
+                    operation.destination.name,
+                    source_directory=source_directory,
+                    destination_directory=destination_directory,
+                    expected_source_identity=source_identity,
+                )
         except FileExistsError as exc:
             raise FileExistsError(
                 f"Destination appeared before publish: {operation.destination}"
             ) from exc
         operation.published = True
-        try:
-            for child in operation.staged.iterdir():
-                child.rename(operation.destination / child.name)
-        except Exception:
-            _rollback_staged_replacement(operation)
-            raise
         return
 
     if operation.had_destination:
@@ -450,6 +467,10 @@ def _publish_staged_replacement(operation: _StagedGlobalSkillReplacement) -> Non
 def _rollback_staged_replacement(operation: _StagedGlobalSkillReplacement) -> None:
     """Restore one previously published destination."""
     if not operation.published:
+        return
+    if operation.require_missing:
+        # Once a missing helper is public, an external consumer may add content.
+        # Retaining it is safer than deleting data that the publisher no longer owns.
         return
     _remove_path(operation.destination)
     if operation.had_destination:
@@ -611,13 +632,23 @@ def _sync_resolved_global_skills(
             break
 
     if publish_failure is not None:
-        reason = f"Batch publish rolled back: {publish_failure}"
+        retained = {
+            id(operation)
+            for operation in published
+            if operation.require_missing
+        }
+        reason = f"Batch publish failed: {publish_failure}"
+        if published and not retained:
+            reason = f"Batch publish rolled back: {publish_failure}"
         if rollback_failures:
             reason += f"; rollback failures: {', '.join(rollback_failures)}"
         for operation in operations:
             _cleanup_staged_replacement(operation, preserve_backup=True)
         results = [
-            _replacement_result(entry, status="failed", reason=reason)
+            _replacement_result(entry)
+            if isinstance(entry, _StagedGlobalSkillReplacement)
+            and id(entry) in retained
+            else _replacement_result(entry, status="failed", reason=reason)
             if isinstance(entry, _StagedGlobalSkillReplacement)
             else entry
             for entry in entries

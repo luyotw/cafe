@@ -578,6 +578,99 @@ def test_auto_sync_preserves_symlink_that_appears_before_publish(
     assert "concurrent symlink" in (destination / "SKILL.md").read_text(encoding="utf-8")
 
 
+def test_auto_sync_atomically_publishes_a_complete_missing_tree(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "bundled-skills"
+    home_dir = tmp_path / "home"
+    _write_default_sources(source_root)
+    original_move = global_installer.move_without_replacement
+    intervened = False
+
+    def create_destination_at_publish_boundary(*args, **kwargs) -> None:
+        nonlocal intervened
+        if not intervened:
+            intervened = True
+            source_directory = kwargs["source_directory"]
+            destination_directory = kwargs["destination_directory"]
+            source = source_directory.path / args[0]
+            destination = destination_directory.path / args[1]
+            assert (source / "SKILL.md").is_file()
+            assert not destination.exists()
+            destination.mkdir()
+            (destination / "SKILL.md").write_text(
+                "concurrent-existing\n", encoding="utf-8"
+            )
+        original_move(*args, **kwargs)
+
+    with (
+        patch.object(global_installer, "detect_global_skill_clis", return_value=["codex"]),
+        patch.object(
+            global_installer,
+            "move_without_replacement",
+            side_effect=create_destination_at_publish_boundary,
+        ),
+    ):
+        summary = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
+
+    destination = home_dir / ".codex/skills/use-cafe-workflow/SKILL.md"
+    assert summary is not None
+    assert summary.installed_count == 0
+    assert summary.failed_count == len(DEFAULT_GLOBAL_SKILLS)
+    assert destination.read_text(encoding="utf-8") == "concurrent-existing\n"
+
+
+def test_auto_sync_does_not_roll_back_a_published_tree_after_external_use(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "bundled-skills"
+    home_dir = tmp_path / "home"
+    _write_default_sources(source_root)
+    original_move = global_installer.move_without_replacement
+    publish_count = 0
+
+    def fail_second_publish_after_external_use(*args, **kwargs) -> None:
+        nonlocal publish_count
+        publish_count += 1
+        if publish_count == 2:
+            first_destination = (
+                home_dir / ".codex/skills" / DEFAULT_GLOBAL_SKILLS[0]
+            )
+            (first_destination / "concurrent.md").write_text(
+                "external use\n", encoding="utf-8"
+            )
+            destination_directory = kwargs["destination_directory"]
+            destination = destination_directory.path / args[1]
+            destination.mkdir()
+            (destination / "SKILL.md").write_text(
+                "concurrent-existing\n", encoding="utf-8"
+            )
+        original_move(*args, **kwargs)
+
+    with (
+        patch.object(global_installer, "detect_global_skill_clis", return_value=["codex"]),
+        patch.object(
+            global_installer,
+            "move_without_replacement",
+            side_effect=fail_second_publish_after_external_use,
+        ),
+    ):
+        summary = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
+
+    first_destination = home_dir / ".codex/skills" / DEFAULT_GLOBAL_SKILLS[0]
+    second_destination = home_dir / ".codex/skills" / DEFAULT_GLOBAL_SKILLS[1]
+    assert summary is not None
+    assert summary.installed_count == 1
+    assert summary.failed_count == len(DEFAULT_GLOBAL_SKILLS) - 1
+    assert (first_destination / "SKILL.md").is_file()
+    assert (first_destination / "concurrent.md").read_text(encoding="utf-8") == (
+        "external use\n"
+    )
+    assert (second_destination / "SKILL.md").read_text(encoding="utf-8") == (
+        "concurrent-existing\n"
+    )
+
+
 def test_auto_sync_skips_quickly_when_another_process_holds_the_lock(
     tmp_path: Path,
 ) -> None:
