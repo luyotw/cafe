@@ -19,3 +19,19 @@ def test_cafe_core_has_no_driver_mode_implementation() -> None:
             offenders.append(str(path.relative_to(source_root)))
 
     assert offenders == []
+
+
+def test_event_driver_status_projection_stays_in_the_skill_boundary() -> None:
+    source_root = Path(__file__).parents[2] / "src" / "cafe"
+    callback = (
+        source_root
+        / "data"
+        / "skills"
+        / "use-cafe-workflow"
+        / "scripts"
+        / "workflow_event_callback.py"
+    )
+
+    assert "def read_status(" in callback.read_text(encoding="utf-8")
+    for path in (source_root / "core").rglob("*.py"):
+        assert "read_status" not in path.read_text(encoding="utf-8")

@@ -98,8 +98,10 @@ obtain explicit user confirmation of:
 - `model_adjustment_authority`: either `driver_autonomous` or
   `user_approval_required`;
 - exactly one operating mode: attached with a positive `poll_interval_seconds`,
-  unattended, or event-driven with one supported CLI and the exact model selected
-  by the user. Event-driven's binding lives only in
+  unattended, or event-driven with one non-empty ordered list of distinct,
+  conforming CLIs and an exact model selected by the user for every entry. The
+  first entry is primary and every later entry is a forward-only fallback;
+  there is no fixed fallback limit. Event-driven's binding lives only in
   `.cafe/issues/<issue>/driver/config.yaml`;
 - worktree choice and path when using a worktree.
 
@@ -209,8 +211,7 @@ python3 <skill-dir>/scripts/format_kickoff_contract.py <playbook-id> \
   --catalog-preflight '<bounded all-catalog JSON>' \
   --driver-mode <attached|unattended|event-driven> \
   [--poll-interval-seconds <positive-integer>] \
-  [--event-driver-cli <claude|codex|gemini|copilot|cursor-agent> \
-   --event-driver-model <exact-model>] \
+  [--event-driver <claude|codex|gemini|copilot|cursor-agent>:<exact-model> ...] \
   --risk-factor "<risk factor; repeat as needed>" \
   --assessment-rationale "<repository evidence for nature and scale>" \
   --phase-rationale "<step>=<capability band, profile/risk evidence, and optional fallback justification>" \
@@ -369,13 +370,32 @@ for confirmation rather than asking again.
 
   ```bash
   python3 <skill-dir>/scripts/workflow_event_callback.py --write-config \
-    --issue-dir .cafe/issues/<issue-name> --cli <cli> --model <exact-model>
+    --issue-dir .cafe/issues/<issue-name> \
+    --entry <primary-cli>:<exact-model> \
+    [--entry <fallback-cli>:<exact-model> ...]
   ```
 
+  Writing a version 3 binding also creates its authoritative dispatch state, so
+  the confirmed policy is bound to the prepared WorkflowInstance when
+  configuration is written rather than when the first callback happens.
+
   Do not put the mode, CLI, model, session, callback, or any driver control
-  setting in `issue.yaml`. When this command is run from a Codex App thread
-  with `cli: codex`, it records that thread only in the skill-owned binding so
-  later callbacks return to the same visible conversation.
+  setting in `issue.yaml`. Confirm that every entry reports `event-driven
+  session-and-dispatch: conforming` before accepting the contract. When the
+  primary is Codex and this command runs from a Codex App thread, the first
+  Codex entry's valid runtime-owned host binding is recorded only in the
+  skill-owned binding; no fallback inherits it.
+
+  Confirm these two separate lifecycle boundaries explicitly. An unbound entry
+  first receives a bootstrap exactly equivalent to `say "HI"`; Codex, Claude,
+  Gemini, Cursor, and Copilot must each return a provider-created session ID.
+  That ID is persisted in `dispatch_state.json` before the actual callback is
+  sent. An existing acquired session or the first Codex entry's valid
+  runtime-owned host binding is reused without bootstrap. The bootstrap never
+  counts as event delivery or acceptance; only actual callback durable
+  acceptance can stop routing and select the sticky active entry. The provider
+  acknowledgement is bound to the exact event identity in that dispatched
+  invocation. Copilot never receives a caller-selected new-session ID.
 
 - [ ] Install the confirmed ordered phase chains in the active worktree with
   `scripts/write_phase_config.py`, then verify the effective config as described

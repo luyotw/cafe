@@ -1,8 +1,7 @@
 """Copilot CLI tool implementation."""
 
-import time
 from pathlib import Path
-from typing import List, Optional, Set, Tuple
+from typing import Any, List, Mapping, Optional, Sequence, Tuple
 
 from cafe.agents.cli.abstract import AbstractCLI
 from cafe.core.types import PermissionDenial, TokenUsage
@@ -10,15 +9,6 @@ from cafe.core.types import PermissionDenial, TokenUsage
 
 class CopilotCLI(AbstractCLI):
     """Concrete implementation of Copilot CLI tool."""
-
-    def __init__(self, config):
-        """Initialize Copilot CLI.
-
-        Args:
-            config: Agent configuration
-        """
-        super().__init__(config)
-        self._existing_sessions: Set[str] = set()
 
     def build_command(
         self,
@@ -216,51 +206,98 @@ class CopilotCLI(AbstractCLI):
         # Copilot doesn't use output format parameter
         return []
 
+    @property
+    def event_driver_conforming(self) -> bool:
+        return True
+
+    def build_event_driver_command(
+        self,
+        prompt: str,
+        allowed_tools: Optional[List[str]] = None,
+        allowed_directories: Optional[List[str]] = None,
+    ) -> List[str]:
+        command = self.build_command(prompt, allowed_tools, allowed_directories)
+        command.append("--output-format=json")
+        return command
+
     def record_existing_sessions(self) -> None:
-        """Record session files that existed before execution.
+        """Snapshot ordinary Copilot sessions before its plain-text command runs."""
+        session_dir = Path.home() / ".copilot" / "session-state"
+        self._existing_sessions = (
+            {entry.name for entry in session_dir.iterdir() if entry.is_file() or entry.is_dir()}
+            if session_dir.exists()
+            else set()
+        )
 
-        Used to later detect newly created sessions.
-        """
-        copilot_session_dir = Path.home() / ".copilot" / "session-state"
+    def _event_driver_terminal_session(
+        self, records: Sequence[Mapping[str, Any]]
+    ) -> Optional[str]:
+        if (
+            not records
+            or not isinstance(records[-1], Mapping)
+            or records[-1].get("type") != "result"
+        ):
+            return None
+        terminal_records = [
+            record
+            for record in records
+            if isinstance(record, Mapping) and record.get("type") == "result"
+        ]
+        if len(terminal_records) != 1:
+            return None
+        for record in records:
+            if not isinstance(record, Mapping):
+                return None
+            status = record.get("status")
+            if isinstance(status, str) and status.lower() in {
+                "error",
+                "failed",
+                "failure",
+                "cancelled",
+                "canceled",
+            }:
+                return None
+            error = record.get("error")
+            if record.get("type") == "error" or record.get("is_error") is True:
+                return None
+            if error is not None and error is not False and error != "":
+                return None
+        terminal_status = terminal_records[0].get("status")
+        if terminal_status not in (None, "success"):
+            return None
+        return self._verified_event_driver_session(
+            terminal_records,
+            matches=lambda record: record.get("type") == "result",
+            field="sessionId",
+        )
 
-        if copilot_session_dir.exists():
-            self._existing_sessions = {
-                f.name for f in copilot_session_dir.iterdir() if f.is_file() or f.is_dir()
-            }
-        else:
-            self._existing_sessions = set()
+    def extract_event_driver_session(self, records) -> Optional[str]:
+        return self._event_driver_terminal_session(records)
+
+    def accepts_event_driver_callback(
+        self, records, *, session_id: str, event_id: str
+    ) -> bool:
+        if (
+            not event_id.strip()
+            or self._event_driver_terminal_session(records) != session_id
+        ):
+            return False
+        return any(
+            isinstance(record, Mapping)
+            and record.get("type") == "user.message"
+            and self._event_driver_record_contains_text(record.get("data"), event_id)
+            for record in records[:-1]
+        )
 
     def extract_session_id(self, output_lines: List[str]) -> Optional[str]:
-        """Extract newly created session ID from file system.
-
-        Copilot automatically creates session directories, need to detect from file system.
-
-        Args:
-            output_lines: List of lines from CLI output (not used here)
-
-        Returns:
-            Session ID, or None if not found
-        """
-        copilot_session_dir = Path.home() / ".copilot" / "session-state"
-
-        if not copilot_session_dir.exists():
+        """Discover the session created by ordinary plain-text Copilot execution."""
+        session_dir = Path.home() / ".copilot" / "session-state"
+        if not session_dir.exists():
             return None
-
-        # Wait for file system to update
-        time.sleep(0.1)
-
-        # Get current session files and directories
-        current_sessions = {
-            f.name for f in copilot_session_dir.iterdir() if f.is_file() or f.is_dir()
+        current = {
+            entry.name for entry in session_dir.iterdir() if entry.is_file() or entry.is_dir()
         }
-
-        # Find newly created sessions
-        new_sessions = current_sessions - self._existing_sessions
-
-        if len(new_sessions) == 1:
-            session_name = next(iter(new_sessions))
-            # Remove .jsonl extension if present (for file-based sessions)
-            session_id = session_name.replace(".jsonl", "")
-            return session_id
-
-        return None
+        created = current - getattr(self, "_existing_sessions", set())
+        if len(created) != 1:
+            return None
+        return next(iter(created)).removesuffix(".jsonl")

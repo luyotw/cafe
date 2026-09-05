@@ -102,6 +102,13 @@ class TestClaudeCLIBuildCommand:
         assert cmd[format_idx + 1] == "stream-json"
         assert "--verbose" in cmd
 
+    def test_event_driver_command_requests_provider_turn_start(self, claude_config):
+        cli = ClaudeCLI(claude_config)
+
+        cmd = cli.build_event_driver_command("callback event-1")
+
+        assert "--include-partial-messages" in cmd
+
 
 class TestClaudeCLITranslateAllowedTools:
     """測試 translate_allowed_tools() 方法."""

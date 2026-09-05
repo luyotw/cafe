@@ -2195,11 +2195,27 @@ class BlackboardWorkflowRuntime:
             "issue": self.issue_dir.name,
             "event_type": event_type,
         }
-        for field in ("step", "status_code", "runtime", "attempt", "hop", "reason", "task_id"):
-            value = payload.get(field)
+        for event_field in (
+            "step",
+            "status_code",
+            "runtime",
+            "attempt",
+            "hop",
+            "reason",
+            "task_id",
+        ):
+            value = payload.get(event_field)
             if isinstance(value, (str, int)):
-                event[field] = value
+                event[event_field] = value
+        for event_field in ("event_id", "occurred_at"):
+            value = payload.get(event_field)
+            if isinstance(value, str):
+                event[event_field] = value
+        sequence = payload.get("sequence")
+        if isinstance(sequence, int) and not isinstance(sequence, bool):
+            event["sequence"] = sequence
         try:
+            event = self.blackboard_store.prepare_workflow_callback_event(self.blackboard, event)
             self._workflow_event_callback(event)
         except Exception as exc:
             try:

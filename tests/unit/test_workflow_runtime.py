@@ -74,6 +74,61 @@ def test_event_callback_wakes_once_after_a_phase_transition(tmp_path: Path) -> N
     ]
     assert events[0]["step"] == "spec"
     assert events[1]["step"] == "develop"
+    assert [event["sequence"] for event in events] == [1, 2]
+    assert all(event["event_id"] for event in events)
+    assert all(event["occurred_at"] for event in events)
+
+
+def test_callback_sequence_is_allocated_from_latest_durable_state(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "concurrent-callbacks"
+    first_store = BlackboardStore(issue_dir)
+    first_state = first_store.load_or_create("spec")
+    stale_store = BlackboardStore(issue_dir)
+    stale_state = stale_store.load_or_create("spec")
+    payload = {
+        "workflow_id": first_state.workflow_id,
+        "issue": issue_dir.name,
+        "event_type": "phase_terminal",
+        "step": "spec",
+    }
+
+    first = first_store.prepare_workflow_callback_event(first_state, payload)
+    second = stale_store.prepare_workflow_callback_event(stale_state, payload)
+
+    durable = BlackboardStore(issue_dir).load_or_create("spec")
+    callback_events = [
+        event.data
+        for event in durable.events
+        if event.event_type == "workflow_event_callback_enqueued"
+    ]
+    assert first["sequence"] == 1
+    assert second["sequence"] == 2
+    assert [event["sequence"] for event in callback_events] == [1, 2]
+
+
+def test_legacy_blackboard_events_load_without_callback_identity(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "legacy-events"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "current_step": "spec",
+                "events": [
+                    {
+                        "timestamp": "2026-01-01T00:00:00+00:00",
+                        "step": "spec",
+                        "type": "legacy",
+                        "payload": {"step": "spec"},
+                    }
+                ],
+            }
+        )
+    )
+
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+
+    assert state.events[0].data == {"step": "spec"}
 
 
 def test_event_callback_failure_never_blocks_workflow_advancement(tmp_path: Path) -> None:
@@ -159,16 +214,18 @@ def test_pause_without_completed_phase_still_wakes_callback(tmp_path: Path) -> N
     )
 
     assert result.final_status_code == "ITERATION_LIMIT_REACHED"
-    assert events == [
-        {
-            "workflow_id": runtime.blackboard.workflow_id,
-            "issue": "callback-pause",
-            "event_type": "workflow_interruption",
-            "step": "spec",
-            "status_code": "ITERATION_LIMIT_REACHED",
-            "reason": "limit",
-        }
-    ]
+    assert len(events) == 1
+    assert events[0].items() >= {
+        "workflow_id": runtime.blackboard.workflow_id,
+        "issue": "callback-pause",
+        "event_type": "workflow_interruption",
+        "step": "spec",
+        "status_code": "ITERATION_LIMIT_REACHED",
+        "reason": "limit",
+    }.items()
+    assert events[0]["event_id"]
+    assert events[0]["sequence"] == 1
+    assert events[0]["occurred_at"]
 
 
 def test_terminal_status_rewrite_dispatches_one_callback(tmp_path: Path) -> None:
@@ -3704,17 +3761,19 @@ def test_runtime_handles_agent_execution_error(
     assert task.policy_id == "agent-execution-interrupted"
     assert task.continuations == {"retry": "spec"}
     assert notifications == [task]
-    assert callback_events == [
-        {
-            "workflow_id": bb.workflow_id,
-            "issue": "demo-agent-error",
-            "event_type": "human_task",
-            "step": "spec",
-            "status_code": "INTERRUPTED:agent_rate_limit",
-            "reason": "agent_rate_limit",
-            "task_id": task.id,
-        }
-    ]
+    assert len(callback_events) == 1
+    assert callback_events[0].items() >= {
+        "workflow_id": bb.workflow_id,
+        "issue": "demo-agent-error",
+        "event_type": "human_task",
+        "step": "spec",
+        "status_code": "INTERRUPTED:agent_rate_limit",
+        "reason": "agent_rate_limit",
+        "task_id": task.id,
+    }.items()
+    assert callback_events[0]["event_id"]
+    assert callback_events[0]["sequence"] == 1
+    assert callback_events[0]["occurred_at"]
     assert not any(event.event_type == "step_reconciled" for event in bb.events)
 
     applied = apply_human_task_payload(
