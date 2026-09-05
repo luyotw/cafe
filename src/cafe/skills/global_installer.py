@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import shutil
 import sqlite3
+import subprocess
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -39,7 +39,6 @@ GLOBAL_CLI_EXECUTABLES = {
 }
 
 GlobalSkillSyncStatus = Literal["installed", "updated", "unchanged", "failed"]
-AUTO_SYNC_STATE_VERSION = 1
 EXPLICIT_SYNC_LOCK_TIMEOUT_SECONDS = 10
 AUTO_SYNC_LOCK_TIMEOUT_SECONDS = 0.05
 
@@ -88,6 +87,32 @@ class GlobalSkillSyncSummary:
     def changed_count(self) -> int:
         return self.installed_count + self.updated_count
 
+    @property
+    def installed_skill_count(self) -> int:
+        return len(
+            {result.skill for result in self.results if result.status == "installed"}
+        )
+
+    @property
+    def changed_skill_count(self) -> int:
+        return len(
+            {
+                result.skill
+                for result in self.results
+                if result.status in {"installed", "updated"}
+            }
+        )
+
+    @property
+    def changed_cli_count(self) -> int:
+        return len(
+            {
+                result.cli
+                for result in self.results
+                if result.status in {"installed", "updated"}
+            }
+        )
+
     def _count(self, status: GlobalSkillSyncStatus) -> int:
         return sum(1 for result in self.results if result.status == status)
 
@@ -121,6 +146,54 @@ class _StagedGlobalSkillReplacement:
 
 def _default_source_root() -> Path:
     return Path(__file__).resolve().parent.parent / "data" / "skills"
+
+
+def _discover_git_roots(checkout_root: Path) -> tuple[Path, Path]:
+    """Return active and canonical roots using read-only Git discovery."""
+
+    def run(*args: str) -> Path:
+        result = subprocess.run(
+            ("git", *args),
+            cwd=checkout_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise GlobalSkillSyncError(
+                result.stderr.strip() or "Git root discovery failed"
+            )
+        return Path(result.stdout.strip()).resolve()
+
+    active = run("rev-parse", "--show-toplevel")
+    common_git = run("rev-parse", "--path-format=absolute", "--git-common-dir")
+    canonical = common_git.parent if common_git.name == ".git" else active
+    return active, canonical
+
+
+def _trusted_automatic_source_root(bundled_root: Optional[Path] = None) -> Path:
+    """Resolve a released bundle or a checkout's canonical bundled catalog."""
+    source_root = (bundled_root or _default_source_root()).expanduser().resolve()
+    if len(source_root.parents) < 4 or source_root.parents[2].name != "src":
+        return source_root
+
+    checkout_root = source_root.parents[3]
+    if not (checkout_root / ".git").exists():
+        return source_root
+
+    active, canonical = _discover_git_roots(checkout_root)
+    if active != checkout_root:
+        raise GlobalSkillSyncError(
+            f"Git reported active checkout {active}, expected {checkout_root}"
+        )
+    canonical_source = (canonical / "src" / "cafe" / "data" / "skills").resolve()
+    try:
+        canonical_source.relative_to(canonical.resolve())
+    except ValueError as exc:
+        raise GlobalSkillSyncError(
+            f"Trusted automatic source escapes canonical checkout: {canonical_source}"
+        ) from exc
+    return canonical_source
 
 
 def _default_home_dir() -> Path:
@@ -184,6 +257,13 @@ def _validate_sources(source_root: Path, skill_names: Optional[list[str]]) -> li
         skill_file = source / "SKILL.md"
         if not source.is_dir() or not skill_file.is_file():
             raise GlobalSkillSyncError(f"Missing bundled skill '{name}' under {source_root}")
+        try:
+            source.resolve().relative_to(source_root)
+            skill_file.resolve().relative_to(source_root)
+        except ValueError as exc:
+            raise GlobalSkillSyncError(
+                f"Bundled skill '{name}' escapes source root {source_root}"
+            ) from exc
         metadata = read_skill_frontmatter(skill_file)
         if metadata.get("name") != name:
             raise GlobalSkillSyncError(
@@ -224,16 +304,6 @@ def _trees_equal(source: Path, destination: Path) -> bool:
     return _tree_manifest(source) == _tree_manifest(destination)
 
 
-def _source_fingerprint(source_root: Path, skill_names: list[str]) -> str:
-    payload = [(skill, _tree_manifest(source_root / skill)) for skill in skill_names]
-    serialized = json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
-    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
-
-
-def _auto_sync_state_file(home_dir: Path) -> Path:
-    return home_dir / ".cafe" / "cache" / "global-skills-sync.json"
-
-
 @contextmanager
 def _global_skill_sync_lock(
     home_dir: Path,
@@ -263,72 +333,13 @@ def _global_skill_destinations_exist(
     cli_names: list[str],
 ) -> bool:
     return all(
-        (home_dir / GLOBAL_CLI_SKILL_DIRS[cli] / skill / "SKILL.md").is_file()
+        (
+            (destination := home_dir / GLOBAL_CLI_SKILL_DIRS[cli] / skill).exists()
+            or destination.is_symlink()
+        )
         for cli in cli_names
         for skill in skill_names
     )
-
-
-def _build_auto_sync_state(
-    request: _ResolvedGlobalSkillSync,
-    fingerprint: str,
-) -> dict[str, object]:
-    return {
-        "version": AUTO_SYNC_STATE_VERSION,
-        "source_root": str(request.source_root),
-        "fingerprint": fingerprint,
-        "skills": request.skill_names,
-        "clis": request.cli_names,
-    }
-
-
-def _is_complete_default_sync(request: _ResolvedGlobalSkillSync) -> bool:
-    return request.skill_names == list(DEFAULT_GLOBAL_SKILLS) and request.default_cli_selection
-
-
-def _expected_auto_sync_state(
-    request: _ResolvedGlobalSkillSync,
-) -> dict[str, object]:
-    fingerprint = _source_fingerprint(request.source_root, request.skill_names)
-    return _build_auto_sync_state(request, fingerprint)
-
-
-def _auto_sync_state_matches(
-    state_file: Path,
-    expected_state: dict[str, object],
-) -> bool:
-    try:
-        state: object = json.loads(state_file.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return False
-    if not isinstance(state, dict):
-        return False
-
-    # ``source_root`` records which checkout last published this content, but
-    # it is not part of cache validity. Linked worktrees with identical helper
-    # skills must share the same per-machine fingerprint fast path.
-    validity_keys = ("version", "fingerprint", "skills", "clis")
-    return all(state.get(key) == expected_state.get(key) for key in validity_keys)
-
-
-def _write_auto_sync_state(
-    state_file: Path,
-    state: dict[str, object],
-) -> None:
-    state_file.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{state_file.name}.",
-        dir=state_file.parent,
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(state, handle, sort_keys=True)
-            handle.write("\n")
-        os.replace(temporary, state_file)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
 
 
 def _remove_path(path: Path) -> None:
@@ -440,8 +451,12 @@ def _resolve_global_skill_sync(
     home_dir: Optional[Path] = None,
     skill_names: Optional[list[str]] = None,
     cli_names: Optional[list[str]] = None,
+    automatic: bool = False,
 ) -> _ResolvedGlobalSkillSync:
-    resolved_source_root = (source_root or _default_source_root()).expanduser().resolve()
+    if automatic and source_root is None:
+        resolved_source_root = _trusted_automatic_source_root()
+    else:
+        resolved_source_root = (source_root or _default_source_root()).expanduser().resolve()
     resolved_home_dir = (home_dir or _default_home_dir()).expanduser().resolve()
     return _ResolvedGlobalSkillSync(
         source_root=resolved_source_root,
@@ -458,6 +473,8 @@ def _resolve_global_skill_sync(
 
 def _sync_resolved_global_skills(
     request: _ResolvedGlobalSkillSync,
+    *,
+    replace_existing: bool = True,
 ) -> GlobalSkillSyncSummary:
     """Stage every change, then publish or roll back the complete batch."""
 
@@ -470,7 +487,9 @@ def _sync_resolved_global_skills(
             destination = skills_root / skill
             existed = destination.exists() or destination.is_symlink()
             try:
-                if existed and _trees_equal(source, destination):
+                if existed and (
+                    not replace_existing or _trees_equal(source, destination)
+                ):
                     entries.append(
                         GlobalSkillSyncResult(
                             cli=cli,
@@ -614,16 +633,7 @@ def sync_global_skills(
         request.home_dir,
         timeout_seconds=EXPLICIT_SYNC_LOCK_TIMEOUT_SECONDS,
     ):
-        expected_state = (
-            _expected_auto_sync_state(request) if _is_complete_default_sync(request) else None
-        )
-        summary = _sync_resolved_global_skills(request)
-        if expected_state is not None and summary.failed_count == 0:
-            _write_auto_sync_state(
-                _auto_sync_state_file(request.home_dir),
-                expected_state,
-            )
-        return summary
+        return _sync_resolved_global_skills(request)
 
 
 def auto_sync_global_skills(
@@ -631,41 +641,32 @@ def auto_sync_global_skills(
     source_root: Optional[Path] = None,
     home_dir: Optional[Path] = None,
 ) -> Optional[GlobalSkillSyncSummary]:
-    """Synchronize defaults only when sources changed or an install is missing.
-
-    The per-machine fingerprint makes normal CAFE startup cheap while ensuring a
-    fresh checkout, package upgrade, or another machine installs the bundled
-    helper skills on its first invocation. Explicit ``sync-global`` remains the
-    recovery path for destination content that exists but was manually edited.
-    """
+    """Install missing defaults without changing any existing destination."""
     request = _resolve_global_skill_sync(
         source_root=source_root,
         home_dir=home_dir,
+        automatic=True,
     )
     if not request.cli_names:
+        return None
+    if _global_skill_destinations_exist(
+        request.home_dir,
+        request.skill_names,
+        request.cli_names,
+    ):
         return None
     try:
         with _global_skill_sync_lock(
             request.home_dir,
             timeout_seconds=AUTO_SYNC_LOCK_TIMEOUT_SECONDS,
         ):
-            state_file = _auto_sync_state_file(request.home_dir)
-            expected_state = _expected_auto_sync_state(request)
-
-            if _auto_sync_state_matches(
-                state_file,
-                expected_state,
-            ) and _global_skill_destinations_exist(
+            if _global_skill_destinations_exist(
                 request.home_dir,
                 request.skill_names,
                 request.cli_names,
             ):
                 return None
-
-            summary = _sync_resolved_global_skills(request)
-            if summary.failed_count == 0:
-                _write_auto_sync_state(state_file, expected_state)
-            return summary
+            return _sync_resolved_global_skills(request, replace_existing=False)
     except sqlite3.OperationalError as exc:
         if "locked" in str(exc).lower():
             return None

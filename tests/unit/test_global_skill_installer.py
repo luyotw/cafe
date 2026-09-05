@@ -1,6 +1,5 @@
 """Tests for syncing bundled CAFE helper skills into user-level CLI directories."""
 
-import json
 import shutil
 import subprocess
 import sys
@@ -368,9 +367,7 @@ def test_auto_sync_serializes_concurrent_initialization(tmp_path: Path) -> None:
     assert summaries[0].failed_count == 0
 
 
-def test_auto_sync_uses_per_machine_fingerprint_and_detects_source_updates(
-    tmp_path: Path,
-) -> None:
+def test_auto_sync_never_replaces_existing_differing_destinations(tmp_path: Path) -> None:
     source_root = tmp_path / "bundled-skills"
     home_dir = tmp_path / "home"
     _write_default_sources(source_root)
@@ -379,64 +376,59 @@ def test_auto_sync_uses_per_machine_fingerprint_and_detects_source_updates(
     assert installed is not None
     assert installed.installed_count == 20
 
-    unchanged = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
-    assert unchanged is None
-
+    destination = home_dir / ".codex/skills/use-cafe-workflow/SKILL.md"
+    original = destination.read_bytes()
     (source_root / "use-cafe-workflow" / "SKILL.md").write_text(
         "---\nname: use-cafe-workflow\ndescription: test skill\n---\n\nversion 2\n",
         encoding="utf-8",
     )
-    updated = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
+    unchanged = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
 
-    assert updated is not None
-    assert updated.updated_count == 5
-    assert updated.unchanged_count == 15
-
-
-def test_auto_sync_reuses_fingerprint_across_identical_worktree_sources(
-    tmp_path: Path,
-) -> None:
-    source_a = tmp_path / "repo/src/cafe/data/skills"
-    source_b = tmp_path / "repo/.cafe/worktrees/issue/src/cafe/data/skills"
-    home_dir = tmp_path / "home"
-    _write_default_sources(source_a)
-    _write_default_sources(source_b)
-
-    installed = auto_sync_global_skills(source_root=source_a, home_dir=home_dir)
-    unchanged = auto_sync_global_skills(source_root=source_b, home_dir=home_dir)
-
-    assert installed is not None
-    assert installed.installed_count == 20
     assert unchanged is None
-    state = json.loads(
-        (home_dir / ".cafe/cache/global-skills-sync.json").read_text(encoding="utf-8")
-    )
-    assert state["source_root"] == str(source_a.resolve())
+    assert destination.read_bytes() == original
 
 
-def test_auto_sync_repairs_missing_destination_even_when_fingerprint_matches(
+def test_auto_sync_treats_existing_symlink_as_immutable(tmp_path: Path) -> None:
+    source_root = tmp_path / "bundled-skills"
+    home_dir = tmp_path / "home"
+    _write_default_sources(source_root)
+    external = tmp_path / "external-skill"
+    _write_skill(tmp_path, "external-skill", "external")
+    destination = home_dir / ".codex/skills/use-cafe-workflow"
+    destination.parent.mkdir(parents=True)
+    destination.symlink_to(external, target_is_directory=True)
+
+    summary = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
+
+    assert summary is not None
+    assert summary.installed_count == 19
+    assert summary.unchanged_count == 1
+    assert destination.is_symlink()
+    assert "external" in (destination / "SKILL.md").read_text(encoding="utf-8")
+
+
+def test_auto_sync_installs_a_missing_destination_without_touching_existing_ones(
     tmp_path: Path,
 ) -> None:
     source_root = tmp_path / "bundled-skills"
     home_dir = tmp_path / "home"
     _write_default_sources(source_root)
     auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
+    existing = home_dir / ".cursor/skills/use-cafe-workflow/SKILL.md"
+    existing.write_text("local content\n", encoding="utf-8")
     missing = home_dir / ".codex/skills/use-cafe-workflow"
-    for path in sorted(missing.rglob("*"), reverse=True):
-        if path.is_file():
-            path.unlink()
-        else:
-            path.rmdir()
-    missing.rmdir()
+    shutil.rmtree(missing)
 
     repaired = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
 
     assert repaired is not None
     assert repaired.installed_count == 1
+    assert repaired.updated_count == 0
     assert (missing / "SKILL.md").is_file()
+    assert existing.read_text(encoding="utf-8") == "local content\n"
 
 
-def test_auto_sync_retries_after_failed_install_instead_of_recording_state(
+def test_auto_sync_retries_after_failed_install_without_recording_state(
     tmp_path: Path,
 ) -> None:
     source_root = tmp_path / "bundled-skills"
@@ -458,35 +450,44 @@ def test_auto_sync_retries_after_failed_install_instead_of_recording_state(
     assert retried.installed_count == 20
 
 
-def test_explicit_default_sync_updates_state_before_returning_to_an_older_source(
-    tmp_path: Path,
-) -> None:
+def test_auto_sync_leaves_legacy_state_untouched(tmp_path: Path) -> None:
     source_root = tmp_path / "bundled-skills"
     home_dir = tmp_path / "home"
     _write_default_sources(source_root)
-    auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
     state_file = home_dir / ".cafe/cache/global-skills-sync.json"
-    v1_state = state_file.read_text(encoding="utf-8")
-    source_file = source_root / "use-cafe-workflow/SKILL.md"
-    v1_source = source_file.read_text(encoding="utf-8")
+    state_file.parent.mkdir(parents=True)
+    state_file.write_text('{"legacy": true}\n', encoding="utf-8")
 
-    source_file.write_text(
-        "---\nname: use-cafe-workflow\ndescription: test skill\n---\n\nversion 2\n",
-        encoding="utf-8",
-    )
-    hook_sync = sync_global_skills(source_root=source_root, home_dir=home_dir)
+    auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
+    sync_global_skills(source_root=source_root, home_dir=home_dir)
 
-    assert hook_sync.updated_count == 5
-    assert state_file.read_text(encoding="utf-8") != v1_state
+    assert state_file.read_text(encoding="utf-8") == '{"legacy": true}\n'
 
-    source_file.write_text(v1_source, encoding="utf-8")
-    returned_to_v1 = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
 
-    assert returned_to_v1 is not None
-    assert returned_to_v1.updated_count == 5
-    assert "use-cafe-workflow v1" in (
-        home_dir / ".codex/skills/use-cafe-workflow/SKILL.md"
-    ).read_text(encoding="utf-8")
+def test_trusted_automatic_source_uses_packaged_bundle_outside_git(tmp_path: Path) -> None:
+    bundle = tmp_path / "site-packages/cafe/data/skills"
+    _write_default_sources(bundle)
+
+    resolved = global_installer._trusted_automatic_source_root(bundle)
+
+    assert resolved == bundle.resolve()
+
+
+def test_trusted_automatic_source_fails_closed_for_invalid_checkout(
+    tmp_path: Path,
+) -> None:
+    checkout = tmp_path / "checkout"
+    bundle = checkout / "src/cafe/data/skills"
+    _write_default_sources(bundle)
+    (checkout / ".git").mkdir(parents=True)
+
+    with patch.object(
+        global_installer,
+        "_discover_git_roots",
+        side_effect=GlobalSkillSyncError("Git root discovery failed"),
+    ):
+        with pytest.raises(GlobalSkillSyncError, match="Git root discovery failed"):
+            global_installer._trusted_automatic_source_root(bundle)
 
 
 def test_auto_sync_skips_quickly_when_another_process_holds_the_lock(
@@ -535,34 +536,3 @@ def test_auto_sync_lock_contention_is_safe_across_processes(tmp_path: Path) -> N
         )
 
     assert result.stdout.strip() == "None"
-
-
-def test_auto_sync_tracks_each_development_machine_independently(tmp_path: Path) -> None:
-    source_a = tmp_path / "machine-a/repo/src/cafe/data/skills"
-    source_b = tmp_path / "machine-b/repo/src/cafe/data/skills"
-    home_a = tmp_path / "machine-a/home"
-    home_b = tmp_path / "machine-b/home"
-    _write_default_sources(source_a)
-    _write_default_sources(source_b)
-
-    auto_sync_global_skills(source_root=source_a, home_dir=home_a)
-    auto_sync_global_skills(source_root=source_b, home_dir=home_b)
-    changed = "---\nname: use-cafe-workflow\ndescription: test skill\n---\n\nmachine update\n"
-    (source_a / "use-cafe-workflow/SKILL.md").write_text(changed, encoding="utf-8")
-
-    updated_a = auto_sync_global_skills(source_root=source_a, home_dir=home_a)
-    unchanged_b = auto_sync_global_skills(source_root=source_b, home_dir=home_b)
-
-    assert updated_a is not None
-    assert updated_a.updated_count == 5
-    assert unchanged_b is None
-
-    # Simulate machine B receiving A's committed source through Git pull.
-    (source_b / "use-cafe-workflow/SKILL.md").write_text(changed, encoding="utf-8")
-    updated_b = auto_sync_global_skills(source_root=source_b, home_dir=home_b)
-
-    assert updated_b is not None
-    assert updated_b.updated_count == 5
-    assert "machine update" in (home_b / ".codex/skills/use-cafe-workflow/SKILL.md").read_text(
-        encoding="utf-8"
-    )

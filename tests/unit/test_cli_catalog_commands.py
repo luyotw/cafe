@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from typer.testing import CliRunner
@@ -254,7 +254,9 @@ def test_skill_sync_global_installs_bundled_helper_skills(
         result = runner.invoke(app, ["skill", "sync-global"])
 
     assert result.exit_code == 0
-    assert "Synced 4 installation(s)" in result.stdout
+    assert "Source:" in result.stdout
+    assert "4 destination result(s)" in result.stdout
+    assert "4 unique helper(s) across 1 CLI destination(s)" in result.stdout
     assert (home_dir / ".codex/skills/write-cafe-agent/SKILL.md").is_file()
     assert (home_dir / ".codex/skills/write-cafe-playbook/SKILL.md").is_file()
     assert not (home_dir / ".claude").exists()
@@ -271,10 +273,11 @@ def test_skill_sync_global_can_limit_target_clis(tmp_path: Path, monkeypatch) ->
         result = runner.invoke(
             app,
             ["skill", "sync-global", "--cli", "codex", "--cli", "cursor"],
-        )
+    )
 
     assert result.exit_code == 0
-    assert "Synced 8 installation(s)" in result.stdout
+    assert "8 destination result(s)" in result.stdout
+    assert "4 unique helper(s) across 2 CLI destination(s)" in result.stdout
     assert (home_dir / ".codex/skills/use-cafe-workflow/SKILL.md").is_file()
     assert (home_dir / ".cursor/skills/use-cafe-workflow/SKILL.md").is_file()
     assert not (home_dir / ".claude").exists()
@@ -293,8 +296,62 @@ def test_skill_sync_global_reports_when_no_cli_is_detected(
         result = runner.invoke(app, ["skill", "sync-global"])
 
     assert result.exit_code == 0
+    assert "Source:" in result.stdout
     assert "No supported CLI agents detected" in result.stdout
     assert not home_dir.exists()
+
+
+def test_skill_sync_global_reports_unchanged_source_and_destination_outcomes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    home_dir = tmp_path / "home"
+
+    with (
+        patch("cafe.skills.global_installer._default_home_dir", return_value=home_dir),
+        patch(
+            "cafe.skills.global_installer.shutil.which",
+            side_effect=lambda executable: (
+                "/test-bin/codex" if executable == "codex" else None
+            ),
+        ),
+    ):
+        first = runner.invoke(app, ["skill", "sync-global"])
+        second = runner.invoke(app, ["skill", "sync-global"])
+
+    assert first.exit_code == 0
+    assert second.exit_code == 0
+    assert "0 unique helper(s) across 0 CLI destination(s)" in second.stdout
+    assert "4 unchanged" in second.stdout
+
+
+def test_skill_sync_global_does_not_report_failure_as_success() -> None:
+    summary = MagicMock(
+        source_root=Path("/trusted/source"),
+        results=[
+            MagicMock(
+                status="failed",
+                cli="codex",
+                skill="use-cafe-workflow",
+                destination=Path("/home/test/.codex/skills/use-cafe-workflow"),
+                reason="permission denied",
+            )
+        ],
+        installed_count=0,
+        updated_count=0,
+        unchanged_count=0,
+        failed_count=1,
+        changed_skill_count=0,
+        changed_cli_count=0,
+    )
+
+    with patch("cafe.ui.commands.catalog.sync_global_skills", return_value=summary):
+        result = runner.invoke(app, ["skill", "sync-global", "--cli", "codex"])
+
+    assert result.exit_code == 1
+    assert "Source: /trusted/source" in result.stdout
+    assert "1 failed" in result.stdout
+    assert "permission denied" in result.stdout
 
 
 def test_playbook_validate_reports_warning_and_strict_failure(tmp_path: Path, monkeypatch) -> None:

@@ -523,15 +523,20 @@ def _print_skill_import_summary(summary: SkillImportSummary) -> None:
 
 def _print_global_skill_sync_summary(summary: GlobalSkillSyncSummary) -> None:
     """Print user-level CLI skill installation and update results."""
+    console.print(f"[bold]Source:[/bold] {summary.source_root}")
     if not summary.results:
         console.print(
             "[yellow]No supported CLI agents detected. Use --cli to target one explicitly.[/yellow]"
         )
         return
     console.print(
-        f"[green]Synced {len(summary.results)} installation(s)[/green]: "
+        f"[green]{len(summary.results)} destination result(s)[/green]: "
         f"{summary.installed_count} installed, {summary.updated_count} updated, "
         f"{summary.unchanged_count} unchanged"
+    )
+    console.print(
+        f"Changed {summary.changed_skill_count} unique helper(s) across "
+        f"{summary.changed_cli_count} CLI destination(s)"
     )
     if summary.failed_count:
         console.print(f"[red]{summary.failed_count} failed[/red]")
