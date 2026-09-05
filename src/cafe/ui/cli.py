@@ -39,6 +39,7 @@ from cafe.ui.cli_shared import (
     _resolve_issue_playbook_name,
 )
 from rich.console import Console
+from rich.markup import escape
 
 from cafe.agents.manager import AgentManager
 from cafe.core.git import GitOperations
@@ -270,7 +271,7 @@ def _auto_sync_global_helper_skills() -> None:
         console.print(
             f"[dim]✓ Installed {summary.installed_skill_count} missing global helper "
             f"skill(s) across {summary.changed_cli_count} CLI destination(s) from "
-            f"{summary.source_root}[/dim]"
+            f"{escape(str(summary.source_root))}[/dim]"
         )
     if summary.failed_count:
         console.print(

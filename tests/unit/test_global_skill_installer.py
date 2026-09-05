@@ -490,6 +490,94 @@ def test_trusted_automatic_source_fails_closed_for_invalid_checkout(
             global_installer._trusted_automatic_source_root(bundle)
 
 
+def test_trusted_automatic_source_bounds_git_discovery_time(tmp_path: Path) -> None:
+    checkout = tmp_path / "checkout"
+    bundle = checkout / "src/cafe/data/skills"
+    _write_default_sources(bundle)
+    (checkout / ".git").mkdir(parents=True)
+
+    with patch.object(
+        global_installer.subprocess,
+        "run",
+        side_effect=subprocess.TimeoutExpired(("git",), timeout=0.01),
+    ) as run:
+        with pytest.raises(GlobalSkillSyncError):
+            global_installer._trusted_automatic_source_root(bundle)
+
+    assert run.call_args.kwargs["timeout"] > 0
+
+
+def test_auto_sync_preserves_destination_that_appears_before_staging(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "bundled-skills"
+    home_dir = tmp_path / "home"
+    _write_default_sources(source_root)
+    original_stage = global_installer._stage_directory_replacement
+    appeared = False
+
+    def create_destination_before_staging(**kwargs):
+        nonlocal appeared
+        if not appeared:
+            appeared = True
+            destination = kwargs["destination"]
+            destination.mkdir(parents=True)
+            (destination / "SKILL.md").write_text(
+                "concurrent-existing\n", encoding="utf-8"
+            )
+        return original_stage(**kwargs)
+
+    with (
+        patch.object(global_installer, "detect_global_skill_clis", return_value=["codex"]),
+        patch.object(
+            global_installer,
+            "_stage_directory_replacement",
+            side_effect=create_destination_before_staging,
+        ),
+    ):
+        summary = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
+
+    destination = home_dir / ".codex/skills/use-cafe-workflow/SKILL.md"
+    assert summary is not None
+    assert summary.updated_count == 0
+    assert destination.read_text(encoding="utf-8") == "concurrent-existing\n"
+
+
+def test_auto_sync_preserves_symlink_that_appears_before_publish(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "bundled-skills"
+    home_dir = tmp_path / "home"
+    external = tmp_path / "external"
+    _write_default_sources(source_root)
+    _write_skill(tmp_path, "external", "concurrent symlink")
+    original_publish = global_installer._publish_staged_replacement
+    appeared = False
+
+    def create_symlink_before_publish(operation) -> None:
+        nonlocal appeared
+        if not appeared:
+            appeared = True
+            operation.destination.symlink_to(external, target_is_directory=True)
+        original_publish(operation)
+
+    with (
+        patch.object(global_installer, "detect_global_skill_clis", return_value=["codex"]),
+        patch.object(
+            global_installer,
+            "_publish_staged_replacement",
+            side_effect=create_symlink_before_publish,
+        ),
+    ):
+        summary = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
+
+    destination = home_dir / ".codex/skills/use-cafe-workflow"
+    assert summary is not None
+    assert summary.updated_count == 0
+    assert destination.is_symlink()
+    assert "concurrent symlink" in (destination / "SKILL.md").read_text(encoding="utf-8")
+
+
 def test_auto_sync_skips_quickly_when_another_process_holds_the_lock(
     tmp_path: Path,
 ) -> None:

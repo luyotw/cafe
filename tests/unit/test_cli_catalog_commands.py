@@ -327,13 +327,15 @@ def test_skill_sync_global_reports_unchanged_source_and_destination_outcomes(
 
 def test_skill_sync_global_does_not_report_failure_as_success() -> None:
     summary = MagicMock(
-        source_root=Path("/trusted/source"),
+        source_root=Path("/trusted/[red]source[/red]"),
         results=[
             MagicMock(
                 status="failed",
                 cli="codex",
                 skill="use-cafe-workflow",
-                destination=Path("/home/test/.codex/skills/use-cafe-workflow"),
+                destination=Path(
+                    "/home/[blue]test[/blue]/.codex/skills/use-cafe-workflow"
+                ),
                 reason="permission denied",
             )
         ],
@@ -349,7 +351,9 @@ def test_skill_sync_global_does_not_report_failure_as_success() -> None:
         result = runner.invoke(app, ["skill", "sync-global", "--cli", "codex"])
 
     assert result.exit_code == 1
-    assert "Source: /trusted/source" in result.stdout
+    rendered = result.stdout.replace("\n", "")
+    assert "Source: /trusted/[red]source[/red]" in rendered
+    assert "/home/[blue]test[/blue]/.codex/skills/use-cafe-workflow" in rendered
     assert "1 failed" in result.stdout
     assert "permission denied" in result.stdout
 

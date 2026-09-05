@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, Optional, Sequence, TypeVar
 import typer
 import yaml
 from rich.console import Console
+from rich.markup import escape
 
 from cafe.catalogs.resolver import (
     MAX_CATALOG_DISCOVERY_ENTRIES,
@@ -523,7 +524,7 @@ def _print_skill_import_summary(summary: SkillImportSummary) -> None:
 
 def _print_global_skill_sync_summary(summary: GlobalSkillSyncSummary) -> None:
     """Print user-level CLI skill installation and update results."""
-    console.print(f"[bold]Source:[/bold] {summary.source_root}")
+    console.print(f"[bold]Source:[/bold] {escape(str(summary.source_root))}")
     if not summary.results:
         console.print(
             "[yellow]No supported CLI agents detected. Use --cli to target one explicitly.[/yellow]"
@@ -542,16 +543,18 @@ def _print_global_skill_sync_summary(summary: GlobalSkillSyncSummary) -> None:
         console.print(f"[red]{summary.failed_count} failed[/red]")
 
     for item in summary.results:
+        identity = escape(f"{item.cli}/{item.skill}")
+        destination = escape(str(item.destination))
         if item.status == "failed":
             console.print(
-                f"[red]failed:[/red] {item.cli}/{item.skill} -> "
-                f"{item.destination} ({item.reason})"
+                f"[red]failed:[/red] {identity} -> "
+                f"{destination} ({escape(str(item.reason))})"
             )
         else:
             style = "dim" if item.status == "unchanged" else "green"
             console.print(
                 f"[{style}]{item.status}:[/{style}] "
-                f"{item.cli}/{item.skill} -> {item.destination}"
+                f"{identity} -> {destination}"
             )
 
 

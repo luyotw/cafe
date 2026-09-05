@@ -41,6 +41,7 @@ GLOBAL_CLI_EXECUTABLES = {
 GlobalSkillSyncStatus = Literal["installed", "updated", "unchanged", "failed"]
 EXPLICIT_SYNC_LOCK_TIMEOUT_SECONDS = 10
 AUTO_SYNC_LOCK_TIMEOUT_SECONDS = 0.05
+AUTOMATIC_GIT_DISCOVERY_TIMEOUT_SECONDS = 1.0
 
 
 class GlobalSkillSyncError(ValueError):
@@ -141,6 +142,7 @@ class _StagedGlobalSkillReplacement:
     staged: Path
     backup: Path
     had_destination: bool
+    require_missing: bool = False
     published: bool = False
 
 
@@ -150,25 +152,37 @@ def _default_source_root() -> Path:
 
 def _discover_git_roots(checkout_root: Path) -> tuple[Path, Path]:
     """Return active and canonical roots using read-only Git discovery."""
-
-    def run(*args: str) -> Path:
+    try:
         result = subprocess.run(
-            ("git", *args),
+            ("git", "worktree", "list", "--porcelain", "-z"),
             cwd=checkout_root,
             capture_output=True,
             text=True,
             check=False,
+            timeout=AUTOMATIC_GIT_DISCOVERY_TIMEOUT_SECONDS,
         )
-        if result.returncode != 0:
-            raise GlobalSkillSyncError(
-                result.stderr.strip() or "Git root discovery failed"
-            )
-        return Path(result.stdout.strip()).resolve()
+    except subprocess.TimeoutExpired as exc:
+        raise GlobalSkillSyncError("Git root discovery timed out") from exc
+    except OSError as exc:
+        raise GlobalSkillSyncError(f"Git root discovery failed: {exc}") from exc
 
-    active = run("rev-parse", "--show-toplevel")
-    common_git = run("rev-parse", "--path-format=absolute", "--git-common-dir")
-    canonical = common_git.parent if common_git.name == ".git" else active
-    return active, canonical
+    if result.returncode != 0:
+        raise GlobalSkillSyncError(
+            result.stderr.strip() or "Git root discovery failed"
+        )
+
+    worktrees = [
+        Path(field.removeprefix("worktree ")).resolve()
+        for field in result.stdout.split("\0")
+        if field.startswith("worktree ")
+    ]
+    active = checkout_root.resolve()
+    if not worktrees or active not in worktrees:
+        raise GlobalSkillSyncError(
+            f"Git worktree discovery did not include active checkout {active}"
+        )
+
+    return active, worktrees[0]
 
 
 def _trusted_automatic_source_root(bundled_root: Optional[Path] = None) -> Path:
@@ -356,6 +370,7 @@ def _stage_directory_replacement(
     source: Path,
     destination: Path,
     status: GlobalSkillSyncStatus,
+    require_missing: bool = False,
 ) -> _StagedGlobalSkillReplacement:
     """Copy one source beside its destination without publishing it."""
     skills_root = destination.parent
@@ -364,11 +379,13 @@ def _stage_directory_replacement(
     if skills_root.exists() and not skills_root.is_dir():
         raise NotADirectoryError(f"Skills path is not a directory: {skills_root}")
     skills_root.mkdir(parents=True, exist_ok=True)
+    had_destination = destination.exists() or destination.is_symlink()
+    if require_missing and had_destination:
+        raise FileExistsError(f"Destination appeared before staging: {destination}")
 
     workspace = Path(tempfile.mkdtemp(prefix=f".cafe-{destination.name}-", dir=skills_root))
     staged = workspace / "staged"
     backup = workspace / "previous"
-    had_destination = destination.exists() or destination.is_symlink()
 
     try:
         shutil.copytree(
@@ -377,6 +394,10 @@ def _stage_directory_replacement(
             symlinks=True,
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
         )
+        if require_missing and (destination.exists() or destination.is_symlink()):
+            raise FileExistsError(
+                f"Destination appeared while staging: {destination}"
+            )
     except Exception:
         shutil.rmtree(workspace, ignore_errors=True)
         raise
@@ -391,11 +412,28 @@ def _stage_directory_replacement(
         staged=staged,
         backup=backup,
         had_destination=had_destination,
+        require_missing=require_missing,
     )
 
 
 def _publish_staged_replacement(operation: _StagedGlobalSkillReplacement) -> None:
     """Publish one staged destination while retaining its rollback backup."""
+    if operation.require_missing:
+        try:
+            operation.destination.mkdir()
+        except FileExistsError as exc:
+            raise FileExistsError(
+                f"Destination appeared before publish: {operation.destination}"
+            ) from exc
+        operation.published = True
+        try:
+            for child in operation.staged.iterdir():
+                child.rename(operation.destination / child.name)
+        except Exception:
+            _rollback_staged_replacement(operation)
+            raise
+        return
+
     if operation.had_destination:
         operation.destination.rename(operation.backup)
     try:
@@ -518,6 +556,7 @@ def _sync_resolved_global_skills(
                             source=source,
                             destination=destination,
                             status="updated" if existed else "installed",
+                            require_missing=not replace_existing,
                         )
                     )
             except Exception as exc:
