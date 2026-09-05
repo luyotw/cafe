@@ -14,8 +14,8 @@ from cafe.core.capabilities import (
     ExecutionRequest,
     PolicyDecision,
     canonical_request_fingerprint,
-    evaluate_capability_request,
     default_capability_definition_dirs,
+    evaluate_capability_request,
     load_capability_registry,
     run_capability_request,
     run_pr_publish_capability,
@@ -206,6 +206,7 @@ def _slack_request(**overrides: object) -> dict[str, object]:
         "capability": CAPABILITY_SLACK_HUMAN_TASK_ID,
         "args": {
             "repository": "openfunltd/cafe",
+            "issue": "demo",
             "workflow_id": "workflow-one",
             "task_id": "task-one",
             "step": "develop",
@@ -232,6 +233,7 @@ def test_registered_slack_human_task_capability_has_fixed_boundary(tmp_path: Pat
     assert manifest.implementation == "notify_slack_human_task"
     assert set(manifest.arguments.required) == {
         "repository",
+        "issue",
         "workflow_id",
         "task_id",
         "step",

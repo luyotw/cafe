@@ -15,7 +15,14 @@ from cafe.core.session_continuation import (
     SessionContinuationPolicy,
     exact_continuation_from_context,
 )
-from cafe.core.types import AgentCLI, AgentConfig, AgentResponse, CliEntry, TokenUsage
+from cafe.core.types import (
+    AgentCLI,
+    AgentConfig,
+    AgentResponse,
+    CliEntry,
+    CriticalPhaseError,
+    TokenUsage,
+)
 
 
 def _manager(tmp_path: Path, monkeypatch) -> AgentManager:
@@ -361,6 +368,155 @@ def test_new_primary_fallback_is_also_fresh(tmp_path: Path, monkeypatch) -> None
         (AgentCLI.CODEX, None),
         (AgentCLI.GEMINI, None),
     ]
+    assert manager.get_last_session_id() == "fresh-gemini"
+
+
+def test_exact_primary_without_takeover_context_does_not_fallback(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    manager = _manager(tmp_path, monkeypatch)
+    attempted_clis: list[AgentCLI] = []
+
+    def execute(self, *args, **kwargs):
+        attempted_clis.append(self.config.cli)
+        raise AgentExecutionError("rate limit", error_type="rate_limit")
+
+    with (
+        patch("cafe.agents.executor.AgentExecutor.execute", execute),
+        pytest.raises(AgentExecutionError, match="rate limit"),
+    ):
+        manager.execute(
+            "David",
+            "prompt",
+            phase_name="develop",
+            continuation=SessionContinuation.resume_exact(
+                AgentCLI.CODEX,
+                "exact-codex",
+            ),
+        )
+
+    assert attempted_clis == [AgentCLI.CODEX]
+
+
+def test_phase_exact_retry_without_takeover_context_remains_on_primary(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    manager = _manager(tmp_path, monkeypatch)
+    attempted_clis: list[AgentCLI] = []
+
+    class ConcretePhase(Phase):
+        def __init__(self):
+            super().__init__(interactive=False)
+            self.agent_manager = manager
+            self.issue_dir = tmp_path / ".cafe" / "issues" / "issue-381"
+            self.phase_dir = self.issue_dir / "develop"
+            self.iteration = 1
+            self._session_continuation = SessionContinuation.resume_exact(
+                AgentCLI.CODEX,
+                "exact-codex",
+            )
+
+        def execute(self):
+            raise NotImplementedError
+
+    def execute(self, *args, **kwargs):
+        attempted_clis.append(self.config.cli)
+        raise AgentExecutionError("rate limit", error_type="rate_limit")
+
+    with (
+        patch("cafe.agents.executor.AgentExecutor.execute", execute),
+        pytest.raises(CriticalPhaseError, match="rate limit"),
+    ):
+        ConcretePhase()._execute_agent_iteration(
+            agent_name="David",
+            prompt="complete checklist",
+            user_input="workflow execute",
+            valid_intents=[],
+            require_status_code=False,
+            allowed_tools=[],
+            phase_specific_data={"step_name": "develop"},
+        )
+
+    assert attempted_clis == [AgentCLI.CODEX]
+
+
+def test_exact_primary_with_empty_takeover_context_does_not_run_fallback(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    manager = _manager(tmp_path, monkeypatch)
+    attempted_clis: list[AgentCLI] = []
+
+    def execute(self, *args, **kwargs):
+        attempted_clis.append(self.config.cli)
+        raise AgentExecutionError("rate limit", error_type="rate_limit")
+
+    with (
+        patch("cafe.agents.executor.AgentExecutor.execute", execute),
+        pytest.raises(AgentExecutionError, match="All agents failed"),
+    ):
+        manager.execute(
+            "David",
+            "prompt",
+            phase_name="develop",
+            continuation=SessionContinuation.resume_exact(
+                AgentCLI.CODEX,
+                "exact-codex",
+            ),
+            backup_context_callback=lambda _error: "   ",
+        )
+
+    assert attempted_clis == [AgentCLI.CODEX]
+
+
+def test_exact_primary_fallback_is_a_fresh_context_takeover(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    manager = _manager(tmp_path, monkeypatch)
+    attempts: list[tuple[AgentCLI, str | None, str, bool]] = []
+
+    def execute(self, prompt, *args, **kwargs):
+        attempts.append(
+            (
+                self.config.cli,
+                self.config.session_id,
+                prompt,
+                bool(kwargs.get("exact_session")),
+            )
+        )
+        if self.config.cli == AgentCLI.CODEX:
+            raise AgentExecutionError("rate limit", error_type="rate_limit")
+        return AgentResponse(
+            response="fallback",
+            token_usage=TokenUsage(),
+            cli=AgentCLI.GEMINI,
+            session_id="fresh-gemini",
+        )
+
+    with patch("cafe.agents.executor.AgentExecutor.execute", execute):
+        response, *_ = manager.execute(
+            "David",
+            "primary prompt",
+            phase_name="develop",
+            continuation=SessionContinuation.resume_exact(
+                AgentCLI.CODEX,
+                "exact-codex",
+            ),
+            backup_context_callback=lambda _error: '{"operation":{"state":"running"}}',
+        )
+
+    assert response == "fallback"
+    assert attempts[0] == (AgentCLI.CODEX, "exact-codex", "primary prompt", True)
+    backup_cli, backup_session, backup_prompt, backup_exact = attempts[1]
+    assert backup_cli == AgentCLI.GEMINI
+    assert backup_session is None
+    assert backup_exact is False
+    assert "Cold backup takeover context" in backup_prompt
+    assert '"operation":{"state":"running"}' in backup_prompt
+    assert "exact-codex" not in backup_prompt
     assert manager.get_last_session_id() == "fresh-gemini"
 
 

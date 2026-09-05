@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import os
 import subprocess
@@ -18,9 +19,16 @@ import yaml
 
 from cafe.agents.executor import AgentExecutionControl, AgentExecutionError, AgentExecutor
 from cafe.agents.manager import AgentManager
+from cafe.core.human_task_notifications import (
+    build_workflow_callback_failure_message,
+    load_human_task_notification_settings,
+    load_slack_webhook_url,
+    post_slack_notification,
+)
 from cafe.core.session import SessionStore
 from cafe.core.session_continuation import SessionContinuation
 from cafe.core.types import AgentCLI, AgentConfig, SessionData
+from cafe.core.workflow_runtime import resolve_human_task_notification_repository_root
 
 try:
     import fcntl
@@ -38,6 +46,8 @@ CONFIG_FILENAME = "config.yaml"
 SESSION_FILENAME = "session.json"
 DISPATCH_STATE_FILENAME = "dispatch_state.json"
 LOCK_FILENAME = "session.lock"
+FAILURE_NOTIFICATIONS_FILENAME = "callback_failure_notifications.json"
+MAX_FAILURE_NOTIFICATIONS = 128
 _HOST_SESSION_KIND = "codex"
 
 
@@ -66,6 +76,14 @@ _ExactSafeLoader.add_constructor(
     yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
     _construct_exact_mapping,
 )
+
+
+class InvalidWorkflowEventError(ValueError):
+    """The callback envelope cannot be safely associated with one issue."""
+
+
+class StaleWorkflowEventError(ValueError):
+    """The callback belongs to an earlier workflow and should be ignored."""
 
 
 def _now() -> str:
@@ -1560,10 +1578,8 @@ def _event_is_durable(blackboard, event: dict[str, Any]) -> bool:
 
 
 def run_callback(event: dict[str, Any], *, repository_root: Path) -> None:
-    issue_name = event.get("issue")
+    issue_name = _validated_issue_name(event)
     workflow_id = event.get("workflow_id")
-    if not isinstance(issue_name, str) or not issue_name or Path(issue_name).name != issue_name:
-        raise ValueError("workflow event callback has an invalid issue")
     if not isinstance(workflow_id, str) or not workflow_id:
         raise ValueError("workflow event callback has an invalid workflow ID")
     issue_dir = repository_root / ".cafe" / "issues" / issue_name
@@ -1576,7 +1592,7 @@ def run_callback(event: dict[str, Any], *, repository_root: Path) -> None:
 
         blackboard = BlackboardStore(issue_dir).load_or_create("spec")
         if blackboard.workflow_id != workflow_id:
-            raise ValueError("workflow event callback is stale")
+            raise StaleWorkflowEventError("workflow event callback is stale")
         if config["schema_version"] == 3:
             if not _event_is_durable(blackboard, event):
                 raise ValueError("workflow event callback is not durable")
@@ -1649,6 +1665,123 @@ def run_callback(event: dict[str, Any], *, repository_root: Path) -> None:
         store.commit()
 
 
+def _notify_callback_failure(
+    event: dict[str, Any], *, repository_root: Path, error: Exception
+) -> None:
+    """Best-effort out-of-band notice when the primary callback path fails."""
+    issue = _validated_issue_name(event)
+    step = event.get("step")
+    event_type = event.get("event_type")
+    issue_dir = repository_root / ".cafe" / "issues" / issue
+    driver_dir = _driver_dir(issue_dir)
+    notification_root = resolve_human_task_notification_repository_root(issue_dir)
+    error_code = _callback_error_code(error)
+    notification_key = _callback_failure_key(event, error_code=error_code)
+    with _session_lock(driver_dir):
+        records = _load_callback_failure_notifications(driver_dir)
+        existing = records.get(notification_key)
+        if isinstance(existing, dict) and existing.get("outcome") in {"sent", "disabled"}:
+            return
+        settings = load_human_task_notification_settings()
+        if not settings.enabled:
+            records[notification_key] = {
+                "occurred_at": _now(),
+                "outcome": "disabled",
+                "error_code": error_code,
+                "notification_code": settings.code,
+            }
+            _write_callback_failure_notifications(driver_dir, records)
+            return
+        message = build_workflow_callback_failure_message(
+            repository=notification_root.name,
+            issue=issue,
+            step=step if isinstance(step, str) else "",
+            event_type=event_type if isinstance(event_type, str) else "",
+            error_code=error_code,
+        )
+        try:
+            webhook_url = load_slack_webhook_url(repository_root=notification_root)
+            post_slack_notification(webhook_url, message, timeout_sec=4.0)
+        except Exception as notification_error:
+            records[notification_key] = {
+                "occurred_at": _now(),
+                "outcome": "failed",
+                "error_code": error_code,
+                "notification_code": type(notification_error).__name__,
+            }
+            _write_callback_failure_notifications(driver_dir, records)
+            raise
+        records[notification_key] = {
+            "occurred_at": _now(),
+            "outcome": "sent",
+            "error_code": error_code,
+            "notification_code": "slack_notification_sent",
+        }
+        _write_callback_failure_notifications(driver_dir, records)
+
+
+def _callback_error_code(error: Exception) -> str:
+    """Return an actionable, bounded code without exposing exception text."""
+    if isinstance(error, FileNotFoundError):
+        return "codex_queue_not_found"
+    if isinstance(error, subprocess.TimeoutExpired):
+        return "codex_queue_timeout"
+    if isinstance(error, subprocess.CalledProcessError):
+        return f"codex_queue_exit_{error.returncode}"
+    return f"callback_{type(error).__name__}"
+
+
+def _validated_issue_name(event: dict[str, Any]) -> str:
+    """Return one safe issue directory name shared by execution and reporting."""
+    issue = event.get("issue")
+    if not isinstance(issue, str) or not issue or Path(issue).name != issue:
+        raise InvalidWorkflowEventError("workflow event callback has an invalid issue")
+    return issue
+
+
+def _callback_failure_key(event: dict[str, Any], *, error_code: str) -> str:
+    """Bind one notification to the durable event identity and stable failure."""
+    bounded = {
+        key: event.get(key)
+        for key in ("workflow_id", "issue", "event_type", "step", "status_code", "task_id")
+        if isinstance(event.get(key), (str, int))
+    }
+    bounded["error_code"] = error_code
+    encoded = json.dumps(bounded, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _load_callback_failure_notifications(driver_dir: Path) -> dict[str, dict[str, str]]:
+    """Load bounded notification receipts; malformed state is replaced safely."""
+    path = driver_dir / FAILURE_NOTIFICATIONS_FILENAME
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, UnicodeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(raw, dict) or raw.get("schema_version") != 1:
+        return {}
+    records = raw.get("records")
+    if not isinstance(records, dict):
+        return {}
+    return {
+        key: value
+        for key, value in records.items()
+        if isinstance(key, str) and isinstance(value, dict)
+    }
+
+
+def _write_callback_failure_notifications(
+    driver_dir: Path, records: dict[str, dict[str, str]]
+) -> None:
+    """Persist secret-free callback notification outcomes for diagnosis."""
+    bounded_records = dict(list(records.items())[-MAX_FAILURE_NOTIFICATIONS:])
+    payload = {"schema_version": 1, "records": bounded_records}
+    _atomic_write(
+        driver_dir / FAILURE_NOTIFICATIONS_FILENAME,
+        json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8"),
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--workflow-event")
@@ -1687,7 +1820,17 @@ def main(argv: list[str] | None = None) -> int:
     raw_event = json.loads(args.workflow_event)
     if not isinstance(raw_event, dict):
         raise ValueError("workflow event callback must be an object")
-    run_callback(raw_event, repository_root=Path.cwd().resolve())
+    repository_root = Path.cwd().resolve()
+    try:
+        run_callback(raw_event, repository_root=repository_root)
+    except (InvalidWorkflowEventError, StaleWorkflowEventError):
+        raise
+    except Exception as exc:
+        try:
+            _notify_callback_failure(raw_event, repository_root=repository_root, error=exc)
+        except Exception:
+            pass
+        raise
     return 0
 
 

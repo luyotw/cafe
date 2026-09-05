@@ -9,7 +9,7 @@ import re
 import stat
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -27,6 +27,21 @@ MACHINE_CONFIG_DIRECTORY = ".cafe"
 MACHINE_CONFIG_FILENAME = "config.yaml"
 MAX_NOTIFICATION_METADATA_LENGTH = 128
 SAFE_NOTIFICATION_METADATA = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}\Z")
+HUMAN_TASK_STEP_LABELS = {
+    "spec": "需求規格",
+    "plan": "規劃",
+    "develop": "開發",
+    "review": "審查",
+    "pr": "提交與合併",
+}
+HUMAN_TASK_ACTION_LABELS = {
+    "clarification-feedback": "回覆釐清問題",
+    "output-review": "確認結果",
+    "permission-answers": "回覆權限相關問題",
+    "alignment-decision": "確認方向",
+    "no-changes-needed": "確認沒有需要變更",
+    "agent-execution-interrupted": "決定如何繼續",
+}
 
 
 class SlackNotificationError(RuntimeError):
@@ -192,46 +207,102 @@ class HumanTaskSlackMessage:
     """Actionable, non-secret fields for one pending HumanTask."""
 
     repository: str
+    issue: str
     workflow_id: str
     task_id: str
     step: str
     task_type: str
-    inspect_command: str
-    complete_command: str
 
     def to_slack_payload(self) -> dict[str, str]:
+        repository = _readable_metadata(self.repository, fallback="目前專案")
+        issue = _readable_metadata(self.issue, fallback="未命名工作項目")
+        step_label = HUMAN_TASK_STEP_LABELS.get(self.step, "工作流程")
+        action_label = HUMAN_TASK_ACTION_LABELS.get(self.task_type, "處理 CAFE 工作項目")
         text = "\n".join(
             (
-                "CAFE HumanTask requires action",
-                f"Repository: {self.repository}",
-                f"Workflow: {self.workflow_id}",
-                f"Step: {self.step}",
-                f"HumanTask: {self.task_id}",
-                f"Task type: {self.task_type}",
-                f"Inspect: {self.inspect_command}",
-                f"Complete: {self.complete_command}",
+                "CAFE 需要你的處理",
+                f"專案：{repository}",
+                f"對話：{issue}",
+                f"目前階段：{step_label}",
+                f"需要你做的事：{action_label}",
+                f"請回到 CAFE 的「{issue}」工作項目處理。",
             )
         )
         return {"text": text}
 
 
+@dataclass(frozen=True)
+class WorkflowCallbackFailureSlackMessage:
+    """Readable, secret-free notification for an asynchronous callback failure."""
+
+    repository: str
+    issue: str
+    step: str
+    event_type: str
+    error_code: str
+
+    def to_slack_payload(self) -> dict[str, str]:
+        repository = _readable_metadata(self.repository, fallback="目前專案")
+        issue = _readable_metadata(self.issue, fallback="未命名工作項目")
+        step = HUMAN_TASK_STEP_LABELS.get(self.step, self.step or "未知階段")
+        event_type = _readable_metadata(self.event_type, fallback="未知事件")
+        error_code = _readable_metadata(self.error_code, fallback="未知錯誤")
+        text = "\n".join(
+            (
+                "CAFE event callback 執行失敗",
+                f"專案：{repository}",
+                f"對話：{issue}",
+                f"目前階段：{step}",
+                f"事件：{event_type}",
+                f"錯誤：{error_code}",
+                f"工作流程狀態已保存，請回到 CAFE 的「{issue}」工作項目查看。",
+            )
+        )
+        return {"text": text}
+
+
+class SlackPayloadMessage(Protocol):
+    """Minimal message contract accepted by the trusted Slack transport."""
+
+    def to_slack_payload(self) -> dict[str, str]: ...
+
+
 def build_human_task_message(
-    *, repository: str, workflow_id: str, task_id: str, step: str, task_type: str
+    *,
+    repository: str,
+    workflow_id: str,
+    task_id: str,
+    step: str,
+    task_type: str,
+    issue: str = "",
 ) -> HumanTaskSlackMessage:
-    """Build the supported task inspection and completion journey."""
+    """Build one readable, bounded HumanTask notification."""
     repository = sanitize_human_task_metadata(repository)
+    issue = sanitize_human_task_metadata(issue)
     workflow_id = sanitize_human_task_metadata(workflow_id)
     task_id = sanitize_human_task_metadata(task_id)
     step = sanitize_human_task_metadata(step)
     task_type = sanitize_human_task_metadata(task_type)
     return HumanTaskSlackMessage(
         repository=repository,
+        issue=issue,
         workflow_id=workflow_id,
         task_id=task_id,
         step=step,
         task_type=task_type,
-        inspect_command=f"cafe task inspect {task_id}",
-        complete_command=f"cafe task complete {task_id}",
+    )
+
+
+def build_workflow_callback_failure_message(
+    *, repository: str, issue: str, step: str, event_type: str, error_code: str
+) -> WorkflowCallbackFailureSlackMessage:
+    """Build a bounded callback-failure notification without raw exception text."""
+    return WorkflowCallbackFailureSlackMessage(
+        repository=sanitize_human_task_metadata(repository),
+        issue=sanitize_human_task_metadata(issue),
+        step=sanitize_human_task_metadata(step),
+        event_type=sanitize_human_task_metadata(event_type),
+        error_code=sanitize_human_task_metadata(error_code),
     )
 
 
@@ -251,6 +322,11 @@ def _is_url_shaped_metadata(value: str) -> bool:
     """Reject link-like identifiers while retaining ordinary namespaced IDs."""
     normalized = value.casefold()
     return "://" in normalized or "www." in normalized
+
+
+def _readable_metadata(value: str, *, fallback: str) -> str:
+    """Avoid displaying sanitization hashes to people receiving Slack messages."""
+    return fallback if value.startswith("invalid-") else value
 
 
 @dataclass(frozen=True)
@@ -440,7 +516,7 @@ def _open_slack_request(request: Request, *, timeout: float):
 
 def post_slack_notification(
     webhook_url: str,
-    message: HumanTaskSlackMessage,
+    message: SlackPayloadMessage,
     *,
     timeout_sec: float,
 ) -> None:
@@ -453,7 +529,9 @@ def post_slack_notification(
         method="POST",
     )
     try:
-        with _open_slack_request(request, timeout=timeout_sec) as response:  # noqa: S310 - URL is fixed/validated.
+        with _open_slack_request(
+            request, timeout=timeout_sec
+        ) as response:  # noqa: S310 - URL is fixed/validated.
             status = response.status
             body = response.read(64).decode("utf-8", errors="replace").strip()
     except HTTPError as exc:

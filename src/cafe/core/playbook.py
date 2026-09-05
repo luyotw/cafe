@@ -516,7 +516,7 @@ class StepConfig(BaseModel):
     behavior: StepBehaviorDeclaration = Field(default_factory=StepBehaviorDeclaration)
     valid_intents: List[str] = Field(default_factory=list)
     max_attempts_per_cycle: Optional[int] = None
-    correction_session: Literal["fresh", "resume"] = "fresh"
+    correction_session: Literal["fresh", "resume"] = "resume"
     allowed_goto: List[str] = Field(default_factory=list)
     hooks: StepHooks = Field(default_factory=StepHooks)
     auto_snapshot: bool = True

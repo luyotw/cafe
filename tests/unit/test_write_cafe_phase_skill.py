@@ -73,7 +73,7 @@ def test_write_cafe_phase_requires_interrupt_safe_batch_progress() -> None:
     normalized_skill = " ".join(skill.split())
     normalized_spec = " ".join(spec.split())
 
-    assert "version: 2.9.5" in skill
+    assert "version: 2.10.0" in skill
     assert "## Interruptible and Batch Phases" in skill
     assert "it is not a per-target resume ledger" in normalized_skill
     assert (

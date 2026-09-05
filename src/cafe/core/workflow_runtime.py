@@ -241,7 +241,8 @@ class HumanTaskNotificationDispatcher:
     def _notification_inputs(self, task: HumanTask) -> dict[str, str]:
         """Return the closed safe payload shared by receipts and capability requests."""
         return {
-            "repository": sanitize_human_task_metadata(self._repository_root().name),
+            "repository": sanitize_human_task_metadata(self._repository_root().resolve().name),
+            "issue": sanitize_human_task_metadata(self.issue_dir.name),
             "workflow_id": sanitize_human_task_metadata(task.workflow_id),
             "task_id": sanitize_human_task_metadata(task.id),
             "step": sanitize_human_task_metadata(task.step),
@@ -2194,14 +2195,22 @@ class BlackboardWorkflowRuntime:
             "issue": self.issue_dir.name,
             "event_type": event_type,
         }
-        for field in ("step", "status_code", "runtime", "attempt", "hop", "reason", "task_id"):
-            value = payload.get(field)
+        for event_field in (
+            "step",
+            "status_code",
+            "runtime",
+            "attempt",
+            "hop",
+            "reason",
+            "task_id",
+        ):
+            value = payload.get(event_field)
             if isinstance(value, (str, int)):
-                event[field] = value
-        for field in ("event_id", "occurred_at"):
-            value = payload.get(field)
+                event[event_field] = value
+        for event_field in ("event_id", "occurred_at"):
+            value = payload.get(event_field)
             if isinstance(value, str):
-                event[field] = value
+                event[event_field] = value
         sequence = payload.get("sequence")
         if isinstance(sequence, int) and not isinstance(sequence, bool):
             event["sequence"] = sequence

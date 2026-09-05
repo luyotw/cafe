@@ -46,6 +46,7 @@ def _slack_request(**overrides: object) -> dict[str, object]:
         "capability": CAPABILITY_SLACK_HUMAN_TASK_ID,
         "args": {
             "repository": "openfunltd/cafe",
+            "issue": "slack-notification-routing",
             "workflow_id": "workflow-one",
             "task_id": "task-one",
             "step": "develop",
@@ -109,11 +110,36 @@ def test_actionable_message_exposes_allowlisted_task_journey_without_prompt_or_c
     assert message.task_id == "task-one"
     assert message.step == "develop"
     assert message.task_type == "permission-answers"
-    assert message.inspect_command == "cafe task inspect task-one"
-    assert message.complete_command == "cafe task complete task-one"
     payload = json.dumps(message.to_slack_payload())
     assert "Review the implementation plan." not in payload
     assert "secret-value" not in payload
+
+
+def test_actionable_message_names_the_cafe_issue_without_opaque_identifiers() -> None:
+    """Test List: Slack shows a readable CAFE location rather than opaque task IDs."""
+    message = build_human_task_message(
+        repository="cafe",
+        issue="slack-notification-routing",
+        workflow_id="7252d0dd-47c4-43b2-87b1-82b27f9c1cf5",
+        task_id="8a010542-007e-4cd1-88fe-dc799721c522",
+        step="develop",
+        task_type="clarification-feedback",
+    )
+
+    payload = message.to_slack_payload()["text"]
+
+    assert payload == (
+        "CAFE 需要你的處理\n"
+        "專案：cafe\n"
+        "對話：slack-notification-routing\n"
+        "目前階段：開發\n"
+        "需要你做的事：回覆釐清問題\n"
+        "請回到 CAFE 的「slack-notification-routing」工作項目處理。"
+    )
+    assert "7252d0dd" not in payload
+    assert "8a010542" not in payload
+    assert "clarification-feedback" not in payload
+    assert "cafe task" not in payload
 
 
 def test_actionable_message_bounds_project_controlled_metadata_to_one_safe_line_per_field() -> None:
@@ -128,12 +154,13 @@ def test_actionable_message_bounds_project_controlled_metadata_to_one_safe_line_
 
     payload = message.to_slack_payload()["text"]
 
-    assert payload.count("\n") == 7
+    assert payload.count("\n") == 5
     assert "<!channel>" not in payload
     assert "<!subteam" not in payload
     assert "@here" not in payload
     assert "@channel" not in payload
     assert "https://attacker.invalid" not in payload
+    assert "invalid-" not in payload
 
 
 @pytest.mark.parametrize(
@@ -628,6 +655,7 @@ def test_outbound_adapter_classifies_delivery_outcomes(
     monkeypatch.setattr(notification_mod, "_open_slack_request", _open_slack_request)
     message = build_human_task_message(
         repository="openfunltd/cafe",
+        issue="issue-one",
         workflow_id="workflow-one",
         task_id="task-one",
         step="develop",
@@ -639,7 +667,8 @@ def test_outbound_adapter_classifies_delivery_outcomes(
         payload = json.loads(requests[0][0].data)
         assert requests[0][0].full_url == VALID_WEBHOOK
         assert requests[0][1] == 4.0
-        assert "task-one" in payload["text"]
+        assert "issue-one" in payload["text"]
+        assert "task-one" not in payload["text"]
         return
 
     with pytest.raises(SlackNotificationError) as exc:

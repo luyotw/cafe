@@ -290,6 +290,28 @@ placeholder 名稱。不要依賴 artifact 名稱或新增 Python mapping；未�
 - stop contract 以 playbook step name 為單位。如果同一 phase 有兩個需要不同 user/driver ownership 的確認時點，應拆成兩個 playbook steps；不要發明 `phase.preview`、`phase.plan` 等 pseudo-step gate 名稱。
 - 新增、移除或拆分 planned gate 後，執行 `cafe playbook confirmation-gates <id>`，並回報既有 issue 的 confirmation contract 已可能 stale，必須在下一次 `cafe make` 前重新確認。
 
+### 同一 phase 內的多階段 checkpoint
+
+若 user 必須先確認一項前置決策，phase 才能完成最終 output，可以在同一 step 內保留多個
+stage，但只限於各 stage 共用 owner、artifact lifecycle 與 final approval 的情況。前置決策
+使用 mandatory、user-owned 的 reactive checkpoint；它不是 completed output 的 planned
+approval，也不列入 kickoff 可分派的 confirmation contract。最終 output 仍走原本的
+`confirm_output`。
+
+此模式必須同時滿足：
+
+- 在 phase-owned artifact 保存 durable、無歧義的 stage evidence；resume 只信任該 evidence，
+  不得從 iteration number、一般 prose 或 session memory 推斷 stage。evidence 或必要 answer
+  缺漏、衝突或模糊時 fail closed，留在前置 stage。
+- provisional output 明標未確認，內容只涵蓋 user 做決策所需的範圍與主要取捨，且在最終
+  `confirm_output` 前不可到達 downstream execution。
+- HumanTask prompt 必須能獨立呈現決策所需資訊；具體問題格式、answer validation、stage
+  marker 與 final output shape 由 owning phase skill 定義，不放進本通用規範。
+- iteration selector 只區分 first entry 與 resume，不代表某個 stage 只會進行一輪。Checklist
+  reference 應依程序用途命名；只有程序本身確實綁定特定 iteration 時才以 iteration 命名。
+- 若 stages 需要不同 owner、獨立 artifact、重用、各自可配置的 planned gate 或不同 downstream
+  reachability，應拆成不同 playbook steps。
+
 ## 7. Shared rules 的放置
 
 - 一條規則若適用於多個 phase，就放進 shared skill（通常是 `cafe-workflow-common`），
@@ -305,8 +327,11 @@ placeholder 名稱。不要依賴 artifact 名稱或新增 Python mapping；未�
 
 ## 8. Iteration 行為的兩種做法
 
-- **差異小**：單一 skill 內依 iteration 分支（`cafe-spec` 的做法：「第一輪 / 後續輪」各一段），
-  細節放 `references/execution_steps_iteration_1.md` 與 `execution_steps_iteration_n.md`。
+- **差異小**：單一 skill 內依 bounded selector 分支。Selector 可使用 `iteration: 1` 與
+  `min_iteration: 2` 區分 first entry／已有前次輸出的後續執行，細節放
+  `references/execution_steps_iteration_1.md` 與 `execution_steps_iteration_n.md`。檔名描述
+  selector，不代表其中的 domain stage 只能進行一輪；stage 必須由 durable artifact evidence
+  判斷。
 - **差異大**：拆成兩個 skill，由 playbook 以 dict 切換（`editorial` 的做法：
   `skill: {1: cafe-brief_first, default: cafe-brief_revise}`）。
 
@@ -418,7 +443,7 @@ steps:
 
 ### Plan phase output
 
-plan phase 的 `{output_file}` 是下一個 execute phase 的 implementation plan，不是只有分類、建議或散文摘要。至少包含：
+plan phase 在交給下一個 execute phase 時的最終 `{output_file}` 是 implementation plan，不是只有分類、建議或散文摘要。若使用 §6 的同 phase 方案 checkpoint，較早 iteration 可暫存明確標記、不可執行的 direction draft；它不得離開 Plan self-loop，也不等於已確認的 plan。最終 Plan 至少包含：
 
 - `## Test List`：列出穩定 invariants 與 end-to-end validation；不適用的 unit／integration 類別要明寫為 0 的原因。
 - `## Development Task Breakdown`（或 domain 等價標題）：依 dependency order 使用 `- [ ]`，每項有穩定 ID、inputs、action、output、validation 與 dependencies。
