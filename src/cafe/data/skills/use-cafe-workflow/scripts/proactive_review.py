@@ -1088,21 +1088,33 @@ def _atomic_yaml_write(
 
 
 @contextmanager
+def _issue_lock(issue_dir: Path) -> Iterator[None]:
+    """Hold the stable issue directory lock before accessing review persistence."""
+    if fcntl is None:  # pragma: no cover - CAFE's workflow driver is POSIX-hosted.
+        raise RuntimeError("proactive review activation requires process file locking")
+    try:
+        descriptor = os.open(issue_dir, _persistence_open_flags())
+    except OSError as exc:
+        raise StaleContractError("proactive review issue directory is invalid") from exc
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
+@contextmanager
 def _contract_lock(
     issue_dir: Path, *, create: bool = True, recover: bool = True
 ) -> Iterator[int]:
     """Serialize recovery, contract reads, and shared state updates."""
-    if fcntl is None:  # pragma: no cover - CAFE's workflow driver is POSIX-hosted.
-        raise RuntimeError("proactive review activation requires process file locking")
     with _IN_PROCESS_CONTRACT_LOCK:
-        with _proactive_review_directory(issue_dir, create=create) as descriptor:
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
-            try:
+        with _issue_lock(issue_dir):
+            with _proactive_review_directory(issue_dir, create=create) as descriptor:
                 if recover:
                     _recover_pending_replacement(descriptor)
                 yield descriptor
-            finally:
-                fcntl.flock(descriptor, fcntl.LOCK_UN)
 
 
 def _active_contract_digest(directory_descriptor: int) -> str:

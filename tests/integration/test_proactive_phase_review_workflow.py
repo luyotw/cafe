@@ -8,6 +8,7 @@ import json
 import subprocess
 import sys
 import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -276,6 +277,167 @@ def test_failed_initial_activation_cleanup_cannot_invalidate_next_activation(
     assert not second_errors
     assert len(second_results) == 1
     assert second_results[0].is_file()
+    assert module.load_active_contract(issue_dir=issue_dir, project_root=tmp_path)[
+        "proposal_digest"
+    ] == module.policy_digest(policy)
+
+
+def test_failed_initial_activation_does_not_detach_a_waiting_process_directory(
+    tmp_path: Path,
+) -> None:
+    """I3, U8 — process locks precede access to removable persistence directories."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "process-cleanup-overlap"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text("playbook_id: standard\n", encoding="utf-8")
+    policy = _policy(selected="develop")
+    confirmation = _confirmation("process-cleanup-overlap", policy)
+    first_ready = tmp_path / "first-ready"
+    allow_first_failure = tmp_path / "allow-first-failure"
+    second_started = tmp_path / "second-started"
+    allow_second_activation = tmp_path / "allow-second-activation"
+    second_lock_entered = tmp_path / "second-lock-entered"
+    second_directory_opened = tmp_path / "second-directory-opened"
+    script_path = SKILL_ROOT / "scripts" / "proactive_review.py"
+    module_loader = """
+import importlib.util
+import sys
+from pathlib import Path
+
+spec = importlib.util.spec_from_file_location(
+    "proactive_review_worker", Path(sys.argv[1])
+)
+assert spec is not None and spec.loader is not None
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+"""
+    first_worker = module_loader + """
+import json
+import sys
+import time
+
+ready = Path(sys.argv[2])
+proceed = Path(sys.argv[3])
+issue_dir = Path(sys.argv[4])
+project_root = Path(sys.argv[5])
+policy = json.loads(sys.argv[6])
+confirmation = json.loads(sys.argv[7])
+original_write = module._atomic_yaml_write
+
+def fail_contract_write(path, *args, **kwargs):
+    if path.name == module.CONTRACT_FILENAME:
+        ready.write_text("marker-created", encoding="utf-8")
+        while not proceed.exists():
+            time.sleep(0.01)
+        raise OSError("injected first activation write failure")
+    return original_write(path, *args, **kwargs)
+
+module._atomic_yaml_write = fail_contract_write
+try:
+    module.activate_contract(
+        issue_dir=issue_dir,
+        project_root=project_root,
+        policy=policy,
+        confirmation=confirmation,
+    )
+except OSError:
+    pass
+else:
+    raise AssertionError("first activation unexpectedly succeeded")
+"""
+    second_worker = module_loader + """
+import json
+import sys
+import time
+from contextlib import contextmanager
+
+started = Path(sys.argv[2])
+proceed = Path(sys.argv[3])
+lock_entered = Path(sys.argv[4])
+directory_opened = Path(sys.argv[5])
+issue_dir = Path(sys.argv[6])
+project_root = Path(sys.argv[7])
+policy = json.loads(sys.argv[8])
+confirmation = json.loads(sys.argv[9])
+original_directory = module._proactive_review_directory
+original_lock = module._contract_lock
+
+@contextmanager
+def observe_directory(*args, **kwargs):
+    with original_directory(*args, **kwargs) as descriptor:
+        directory_opened.write_text("opened", encoding="utf-8")
+        yield descriptor
+
+module._proactive_review_directory = observe_directory
+
+@contextmanager
+def observe_lock(*args, **kwargs):
+    lock_entered.write_text("entered", encoding="utf-8")
+    with original_lock(*args, **kwargs) as descriptor:
+        yield descriptor
+
+module._contract_lock = observe_lock
+started.write_text("started", encoding="utf-8")
+while not proceed.exists():
+    time.sleep(0.01)
+module.activate_contract(
+    issue_dir=issue_dir,
+    project_root=project_root,
+    policy=policy,
+    confirmation=confirmation,
+)
+"""
+    serialized_policy = json.dumps(policy)
+    serialized_confirmation = json.dumps(confirmation)
+    first = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            first_worker,
+            str(script_path),
+            str(first_ready),
+            str(allow_first_failure),
+            str(issue_dir),
+            str(tmp_path),
+            serialized_policy,
+            serialized_confirmation,
+        ]
+    )
+    deadline = time.monotonic() + 5
+    while not first_ready.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert first_ready.exists()
+    second = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            second_worker,
+            str(script_path),
+            str(second_started),
+            str(allow_second_activation),
+            str(second_lock_entered),
+            str(second_directory_opened),
+            str(issue_dir),
+            str(tmp_path),
+            serialized_policy,
+            serialized_confirmation,
+        ]
+    )
+    deadline = time.monotonic() + 5
+    while not second_started.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert second_started.exists()
+    allow_second_activation.write_text("activate", encoding="utf-8")
+    deadline = time.monotonic() + 5
+    while not second_lock_entered.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert second_lock_entered.exists()
+    time.sleep(0.5)
+    assert not second_directory_opened.exists()
+    allow_first_failure.write_text("fail", encoding="utf-8")
+    assert first.wait(timeout=20) == 0
+    assert second.wait(timeout=20) == 0
+    assert second_directory_opened.exists()
+    module = _module()
     assert module.load_active_contract(issue_dir=issue_dir, project_root=tmp_path)[
         "proposal_digest"
     ] == module.policy_digest(policy)
