@@ -1589,6 +1589,67 @@ def test_generic_workflow_step_writes_pr_publish_request_contract(
     assert publish_request["credentials"] == ["gh"]
 
 
+def test_generic_step_forwards_runtime_validated_publication_choice(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Test List 5/8: hook and prompt context use the runtime-bound choice."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "bound-publication-choice"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        "base_branch: develop\npr:\n  auto_create: true\n",
+        encoding="utf-8",
+    )
+    playbook = {
+        "playbook": {"id": "bound-publication-choice"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "publish": {
+                "skill": "pr",
+                "role": "developer",
+                "behavior": {"completion": "baton", "publish_confirmation": True},
+                "capability_requests": ["cafe.pr.publish"],
+                "output_artifact": "pr",
+                "allowed_tools": ["Read"],
+                "on": {"workflow_complete": "_done"},
+            }
+        },
+    }
+    state = BlackboardStore(issue_dir).load_or_create("publish")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="bound-publication-choice",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("unused"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+    captured: dict[str, object] = {}
+
+    def fake_execute(*_args, **kwargs):
+        captured.update(kwargs)
+        return GenericPhaseExecution(
+            response="confirmed",
+            status_code=PhaseStatusCode.CONFIRMED,
+            goto_target=None,
+            context_updates={},
+            events=[],
+        )
+
+    executor.generic_phase.execute = fake_execute
+
+    executor.execute_step(
+        "publish",
+        playbook["steps"]["publish"],
+        state,
+        validated_pr_auto_create=False,
+    )
+
+    assert captured["context"]["pr_auto_create"] == "false"
+    assert captured["hook_context"]["validated_pr_auto_create"] is False
+
+
 def test_remote_pr_git_history_uses_fetched_remote_base(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-remote-history"

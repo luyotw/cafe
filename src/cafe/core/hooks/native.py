@@ -1173,7 +1173,10 @@ class GitHubPRCreator(NoOpHook):
             return HookResult()
 
         context_updates: dict[str, str] = {}
-        if not self._is_local_pr_mode(phase):
+        if not self._is_local_pr_mode(
+            phase,
+            validated_pr_auto_create=kwargs.get("validated_pr_auto_create"),
+        ):
             base_branch = self._resolve_base_branch(phase)
             if not base_branch:
                 base_branch = str(phase.git_ops.get_default_base_branch())
@@ -1256,7 +1259,10 @@ class GitHubPRCreator(NoOpHook):
             return HookResult()
         if CAPABILITY_PR_PUBLISH_ID in _effective_capability_ids(
             step_name=step_name, step_def=step_def
-        ) and self._is_local_pr_mode(phase):
+        ) and self._is_local_pr_mode(
+            phase,
+            validated_pr_auto_create=kwargs.get("validated_pr_auto_create"),
+        ):
             return HookResult()
 
         repo_root = self._resolve_repo_root(phase)
@@ -1457,7 +1463,13 @@ class GitHubPRCreator(NoOpHook):
         return HookResult(context_updates=context_updates, events=events)
 
     @staticmethod
-    def _is_local_pr_mode(phase: Any) -> bool:
+    def _is_local_pr_mode(
+        phase: Any,
+        *,
+        validated_pr_auto_create: Any = None,
+    ) -> bool:
+        if isinstance(validated_pr_auto_create, bool):
+            return not validated_pr_auto_create
         try:
             value = phase._get_issue_config_value(
                 phase.issue_dir / "issue.yaml",

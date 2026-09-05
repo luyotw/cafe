@@ -505,6 +505,68 @@ def test_runtime_reads_publication_contract_at_run_time(tmp_path: Path) -> None:
     assert calls == []
 
 
+def test_runtime_revalidates_publication_contract_before_each_agent_execution(
+    tmp_path: Path,
+) -> None:
+    """Test List 5: a between-hop config change fails before the next agent."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "changed-between-hops"
+    _write_publication_contract(issue_dir, confirmed=False, persisted=False)
+    playbook = {
+        "playbook": {"id": "between-hop-contract"},
+        "steps": {
+            "review": {
+                "skill": "review",
+                "role": "reviewer",
+                "behavior": {"completion": "baton"},
+                "on": {"await_agent": "publish"},
+            },
+            "publish": {
+                "skill": "pr",
+                "role": "developer",
+                "behavior": {"completion": "baton", "publish_confirmation": True},
+                "capability_requests": ["cafe.pr.publish"],
+                "on": {"workflow_complete": "_done"},
+            },
+        },
+    }
+    calls: list[str] = []
+
+    def executor(step: str, *_args: object, **_kwargs: object) -> StepExecutionResult:
+        calls.append(step)
+        if step == "review":
+            _write_publication_contract(issue_dir, confirmed=False, persisted=True)
+            _write_baton(
+                issue_dir,
+                from_step=step,
+                to_owner="agent",
+                to_step="publish",
+                intent="await_agent",
+            )
+            return StepExecutionResult(response="", artifacts={})
+        _write_baton(
+            issue_dir,
+            from_step=step,
+            to_owner="done",
+            to_step="done",
+            intent="workflow_complete",
+        )
+        return StepExecutionResult(
+            response="",
+            artifacts={},
+            events=[{"type": "pr_synced", "url": "https://example.test/pull/467"}],
+        )
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    ).run(start_step="review")
+
+    assert result.final_status_code == "INVALID_WORKFLOW_CONFIG"
+    assert "publication_choice_mismatch" in (result.detail or "")
+    assert calls == ["review"]
+
+
 @pytest.mark.parametrize("choice", [True, False])
 def test_local_review_task_reports_the_current_publication_outcome(
     tmp_path: Path,

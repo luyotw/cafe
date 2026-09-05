@@ -1928,6 +1928,12 @@ class BlackboardWorkflowRuntime:
             "id": portion_id,
             "instruction": portion.get("instruction", ""),
         }
+        publication_error = self._publication_contract_error()
+        if publication_error is not None:
+            return self._reject_invalid_publication_contract(
+                start_step=current_step,
+                error=publication_error,
+            )
         frame = self._execute_one_iteration(
             current_step=current_step,
             step_def=framed_step,
@@ -2164,6 +2170,7 @@ class BlackboardWorkflowRuntime:
                     self.blackboard,
                     extra_prompt=extra_prompt,
                     same_invocation_retry=same_invocation_retry,
+                    validated_pr_auto_create=self._validated_pr_auto_create,
                 )
             except TypeError:
                 try:
@@ -3254,6 +3261,12 @@ class BlackboardWorkflowRuntime:
             except IterationLimitReachedError as exc:
                 return exc.result
             for _baton_attempt in range(3):
+                publication_error = self._publication_contract_error()
+                if publication_error is not None:
+                    return self._reject_invalid_publication_contract(
+                        start_step=current_step,
+                        error=publication_error,
+                    )
                 try:
                     frame = self._execute_one_iteration(
                         current_step=current_step,
@@ -3564,6 +3577,12 @@ class BlackboardWorkflowRuntime:
                 return exc.result
 
             for _baton_attempt in range(3):
+                publication_error = self._publication_contract_error()
+                if publication_error is not None:
+                    return self._reject_invalid_publication_contract(
+                        start_step=current_step,
+                        error=publication_error,
+                    )
                 try:
                     frame = self._execute_one_iteration(
                         current_step=current_step,
