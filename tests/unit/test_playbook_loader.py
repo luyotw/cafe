@@ -106,6 +106,12 @@ def test_legacy_max_iterations_is_migrated_to_attempt_limit(tmp_path: Path) -> N
     assert "max_iterations" not in resolved["steps"]["review"]
 
 
+def test_step_corrections_resume_sessions_by_default() -> None:
+    step = StepConfig.model_validate({"skill": "phase", "role": "reviewer", "on": {}})
+
+    assert step.correction_session == "resume"
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
