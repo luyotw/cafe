@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import importlib.util
 import json
 import subprocess
@@ -31,6 +32,81 @@ def _prepare_issue(issue_dir: Path):
     from cafe.core.blackboard import BlackboardStore
 
     return BlackboardStore(issue_dir).load_or_create("spec")
+
+
+def _activate_event_contract(
+    issue_dir: Path, *, workflow_id: str, clis: list[tuple[str, str]]
+) -> None:
+    """Create the complete Driver authority required by public callback tests."""
+    from cafe.driver import ActivateConfirmedContract, activate_confirmed_contract
+
+    driver_clis = [{"cli": cli, "model": model} for cli, model in clis]
+    proposal: dict[str, object] = {
+        "locales": {"conversation": {"value": "en", "source": "test"}},
+        "confirmation_contract": {
+            "user_required": ["spec", "plan"],
+            "driver_confirmable": [],
+            "mandatory_human_stops": ["spec", "plan"],
+        },
+        "reactive_user_handoffs": {
+            "need_clarification": "user_required",
+            "need_permission": "user_required",
+            "alignment_checkpoint": "driver_resolvable_when_clear",
+        },
+        "mandate": {"source": "test", "boundaries": ["issue scope"]},
+        "issue_assessment": {
+            "nature": "feature",
+            "scale": "small",
+            "risks": [],
+            "rationale": "Exercise contract-managed callback transport.",
+        },
+        "phases": [
+            {
+                "name": "develop",
+                "chain": driver_clis,
+                "rationale": "The confirmed event-driven callback chain.",
+            }
+        ],
+        "proactive_review": {
+            "phase_decisions": [
+                {
+                    "phase": "develop",
+                    "decision": "not_required",
+                    "rationale": "No review is required for this callback fixture.",
+                }
+            ]
+        },
+        "model_adjustment": {"authority": "user_approval_required"},
+        "driver": {"mode": "event-driven", "clis": driver_clis},
+        "checkout": {"kind": "current_checkout"},
+        "semantic_facts": {},
+        "material_assumptions": {"provider": "test", "permissions": ["local"]},
+    }
+    policy_fields = (
+        "locales",
+        "confirmation_contract",
+        "reactive_user_handoffs",
+        "mandate",
+        "issue_assessment",
+        "phases",
+        "proactive_review",
+        "model_adjustment",
+        "driver",
+        "checkout",
+    )
+    proposal["semantic_facts"] = {
+        "effective_policy": {name: proposal[name] for name in policy_fields}
+    }
+    activate_confirmed_contract(
+        ActivateConfirmedContract(
+            issue_dir=issue_dir,
+            issue_name=issue_dir.name,
+            workflow_id=workflow_id,
+            confirmed_by="user",
+            confirmed_at=datetime(2026, 9, 6, 2, tzinfo=timezone.utc),
+            proposal=proposal,
+        )
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -304,12 +380,8 @@ def test_version_three_state_rejects_inconsistent_event_transitions(
 
         def execute_event_driver(self, _prompt, **_kwargs):
             if self.config.cli is AgentCLI.CODEX:
-                raise callback.AgentExecutionError(
-                    "rejected", error_type="transport_rejected"
-                )
-            return SimpleNamespace(
-                session_id="claude-session", accepted=True, records=()
-            )
+                raise callback.AgentExecutionError("rejected", error_type="transport_rejected")
+            return SimpleNamespace(session_id="claude-session", accepted=True, records=())
 
     accepted = callback._run_v3_callback(
         driver_dir,
@@ -330,9 +402,7 @@ def test_version_three_state_rejects_inconsistent_event_transitions(
         event_state["takeover"]["eligible_reason"] = "unrelated"
     else:
         event_state["recovery_pending"] = True
-    (driver_dir / "dispatch_state.json").write_text(
-        json.dumps(invalid), encoding="utf-8"
-    )
+    (driver_dir / "dispatch_state.json").write_text(json.dumps(invalid), encoding="utf-8")
 
     with pytest.raises(ValueError):
         callback._load_or_initialize_dispatch_state(
@@ -364,6 +434,45 @@ def _v3_event_context(callback, tmp_path: Path, clis: list[tuple[str, str]]):
         driver_dir,
         workflow_id=blackboard.workflow_id,
         config=callback._load_config(driver_dir),
+    )
+    state = callback._ensure_dispatch_event(driver_dir, state, event)
+    return driver_dir, state, event
+
+
+def _contract_event_context(
+    callback,
+    tmp_path: Path,
+    clis: list[tuple[str, str]],
+    *,
+    issue_name: str = "issue457",
+    event_type: str = "phase_terminal",
+):
+    from cafe.core.blackboard import BlackboardStore
+
+    issue_dir = tmp_path / ".cafe" / "issues" / issue_name
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("spec")
+    _activate_event_contract(issue_dir, workflow_id=blackboard.workflow_id, clis=clis)
+    event = store.prepare_workflow_callback_event(
+        blackboard,
+        {
+            "workflow_id": blackboard.workflow_id,
+            "issue": issue_dir.name,
+            "event_type": event_type,
+            "step": "develop",
+            "status_code": "ok",
+        },
+    )
+    driver_dir = issue_dir / "driver"
+    config = callback._contract_callback_config(
+        issue_dir=issue_dir,
+        issue_name=issue_dir.name,
+        workflow_id=blackboard.workflow_id,
+    )
+    state = callback._load_or_initialize_dispatch_state(
+        driver_dir,
+        workflow_id=blackboard.workflow_id,
+        config=config,
     )
     state = callback._ensure_dispatch_event(driver_dir, state, event)
     return driver_dir, state, event
@@ -759,10 +868,7 @@ def test_copilot_acceptance_at_record_65_stops_before_fallback(tmp_path: Path) -
             "type": "user.message",
             "data": {"content": f"callback {event['event_id']}"},
         },
-        *(
-            {"type": "assistant.message", "index": index}
-            for index in range(63)
-        ),
+        *({"type": "assistant.message", "index": index} for index in range(63)),
         {"type": "result", "sessionId": "provider-session"},
     ]
     process = MagicMock()
@@ -1067,7 +1173,7 @@ def test_conclusive_bootstrap_failure_moves_to_next_entry(tmp_path: Path) -> Non
 
 def test_public_callback_path_executes_version_three_lifecycle(tmp_path: Path, monkeypatch) -> None:
     callback = _callback_module()
-    driver_dir, state, event = _v3_event_context(callback, tmp_path, [("gemini", "exact")])
+    driver_dir, state, event = _contract_event_context(callback, tmp_path, [("gemini", "exact")])
     calls = []
 
     class FakeExecutor:
@@ -1088,17 +1194,19 @@ def test_public_callback_path_executes_version_three_lifecycle(tmp_path: Path, m
     persisted = callback._load_or_initialize_dispatch_state(
         driver_dir,
         workflow_id=state["workflow_id"],
-        config=state["policy"],
+        config=callback._contract_callback_config(
+            issue_dir=driver_dir.parent,
+            issue_name=driver_dir.parent.name,
+            workflow_id=state["workflow_id"],
+        ),
     )
     assert calls == [None, "gemini-session"]
     assert persisted["events"][event["event_id"]]["status"] == "accepted"
 
 
-def test_public_callback_path_rejects_eventless_provider_init(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_public_callback_path_rejects_eventless_provider_init(tmp_path: Path, monkeypatch) -> None:
     callback = _callback_module()
-    driver_dir, state, event = _v3_event_context(callback, tmp_path, [("claude", "exact")])
+    driver_dir, state, event = _contract_event_context(callback, tmp_path, [("claude", "exact")])
     state["entries"][0]["session"] = {
         "id": "provider-session",
         "source": "provider",
@@ -1121,7 +1229,11 @@ def test_public_callback_path_rejects_eventless_provider_init(
     persisted = callback._load_or_initialize_dispatch_state(
         driver_dir,
         workflow_id=state["workflow_id"],
-        config=state["policy"],
+        config=callback._contract_callback_config(
+            issue_dir=driver_dir.parent,
+            issue_name=driver_dir.parent.name,
+            workflow_id=state["workflow_id"],
+        ),
     )
     event_state = persisted["events"][event["event_id"]]
     assert event_state["status"] == "exhausted"
@@ -1389,9 +1501,7 @@ def test_status_projects_acquisition_delivery_takeover_and_recovery(
 
 
 @pytest.mark.parametrize("schema_version", [1, 2])
-def test_status_reads_legacy_binding_without_mutation(
-    tmp_path: Path, schema_version: int
-) -> None:
+def test_status_reads_legacy_binding_without_mutation(tmp_path: Path, schema_version: int) -> None:
     callback = _callback_module()
     issue_dir = tmp_path / ".cafe" / "issues" / "legacy"
     driver_dir = issue_dir / "driver"
@@ -1454,55 +1564,46 @@ def test_event_driver_refuses_callbacks_without_a_process_lock(tmp_path: Path) -
             pass
 
 
-def test_callback_acquires_then_exactly_resumes_its_session(tmp_path: Path, monkeypatch) -> None:
+def test_callback_acquires_and_delivers_a_contract_bound_session(
+    tmp_path: Path, monkeypatch
+) -> None:
     callback = _callback_module()
-    issue_dir = tmp_path / ".cafe" / "issues" / "issue456"
-    callback.write_config(issue_dir, cli="codex", model="exact")
-    from cafe.core.blackboard import BlackboardStore
+    driver_dir, state, event = _contract_event_context(
+        callback, tmp_path, [("codex", "exact")], issue_name="issue456"
+    )
+    calls = []
 
-    workflow_id = BlackboardStore(issue_dir).load_or_create("spec").workflow_id
-    continuations = []
-
-    class FakeManager:
-        def __init__(self, *, session_manager, **_kwargs):
-            self.session_manager = session_manager
-            self._last_cli = AgentCLI.CODEX
-            self._last_reported_model = None  # Codex does not report this in standard JSONL.
-            self._last_session_id = "session-1"
-
-        def register_agent(self, _config):
+    class FakeExecutor:
+        def __init__(self, _config, **_kwargs):
             pass
 
-        def execute(self, _name, _prompt, *, continuation, **_kwargs):
-            continuations.append(continuation)
-            self.session_manager.save_session(
-                callback.DRIVER_AGENT_NAME, AgentCLI.CODEX, "session-1"
+        def execute_event_driver(self, _prompt, **kwargs):
+            expected_session_id = kwargs.get("expected_session_id")
+            calls.append(expected_session_id)
+            return SimpleNamespace(
+                session_id="session-1",
+                accepted=expected_session_id == "session-1",
+                records=(),
             )
 
-    monkeypatch.setattr(callback, "AgentManager", FakeManager)
-    event = {"issue": "issue456", "workflow_id": workflow_id, "event_type": "phase_terminal"}
-    callback.run_callback(event, repository_root=tmp_path)
+    monkeypatch.setattr(callback, "AgentExecutor", FakeExecutor)
     callback.run_callback(event, repository_root=tmp_path)
 
-    assert continuations[0].is_exact is False
-    assert continuations[1].is_exact is True
-    assert continuations[1].session_id == "session-1"
+    persisted = json.loads((driver_dir / "dispatch_state.json").read_text(encoding="utf-8"))
+    assert calls == [None, "session-1"]
+    assert persisted["entries"][0]["session"]["id"] == "session-1"
 
 
 def test_callback_queues_the_bound_codex_host_thread(tmp_path: Path, monkeypatch) -> None:
     callback = _callback_module()
     monkeypatch.setenv("CODEX_THREAD_ID", "visible-thread")
-    issue_dir = tmp_path / ".cafe" / "issues" / "issue456"
-    callback.write_config(issue_dir, cli="codex", model="exact")
-    assert callback._load_config(issue_dir / "driver")["host_session"] == {
-        "kind": "codex",
-        "thread_id": "visible-thread",
-    }
-
-    from cafe.core.blackboard import BlackboardStore
-
-    workflow_id = BlackboardStore(issue_dir).load_or_create("spec").workflow_id
-    event = {"issue": "issue456", "workflow_id": workflow_id, "event_type": "human_task"}
+    driver_dir, _state, event = _contract_event_context(
+        callback,
+        tmp_path,
+        [("codex", "exact")],
+        issue_name="issue456",
+        event_type="human_task",
+    )
     with patch.object(callback.subprocess, "run") as run:
         callback.run_callback(event, repository_root=tmp_path)
 
@@ -1519,11 +1620,8 @@ def test_callback_queues_the_bound_codex_host_thread(tmp_path: Path, monkeypatch
         "text": True,
         "timeout": 30,
     }
-    stored = callback.EventDriverSessionStore(
-        issue_dir / "driver", workflow_id=workflow_id, cli=AgentCLI.CODEX, model="exact"
-    ).load_session(callback.DRIVER_AGENT_NAME, AgentCLI.CODEX)
-    assert stored is not None
-    assert stored.session_id == "visible-thread"
+    persisted = json.loads((driver_dir / "dispatch_state.json").read_text(encoding="utf-8"))
+    assert persisted["entries"][0]["session"]["id"] == "visible-thread"
 
 
 def test_bound_host_thread_queue_failure_never_creates_a_new_session(
@@ -1531,25 +1629,20 @@ def test_bound_host_thread_queue_failure_never_creates_a_new_session(
 ) -> None:
     callback = _callback_module()
     monkeypatch.setenv("CODEX_THREAD_ID", "visible-thread")
-    issue_dir = tmp_path / ".cafe" / "issues" / "issue456"
-    callback.write_config(issue_dir, cli="codex", model="exact")
-    from cafe.core.blackboard import BlackboardStore
-
-    workflow_id = BlackboardStore(issue_dir).load_or_create("spec").workflow_id
+    driver_dir, _state, event = _contract_event_context(
+        callback,
+        tmp_path,
+        [("codex", "exact")],
+        issue_name="issue456",
+        event_type="human_task",
+    )
     failure = subprocess.CalledProcessError(1, ["codex", "queue"], stderr="not found")
     with patch.object(callback.subprocess, "run", side_effect=failure) as run:
-        with pytest.raises(subprocess.CalledProcessError):
-            callback.run_callback(
-                {
-                    "issue": "issue456",
-                    "workflow_id": workflow_id,
-                    "event_type": "human_task",
-                },
-                repository_root=tmp_path,
-            )
+        callback.run_callback(event, repository_root=tmp_path)
 
     assert run.call_count == 1
-    assert not (issue_dir / "driver" / "session.json").exists()
+    persisted = json.loads((driver_dir / "dispatch_state.json").read_text(encoding="utf-8"))
+    assert persisted["entries"][0]["session"]["id"] == "visible-thread"
 
 
 def test_callback_failure_sends_a_best_effort_slack_notice(tmp_path: Path, monkeypatch) -> None:
@@ -1796,71 +1889,52 @@ def test_invalid_issue_is_rejected_without_writing_a_failure_receipt(
 
 def test_callback_identity_mismatch_keeps_existing_session(tmp_path: Path, monkeypatch) -> None:
     callback = _callback_module()
-    issue_dir = tmp_path / ".cafe" / "issues" / "issue456"
-    callback.write_config(issue_dir, cli="codex", model="exact")
-    from cafe.core.blackboard import BlackboardStore
-
-    workflow_id = BlackboardStore(issue_dir).load_or_create("spec").workflow_id
-    store = callback.EventDriverSessionStore(
-        issue_dir / "driver", workflow_id=workflow_id, cli=AgentCLI.CODEX, model="exact"
+    driver_dir, state, event = _contract_event_context(
+        callback, tmp_path, [("codex", "exact")], issue_name="issue456"
     )
-    store.save_session(callback.DRIVER_AGENT_NAME, AgentCLI.CODEX, "existing")
-    store.commit()
-    original = store.path.read_bytes()
+    state["entries"][0]["session"] = {
+        "id": "existing",
+        "source": "provider",
+        "acquired_at": "2026-09-04T00:00:00+00:00",
+    }
+    callback._write_dispatch_state(driver_dir, state)
 
-    class FakeManager:
-        def __init__(self, *, session_manager, **_kwargs):
-            self.session_manager = session_manager
-            self._last_cli = AgentCLI.CODEX
-            self._last_reported_model = "wrong"
-            self._last_session_id = "existing"
-
-        def register_agent(self, _config):
+    class FakeExecutor:
+        def __init__(self, _config, **_kwargs):
             pass
 
-        def execute(self, *_args, **_kwargs):
-            self.session_manager.save_session(
-                callback.DRIVER_AGENT_NAME, AgentCLI.CODEX, "existing"
-            )
+        def execute_event_driver(self, _prompt, **_kwargs):
+            return SimpleNamespace(session_id="different", accepted=True, records=())
 
-    monkeypatch.setattr(callback, "AgentManager", FakeManager)
-    with pytest.raises(ValueError, match="identity mismatch"):
-        callback.run_callback(
-            {"issue": "issue456", "workflow_id": workflow_id, "event_type": "phase_terminal"},
-            repository_root=tmp_path,
-        )
-    assert store.path.read_bytes() == original
+    monkeypatch.setattr(callback, "AgentExecutor", FakeExecutor)
+    callback.run_callback(event, repository_root=tmp_path)
+
+    persisted = json.loads((driver_dir / "dispatch_state.json").read_text(encoding="utf-8"))
+    assert persisted["entries"][0]["session"]["id"] == "existing"
+    assert persisted["events"][event["event_id"]]["recovery_pending"] is True
 
 
 def test_callback_session_conflict_keeps_existing_session(tmp_path: Path, monkeypatch) -> None:
     callback = _callback_module()
-    issue_dir = tmp_path / ".cafe" / "issues" / "issue456"
-    callback.write_config(issue_dir, cli="codex", model="exact")
-    from cafe.agents.executor import AgentExecutionError
-    from cafe.core.blackboard import BlackboardStore
-
-    workflow_id = BlackboardStore(issue_dir).load_or_create("spec").workflow_id
-    store = callback.EventDriverSessionStore(
-        issue_dir / "driver", workflow_id=workflow_id, cli=AgentCLI.CODEX, model="exact"
+    driver_dir, state, event = _contract_event_context(
+        callback, tmp_path, [("codex", "exact")], issue_name="issue456"
     )
-    store.save_session(callback.DRIVER_AGENT_NAME, AgentCLI.CODEX, "existing")
-    store.commit()
-    original = store.path.read_bytes()
+    state["entries"][0]["session"] = {
+        "id": "existing",
+        "source": "provider",
+        "acquired_at": "2026-09-04T00:00:00+00:00",
+    }
+    callback._write_dispatch_state(driver_dir, state)
 
-    class FakeManager:
-        def __init__(self, **_kwargs):
+    class FakeExecutor:
+        def __init__(self, _config, **_kwargs):
             pass
 
-        def register_agent(self, _config):
-            pass
+        def execute_event_driver(self, _prompt, **_kwargs):
+            raise callback.AgentExecutionError("conflict", error_type="SESSION_CONFLICT")
 
-        def execute(self, *_args, **_kwargs):
-            raise AgentExecutionError("conflict", error_type="SESSION_CONFLICT")
+    monkeypatch.setattr(callback, "AgentExecutor", FakeExecutor)
+    callback.run_callback(event, repository_root=tmp_path)
 
-    monkeypatch.setattr(callback, "AgentManager", FakeManager)
-    with pytest.raises(AgentExecutionError, match="conflict"):
-        callback.run_callback(
-            {"issue": "issue456", "workflow_id": workflow_id, "event_type": "phase_terminal"},
-            repository_root=tmp_path,
-        )
-    assert store.path.read_bytes() == original
+    persisted = json.loads((driver_dir / "dispatch_state.json").read_text(encoding="utf-8"))
+    assert persisted["entries"][0]["session"]["id"] == "existing"
