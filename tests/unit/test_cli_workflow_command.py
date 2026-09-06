@@ -1,7 +1,6 @@
 """Tests for workflow CLI command."""
 
 import json
-import hashlib
 import os
 import subprocess
 from pathlib import Path
@@ -30,7 +29,6 @@ from cafe.ui.cli_shared import (
     _resolve_issue_playbook_name,
     apply_alignment_decision_from_payload,
 )
-from cafe.ui.commands.workflow import _verify_expected_workflow_inputs
 from cafe.ui.human_tasks import resolve_step_human_task
 from cafe.utils.config import ConfigManager
 
@@ -45,35 +43,6 @@ def _write_local_only_publication_contract(issue_dir: Path) -> None:
         "confirmation_contract:\n" "  pr_auto_create: false\n" "pr:\n" "  auto_create: false\n",
         encoding="utf-8",
     )
-
-
-def test_validated_workflow_inputs_reject_change_before_generic_consumption(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A generic workflow can bind its initial config read to caller evidence."""
-    monkeypatch.chdir(tmp_path)
-    issue_config = tmp_path / ".cafe" / "issues" / "issue-input" / "issue.yaml"
-    issue_config.parent.mkdir(parents=True)
-    issue_config.write_text("playbook_id: standard\n", encoding="utf-8")
-    phase_config = tmp_path / ".cafe" / "phases.yaml"
-    phase_config.parent.mkdir(parents=True, exist_ok=True)
-    phase_config.write_text("develop: {}\n", encoding="utf-8")
-    issue_digest = hashlib.sha256(issue_config.read_bytes()).hexdigest()
-    phase_digest = hashlib.sha256(phase_config.read_bytes()).hexdigest()
-
-    _verify_expected_workflow_inputs(
-        issue="issue-input",
-        issue_sha256=issue_digest,
-        phase_sha256=phase_digest,
-    )
-
-    issue_config.write_text("playbook_id: changed\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="expected issue configuration changed"):
-        _verify_expected_workflow_inputs(
-            issue="issue-input",
-            issue_sha256=issue_digest,
-            phase_sha256=phase_digest,
-        )
 
 
 def test_background_forwards_trusted_event_callback_to_the_fixed_worker(
@@ -116,64 +85,6 @@ def test_background_forwards_trusted_event_callback_to_the_fixed_worker(
         "standard",
         "--on-workflow-event",
         "builtin:use-cafe-workflow:workflow_event_callback",
-    ]
-
-
-def test_background_forwards_validated_input_digests_to_the_generic_worker(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The background/resume child retains the caller's exact input binding."""
-    monkeypatch.chdir(tmp_path)
-    captured: dict[str, object] = {}
-    issue_dir = tmp_path / ".cafe" / "issues" / "issue456"
-    issue_dir.mkdir(parents=True)
-    issue_config = issue_dir / "issue.yaml"
-    issue_config.write_text("playbook_id: standard\n", encoding="utf-8")
-    phase_config = tmp_path / ".cafe" / "phases.yaml"
-    phase_config.write_text("{}\n", encoding="utf-8")
-    issue_digest = hashlib.sha256(issue_config.read_bytes()).hexdigest()
-    phase_digest = hashlib.sha256(phase_config.read_bytes()).hexdigest()
-
-    class CapturingWorkerLauncher:
-        def __init__(self, _issue_dir) -> None:
-            pass
-
-        def launch(self, _record, *, extra_args=None):
-            captured["extra_args"] = extra_args
-            return 4561
-
-    with (
-        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
-        patch("cafe.ui.commands.workflow.FixedWorkerLauncher", CapturingWorkerLauncher),
-    ):
-        git = MagicMock()
-        git.get_current_branch.return_value = "issue456"
-        mock_git_cls.return_value = git
-        result = runner.invoke(
-            app,
-            [
-                "workflow",
-                "--playbook",
-                "standard",
-                "--issue",
-                "issue456",
-                "--execute",
-                "--background",
-                "--expected-issue-config-sha256",
-                issue_digest,
-                "--expected-phase-config-sha256",
-                phase_digest,
-            ],
-        )
-
-    assert result.exit_code == 0, (result.stdout, result.exception)
-    assert captured["extra_args"] == [
-        "--playbook",
-        "standard",
-        "--expected-issue-config-sha256",
-        issue_digest,
-        "--expected-phase-config-sha256",
-        phase_digest,
     ]
 
 

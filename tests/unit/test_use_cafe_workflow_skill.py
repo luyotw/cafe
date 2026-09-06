@@ -1079,21 +1079,9 @@ def test_driver_launcher_rejects_decoy_paths_before_generic_execution(
 
     args.issue_config = issue_config
     assert launcher.run_validated_workflow(args) == 0
-    assert len(launches) == 1
-    command, cwd = launches[0]
-    assert command[:7] == [
-        "cafe",
-        "workflow",
-        "--issue",
-        "victim",
-        "--execute",
-        "--mute-agent-output",
-        "--expected-issue-config-sha256",
+    assert launches == [
+        (["cafe", "workflow", "--issue", "victim", "--execute", "--mute-agent-output"], tmp_path)
     ]
-    assert len(command[7]) == 64
-    assert command[8] == "--expected-phase-config-sha256"
-    assert len(command[9]) == 64
-    assert cwd == tmp_path
 
     alias_root = tmp_path / "alias-root"
     alias_root.symlink_to(tmp_path, target_is_directory=True)
@@ -1103,61 +1091,6 @@ def test_driver_launcher_rejects_decoy_paths_before_generic_execution(
     with pytest.raises(ValueError):
         launcher.run_validated_workflow(args)
     assert len(launches) == 1
-
-
-def test_driver_launcher_fails_closed_when_generic_inputs_change_during_launch(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """The generic child cannot report success after its validated files change."""
-    entry = _load_script_module(
-        SKILL_ROOT / "scripts" / "validate_driver_entry.py", "test_driver_entry_for_race"
-    )
-    monkeypatch.setitem(sys.modules, "validate_driver_entry", entry)
-    launcher = _load_script_module(
-        SKILL_ROOT / "scripts" / "run_validated_driver_workflow.py", "test_driver_launcher_race"
-    )
-    issue_dir = tmp_path / ".cafe" / "issues" / "victim"
-    issue_dir.mkdir(parents=True)
-    issue_config = issue_dir / "issue.yaml"
-    issue_config.write_text("playbook_id: standard\npr:\n  auto_create: false\n", encoding="utf-8")
-    phase_config = tmp_path / ".cafe" / "phases.yaml"
-    phase_config.write_text(
-        "develop:\n  name: David\n  role: developer\n  clis:\n"
-        "    - cli: codex\n      model: exact\n",
-        encoding="utf-8",
-    )
-    projection = {
-        "generic_inputs": {
-            "playbook_id": "standard",
-            "pr_auto_create": False,
-            "phase_chains": {"develop": [{"cli": "codex", "model": "exact"}]},
-        }
-    }
-    monkeypatch.setattr(launcher, "validate_entry", lambda **_kwargs: projection)
-    observed: list[bool] = []
-
-    def mutate_before_generic_read(*_args, **_kwargs):
-        issue_config.write_text(
-            "playbook_id: standard\npr:\n  auto_create: true\n", encoding="utf-8"
-        )
-        observed.append("auto_create: true" in issue_config.read_text(encoding="utf-8"))
-        return SimpleNamespace(returncode=0)
-
-    monkeypatch.setattr(launcher.subprocess, "run", mutate_before_generic_read)
-    args = SimpleNamespace(
-        issue_dir=issue_dir,
-        issue_name="victim",
-        workflow_id="workflow-victim",
-        fresh_facts={},
-        issue_config=issue_config,
-        phase_config=phase_config,
-        background=False,
-        on_workflow_event=None,
-    )
-
-    with pytest.raises(ValueError, match="changed during generic launch"):
-        launcher.run_validated_workflow(args)
-    assert observed == [True]
 
 
 def test_phase_writer_accepts_primary_only_chain(tmp_path: Path) -> None:

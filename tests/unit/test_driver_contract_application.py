@@ -189,6 +189,36 @@ def test_contract_accepts_legacy_model_adjustment_confirmation_evidence(tmp_path
     assert result.created is True
 
 
+def test_legacy_model_adjustment_evidence_has_current_semantic_freshness(
+    tmp_path: Path,
+) -> None:
+    """Compatibility-only confirmation fields do not make unchanged policy stale."""
+    issue_dir = tmp_path / "legacy"
+    legacy_proposal = _proposal()
+    legacy_proposal["model_adjustment"] = {
+        "authority": "user_approval_required",
+        "confirmed_by": "user",
+        "confirmed_at": "2026-09-06T02:00:00+00:00",
+    }
+    legacy_proposal["semantic_facts"] = _fresh_policy_facts(legacy_proposal)
+    activate_confirmed_contract(_activation(issue_dir, legacy_proposal))
+    current_proposal = _proposal()
+
+    result = evaluate_driver_entry(
+        DriverEntryRequest(
+            issue_dir,
+            "issue474",
+            "workflow-474",
+            {
+                "semantic_facts": current_proposal["semantic_facts"],
+                "material_assumptions": current_proposal["material_assumptions"],
+            },
+        )
+    )
+
+    assert result.freshness is Freshness.SAME_SEMANTICS
+
+
 def test_semantic_freshness_ignores_metadata_but_fails_closed_for_unknown_or_material(
     tmp_path: Path,
 ) -> None:
@@ -714,6 +744,42 @@ def test_legacy_adoption_rejects_every_conflicting_ordinary_policy_field(
                 "pr": proposal["pr"],
                 "model_adjustment": {"authority": "driver_autonomous"},
                 "reactive_user_handoffs": {"need_clarification": "driver_resolvable_when_clear"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = adopt_legacy_contract(LegacyAdoptionRequest(legacy, "issue474", "workflow-474"))
+
+    assert result.adopted is False
+    assert result.disposition == "reconfirmation_required"
+    assert not (legacy / "driver" / "contract.json").exists()
+
+
+def test_legacy_adoption_rejects_behavior_changing_playbook_overrides(tmp_path: Path) -> None:
+    """A legacy issue override must not become an unchecked authority source."""
+    legacy = tmp_path / "legacy"
+    confirmation = legacy / "driver" / "legacy_confirmation.json"
+    confirmation.parent.mkdir(parents=True)
+    proposal = _proposal()
+    confirmation.write_text(
+        json.dumps(
+            {
+                "identity": {"issue_name": "issue474", "workflow_id": "workflow-474"},
+                "confirmed_by": "user",
+                "confirmed_at": "2026-09-06T02:00:00+00:00",
+                "proposal": proposal,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (legacy / "issue.yaml").write_text(
+        json.dumps(
+            {
+                "playbook_id": "standard",
+                "confirmation_contract": proposal["confirmation_contract"],
+                "pr": proposal["pr"],
+                "playbook_overrides": {"steps": {"develop": {"max_attempts_per_cycle": 2}}},
             }
         ),
         encoding="utf-8",

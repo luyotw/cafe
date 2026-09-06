@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import inspect
-import hashlib
 import os
-import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -143,47 +141,6 @@ def _resolve_issue_playbook_name(*a, **kw):
 console = Console()
 
 _USER_INPUT_HELP = "Initial workflow input, or answer to write when resuming from a user handoff"
-_MAX_VALIDATED_INPUT_BYTES = 256 * 1024
-
-
-def _validated_input_sha256(path: Path, *, label: str) -> str:
-    """Hash one ordinary bounded config file before generic workflow consumption."""
-    try:
-        metadata = path.lstat()
-    except FileNotFoundError as exc:
-        raise ValueError(f"{label} is missing") from exc
-    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
-        raise ValueError(f"{label} is unsafe")
-    if metadata.st_size > _MAX_VALIDATED_INPUT_BYTES:
-        raise ValueError(f"{label} exceeds the maximum bounded size")
-    try:
-        contents = path.read_bytes()
-    except OSError as exc:
-        raise ValueError(f"{label} is unreadable") from exc
-    if len(contents) > _MAX_VALIDATED_INPUT_BYTES:
-        raise ValueError(f"{label} exceeds the maximum bounded size")
-    return hashlib.sha256(contents).hexdigest()
-
-
-def _verify_expected_workflow_inputs(
-    *,
-    issue: str | None,
-    issue_sha256: str | None,
-    phase_sha256: str | None,
-) -> None:
-    """Fail before use unless a caller's generic config snapshot still matches."""
-    if issue_sha256 is None and phase_sha256 is None:
-        return
-    if not issue or issue_sha256 is None or phase_sha256 is None:
-        raise ValueError("both expected workflow input digests require an explicit issue")
-    if len(issue_sha256) != 64 or len(phase_sha256) != 64:
-        raise ValueError("expected workflow input digest is invalid")
-    issue_config = Path(".cafe") / "issues" / issue / "issue.yaml"
-    phase_config = Path(".cafe") / "phases.yaml"
-    if _validated_input_sha256(issue_config, label="expected issue configuration") != issue_sha256:
-        raise ValueError("expected issue configuration changed before generic workflow launch")
-    if _validated_input_sha256(phase_config, label="expected phase configuration") != phase_sha256:
-        raise ValueError("expected phase configuration changed before generic workflow launch")
 
 
 def _normalize_cli_user_input(user_input: Any) -> Optional[str]:
@@ -666,12 +623,6 @@ def workflow(
         "--on-workflow-event",
         help="Trusted builtin asynchronous callback after durable workflow events",
     ),
-    expected_issue_config_sha256: Optional[str] = typer.Option(
-        None, "--expected-issue-config-sha256", hidden=True
-    ),
-    expected_phase_config_sha256: Optional[str] = typer.Option(
-        None, "--expected-phase-config-sha256", hidden=True
-    ),
     mute_agent_output: bool = typer.Option(
         False,
         "--mute-agent-output",
@@ -711,12 +662,6 @@ def workflow(
     worker_exit_error: str | None = None
     launch_store: WorkerLaunchStore | None = None
     try:
-
-        _verify_expected_workflow_inputs(
-            issue=issue,
-            issue_sha256=expected_issue_config_sha256,
-            phase_sha256=expected_phase_config_sha256,
-        )
 
         git = _get_GitOperations()()
         cafe_dir = Path(".cafe")
@@ -815,14 +760,6 @@ def workflow(
             try:
                 record = launch_store.start()
                 child_args = ["--playbook", selected_playbook]
-                if expected_issue_config_sha256 is not None:
-                    child_args.extend(
-                        ["--expected-issue-config-sha256", expected_issue_config_sha256]
-                    )
-                if expected_phase_config_sha256 is not None:
-                    child_args.extend(
-                        ["--expected-phase-config-sha256", expected_phase_config_sha256]
-                    )
                 if callback_binding is not None:
                     child_args.extend(["--on-workflow-event", callback_binding.callback_id])
                 if mute_agent_output:

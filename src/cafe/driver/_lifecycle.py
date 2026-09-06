@@ -284,6 +284,10 @@ def _legacy_issue_projection_matches(
             "playbook_id"
         ] != expected_playbook.get("id"):
             return False
+    if "playbook_overrides" in document:
+        # The legacy formatter did not persist a normalized override projection.
+        # Treat any override as incomplete authority rather than silently adopting it.
+        return False
     for field in (
         "locales",
         "confirmation_contract",
