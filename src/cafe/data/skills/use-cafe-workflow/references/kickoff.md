@@ -433,3 +433,24 @@ for confirmation rather than asking again.
 A legacy `mandate.confirmation_contract.agent_confirmable` value in strategic
 context is only a kickoff proposal. Rename it to `driver_confirmable`, compare it
 with the active playbook, and obtain fresh confirmation before persisting it.
+
+## Durable Driver authority
+
+After the user confirms the complete normalized kickoff, activate exactly one
+versioned contract at `.cafe/issues/<issue>/driver/contract.json` before the
+first Driver entry. The activation command must bind the prepared workflow ID,
+timezone-aware confirmation time, confirmer, and the same semantic proposal
+that was rendered for confirmation. Rendering alone never writes authority.
+
+`proactive_review.phase_decisions` is an ordered policy field in that contract,
+covering every agent or hybrid phase with `required` or `not_required` and an
+issue-specific rationale. It is not a `proactive_review.yaml` sidecar and does
+not schedule review work. `pr.auto_create`, when the effective playbook requests
+`cafe.pr.publish`, is likewise a matching confirmed Boolean contract field that
+is projected into the existing generic PR input only after entry validation.
+
+On resume, Primary and Backup Drivers must first refresh skill-owned preflight
+evidence and use `scripts/validate_driver_entry.py`. Metadata-only cache churn
+may rebuild derived views; material or unknown semantic evidence stops for
+reconfirmation. Session, dispatch, callback delivery, active CLI, and PR URL
+remain runtime state rather than contract fields.

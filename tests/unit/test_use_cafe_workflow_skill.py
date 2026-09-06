@@ -351,7 +351,9 @@ def test_use_cafe_workflow_keeps_playbook_selection_issue_owned() -> None:
         "legacy `settings.playbook`, top-level `playbook`, or `playbook_id`"
         in normalized_selection
     )
-    assert "persist the selected `playbook_id` only in" in normalized_selection
+    assert "persist the effective playbook and every other confirmed Driver policy" in normalized_selection
+    assert "`.cafe/issues/<issue-name>/driver/contract.json`" in normalized_selection
+    assert "`issue.yaml` may retain a prepare input or derived view" in normalized_selection
     assert "Strategic context is not playbook configuration" in normalized_strategic
     assert (
         "Do not add `playbook_id` to `mandate` or `issues.<name>`"
@@ -461,6 +463,75 @@ mandate:
     assert "| need_clarification | user_required | 否 |" in result.stdout
     assert "| product_scope | escalate | roadmap, positioning |" in result.stdout
     assert result.stdout.count("| playbook_id |") == 1
+
+
+def test_confirmed_kickoff_activates_one_issue_scoped_driver_contract(tmp_path: Path) -> None:
+    """Test List integration 1: the confirmed rendered policy becomes durable before use."""
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text(
+        "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
+        encoding="utf-8",
+    )
+    issue_dir = tmp_path / "issues" / "issue346"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps({"workflow_id": "prepared-346"}), encoding="utf-8"
+    )
+    result = subprocess.run(
+        _kickoff_formatter_command(
+            strategic_context,
+            "--activate-confirmed",
+            "--workflow-id",
+            "prepared-346",
+            "--confirmed-by",
+            "user",
+            "--confirmed-at",
+            "2026-09-06T02:00:00+00:00",
+            "--issue-dir",
+            str(issue_dir),
+            "--proactive-review-decision",
+            "spec=not_required:Specification review remains user-confirmed.",
+            "--proactive-review-decision",
+            "plan=not_required:Planning review remains user-confirmed.",
+            "--proactive-review-decision",
+            "develop=not_required:No proactive review was confirmed for development.",
+            "--proactive-review-decision",
+            "review=not_required:The normal review phase remains reactive.",
+            "--proactive-review-decision",
+            "pr=not_required:Publication uses the generic PR path.",
+        ),
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    contract = json.loads((issue_dir / "driver" / "contract.json").read_text(encoding="utf-8"))
+    assert contract["identity"] == {"issue_name": "issue346", "workflow_id": "prepared-346"}
+    assert contract["pr"]["auto_create"] is False
+    assert "proactive_review.yaml" not in {path.name for path in (issue_dir / "driver").iterdir()}
+
+    entry = subprocess.run(
+        [
+            sys.executable,
+            str(SKILL_ROOT / "scripts" / "validate_driver_entry.py"),
+            "--issue-dir",
+            str(issue_dir),
+            "--issue-name",
+            "issue346",
+            "--workflow-id",
+            "prepared-346",
+            "--fresh-facts",
+            json.dumps(contract["preflight"]),
+        ],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert entry.returncode == 0, entry.stderr
+    assert json.loads(entry.stdout)["generic_inputs"]["pr_auto_create"] is False
 
 
 @pytest.mark.parametrize("choice", [True, False])

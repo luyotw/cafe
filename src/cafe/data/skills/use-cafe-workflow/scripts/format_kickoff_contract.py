@@ -9,6 +9,7 @@ import os
 import shlex
 import shutil
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -51,6 +52,7 @@ try:
         playbook_requests_capability,
     )
     from cafe.agents.executor import AgentExecutor
+    from cafe.driver import ActivateConfirmedContract, activate_confirmed_contract
     from cafe.core.types import AgentCLI, AgentConfig
     from cafe.playbooks.loader import PlaybookLoader
     from cafe.skills.execution_profile import resolve_execution_profile
@@ -447,7 +449,208 @@ def _parser() -> argparse.ArgumentParser:
         "--alignment-checkpoint",
         default="driver_resolvable_when_clear",
     )
+    parser.add_argument(
+        "--proactive-review-decision",
+        action="append",
+        default=[],
+        metavar="PHASE=required|not_required:RATIONALE",
+        help="Confirmed proactive-review decision for one agent or hybrid phase.",
+    )
+    parser.add_argument(
+        "--activate-confirmed",
+        action="store_true",
+        help="Persist the complete proposal after the user has already confirmed it.",
+    )
+    parser.add_argument("--workflow-id")
+    parser.add_argument("--confirmed-by")
+    parser.add_argument("--confirmed-at")
+    parser.add_argument("--issue-dir", type=Path)
     return parser
+
+
+def _proactive_review_decisions(
+    values: Iterable[str], *, agent_phases: list[str]
+) -> list[dict[str, str]]:
+    """Parse the complete, ordered confirmed review policy without a sidecar."""
+    decisions: dict[str, dict[str, str]] = {}
+    for raw in values:
+        phase, separator, remainder = raw.partition("=")
+        state, rationale_separator, rationale = remainder.partition(":")
+        phase, state, rationale = phase.strip(), state.strip(), rationale.strip()
+        if not separator or not rationale_separator or state not in {"required", "not_required"}:
+            raise ValueError("proactive review decisions use PHASE=required|not_required:RATIONALE")
+        if phase in decisions:
+            raise ValueError(f"duplicate proactive review decision: {phase}")
+        decisions[phase] = {"phase": phase, "decision": state, "rationale": rationale}
+    if list(decisions) != agent_phases:
+        raise ValueError("proactive review decisions must cover agent phases in playbook order")
+    return [decisions[phase] for phase in agent_phases]
+
+
+def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
+    """Build the same normalized policy rendered at kickoff, with no persistence."""
+    project_root = args.project_root.resolve()
+    model = PlaybookLoader(project_root=project_root).load_model(args.playbook_id).model
+    skill_loader = SkillLoader(project_root=project_root)
+    publication_applicable = playbook_requests_capability(model, "cafe.pr.publish")
+    candidates = confirmation_gate_steps(model)
+    mandatory_human_tasks = mandatory_confirmation_gate_steps(model)
+    user_required, driver_confirmable = _resolve_partition(
+        candidates=candidates,
+        user_values=args.user_required,
+        driver_values=args.driver_confirmable,
+    )
+    configured_locale = model.playbook.conversation_locale
+    effective_locale = args.effective_locale or configured_locale
+    if effective_locale.lower() == "auto":
+        raise ValueError("--effective-locale is required when the playbook locale is auto")
+    update = _validate_preflight(
+        args.update_preflight,
+        label="runtime update",
+        required={
+            "checked_at", "status", "installed_version", "latest_version", "decision",
+            "comparison_token", "post_change_evidence",
+        },
+    )
+    catalog = _validate_preflight(
+        args.catalog_preflight,
+        label="catalog",
+        required={"checked_at", "status", "comparison_token", "effective_digests", "decision", "post_change_evidence"},
+    )
+    if not isinstance(catalog["effective_digests"], dict) or set(catalog["effective_digests"]) != {"playbook", "phase", "agent"}:
+        raise ValueError("catalog preflight effective_digests must cover playbook, phase, and agent")
+    if publication_applicable != (args.pr_auto_create is not None):
+        raise ValueError("PR choice must be supplied exactly when cafe.pr.publish is applicable")
+    mandate, mandate_source = _load_strategic_context(
+        _project_path(args.strategic_context, project_root), args.issue_name
+    )
+    overrides = _parse_phase_chains(args.phase_chain, step_names=set(model.steps))
+    rationales = _parse_phase_rationales(args.phase_rationale, step_names=set(model.steps))
+    phase_config = _project_path(args.phase_config, project_root)
+    phases: list[dict[str, Any]] = []
+    agent_phases: list[str] = []
+    for step_name, step in model.steps.items():
+        profile = resolve_execution_profile(skill_loader, step.skill)
+        chain: list[dict[str, str]] = []
+        if step.assignee_type in {"agent", "hybrid"}:
+            selected = overrides.get(step_name)
+            if selected is None:
+                selected, _ = _resolve_configured_chain(
+                    step_name=step_name, role=step.role, phase_config=phase_config
+                )
+            rationale = rationales.get(step_name)
+            if rationale is None:
+                raise ValueError(f"missing phase rationale for agent-executed step: {step_name}")
+            chain = [{"cli": cli, "model": model_name} for cli, model_name in selected]
+            agent_phases.append(step_name)
+        else:
+            rationale = "not agent-executed"
+        phases.append(
+            {
+                "name": step_name,
+                "assignee_type": step.assignee_type,
+                "role": step.role,
+                "skill": step.skill,
+                "execution_profile": profile.workloads[0] if profile.workloads else "default",
+                "chain": chain,
+                "rationale": rationale,
+                "capabilities": [],
+            }
+        )
+    if set(rationales) - set(agent_phases):
+        raise ValueError("phase rationale targets a non-agent phase")
+    locale_source = args.locale_source or f"playbook:{args.playbook_id}"
+    checkout = {"kind": "worktree", "path": args.worktree} if args.worktree else {"kind": "current_checkout"}
+    proposal: dict[str, Any] = {
+        "playbook": {
+            "id": args.playbook_id,
+            "source": f"playbook:{args.playbook_id}",
+            "selection_rationale": args.playbook_rationale,
+            "semantic_fingerprint": {"steps": list(model.steps), "publication_applicable": publication_applicable},
+            "capability_requests": ["cafe.pr.publish"] if publication_applicable else [],
+        },
+        "locales": {
+            "conversation": {"value": effective_locale, "source": locale_source},
+            "repository_content": {"value": args.repository_content_locale, "source": "confirmation"},
+        },
+        "confirmation_contract": {
+            "user_required": list(user_required),
+            "driver_confirmable": list(driver_confirmable),
+            "mandatory_human_stops": list(mandatory_human_tasks),
+            **({"pr_auto_create": args.pr_auto_create} if publication_applicable else {}),
+        },
+        "reactive_user_handoffs": {
+            "need_clarification": args.need_clarification,
+            "need_permission": args.need_permission,
+            "alignment_checkpoint": args.alignment_checkpoint,
+        },
+        "mandate": {"source": mandate_source, "value": mandate},
+        "issue_assessment": {
+            "nature": args.issue_nature,
+            "scale": args.issue_scale,
+            "risks": _items(args.risk_factor),
+            "rationale": args.assessment_rationale,
+        },
+        "phases": phases,
+        "proactive_review": {
+            "phase_decisions": _proactive_review_decisions(
+                args.proactive_review_decision, agent_phases=agent_phases
+            )
+        },
+        "model_adjustment": {
+            "authority": args.model_adjustment_authority,
+            "confirmed_by": args.confirmed_by or "user",
+            "confirmed_at": args.confirmed_at or datetime.now().astimezone().isoformat(),
+        },
+        "driver": {"mode": args.driver_mode},
+        "checkout": checkout,
+        "semantic_facts": {
+            "effective_graph": list(model.steps),
+            "assignees": {name: step.assignee_type for name, step in model.steps.items()},
+            "confirmation_gates": {"user": user_required, "driver": driver_confirmable},
+            "publication_applicable": publication_applicable,
+        },
+        "material_assumptions": {
+            "runtime_update": {key: update[key] for key in ("status", "decision", "installed_version", "latest_version")},
+            "catalog": {key: catalog[key] for key in ("status", "decision", "effective_digests")},
+        },
+    }
+    if args.driver_mode == "attached":
+        proposal["driver"]["poll_interval_seconds"] = args.poll_interval_seconds
+    elif args.driver_mode == "event-driven":
+        proposal["driver"]["clis"] = [
+            {"cli": cli, "model": model_name} for cli, model_name in _parse_event_driver_entries(args.event_driver)
+        ]
+    if publication_applicable:
+        proposal["pr"] = {"auto_create": args.pr_auto_create, "post_todo_list": []}
+    return proposal
+
+
+def activate_confirmed_proposal(args: argparse.Namespace) -> None:
+    """Persist only after explicit confirmation metadata and prepared identity are present."""
+    if not args.workflow_id or not args.confirmed_by or not args.confirmed_at:
+        raise ValueError("activation requires workflow ID, confirmer, and timezone-aware confirmation time")
+    issue_dir = args.issue_dir or args.project_root / ".cafe" / "issues" / args.issue_name
+    blackboard = issue_dir / "blackboard.json"
+    if not blackboard.is_file() or blackboard.is_symlink():
+        raise ValueError("activation requires a prepared issue identity")
+    try:
+        prepared = json.loads(blackboard.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("prepared issue identity is unreadable") from exc
+    if not isinstance(prepared, dict) or prepared.get("workflow_id") != args.workflow_id:
+        raise ValueError("activation workflow ID does not match the prepared issue")
+    confirmed_at = datetime.fromisoformat(args.confirmed_at.replace("Z", "+00:00"))
+    activate_confirmed_contract(
+        ActivateConfirmedContract(
+            issue_dir=issue_dir,
+            issue_name=args.issue_name,
+            workflow_id=args.workflow_id,
+            confirmed_by=args.confirmed_by,
+            confirmed_at=confirmed_at,
+            proposal=build_confirmed_proposal(args),
+        )
+    )
 
 
 def render(args: argparse.Namespace) -> str:
@@ -773,7 +976,11 @@ def render(args: argparse.Namespace) -> str:
 
 def main() -> int:
     try:
-        print(render(_parser().parse_args()))
+        args = _parser().parse_args()
+        rendered = render(args)
+        if args.activate_confirmed:
+            activate_confirmed_proposal(args)
+        print(rendered)
     except (FileNotFoundError, LookupError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

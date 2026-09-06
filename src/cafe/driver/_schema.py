@@ -137,10 +137,10 @@ def _validate_confirmation(value: Any, *, pr_capable: bool) -> dict[str, Any]:
     result = _mapping(value, "confirmation_contract", keys=required)
     for name in required - {"pr_auto_create"}:
         result[name] = _string_list(result[name], f"confirmation_contract.{name}")
-    if set(result["mandatory_human_stops"]) - set(result["user_required"]):
-        raise ValueError("mandatory human stops must be user-required")
     if set(result["user_required"]) & set(result["driver_confirmable"]):
         raise ValueError("confirmation ownership must be disjoint")
+    if set(result["mandatory_human_stops"]) & set(result["driver_confirmable"]):
+        raise ValueError("mandatory human stops cannot be driver-confirmable")
     if pr_capable:
         result["pr_auto_create"] = _bool(
             result["pr_auto_create"], "confirmation_contract.pr_auto_create"

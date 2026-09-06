@@ -301,3 +301,10 @@ Update only the future phase's chain in `.cafe/phases.yaml`. With
 first. State the new band and keep/change rationale in the driver progress
 update; do not add a separate runtime decision store. A terminal `_done` baton
 has no future chain to adjust.
+
+For a Driver-managed issue, `.cafe/phases.yaml` is a derived execution view.
+The confirmed ordered chains and the authority for later adjustment live in the
+single Driver contract. A delegated replacement may change only the explicitly
+delegated future model paths; changing publication choice, proactive-review
+policy, confirmation ownership, or any unrelated policy requires user
+reconfirmation and a complete contract replacement.

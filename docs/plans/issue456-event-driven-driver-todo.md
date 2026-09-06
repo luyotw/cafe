@@ -90,3 +90,17 @@
 - per-action authority、structured action executor、action receipt或global CAS framework。
 - 新的safe-stop API、PID registry、cooperative cancellation或worker lifecycle/control framework；不宣稱callback或使用者授權本身會產生process ownership。
 - 五套driver transport複製或五CLI完整workflow測試矩陣。
+
+## #474 durable contract refinement
+
+The #474 contract application is intentionally a small `src/cafe/driver/**`
+periphery, not a core Driver Mode subsystem. Its only production caller is the
+`use-cafe-workflow` skill, which retains preflight, mode routing, session,
+callback, prompt, and process ownership. The package owns only the complete
+issue-scoped kickoff contract lifecycle and its bounded projections.
+
+Every generic phase, `cafe-pr`, trusted host capability path, core runtime, UI,
+and agent remains Driver-free. They continue to consume the existing generic
+publication input and capability contract, so a workflow with no Driver
+directory has the same local-only or verified-PR outcome as a Driver-projected
+workflow. This preserves the mode-neutral and trusted-boundary principles above.
