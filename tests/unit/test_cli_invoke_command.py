@@ -172,3 +172,22 @@ class TestChatCommand:
 
                     assert result.exit_code == 0
                     mock_launch.assert_called_once_with("pm", "issue36")
+
+    def test_chat_prompt_runs_one_shot_mode(
+        self, tmp_path: Path, mock_initialized_branch, config_with_agents
+    ):
+        with (
+            patch("cafe.ui.cli.GitOperations") as mock_git_class,
+            patch("cafe.ui.cli.is_branch_initialized", return_value=True),
+            patch("cafe.ui.cli.launch_chat_session", return_value=0) as mock_launch,
+        ):
+            mock_git = mock_git_class.return_value
+            mock_git.is_valid_branch.return_value = True
+            mock_git.get_current_branch.return_value = "issue478"
+
+            result = runner.invoke(app, ["chat", "developer", "-p", "Summarize this"])
+
+        assert result.exit_code == 0
+        mock_launch.assert_called_once_with(
+            "developer", "issue478", prompt="Summarize this"
+        )
