@@ -258,8 +258,6 @@ issue_assessment:
   risk_factors: [public contract, integration coverage]
 model_adjustment:
   authority: driver_autonomous  # or user_approval_required
-  confirmed_by: user
-  confirmed_at: 2026-08-13
 ```
 
 With `driver_autonomous`, the driver may change future phase chains using the

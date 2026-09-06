@@ -284,16 +284,29 @@ def _legacy_issue_projection_matches(
             "playbook_id"
         ] != expected_playbook.get("id"):
             return False
-    for field in ("confirmation_contract", "pr"):
+    for field in (
+        "locales",
+        "confirmation_contract",
+        "reactive_user_handoffs",
+        "mandate",
+        "issue_assessment",
+        "phases",
+        "proactive_review",
+        "model_adjustment",
+        "driver",
+        "checkout",
+        "pr",
+    ):
         if field not in document:
             continue
         actual = document[field]
         expected = proposal.get(field)
-        if not isinstance(actual, Mapping) or not isinstance(expected, Mapping):
-            return False
-        if set(actual) - set(expected):
-            return False
-        if any(actual[key] != expected[key] for key in actual):
+        if isinstance(actual, Mapping):
+            if not isinstance(expected, Mapping) or set(actual) - set(expected):
+                return False
+            if any(actual[key] != expected[key] for key in actual):
+                return False
+        elif actual != expected:
             return False
     return True
 

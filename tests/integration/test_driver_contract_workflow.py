@@ -85,7 +85,12 @@ def _proposal() -> dict[str, object]:
             "alignment_checkpoint": "user_required",
         },
         "mandate": {"source": "test", "boundaries": ["issue"]},
-        "issue_assessment": {"nature": "feature", "scale": "small", "risks": [], "rationale": "test"},
+        "issue_assessment": {
+            "nature": "feature",
+            "scale": "small",
+            "risks": [],
+            "rationale": "test",
+        },
         "phases": phases,
         "proactive_review": {
             "phase_decisions": [
@@ -95,8 +100,6 @@ def _proposal() -> dict[str, object]:
         },
         "model_adjustment": {
             "authority": "user_approval_required",
-            "confirmed_by": "user",
-            "confirmed_at": "2026-09-06T02:00:00+00:00",
         },
         "driver": {"mode": "unattended"},
         "checkout": {"kind": "current_checkout"},
@@ -166,7 +169,10 @@ def test_resume_and_cold_takeover_reach_the_same_safe_authority_decision(tmp_pat
     facts["semantic_facts"] = _fresh_policy_facts(changed)
     with pytest.raises(ValueError):
         adapter.validate_entry(
-            issue_dir=issue_dir, issue_name="journey", workflow_id="workflow-journey", fresh_facts=facts
+            issue_dir=issue_dir,
+            issue_name="journey",
+            workflow_id="workflow-journey",
+            fresh_facts=facts,
         )
 
 

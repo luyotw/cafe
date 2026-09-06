@@ -378,8 +378,6 @@ for confirmation rather than asking again.
     risk_factors: [public contract, integration coverage]
   model_adjustment:
     authority: driver_autonomous
-    confirmed_by: user
-    confirmed_at: 2026-08-13
   ```
 
   For a playbook requesting `cafe.pr.publish`, verify that the prepare flag

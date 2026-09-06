@@ -87,7 +87,9 @@ def _bool(value: Any, label: str) -> bool:
 
 
 def _string_list(value: Any, label: str) -> list[str]:
-    if not isinstance(value, list) or any(not isinstance(item, str) or not item.strip() for item in value):
+    if not isinstance(value, list) or any(
+        not isinstance(item, str) or not item.strip() for item in value
+    ):
         raise ValueError(f"{label} must be a list of non-empty strings")
     result = [item.strip() for item in value]
     if len(set(result)) != len(result):
@@ -184,9 +186,7 @@ def _validate_phases(value: Any) -> list[dict[str, Any]]:
             phase[field] = _string(phase[field], f"phases[{index}].{field}")
         profile = phase["execution_profile"]
         if isinstance(profile, str):
-            phase["execution_profile"] = _string(
-                profile, f"phases[{index}].execution_profile"
-            )
+            phase["execution_profile"] = _string(profile, f"phases[{index}].execution_profile")
         else:
             profile = _mapping(
                 profile,
@@ -247,18 +247,26 @@ def _validate_proactive(value: Any, phases: list[dict[str, Any]]) -> dict[str, A
     raw_decisions = result["phase_decisions"]
     if not isinstance(raw_decisions, list):
         raise ValueError("proactive_review.phase_decisions must be a list")
-    agent_phases = [phase["name"] for phase in phases if phase["assignee_type"] in {"agent", "hybrid"}]
+    agent_phases = [
+        phase["name"] for phase in phases if phase["assignee_type"] in {"agent", "hybrid"}
+    ]
     decisions: list[dict[str, str]] = []
     for index, raw in enumerate(raw_decisions):
         decision = _mapping(
-            raw, f"proactive_review.phase_decisions[{index}]", keys={"phase", "decision", "rationale"}
+            raw,
+            f"proactive_review.phase_decisions[{index}]",
+            keys={"phase", "decision", "rationale"},
         )
         phase = _string(decision["phase"], "proactive review phase")
         state = _string(decision["decision"], "proactive review decision")
         if state not in {"required", "not_required"}:
             raise ValueError("proactive review decision is invalid")
         decisions.append(
-            {"phase": phase, "decision": state, "rationale": _string(decision["rationale"], "proactive review rationale")}
+            {
+                "phase": phase,
+                "decision": state,
+                "rationale": _string(decision["rationale"], "proactive review rationale"),
+            }
         )
     if [item["phase"] for item in decisions] != agent_phases:
         raise ValueError("proactive review decisions must cover agent phases in playbook order")
@@ -281,7 +289,11 @@ def _validate_driver(value: Any) -> dict[str, Any]:
         if set(result) != {"mode"}:
             raise ValueError("unattended driver has invalid fields")
     elif mode == "event-driven":
-        if set(result) != {"mode", "clis"} or not isinstance(result["clis"], list) or not result["clis"]:
+        if (
+            set(result) != {"mode", "clis"}
+            or not isinstance(result["clis"], list)
+            or not result["clis"]
+        ):
             raise ValueError("event-driven driver requires an ordered CLI/model chain")
         clis: list[dict[str, str]] = []
         seen: set[str] = set()
@@ -328,10 +340,16 @@ def _validate_policy(proposal: Mapping[str, Any]) -> dict[str, Any]:
     pr_capable = "cafe.pr.publish" in playbook["capability_requests"] or any(
         "cafe.pr.publish" in phase["capabilities"] for phase in phases
     )
+    adjustment = _json_mapping(raw["model_adjustment"], "model_adjustment")
+    adjustment_keys = set(adjustment)
+    if adjustment_keys not in ({"authority"}, {"authority", "confirmed_by", "confirmed_at"}):
+        raise ValueError("model_adjustment has unsupported or missing fields")
     result: dict[str, Any] = {
         "playbook": playbook,
         "locales": _validate_locales(raw["locales"]),
-        "confirmation_contract": _validate_confirmation(raw["confirmation_contract"], pr_capable=pr_capable),
+        "confirmation_contract": _validate_confirmation(
+            raw["confirmation_contract"], pr_capable=pr_capable
+        ),
         "reactive_user_handoffs": _mapping(
             raw["reactive_user_handoffs"],
             "reactive_user_handoffs",
@@ -345,11 +363,7 @@ def _validate_policy(proposal: Mapping[str, Any]) -> dict[str, Any]:
         ),
         "phases": phases,
         "proactive_review": _validate_proactive(raw["proactive_review"], phases),
-        "model_adjustment": _mapping(
-            raw["model_adjustment"],
-            "model_adjustment",
-            keys={"authority", "confirmed_by", "confirmed_at"},
-        ),
+        "model_adjustment": adjustment,
         "driver": _validate_driver(raw["driver"]),
         "checkout": _validate_checkout(raw["checkout"]),
     }
@@ -365,8 +379,13 @@ def _validate_policy(proposal: Mapping[str, Any]) -> dict[str, Any]:
     adjustment = result["model_adjustment"]
     if adjustment["authority"] not in {"driver_autonomous", "user_approval_required"}:
         raise ValueError("model adjustment authority is invalid")
-    adjustment["confirmed_by"] = _string(adjustment["confirmed_by"], "model_adjustment.confirmed_by")
-    adjustment["confirmed_at"] = _aware_time(adjustment["confirmed_at"], "model_adjustment.confirmed_at")
+    if "confirmed_by" in adjustment:
+        adjustment["confirmed_by"] = _string(
+            adjustment["confirmed_by"], "model_adjustment.confirmed_by"
+        )
+        adjustment["confirmed_at"] = _aware_time(
+            adjustment["confirmed_at"], "model_adjustment.confirmed_at"
+        )
     if pr_capable:
         pr = _mapping(raw.get("pr"), "pr", keys={"auto_create", "post_todo_list"})
         pr["auto_create"] = _bool(pr["auto_create"], "pr.auto_create")
@@ -386,9 +405,7 @@ def _validate_policy(proposal: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("semantic_facts must exactly represent the complete effective policy")
     result["preflight"] = {
         "semantic_facts": expected_semantics,
-        "material_assumptions": _json_mapping(
-            raw["material_assumptions"], "material_assumptions"
-        ),
+        "material_assumptions": _json_mapping(raw["material_assumptions"], "material_assumptions"),
     }
     return result
 
@@ -449,7 +466,10 @@ def build_initial_contract(
     policy = _validate_policy(proposal)
     document: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
-        "identity": {"issue_name": _string(issue_name, "identity.issue_name"), "workflow_id": _string(workflow_id, "identity.workflow_id")},
+        "identity": {
+            "issue_name": _string(issue_name, "identity.issue_name"),
+            "workflow_id": _string(workflow_id, "identity.workflow_id"),
+        },
         "revision": {"generation": revision, "previous_contract_sha256": previous_contract_sha256},
         "provenance": {
             "kind": provenance_kind,
@@ -477,7 +497,11 @@ def validate_contract(
     if set(raw) != permitted:
         raise ValueError("contract has unsupported or missing fields")
     schema_version = raw["schema_version"]
-    if not isinstance(schema_version, int) or isinstance(schema_version, bool) or schema_version != SCHEMA_VERSION:
+    if (
+        not isinstance(schema_version, int)
+        or isinstance(schema_version, bool)
+        or schema_version != SCHEMA_VERSION
+    ):
         raise ValueError("contract schema version is unsupported")
     identity = _mapping(raw["identity"], "identity", keys={"issue_name", "workflow_id"})
     identity["issue_name"] = _string(identity["issue_name"], "identity.issue_name")
@@ -486,8 +510,14 @@ def validate_contract(
         raise ValueError("contract belongs to a different issue")
     if workflow_id is not None and identity["workflow_id"] != workflow_id:
         raise ValueError("contract belongs to a different workflow")
-    revision = _mapping(raw["revision"], "revision", keys={"generation", "previous_contract_sha256"})
-    if not isinstance(revision["generation"], int) or isinstance(revision["generation"], bool) or revision["generation"] <= 0:
+    revision = _mapping(
+        raw["revision"], "revision", keys={"generation", "previous_contract_sha256"}
+    )
+    if (
+        not isinstance(revision["generation"], int)
+        or isinstance(revision["generation"], bool)
+        or revision["generation"] <= 0
+    ):
         raise ValueError("contract generation is invalid")
     previous = revision["previous_contract_sha256"]
     if previous is not None and (not isinstance(previous, str) or len(previous) != 64):
@@ -506,9 +536,21 @@ def validate_contract(
     digest = _string(provenance["proposal_digest"], "provenance.proposal_digest")
     if len(digest) != 64:
         raise ValueError("contract proposal digest is invalid")
-    proposal = {key: deepcopy(value) for key, value in raw.items() if key not in {"schema_version", "identity", "revision", "provenance"}}
-    proposal["semantic_facts"] = proposal.pop("preflight")["semantic_facts"] if isinstance(proposal.get("preflight"), Mapping) else None
-    proposal["material_assumptions"] = raw["preflight"].get("material_assumptions") if isinstance(raw["preflight"], Mapping) else None
+    proposal = {
+        key: deepcopy(value)
+        for key, value in raw.items()
+        if key not in {"schema_version", "identity", "revision", "provenance"}
+    }
+    proposal["semantic_facts"] = (
+        proposal.pop("preflight")["semantic_facts"]
+        if isinstance(proposal.get("preflight"), Mapping)
+        else None
+    )
+    proposal["material_assumptions"] = (
+        raw["preflight"].get("material_assumptions")
+        if isinstance(raw["preflight"], Mapping)
+        else None
+    )
     policy = _validate_policy(proposal)
     normalized: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,

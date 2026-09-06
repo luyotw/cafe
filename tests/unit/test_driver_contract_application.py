@@ -93,8 +93,6 @@ def _proposal() -> dict[str, object]:
         },
         "model_adjustment": {
             "authority": "user_approval_required",
-            "confirmed_by": "user",
-            "confirmed_at": "2026-09-06T02:00:00+00:00",
         },
         "driver": {"mode": "unattended"},
         "checkout": {"kind": "current_checkout"},
@@ -174,6 +172,21 @@ def test_public_application_contract_persists_only_a_complete_valid_policy(tmp_p
     runtime_state["session"] = {"provider_session": "must-not-persist"}
     with pytest.raises(ValueError):
         activate_confirmed_contract(_activation(tmp_path / "runtime", runtime_state))
+
+
+def test_contract_accepts_legacy_model_adjustment_confirmation_evidence(tmp_path: Path) -> None:
+    """Existing durable contracts retain their recorded confirmation provenance."""
+    proposal = _proposal()
+    proposal["model_adjustment"] = {
+        "authority": "user_approval_required",
+        "confirmed_by": "user",
+        "confirmed_at": "2026-09-06T02:00:00+00:00",
+    }
+    proposal["semantic_facts"] = _fresh_policy_facts(proposal)
+
+    result = activate_confirmed_contract(_activation(tmp_path / "legacy", proposal))
+
+    assert result.created is True
 
 
 def test_semantic_freshness_ignores_metadata_but_fails_closed_for_unknown_or_material(
@@ -662,6 +675,45 @@ def test_legacy_adoption_rejects_conflicting_ordinary_issue_projection(tmp_path:
                 "playbook_id": "standard",
                 "confirmation_contract": {"pr_auto_create": False},
                 "pr": {"auto_create": False},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = adopt_legacy_contract(LegacyAdoptionRequest(legacy, "issue474", "workflow-474"))
+
+    assert result.adopted is False
+    assert result.disposition == "reconfirmation_required"
+    assert not (legacy / "driver" / "contract.json").exists()
+
+
+def test_legacy_adoption_rejects_every_conflicting_ordinary_policy_field(
+    tmp_path: Path,
+) -> None:
+    """Legacy sidecars cannot silently override handoff or model authority."""
+    legacy = tmp_path / "legacy"
+    confirmation = legacy / "driver" / "legacy_confirmation.json"
+    confirmation.parent.mkdir(parents=True)
+    proposal = _proposal()
+    confirmation.write_text(
+        json.dumps(
+            {
+                "identity": {"issue_name": "issue474", "workflow_id": "workflow-474"},
+                "confirmed_by": "user",
+                "confirmed_at": "2026-09-06T02:00:00+00:00",
+                "proposal": proposal,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (legacy / "issue.yaml").write_text(
+        json.dumps(
+            {
+                "playbook_id": "standard",
+                "confirmation_contract": proposal["confirmation_contract"],
+                "pr": proposal["pr"],
+                "model_adjustment": {"authority": "driver_autonomous"},
+                "reactive_user_handoffs": {"need_clarification": "driver_resolvable_when_clear"},
             }
         ),
         encoding="utf-8",

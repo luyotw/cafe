@@ -651,8 +651,6 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
         },
         "model_adjustment": {
             "authority": args.model_adjustment_authority,
-            "confirmed_by": args.confirmed_by or "user",
-            "confirmed_at": args.confirmed_at or datetime.now().astimezone().isoformat(),
         },
         "driver": {"mode": args.driver_mode},
         "checkout": checkout,

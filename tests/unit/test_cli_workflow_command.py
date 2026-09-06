@@ -1,6 +1,7 @@
 """Tests for workflow CLI command."""
 
 import json
+import hashlib
 import os
 import subprocess
 from pathlib import Path
@@ -29,6 +30,7 @@ from cafe.ui.cli_shared import (
     _resolve_issue_playbook_name,
     apply_alignment_decision_from_payload,
 )
+from cafe.ui.commands.workflow import _verify_expected_workflow_inputs
 from cafe.ui.human_tasks import resolve_step_human_task
 from cafe.utils.config import ConfigManager
 
@@ -40,12 +42,38 @@ runner = CliRunner()
 def _write_local_only_publication_contract(issue_dir: Path) -> None:
     issue_dir.mkdir(parents=True, exist_ok=True)
     (issue_dir / "issue.yaml").write_text(
-        "confirmation_contract:\n"
-        "  pr_auto_create: false\n"
-        "pr:\n"
-        "  auto_create: false\n",
+        "confirmation_contract:\n" "  pr_auto_create: false\n" "pr:\n" "  auto_create: false\n",
         encoding="utf-8",
     )
+
+
+def test_validated_workflow_inputs_reject_change_before_generic_consumption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A generic workflow can bind its initial config read to caller evidence."""
+    monkeypatch.chdir(tmp_path)
+    issue_config = tmp_path / ".cafe" / "issues" / "issue-input" / "issue.yaml"
+    issue_config.parent.mkdir(parents=True)
+    issue_config.write_text("playbook_id: standard\n", encoding="utf-8")
+    phase_config = tmp_path / ".cafe" / "phases.yaml"
+    phase_config.parent.mkdir(parents=True, exist_ok=True)
+    phase_config.write_text("develop: {}\n", encoding="utf-8")
+    issue_digest = hashlib.sha256(issue_config.read_bytes()).hexdigest()
+    phase_digest = hashlib.sha256(phase_config.read_bytes()).hexdigest()
+
+    _verify_expected_workflow_inputs(
+        issue="issue-input",
+        issue_sha256=issue_digest,
+        phase_sha256=phase_digest,
+    )
+
+    issue_config.write_text("playbook_id: changed\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="expected issue configuration changed"):
+        _verify_expected_workflow_inputs(
+            issue="issue-input",
+            issue_sha256=issue_digest,
+            phase_sha256=phase_digest,
+        )
 
 
 def test_background_forwards_trusted_event_callback_to_the_fixed_worker(
@@ -88,6 +116,64 @@ def test_background_forwards_trusted_event_callback_to_the_fixed_worker(
         "standard",
         "--on-workflow-event",
         "builtin:use-cafe-workflow:workflow_event_callback",
+    ]
+
+
+def test_background_forwards_validated_input_digests_to_the_generic_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The background/resume child retains the caller's exact input binding."""
+    monkeypatch.chdir(tmp_path)
+    captured: dict[str, object] = {}
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue456"
+    issue_dir.mkdir(parents=True)
+    issue_config = issue_dir / "issue.yaml"
+    issue_config.write_text("playbook_id: standard\n", encoding="utf-8")
+    phase_config = tmp_path / ".cafe" / "phases.yaml"
+    phase_config.write_text("{}\n", encoding="utf-8")
+    issue_digest = hashlib.sha256(issue_config.read_bytes()).hexdigest()
+    phase_digest = hashlib.sha256(phase_config.read_bytes()).hexdigest()
+
+    class CapturingWorkerLauncher:
+        def __init__(self, _issue_dir) -> None:
+            pass
+
+        def launch(self, _record, *, extra_args=None):
+            captured["extra_args"] = extra_args
+            return 4561
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.commands.workflow.FixedWorkerLauncher", CapturingWorkerLauncher),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue456"
+        mock_git_cls.return_value = git
+        result = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "standard",
+                "--issue",
+                "issue456",
+                "--execute",
+                "--background",
+                "--expected-issue-config-sha256",
+                issue_digest,
+                "--expected-phase-config-sha256",
+                phase_digest,
+            ],
+        )
+
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    assert captured["extra_args"] == [
+        "--playbook",
+        "standard",
+        "--expected-issue-config-sha256",
+        issue_digest,
+        "--expected-phase-config-sha256",
+        phase_digest,
     ]
 
 
@@ -458,9 +544,7 @@ steps:
 
 def test_workflow_command_runs_execute_mode(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    _write_local_only_publication_contract(
-        tmp_path / ".cafe" / "issues" / "issue-200"
-    )
+    _write_local_only_publication_contract(tmp_path / ".cafe" / "issues" / "issue-200")
     executed_steps: list[str] = []
 
     class FakeExecutor:
@@ -523,9 +607,7 @@ def test_single_step_uses_the_mode_neutral_core_in_the_foreground(
 
     class FakeExecutor:
         def execute_step(self, step_name, step_def, blackboard_state, **kwargs):
-            captured["validated_pr_auto_create"] = kwargs.get(
-                "validated_pr_auto_create"
-            )
+            captured["validated_pr_auto_create"] = kwargs.get("validated_pr_auto_create")
             return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
 
     class CapturingWorkflowHost:
@@ -1391,9 +1473,7 @@ def test_workflow_command_passes_initial_user_input_to_spec_step(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    _write_local_only_publication_contract(
-        tmp_path / ".cafe" / "issues" / "issue-201"
-    )
+    _write_local_only_publication_contract(tmp_path / ".cafe" / "issues" / "issue-201")
 
     class FakeExecutor:
         def execute_step(
@@ -2706,9 +2786,7 @@ def test_workflow_accepts_add_dir_and_passes_through(tmp_path: Path, monkeypatch
     """workflow --add-dir should validate the directory and pass it to the builder."""
     monkeypatch.chdir(tmp_path)
     (tmp_path / "src").mkdir()
-    _write_local_only_publication_contract(
-        tmp_path / ".cafe" / "issues" / "issue-add-dir"
-    )
+    _write_local_only_publication_contract(tmp_path / ".cafe" / "issues" / "issue-add-dir")
 
     class FakeExecutor:
         def execute_step(
@@ -2745,9 +2823,7 @@ def test_workflow_accepts_add_dir_and_passes_through(tmp_path: Path, monkeypatch
 
 def test_workflow_command_prints_generic_event_display(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    _write_local_only_publication_contract(
-        tmp_path / ".cafe" / "issues" / "issue-238"
-    )
+    _write_local_only_publication_contract(tmp_path / ".cafe" / "issues" / "issue-238")
     executed_steps: list[str] = []
 
     class FakeExecutor:
@@ -2796,9 +2872,7 @@ def test_workflow_command_does_not_duplicate_pr_url_without_display(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    _write_local_only_publication_contract(
-        tmp_path / ".cafe" / "issues" / "issue-277"
-    )
+    _write_local_only_publication_contract(tmp_path / ".cafe" / "issues" / "issue-277")
 
     class FakeExecutor:
         def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs):
@@ -3187,9 +3261,7 @@ def test_workflow_command_prints_paused_when_human_input_is_needed(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    _write_local_only_publication_contract(
-        tmp_path / ".cafe" / "issues" / "issue-201"
-    )
+    _write_local_only_publication_contract(tmp_path / ".cafe" / "issues" / "issue-201")
 
     class FakeExecutor:
         def execute_step(
@@ -4813,9 +4885,7 @@ steps:
 
 def test_workflow_command_runs_hotfix_playbook(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    _write_local_only_publication_contract(
-        tmp_path / ".cafe" / "issues" / "issue-203"
-    )
+    _write_local_only_publication_contract(tmp_path / ".cafe" / "issues" / "issue-203")
     executed_steps: list[str] = []
 
     with (
