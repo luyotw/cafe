@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from cafe.core.capabilities import pr_synced_event_from_receipt
+from cafe.core.git import GitOperations
 from cafe.core.hooks.native import (
     GitHubIssueFetcher,
     GitHubPRCreator,
@@ -1563,6 +1564,7 @@ def test_github_pr_creator_publish_output_records_all_multi_capability_receipts(
     ],
 )
 def test_github_pr_creator_publish_output_honors_declared_pr_handoff_without_status_code(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     step_def: dict,
     to_owner: str,
@@ -1571,6 +1573,7 @@ def test_github_pr_creator_publish_output_honors_declared_pr_handoff_without_sta
     baton_status: str,
     should_publish: bool,
 ) -> None:
+    monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     _enable_remote_pr(issue_dir)
     phase_dir = issue_dir / "pr"
@@ -1608,8 +1611,7 @@ def test_github_pr_creator_publish_output_honors_declared_pr_handoff_without_sta
     )
 
     phase = _FakePhase(phase_dir=phase_dir, iteration=1)
-    phase.git_ops = MagicMock()
-    phase.git_ops.get_repo_root.return_value = tmp_path
+    phase.git_ops = GitOperations(str(tmp_path))
 
     completed = MagicMock()
     completed.returncode = 0
