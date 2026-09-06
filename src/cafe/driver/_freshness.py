@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 from enum import Enum
 from typing import Any, Mapping
 
@@ -15,19 +14,6 @@ class Freshness(str, Enum):
     SAME_SEMANTICS = "same_semantics"
     MATERIAL_CHANGE = "material_change"
     UNKNOWN = "unknown"
-
-
-def _normalized_semantic_facts(value: Mapping[str, Any]) -> dict[str, Any]:
-    """Discard legacy confirmation evidence duplicated outside policy provenance."""
-    normalized = deepcopy(dict(value))
-    effective_policy = normalized.get("effective_policy")
-    if not isinstance(effective_policy, dict):
-        return normalized
-    adjustment = effective_policy.get("model_adjustment")
-    if isinstance(adjustment, dict):
-        adjustment.pop("confirmed_by", None)
-        adjustment.pop("confirmed_at", None)
-    return normalized
 
 
 def compare_freshness(contract: Mapping[str, Any], fresh_facts: Mapping[str, Any]) -> Freshness:
@@ -49,13 +35,13 @@ def compare_freshness(contract: Mapping[str, Any], fresh_facts: Mapping[str, Any
     try:
         expected = canonical_json(
             {
-                "semantic_facts": _normalized_semantic_facts(expected_semantics),
+                "semantic_facts": dict(expected_semantics),
                 "material_assumptions": dict(expected_assumptions),
             }
         )
         live = canonical_json(
             {
-                "semantic_facts": _normalized_semantic_facts(live_semantics),
+                "semantic_facts": dict(live_semantics),
                 "material_assumptions": dict(live_assumptions),
             }
         )

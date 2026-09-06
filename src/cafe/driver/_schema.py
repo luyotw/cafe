@@ -264,8 +264,7 @@ def _validate_policy(proposal: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("confirmed proposal is incomplete")
     phases = _validate_phases(raw["phases"])
     adjustment = _json_mapping(raw["model_adjustment"], "model_adjustment")
-    adjustment_keys = set(adjustment)
-    if adjustment_keys not in ({"authority"}, {"authority", "confirmed_by", "confirmed_at"}):
+    if set(adjustment) != {"authority"}:
         raise ValueError("model_adjustment has unsupported or missing fields")
     result: dict[str, Any] = {
         "locales": _validate_locales(raw["locales"]),
@@ -299,13 +298,6 @@ def _validate_policy(proposal: Mapping[str, Any]) -> dict[str, Any]:
     adjustment = result["model_adjustment"]
     if adjustment["authority"] not in {"driver_autonomous", "user_approval_required"}:
         raise ValueError("model adjustment authority is invalid")
-    if "confirmed_by" in adjustment:
-        adjustment["confirmed_by"] = _string(
-            adjustment["confirmed_by"], "model_adjustment.confirmed_by"
-        )
-        adjustment["confirmed_at"] = _aware_time(
-            adjustment["confirmed_at"], "model_adjustment.confirmed_at"
-        )
     expected_semantics = {
         "effective_policy": {
             name: deepcopy(result[name]) for name in _POLICY_SEMANTIC_FIELDS if name in result

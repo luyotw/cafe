@@ -1737,18 +1737,11 @@ def run_callback(event: dict[str, Any], *, repository_root: Path) -> None:
     issue_dir = repository_root / ".cafe" / "issues" / issue_name
     driver_dir = _driver_dir(issue_dir)
     with _session_lock(driver_dir):
-        try:
-            config = _contract_callback_config(
-                issue_dir=issue_dir,
-                issue_name=issue_name,
-                workflow_id=workflow_id,
-            )
-        except ValueError as exc:
-            from cafe.driver import DriverContractMissingError
-
-            if not isinstance(exc, DriverContractMissingError):
-                raise
-            config = _load_config(driver_dir)
+        config = _contract_callback_config(
+            issue_dir=issue_dir,
+            issue_name=issue_name,
+            workflow_id=workflow_id,
+        )
         if config is None:
             return
         from cafe.core.blackboard import BlackboardStore

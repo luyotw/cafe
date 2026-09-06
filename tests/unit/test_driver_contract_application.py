@@ -12,6 +12,7 @@ import pytest
 
 from cafe.driver import (
     ActivateConfirmedContract,
+    DriverContractMissingError,
     DriverEntryRequest,
     Freshness,
     LegacyAdoptionRequest,
@@ -147,8 +148,8 @@ def test_public_application_contract_persists_only_a_complete_valid_policy(tmp_p
         activate_confirmed_contract(_activation(tmp_path / "runtime", runtime_state))
 
 
-def test_contract_accepts_legacy_model_adjustment_confirmation_evidence(tmp_path: Path) -> None:
-    """Existing durable contracts retain their recorded confirmation provenance."""
+def test_contract_rejects_nested_model_adjustment_confirmation_evidence(tmp_path: Path) -> None:
+    """Test List 1: v1 keeps confirmation evidence in top-level provenance only."""
     proposal = _proposal()
     proposal["model_adjustment"] = {
         "authority": "user_approval_required",
@@ -157,39 +158,47 @@ def test_contract_accepts_legacy_model_adjustment_confirmation_evidence(tmp_path
     }
     proposal["semantic_facts"] = _fresh_policy_facts(proposal)
 
-    result = activate_confirmed_contract(_activation(tmp_path / "legacy", proposal))
+    with pytest.raises(ValueError):
+        activate_confirmed_contract(_activation(tmp_path / "legacy", proposal))
 
-    assert result.created is True
 
-
-def test_legacy_model_adjustment_evidence_has_current_semantic_freshness(
+def test_canonical_model_adjustment_has_stable_activation_identity(
     tmp_path: Path,
 ) -> None:
-    """Compatibility-only confirmation fields do not make unchanged policy stale."""
+    """Test List 2: one canonical authority shape yields an idempotent retry."""
     issue_dir = tmp_path / "legacy"
-    legacy_proposal = _proposal()
-    legacy_proposal["model_adjustment"] = {
-        "authority": "user_approval_required",
-        "confirmed_by": "user",
-        "confirmed_at": "2026-09-06T02:00:00+00:00",
-    }
-    legacy_proposal["semantic_facts"] = _fresh_policy_facts(legacy_proposal)
-    activate_confirmed_contract(_activation(issue_dir, legacy_proposal))
-    current_proposal = _proposal()
+    first = activate_confirmed_contract(_activation(issue_dir))
+    retry = activate_confirmed_contract(_activation(issue_dir))
+    contract = json.loads((issue_dir / "driver" / "contract.json").read_text(encoding="utf-8"))
 
-    result = evaluate_driver_entry(
-        DriverEntryRequest(
-            issue_dir,
-            "issue474",
-            "workflow-474",
-            {
-                "semantic_facts": current_proposal["semantic_facts"],
-                "material_assumptions": current_proposal["material_assumptions"],
-            },
-        )
+    assert first.created is True
+    assert retry.created is False
+    assert retry.contract_sha256 == first.contract_sha256
+    assert contract["model_adjustment"] == {"authority": "user_approval_required"}
+    assert contract["provenance"]["confirmed_by"] == "user"
+    assert contract["provenance"]["confirmed_at"] == "2026-09-06T02:00:00+00:00"
+
+
+def test_missing_contract_blocks_callback_even_with_legacy_transport_config(tmp_path: Path) -> None:
+    """Test List 2/5: automatic work cannot use a CLI/model-only sidecar as authority."""
+    callback = _callback_module()
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue474"
+    driver_dir = issue_dir / "driver"
+    driver_dir.mkdir(parents=True)
+    (driver_dir / "config.yaml").write_text(
+        "schema_version: 3\nworkflow_id: workflow-474\nclis:\n  - cli: gemini\n    model: legacy-exact\n",
+        encoding="utf-8",
     )
+    event = {
+        "issue": "issue474",
+        "workflow_id": "workflow-474",
+        "event_type": "phase_terminal",
+    }
 
-    assert result.freshness is Freshness.SAME_SEMANTICS
+    with pytest.raises(DriverContractMissingError):
+        callback.run_callback(event, repository_root=tmp_path)
+
+    assert not (driver_dir / "dispatch_state.json").exists()
 
 
 def test_semantic_freshness_ignores_metadata_but_fails_closed_for_unknown_or_material(
