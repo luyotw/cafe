@@ -300,9 +300,9 @@ first. State the new band and keep/change rationale in the driver progress
 update; do not add a separate runtime decision store. A terminal `_done` baton
 has no future chain to adjust.
 
-For a Driver-managed issue, `.cafe/phases.yaml` is a derived execution view.
-The confirmed ordered chains and the authority for later adjustment live in the
-single Driver contract. A delegated replacement may change only the explicitly
-delegated future model paths; changing publication choice, proactive-review
-policy, confirmation ownership, or any unrelated policy requires user
-reconfirmation and a complete contract replacement.
+For a Driver-managed issue, `.cafe/phases.yaml` remains generic execution
+configuration under its existing lifecycle. The Driver contract keeps only its
+own confirmed phase/model authority and never compares or projects that generic
+file. A delegated replacement may change only explicitly delegated Driver model
+paths; proactive-review policy, confirmation ownership, or any unrelated
+Driver policy requires user reconfirmation and a complete contract replacement.

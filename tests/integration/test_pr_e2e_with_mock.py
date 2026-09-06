@@ -182,13 +182,19 @@ def test_pr_runtime_rejects_generic_success_receipt_without_verified_url(
 
 @pytest.mark.e2e
 @pytest.mark.parametrize("auto_create", [True, False])
+@pytest.mark.parametrize("with_driver_contract", [False, True])
 def test_pr_review_handoff_tracks_published_or_local_only_journey(
     tmp_path: Path,
     auto_create: bool,
+    with_driver_contract: bool,
 ) -> None:
-    """Integration 3: mocked host evidence produces one truthful durable review task."""
-    issue_dir = tmp_path / ".cafe" / "issues" / f"review-{auto_create}"
+    """Integration 4: #467 publication has identical Driver-free outcomes."""
+    issue_dir = tmp_path / ".cafe" / "issues" / f"review-{auto_create}-{with_driver_contract}"
     _seed_pr_artifacts(issue_dir, auto_create=auto_create)
+    if with_driver_contract:
+        driver_dir = issue_dir / "driver"
+        driver_dir.mkdir()
+        (driver_dir / "contract.json").write_text('{"not": "generic authority"}', encoding="utf-8")
     verified_url = "https://github.com/acme/widgets/pull/467"
 
     def executor(step_name: str, *_args: object, **_kwargs: object) -> StepExecutionResult:
@@ -254,10 +260,7 @@ def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(
     issue_dir = tmp_path / ".cafe" / "issues" / "pr-feedback"
     issue_dir.mkdir(parents=True)
     (issue_dir / "issue.yaml").write_text(
-        "confirmation_contract:\n"
-        "  pr_auto_create: true\n"
-        "pr:\n"
-        "  auto_create: true\n",
+        "confirmation_contract:\n" "  pr_auto_create: true\n" "pr:\n" "  auto_create: true\n",
         encoding="utf-8",
     )
     playbook = _load_default_playbook()

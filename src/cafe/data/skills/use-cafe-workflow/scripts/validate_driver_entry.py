@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate one Driver entry and return only generic/runtime-safe projections.
+"""Validate one Driver entry and return only Driver-owned projections.
 
 Preflight, cache invalidation, confirmation, callback routing, and projection
 installation remain owned by ``use-cafe-workflow``.  This adapter is its sole
@@ -37,7 +37,7 @@ def _plain(value: Any) -> Any:
 def validate_entry(
     *, issue_dir: Path, issue_name: str, workflow_id: str, fresh_facts: Mapping[str, Any]
 ) -> dict[str, Any]:
-    """Fail before generic CAFE when current authority cannot be proved unchanged."""
+    """Fail before Driver work when current authority cannot be proved unchanged."""
     result = evaluate_driver_entry(
         DriverEntryRequest(
             issue_dir=issue_dir,
@@ -54,13 +54,13 @@ def validate_entry(
         "runtime": _plain(result.runtime),
         "event": _plain(result.event),
         "proactive_review": _plain(result.proactive_review),
-        "generic_inputs": _plain(result.generic_inputs),
+        "phase_model_authority": _plain(result.phase_model_authority),
     }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Validate a Driver entry before invoking generic CAFE."
+        description="Validate a Driver entry before Driver-owned work."
     )
     parser.add_argument("--issue-dir", type=Path, required=True)
     parser.add_argument("--issue-name", required=True)

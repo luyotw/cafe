@@ -24,24 +24,15 @@ from cafe.driver import (
 
 
 def _proposal() -> dict[str, object]:
-    """Return a complete, PR-capable confirmed policy without runtime progress."""
+    """Return a complete Driver-owned policy without generic configuration."""
     proposal: dict[str, object] = {
-        "playbook": {
-            "id": "standard",
-            "source": "builtin:standard",
-            "selection_rationale": "Matches the confirmed development journey.",
-            "semantic_fingerprint": {"steps": ["spec", "develop", "review", "pr"]},
-            "capability_requests": ["cafe.pr.publish"],
-        },
         "locales": {
             "conversation": {"value": "en", "source": "playbook:standard"},
-            "repository_content": {"value": "en", "source": "user_confirmation"},
         },
         "confirmation_contract": {
             "user_required": ["spec", "plan"],
             "driver_confirmable": [],
             "mandatory_human_stops": ["spec", "plan"],
-            "pr_auto_create": True,
         },
         "reactive_user_handoffs": {
             "need_clarification": "user_required",
@@ -58,23 +49,8 @@ def _proposal() -> dict[str, object]:
         "phases": [
             {
                 "name": "develop",
-                "assignee_type": "agent",
-                "role": "developer",
-                "skill": "cafe-develop",
-                "execution_profile": "implementation",
                 "chain": [{"cli": "codex", "model": "gpt-5.6-sol"}],
                 "rationale": "The confirmed implementation chain.",
-                "capabilities": [],
-            },
-            {
-                "name": "publish",
-                "assignee_type": "agent",
-                "role": "publisher",
-                "skill": "cafe-pr",
-                "execution_profile": "publication",
-                "chain": [{"cli": "codex", "model": "gpt-5.6-sol"}],
-                "rationale": "The generic publication phase.",
-                "capabilities": ["cafe.pr.publish"],
             },
         ],
         "proactive_review": {
@@ -84,11 +60,6 @@ def _proposal() -> dict[str, object]:
                     "decision": "not_required",
                     "rationale": "No confirmed proactive review is needed for this phase.",
                 },
-                {
-                    "phase": "publish",
-                    "decision": "not_required",
-                    "rationale": "Publication is governed by the generic PR contract.",
-                },
             ]
         },
         "model_adjustment": {
@@ -96,7 +67,6 @@ def _proposal() -> dict[str, object]:
         },
         "driver": {"mode": "unattended"},
         "checkout": {"kind": "current_checkout"},
-        "pr": {"auto_create": True, "post_todo_list": []},
         "semantic_facts": {},
         "material_assumptions": {"provider": "codex", "permissions": ["local"]},
     }
@@ -106,7 +76,6 @@ def _proposal() -> dict[str, object]:
 
 def _fresh_policy_facts(proposal: dict[str, object]) -> dict[str, object]:
     fields = (
-        "playbook",
         "locales",
         "confirmation_contract",
         "reactive_user_handoffs",
@@ -117,7 +86,6 @@ def _fresh_policy_facts(proposal: dict[str, object]) -> dict[str, object]:
         "model_adjustment",
         "driver",
         "checkout",
-        "pr",
     )
     return {"effective_policy": {name: deepcopy(proposal[name]) for name in fields}}
 
@@ -158,10 +126,15 @@ def test_public_application_contract_persists_only_a_complete_valid_policy(tmp_p
     assert result.revision == 1
     assert (tmp_path / "issue" / "driver" / "contract.json").is_file()
 
-    invalid = _proposal()
-    invalid["pr"] = {"auto_create": False}
-    with pytest.raises(ValueError):
-        activate_confirmed_contract(_activation(tmp_path / "invalid", invalid))
+    for field, value in (
+        ("pr", {"auto_create": False}),
+        ("playbook", {"id": "standard"}),
+        ("generic_inputs", {"playbook_id": "standard"}),
+    ):
+        invalid = _proposal()
+        invalid[field] = value
+        with pytest.raises(ValueError):
+            activate_confirmed_contract(_activation(tmp_path / f"invalid-{field}", invalid))
 
     partial_facts = _proposal()
     partial_facts["semantic_facts"] = {"effective_graph": ["develop"]}
@@ -240,7 +213,7 @@ def test_semantic_freshness_ignores_metadata_but_fails_closed_for_unknown_or_mat
         )
     )
     assert same.freshness is Freshness.SAME_SEMANTICS
-    assert same.generic_inputs["pr_auto_create"] is True
+    assert not hasattr(same, "generic_inputs")
     assert same.proactive_review[0]["phase"] == "develop"
 
     changed = deepcopy(facts)
@@ -430,7 +403,7 @@ def test_driver_entry_projections_are_deeply_immutable(tmp_path: Path) -> None:
         )
     )
     with pytest.raises(TypeError):
-        result.generic_inputs["phase_chains"]["develop"][0]["model"] = "mutated"
+        result.runtime["driver"]["mode"] = "mutated"
 
 
 def test_oversized_contract_and_legacy_evidence_fail_closed(tmp_path: Path) -> None:
@@ -465,6 +438,13 @@ def test_replacement_is_compare_and_swap_and_delegation_cannot_change_policy(
 ) -> None:
     """Test List 3: readers retain valid authority when a replacement is rejected."""
     issue_dir = tmp_path / "issue"
+    issue_dir.mkdir(parents=True)
+    issue_config = issue_dir / "issue.yaml"
+    issue_config.write_text(
+        "confirmation_contract:\n  pr_auto_create: false\npr:\n  auto_create: false\n",
+        encoding="utf-8",
+    )
+    original_issue_config = issue_config.read_bytes()
     activated = activate_confirmed_contract(_activation(issue_dir))
     before = (issue_dir / "driver" / "contract.json").read_bytes()
     proposal = _proposal()
@@ -486,8 +466,7 @@ def test_replacement_is_compare_and_swap_and_delegation_cannot_change_policy(
     assert (issue_dir / "driver" / "contract.json").read_bytes() == before
 
     reconfirmed = _proposal()
-    reconfirmed["pr"] = {"auto_create": False, "post_todo_list": []}
-    reconfirmed["confirmation_contract"]["pr_auto_create"] = False
+    reconfirmed["reactive_user_handoffs"]["alignment_checkpoint"] = "user_required"
     reconfirmed["semantic_facts"] = _fresh_policy_facts(reconfirmed)
     replacement = replace_confirmed_contract(
         ReplaceConfirmedContract(
@@ -502,6 +481,7 @@ def test_replacement_is_compare_and_swap_and_delegation_cannot_change_policy(
         )
     )
     assert replacement.revision == 2
+    assert issue_config.read_bytes() == original_issue_config
     with pytest.raises(ValueError):
         replace_confirmed_contract(
             ReplaceConfirmedContract(
@@ -544,11 +524,60 @@ def test_legacy_adoption_requires_complete_identity_bound_confirmation(tmp_path:
     assert unresolved.disposition == "reconfirmation_required"
 
 
-def test_legacy_adoption_reconciles_project_phase_projection(tmp_path: Path) -> None:
-    """Test List 4: a legacy phase projection is evidence, not a fallback authority."""
+def test_legacy_adoption_discards_co_located_generic_fields(tmp_path: Path) -> None:
+    """Test List 4: legacy generic values never become Driver policy."""
+    issue_dir = tmp_path / "legacy"
+    proposal = _proposal()
+    proposal["playbook"] = {"id": "standard"}
+    proposal["pr"] = {"auto_create": False}
+    proposal["confirmation_contract"]["pr_auto_create"] = False
+    proposal["locales"]["repository_content"] = {"value": "en", "source": "legacy"}
+    proposal["semantic_facts"] = _fresh_policy_facts(proposal)
+    confirmation = issue_dir / "driver" / "legacy_confirmation.json"
+    confirmation.parent.mkdir(parents=True)
+    confirmation.write_text(
+        json.dumps(
+            {
+                "identity": {"issue_name": "issue474", "workflow_id": "workflow-474"},
+                "confirmed_by": "user",
+                "confirmed_at": "2026-09-06T02:00:00+00:00",
+                "proposal": proposal,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = adopt_legacy_contract(LegacyAdoptionRequest(issue_dir, "issue474", "workflow-474"))
+
+    assert result.adopted is True
+    contract = json.loads((issue_dir / "driver" / "contract.json").read_text(encoding="utf-8"))
+    assert "playbook" not in contract
+    assert "pr" not in contract
+    assert "pr_auto_create" not in contract["confirmation_contract"]
+
+
+def test_mixed_experimental_contract_requires_reconfirmation(tmp_path: Path) -> None:
+    """Test List 4: a persisted generic field is invalid, never rewritten in place."""
+    issue_dir = tmp_path / "mixed"
+    activated = activate_confirmed_contract(_activation(issue_dir))
+    contract_path = issue_dir / "driver" / "contract.json"
+    mixed = json.loads(contract_path.read_text(encoding="utf-8"))
+    mixed["pr"] = {"auto_create": False}
+    contract_path.write_text(json.dumps(mixed), encoding="utf-8")
+
+    result = adopt_legacy_contract(LegacyAdoptionRequest(issue_dir, "issue474", "workflow-474"))
+
+    assert activated.created is True
+    assert result.adopted is False
+    assert result.disposition == "reconfirmation_required"
+    assert json.loads(contract_path.read_text(encoding="utf-8"))["pr"] == {"auto_create": False}
+
+
+def test_legacy_adoption_ignores_generic_phase_projection(tmp_path: Path) -> None:
+    """Test List 4: generic phase configuration is never migration evidence."""
     proposal = _proposal()
 
-    def prepare_legacy_issue(name: str, *, model: str) -> Path:
+    def prepare_legacy_issue(name: str) -> Path:
         issue_dir = tmp_path / name / ".cafe" / "issues" / "issue474"
         confirmation = issue_dir / "driver" / "legacy_confirmation.json"
         confirmation.parent.mkdir(parents=True)
@@ -563,28 +592,14 @@ def test_legacy_adoption_reconciles_project_phase_projection(tmp_path: Path) -> 
             ),
             encoding="utf-8",
         )
-        phases = {
-            phase["name"]: {
-                "role": phase["role"],
-                "clis": deepcopy(phase["chain"]),
-            }
-            for phase in proposal["phases"]
-            if phase["assignee_type"] in {"agent", "hybrid"}
-        }
-        phases["develop"]["clis"][0]["model"] = model
         phase_path = issue_dir.parent.parent / "phases.yaml"
         phase_path.parent.mkdir(parents=True, exist_ok=True)
-        phase_path.write_text(json.dumps(phases), encoding="utf-8")
+        phase_path.write_text("develop:\n  clis: []\n", encoding="utf-8")
         return issue_dir
 
-    matching = prepare_legacy_issue("matching", model="gpt-5.6-sol")
+    matching = prepare_legacy_issue("matching")
     adopted = adopt_legacy_contract(LegacyAdoptionRequest(matching, "issue474", "workflow-474"))
     assert adopted.adopted is True
-
-    conflicting = prepare_legacy_issue("conflicting", model="different-model")
-    rejected = adopt_legacy_contract(LegacyAdoptionRequest(conflicting, "issue474", "workflow-474"))
-    assert rejected.adopted is False
-    assert rejected.disposition == "reconfirmation_required"
 
 
 def test_delegated_model_adjustment_rejects_cli_and_chain_topology_changes(tmp_path: Path) -> None:
@@ -683,8 +698,8 @@ def test_legacy_sidecar_conflict_and_ancestor_symlink_fail_closed(tmp_path: Path
     assert not (outside / "issue" / "driver" / "contract.json").exists()
 
 
-def test_legacy_adoption_rejects_conflicting_ordinary_issue_projection(tmp_path: Path) -> None:
-    """Ordinary issue.yaml policy fields are migration evidence, never ignored."""
+def test_legacy_adoption_ignores_generic_issue_configuration(tmp_path: Path) -> None:
+    """Generic issue configuration does not participate in Driver migration."""
     legacy = tmp_path / "legacy"
     confirmation = legacy / "driver" / "legacy_confirmation.json"
     confirmation.parent.mkdir(parents=True)
@@ -712,12 +727,11 @@ def test_legacy_adoption_rejects_conflicting_ordinary_issue_projection(tmp_path:
 
     result = adopt_legacy_contract(LegacyAdoptionRequest(legacy, "issue474", "workflow-474"))
 
-    assert result.adopted is False
-    assert result.disposition == "reconfirmation_required"
-    assert not (legacy / "driver" / "contract.json").exists()
+    assert result.adopted is True
+    assert (legacy / "driver" / "contract.json").is_file()
 
 
-def test_legacy_adoption_rejects_every_conflicting_ordinary_policy_field(
+def test_legacy_adoption_rejects_conflicting_driver_sidecar(
     tmp_path: Path,
 ) -> None:
     """Legacy sidecars cannot silently override handoff or model authority."""
@@ -736,18 +750,7 @@ def test_legacy_adoption_rejects_every_conflicting_ordinary_policy_field(
         ),
         encoding="utf-8",
     )
-    (legacy / "issue.yaml").write_text(
-        json.dumps(
-            {
-                "playbook_id": "standard",
-                "confirmation_contract": proposal["confirmation_contract"],
-                "pr": proposal["pr"],
-                "model_adjustment": {"authority": "driver_autonomous"},
-                "reactive_user_handoffs": {"need_clarification": "driver_resolvable_when_clear"},
-            }
-        ),
-        encoding="utf-8",
-    )
+    (legacy / "driver" / "config.yaml").write_text("mode: attached\n", encoding="utf-8")
 
     result = adopt_legacy_contract(LegacyAdoptionRequest(legacy, "issue474", "workflow-474"))
 
@@ -756,8 +759,8 @@ def test_legacy_adoption_rejects_every_conflicting_ordinary_policy_field(
     assert not (legacy / "driver" / "contract.json").exists()
 
 
-def test_legacy_adoption_rejects_behavior_changing_playbook_overrides(tmp_path: Path) -> None:
-    """A legacy issue override must not become an unchecked authority source."""
+def test_legacy_adoption_ignores_playbook_overrides(tmp_path: Path) -> None:
+    """A generic override does not become a Driver migration input."""
     legacy = tmp_path / "legacy"
     confirmation = legacy / "driver" / "legacy_confirmation.json"
     confirmation.parent.mkdir(parents=True)
@@ -777,8 +780,6 @@ def test_legacy_adoption_rejects_behavior_changing_playbook_overrides(tmp_path: 
         json.dumps(
             {
                 "playbook_id": "standard",
-                "confirmation_contract": proposal["confirmation_contract"],
-                "pr": proposal["pr"],
                 "playbook_overrides": {"steps": {"develop": {"max_attempts_per_cycle": 2}}},
             }
         ),
@@ -787,6 +788,5 @@ def test_legacy_adoption_rejects_behavior_changing_playbook_overrides(tmp_path: 
 
     result = adopt_legacy_contract(LegacyAdoptionRequest(legacy, "issue474", "workflow-474"))
 
-    assert result.adopted is False
-    assert result.disposition == "reconfirmation_required"
-    assert not (legacy / "driver" / "contract.json").exists()
+    assert result.adopted is True
+    assert (legacy / "driver" / "contract.json").is_file()

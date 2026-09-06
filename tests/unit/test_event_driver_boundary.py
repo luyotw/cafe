@@ -59,3 +59,42 @@ def test_driver_contract_application_has_one_production_skill_boundary() -> None
 
     assert importers
     assert all(path.is_relative_to(skill_root) for path in importers)
+
+
+def test_driver_contract_has_no_generic_configuration_bridge() -> None:
+    """Test List 5: Driver authority never imports generic workflow or PR policy."""
+    source_root = Path(__file__).parents[2] / "src" / "cafe"
+    driver_root = source_root / "driver"
+    skill_root = source_root / "data" / "skills" / "use-cafe-workflow"
+    forbidden_driver_tokens = (
+        "pr_auto_create",
+        "cafe.pr.publish",
+        "generic_inputs",
+        "issue.yaml",
+        "phases.yaml",
+        "semantic_fingerprint",
+        "repository_content",
+    )
+
+    for path in driver_root.rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        if path.name == "_lifecycle.py":
+            assert not any(
+                token in source
+                for token in (
+                    "generic_inputs",
+                    "issue.yaml",
+                    "phases.yaml",
+                )
+            ), path
+            continue
+        assert not any(token in source for token in forbidden_driver_tokens), path
+
+    assert not (skill_root / "scripts" / "run_validated_driver_workflow.py").exists()
+
+    for path in source_root.rglob("*.py"):
+        if path.is_relative_to(skill_root) or path.is_relative_to(driver_root):
+            continue
+        source = path.read_text(encoding="utf-8")
+        assert "cafe.driver" not in source
+        assert "driver/contract.json" not in source

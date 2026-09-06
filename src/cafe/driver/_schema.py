@@ -27,7 +27,6 @@ _RUNTIME_KEYS = {
     "pr_url",
 }
 _PROPOSAL_KEYS = {
-    "playbook",
     "locales",
     "confirmation_contract",
     "reactive_user_handoffs",
@@ -38,7 +37,6 @@ _PROPOSAL_KEYS = {
     "model_adjustment",
     "driver",
     "checkout",
-    "pr",
     "semantic_facts",
     "material_assumptions",
 }
@@ -50,7 +48,6 @@ _CONTRACT_KEYS = _PROPOSAL_KEYS - {"semantic_facts", "material_assumptions"} | {
     "preflight",
 }
 _POLICY_SEMANTIC_FIELDS = (
-    "playbook",
     "locales",
     "confirmation_contract",
     "reactive_user_handoffs",
@@ -61,7 +58,6 @@ _POLICY_SEMANTIC_FIELDS = (
     "model_adjustment",
     "driver",
     "checkout",
-    "pr",
 )
 
 
@@ -117,51 +113,24 @@ def _aware_time(value: Any, label: str) -> str:
     return text
 
 
-def _validate_playbook(value: Any) -> dict[str, Any]:
-    result = _mapping(
-        value,
-        "playbook",
-        keys={"id", "source", "selection_rationale", "semantic_fingerprint", "capability_requests"},
-    )
-    result["id"] = _string(result["id"], "playbook.id")
-    result["source"] = _string(result["source"], "playbook.source")
-    result["selection_rationale"] = _string(
-        result["selection_rationale"], "playbook.selection_rationale"
-    )
-    result["semantic_fingerprint"] = _json_mapping(
-        result["semantic_fingerprint"], "playbook.semantic_fingerprint"
-    )
-    result["capability_requests"] = _string_list(
-        result["capability_requests"], "playbook.capability_requests"
-    )
-    return result
-
-
 def _validate_locales(value: Any) -> dict[str, Any]:
-    result = _mapping(value, "locales", keys={"conversation", "repository_content"})
-    for name in ("conversation", "repository_content"):
-        locale = _mapping(result[name], f"locales.{name}", keys={"value", "source"})
-        locale["value"] = _string(locale["value"], f"locales.{name}.value")
-        locale["source"] = _string(locale["source"], f"locales.{name}.source")
-        result[name] = locale
+    result = _mapping(value, "locales", keys={"conversation"})
+    locale = _mapping(result["conversation"], "locales.conversation", keys={"value", "source"})
+    locale["value"] = _string(locale["value"], "locales.conversation.value")
+    locale["source"] = _string(locale["source"], "locales.conversation.source")
+    result["conversation"] = locale
     return result
 
 
-def _validate_confirmation(value: Any, *, pr_capable: bool) -> dict[str, Any]:
+def _validate_confirmation(value: Any) -> dict[str, Any]:
     required = {"user_required", "driver_confirmable", "mandatory_human_stops"}
-    if pr_capable:
-        required.add("pr_auto_create")
     result = _mapping(value, "confirmation_contract", keys=required)
-    for name in required - {"pr_auto_create"}:
+    for name in required:
         result[name] = _string_list(result[name], f"confirmation_contract.{name}")
     if set(result["user_required"]) & set(result["driver_confirmable"]):
         raise ValueError("confirmation ownership must be disjoint")
     if set(result["mandatory_human_stops"]) & set(result["driver_confirmable"]):
         raise ValueError("mandatory human stops cannot be driver-confirmable")
-    if pr_capable:
-        result["pr_auto_create"] = _bool(
-            result["pr_auto_create"], "confirmation_contract.pr_auto_create"
-        )
     return result
 
 
@@ -170,51 +139,14 @@ def _validate_phases(value: Any) -> list[dict[str, Any]]:
         raise ValueError("phases must be a list")
     phases: list[dict[str, Any]] = []
     names: set[str] = set()
-    expected = {
-        "name",
-        "assignee_type",
-        "role",
-        "skill",
-        "execution_profile",
-        "chain",
-        "rationale",
-        "capabilities",
-    }
+    expected = {"name", "chain", "rationale"}
     for index, raw in enumerate(value):
         phase = _mapping(raw, f"phases[{index}]", keys=expected)
-        for field in ("name", "role", "skill", "rationale"):
+        for field in ("name", "rationale"):
             phase[field] = _string(phase[field], f"phases[{index}].{field}")
-        profile = phase["execution_profile"]
-        if isinstance(profile, str):
-            phase["execution_profile"] = _string(profile, f"phases[{index}].execution_profile")
-        else:
-            profile = _mapping(
-                profile,
-                f"phases[{index}].execution_profile",
-                keys={"workloads", "reasoning", "risk_domains", "fallback_strength", "source"},
-            )
-            profile["workloads"] = _string_list(
-                profile["workloads"], f"phases[{index}].execution_profile.workloads"
-            )
-            profile["reasoning"] = _string(
-                profile["reasoning"], f"phases[{index}].execution_profile.reasoning"
-            )
-            profile["risk_domains"] = _string_list(
-                profile["risk_domains"], f"phases[{index}].execution_profile.risk_domains"
-            )
-            profile["fallback_strength"] = _string(
-                profile["fallback_strength"],
-                f"phases[{index}].execution_profile.fallback_strength",
-            )
-            if profile["source"] not in {"declared", "defaulted"}:
-                raise ValueError("phase execution profile source is invalid")
-            phase["execution_profile"] = profile
         if phase["name"] in names:
             raise ValueError("phases must have distinct names")
         names.add(phase["name"])
-        if phase["assignee_type"] not in {"agent", "hybrid", "human"}:
-            raise ValueError("phase assignee type is invalid")
-        phase["capabilities"] = _string_list(phase["capabilities"], f"phases[{index}].capabilities")
         if not isinstance(phase["chain"], list):
             raise ValueError("phase chain must be a list")
         chain: list[dict[str, str]] = []
@@ -233,10 +165,8 @@ def _validate_phases(value: Any) -> list[dict[str, Any]]:
                 raise ValueError("phase chain CLIs must be distinct")
             seen_clis.add(entry["cli"])
             chain.append(entry)
-        if phase["assignee_type"] in {"agent", "hybrid"} and not chain:
-            raise ValueError("agent and hybrid phases require an ordered CLI/model chain")
-        if phase["assignee_type"] == "human" and chain:
-            raise ValueError("human phases must not include a CLI/model chain")
+        if not chain:
+            raise ValueError("Driver phases require an ordered CLI/model chain")
         phase["chain"] = chain
         phases.append(phase)
     return phases
@@ -247,9 +177,7 @@ def _validate_proactive(value: Any, phases: list[dict[str, Any]]) -> dict[str, A
     raw_decisions = result["phase_decisions"]
     if not isinstance(raw_decisions, list):
         raise ValueError("proactive_review.phase_decisions must be a list")
-    agent_phases = [
-        phase["name"] for phase in phases if phase["assignee_type"] in {"agent", "hybrid"}
-    ]
+    agent_phases = [phase["name"] for phase in phases]
     decisions: list[dict[str, str]] = []
     for index, raw in enumerate(raw_decisions):
         decision = _mapping(
@@ -269,7 +197,7 @@ def _validate_proactive(value: Any, phases: list[dict[str, Any]]) -> dict[str, A
             }
         )
     if [item["phase"] for item in decisions] != agent_phases:
-        raise ValueError("proactive review decisions must cover agent phases in playbook order")
+        raise ValueError("proactive review decisions must cover Driver phases in order")
     result["phase_decisions"] = decisions
     return result
 
@@ -332,24 +260,16 @@ def _validate_policy(proposal: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("mutable runtime state does not belong in the confirmed contract")
     if set(raw) - _PROPOSAL_KEYS:
         raise ValueError("confirmed proposal has unknown authority fields")
-    required = _PROPOSAL_KEYS - {"pr"}
-    if set(raw) - {"pr"} != required:
+    if set(raw) != _PROPOSAL_KEYS:
         raise ValueError("confirmed proposal is incomplete")
-    playbook = _validate_playbook(raw["playbook"])
     phases = _validate_phases(raw["phases"])
-    pr_capable = "cafe.pr.publish" in playbook["capability_requests"] or any(
-        "cafe.pr.publish" in phase["capabilities"] for phase in phases
-    )
     adjustment = _json_mapping(raw["model_adjustment"], "model_adjustment")
     adjustment_keys = set(adjustment)
     if adjustment_keys not in ({"authority"}, {"authority", "confirmed_by", "confirmed_at"}):
         raise ValueError("model_adjustment has unsupported or missing fields")
     result: dict[str, Any] = {
-        "playbook": playbook,
         "locales": _validate_locales(raw["locales"]),
-        "confirmation_contract": _validate_confirmation(
-            raw["confirmation_contract"], pr_capable=pr_capable
-        ),
+        "confirmation_contract": _validate_confirmation(raw["confirmation_contract"]),
         "reactive_user_handoffs": _mapping(
             raw["reactive_user_handoffs"],
             "reactive_user_handoffs",
@@ -386,15 +306,6 @@ def _validate_policy(proposal: Mapping[str, Any]) -> dict[str, Any]:
         adjustment["confirmed_at"] = _aware_time(
             adjustment["confirmed_at"], "model_adjustment.confirmed_at"
         )
-    if pr_capable:
-        pr = _mapping(raw.get("pr"), "pr", keys={"auto_create", "post_todo_list"})
-        pr["auto_create"] = _bool(pr["auto_create"], "pr.auto_create")
-        if pr["auto_create"] != result["confirmation_contract"]["pr_auto_create"]:
-            raise ValueError("PR choice and confirmation binding must match")
-        pr["post_todo_list"] = _string_list(pr["post_todo_list"], "pr.post_todo_list")
-        result["pr"] = pr
-    elif "pr" in raw:
-        raise ValueError("PR fields are inapplicable to this playbook")
     expected_semantics = {
         "effective_policy": {
             name: deepcopy(result[name]) for name in _POLICY_SEMANTIC_FIELDS if name in result
@@ -414,7 +325,6 @@ def _semantic_projection_from_validated(contract: Mapping[str, Any]) -> dict[str
     """Project a policy already validated by the caller or proposal builder."""
     fields = (
         "identity",
-        "playbook",
         "locales",
         "confirmation_contract",
         "reactive_user_handoffs",
@@ -425,7 +335,6 @@ def _semantic_projection_from_validated(contract: Mapping[str, Any]) -> dict[str
         "model_adjustment",
         "driver",
         "checkout",
-        "pr",
     )
     projection = {name: deepcopy(contract[name]) for name in fields if name in contract}
     projection["material_assumptions"] = deepcopy(contract["preflight"]["material_assumptions"])
@@ -491,10 +400,7 @@ def validate_contract(
     document: Mapping[str, Any], *, issue_name: str | None = None, workflow_id: str | None = None
 ) -> dict[str, Any]:
     raw = _mapping(document, "contract")
-    permitted = set(_CONTRACT_KEYS)
-    if "pr" not in raw:
-        permitted.remove("pr")
-    if set(raw) != permitted:
+    if set(raw) != _CONTRACT_KEYS:
         raise ValueError("contract has unsupported or missing fields")
     schema_version = raw["schema_version"]
     if (

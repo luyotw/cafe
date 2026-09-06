@@ -495,7 +495,6 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
     """Build the same normalized policy rendered at kickoff, with no persistence."""
     project_root = args.project_root.resolve()
     model = PlaybookLoader(project_root=project_root).load_model(args.playbook_id).model
-    skill_loader = SkillLoader(project_root=project_root)
     publication_applicable = playbook_requests_capability(model, "cafe.pr.publish")
     candidates = confirmation_gate_steps(model)
     mandatory_human_tasks = mandatory_confirmation_gate_steps(model)
@@ -550,37 +549,23 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
     phases: list[dict[str, Any]] = []
     agent_phases: list[str] = []
     for step_name, step in model.steps.items():
-        profile = resolve_execution_profile(skill_loader, step.skill)
-        chain: list[dict[str, str]] = []
-        if step.assignee_type in {"agent", "hybrid"}:
-            selected = overrides.get(step_name)
-            if selected is None:
-                selected, _ = _resolve_configured_chain(
-                    step_name=step_name, role=step.role, phase_config=phase_config
-                )
-            rationale = rationales.get(step_name)
-            if rationale is None:
-                raise ValueError(f"missing phase rationale for agent-executed step: {step_name}")
-            chain = [{"cli": cli, "model": model_name} for cli, model_name in selected]
-            agent_phases.append(step_name)
-        else:
-            rationale = "not agent-executed"
+        if step.assignee_type not in {"agent", "hybrid"}:
+            continue
+        selected = overrides.get(step_name)
+        if selected is None:
+            selected, _ = _resolve_configured_chain(
+                step_name=step_name, role=step.role, phase_config=phase_config
+            )
+        rationale = rationales.get(step_name)
+        if rationale is None:
+            raise ValueError(f"missing phase rationale for agent-executed step: {step_name}")
+        chain = [{"cli": cli, "model": model_name} for cli, model_name in selected]
+        agent_phases.append(step_name)
         phases.append(
             {
                 "name": step_name,
-                "assignee_type": step.assignee_type,
-                "role": step.role,
-                "skill": step.skill,
-                "execution_profile": {
-                    "workloads": list(profile.workloads),
-                    "reasoning": profile.reasoning,
-                    "risk_domains": list(profile.risk_domains),
-                    "fallback_strength": profile.fallback_strength,
-                    "source": "defaulted" if profile.uses_default else "declared",
-                },
                 "chain": chain,
                 "rationale": rationale,
-                "capabilities": list(step.capability_requests),
             }
         )
     if set(rationales) - set(agent_phases):
@@ -601,35 +586,13 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
         else {"kind": "current_checkout"}
     )
     proposal: dict[str, Any] = {
-        "playbook": {
-            "id": args.playbook_id,
-            "source": f"playbook:{args.playbook_id}",
-            "selection_rationale": args.playbook_rationale,
-            "semantic_fingerprint": {
-                "effective_graph": {
-                    "entry_point": model.entry_point,
-                    "steps": [
-                        {"name": step_name, "on": dict(step.on)}
-                        for step_name, step in model.steps.items()
-                    ],
-                },
-                "effective_playbook": model.model_dump(mode="json"),
-                "publication_applicable": publication_applicable,
-            },
-            "capability_requests": ["cafe.pr.publish"] if publication_applicable else [],
-        },
         "locales": {
             "conversation": {"value": effective_locale, "source": locale_source},
-            "repository_content": {
-                "value": args.repository_content_locale,
-                "source": "confirmation",
-            },
         },
         "confirmation_contract": {
             "user_required": list(user_required),
             "driver_confirmable": list(driver_confirmable),
             "mandatory_human_stops": list(mandatory_human_tasks),
-            **({"pr_auto_create": args.pr_auto_create} if publication_applicable else {}),
         },
         "reactive_user_handoffs": {
             "need_clarification": args.need_clarification,
@@ -666,9 +629,6 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
                     "post_change_evidence",
                 )
             },
-            "catalog": {
-                name: catalog[name] for name in ("status", "decision", "post_change_evidence")
-            },
         },
     }
     if args.driver_mode == "attached":
@@ -678,10 +638,7 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
             {"cli": cli, "model": model_name}
             for cli, model_name in _parse_event_driver_entries(args.event_driver)
         ]
-    if publication_applicable:
-        proposal["pr"] = {"auto_create": args.pr_auto_create, "post_todo_list": []}
     policy_fields = (
-        "playbook",
         "locales",
         "confirmation_contract",
         "reactive_user_handoffs",
@@ -692,7 +649,6 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
         "model_adjustment",
         "driver",
         "checkout",
-        "pr",
     )
     proposal["semantic_facts"] = {
         "effective_policy": {
@@ -1053,7 +1009,7 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
             *(
                 [
                     "### Confirmed durable policy",
-                    "The following normalized proposal must be confirmed unchanged before activation.",
+                    "The following Driver-owned policy must be confirmed unchanged before activation.",
                     "```json",
                     json.dumps(
                         {"schema_version": 1, "policy": confirmed_proposal},

@@ -42,42 +42,18 @@ def _proposal() -> dict[str, object]:
     phases = [
         {
             "name": "develop",
-            "assignee_type": "agent",
-            "role": "developer",
-            "skill": "cafe-develop",
-            "execution_profile": "implementation",
             "chain": [{"cli": "codex", "model": "exact"}],
             "rationale": "Confirmed implementation chain.",
-            "capabilities": [],
-        },
-        {
-            "name": "publish",
-            "assignee_type": "agent",
-            "role": "developer",
-            "skill": "cafe-pr",
-            "execution_profile": "publication",
-            "chain": [{"cli": "codex", "model": "exact"}],
-            "rationale": "Generic publication remains Driver-free.",
-            "capabilities": ["cafe.pr.publish"],
         },
     ]
     proposal: dict[str, object] = {
-        "playbook": {
-            "id": "custom-capable",
-            "source": "test:custom-capable",
-            "selection_rationale": "Exercises a custom named publish step.",
-            "semantic_fingerprint": {"steps": [phase["name"] for phase in phases]},
-            "capability_requests": [],
-        },
         "locales": {
             "conversation": {"value": "en", "source": "playbook"},
-            "repository_content": {"value": "en", "source": "confirmation"},
         },
         "confirmation_contract": {
             "user_required": [],
             "driver_confirmable": [],
             "mandatory_human_stops": [],
-            "pr_auto_create": False,
         },
         "reactive_user_handoffs": {
             "need_clarification": "user_required",
@@ -95,7 +71,6 @@ def _proposal() -> dict[str, object]:
         "proactive_review": {
             "phase_decisions": [
                 {"phase": "develop", "decision": "not_required", "rationale": "No schedule."},
-                {"phase": "publish", "decision": "not_required", "rationale": "Generic phase."},
             ]
         },
         "model_adjustment": {
@@ -103,7 +78,6 @@ def _proposal() -> dict[str, object]:
         },
         "driver": {"mode": "unattended"},
         "checkout": {"kind": "current_checkout"},
-        "pr": {"auto_create": False, "post_todo_list": []},
         "semantic_facts": {},
         "material_assumptions": {"permissions": ["local"], "provider": "codex"},
     }
@@ -113,7 +87,6 @@ def _proposal() -> dict[str, object]:
 
 def _fresh_policy_facts(proposal: dict[str, object]) -> dict[str, object]:
     fields = (
-        "playbook",
         "locales",
         "confirmation_contract",
         "reactive_user_handoffs",
@@ -124,7 +97,6 @@ def _fresh_policy_facts(proposal: dict[str, object]) -> dict[str, object]:
         "model_adjustment",
         "driver",
         "checkout",
-        "pr",
     )
     return {"effective_policy": {name: deepcopy(proposal[name]) for name in fields}}
 
@@ -161,8 +133,8 @@ def test_resume_and_cold_takeover_reach_the_same_safe_authority_decision(tmp_pat
     backup = adapter.validate_entry(
         issue_dir=issue_dir, issue_name="journey", workflow_id="workflow-journey", fresh_facts=facts
     )
-    assert primary["generic_inputs"] == backup["generic_inputs"]
-    assert primary["generic_inputs"]["pr_auto_create"] is False
+    assert primary["runtime"] == backup["runtime"]
+    assert "generic_inputs" not in primary
 
     changed = _proposal()
     changed["phases"][0]["chain"][0]["model"] = "changed-model"

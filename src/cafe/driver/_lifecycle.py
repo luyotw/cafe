@@ -205,10 +205,7 @@ def _legacy_path_present(path: Path) -> bool:
 
 def _load_legacy_confirmation(issue_dir: Path) -> Mapping[str, Any] | None:
     """Require every available legacy confirmation candidate to agree exactly."""
-    candidates = (
-        issue_dir / "driver" / "legacy_confirmation.json",
-        issue_dir / "issue.yaml",
-    )
+    candidates = (issue_dir / "driver" / "legacy_confirmation.json",)
     evidence: list[Mapping[str, Any]] = []
     for path in candidates:
         document = _load_legacy_mapping(path)
@@ -233,12 +230,6 @@ def _load_legacy_confirmation(issue_dir: Path) -> Mapping[str, Any] | None:
 
 def _legacy_sidecars_match(issue_dir: Path, proposal: Mapping[str, Any]) -> bool:
     """Sidecars are migration evidence only; a mismatch is never guessed away."""
-    issue_path = issue_dir / "issue.yaml"
-    issue = _load_legacy_mapping(issue_path)
-    if issue is None and _legacy_path_present(issue_path):
-        return False
-    if issue is not None and not _legacy_issue_projection_matches(issue, proposal):
-        return False
     config_path = issue_dir / "driver" / "config.yaml"
     config = _load_legacy_mapping(config_path)
     if config is None and _legacy_path_present(config_path):
@@ -265,30 +256,66 @@ def _legacy_sidecars_match(issue_dir: Path, proposal: Mapping[str, Any]) -> bool
                 return False
         except (TypeError, ValueError):
             return False
-    phases_path = _legacy_phases_path(issue_dir)
-    phases = _load_legacy_mapping(phases_path) if phases_path is not None else None
-    if phases_path is not None and phases is None and _legacy_path_present(phases_path):
-        return False
-    if phases is not None and not _legacy_phases_match(phases, proposal):
-        return False
     return True
 
 
-def _legacy_issue_projection_matches(
-    document: Mapping[str, Any], proposal: Mapping[str, Any]
-) -> bool:
-    """Reconcile every ordinary issue projection field that can govern Driver work."""
-    expected_playbook = proposal.get("playbook")
-    if "playbook_id" in document:
-        if not isinstance(expected_playbook, Mapping) or document[
-            "playbook_id"
-        ] != expected_playbook.get("id"):
-            return False
-    if "playbook_overrides" in document:
-        # The legacy formatter did not persist a normalized override projection.
-        # Treat any override as incomplete authority rather than silently adopting it.
-        return False
-    for field in (
+def _driver_only_legacy_proposal(value: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Extract known Driver evidence without adopting co-located generic policy."""
+    proposal = deepcopy(dict(value))
+    proposal.pop("playbook", None)
+    proposal.pop("pr", None)
+    locales = proposal.get("locales")
+    if isinstance(locales, Mapping):
+        if set(locales) - {"conversation", "repository_content"}:
+            return None
+        proposal["locales"] = {
+            name: deepcopy(item) for name, item in locales.items() if name == "conversation"
+        }
+    confirmation = proposal.get("confirmation_contract")
+    if isinstance(confirmation, Mapping):
+        if set(confirmation) - {
+            "user_required",
+            "driver_confirmable",
+            "mandatory_human_stops",
+            "pr_auto_create",
+        }:
+            return None
+        proposal["confirmation_contract"] = {
+            name: deepcopy(item)
+            for name, item in confirmation.items()
+            if name in {"user_required", "driver_confirmable", "mandatory_human_stops"}
+        }
+    phases = proposal.get("phases")
+    if isinstance(phases, list):
+        normalized_phases: list[dict[str, Any]] = []
+        for phase in phases:
+            if not isinstance(phase, Mapping):
+                return None
+            if phase.get("assignee_type") == "human":
+                continue
+            if set(phase) - {
+                "name",
+                "assignee_type",
+                "role",
+                "skill",
+                "execution_profile",
+                "chain",
+                "rationale",
+                "capabilities",
+            }:
+                return None
+            try:
+                normalized_phases.append(
+                    {
+                        "name": deepcopy(phase["name"]),
+                        "chain": deepcopy(phase["chain"]),
+                        "rationale": deepcopy(phase["rationale"]),
+                    }
+                )
+            except KeyError:
+                return None
+        proposal["phases"] = normalized_phases
+    policy_fields = (
         "locales",
         "confirmation_contract",
         "reactive_user_handoffs",
@@ -299,60 +326,13 @@ def _legacy_issue_projection_matches(
         "model_adjustment",
         "driver",
         "checkout",
-        "pr",
-    ):
-        if field not in document:
-            continue
-        actual = document[field]
-        expected = proposal.get(field)
-        if isinstance(actual, Mapping):
-            if not isinstance(expected, Mapping) or set(actual) - set(expected):
-                return False
-            if any(actual[key] != expected[key] for key in actual):
-                return False
-        elif actual != expected:
-            return False
-    return True
-
-
-def _legacy_phases_path(issue_dir: Path) -> Path | None:
-    """Locate a legacy project phase projection only for normal issue layout."""
-    issue = Path(issue_dir)
-    if issue.parent.name != "issues" or issue.parent.parent.name != ".cafe":
-        return None
-    return issue.parent.parent / "phases.yaml"
-
-
-def _legacy_phases_match(document: Mapping[str, Any], proposal: Mapping[str, Any]) -> bool:
-    """Require every available legacy phase projection to prove the same chains."""
-    raw_phases = proposal.get("phases")
-    if not isinstance(raw_phases, list):
-        return False
-    expected: dict[str, dict[str, Any]] = {}
-    for phase in raw_phases:
-        if not isinstance(phase, Mapping) or phase.get("assignee_type") not in {"agent", "hybrid"}:
-            continue
-        name = phase.get("name")
-        role = phase.get("role")
-        chain = phase.get("chain")
-        if not isinstance(name, str) or not isinstance(role, str) or not isinstance(chain, list):
-            return False
-        expected[name] = {"role": role, "clis": chain}
-    if set(document) != set(expected):
-        return False
-    for name, expected_phase in expected.items():
-        actual = document.get(name)
-        if not isinstance(actual, Mapping) or set(actual) - {"name", "role", "clis"}:
-            return False
-        if (
-            actual.get("role") != expected_phase["role"]
-            or actual.get("clis") != expected_phase["clis"]
-        ):
-            return False
-        name_value = actual.get("name")
-        if name_value is not None and (not isinstance(name_value, str) or not name_value.strip()):
-            return False
-    return True
+    )
+    proposal["semantic_facts"] = {
+        "effective_policy": {
+            name: deepcopy(proposal[name]) for name in policy_fields if name in proposal
+        }
+    }
+    return proposal
 
 
 def adopt_legacy(
@@ -367,6 +347,8 @@ def adopt_legacy(
             return True, current["revision"]["generation"], digest, "already_adopted"
         except DriverContractMissingError:
             pass
+        except ValueError:
+            return False, None, None, "reconfirmation_required"
         evidence = _load_legacy_confirmation(issue_dir)
         if evidence is None:
             return False, None, None, "reconfirmation_required"
@@ -382,6 +364,9 @@ def adopt_legacy(
             confirmed_by = evidence.get("confirmed_by")
             confirmed_at = evidence.get("confirmed_at")
             if not isinstance(proposal, Mapping):
+                return False, None, None, "reconfirmation_required"
+            proposal = _driver_only_legacy_proposal(proposal)
+            if proposal is None:
                 return False, None, None, "reconfirmation_required"
             if not _legacy_sidecars_match(issue_dir, proposal):
                 return False, None, None, "reconfirmation_required"

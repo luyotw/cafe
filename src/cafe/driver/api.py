@@ -72,7 +72,7 @@ class DriverEntryResult:
     runtime: Mapping[str, Any]
     event: Mapping[str, Any] | None
     proactive_review: tuple[Mapping[str, str], ...]
-    generic_inputs: Mapping[str, Any]
+    phase_model_authority: Mapping[str, tuple[Mapping[str, str], ...]]
 
 
 @dataclass(frozen=True)
@@ -149,17 +149,10 @@ def evaluate_driver_entry(command: DriverEntryRequest) -> DriverEntryResult:
         workflow_id=command.workflow_id,
         fresh_facts=command.fresh_facts,
     )
-    phase_chains = {
+    phase_model_authority = {
         phase["name"]: tuple(dict(entry) for entry in phase["chain"])
         for phase in contract["phases"]
-        if phase["assignee_type"] in {"agent", "hybrid"}
     }
-    generic: dict[str, Any] = {
-        "playbook_id": contract["playbook"]["id"],
-        "phase_chains": phase_chains,
-    }
-    if "pr" in contract:
-        generic["pr_auto_create"] = contract["pr"]["auto_create"]
     event = None
     if contract["driver"]["mode"] == "event-driven":
         event = {"clis": tuple(dict(item) for item in contract["driver"]["clis"])}
@@ -170,7 +163,7 @@ def evaluate_driver_entry(command: DriverEntryRequest) -> DriverEntryResult:
         runtime=_freeze({"driver": contract["driver"], "checkout": contract["checkout"]}),
         event=_freeze(event) if event is not None else None,
         proactive_review=_freeze(contract["proactive_review"]["phase_decisions"]),
-        generic_inputs=_freeze(generic),
+        phase_model_authority=_freeze(phase_model_authority),
     )
 
 

@@ -27,16 +27,17 @@ policy.
   normally whether the callback succeeds, fails, or never starts.
 
 For event-driven mode, activate the confirmed Driver contract after
-`cafe prepare` and then launch the callback:
+`cafe prepare`, validate the Driver-only entry, and then launch generic CAFE
+through its existing event callback path:
 
 ```bash
-python3 <skill-dir>/scripts/run_validated_driver_workflow.py \
+python3 <skill-dir>/scripts/validate_driver_entry.py \
   --issue-name <issue> \
   --issue-dir .cafe/issues/<issue> \
   --workflow-id <prepared-workflow-id> \
-  --fresh-facts '<fresh-bounded-policy-facts-json>' \
-  --issue-config .cafe/issues/<issue>/issue.yaml \
-  --phase-config .cafe/phases.yaml \
+  --fresh-facts '<fresh-driver-policy-facts-json>'
+
+cafe workflow --issue <issue> --execute --mute-agent-output \
   --background \
   --on-workflow-event builtin:use-cafe-workflow:workflow_event_callback
 ```
@@ -51,17 +52,13 @@ only; when a contract exists it is neither read as callback authority nor a
 writer target. The event-driver lifecycle uses no session-file discovery,
 directory diff, sleep, polling, or watcher.
 
-For attached or unattended Driver-managed work, invoke the same validator
-without `--background` or `--on-workflow-event`. The supplied fresh facts are
+For attached or unattended Driver-managed work, invoke the same validator,
+then start generic CAFE through its ordinary command. The supplied fresh facts are
 the current bounded semantic policy rebuilt by the skill's loaders and the
 current material assumptions; they are not a caller-selected subset. The
-launcher rejects a mismatching `issue.yaml`, phase chain, or PR choice before
-it starts generic CAFE, so generic code remains Driver-free while the
-validation-to-use boundary remains immediate.
-It accepts only the canonical `.cafe/issues/<issue>/issue.yaml` and
-`.cafe/phases.yaml` inputs under the launch repository root, rejects aliases,
-and starts generic CAFE from that same root. Equivalent or decoy paths cannot
-stand in for the generic inputs actually consumed.
+validator does not inspect `issue.yaml`, phase chains, or PR choices. Generic
+CAFE validates and consumes those ordinary inputs under the existing #467
+contract, with identical behavior whether a Driver exists or not.
 
 Session acquisition and actual delivery are separate boundaries. Every
 unacquired, unbound entry first runs a provider request exactly equivalent to

@@ -6,7 +6,6 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -328,7 +327,7 @@ def test_use_cafe_workflow_skill_requires_playbook_derived_kickoff_contract() ->
     assert "reactive interruptions, not scheduled candidates" in normalized
     assert "Alignment is a proactive driver decision" in normalized
     assert "alignment_policy:" not in reference
-    assert "alignment_checkpoint: driver_resolvable_when_clear" in reference
+    assert "Driver-owned policy" in reference
     assert "`repository_content_locale`" in reference
     assert "explicitly ask the user to confirm `repository_content_locale`" in normalized
     assert "do not treat inference or a playbook locale as confirmation" in normalized
@@ -366,11 +365,14 @@ def test_use_cafe_workflow_keeps_playbook_selection_issue_owned() -> None:
         "legacy `settings.playbook`, top-level `playbook`, or `playbook_id`" in normalized_selection
     )
     assert (
-        "persist the effective playbook and every other confirmed Driver policy"
+        "persist the effective playbook in `.cafe/issues/<issue-name>/issue.yaml`"
         in normalized_selection
     )
-    assert "`.cafe/issues/<issue-name>/driver/contract.json`" in normalized_selection
-    assert "`issue.yaml` may retain a prepare input or derived view" in normalized_selection
+    assert "separate Driver-owned subset is persisted in `driver/contract.json`" in normalized_selection
+    assert (
+        "separate Driver-owned subset is persisted in `driver/contract.json`"
+        in normalized_selection
+    )
     assert "Strategic context is not playbook configuration" in normalized_strategic
     assert "Do not add `playbook_id` to `mandate` or `issues.<name>`" in normalized_strategic
     assert "playbook_id: standard" not in strategic
@@ -522,7 +524,11 @@ def test_confirmed_kickoff_activates_one_issue_scoped_driver_contract(tmp_path: 
     assert result.returncode == 0, result.stderr
     contract = json.loads((issue_dir / "driver" / "contract.json").read_text(encoding="utf-8"))
     assert contract["identity"] == {"issue_name": "issue346", "workflow_id": "prepared-346"}
-    assert contract["pr"]["auto_create"] is False
+    assert "pr" not in contract
+    assert "playbook" not in contract
+    assert contract["locales"] == {
+        "conversation": {"value": "zh-TW", "source": "user thread override"}
+    }
     assert "proactive_review.yaml" not in {path.name for path in (issue_dir / "driver").iterdir()}
     assert "No proactive review was confirmed for development." in result.stdout
     assert "| schema_version | 1 |" in result.stdout
@@ -546,7 +552,10 @@ def test_confirmed_kickoff_activates_one_issue_scoped_driver_contract(tmp_path: 
         check=False,
     )
     assert entry.returncode == 0, entry.stderr
-    assert json.loads(entry.stdout)["generic_inputs"]["pr_auto_create"] is False
+    entry_projection = json.loads(entry.stdout)
+    assert "generic_inputs" not in entry_projection
+    assert "pr_auto_create" not in entry.stdout
+    assert entry_projection["phase_model_authority"]["develop"][0]["model"] == "implementation-main"
 
 
 def test_kickoff_formatter_renders_the_complete_normalized_policy_before_activation(
@@ -570,7 +579,9 @@ def test_kickoff_formatter_renders_the_complete_normalized_policy_before_activat
     assert result.returncode == 0, result.stderr
     assert "### Confirmed durable policy" in result.stdout
     assert '"proactive_review"' in result.stdout
-    assert '"effective_graph"' in result.stdout
+    assert '"effective_graph"' not in result.stdout
+    rendered = result.stdout.split("```json\n", 1)[1].split("\n```", 1)[0]
+    assert "pr" not in json.loads(rendered)["policy"]
     assert '"material_assumptions"' in result.stdout
     assert not (tmp_path / ".cafe" / "issues" / "issue346" / "driver").exists()
 
@@ -979,118 +990,6 @@ def test_phase_writer_installs_exact_confirmed_chains_atomically(tmp_path: Path)
         ("codex", "gpt-5.6-sol"),
         ("claude", "claude-opus-5"),
     )
-
-
-def test_driver_launcher_checks_derived_inputs_before_generic_execution(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """The sole launcher binds a validated Driver projection to generic inputs."""
-    entry = _load_script_module(
-        SKILL_ROOT / "scripts" / "validate_driver_entry.py", "test_driver_entry_adapter"
-    )
-    monkeypatch.setitem(sys.modules, "validate_driver_entry", entry)
-    launcher = _load_script_module(
-        SKILL_ROOT / "scripts" / "run_validated_driver_workflow.py", "test_driver_launcher"
-    )
-    issue_config = tmp_path / "issue.yaml"
-    issue_config.write_text("playbook_id: standard\npr:\n  auto_create: false\n", encoding="utf-8")
-    phase_config = tmp_path / "phases.yaml"
-    phase_config.write_text(
-        "develop:\n  name: David\n  role: developer\n  clis:\n"
-        "    - cli: codex\n      model: exact\n",
-        encoding="utf-8",
-    )
-    projection = {
-        "generic_inputs": {
-            "playbook_id": "standard",
-            "pr_auto_create": False,
-            "phase_chains": {"develop": [{"cli": "codex", "model": "exact"}]},
-        }
-    }
-
-    launcher._verify_generic_projection(
-        projection, issue_config=issue_config, phase_config=phase_config
-    )
-
-    phase_config.write_text(
-        "develop:\n  name: David\n  role: developer\n  clis:\n"
-        "    - cli: codex\n      model: wrong\n",
-        encoding="utf-8",
-    )
-    with pytest.raises(ValueError, match="does not match"):
-        launcher._verify_generic_projection(
-            projection, issue_config=issue_config, phase_config=phase_config
-        )
-
-
-def test_driver_launcher_rejects_decoy_paths_before_generic_execution(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """The generic worker uses only the exact paths validated for this issue."""
-    entry = _load_script_module(
-        SKILL_ROOT / "scripts" / "validate_driver_entry.py", "test_driver_entry_for_paths"
-    )
-    monkeypatch.setitem(sys.modules, "validate_driver_entry", entry)
-    launcher = _load_script_module(
-        SKILL_ROOT / "scripts" / "run_validated_driver_workflow.py", "test_driver_launcher_paths"
-    )
-    issue_dir = tmp_path / ".cafe" / "issues" / "victim"
-    issue_dir.mkdir(parents=True)
-    issue_config = issue_dir / "issue.yaml"
-    issue_config.write_text("playbook_id: standard\npr:\n  auto_create: false\n", encoding="utf-8")
-    phase_config = tmp_path / ".cafe" / "phases.yaml"
-    phase_config.write_text(
-        "develop:\n  name: David\n  role: developer\n  clis:\n"
-        "    - cli: codex\n      model: exact\n",
-        encoding="utf-8",
-    )
-    decoy = tmp_path / "decoy.yaml"
-    decoy.write_text(issue_config.read_text(encoding="utf-8"), encoding="utf-8")
-    projection = {
-        "generic_inputs": {
-            "playbook_id": "standard",
-            "pr_auto_create": False,
-            "phase_chains": {"develop": [{"cli": "codex", "model": "exact"}]},
-        }
-    }
-    monkeypatch.setattr(launcher, "validate_entry", lambda **_kwargs: projection)
-    launches: list[tuple[list[str], Path]] = []
-    monkeypatch.setattr(
-        launcher.subprocess,
-        "run",
-        lambda command, **kwargs: (
-            launches.append((command, kwargs["cwd"])) or SimpleNamespace(returncode=0)
-        ),
-    )
-    args = SimpleNamespace(
-        issue_dir=issue_dir,
-        issue_name="victim",
-        workflow_id="workflow-victim",
-        fresh_facts={},
-        issue_config=decoy,
-        phase_config=phase_config,
-        background=False,
-        on_workflow_event=None,
-    )
-
-    with pytest.raises(ValueError):
-        launcher.run_validated_workflow(args)
-    assert launches == []
-
-    args.issue_config = issue_config
-    assert launcher.run_validated_workflow(args) == 0
-    assert launches == [
-        (["cafe", "workflow", "--issue", "victim", "--execute", "--mute-agent-output"], tmp_path)
-    ]
-
-    alias_root = tmp_path / "alias-root"
-    alias_root.symlink_to(tmp_path, target_is_directory=True)
-    args.issue_dir = alias_root / ".cafe" / "issues" / "victim"
-    args.issue_config = alias_root / ".cafe" / "issues" / "victim" / "issue.yaml"
-    args.phase_config = alias_root / ".cafe" / "phases.yaml"
-    with pytest.raises(ValueError):
-        launcher.run_validated_workflow(args)
-    assert len(launches) == 1
 
 
 def test_phase_writer_accepts_primary_only_chain(tmp_path: Path) -> None:
@@ -1904,7 +1803,8 @@ def test_use_cafe_workflow_defines_event_driven_mode_and_model_authority() -> No
     assert "event-driven" in skill
     assert "explicit exact model" in normalized_skill
     assert "cafe workflow --execute --mute-agent-output" in skill
-    assert "scripts/run_validated_driver_workflow.py" in running
+    assert "scripts/validate_driver_entry.py" in running
+    assert "does not inspect `issue.yaml`, phase chains, or PR choices" in running
     assert "manual diagnostic `--single-step`" in normalized_skill
     assert "callbacks are best effort" in normalized_running
     assert "No ordinary operating mode uses it" in normalized_running
