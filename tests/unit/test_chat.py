@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from cafe.agents.cli import ClaudeCLI, CodexCLI, CopilotCLI, CursorCLI, GeminiCLI
+from cafe.agents.executor import AgentExecutionError
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.types import AgentCLI, AgentConfig
 from cafe.skills.loader import SkillLoader
@@ -203,6 +204,73 @@ class TestLaunchChatSession:
         assert env["CAFE_ISSUE_NAME"] == "issue123"
         assert env["CAFE_ALIGNMENT_REQUEST_FILE"] == "/tmp/request.json"
         assert env["CAFE_ALIGNMENT_DECISION_FILE"] == "/tmp/decision.json"
+
+    @patch("cafe.ui.chat.subprocess.run")
+    @patch("cafe.ui.chat.ConfigManager")
+    @patch("cafe.ui.chat.AgentManager")
+    def test_chat_prompt_executes_once_and_saves_session(
+        self,
+        mock_agent_manager_cls,
+        mock_config_manager_cls,
+        mock_run,
+        capsys,
+    ):
+        mock_config = MagicMock()
+        mock_config.get.return_value = {"name": "David", "cli": "claude"}
+        mock_config_manager_cls.return_value = mock_config
+
+        agent_manager = self._make_agent_manager("David", "claude", session_id=None)
+        executor = agent_manager.get_agent.return_value
+        executor.execute.return_value = MagicMock(
+            response="One-shot response",
+            session_id="session-new",
+        )
+        mock_agent_manager_cls.return_value = agent_manager
+
+        result = launch_chat_session("developer", "issue123", prompt="Status?")
+
+        assert result == 0
+        assert "One-shot response" in capsys.readouterr().out
+        assert executor.stream_output is False
+        executor.execute.assert_called_once_with(
+            "Status?",
+            environment_overrides={
+                "CAFE_ISSUE_NAME": "issue123",
+                "CAFE_ISSUE_DIR": str(Path.cwd() / ".cafe" / "issues" / "issue123"),
+                "CAFE_CHAT_CURRENT_STEP": "spec",
+                "CAFE_CHAT_PLAYBOOK_ID": "standard",
+            },
+        )
+        agent_manager.session_manager.save_session.assert_called_once_with(
+            "David", AgentCLI.CLAUDE, "session-new", "issue123"
+        )
+        assert all(call.args[0][0] == "git" for call in mock_run.call_args_list)
+
+    @patch("cafe.ui.chat.ConfigManager")
+    @patch("cafe.ui.chat.AgentManager")
+    def test_chat_prompt_reports_execution_failure(
+        self,
+        mock_agent_manager_cls,
+        mock_config_manager_cls,
+        capsys,
+    ):
+        mock_config = MagicMock()
+        mock_config.get.return_value = {"name": "David", "cli": "claude"}
+        mock_config_manager_cls.return_value = mock_config
+
+        agent_manager = self._make_agent_manager("David", "claude")
+        executor = agent_manager.get_agent.return_value
+        executor.execute.side_effect = AgentExecutionError(
+            "provider failed",
+            display_message="Claude provider is unavailable.",
+        )
+        mock_agent_manager_cls.return_value = agent_manager
+
+        result = launch_chat_session("developer", "issue123", prompt="Status?")
+
+        assert result == 1
+        assert "Claude provider is unavailable." in capsys.readouterr().out
+        agent_manager.session_manager.save_session.assert_not_called()
 
     @patch("builtins.print")
     @patch("cafe.ui.chat.ConfigManager")

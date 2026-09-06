@@ -1229,8 +1229,14 @@ def agent_sync() -> None:
 def chat_with_agent(
     ctx: typer.Context,
     role: str = typer.Argument(..., help="Playbook-declared role"),
+    prompt: Optional[str] = typer.Option(
+        None,
+        "--prompt",
+        "-p",
+        help="Send one message and exit instead of opening interactive chat",
+    ),
 ) -> None:
-    """Open interactive chat with a playbook-declared role Agent
+    """Chat with a playbook-declared role Agent.
 
     This command allows you to quickly interact with an Agent of specified role,
     without manually looking up and entering session id.
@@ -1240,6 +1246,7 @@ def chat_with_agent(
     \b
     Examples:
         cafe chat developer
+        cafe chat developer -p "Summarize the current implementation"
         cafe chat qa
         cafe chat researcher
     """
@@ -1250,7 +1257,9 @@ def chat_with_agent(
         console.print(f"[red]Error: Invalid role '{role}'. Must be one of: {', '.join(valid_roles)}[/red]")
         raise typer.Exit(1)
 
-    raise typer.Exit(launch_chat_session(role, issue_name))
+    if prompt is None:
+        raise typer.Exit(launch_chat_session(role, issue_name))
+    raise typer.Exit(launch_chat_session(role, issue_name, prompt=prompt))
 
 
 def _load_issue_playbook_roles(issue_name: str) -> list[str]:

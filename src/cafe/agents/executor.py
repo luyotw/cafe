@@ -202,6 +202,7 @@ class AgentExecutor:
         streaming_output_file: Optional[str] = None,
         execution_control: AgentExecutionControl | None = None,
         exact_session: bool = False,
+        environment_overrides: Optional[dict[str, str]] = None,
     ) -> AgentResponse:
         """Execute the agent with given prompt.
 
@@ -210,6 +211,7 @@ class AgentExecutor:
             allowed_tools: List of allowed tools (using Claude naming convention)
             allowed_directories: List of allowed directories (e.g., [".cafe", "src"])
             streaming_output_file: Optional file path to write streaming output line-by-line
+            environment_overrides: Environment values to add to the provider process
 
         Returns:
             AgentResponse with response text, token usage, and permission denials
@@ -247,6 +249,10 @@ class AgentExecutor:
                 execution_control,
             )
             env = cli_strategy.build_environment()
+            if environment_overrides:
+                env.update(
+                    {str(key): str(value) for key, value in environment_overrides.items()}
+                )
 
             # Execute with streaming
             if self.config.cli == AgentCLI.COPILOT:
