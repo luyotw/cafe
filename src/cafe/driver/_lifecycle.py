@@ -12,7 +12,14 @@ from cafe.core.packet_io import canonical_json
 
 from ._freshness import Freshness, compare_freshness
 from ._schema import build_initial_contract, semantic_projection
-from ._store import _decode_exact, _read_bounded, contract_lock, load_contract, write_contract
+from ._store import (
+    DriverContractMissingError,
+    _decode_exact,
+    _read_bounded,
+    contract_lock,
+    load_contract,
+    write_contract,
+)
 
 
 class _ExactLegacyLoader(yaml.SafeLoader):
@@ -64,13 +71,13 @@ def activate(
             current, current_sha = load_contract(
                 issue_dir, issue_name=issue_name, workflow_id=workflow_id
             )
-        except ValueError as exc:
-            if "missing or unsafe" not in str(exc):
-                raise
+        except DriverContractMissingError:
             digest = write_contract(issue_dir, candidate, expected_predecessor_sha256=None)
             return 1, digest, True
         if current["provenance"]["proposal_digest"] != candidate["provenance"]["proposal_digest"]:
-            raise ValueError("a different confirmed contract already exists; reconfirmation is required")
+            raise ValueError(
+                "a different confirmed contract already exists; reconfirmation is required"
+            )
         return current["revision"]["generation"], current_sha, False
 
 
@@ -123,7 +130,9 @@ def _changed_paths(before: Any, after: Any, prefix: str = "") -> set[str]:
     return set() if before == after else {prefix}
 
 
-def _assert_delegated_model_change(current: Mapping[str, Any], candidate: Mapping[str, Any]) -> None:
+def _assert_delegated_model_change(
+    current: Mapping[str, Any], candidate: Mapping[str, Any]
+) -> None:
     if current["model_adjustment"]["authority"] != "driver_autonomous":
         raise ValueError("the effective contract does not delegate model adjustment")
     changes = _changed_paths(semantic_projection(current), semantic_projection(candidate))
@@ -152,7 +161,9 @@ def replace(
     if kind not in {"user_reconfirmation", "delegated_change"}:
         raise ValueError("replacement requires user reconfirmation or delegated model authority")
     with contract_lock(issue_dir):
-        current, current_sha = load_contract(issue_dir, issue_name=issue_name, workflow_id=workflow_id)
+        current, current_sha = load_contract(
+            issue_dir, issue_name=issue_name, workflow_id=workflow_id
+        )
         if current_sha != expected_predecessor_sha256:
             raise ValueError("Driver contract predecessor is stale")
         candidate = build_initial_contract(
@@ -168,9 +179,7 @@ def replace(
         )
         if kind == "delegated_change":
             _assert_delegated_model_change(current, candidate)
-        digest = write_contract(
-            issue_dir, candidate, expected_predecessor_sha256=current_sha
-        )
+        digest = write_contract(issue_dir, candidate, expected_predecessor_sha256=current_sha)
         return candidate["revision"]["generation"], digest
 
 
@@ -224,15 +233,25 @@ def _load_legacy_confirmation(issue_dir: Path) -> Mapping[str, Any] | None:
 
 def _legacy_sidecars_match(issue_dir: Path, proposal: Mapping[str, Any]) -> bool:
     """Sidecars are migration evidence only; a mismatch is never guessed away."""
+    issue_path = issue_dir / "issue.yaml"
+    issue = _load_legacy_mapping(issue_path)
+    if issue is None and _legacy_path_present(issue_path):
+        return False
+    if issue is not None and not _legacy_issue_projection_matches(issue, proposal):
+        return False
     config_path = issue_dir / "driver" / "config.yaml"
     config = _load_legacy_mapping(config_path)
     if config is None and _legacy_path_present(config_path):
         return False
     expected_driver = proposal.get("driver")
     if config is not None:
-        if not isinstance(expected_driver, Mapping) or config.get("mode") != expected_driver.get("mode"):
+        if not isinstance(expected_driver, Mapping) or config.get("mode") != expected_driver.get(
+            "mode"
+        ):
             return False
-        if expected_driver.get("mode") == "event-driven" and config.get("clis") != expected_driver.get("clis"):
+        if expected_driver.get("mode") == "event-driven" and config.get(
+            "clis"
+        ) != expected_driver.get("clis"):
             return False
     review_path = issue_dir / "driver" / "proactive_review.yaml"
     review = _load_legacy_mapping(review_path)
@@ -252,6 +271,30 @@ def _legacy_sidecars_match(issue_dir: Path, proposal: Mapping[str, Any]) -> bool
         return False
     if phases is not None and not _legacy_phases_match(phases, proposal):
         return False
+    return True
+
+
+def _legacy_issue_projection_matches(
+    document: Mapping[str, Any], proposal: Mapping[str, Any]
+) -> bool:
+    """Reconcile every ordinary issue projection field that can govern Driver work."""
+    expected_playbook = proposal.get("playbook")
+    if "playbook_id" in document:
+        if not isinstance(expected_playbook, Mapping) or document[
+            "playbook_id"
+        ] != expected_playbook.get("id"):
+            return False
+    for field in ("confirmation_contract", "pr"):
+        if field not in document:
+            continue
+        actual = document[field]
+        expected = proposal.get(field)
+        if not isinstance(actual, Mapping) or not isinstance(expected, Mapping):
+            return False
+        if set(actual) - set(expected):
+            return False
+        if any(actual[key] != expected[key] for key in actual):
+            return False
     return True
 
 
@@ -284,7 +327,10 @@ def _legacy_phases_match(document: Mapping[str, Any], proposal: Mapping[str, Any
         actual = document.get(name)
         if not isinstance(actual, Mapping) or set(actual) - {"name", "role", "clis"}:
             return False
-        if actual.get("role") != expected_phase["role"] or actual.get("clis") != expected_phase["clis"]:
+        if (
+            actual.get("role") != expected_phase["role"]
+            or actual.get("clis") != expected_phase["clis"]
+        ):
             return False
         name_value = actual.get("name")
         if name_value is not None and (not isinstance(name_value, str) or not name_value.strip()):
@@ -298,17 +344,22 @@ def adopt_legacy(
     """Adopt only complete deterministic legacy evidence; every ambiguity fails closed."""
     with contract_lock(issue_dir):
         try:
-            current, digest = load_contract(issue_dir, issue_name=issue_name, workflow_id=workflow_id)
+            current, digest = load_contract(
+                issue_dir, issue_name=issue_name, workflow_id=workflow_id
+            )
             return True, current["revision"]["generation"], digest, "already_adopted"
-        except ValueError as exc:
-            if "missing or unsafe" not in str(exc):
-                raise
+        except DriverContractMissingError:
+            pass
         evidence = _load_legacy_confirmation(issue_dir)
         if evidence is None:
             return False, None, None, "reconfirmation_required"
         try:
             identity = evidence.get("identity") if isinstance(evidence, Mapping) else None
-            if not isinstance(identity, Mapping) or identity.get("issue_name") != issue_name or identity.get("workflow_id") != workflow_id:
+            if (
+                not isinstance(identity, Mapping)
+                or identity.get("issue_name") != issue_name
+                or identity.get("workflow_id") != workflow_id
+            ):
                 return False, None, None, "reconfirmation_required"
             proposal = evidence.get("proposal")
             confirmed_by = evidence.get("confirmed_by")

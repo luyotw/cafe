@@ -228,6 +228,7 @@ python3 <skill-dir>/scripts/format_kickoff_contract.py <playbook-id> \
   --risk-factor "<risk factor; repeat as needed>" \
   --assessment-rationale "<repository evidence for nature and scale>" \
   --phase-rationale "<step>=<capability band, profile/risk evidence, and optional fallback justification>" \
+  --proactive-review-decision "<agent-or-hybrid-step>=<required|not_required>:<confirmed rationale>" \
   --effective-locale <locale> \
   --locale-source "<playbook or direct-user-override source>" \
   --repository-content-locale <locale> \

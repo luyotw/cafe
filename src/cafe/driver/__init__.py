@@ -3,6 +3,8 @@
 from .api import (
     ActivateConfirmedContract,
     ActivationResult,
+    DriverContractMissingError,
+    DriverContractUnsafeError,
     DriverEntryRequest,
     DriverEntryResult,
     EventCallbackPolicy,
@@ -22,6 +24,8 @@ from .api import (
 __all__ = [
     "ActivateConfirmedContract",
     "ActivationResult",
+    "DriverContractMissingError",
+    "DriverContractUnsafeError",
     "DriverEntryRequest",
     "DriverEntryResult",
     "EventCallbackPolicy",

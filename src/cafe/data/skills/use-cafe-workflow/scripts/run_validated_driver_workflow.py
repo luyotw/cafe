@@ -74,8 +74,52 @@ def _verify_generic_projection(
             raise ValueError(f"derived phase chain for '{step}' does not match the Driver contract")
 
 
+def _canonical_generic_paths(issue_dir: Path, *, issue_name: str) -> tuple[Path, Path, Path]:
+    """Return the ambient generic inputs that the launched CAFE process will read."""
+    if (
+        issue_dir.name != issue_name
+        or issue_dir.parent.name != "issues"
+        or issue_dir.parent.parent.name != ".cafe"
+    ):
+        raise ValueError("Driver issue directory is not the canonical generic workflow location")
+    project_root = issue_dir.parent.parent.parent
+    return project_root, issue_dir / "issue.yaml", project_root / ".cafe" / "phases.yaml"
+
+
+def _absolute_path(path: Path) -> Path:
+    """Keep caller-supplied paths lexical so a symlink cannot hide from validation."""
+    return path if path.is_absolute() else Path.cwd() / path
+
+
+def _reject_symlink_ancestors(path: Path, *, label: str) -> None:
+    """Ensure generic execution cannot consume a projection through an alias."""
+    for candidate in (path, *path.parents):
+        try:
+            metadata = candidate.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(metadata.st_mode):
+            raise ValueError(f"{label} must not traverse a symlink")
+
+
 def run_validated_workflow(args: argparse.Namespace) -> int:
-    issue_dir = args.issue_dir.resolve()
+    issue_dir = _absolute_path(args.issue_dir)
+    _reject_symlink_ancestors(issue_dir, label="Driver issue directory")
+    project_root, expected_issue_config, expected_phase_config = _canonical_generic_paths(
+        issue_dir, issue_name=args.issue_name
+    )
+    issue_config = _absolute_path(args.issue_config)
+    phase_config = _absolute_path(args.phase_config)
+    _reject_symlink_ancestors(issue_config, label="Driver issue configuration")
+    _reject_symlink_ancestors(phase_config, label="Driver phase configuration")
+    if issue_config != expected_issue_config:
+        raise ValueError(
+            "Driver launcher must validate the issue configuration generic CAFE will use"
+        )
+    if phase_config != expected_phase_config:
+        raise ValueError(
+            "Driver launcher must validate the phase configuration generic CAFE will use"
+        )
     projection = validate_entry(
         issue_dir=issue_dir,
         issue_name=args.issue_name,
@@ -84,15 +128,15 @@ def run_validated_workflow(args: argparse.Namespace) -> int:
     )
     _verify_generic_projection(
         projection,
-        issue_config=args.issue_config.resolve(),
-        phase_config=args.phase_config.resolve(),
+        issue_config=expected_issue_config,
+        phase_config=expected_phase_config,
     )
     command = ["cafe", "workflow", "--issue", args.issue_name, "--execute", "--mute-agent-output"]
     if args.background:
         command.append("--background")
     if args.on_workflow_event:
         command.extend(["--on-workflow-event", args.on_workflow_event])
-    return subprocess.run(command, check=False).returncode
+    return subprocess.run(command, check=False, cwd=project_root).returncode
 
 
 def main() -> int:

@@ -10,6 +10,7 @@ from typing import Any, Mapping
 
 from ._freshness import Freshness
 from ._lifecycle import activate, adopt_legacy, evaluate, event_callback_policy, replace
+from ._store import DriverContractMissingError, DriverContractUnsafeError
 
 
 @dataclass(frozen=True)
@@ -197,6 +198,8 @@ __all__ = [
     "ActivationResult",
     "DriverEntryRequest",
     "DriverEntryResult",
+    "DriverContractMissingError",
+    "DriverContractUnsafeError",
     "EventCallbackPolicy",
     "EventCallbackRequest",
     "Freshness",

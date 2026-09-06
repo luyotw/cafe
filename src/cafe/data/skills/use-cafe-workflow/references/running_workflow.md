@@ -58,6 +58,10 @@ current material assumptions; they are not a caller-selected subset. The
 launcher rejects a mismatching `issue.yaml`, phase chain, or PR choice before
 it starts generic CAFE, so generic code remains Driver-free while the
 validation-to-use boundary remains immediate.
+It accepts only the canonical `.cafe/issues/<issue>/issue.yaml` and
+`.cafe/phases.yaml` inputs under the launch repository root, rejects aliases,
+and starts generic CAFE from that same root. Equivalent or decoy paths cannot
+stand in for the generic inputs actually consumed.
 
 Session acquisition and actual delivery are separate boundaries. Every
 unacquired, unbound entry first runs a provider request exactly equivalent to

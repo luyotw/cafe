@@ -20,6 +20,14 @@ LOCK_FILENAME = "contract.lock"
 MAX_CONTRACT_BYTES = 256 * 1024
 
 
+class DriverContractMissingError(ValueError):
+    """Raised only when no contract authority exists at the expected location."""
+
+
+class DriverContractUnsafeError(ValueError):
+    """Raised when a present contract location cannot be trusted as authority."""
+
+
 def contract_path(issue_dir: Path) -> Path:
     return Path(issue_dir) / "driver" / CONTRACT_FILENAME
 
@@ -116,15 +124,20 @@ def load_contract(
     issue_dir: Path, *, issue_name: str | None = None, workflow_id: str | None = None
 ) -> tuple[dict[str, Any], str]:
     """Load the sole authority after bounded, symlink-safe validation."""
+    issue = Path(issue_dir)
     try:
-        driver = _safe_driver_directory(issue_dir, create=False)
+        driver = _safe_driver_directory(issue, create=False)
     except ValueError as exc:
-        if "directory is unavailable" in str(exc):
-            raise ValueError("Driver contract is missing or unsafe") from exc
-        raise
+        if not issue.exists() or not (issue / "driver").exists():
+            raise DriverContractMissingError("Driver contract is missing") from exc
+        raise DriverContractUnsafeError("Driver contract is unsafe") from exc
     path = driver / CONTRACT_FILENAME
-    if not path.is_file() or path.is_symlink():
-        raise ValueError("Driver contract is missing or unsafe")
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError as exc:
+        raise DriverContractMissingError("Driver contract is missing") from exc
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise DriverContractUnsafeError("Driver contract is unsafe")
     content = _read_bounded(path, label="Driver contract")
     return (
         validate_contract(_decode_exact(content), issue_name=issue_name, workflow_id=workflow_id),

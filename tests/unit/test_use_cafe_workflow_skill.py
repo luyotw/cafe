@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -62,6 +63,20 @@ def _phase_rationale_args(rationales: dict[str, str] | None = None) -> list[str]
     return result
 
 
+def _proactive_review_args(playbook_id: str, *, project_root: Path = PROJECT_ROOT) -> list[str]:
+    result: list[str] = []
+    model = PlaybookLoader(project_root=project_root).load_model(playbook_id).model
+    for step_name, step in model.steps.items():
+        if step.assignee_type in {"agent", "hybrid"}:
+            result.extend(
+                [
+                    "--proactive-review-decision",
+                    f"{step_name}=not_required:User confirms no proactive review for {step_name}.",
+                ]
+            )
+    return result
+
+
 def _preflight_args() -> list[str]:
     return [
         "--update-preflight",
@@ -107,10 +122,9 @@ def _kickoff_formatter_command(
     phase_rationales: dict[str, str] | None = None,
     driver_confirmable: tuple[str, ...] = ("spec", "plan"),
 ) -> list[str]:
-    pr_args = (
-        []
-        if pr_auto_create is None
-        else ["--pr-auto-create", str(pr_auto_create).lower()]
+    pr_args = [] if pr_auto_create is None else ["--pr-auto-create", str(pr_auto_create).lower()]
+    proactive_args = (
+        [] if "--proactive-review-decision" in extra_args else _proactive_review_args(playbook_id)
     )
     return [
         sys.executable,
@@ -153,6 +167,7 @@ def _kickoff_formatter_command(
         ".cafe/worktrees/issue346",
         "--strategic-context",
         str(strategic_context),
+        *proactive_args,
     ]
 
 
@@ -348,21 +363,18 @@ def test_use_cafe_workflow_keeps_playbook_selection_issue_owned() -> None:
     assert "Never write or update a playbook default" in normalized_skill
     assert "are not playbook-selection sources" in normalized_selection
     assert (
-        "legacy `settings.playbook`, top-level `playbook`, or `playbook_id`"
+        "legacy `settings.playbook`, top-level `playbook`, or `playbook_id`" in normalized_selection
+    )
+    assert (
+        "persist the effective playbook and every other confirmed Driver policy"
         in normalized_selection
     )
-    assert "persist the effective playbook and every other confirmed Driver policy" in normalized_selection
     assert "`.cafe/issues/<issue-name>/driver/contract.json`" in normalized_selection
     assert "`issue.yaml` may retain a prepare input or derived view" in normalized_selection
     assert "Strategic context is not playbook configuration" in normalized_strategic
-    assert (
-        "Do not add `playbook_id` to `mandate` or `issues.<name>`"
-        in normalized_strategic
-    )
+    assert "Do not add `playbook_id` to `mandate` or `issues.<name>`" in normalized_strategic
     assert "playbook_id: standard" not in strategic
-    assert (
-        "Do not write the selected playbook to `.cafe/config.yaml`" in normalized_kickoff
-    )
+    assert "Do not write the selected playbook to `.cafe/config.yaml`" in normalized_kickoff
     assert "`cafe init --no-interactive`" in kickoff
     assert "`.cafe/config.yaml` has no playbook key" in normalized_kickoff
     assert kickoff.count("--playbook <playbook-id>") == 3
@@ -450,7 +462,8 @@ mandate:
         "cursor-agent:implementation-fallback | --phase-chain | balanced:" in result.stdout
     )
     assert (
-        "| review | gemini:review-main | copilot:review-fallback | --phase-chain | frontier:" in result.stdout
+        "| review | gemini:review-main | copilot:review-fallback | --phase-chain | frontier:"
+        in result.stdout
     )
     assert (
         "| pr | cursor-agent:publication-main | gemini:publication-fallback | --phase-chain | efficiency:"
@@ -536,6 +549,32 @@ def test_confirmed_kickoff_activates_one_issue_scoped_driver_contract(tmp_path: 
     assert json.loads(entry.stdout)["generic_inputs"]["pr_auto_create"] is False
 
 
+def test_kickoff_formatter_renders_the_complete_normalized_policy_before_activation(
+    tmp_path: Path,
+) -> None:
+    """A user sees the exact policy fields before choosing to activate them."""
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text(
+        "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        _kickoff_formatter_command(strategic_context),
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "### Confirmed durable policy" in result.stdout
+    assert '"proactive_review"' in result.stdout
+    assert '"effective_graph"' in result.stdout
+    assert '"material_assumptions"' in result.stdout
+    assert not (tmp_path / ".cafe" / "issues" / "issue346" / "driver").exists()
+
+
 @pytest.mark.parametrize("choice", [True, False])
 def test_kickoff_formatter_requires_and_binds_explicit_publication_choice(
     tmp_path: Path,
@@ -595,10 +634,7 @@ def test_non_pr_playbook_omits_choice_and_rejects_supplied_false(tmp_path: Path)
         "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
         encoding="utf-8",
     )
-    chains = {
-        step: f"gemini:{step}-main"
-        for step in ("brief", "draft", "review", "publish")
-    }
+    chains = {step: f"gemini:{step}-main" for step in ("brief", "draft", "review", "publish")}
     rationales = {
         step: "balanced: bounded editorial work with an equivalent configured model"
         for step in chains
@@ -792,9 +828,7 @@ def test_kickoff_contract_formatter_rejects_invalid_operating_mode(
 
 
 def test_kickoff_formatter_documents_structural_validation_boundary() -> None:
-    script = (SKILL_ROOT / "scripts" / "format_kickoff_contract.py").read_text(
-        encoding="utf-8"
-    )
+    script = (SKILL_ROOT / "scripts" / "format_kickoff_contract.py").read_text(encoding="utf-8")
     kickoff = (SKILL_ROOT / "references" / "kickoff.md").read_text(encoding="utf-8")
 
     assert "structurally validated" in script
@@ -826,13 +860,13 @@ def test_kickoff_contract_formatter_accepts_primary_only_chains(tmp_path: Path) 
             "localized defect",
             "--issue-scale",
             "small",
-                "--model-adjustment-authority",
-                "user_approval_required",
-                "--driver-mode",
-                "unattended",
-                "--pr-auto-create",
-                "false",
-                    *_preflight_args(),
+            "--model-adjustment-authority",
+            "user_approval_required",
+            "--driver-mode",
+            "unattended",
+            "--pr-auto-create",
+            "false",
+            *_preflight_args(),
             "--risk-factor",
             "none",
             "--assessment-rationale",
@@ -847,6 +881,7 @@ def test_kickoff_contract_formatter_accepts_primary_only_chains(tmp_path: Path) 
             "--current-checkout",
             "--strategic-context",
             str(strategic_context),
+            *_proactive_review_args("standard"),
         ],
         cwd=PROJECT_ROOT,
         text=True,
@@ -908,9 +943,7 @@ def test_driver_launcher_checks_derived_inputs_before_generic_execution(
         SKILL_ROOT / "scripts" / "run_validated_driver_workflow.py", "test_driver_launcher"
     )
     issue_config = tmp_path / "issue.yaml"
-    issue_config.write_text(
-        "playbook_id: standard\npr:\n  auto_create: false\n", encoding="utf-8"
-    )
+    issue_config.write_text("playbook_id: standard\npr:\n  auto_create: false\n", encoding="utf-8")
     phase_config = tmp_path / "phases.yaml"
     phase_config.write_text(
         "develop:\n  name: David\n  role: developer\n  clis:\n"
@@ -938,6 +971,76 @@ def test_driver_launcher_checks_derived_inputs_before_generic_execution(
         launcher._verify_generic_projection(
             projection, issue_config=issue_config, phase_config=phase_config
         )
+
+
+def test_driver_launcher_rejects_decoy_paths_before_generic_execution(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The generic worker uses only the exact paths validated for this issue."""
+    entry = _load_script_module(
+        SKILL_ROOT / "scripts" / "validate_driver_entry.py", "test_driver_entry_for_paths"
+    )
+    monkeypatch.setitem(sys.modules, "validate_driver_entry", entry)
+    launcher = _load_script_module(
+        SKILL_ROOT / "scripts" / "run_validated_driver_workflow.py", "test_driver_launcher_paths"
+    )
+    issue_dir = tmp_path / ".cafe" / "issues" / "victim"
+    issue_dir.mkdir(parents=True)
+    issue_config = issue_dir / "issue.yaml"
+    issue_config.write_text("playbook_id: standard\npr:\n  auto_create: false\n", encoding="utf-8")
+    phase_config = tmp_path / ".cafe" / "phases.yaml"
+    phase_config.write_text(
+        "develop:\n  name: David\n  role: developer\n  clis:\n"
+        "    - cli: codex\n      model: exact\n",
+        encoding="utf-8",
+    )
+    decoy = tmp_path / "decoy.yaml"
+    decoy.write_text(issue_config.read_text(encoding="utf-8"), encoding="utf-8")
+    projection = {
+        "generic_inputs": {
+            "playbook_id": "standard",
+            "pr_auto_create": False,
+            "phase_chains": {"develop": [{"cli": "codex", "model": "exact"}]},
+        }
+    }
+    monkeypatch.setattr(launcher, "validate_entry", lambda **_kwargs: projection)
+    launches: list[tuple[list[str], Path]] = []
+    monkeypatch.setattr(
+        launcher.subprocess,
+        "run",
+        lambda command, **kwargs: (
+            launches.append((command, kwargs["cwd"])) or SimpleNamespace(returncode=0)
+        ),
+    )
+    args = SimpleNamespace(
+        issue_dir=issue_dir,
+        issue_name="victim",
+        workflow_id="workflow-victim",
+        fresh_facts={},
+        issue_config=decoy,
+        phase_config=phase_config,
+        background=False,
+        on_workflow_event=None,
+    )
+
+    with pytest.raises(ValueError):
+        launcher.run_validated_workflow(args)
+    assert launches == []
+
+    args.issue_config = issue_config
+    assert launcher.run_validated_workflow(args) == 0
+    assert launches == [
+        (["cafe", "workflow", "--issue", "victim", "--execute", "--mute-agent-output"], tmp_path)
+    ]
+
+    alias_root = tmp_path / "alias-root"
+    alias_root.symlink_to(tmp_path, target_is_directory=True)
+    args.issue_dir = alias_root / ".cafe" / "issues" / "victim"
+    args.issue_config = alias_root / ".cafe" / "issues" / "victim" / "issue.yaml"
+    args.phase_config = alias_root / ".cafe" / "phases.yaml"
+    with pytest.raises(ValueError):
+        launcher.run_validated_workflow(args)
+    assert len(launches) == 1
 
 
 def test_phase_writer_accepts_primary_only_chain(tmp_path: Path) -> None:
@@ -982,7 +1085,9 @@ def test_phase_writer_preserves_existing_file_when_candidate_is_invalid(tmp_path
     chains = tmp_path / "chains.json"
     target = tmp_path / ".cafe" / "phases.yaml"
     target.parent.mkdir()
-    original = "develop:\n  clis:\n    - {cli: codex, model: old}\n    - {cli: claude, model: old}\n"
+    original = (
+        "develop:\n  clis:\n    - {cli: codex, model: old}\n    - {cli: claude, model: old}\n"
+    )
     target.write_text(original, encoding="utf-8")
     chains.write_text(
         json.dumps({"develop": {"clis": [{"cli": "codex", "model": "only-primary"}]}}),
@@ -1056,7 +1161,7 @@ def test_phase_writer_preserves_existing_file_when_atomic_replace_fails(
                     "clis": [
                         {"cli": "codex", "model": "gpt-5.6-sol"},
                         {"cli": "claude", "model": "claude-opus-5"},
-                    ]
+                    ],
                 }
             }
         ),
@@ -1067,7 +1172,9 @@ def test_phase_writer_preserves_existing_file_when_atomic_replace_fails(
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    monkeypatch.setattr(module.os, "replace", lambda *_args: (_ for _ in ()).throw(OSError("blocked")))
+    monkeypatch.setattr(
+        module.os, "replace", lambda *_args: (_ for _ in ()).throw(OSError("blocked"))
+    )
 
     try:
         module.write_phase_config(chains_file=chains, target=target)
@@ -1091,9 +1198,9 @@ def test_preflight_cache_reuses_only_success_for_same_cli_fingerprint(
         "if [ \"$1\" = \"--version\" ]; then printf '%s\\n' 'codex 1.0'; exit 0; fi\n"
         "if [ ! -d .git ]; then printf '%s\\n' 'missing disposable git repository' >&2; exit 1; fi\n"
         "printf '%s\\n' "
-        "'{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\","
-        "\"text\":\"CAFE_PREFLIGHT_OK\"}}' "
-        "'{\"type\":\"turn.completed\",\"usage\":{}}'\n",
+        '\'{"type":"item.completed","item":{"type":"agent_message",'
+        '"text":"CAFE_PREFLIGHT_OK"}}\' '
+        '\'{"type":"turn.completed","usage":{}}\'\n',
         encoding="utf-8",
     )
     executable.chmod(0o755)
@@ -1129,9 +1236,7 @@ def test_preflight_cache_reuses_only_success_for_same_cli_fingerprint(
     assert hit.returncode == 0, hit.stderr
     assert json.loads(hit.stdout)["status"] == "hit"
 
-    executable.write_text(
-        "#!/bin/sh\nprintf '%s\\n' 'codex version 2.0'\n", encoding="utf-8"
-    )
+    executable.write_text("#!/bin/sh\nprintf '%s\\n' 'codex version 2.0'\n", encoding="utf-8")
     executable.chmod(0o755)
     changed = _run_preflight_cache(
         cache_file,
@@ -1145,9 +1250,7 @@ def test_preflight_cache_reuses_only_success_for_same_cli_fingerprint(
     assert json.loads(changed.stdout)["reason"] == "not_cached"
 
 
-def test_preflight_cache_can_invalidate_candidate_evidence(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_preflight_cache_can_invalidate_candidate_evidence(tmp_path: Path, monkeypatch) -> None:
     executable_dir = tmp_path / "bin"
     executable_dir.mkdir()
     executable = executable_dir / "probe-cli"
@@ -1243,11 +1346,11 @@ def test_kickoff_contract_formatter_rejects_incomplete_gate_partition(
             "small",
             "--model-adjustment-authority",
             "user_approval_required",
-                "--driver-mode",
-                "unattended",
-                "--pr-auto-create",
-                "false",
-                *_preflight_args(),
+            "--driver-mode",
+            "unattended",
+            "--pr-auto-create",
+            "false",
+            *_preflight_args(),
             "--risk-factor",
             "none",
             "--assessment-rationale",
@@ -1348,6 +1451,7 @@ def test_kickoff_contract_formatter_uses_cafe_python_when_site_packages_are_miss
             ".cafe/worktrees/issue346",
             "--strategic-context",
             str(strategic_context),
+            *_proactive_review_args("standard"),
             *_phase_chain_args(),
             *_phase_rationale_args(),
         ],
@@ -1451,6 +1555,7 @@ entry_point: audit
             "--current-checkout",
             "--strategic-context",
             str(strategic_context),
+            *_proactive_review_args("custom-audit", project_root=tmp_path),
         ],
         cwd=tmp_path,
         text=True,
@@ -1604,9 +1709,7 @@ def test_builtin_confirmation_gate_candidates_come_from_playbook_declarations() 
     }
 
     mandatory = {
-        playbook_id: mandatory_confirmation_gate_steps(
-            loader.load_model(playbook_id).model
-        )
+        playbook_id: mandatory_confirmation_gate_steps(loader.load_model(playbook_id).model)
         for playbook_id in actual
     }
     assert mandatory == {
@@ -1787,7 +1890,9 @@ def test_event_driver_documentation_defines_the_contract_managed_lifecycle() -> 
     assert "bootstrap never counts as event delivery or acceptance" in contract
     assert "actual callback durable acceptance" in contract
     assert "Copilot never receives a caller-selected new-session ID" in contract
-    assert "`dispatch_state.json` is mutable runtime state bound to that contract's digest" in contract
+    assert (
+        "`dispatch_state.json` is mutable runtime state bound to that contract's digest" in contract
+    )
     assert "callback reads the issue-scoped `driver/contract.json`" in contract
     assert "provider acknowledgement is bound to the exact event identity" in contract
     assert "no session-file discovery, directory diff, sleep, polling, or watcher" in contract
@@ -1809,7 +1914,9 @@ def test_use_cafe_workflow_keeps_human_task_completion_in_the_interactive_driver
         "Direct `cafe task complete` users retain its normal automatic foreground-resume"
         in normalized_running
     )
-    assert "cannot wait for, collect, infer, or choose an answer for a mandatory" in normalized_running
+    assert (
+        "cannot wait for, collect, infer, or choose an answer for a mandatory" in normalized_running
+    )
     assert "may instead be completed by any driver" in normalized_running
     assert "cafe task complete <active-human-task-id>" in handoffs
     assert '--user-input \'{"task":"output-review"' not in handoffs
@@ -1870,9 +1977,7 @@ class TestPollingContract:
     def test_first_poll_waits_for_the_full_confirmed_interval(self) -> None:
         skill = " ".join(_read_skill_resource("SKILL.md").split())
         kickoff = " ".join(_read_skill_resource("references/kickoff.md").split())
-        running = " ".join(
-            _read_skill_resource("references/running_workflow.md").split()
-        )
+        running = " ".join(_read_skill_resource("references/running_workflow.md").split())
 
         assert "In attached mode, honor the full positive poll cadence" in skill
         assert "there is no shorter startup or warm-up cadence" in kickoff
@@ -1882,9 +1987,7 @@ class TestPollingContract:
 
     def test_transport_yields_do_not_trigger_workflow_inspection(self) -> None:
         kickoff = " ".join(_read_skill_resource("references/kickoff.md").split())
-        running = " ".join(
-            _read_skill_resource("references/running_workflow.md").split()
-        )
+        running = " ".join(_read_skill_resource("references/running_workflow.md").split())
 
         assert "is transport state rather than an event-driven signal" in kickoff
         assert "must not cause a sub-interval status or artifact poll" in kickoff
@@ -1893,9 +1996,7 @@ class TestPollingContract:
         assert "Substantive lifecycle output" in running
         assert "still wake the driver immediately" in running
 
-    def test_formatter_exposes_first_poll_and_timestamp_contract(
-        self, tmp_path: Path
-    ) -> None:
+    def test_formatter_exposes_first_poll_and_timestamp_contract(self, tmp_path: Path) -> None:
         strategic_context = tmp_path / "strategic_context.yaml"
         strategic_context.write_text(
             """\

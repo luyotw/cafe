@@ -329,6 +329,47 @@ def test_contract_only_event_callback_derives_and_digest_binds_runtime_state(
         callback.run_callback(later_event, repository_root=tmp_path)
 
 
+def test_unsafe_present_contract_cannot_fall_back_to_legacy_callback_policy(
+    tmp_path: Path,
+) -> None:
+    """A damaged highest-authority contract stops instead of reviving a sidecar."""
+    from cafe.core.blackboard import BlackboardStore
+
+    callback = _callback_module()
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue474"
+    blackboard = BlackboardStore(issue_dir).load_or_create("spec")
+    proposal = _proposal()
+    proposal["driver"] = {
+        "mode": "event-driven",
+        "clis": [{"cli": "claude", "model": "exact"}],
+    }
+    proposal["semantic_facts"] = _fresh_policy_facts(proposal)
+    activate_confirmed_contract(
+        _activation(issue_dir, proposal, workflow_id=blackboard.workflow_id)  # type: ignore[arg-type]
+    )
+    contract = issue_dir / "driver" / "contract.json"
+    outside = tmp_path / "untrusted-contract.json"
+    outside.write_text(contract.read_text(encoding="utf-8"), encoding="utf-8")
+    contract.unlink()
+    contract.symlink_to(outside)
+    (issue_dir / "driver" / "config.yaml").write_text(
+        "schema_version: 1\nmode: event-driven\ncli: codex\nmodel: legacy\n",
+        encoding="utf-8",
+    )
+    event = BlackboardStore(issue_dir).prepare_workflow_callback_event(
+        blackboard,
+        {
+            "workflow_id": blackboard.workflow_id,
+            "issue": "issue474",
+            "event_type": "phase_terminal",
+        },
+    )
+
+    with pytest.raises(ValueError):
+        callback.run_callback(event, repository_root=tmp_path)
+    assert not (issue_dir / "driver" / "dispatch_state.json").exists()
+
+
 def test_driver_entry_projections_are_deeply_immutable(tmp_path: Path) -> None:
     """Follow-up FUP-001: public results cannot be changed after validation."""
     issue_dir = tmp_path / "issue"
@@ -360,7 +401,10 @@ def test_oversized_contract_and_legacy_evidence_fail_closed(tmp_path: Path) -> N
     with pytest.raises(ValueError, match="maximum bounded size"):
         evaluate_driver_entry(
             DriverEntryRequest(
-                issue_dir, "issue474", "workflow-474", {"semantic_facts": {}, "material_assumptions": {}}
+                issue_dir,
+                "issue474",
+                "workflow-474",
+                {"semantic_facts": {}, "material_assumptions": {}},
             )
         )
 
@@ -368,11 +412,11 @@ def test_oversized_contract_and_legacy_evidence_fail_closed(tmp_path: Path) -> N
     evidence = legacy / "driver" / "legacy_confirmation.json"
     evidence.parent.mkdir(parents=True)
     evidence.write_bytes(b"x" * (MAX_CONTRACT_BYTES + 1))
-    adoption = adopt_legacy_contract(
-        LegacyAdoptionRequest(legacy, "issue474", "workflow-474")
-    )
+    adoption = adopt_legacy_contract(LegacyAdoptionRequest(legacy, "issue474", "workflow-474"))
     assert adoption.adopted is False
     assert adoption.disposition == "reconfirmation_required"
+
+
 def test_replacement_is_compare_and_swap_and_delegation_cannot_change_policy(
     tmp_path: Path,
 ) -> None:
@@ -495,9 +539,7 @@ def test_legacy_adoption_reconciles_project_phase_projection(tmp_path: Path) -> 
     assert adopted.adopted is True
 
     conflicting = prepare_legacy_issue("conflicting", model="different-model")
-    rejected = adopt_legacy_contract(
-        LegacyAdoptionRequest(conflicting, "issue474", "workflow-474")
-    )
+    rejected = adopt_legacy_contract(LegacyAdoptionRequest(conflicting, "issue474", "workflow-474"))
     assert rejected.adopted is False
     assert rejected.disposition == "reconfirmation_required"
 
@@ -529,9 +571,7 @@ def test_delegated_model_adjustment_rejects_cli_and_chain_topology_changes(tmp_p
         )
 
     changed_topology = deepcopy(current)
-    changed_topology["phases"][0]["chain"].append(
-        {"cli": "claude", "model": "fallback"}
-    )
+    changed_topology["phases"][0]["chain"].append({"cli": "claude", "model": "fallback"})
     changed_topology["semantic_facts"] = _fresh_policy_facts(changed_topology)
     with pytest.raises(ValueError):
         replace_confirmed_contract(
@@ -598,3 +638,37 @@ def test_legacy_sidecar_conflict_and_ancestor_symlink_fail_closed(tmp_path: Path
     with pytest.raises(ValueError):
         activate_confirmed_contract(_activation(alias / "issue"))
     assert not (outside / "issue" / "driver" / "contract.json").exists()
+
+
+def test_legacy_adoption_rejects_conflicting_ordinary_issue_projection(tmp_path: Path) -> None:
+    """Ordinary issue.yaml policy fields are migration evidence, never ignored."""
+    legacy = tmp_path / "legacy"
+    confirmation = legacy / "driver" / "legacy_confirmation.json"
+    confirmation.parent.mkdir(parents=True)
+    confirmation.write_text(
+        json.dumps(
+            {
+                "identity": {"issue_name": "issue474", "workflow_id": "workflow-474"},
+                "confirmed_by": "user",
+                "confirmed_at": "2026-09-06T02:00:00+00:00",
+                "proposal": _proposal(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    (legacy / "issue.yaml").write_text(
+        json.dumps(
+            {
+                "playbook_id": "standard",
+                "confirmation_contract": {"pr_auto_create": False},
+                "pr": {"auto_create": False},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = adopt_legacy_contract(LegacyAdoptionRequest(legacy, "issue474", "workflow-474"))
+
+    assert result.adopted is False
+    assert result.disposition == "reconfirmation_required"
+    assert not (legacy / "driver" / "contract.json").exists()
