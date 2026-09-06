@@ -507,6 +507,28 @@ class TestCodexPermissionExtraction:
 
         assert mock_popen.call_args.kwargs["env"]["CODEX_HOME"] == codex_home
 
+    def test_execute_adds_environment_overrides(self) -> None:
+        config = AgentConfig(name="Nick", cli=AgentCLI.CODEX)
+        executor = AgentExecutor(config)
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"type":"item.completed","item":{"type":"agent_message","text":"done"}}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with (
+            patch("subprocess.Popen", return_value=mock_process) as mock_popen,
+            patch("sys.platform", "win32"),
+        ):
+            executor.execute(
+                "Test prompt",
+                environment_overrides={"CAFE_ISSUE_NAME": "issue478"},
+            )
+
+        assert mock_popen.call_args.kwargs["env"]["CAFE_ISSUE_NAME"] == "issue478"
+
     def test_codex_turn_completed_is_a_durable_stream_terminal_event(self, tmp_path: Path) -> None:
         """Codex's terminal event completes an iteration-backed stream."""
         config = AgentConfig(name="Nick", cli=AgentCLI.CODEX)
