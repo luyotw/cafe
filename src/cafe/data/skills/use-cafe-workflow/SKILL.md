@@ -41,6 +41,7 @@ If more than one situation applies, read every listed reference before acting; d
   playbook skills, classify the remaining work into a capability band, and
   record a phase-specific selection rationale; no provider or model is built
   into this driver skill.
+- During that assessment, decide `required` or `not_required` proactive review for every agent-executed phase. Only a phase followed by an existing scheduled confirmation pause before workflow advancement is eligible for `required`; use `not_required` when the workflow would advance immediately. Prefer the smallest useful eligible set, give each an issue-specific rationale, and obtain complete user confirmation before preparation, execution, or persistence.
 - Resolve the effective conversation locale from a direct user override first,
   then a reliably inferred user preference from the current thread, and finally
   the active playbook. Use that locale for every driver-to-user message.
@@ -104,6 +105,7 @@ If more than one situation applies, read every listed reference before acting; d
 - [ ] Assess issue nature, scale, and risk; resolve every phase's execution profile,
   capability band, exact primary and any fallbacks, rationale, cached or tested
   primary evidence, configured fallback smoke evidence, and adjustment authority.
+- [ ] Assess every agent-executed phase for proactive review and render one `required` or `not_required` decision and rationale for each.
 - [ ] Present the deterministic kickoff table and obtain explicit confirmation.
 - [ ] Record the confirmed operating mode. For event-driven, create its exact
   per-issue callback binding with the bundled callback script before launch.
@@ -121,6 +123,7 @@ If more than one situation applies, read every listed reference before acting; d
 - [ ] In a user-facing driver turn, relay only an explicit mandatory/user-required HumanTask answer with `cafe task complete --no-resume --json`, verify it durably, then resume using the confirmed mode; a confirmed `driver_confirmable` gate may be verified and completed by a driver, but detached callbacks cannot collect or infer user answers.
 - [ ] Timestamp proactive polls and user updates; handle substantive output, completion, errors, and HumanTasks immediately.
 - [ ] At each contract-defined pause or completion, inspect new phase evidence and revise only remaining model chains within confirmed authority.
+- [ ] At the existing scheduled confirmation pause after each executed required phase, the current Driver reviews its durable output before completing or relaying the confirmation, routes consolidated blockers through the existing correction path, and does not launch a separate reviewer or recursively review the result.
 - [ ] When CAFE pauses, classify the handoff before supplying any input.
 - [ ] When behavior is wrong, stop normal execution and use the bounded
   diagnosis reference.

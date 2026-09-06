@@ -1767,6 +1767,106 @@ def test_use_cafe_workflow_prefers_user_conversation_locale() -> None:
     assert "commands, paths, playbook and step names, intents, artifact keys" in normalized
 
 
+def test_use_cafe_workflow_defines_phase_scoped_proactive_driver_review() -> None:
+    skill = _read_skill_resource("SKILL.md")
+    kickoff = _read_skill_resource("references/kickoff.md")
+    running = _read_skill_resource("references/running_workflow.md")
+    handoffs = _read_skill_resource("references/handoffs_and_alignment.md")
+    normalized = " ".join((skill + kickoff + running + handoffs).split())
+
+    assert "smallest useful eligible set" in normalized
+    assert "`proactive_review.phase_decisions` projection" in running
+    assert "existing scheduled confirmation pause" in normalized
+    assert "current Driver performs the review directly" in normalized
+    assert "missing necessary scope and excessive or unnecessary scope" in normalized
+    assert "code and non-code phase output" in normalized
+    assert "must not launch a separate reviewer" in normalized
+
+
+def test_kickoff_rejects_required_review_without_a_scheduled_pause(tmp_path: Path) -> None:
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text(
+        "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
+        encoding="utf-8",
+    )
+
+    for ineligible_phase in ("develop", "review"):
+        decisions: list[str] = []
+        for phase in PRIMARY_ONLY_PHASE_CHAINS:
+            state = "required" if phase == ineligible_phase else "not_required"
+            decisions.extend(
+                [
+                    "--proactive-review-decision",
+                    f"{phase}={state}:Confirmed review decision for {phase}.",
+                ]
+            )
+        result = subprocess.run(
+            _kickoff_formatter_command(strategic_context, *decisions),
+            cwd=PROJECT_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        assert result.returncode == 2
+        assert (
+            f"proactive review phase '{ineligible_phase}' cannot be required because it has no "
+            "scheduled confirmation pause"
+        ) in result.stderr
+
+
+def test_kickoff_rejects_proactive_review_without_a_rationale(tmp_path: Path) -> None:
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text(
+        "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
+        encoding="utf-8",
+    )
+    decisions = _proactive_review_args("standard")
+    decisions[1] = "spec=not_required:   "
+
+    result = subprocess.run(
+        _kickoff_formatter_command(strategic_context, *decisions),
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "proactive review decision for 'spec' requires a rationale" in result.stderr
+
+
+def test_kickoff_accepts_required_review_at_scheduled_pauses(tmp_path: Path) -> None:
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text(
+        "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
+        encoding="utf-8",
+    )
+    decisions: list[str] = []
+    for phase in PRIMARY_ONLY_PHASE_CHAINS:
+        state = "required" if phase in {"spec", "plan"} else "not_required"
+        decisions.extend(
+            [
+                "--proactive-review-decision",
+                f"{phase}={state}:Confirmed review decision for {phase}.",
+            ]
+        )
+
+    result = subprocess.run(
+        _kickoff_formatter_command(strategic_context, *decisions),
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    rendered = result.stdout.split("```json\n", 1)[1].split("\n```", 1)[0]
+    phase_decisions = json.loads(rendered)["policy"]["proactive_review"]["phase_decisions"]
+    required = {item["phase"] for item in phase_decisions if item["decision"] == "required"}
+    assert required == {"spec", "plan"}
+
+
 def test_use_cafe_workflow_requires_confirmed_repository_content_locale() -> None:
     skill = _read_skill_resource("SKILL.md")
     reference = _read_skill_resource("references/kickoff.md")

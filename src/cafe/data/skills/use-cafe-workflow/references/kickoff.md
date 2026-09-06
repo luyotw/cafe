@@ -91,6 +91,10 @@ obtain explicit user confirmation of:
 - `reactive_user_handoffs`;
 - mandate preset, axes, levels, and out-of-mandate list;
 - issue nature, scale, and risk factors;
+- one `required` or `not_required` proactive-review decision with an
+  issue-specific rationale for every agent or hybrid phase; only phases followed
+  by an existing scheduled confirmation pause before workflow advancement are
+  eligible for `required`, and the smallest useful eligible set is preferred;
 - the exact ordered CLI/model chain for every phase, containing one primary and
   zero or more explicitly confirmed fallbacks;
 - `model_adjustment_authority`: either `driver_autonomous` or

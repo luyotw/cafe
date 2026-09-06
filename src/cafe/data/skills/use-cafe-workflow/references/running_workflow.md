@@ -182,6 +182,60 @@ observed. For event-driven runs, explain that boundary callbacks are best effort
 and do not delay advancement; their role is timely diagnosis and authorized
 handling of anomalies, not worker control.
 
+## Proactive driver review
+
+Before every start or resume, validate the confirmed
+`.cafe/issues/<issue>/driver/contract.json` and use its
+`proactive_review.phase_decisions` projection. If the contract is absent,
+invalid, stale, or its phase coverage no longer matches the active playbook,
+stop for a complete replacement proposal and user reconfirmation; do not infer
+a review policy from an earlier conversation.
+
+Only an executed required phase becomes due for proactive review, and only when
+its durable output has reached an existing scheduled confirmation pause that
+blocks downstream agent work. Complete the review before completing a
+`driver_confirmable` task or relaying a `user_required` answer that would resume
+the workflow. A phase that advances immediately is not eligible for `required`;
+its kickoff decision must be `not_required` because an asynchronous Driver
+cannot review it in time to gate advancement. A not_required phase, a skipped
+phase, and an all-not_required contract perform no proactive review. The
+current Driver performs the review directly; it must not launch a separate
+reviewer or create a review artifact that itself needs proactive review.
+
+For every due phase, review the exact current durable artifact against accepted
+upstream requirements, relevant repository evidence, and available correction
+history. Complete every applicable pass by explicitly checking both missing
+necessary scope and excessive or unnecessary scope, including out-of-scope
+work, unnecessary abstraction, and extension work. These checks apply equally
+to code and non-code phase output. An incomplete, interrupted, or ambiguous
+pass is not a no-blocking result.
+
+Then consolidate every currently observable blocker and send it through the
+responsible phase's existing correction route; do not edit generated phase
+artifacts or invent a side channel. After any correction or other candidate
+change, re-review the changed durable artifact, its correction delta, and every
+affected original requirement, repeating both scope checks. Stop with a
+self-contained user handoff when correction needs user-owned authority,
+permission, capability, scope selection, or an answer. A no-blocking result is
+quality evidence only: it does not replace `driver_confirmable` evidence,
+mandatory HumanTasks, or user approval, and it does not replace built-in review
+or final PR review.
+
+On resume, a prior clean result may be reused only when existing artifacts and
+handoffs prove that the exact current durable artifact completed a full
+no-blocking pass. Missing, stale, incomplete, or ambiguous proof requires a
+new full pass. This fail-closed rule stores no review status or correction
+history.
+
+Apply this same contract in attached, unattended, and event-driven modes, but
+only at the existing scheduled pause. Attached mode reviews before its paused
+handoff resumes, unattended mode reviews when the user returns while that pause
+is still pending, and an event-driven callback may begin after the durable pause
+notification. A phase-terminal callback that did not pause cannot make the
+review gating and must not be treated as a valid review opportunity. The
+callback remains asynchronous, best-effort, fail-open, and non-gating for
+workflow advancement.
+
 Do not edit workflow artifacts, blackboard, or `next_step.txt` by hand except
 when repairing confirmed broken workflow state. Do not bypass CAFE by directly
 asking an agent to implement the issue.
