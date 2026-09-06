@@ -1,6 +1,5 @@
 """Tests for syncing bundled CAFE helper skills into user-level CLI directories."""
 
-import json
 import shutil
 import subprocess
 import sys
@@ -8,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Barrier
 from time import monotonic
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -60,6 +60,28 @@ def _write_skill(source_root: Path, name: str, body: str) -> None:
 def _write_default_sources(source_root: Path) -> None:
     for name in DEFAULT_GLOBAL_SKILLS:
         _write_skill(source_root, name, f"{name} v1")
+
+
+def _open_fake_windows_directory_handle(path: Path, *, delete_access: bool):
+    resolved = Path(path)
+    metadata = resolved.stat()
+    return SimpleNamespace(
+        path=resolved,
+        identity=(metadata.st_dev, metadata.st_ino),
+        delete_access=delete_access,
+    )
+
+
+def _fake_windows_handle_matches_path(path: Path, handle) -> bool:
+    try:
+        metadata = Path(path).stat()
+    except FileNotFoundError:
+        return False
+    return (metadata.st_dev, metadata.st_ino) == handle.identity
+
+
+def _rename_fake_windows_directory_handle(source_handle, destination_handle, name) -> None:
+    source_handle.path.rename(destination_handle.path / name)
 
 
 def test_detect_global_skill_clis_uses_path_or_existing_non_cafe_state(
@@ -368,9 +390,7 @@ def test_auto_sync_serializes_concurrent_initialization(tmp_path: Path) -> None:
     assert summaries[0].failed_count == 0
 
 
-def test_auto_sync_uses_per_machine_fingerprint_and_detects_source_updates(
-    tmp_path: Path,
-) -> None:
+def test_auto_sync_never_replaces_existing_differing_destinations(tmp_path: Path) -> None:
     source_root = tmp_path / "bundled-skills"
     home_dir = tmp_path / "home"
     _write_default_sources(source_root)
@@ -379,64 +399,59 @@ def test_auto_sync_uses_per_machine_fingerprint_and_detects_source_updates(
     assert installed is not None
     assert installed.installed_count == 20
 
-    unchanged = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
-    assert unchanged is None
-
+    destination = home_dir / ".codex/skills/use-cafe-workflow/SKILL.md"
+    original = destination.read_bytes()
     (source_root / "use-cafe-workflow" / "SKILL.md").write_text(
         "---\nname: use-cafe-workflow\ndescription: test skill\n---\n\nversion 2\n",
         encoding="utf-8",
     )
-    updated = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
+    unchanged = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
 
-    assert updated is not None
-    assert updated.updated_count == 5
-    assert updated.unchanged_count == 15
-
-
-def test_auto_sync_reuses_fingerprint_across_identical_worktree_sources(
-    tmp_path: Path,
-) -> None:
-    source_a = tmp_path / "repo/src/cafe/data/skills"
-    source_b = tmp_path / "repo/.cafe/worktrees/issue/src/cafe/data/skills"
-    home_dir = tmp_path / "home"
-    _write_default_sources(source_a)
-    _write_default_sources(source_b)
-
-    installed = auto_sync_global_skills(source_root=source_a, home_dir=home_dir)
-    unchanged = auto_sync_global_skills(source_root=source_b, home_dir=home_dir)
-
-    assert installed is not None
-    assert installed.installed_count == 20
     assert unchanged is None
-    state = json.loads(
-        (home_dir / ".cafe/cache/global-skills-sync.json").read_text(encoding="utf-8")
-    )
-    assert state["source_root"] == str(source_a.resolve())
+    assert destination.read_bytes() == original
 
 
-def test_auto_sync_repairs_missing_destination_even_when_fingerprint_matches(
+def test_auto_sync_treats_existing_symlink_as_immutable(tmp_path: Path) -> None:
+    source_root = tmp_path / "bundled-skills"
+    home_dir = tmp_path / "home"
+    _write_default_sources(source_root)
+    external = tmp_path / "external-skill"
+    _write_skill(tmp_path, "external-skill", "external")
+    destination = home_dir / ".codex/skills/use-cafe-workflow"
+    destination.parent.mkdir(parents=True)
+    destination.symlink_to(external, target_is_directory=True)
+
+    summary = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
+
+    assert summary is not None
+    assert summary.installed_count == 19
+    assert summary.unchanged_count == 1
+    assert destination.is_symlink()
+    assert "external" in (destination / "SKILL.md").read_text(encoding="utf-8")
+
+
+def test_auto_sync_installs_a_missing_destination_without_touching_existing_ones(
     tmp_path: Path,
 ) -> None:
     source_root = tmp_path / "bundled-skills"
     home_dir = tmp_path / "home"
     _write_default_sources(source_root)
     auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
+    existing = home_dir / ".cursor/skills/use-cafe-workflow/SKILL.md"
+    existing.write_text("local content\n", encoding="utf-8")
     missing = home_dir / ".codex/skills/use-cafe-workflow"
-    for path in sorted(missing.rglob("*"), reverse=True):
-        if path.is_file():
-            path.unlink()
-        else:
-            path.rmdir()
-    missing.rmdir()
+    shutil.rmtree(missing)
 
     repaired = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
 
     assert repaired is not None
     assert repaired.installed_count == 1
+    assert repaired.updated_count == 0
     assert (missing / "SKILL.md").is_file()
+    assert existing.read_text(encoding="utf-8") == "local content\n"
 
 
-def test_auto_sync_retries_after_failed_install_instead_of_recording_state(
+def test_auto_sync_retries_after_failed_install_without_recording_state(
     tmp_path: Path,
 ) -> None:
     source_root = tmp_path / "bundled-skills"
@@ -458,35 +473,419 @@ def test_auto_sync_retries_after_failed_install_instead_of_recording_state(
     assert retried.installed_count == 20
 
 
-def test_explicit_default_sync_updates_state_before_returning_to_an_older_source(
+def test_auto_sync_leaves_legacy_state_untouched(tmp_path: Path) -> None:
+    source_root = tmp_path / "bundled-skills"
+    home_dir = tmp_path / "home"
+    _write_default_sources(source_root)
+    state_file = home_dir / ".cafe/cache/global-skills-sync.json"
+    state_file.parent.mkdir(parents=True)
+    state_file.write_text('{"legacy": true}\n', encoding="utf-8")
+
+    auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
+    sync_global_skills(source_root=source_root, home_dir=home_dir)
+
+    assert state_file.read_text(encoding="utf-8") == '{"legacy": true}\n'
+
+
+def test_trusted_automatic_source_uses_packaged_bundle_outside_git(tmp_path: Path) -> None:
+    bundle = tmp_path / "site-packages/cafe/data/skills"
+    _write_default_sources(bundle)
+
+    resolved = global_installer._trusted_automatic_source_root(bundle)
+
+    assert resolved == bundle.resolve()
+
+
+def test_trusted_automatic_source_fails_closed_for_invalid_checkout(
+    tmp_path: Path,
+) -> None:
+    checkout = tmp_path / "checkout"
+    bundle = checkout / "src/cafe/data/skills"
+    _write_default_sources(bundle)
+    (checkout / ".git").mkdir(parents=True)
+
+    with patch.object(
+        global_installer,
+        "_discover_git_roots",
+        side_effect=GlobalSkillSyncError("Git root discovery failed"),
+    ):
+        with pytest.raises(GlobalSkillSyncError, match="Git root discovery failed"):
+            global_installer._trusted_automatic_source_root(bundle)
+
+
+def test_trusted_automatic_source_bounds_git_discovery_time(tmp_path: Path) -> None:
+    checkout = tmp_path / "checkout"
+    bundle = checkout / "src/cafe/data/skills"
+    _write_default_sources(bundle)
+    (checkout / ".git").mkdir(parents=True)
+
+    with patch.object(
+        global_installer.subprocess,
+        "run",
+        side_effect=subprocess.TimeoutExpired(("git",), timeout=0.01),
+    ) as run:
+        with pytest.raises(GlobalSkillSyncError):
+            global_installer._trusted_automatic_source_root(bundle)
+
+    assert run.call_args.kwargs["timeout"] > 0
+
+
+def test_auto_sync_preserves_destination_that_appears_before_staging(
     tmp_path: Path,
 ) -> None:
     source_root = tmp_path / "bundled-skills"
     home_dir = tmp_path / "home"
     _write_default_sources(source_root)
-    auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
-    state_file = home_dir / ".cafe/cache/global-skills-sync.json"
-    v1_state = state_file.read_text(encoding="utf-8")
-    source_file = source_root / "use-cafe-workflow/SKILL.md"
-    v1_source = source_file.read_text(encoding="utf-8")
+    original_stage = global_installer._stage_directory_replacement
+    appeared = False
 
-    source_file.write_text(
-        "---\nname: use-cafe-workflow\ndescription: test skill\n---\n\nversion 2\n",
-        encoding="utf-8",
-    )
-    hook_sync = sync_global_skills(source_root=source_root, home_dir=home_dir)
+    def create_destination_before_staging(**kwargs):
+        nonlocal appeared
+        if not appeared:
+            appeared = True
+            destination = kwargs["destination"]
+            destination.mkdir(parents=True)
+            (destination / "SKILL.md").write_text(
+                "concurrent-existing\n", encoding="utf-8"
+            )
+        return original_stage(**kwargs)
 
-    assert hook_sync.updated_count == 5
-    assert state_file.read_text(encoding="utf-8") != v1_state
+    with (
+        patch.object(global_installer, "detect_global_skill_clis", return_value=["codex"]),
+        patch.object(
+            global_installer,
+            "_stage_directory_replacement",
+            side_effect=create_destination_before_staging,
+        ),
+    ):
+        summary = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
 
-    source_file.write_text(v1_source, encoding="utf-8")
-    returned_to_v1 = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
+    destination = home_dir / ".codex/skills/use-cafe-workflow/SKILL.md"
+    assert summary is not None
+    assert summary.updated_count == 0
+    assert destination.read_text(encoding="utf-8") == "concurrent-existing\n"
 
-    assert returned_to_v1 is not None
-    assert returned_to_v1.updated_count == 5
+
+def test_auto_sync_preserves_symlink_that_appears_before_publish(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "bundled-skills"
+    home_dir = tmp_path / "home"
+    external = tmp_path / "external"
+    _write_default_sources(source_root)
+    _write_skill(tmp_path, "external", "concurrent symlink")
+    original_publish = global_installer._publish_staged_replacement
+    appeared = False
+
+    def create_symlink_before_publish(operation) -> None:
+        nonlocal appeared
+        if not appeared:
+            appeared = True
+            operation.destination.symlink_to(external, target_is_directory=True)
+        original_publish(operation)
+
+    with (
+        patch.object(global_installer, "detect_global_skill_clis", return_value=["codex"]),
+        patch.object(
+            global_installer,
+            "_publish_staged_replacement",
+            side_effect=create_symlink_before_publish,
+        ),
+    ):
+        summary = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
+
+    destination = home_dir / ".codex/skills/use-cafe-workflow"
+    assert summary is not None
+    assert summary.updated_count == 0
+    assert destination.is_symlink()
+    assert "concurrent symlink" in (destination / "SKILL.md").read_text(encoding="utf-8")
+
+
+def test_auto_sync_atomically_publishes_a_complete_missing_tree(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "bundled-skills"
+    home_dir = tmp_path / "home"
+    _write_default_sources(source_root)
+    original_move = global_installer.move_without_replacement
+    intervened = False
+
+    def create_destination_at_publish_boundary(*args, **kwargs) -> None:
+        nonlocal intervened
+        if not intervened:
+            intervened = True
+            source_directory = kwargs["source_directory"]
+            destination_directory = kwargs["destination_directory"]
+            source = source_directory.path / args[0]
+            destination = destination_directory.path / args[1]
+            assert (source / "SKILL.md").is_file()
+            assert not destination.exists()
+            destination.mkdir()
+            (destination / "SKILL.md").write_text(
+                "concurrent-existing\n", encoding="utf-8"
+            )
+        original_move(*args, **kwargs)
+
+    with (
+        patch.object(global_installer, "detect_global_skill_clis", return_value=["codex"]),
+        patch.object(
+            global_installer,
+            "move_without_replacement",
+            side_effect=create_destination_at_publish_boundary,
+        ),
+    ):
+        summary = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
+
+    destination = home_dir / ".codex/skills/use-cafe-workflow/SKILL.md"
+    assert summary is not None
+    assert summary.installed_count == 0
+    assert summary.failed_count == len(DEFAULT_GLOBAL_SKILLS)
+    assert destination.read_text(encoding="utf-8") == "concurrent-existing\n"
+
+
+def test_auto_sync_publishes_complete_missing_trees_on_windows(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "bundled-skills"
+    home_dir = tmp_path / "home"
+    _write_default_sources(source_root)
+
+    with (
+        patch.object(global_installer, "detect_global_skill_clis", return_value=["codex"]),
+        patch.object(global_installer.sys, "platform", "win32"),
+        patch.object(
+            global_installer,
+            "bound_directory",
+            side_effect=AssertionError("POSIX publication used on Windows"),
+        ),
+        patch.object(
+            global_installer,
+            "_open_windows_directory_handle",
+            side_effect=_open_fake_windows_directory_handle,
+        ),
+        patch.object(
+            global_installer,
+            "_windows_handle_matches_path",
+            side_effect=_fake_windows_handle_matches_path,
+        ),
+        patch.object(
+            global_installer,
+            "_rename_windows_directory_handle_without_replacement",
+            side_effect=_rename_fake_windows_directory_handle,
+        ),
+        patch.object(global_installer, "_close_windows_directory_handle"),
+    ):
+        summary = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
+
+    assert summary is not None
+    assert summary.installed_count == len(DEFAULT_GLOBAL_SKILLS)
+    assert summary.failed_count == 0
+    for skill in DEFAULT_GLOBAL_SKILLS:
+        destination = home_dir / ".codex/skills" / skill
+        assert (destination / "SKILL.md").is_file()
+        assert (destination / "references/guide.md").is_file()
+
+
+def test_auto_sync_windows_preserves_a_destination_that_wins_the_move(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "bundled-skills"
+    home_dir = tmp_path / "home"
+    _write_default_sources(source_root)
+
+    def concurrent_windows_rename(source_handle, destination_handle, name) -> None:
+        competing_destination = destination_handle.path / name
+        competing_destination.mkdir()
+        (competing_destination / "SKILL.md").write_text(
+            "concurrent-existing\n", encoding="utf-8"
+        )
+        raise FileExistsError(competing_destination)
+
+    with (
+        patch.object(global_installer, "detect_global_skill_clis", return_value=["codex"]),
+        patch.object(global_installer.sys, "platform", "win32"),
+        patch.object(
+            global_installer,
+            "_open_windows_directory_handle",
+            side_effect=_open_fake_windows_directory_handle,
+        ),
+        patch.object(
+            global_installer,
+            "_windows_handle_matches_path",
+            side_effect=_fake_windows_handle_matches_path,
+        ),
+        patch.object(
+            global_installer,
+            "_rename_windows_directory_handle_without_replacement",
+            side_effect=concurrent_windows_rename,
+        ),
+        patch.object(global_installer, "_close_windows_directory_handle"),
+    ):
+        summary = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
+
+    destination = home_dir / ".codex/skills/use-cafe-workflow/SKILL.md"
+    assert summary is not None
+    assert summary.installed_count == 0
+    assert summary.failed_count == len(DEFAULT_GLOBAL_SKILLS)
+    assert destination.read_text(encoding="utf-8") == "concurrent-existing\n"
+
+
+def test_auto_sync_windows_publishes_the_bound_staged_source(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "bundled-skills"
+    home_dir = tmp_path / "home"
+    _write_default_sources(source_root)
+    intervened = False
+
+    def replace_staged_path_after_binding(source_handle, destination_handle, name) -> None:
+        nonlocal intervened
+        if not intervened:
+            intervened = True
+            held_source = source_handle.path.with_name("trusted-held")
+            source_handle.path.rename(held_source)
+            _write_skill(source_handle.path.parent, source_handle.path.name, "untrusted")
+            held_source.rename(destination_handle.path / name)
+            return
+        _rename_fake_windows_directory_handle(source_handle, destination_handle, name)
+
+    with (
+        patch.object(global_installer, "detect_global_skill_clis", return_value=["codex"]),
+        patch.object(global_installer.sys, "platform", "win32"),
+        patch.object(
+            global_installer,
+            "_open_windows_directory_handle",
+            side_effect=_open_fake_windows_directory_handle,
+        ),
+        patch.object(
+            global_installer,
+            "_windows_handle_matches_path",
+            side_effect=_fake_windows_handle_matches_path,
+        ),
+        patch.object(
+            global_installer,
+            "_rename_windows_directory_handle_without_replacement",
+            side_effect=replace_staged_path_after_binding,
+        ),
+        patch.object(global_installer, "_close_windows_directory_handle"),
+    ):
+        summary = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
+
+    destination = home_dir / ".codex/skills/use-cafe-workflow/SKILL.md"
+    assert summary is not None
+    assert summary.installed_count == len(DEFAULT_GLOBAL_SKILLS)
+    assert "use-cafe-workflow v1" in destination.read_text(encoding="utf-8")
+    assert "untrusted" not in destination.read_text(encoding="utf-8")
+
+
+def test_auto_sync_windows_fails_when_the_bound_destination_parent_moves(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "bundled-skills"
+    home_dir = tmp_path / "home"
+    detached_skills_root = tmp_path / "detached-skills"
+    _write_default_sources(source_root)
+    intervened = False
+
+    def replace_destination_parent_after_binding(
+        source_handle, destination_handle, name
+    ) -> None:
+        nonlocal intervened
+        if not intervened:
+            intervened = True
+            source_relative = source_handle.path.relative_to(destination_handle.path)
+            destination_handle.path.rename(detached_skills_root)
+            destination_handle.path.mkdir(parents=True)
+            _write_skill(
+                destination_handle.path / source_relative.parent,
+                source_relative.name,
+                "untrusted",
+            )
+            trusted_source = detached_skills_root / source_relative
+            trusted_source.rename(detached_skills_root / name)
+            return
+        _rename_fake_windows_directory_handle(source_handle, destination_handle, name)
+
+    with (
+        patch.object(global_installer, "detect_global_skill_clis", return_value=["codex"]),
+        patch.object(global_installer.sys, "platform", "win32"),
+        patch.object(
+            global_installer,
+            "_open_windows_directory_handle",
+            side_effect=_open_fake_windows_directory_handle,
+        ),
+        patch.object(
+            global_installer,
+            "_windows_handle_matches_path",
+            side_effect=_fake_windows_handle_matches_path,
+        ),
+        patch.object(
+            global_installer,
+            "_rename_windows_directory_handle_without_replacement",
+            side_effect=replace_destination_parent_after_binding,
+        ),
+        patch.object(global_installer, "_close_windows_directory_handle"),
+    ):
+        summary = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
+
+    assert summary is not None
+    assert summary.installed_count == 0
+    assert summary.failed_count == len(DEFAULT_GLOBAL_SKILLS)
+    assert not (home_dir / ".codex/skills/use-cafe-workflow").exists()
     assert "use-cafe-workflow v1" in (
-        home_dir / ".codex/skills/use-cafe-workflow/SKILL.md"
+        detached_skills_root / "use-cafe-workflow/SKILL.md"
     ).read_text(encoding="utf-8")
+
+
+def test_auto_sync_does_not_roll_back_a_published_tree_after_external_use(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "bundled-skills"
+    home_dir = tmp_path / "home"
+    _write_default_sources(source_root)
+    original_move = global_installer.move_without_replacement
+    publish_count = 0
+
+    def fail_second_publish_after_external_use(*args, **kwargs) -> None:
+        nonlocal publish_count
+        publish_count += 1
+        if publish_count == 2:
+            first_destination = (
+                home_dir / ".codex/skills" / DEFAULT_GLOBAL_SKILLS[0]
+            )
+            (first_destination / "concurrent.md").write_text(
+                "external use\n", encoding="utf-8"
+            )
+            destination_directory = kwargs["destination_directory"]
+            destination = destination_directory.path / args[1]
+            destination.mkdir()
+            (destination / "SKILL.md").write_text(
+                "concurrent-existing\n", encoding="utf-8"
+            )
+        original_move(*args, **kwargs)
+
+    with (
+        patch.object(global_installer, "detect_global_skill_clis", return_value=["codex"]),
+        patch.object(
+            global_installer,
+            "move_without_replacement",
+            side_effect=fail_second_publish_after_external_use,
+        ),
+    ):
+        summary = auto_sync_global_skills(source_root=source_root, home_dir=home_dir)
+
+    first_destination = home_dir / ".codex/skills" / DEFAULT_GLOBAL_SKILLS[0]
+    second_destination = home_dir / ".codex/skills" / DEFAULT_GLOBAL_SKILLS[1]
+    assert summary is not None
+    assert summary.installed_count == 1
+    assert summary.failed_count == len(DEFAULT_GLOBAL_SKILLS) - 1
+    assert (first_destination / "SKILL.md").is_file()
+    assert (first_destination / "concurrent.md").read_text(encoding="utf-8") == (
+        "external use\n"
+    )
+    assert (second_destination / "SKILL.md").read_text(encoding="utf-8") == (
+        "concurrent-existing\n"
+    )
 
 
 def test_auto_sync_skips_quickly_when_another_process_holds_the_lock(
@@ -535,34 +934,3 @@ def test_auto_sync_lock_contention_is_safe_across_processes(tmp_path: Path) -> N
         )
 
     assert result.stdout.strip() == "None"
-
-
-def test_auto_sync_tracks_each_development_machine_independently(tmp_path: Path) -> None:
-    source_a = tmp_path / "machine-a/repo/src/cafe/data/skills"
-    source_b = tmp_path / "machine-b/repo/src/cafe/data/skills"
-    home_a = tmp_path / "machine-a/home"
-    home_b = tmp_path / "machine-b/home"
-    _write_default_sources(source_a)
-    _write_default_sources(source_b)
-
-    auto_sync_global_skills(source_root=source_a, home_dir=home_a)
-    auto_sync_global_skills(source_root=source_b, home_dir=home_b)
-    changed = "---\nname: use-cafe-workflow\ndescription: test skill\n---\n\nmachine update\n"
-    (source_a / "use-cafe-workflow/SKILL.md").write_text(changed, encoding="utf-8")
-
-    updated_a = auto_sync_global_skills(source_root=source_a, home_dir=home_a)
-    unchanged_b = auto_sync_global_skills(source_root=source_b, home_dir=home_b)
-
-    assert updated_a is not None
-    assert updated_a.updated_count == 5
-    assert unchanged_b is None
-
-    # Simulate machine B receiving A's committed source through Git pull.
-    (source_b / "use-cafe-workflow/SKILL.md").write_text(changed, encoding="utf-8")
-    updated_b = auto_sync_global_skills(source_root=source_b, home_dir=home_b)
-
-    assert updated_b is not None
-    assert updated_b.updated_count == 5
-    assert "machine update" in (home_b / ".codex/skills/use-cafe-workflow/SKILL.md").read_text(
-        encoding="utf-8"
-    )

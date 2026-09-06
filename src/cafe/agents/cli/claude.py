@@ -249,6 +249,43 @@ class ClaudeCLI(AbstractCLI):
                 continue
         return None
 
+    @property
+    def event_driver_conforming(self) -> bool:
+        return True
+
+    def build_event_driver_command(
+        self,
+        prompt: str,
+        allowed_tools: Optional[List[str]] = None,
+        allowed_directories: Optional[List[str]] = None,
+    ) -> List[str]:
+        command = super().build_event_driver_command(
+            prompt, allowed_tools, allowed_directories
+        )
+        command.append("--include-partial-messages")
+        return command
+
+    def extract_event_driver_session(self, records) -> Optional[str]:
+        return self._verified_event_driver_session(
+            records,
+            matches=lambda record: record.get("type") == "system"
+            and record.get("subtype") == "init",
+            field="session_id",
+        )
+
+    def accepts_event_driver_callback(self, records, *, session_id: str, event_id: str) -> bool:
+        return self._verified_event_driver_acceptance(
+            records,
+            session_matches=lambda record: record.get("type") == "system"
+            and record.get("subtype") == "init",
+            acceptance_matches=lambda record: record.get("type") == "stream_event"
+            and isinstance(record.get("event"), dict)
+            and record["event"].get("type") == "message_start",
+            session_field="session_id",
+            session_id=session_id,
+            event_id=event_id,
+        )
+
     def create_session(self) -> str:
         """Claude sessions are created by the real prompt execution."""
         return ""

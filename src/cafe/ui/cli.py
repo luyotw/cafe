@@ -39,6 +39,7 @@ from cafe.ui.cli_shared import (
     _resolve_issue_playbook_name,
 )
 from rich.console import Console
+from rich.markup import escape
 
 from cafe.agents.manager import AgentManager
 from cafe.core.git import GitOperations
@@ -203,11 +204,57 @@ def _check_repo_entrypoint_alignment() -> bool:
     return False
 
 
+_AUTO_INSTALL_TOP_LEVEL_COMMANDS = {
+    "chat",
+    "close",
+    "edit",
+    "init",
+    "make",
+    "prepare",
+    "reset",
+    "restore",
+    "rm",
+    "setup",
+}
+_AUTO_INSTALL_NESTED_COMMANDS = {
+    ("agent", "create"),
+    ("agent", "edit"),
+    ("agent", "rm"),
+    ("agent", "sync"),
+    ("catalog", "sync-global"),
+    ("skill", "import"),
+    ("skill", "rm"),
+    ("task", "cancel"),
+    ("task", "complete"),
+    ("template", "add"),
+    ("template", "create"),
+    ("template", "edit"),
+    ("template", "rm"),
+    ("template", "sync"),
+    ("trust", "lifecycle"),
+    ("trust", "revoke"),
+    ("update", "apply"),
+    ("verification", "reuse"),
+    ("verification", "run"),
+}
+
+
+def _should_auto_install_global_helper_skills(argv: list[str]) -> bool:
+    """Return whether a declared mutating command may install missing helpers."""
+    if not argv or any(arg in {"--help", "-h", "--version"} for arg in argv):
+        return False
+    if argv[0] == "workflow":
+        return "--execute" in argv and "--dry-run" not in argv
+    if argv[0] in _AUTO_INSTALL_TOP_LEVEL_COMMANDS:
+        return True
+    return len(argv) >= 2 and tuple(argv[:2]) in _AUTO_INSTALL_NESTED_COMMANDS
+
+
 def _auto_sync_global_helper_skills() -> None:
-    """Keep global helper skills current on each real CAFE CLI startup."""
+    """Install missing global helpers for explicitly eligible CLI commands."""
     if os.getenv("CAFE_SKIP_GLOBAL_SKILL_SYNC"):
         return
-    if sys.argv[1:3] == ["skill", "sync-global"]:
+    if not _should_auto_install_global_helper_skills(sys.argv[1:]):
         return
 
     from cafe.skills.global_installer import auto_sync_global_skills
@@ -220,16 +267,17 @@ def _auto_sync_global_helper_skills() -> None:
 
     if summary is None:
         return
+    if summary.installed_count:
+        console.print(
+            f"[dim]✓ Installed {summary.installed_skill_count} missing global helper "
+            f"skill(s) across {summary.changed_cli_count} CLI destination(s) from "
+            f"{escape(str(summary.source_root))}[/dim]"
+        )
     if summary.failed_count:
         console.print(
-            f"[yellow]⚠ Global helper skill auto-sync failed for "
-            f"{summary.failed_count} installation(s). "
+            f"[yellow]⚠ Global helper skill missing-install failed for "
+            f"{summary.failed_count} destination(s). "
             f"Run `cafe skill sync-global` for details.[/yellow]"
-        )
-    elif summary.changed_count:
-        console.print(
-            f"[dim]✓ Synchronized {summary.changed_count} global helper "
-            f"skill installation(s)[/dim]"
         )
 
 
@@ -1181,8 +1229,14 @@ def agent_sync() -> None:
 def chat_with_agent(
     ctx: typer.Context,
     role: str = typer.Argument(..., help="Playbook-declared role"),
+    prompt: Optional[str] = typer.Option(
+        None,
+        "--prompt",
+        "-p",
+        help="Send one message and exit instead of opening interactive chat",
+    ),
 ) -> None:
-    """Open interactive chat with a playbook-declared role Agent
+    """Chat with a playbook-declared role Agent.
 
     This command allows you to quickly interact with an Agent of specified role,
     without manually looking up and entering session id.
@@ -1192,6 +1246,7 @@ def chat_with_agent(
     \b
     Examples:
         cafe chat developer
+        cafe chat developer -p "Summarize the current implementation"
         cafe chat qa
         cafe chat researcher
     """
@@ -1202,7 +1257,9 @@ def chat_with_agent(
         console.print(f"[red]Error: Invalid role '{role}'. Must be one of: {', '.join(valid_roles)}[/red]")
         raise typer.Exit(1)
 
-    raise typer.Exit(launch_chat_session(role, issue_name))
+    if prompt is None:
+        raise typer.Exit(launch_chat_session(role, issue_name))
+    raise typer.Exit(launch_chat_session(role, issue_name, prompt=prompt))
 
 
 def _load_issue_playbook_roles(issue_name: str) -> list[str]:

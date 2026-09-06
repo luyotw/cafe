@@ -101,6 +101,8 @@ class RendererDeps:
 
 def field_is_visible(field: PrepareField, ctx: PreparePromptContext) -> bool:
     """Return whether one field should be shown for the current context."""
+    if (field.write or "").startswith("pr.") and not ctx.profile.supports_pr_config():
+        return False
     show_when = field.show_when
     if show_when is None:
         return True
@@ -132,6 +134,8 @@ def field_is_visible_for_non_interactive(
     ctx: PrepareNonInteractiveContext,
 ) -> bool:
     """Return whether one field applies in non-interactive mode."""
+    if (field.write or "").startswith("pr.") and not ctx.profile.supports_pr_config():
+        return False
     if field.type == "setup_mode" or not field.non_interactive:
         return False
     show_when = field.show_when
@@ -308,6 +312,46 @@ def _validate_declared_non_interactive_input(
         )
 
 
+def validate_publication_answers(
+    profile: PrepareProfile,
+    answers: NonInteractiveCliAnswers,
+) -> None:
+    supplied = answers.auto_create_pr is not None or answers.post_pr_todo_list is not None
+    if not profile.supports_pr_config():
+        if supplied:
+            raise PrepareNonInteractiveError(
+                "PR flags are not applicable because the selected playbook does not "
+                "request cafe.pr.publish"
+            )
+        return
+    if answers.auto_create_pr is None:
+        raise PrepareNonInteractiveError(
+            "--auto-create-pr or --no-auto-create-pr is required because the selected "
+            "playbook requests cafe.pr.publish"
+        )
+    if not isinstance(answers.auto_create_pr, bool):
+        raise PrepareNonInteractiveError("PR publication choice must be a Boolean")
+    if answers.auto_create_pr and not profile.is_github_repo:
+        raise PrepareNonInteractiveError(
+            "--auto-create-pr requires a GitHub repository"
+        )
+    if answers.post_pr_todo_list is not None and not isinstance(
+        answers.post_pr_todo_list, bool
+    ):
+        raise PrepareNonInteractiveError("PR todo-list choice must be a Boolean")
+
+
+def _apply_explicit_publication_answers(
+    config: PrepareIssueConfig,
+    answers: NonInteractiveCliAnswers,
+) -> None:
+    config.pr["auto_create"] = answers.auto_create_pr
+    if answers.auto_create_pr is True and answers.post_pr_todo_list is not None:
+        config.pr["post_todo_list"] = answers.post_pr_todo_list
+    else:
+        config.pr.pop("post_todo_list", None)
+
+
 def resolve_non_interactive_issue_config(
     profile: PrepareProfile,
     answers: NonInteractiveCliAnswers,
@@ -316,16 +360,15 @@ def resolve_non_interactive_issue_config(
     deps: NonInteractiveResolverDeps,
 ) -> PrepareIssueConfig:
     """Resolve and validate non-interactive prepare config for issue.yaml."""
+    validate_publication_answers(profile, answers)
     if parsed_fields is None:
         if not profile.prepare.prompt_for_spec_plan_config and profile.prepare.model_fields_set == {
             "prompt_for_spec_plan_config"
         }:
-            if answers.auto_create_pr is not None or answers.post_pr_todo_list is not None:
-                raise PrepareNonInteractiveError(
-                    "--auto-create-pr and --post-pr-todo-list require a playbook with a "
-                    "pr step or explicit pr.* prepare fields"
-                )
-            return empty_issue_config()
+            config = empty_issue_config()
+            if profile.supports_pr_config():
+                _apply_explicit_publication_answers(config, answers)
+            return config
         validate_non_interactive_required(answers)
         defaults = profile.non_interactive_defaults()
         rigor = answers.rigor if answers.rigor is not None else defaults.rigor
@@ -357,21 +400,8 @@ def resolve_non_interactive_issue_config(
             set_write_value(config, "spec.sync_github", answers.sync_spec_github)
         if answers.sync_plan_github is not None:
             set_write_value(config, "plan.sync_github", answers.sync_plan_github)
-        if not profile.supports_pr_config() and (
-            answers.auto_create_pr is not None or answers.post_pr_todo_list is not None
-        ):
-            raise PrepareNonInteractiveError(
-                "--auto-create-pr and --post-pr-todo-list require a playbook with a "
-                "pr step or explicit pr.* prepare fields"
-            )
-        if (
-            profile.supports_pr_config()
-            and profile.is_github_repo
-            and answers.auto_create_pr is not None
-        ):
-            set_write_value(config, "pr.auto_create", answers.auto_create_pr)
-        if profile.supports_pr_config() and answers.post_pr_todo_list is not None:
-            set_write_value(config, "pr.post_todo_list", answers.post_pr_todo_list)
+        if profile.supports_pr_config():
+            _apply_explicit_publication_answers(config, answers)
         return config
 
     _validate_declared_non_interactive_input(parsed_fields, answers)
@@ -383,6 +413,8 @@ def resolve_non_interactive_issue_config(
     config = empty_issue_config()
     for field in parsed_fields.fields:
         if field.type == "setup_mode" or field.write is None:
+            continue
+        if field.write.startswith("pr.") and not profile.supports_pr_config():
             continue
         is_explicit, value = _cli_value_for_field(field, answers)
         if not field_is_visible_for_non_interactive(field, ctx) and not is_explicit:
@@ -414,13 +446,8 @@ def resolve_non_interactive_issue_config(
             if provider == "github_issue" and answers.issue_id is not None:
                 config.initial_input["issue_id"] = answers.issue_id
 
-    if not profile.supports_pr_config(parsed_fields) and (
-        answers.auto_create_pr is not None or answers.post_pr_todo_list is not None
-    ):
-        raise PrepareNonInteractiveError(
-            "--auto-create-pr and --post-pr-todo-list require a playbook with a "
-            "pr step or explicit pr.* prepare fields"
-        )
+    if profile.supports_pr_config():
+        _apply_explicit_publication_answers(config, answers)
     return config
 
 
@@ -471,26 +498,9 @@ def apply_quick_defaults(
             continue
         if field.write is None:
             continue
+        if field.write == "pr.auto_create":
+            continue
         set_write_value(config, field.write, field.default)
-
-    if (
-        ctx.profile.supports_pr_config(parsed)
-        and ctx.is_github_repo
-        and "auto_create" not in config.pr
-    ):
-        auto_field = next(
-            (field for field in parsed.fields if field.write == "pr.auto_create"),
-            None,
-        )
-        if auto_field is not None and auto_field.default is not None:
-            set_write_value(config, "pr.auto_create", auto_field.default)
-            if config.pr.get("auto_create") and "post_todo_list" not in config.pr:
-                todo_field = next(
-                    (field for field in parsed.fields if field.write == "pr.post_todo_list"),
-                    None,
-                )
-                if todo_field is not None and todo_field.default is not None:
-                    set_write_value(config, "pr.post_todo_list", todo_field.default)
     return config
 
 

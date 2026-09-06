@@ -5,8 +5,12 @@ or retrying ordinary workflow work. Read `model_selection.md` before the first
 execution and whenever agent work remains.
 
 Before every start or resume, follow `project_global_skill_sync.md`: validate
-the persisted runtime/catalog preflight against fresh read-only checks. Stop for
-a fresh, separately scoped approval only when a comparison token changed.
+the persisted runtime/catalog preflight against fresh read-only checks. A
+changed comparison token triggers the reference's bounded semantic comparison,
+not an automatic user stop. Request the exact separately scoped approval only
+for a fresh action, and reconfirm kickoff only for a material difference found
+by that comparison. Verified metadata-only churn may continue, while uncertain
+differences fail closed.
 
 ## Operating modes
 
@@ -22,31 +26,81 @@ policy.
   trusted builtin callback below. It is not `--single-step`: phases continue
   normally whether the callback succeeds, fails, or never starts.
 
-For event-driven mode, create the per-issue binding after `cafe prepare` and
-before launch:
+For event-driven mode, activate the confirmed Driver contract after
+`cafe prepare`, validate the Driver-only entry, and then launch generic CAFE
+through its existing event callback path:
 
 ```bash
-python3 <skill-dir>/scripts/workflow_event_callback.py --write-config \
+python3 <skill-dir>/scripts/validate_driver_entry.py \
+  --issue-name <issue> \
   --issue-dir .cafe/issues/<issue> \
-  --cli <claude|codex|gemini|copilot|cursor-agent> \
-  --model <exact-model>
+  --workflow-id <prepared-workflow-id> \
+  --fresh-facts '<fresh-driver-policy-facts-json>'
 
-cafe workflow --issue <issue> --execute --mute-agent-output --background \
+cafe workflow --issue <issue> --execute --mute-agent-output \
+  --background \
   --on-workflow-event builtin:use-cafe-workflow:workflow_event_callback
 ```
 
-The callback uses `.cafe/issues/<issue>/driver/config.yaml`, `session.json`,
-and `session.lock`. When the launch comes from the Codex App with `cli: codex`,
-the binding records that visible Codex thread and the callback uses `codex queue`
-to wake it through the existing host daemon. If the thread is busy, the notice
-runs after its current turn; if it is idle, the notice wakes it. The callback
-does **not** create a separate `__cafe_event_driver__` session. `session.json`
-then records that same thread as the workflow's exact identity. A terminal or
-non-Codex launch without a host-thread binding retains the existing per-issue
-driver session behavior. Every path refuses to replace an acquired identity.
-It is an ordinary driver and uses only existing kickoff authority:
-confirmation contract, mandatory HumanTask stops, reactive user handoffs,
-mandate, and model-adjustment authority.
+The callback reads the issue-scoped `driver/contract.json` and projects the
+event CLI/model order only in memory. `dispatch_state.json` is mutable runtime
+state bound to that contract's digest: it contains sessions, attempt history,
+the sticky active index, takeover, exhaustion, recovery, and timestamps, but
+never a copy of mode, model-chain, or other confirmed policy. A changed digest
+fails closed before dispatch. `driver/config.yaml` is a legacy migration input
+only; when a contract exists it is neither read as callback authority nor a
+writer target. The event-driver lifecycle uses no session-file discovery,
+directory diff, sleep, polling, or watcher.
+
+For attached or unattended Driver-managed work, invoke the same validator,
+then start generic CAFE through its ordinary command. The supplied fresh facts are
+the current bounded semantic policy rebuilt by the skill's loaders and the
+current material assumptions; they are not a caller-selected subset. The
+validator does not inspect `issue.yaml`, phase chains, or PR choices. Generic
+CAFE validates and consumes those ordinary inputs under the existing #467
+contract, with identical behavior whether a Driver exists or not.
+
+Session acquisition and actual delivery are separate boundaries. Every
+unacquired, unbound entry first runs a provider request exactly equivalent to
+`say "HI"` with no workflow event or driver authority. Codex, Claude, Gemini,
+Cursor, and Copilot each supply a provider-created session ID from their
+verified structured or terminal evidence. The callback persists that ID in
+`dispatch_state.json` before the actual callback. An existing acquired session
+is reused without bootstrap. Copilot has the same lifecycle and never receives
+a caller-selected new-session ID.
+
+When the first entry is Codex and configuration runs from the Codex App, the
+first Codex entry's valid runtime-owned host binding is already acquired and
+uses `codex queue`; no fallback inherits it. Otherwise the actual callback
+resumes only that entry's persisted provider session. Bootstrap never counts as
+event delivery or acceptance. Only actual callback durable acceptance stops
+forward routing, makes that entry active for later events, and records a
+takeover. The provider acknowledgement is bound to the exact event identity in
+the dispatched invocation before it can satisfy acceptance. This is transport
+acceptance and does not wait for or infer success from model output.
+
+Entries are attempted serially from the sticky active index. Only a conclusive
+pre-acceptance nonacceptance may move to the next later entry. An ambiguous
+outcome stops forward routing and remains recovery-visible. Exhaustion retains
+the event and all attempts for existing explicit recovery; it does not roll
+back completed phase work or block normal phase advancement. A cross-provider
+takeover is transport-local and does not merge conversations or promise that
+the initiating conversation continues elsewhere.
+
+Inspect this state without acquiring a callback lock or modifying any driver
+file:
+
+```bash
+python3 <skill-dir>/scripts/workflow_event_callback.py \
+  --status --issue-dir .cafe/issues/<issue>
+```
+
+The projection reports confirmed order/conformance, acquisition separately
+from delivery, the active transport, takeover, exhaustion, and recovery. It
+does not infer delivery from model output or claim cross-provider context
+continuity. The callback remains an ordinary driver and uses only existing
+kickoff authority: confirmation contract, mandatory HumanTask stops, reactive
+user handoffs, mandate, and model-adjustment authority.
 
 The callback receives only an asynchronous durable-event notice. It must
 re-check `cafe status`/`cafe show`; a notice can be stale. It may diagnose and
@@ -130,26 +184,31 @@ handling of anomalies, not worker control.
 
 ## Proactive driver review
 
-Before every start or resume, read and validate the confirmed
-`.cafe/issues/<issue>/driver/proactive_review.yaml` contract against the active
-playbook. If it is absent, invalid, or its phase coverage no longer matches the
-active playbook, stop for a complete replacement proposal and user
-reconfirmation; do not infer a review policy from an earlier conversation.
+Before every start or resume, validate the confirmed
+`.cafe/issues/<issue>/driver/contract.json` and use its
+`proactive_review.phase_decisions` projection. If the contract is absent,
+invalid, stale, or its phase coverage no longer matches the active playbook,
+stop for a complete replacement proposal and user reconfirmation; do not infer
+a review policy from an earlier conversation.
 
-Only an executed required phase becomes due for proactive review, and only
-after it has durable output and the current Driver has a valid observation
-point. A not_required phase, a skipped phase, and an all-not_required contract
-perform no proactive review. The current Driver performs the review directly;
-it must not launch a separate reviewer or create a review artifact that itself
-needs proactive review.
+Only an executed required phase becomes due for proactive review, and only when
+its durable output has reached an existing scheduled confirmation pause that
+blocks downstream agent work. Complete the review before completing a
+`driver_confirmable` task or relaying a `user_required` answer that would resume
+the workflow. A phase that advances immediately is not eligible for `required`;
+its kickoff decision must be `not_required` because an asynchronous Driver
+cannot review it in time to gate advancement. A not_required phase, a skipped
+phase, and an all-not_required contract perform no proactive review. The
+current Driver performs the review directly; it must not launch a separate
+reviewer or create a review artifact that itself needs proactive review.
 
 For every due phase, review the exact current durable artifact against accepted
 upstream requirements, relevant repository evidence, and available correction
 history. Complete every applicable pass by explicitly checking both missing
 necessary scope and excessive or unnecessary scope, including out-of-scope
 work, unnecessary abstraction, and extension work. These checks apply equally
-to code and non-code `spec` or `plan` output. An incomplete, interrupted, or
-ambiguous pass is not a no-blocking result.
+to code and non-code phase output. An incomplete, interrupted, or ambiguous
+pass is not a no-blocking result.
 
 Then consolidate every currently observable blocker and send it through the
 responsible phase's existing correction route; do not edit generated phase
@@ -168,11 +227,14 @@ no-blocking pass. Missing, stale, incomplete, or ambiguous proof requires a
 new full pass. This fail-closed rule stores no review status or correction
 history.
 
-Apply this same contract in attached, unattended, and event-driven modes.
-Attached reviews at normal observation points, unattended reviews when the user
-next returns to inspect durable state, and event-driven callbacks may begin a
-review after a notification. The callback remains asynchronous, best-effort,
-fail-open, and non-gating for workflow advancement.
+Apply this same contract in attached, unattended, and event-driven modes, but
+only at the existing scheduled pause. Attached mode reviews before its paused
+handoff resumes, unattended mode reviews when the user returns while that pause
+is still pending, and an event-driven callback may begin after the durable pause
+notification. A phase-terminal callback that did not pause cannot make the
+review gating and must not be treated as a valid review opportunity. The
+callback remains asynchronous, best-effort, fail-open, and non-gating for
+workflow advancement.
 
 Do not edit workflow artifacts, blackboard, or `next_step.txt` by hand except
 when repairing confirmed broken workflow state. Do not bypass CAFE by directly

@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from cafe.agents.executor import AgentExecutionError
 from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.playbook import resolve_playbook_skills
@@ -419,6 +420,21 @@ def _handle_chat_launch_failure(
     return result.returncode
 
 
+def _warn_if_chat_handoff_missing(
+    issue_dir: Path,
+    current_step: str,
+    valid_steps: list[str],
+) -> None:
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create(current_step)
+    contract = store.load_handoff_contract(blackboard, allowed_steps=valid_steps)
+    if contract.source == "chat.bootstrap":
+        print(
+            "\n⚠️  Chat ended without writing a next-step baton. "
+            "The agent did not complete workflow handoff.\n"
+        )
+
+
 def launch_chat_session(
     role: str,
     issue_name: str,
@@ -426,6 +442,7 @@ def launch_chat_session(
     chat_mode: Optional[str] = None,
     extra_env: Optional[dict[str, str]] = None,
     initial_prompt: Optional[str] = None,
+    prompt: Optional[str] = None,
 ) -> int:
     """Launch an inline chat session with the agent for the given role.
 
@@ -438,6 +455,7 @@ def launch_chat_session(
         role: Agent role declared by the active workflow step.
         issue_name: Current issue name (used to load issue-specific session)
         initial_prompt: Optional first message to send when the interactive CLI supports it.
+        prompt: Optional one-shot message. When set, print the response and exit.
     """
     issue_dir = Path.cwd() / ".cafe" / "issues" / issue_name
 
@@ -510,22 +528,45 @@ def launch_chat_session(
         role=role,
         step_name=_current_step,
     )
+    chat_env = {
+        "CAFE_ISSUE_NAME": issue_name,
+        "CAFE_ISSUE_DIR": str(issue_dir),
+        "CAFE_CHAT_CURRENT_STEP": _current_step,
+        "CAFE_CHAT_PLAYBOOK_ID": _playbook_id,
+    }
+    if initial_prompt:
+        chat_env["CAFE_CHAT_INITIAL_PROMPT"] = initial_prompt
+    if chat_mode:
+        chat_env["CAFE_CHAT_MODE"] = chat_mode
+    if extra_env:
+        for key, value in extra_env.items():
+            chat_env[str(key)] = str(value)
+
+    if prompt is not None:
+        executor.stream_output = False
+        try:
+            response = executor.execute(prompt, environment_overrides=chat_env)
+        except AgentExecutionError as exc:
+            detail = exc.display_message or str(exc)
+            print(f"\n⚠️  Chat CLI failed: {detail}\n")
+            return 1
+
+        if response.session_id:
+            agent_manager.session_manager.save_session(
+                agent_name,
+                agent_cli,
+                response.session_id,
+                issue_name,
+            )
+        print(response.response)
+        _warn_if_chat_handoff_missing(issue_dir, _current_step, _valid_steps)
+        return 0
+
     session_id: Optional[str] = executor.config.session_id
     codex_history_start_ts = int(time.time())
     cli_command = cli_strategy.build_interactive_command(initial_prompt=initial_prompt)
-
     env = cli_strategy.build_environment()
-    env["CAFE_ISSUE_NAME"] = issue_name
-    env["CAFE_ISSUE_DIR"] = str(issue_dir)
-    env["CAFE_CHAT_CURRENT_STEP"] = _current_step
-    env["CAFE_CHAT_PLAYBOOK_ID"] = _playbook_id
-    if initial_prompt:
-        env["CAFE_CHAT_INITIAL_PROMPT"] = initial_prompt
-    if chat_mode:
-        env["CAFE_CHAT_MODE"] = chat_mode
-    if extra_env:
-        for key, value in extra_env.items():
-            env[str(key)] = str(value)
+    env.update(chat_env)
     print(f"\nOpening chat with {role} ({agent_name})...")
     if session_id:
         print(f"Resuming session: {session_id}")
@@ -555,16 +596,6 @@ def launch_chat_session(
     if result.returncode != 0:
         return _handle_chat_launch_failure(agent_cli, result)
 
-    store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create(_current_step)
-    contract = store.load_handoff_contract(
-        blackboard,
-        allowed_steps=_valid_steps,
-    )
-    if contract.source == "chat.bootstrap":
-        print(
-            "\n⚠️  Chat ended without writing a next-step baton. "
-            "The agent did not complete workflow handoff.\n"
-        )
+    _warn_if_chat_handoff_missing(issue_dir, _current_step, _valid_steps)
 
     return result.returncode

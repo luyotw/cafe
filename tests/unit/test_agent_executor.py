@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from cafe.agents.cli.copilot import CopilotCLI
 from cafe.agents.executor import AgentExecutionControl, AgentExecutionError, AgentExecutor
 from cafe.core.types import AgentConfig, AgentCLI, AgentResponse, TokenUsage
 
@@ -506,6 +507,28 @@ class TestCodexPermissionExtraction:
 
         assert mock_popen.call_args.kwargs["env"]["CODEX_HOME"] == codex_home
 
+    def test_execute_adds_environment_overrides(self) -> None:
+        config = AgentConfig(name="Nick", cli=AgentCLI.CODEX)
+        executor = AgentExecutor(config)
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"type":"item.completed","item":{"type":"agent_message","text":"done"}}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with (
+            patch("subprocess.Popen", return_value=mock_process) as mock_popen,
+            patch("sys.platform", "win32"),
+        ):
+            executor.execute(
+                "Test prompt",
+                environment_overrides={"CAFE_ISSUE_NAME": "issue478"},
+            )
+
+        assert mock_popen.call_args.kwargs["env"]["CAFE_ISSUE_NAME"] == "issue478"
+
     def test_codex_turn_completed_is_a_durable_stream_terminal_event(self, tmp_path: Path) -> None:
         """Codex's terminal event completes an iteration-backed stream."""
         config = AgentConfig(name="Nick", cli=AgentCLI.CODEX)
@@ -838,6 +861,250 @@ class TestCopilotTokenUsageExtraction:
             
             # Response should not contain usage summary
             assert "Usage by model:" not in agent_response.response
+
+
+class TestEventDriverObservation:
+    """測試 callback-only provider evidence 觀察邊界。"""
+
+    def test_bootstrap_extracts_provider_session_without_delivery(self) -> None:
+        executor = AgentExecutor(
+            AgentConfig(name="driver", cli=AgentCLI.CODEX, model="exact"),
+            stream_output=False,
+        )
+
+        def execute_stream(**kwargs):
+            kwargs["structured_records"].append(
+                {"type": "thread.started", "thread_id": "provider-session"}
+            )
+            return AgentResponse(response="HI", token_usage=TokenUsage())
+
+        with patch.object(executor, "_execute_with_streaming", side_effect=execute_stream) as run:
+            observed = executor.execute_event_driver('say "HI"')
+
+        assert observed.session_id == "provider-session"
+        assert observed.accepted is False
+        assert run.call_args.kwargs["parse_stream_json"] is True
+        assert run.call_args.kwargs["cmd"].count('say "HI"') == 1
+
+    def test_ordinary_copilot_preserves_provider_session_for_later_turns(self) -> None:
+        executor = AgentExecutor(
+            AgentConfig(name="ordinary", cli=AgentCLI.COPILOT, model="exact"),
+            stream_output=False,
+        )
+        response = AgentResponse(
+            response="plain response",
+            token_usage=TokenUsage(),
+            streaming_log=["plain response"],
+        )
+
+        with (
+            patch.object(CopilotCLI, "record_existing_sessions") as snapshot,
+            patch.object(
+                CopilotCLI,
+                "extract_session_id",
+                return_value="ordinary-session",
+            ),
+            patch.object(executor, "_execute_with_streaming", return_value=response),
+        ):
+            observed = executor.execute("ordinary prompt")
+
+        snapshot.assert_called_once_with()
+        assert observed.session_id == "ordinary-session"
+        assert executor.config.session_id == "ordinary-session"
+
+    def test_actual_callback_uses_exact_session_and_ignores_model_output(self) -> None:
+        executor = AgentExecutor(
+            AgentConfig(
+                name="driver",
+                cli=AgentCLI.CODEX,
+                model="exact",
+                session_id="provider-session",
+            ),
+            stream_output=False,
+        )
+
+        def execute_stream(**kwargs):
+            kwargs["structured_records"].extend(
+                [
+                    {"type": "thread.started", "thread_id": "provider-session"},
+                    {"type": "turn.started"},
+                    {"type": "item.completed", "item": {"type": "agent_message"}},
+                ]
+            )
+            return AgentResponse(response="", token_usage=TokenUsage())
+
+        with (
+            patch.object(executor, "_execute_with_streaming", side_effect=execute_stream) as run,
+            patch.object(
+                executor,
+                "_execute_with_session_recovery",
+                side_effect=AssertionError("cold retry is forbidden"),
+            ),
+        ):
+            observed = executor.execute_event_driver(
+                "callback event-1",
+                expected_session_id="provider-session",
+                event_id="event-1",
+            )
+
+        assert observed.accepted is True
+        assert observed.event_id == "event-1"
+        command = run.call_args.kwargs["cmd"]
+        assert command[command.index("resume") + 1] == "provider-session"
+
+    def test_actual_callback_requires_its_event_identity_in_the_dispatched_prompt(
+        self,
+    ) -> None:
+        executor = AgentExecutor(
+            AgentConfig(
+                name="driver",
+                cli=AgentCLI.CODEX,
+                model="exact",
+                session_id="provider-session",
+            ),
+            stream_output=False,
+        )
+
+        with pytest.raises(ValueError, match="event identity"):
+            executor.execute_event_driver(
+                "callback for a different event",
+                expected_session_id="provider-session",
+                event_id="event-1",
+            )
+
+    def test_actual_callback_notifies_acceptance_before_later_stream_output(self) -> None:
+        executor = AgentExecutor(
+            AgentConfig(
+                name="driver",
+                cli=AgentCLI.CLAUDE,
+                model="exact",
+                session_id="provider-session",
+            ),
+            stream_output=False,
+        )
+        order = []
+
+        def execute_stream(**kwargs):
+            init = {
+                "type": "system",
+                "subtype": "init",
+                "session_id": "provider-session",
+            }
+            kwargs["structured_records"].append(init)
+            kwargs["structured_record_observer"](init)
+            assert order == []
+            turn_started = {
+                "type": "stream_event",
+                "event": {"type": "message_start"},
+            }
+            kwargs["structured_records"].append(turn_started)
+            kwargs["structured_record_observer"](turn_started)
+            assert order == ["accepted"]
+            order.append("model-output")
+            return AgentResponse(response="later", token_usage=TokenUsage())
+
+        with patch.object(executor, "_execute_with_streaming", side_effect=execute_stream):
+            observed = executor.execute_event_driver(
+                "callback event-1",
+                expected_session_id="provider-session",
+                event_id="event-1",
+                on_acceptance=lambda: order.append("accepted"),
+            )
+
+        assert observed.accepted is True
+        assert order == ["accepted", "model-output"]
+
+    def test_copilot_accepts_captured_resume_shape_only_after_terminal_session(self) -> None:
+        executor = AgentExecutor(
+            AgentConfig(
+                name="driver",
+                cli=AgentCLI.COPILOT,
+                model="exact",
+                session_id="provider-session",
+            ),
+            stream_output=False,
+        )
+        order = []
+
+        def execute_stream(**kwargs):
+            user_message = {
+                "type": "user.message",
+                "data": {"content": "callback event-1"},
+            }
+            kwargs["structured_records"].append(user_message)
+            kwargs["structured_record_observer"](user_message)
+            assert order == []
+            terminal = {"type": "result", "sessionId": "provider-session"}
+            kwargs["structured_records"].append(terminal)
+            kwargs["structured_record_observer"](terminal)
+            assert order == ["accepted"]
+            return AgentResponse(response="", token_usage=TokenUsage())
+
+        with patch.object(executor, "_execute_with_streaming", side_effect=execute_stream):
+            observed = executor.execute_event_driver(
+                "callback event-1",
+                expected_session_id="provider-session",
+                event_id="event-1",
+                on_acceptance=lambda: order.append("accepted"),
+            )
+
+        assert observed.accepted is True
+        assert observed.session_id == "provider-session"
+        assert order == ["accepted"]
+
+    def test_eventless_provider_init_does_not_accept_actual_callback(self) -> None:
+        executor = AgentExecutor(
+            AgentConfig(
+                name="driver",
+                cli=AgentCLI.CLAUDE,
+                model="exact",
+                session_id="provider-session",
+            ),
+            stream_output=False,
+        )
+        accepted = []
+
+        def execute_stream(**kwargs):
+            init = {
+                "type": "system",
+                "subtype": "init",
+                "session_id": "provider-session",
+            }
+            kwargs["structured_records"].append(init)
+            kwargs["structured_record_observer"](init)
+            return AgentResponse(response="", token_usage=TokenUsage())
+
+        with patch.object(executor, "_execute_with_streaming", side_effect=execute_stream):
+            observed = executor.execute_event_driver(
+                "callback event-1",
+                expected_session_id="provider-session",
+                event_id="event-1",
+                on_acceptance=lambda: accepted.append(True),
+            )
+
+        assert observed.accepted is False
+        assert accepted == []
+
+    def test_callback_observer_bounds_provider_records(self) -> None:
+        executor = AgentExecutor(
+            AgentConfig(name="driver", cli=AgentCLI.CODEX, model="exact"),
+            stream_output=False,
+        )
+
+        def execute_stream(**kwargs):
+            kwargs["structured_records"].append(
+                {"type": "thread.started", "thread_id": "provider-session"}
+            )
+            kwargs["structured_records"].extend(
+                {"type": "noise", "index": index} for index in range(100)
+            )
+            return AgentResponse(response="", token_usage=TokenUsage())
+
+        with patch.object(executor, "_execute_with_streaming", side_effect=execute_stream):
+            observed = executor.execute_event_driver('say "HI"')
+
+        assert len(observed.records) == 64
+        assert observed.session_id == "provider-session"
 
 
 class TestStreamingExecution:

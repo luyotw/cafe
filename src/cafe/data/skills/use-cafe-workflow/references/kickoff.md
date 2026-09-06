@@ -91,20 +91,36 @@ obtain explicit user confirmation of:
 - `reactive_user_handoffs`;
 - mandate preset, axes, levels, and out-of-mandate list;
 - issue nature, scale, and risk factors;
-- every resolved phase-skill execution profile, including all possible
-  iteration variants at kickoff;
 - one `required` or `not_required` proactive-review decision with an
-  issue-specific rationale for every distinct agent-executed phase that may
-  run, including a phase likely to be skipped on one route;
+  issue-specific rationale for every agent or hybrid phase; only phases followed
+  by an existing scheduled confirmation pause before workflow advancement are
+  eligible for `required`, and the smallest useful eligible set is preferred;
 - the exact ordered CLI/model chain for every phase, containing one primary and
   zero or more explicitly confirmed fallbacks;
 - `model_adjustment_authority`: either `driver_autonomous` or
   `user_approval_required`;
 - exactly one operating mode: attached with a positive `poll_interval_seconds`,
-  unattended, or event-driven with one supported CLI and the exact model selected
-  by the user. Event-driven's binding lives only in
-  `.cafe/issues/<issue>/driver/config.yaml`;
+  unattended, or event-driven with one non-empty ordered list of distinct,
+  conforming CLIs and an exact model selected by the user for every entry. The
+  first entry is primary and every later entry is a forward-only fallback;
+  there is no fixed fallback limit. Event-driven's ordered binding is a
+  confirmed field of the sole Driver contract, never `driver/config.yaml`;
 - worktree choice and path when using a worktree.
+
+The same kickoff presentation also contains the generic PR choice when any
+effective playbook step requests `cafe.pr.publish`. It is persisted only in
+`issue.yaml` under the existing #467 contract, including its generic
+`confirmation_contract.pr_auto_create` binding. `true` means the feature branch is pushed and the PR is created or
+  updated only after local material and authorization succeed, and the review
+  handoff receives a verified PR URL. `false` means `Publication mode:
+  local-only. No PR URL exists.`
+
+Derive this choice only from effective `steps.*.capability_requests`. A
+custom-named step requesting `cafe.pr.publish` is applicable; a step named `pr`
+without that request is not. A PR-capable contract must reject a missing or
+non-Boolean value. A non-PR-capable contract omits the choice and rejects any
+supplied value, including `false`. Re-resolve applicability and obtain a new
+confirmation whenever the effective playbook changes.
 
 Attached polling applies to proactive `cafe status`, `cafe show`, blackboard,
 artifact, or similar liveness checks. Start the timer when a workflow process
@@ -212,14 +228,15 @@ python3 <skill-dir>/scripts/format_kickoff_contract.py <playbook-id> \
   --catalog-preflight '<bounded all-catalog JSON>' \
   --driver-mode <attached|unattended|event-driven> \
   [--poll-interval-seconds <positive-integer>] \
-  [--event-driver-cli <claude|codex|gemini|copilot|cursor-agent> \
-   --event-driver-model <exact-model>] \
+  [--event-driver <claude|codex|gemini|copilot|cursor-agent>:<exact-model> ...] \
   --risk-factor "<risk factor; repeat as needed>" \
   --assessment-rationale "<repository evidence for nature and scale>" \
   --phase-rationale "<step>=<capability band, profile/risk evidence, and optional fallback justification>" \
+  --proactive-review-decision "<agent-or-hybrid-step>=<required|not_required>:<confirmed rationale>" \
   --effective-locale <locale> \
   --locale-source "<playbook or direct-user-override source>" \
   --repository-content-locale <locale> \
+  [--pr-auto-create <true|false> when cafe.pr.publish is requested] \
   --user-required <steps...> \
   --driver-confirmable <steps...> \
   --worktree .cafe/worktrees/<issue-name>
@@ -263,45 +280,6 @@ worktree choice. It
 re-executes with the Python interpreter that owns `cafe` when the shell
 interpreter lacks CAFE dependencies.
 
-The rendered kickoff expresses the confirmed proposal as:
-
-```yaml
-proactive_review:
-  phase_decisions:
-    - phase: spec
-      decision: required
-      rationale: Public requirements need an additional scope check.
-  confirmed_by: user
-  confirmed_at: <timestamp>
-```
-
-For proactive driver review, assess the issue's scale, ambiguity, durable
-contract impact, blast radius, correction cost, and equivalent later review
-coverage for every agent-executed phase. Prefer the smallest useful set with
-material additional value rather than selecting every phase by convention.
-An all-`not_required` contract is valid. Pass one complete, issue-specific
-decision for every such phase:
-
-```bash
---proactive-review-decision \
-  "<step>=<required|not_required>=<issue-specific rationale>"
-```
-
-The formatter rejects missing, duplicate, unknown, human-only, invalid, or
-rationale-free decisions and renders them in effective playbook order. The
-current Driver performs the review directly only for an executed required
-phase; it must not launch a separate reviewer, request reviewer-specific
-model, cost, fallback, or ordering data, or treat a proactive review result as
-another reviewable phase artifact.
-
-The user confirms the complete proactive-review proposal together with the
-rest of the kickoff contract. Do this before `cafe prepare`, any first workflow
-execution, or use of the proactive-review writer. A prior confirmed contract
-may be reused only when its semantics match exactly. Any phase coverage,
-decision, rationale, or active-playbook-derived change requires a complete
-replacement proposal and explicit user reconfirmation; until then, the earlier
-contract remains authoritative.
-
 If the user already chose values in the current request, render and restate them
 for confirmation rather than asking again.
 
@@ -334,6 +312,7 @@ for confirmation rather than asking again.
   cafe prepare <issue-name> --playbook <playbook-id> --no-interactive \
     --input-method=manual \
     --rigor=medium --spec-template=auto --plan-template=default \
+    <--auto-create-pr|--no-auto-create-pr when cafe.pr.publish is requested> \
     --worktree .cafe/worktrees/<issue-name>
   ```
 
@@ -360,7 +339,7 @@ for confirmation rather than asking again.
 - [ ] Enter the reported worktree before running workflow commands.
 - [ ] Verify that `cafe prepare` persisted the active `playbook_id`, then add
   the confirmation contract, reactive handoff policy,
-  issue assessment, and model-adjustment authority to
+  generic confirmation data required by #467 to
   `.cafe/issues/<issue-name>/issue.yaml` in the active checkout before the first
   workflow execution:
 
@@ -390,52 +369,46 @@ for confirmation rather than asking again.
   confirmation_contract:
     user_required: [spec, plan]
     driver_confirmable: []
+    pr_auto_create: false
     confirmed_by: user
     confirmed_at: 2026-07-16
-  reactive_user_handoffs:
-    need_clarification: user_required
-    need_permission: user_required
-    alignment_checkpoint: driver_resolvable_when_clear
-  issue_assessment:
-    nature: feature/integration
-    scale: medium
-    risk_factors: [public contract, integration coverage]
-  model_adjustment:
-    authority: driver_autonomous
-    confirmed_by: user
-    confirmed_at: 2026-08-13
+  pr:
+    auto_create: false
   ```
 
-  Do not put proactive-review policy in `issue.yaml`. After the complete
-  kickoff proposal is explicitly confirmed, persist its one skill-owned
-  contract before first workflow execution:
+  For a playbook requesting `cafe.pr.publish`, verify that the prepare flag
+  persisted the exact confirmed Boolean at `pr.auto_create` and that #467
+  persists the matching `confirmation_contract.pr_auto_create`. For a playbook without
+  that capability, pass neither flag and verify that neither `pr.auto_create`
+  nor `confirmation_contract.pr_auto_create` exists. A missing, changed, or
+  stale value requires a freshly rendered and confirmed kickoff contract; do
+  not infer local-only from omission.
 
-  ```bash
-  python3 <skill-dir>/scripts/write_proactive_review_contract.py \
-    --issue-name <issue-name> --playbook-id <playbook-id> \
-    --proactive-review-decision "<step>=<required|not_required>=<rationale>" \
-    --confirmed-by user --confirmed-at <timestamp>
-  ```
-
-  The writer creates `.cafe/issues/<issue-name>/driver/proactive_review.yaml`,
-  reuses exact semantic matches without rewriting them, and rejects a changed
-  contract until the complete replacement proposal has been reconfirmed. Run
-  it with `--replacement-confirmed` only for that explicit reconfirmation; the
-  same one file is then replaced. It stores decisions, rationales, and
-  confirmation metadata only—never review status or correction history.
-
-  When the confirmed mode is event-driven, create the separate skill-owned
-  binding after this file is written:
-
-  ```bash
-  python3 <skill-dir>/scripts/workflow_event_callback.py --write-config \
-    --issue-dir .cafe/issues/<issue-name> --cli <cli> --model <exact-model>
-  ```
+  When the confirmed mode is event-driven, launch the trusted callback after
+  this contract is written. It loads the current issue contract immediately
+  before dispatch and derives its ordered CLI/model view in memory. Do not
+  create `driver/config.yaml`: that file is legacy migration evidence only and
+  cannot override a contract-managed callback. Its mutable
+  `dispatch_state.json` records only the active contract digest, sessions, and
+  delivery progress.
 
   Do not put the mode, CLI, model, session, callback, or any driver control
-  setting in `issue.yaml`. When this command is run from a Codex App thread
-  with `cli: codex`, it records that thread only in the skill-owned binding so
-  later callbacks return to the same visible conversation.
+  setting in `issue.yaml`. Confirm that every entry reports `event-driven
+  session-and-dispatch: conforming` before accepting the contract. When the
+  primary is Codex and this command runs from a Codex App thread, the first
+  Codex entry's valid runtime-owned host binding is recorded only in the
+  callback runtime; no fallback inherits it.
+
+  Confirm these two separate lifecycle boundaries explicitly. An unbound entry
+  first receives a bootstrap exactly equivalent to `say "HI"`; Codex, Claude,
+  Gemini, Cursor, and Copilot must each return a provider-created session ID.
+  That ID is persisted in `dispatch_state.json` before the actual callback is
+  sent. An existing acquired session or the first Codex entry's valid
+  runtime-owned host binding is reused without bootstrap. The bootstrap never
+  counts as event delivery or acceptance; only actual callback durable
+  acceptance can stop routing and select the sticky active entry. The provider
+  acknowledgement is bound to the exact event identity in that dispatched
+  invocation. Copilot never receives a caller-selected new-session ID.
 
 - [ ] Install the confirmed ordered phase chains in the active worktree with
   `scripts/write_phase_config.py`, then verify the effective config as described
@@ -449,3 +422,29 @@ for confirmation rather than asking again.
 A legacy `mandate.confirmation_contract.agent_confirmable` value in strategic
 context is only a kickoff proposal. Rename it to `driver_confirmable`, compare it
 with the active playbook, and obtain fresh confirmation before persisting it.
+
+## Durable Driver authority
+
+After the user confirms the complete normalized kickoff, activate exactly one
+versioned contract at `.cafe/issues/<issue>/driver/contract.json` before the
+first Driver entry. The activation command must bind the prepared workflow ID,
+timezone-aware confirmation time, confirmer, and the same semantic proposal
+that was rendered for confirmation. Rendering alone never writes authority.
+That contract contains Driver-owned policy only; generic workflow and PR
+configuration remain in `issue.yaml`.
+
+`proactive_review.phase_decisions` is an ordered policy field in that contract,
+covering every agent or hybrid phase with `required` or `not_required` and an
+issue-specific rationale. It is not a `proactive_review.yaml` sidecar and does
+not schedule review work. `pr.auto_create`, when the effective playbook requests
+`cafe.pr.publish`, remains a matching confirmed Boolean only in the existing
+generic `issue.yaml` contract. It is never copied, projected, or validated by
+the Driver contract.
+
+On resume, Primary and Backup Drivers must first refresh skill-owned preflight
+evidence and validate only the Driver contract before Driver-owned work.
+Generic workflow independently validates its own views when it runs.
+Metadata-only cache churn may rebuild runtime views; material or unknown Driver
+semantic evidence stops for reconfirmation. Session, dispatch, callback
+delivery, active CLI, and PR URL remain runtime state rather than contract
+fields.

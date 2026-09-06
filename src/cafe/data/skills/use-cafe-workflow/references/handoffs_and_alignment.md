@@ -52,12 +52,14 @@ Then route by intent:
 
 ## Route proactive-review findings through existing handoffs
 
-When a current-Driver proactive review finds blockers, first finish the full
-review pass and consolidate every currently observable finding. State both
-missing necessary scope and excessive or unnecessary scope when applicable,
-then return the batch through the responsible phase's existing correction path.
-Do not edit the phase artifact, manufacture a replacement output, or turn the
-review result into a new recursive review target.
+At an existing scheduled confirmation pause after a required phase, finish the
+current-Driver review before completing a `driver_confirmable` task or relaying
+a `user_required` answer that would resume the workflow. When the review finds
+blockers, consolidate every currently observable finding. State both missing
+necessary scope and excessive or unnecessary scope when applicable, then return
+the batch through the responsible phase's existing correction path. Do not edit
+the phase artifact, manufacture a replacement output, or turn the review result
+into a new recursive review target.
 
 If the existing path requires a clarification, permission, capability, scope
 choice, strategic decision, or other user-owned authority, stop and present the
@@ -202,6 +204,13 @@ payload; runtime accepts plain text only for a declared `feedback` schema.
 Update a strategic document only when the user explicitly confirms the new
 strategic content. A driver-authored draft remains `draft` or `missing` unless
 it is a mechanical copy of already confirmed material.
+
+Driver takeover does not transfer conversation or provider-session authority.
+The replacement Driver reads the same validated issue contract, refreshes
+skill-owned evidence, and preserves every user confirmation, HumanTask,
+permission, mandate, model-adjustment, proactive-review, and generic PR
+publication boundary. If that proof is material, ambiguous, stale, malformed,
+or belongs to another workflow, stop for the documented reconfirmation path.
 
 ### Legacy or custom core checkpoints
 

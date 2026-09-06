@@ -3,7 +3,7 @@
 import os
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, Callable, List, Mapping, Optional, Sequence, Tuple
 
 from cafe.core.types import AgentConfig, PermissionDenial, TokenUsage
 
@@ -120,6 +120,104 @@ class AbstractCLI(ABC):
         """
         # Default implementation: return empty string, indicating CLI will auto-create session
         return ""
+
+    @property
+    def event_driver_conforming(self) -> bool:
+        """Whether this adapter has verified event-driver evidence parsing."""
+        return False
+
+    def build_event_driver_command(
+        self,
+        prompt: str,
+        allowed_tools: Optional[List[str]] = None,
+        allowed_directories: Optional[List[str]] = None,
+    ) -> List[str]:
+        """Build a provider command for callback-only structured observation."""
+        return self.build_command(prompt, allowed_tools, allowed_directories)
+
+    def extract_event_driver_session(
+        self, records: Sequence[Mapping[str, Any]]
+    ) -> Optional[str]:
+        """Return a provider-created session only from adapter-verified evidence."""
+        return None
+
+    def accepts_event_driver_callback(
+        self,
+        records: Sequence[Mapping[str, Any]],
+        *,
+        session_id: str,
+        event_id: str,
+    ) -> bool:
+        """Recognize durable callback acceptance for one exact resumed session."""
+        return False
+
+    def _verified_event_driver_acceptance(
+        self,
+        records: Sequence[Mapping[str, Any]],
+        *,
+        session_matches: Callable[[Mapping[str, Any]], bool],
+        acceptance_matches: Callable[[Mapping[str, Any]], bool],
+        session_field: str,
+        session_id: str,
+        event_id: str,
+    ) -> bool:
+        """Verify a provider turn acknowledgement after exact-session evidence."""
+        if not event_id.strip():
+            return False
+        observed = self._verified_event_driver_session(
+            records,
+            matches=session_matches,
+            field=session_field,
+        )
+        if observed != session_id:
+            return False
+
+        session_observed = False
+        for record in records:
+            if not isinstance(record, Mapping):
+                continue
+            if session_matches(record):
+                session_observed = True
+                continue
+            if session_observed and acceptance_matches(record):
+                return True
+        return False
+
+    def _event_driver_record_contains_text(self, value: Any, expected: str) -> bool:
+        """Recognize an exact event token inside a provider-owned user record."""
+        if isinstance(value, str):
+            return expected in value
+        if isinstance(value, Mapping):
+            return any(
+                self._event_driver_record_contains_text(item, expected)
+                for item in value.values()
+            )
+        if isinstance(value, Sequence):
+            return any(
+                self._event_driver_record_contains_text(item, expected) for item in value
+            )
+        return False
+
+    def _verified_event_driver_session(
+        self,
+        records: Sequence[Mapping[str, Any]],
+        *,
+        matches: Callable[[Mapping[str, Any]], bool],
+        field: str,
+    ) -> Optional[str]:
+        """Extract one non-conflicting session from exact provider record shapes."""
+        session_ids: set[str] = set()
+        for record in records:
+            if not isinstance(record, Mapping) or not matches(record):
+                continue
+            model = record.get("model")
+            if model is not None and model != self.config.model:
+                return None
+            session_id = record.get(field)
+            if not isinstance(session_id, str) or not session_id.strip():
+                return None
+            session_ids.add(session_id.strip())
+        return next(iter(session_ids)) if len(session_ids) == 1 else None
 
     def prepare_project_workspace(self, project_root: Path) -> None:
         """Prepare CLI-specific project workspace before execution."""

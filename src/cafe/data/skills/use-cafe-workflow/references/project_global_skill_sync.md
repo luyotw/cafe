@@ -43,6 +43,16 @@ applicable, comparison token, effective catalog digests, decision, and any
 post-change evidence in the active issue's `preflight` mapping. Reuse a prior
 decision only when the complete bound token is unchanged.
 
+A changed comparison token invalidates its cached decision, but does not by
+itself show a semantic change or require kickoff reconfirmation. Re-run the
+check, handle only any separately scoped action it reports, and perform a
+bounded semantic comparison of the effective confirmed contract and execution
+behavior. Reconfirm only for a contract or observable-behavior change, or a
+material runtime, dependency, or permission difference. Verified metadata-only
+churn such as paths, timestamps, caches, or labels may continue after recording
+the classification and evidence. If the difference cannot be shown to be
+non-semantic, fail closed.
+
 ## Apply only an exact approval
 
 Use the token and selection the user approved:
@@ -61,8 +71,32 @@ publication flows only from the effective project view to matching Global
 paths; it does not modify project content or CLI-native helper-skill installs.
 `cafe skill sync-global` remains a separate helper installation command.
 
+## Helper installation and publication
+
+Observational startup paths (`status`, `show`, checks, lists, help, and workflow
+dry runs) do not write global helper directories or synchronization metadata.
+Eligible mutating commands may install only missing helpers. Released packages
+use their packaged bundle, while linked Git worktrees resolve the canonical main
+checkout bundle; an existing directory or symlink is never repaired or replaced
+by startup.
+
+Updating an existing CLI-native helper requires an explicit
+`cafe skill sync-global`. That command reports the exact resolved bundled source
+even when every destination is unchanged, and reports installed, updated,
+unchanged, or failed status per destination. Feature-worktree content is not
+published globally unless the user deliberately invokes this separate command.
+Catalog approval does not grant helper-publication approval.
+
 After an approved change, re-run both read-only checks and record the fresh
 results. Compare the effective workflow digests with the pre-change evidence.
-If effective behavior changed, re-render and reconfirm the kickoff contract
-before preparation, start, or resume. If it did not change, retain the
-post-change evidence and continue under the already confirmed contract.
+Digest changes trigger the bounded semantic comparison above, not an automatic
+confirmation stop. When it finds a material difference, re-render and reconfirm
+the kickoff contract; otherwise retain the post-change evidence and continue
+under the confirmed contract.
+
+For a Driver-managed issue, that confirmed contract is the one issue-scoped
+`driver/contract.json` authority. Cache files, raw source digests, labels,
+timestamps, and comparison tokens are diagnostics: an identity change makes
+them stale and requires fresh checks, but does not by itself rewrite the
+contract or force reconfirmation. Only a proved semantic/material difference
+does so; incomplete evidence fails closed.

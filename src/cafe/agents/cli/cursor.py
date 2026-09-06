@@ -161,3 +161,27 @@ class CursorCLI(AbstractCLI):
             if isinstance(session_id, str) and session_id.strip():
                 return session_id
         return None
+
+    @property
+    def event_driver_conforming(self) -> bool:
+        return True
+
+    def extract_event_driver_session(self, records) -> Optional[str]:
+        return self._verified_event_driver_session(
+            records,
+            matches=lambda record: record.get("type") == "system"
+            and record.get("subtype") == "init",
+            field="session_id",
+        )
+
+    def accepts_event_driver_callback(self, records, *, session_id: str, event_id: str) -> bool:
+        return self._verified_event_driver_acceptance(
+            records,
+            session_matches=lambda record: record.get("type") == "system"
+            and record.get("subtype") == "init",
+            acceptance_matches=lambda record: record.get("type") == "user"
+            and self._event_driver_record_contains_text(record.get("message"), event_id),
+            session_field="session_id",
+            session_id=session_id,
+            event_id=event_id,
+        )

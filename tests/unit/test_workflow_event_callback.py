@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -68,13 +69,58 @@ def test_callback_event_envelope_is_one_way_and_bounded(tmp_path: Path) -> None:
         {"step": "spec", "status_code": "ok", "unbounded": {"secret": "nope"}},
     )
 
-    assert captured == {
+    assert captured.items() >= {
         "workflow_id": runtime.blackboard.workflow_id,
         "issue": "event-envelope",
         "event_type": "phase_terminal",
         "step": "spec",
         "status_code": "ok",
+    }.items()
+    assert set(captured) == {
+        "workflow_id",
+        "issue",
+        "event_type",
+        "event_id",
+        "sequence",
+        "occurred_at",
+        "step",
+        "status_code",
     }
+
+    persisted = json.loads((runtime.issue_dir / "blackboard.json").read_text())
+    durable = next(
+        item
+        for item in persisted["events"]
+        if item["event_type"] == "workflow_event_callback_enqueued"
+    )
+    assert captured["event_id"] == durable["data"]["event_id"]
+    assert captured["sequence"] == durable["data"]["sequence"] == 1
+    assert captured["occurred_at"] == durable["timestamp"]
+
+
+def test_callback_event_identity_is_monotonic_and_reused_on_replay(tmp_path: Path) -> None:
+    events: list[dict[str, object]] = []
+
+    from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=tmp_path / ".cafe" / "issues" / "event-replay",
+        playbook={"playbook": {"id": "test"}, "steps": {"spec": {}}},
+        executor=lambda *_args: None,
+        workflow_event_callback=lambda event: events.append(dict(event)),
+    )
+
+    runtime._dispatch_workflow_event("phase_terminal", {"step": "spec", "status_code": "one"})
+    runtime._dispatch_workflow_event("phase_terminal", {"step": "spec", "status_code": "two"})
+    runtime._dispatch_workflow_event("phase_terminal", events[0])
+
+    assert [event["sequence"] for event in events] == [1, 2, 1]
+    assert events[2]["event_id"] == events[0]["event_id"]
+    persisted = json.loads((runtime.issue_dir / "blackboard.json").read_text())
+    assert sum(
+        item["event_type"] == "workflow_event_callback_enqueued"
+        for item in persisted["events"]
+    ) == 2
 
 
 def test_only_builtin_skill_callbacks_are_trusted(tmp_path: Path) -> None:

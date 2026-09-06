@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
-metadata: {version: 1.31.0}
+metadata: {version: 1.31.1}
 ---
 
 # Use CAFE Workflow
@@ -32,10 +32,16 @@ If more than one situation applies, read every listed reference before acting; d
 
 ## Core invariants
 
-- The complete kickoff contract is the first blocking gate. Do not run `cafe prepare`, mutate the repository, or execute the first workflow phase before the user confirms it.
+- The complete kickoff contract is the first blocking gate. Do not run `cafe
+  prepare`, mutate the repository, or execute the first workflow phase before the user confirms it.
 - Resolve a playbook from explicit or durable authority; otherwise use `references/playbook_selection.md` to enumerate every effective candidate, filter by graph sufficiency, and compare valid applicability contracts. Record why the closest alternatives are insufficient. Never silently apply a common example or builtin default. Keep playbook selection issue-owned. Never write or update a playbook default in `.cafe/config.yaml` or `.cafe/strategic_context.yaml`; after kickoff confirmation, persist the selected `playbook_id` only in `.cafe/issues/<issue-name>/issue.yaml`.
-- Assess issue nature, scale, and risk before kickoff. Include one exact primary model with user-approved fallbacks and adjustment authority; resolve profiles, classify capability, and record a phase-specific rationale without built-in providers or models.
-- During that assessment, decide `required` or `not_required` proactive review for every agent-executed phase. Prefer the smallest useful set, give each an issue-specific rationale, and obtain complete user confirmation before preparation, execution, or persistence.
+- Assess the issue nature, scale, and risk before kickoff. Include one exact
+  primary model with any user-approved fallbacks per phase and model-adjustment
+  authority in the contract. Resolve provider-neutral phase execution profiles from the active
+  playbook skills, classify the remaining work into a capability band, and
+  record a phase-specific selection rationale; no provider or model is built
+  into this driver skill.
+- During that assessment, decide `required` or `not_required` proactive review for every agent-executed phase. Only a phase followed by an existing scheduled confirmation pause before workflow advancement is eligible for `required`; use `not_required` when the workflow would advance immediately. Prefer the smallest useful eligible set, give each an issue-specific rationale, and obtain complete user confirmation before preparation, execution, or persistence.
 - Resolve the effective conversation locale from a direct user override first,
   then a reliably inferred user preference from the current thread, and finally
   the active playbook. Use that locale for every driver-to-user message.
@@ -52,12 +58,8 @@ If more than one situation applies, read every listed reference before acting; d
 - Validate issue-decomposition assessments before confirming spec or plan;
   coordinate any authorized split through existing authority boundaries and
   reconstruct linked-work position from durable records.
-- Resolve exactly one workflow operating mode in the confirmed kickoff: attached
-  with positive polling, unattended background execution, or event-driven
-  background execution with one supported CLI and the user's explicit exact
-  model. Store an event-driven binding only under the active issue's
-  `.cafe/issues/<issue>/driver/`; CAFE core and `issue.yaml` do not contain
-  driver-mode policy.
+- Resolve exactly one workflow operating mode in the confirmed kickoff: attached with positive polling, unattended background execution, or event-driven background execution with a non-empty ordered chain of distinct conforming CLIs and one explicit exact model per entry. Store it only in `.cafe/issues/<issue>/driver/contract.json`; CAFE core and `issue.yaml` do not contain Driver-mode policy.
+- For a Driver-managed launch, validate Driver-owned entry authority after bounded preflight, then invoke generic CAFE through its existing command. The validation does not read, project, bind, or authorize `issue.yaml`, playbook, phase, or PR configuration; those remain under their generic contracts. Event callback dispatch derives only its CLI/model order from the Driver contract; mutable dispatch state stores only digest and delivery progress. Session acquisition and actual callback durable acceptance are separate boundaries: every unbound entry bootstraps with a request exactly equivalent to `say "HI"`, persists the provider-created session ID before actual delivery, and never counts bootstrap as event delivery or acceptance. Bind the provider acknowledgement to the exact callback event identity; an ambiguous outcome stops forward routing.
 - Use `cafe workflow --execute --mute-agent-output` when the invocation needs
   direct workflow controls such as `--start-step` or a manual diagnostic
   `--single-step`. After `cafe prepare`, `cafe make` is also a valid launcher;
@@ -105,7 +107,6 @@ If more than one situation applies, read every listed reference before acting; d
   primary evidence, configured fallback smoke evidence, and adjustment authority.
 - [ ] Assess every agent-executed phase for proactive review and render one `required` or `not_required` decision and rationale for each.
 - [ ] Present the deterministic kickoff table and obtain explicit confirmation.
-- [ ] Persist the user-confirmed contract in its skill-owned `driver/` area.
 - [ ] Record the confirmed operating mode. For event-driven, create its exact
   per-issue callback binding with the bundled callback script before launch.
 
@@ -122,7 +123,7 @@ If more than one situation applies, read every listed reference before acting; d
 - [ ] In a user-facing driver turn, relay only an explicit mandatory/user-required HumanTask answer with `cafe task complete --no-resume --json`, verify it durably, then resume using the confirmed mode; a confirmed `driver_confirmable` gate may be verified and completed by a driver, but detached callbacks cannot collect or infer user answers.
 - [ ] Timestamp proactive polls and user updates; handle substantive output, completion, errors, and HumanTasks immediately.
 - [ ] At each contract-defined pause or completion, inspect new phase evidence and revise only remaining model chains within confirmed authority.
-- [ ] At a valid observation point for each executed required phase, the current Driver reviews its durable output directly, routes consolidated blockers through the existing correction path, and does not launch a separate reviewer or recursively review the result.
+- [ ] At the existing scheduled confirmation pause after each executed required phase, the current Driver reviews its durable output before completing or relaying the confirmation, routes consolidated blockers through the existing correction path, and does not launch a separate reviewer or recursively review the result.
 - [ ] When CAFE pauses, classify the handoff before supplying any input.
 - [ ] When behavior is wrong, stop normal execution and use the bounded
   diagnosis reference.

@@ -103,7 +103,9 @@ complete kickoff confirmation approve it.
 Reassess before the first execution if issue facts or repository instructions
 change. Any playbook change requires a freshly rendered and confirmed contract.
 
-After the complete kickoff is confirmed, persist the selected `playbook_id`
-only in `.cafe/issues/<issue-name>/issue.yaml`. Never persist it in
-`.cafe/config.yaml` or `.cafe/strategic_context.yaml`, even when the same
-playbook has been selected for several issues.
+After the complete kickoff is confirmed, persist the effective playbook in
+`.cafe/issues/<issue-name>/issue.yaml` under its generic lifecycle, while the
+separate Driver-owned subset is persisted in `driver/contract.json`. Neither
+authority duplicates the other. Never persist the effective issue contract in `.cafe/config.yaml` or
+`.cafe/strategic_context.yaml`, even when the same playbook has been selected
+for several issues.

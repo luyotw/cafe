@@ -87,7 +87,7 @@ class TestPrepareCommand:
 
     def test_prepare_with_issue_name_argument(self, temp_repo_dir, mock_git_ops):
         """測試使用 CLI 參數指定 issue name"""
-        result = runner.invoke(app, ["prepare", "test-issue"])
+        result = runner.invoke(app, ["prepare", "test-issue", "--no-auto-create-pr"])
 
         assert result.exit_code == 0
         assert "Successfully prepared issue: test-issue" in result.stdout
@@ -135,7 +135,7 @@ class TestPrepareCommand:
         mock_phase_list.return_value = "1. Manual input"
         mock_template_list.return_value = "default (system default)"  # template
 
-        result = runner.invoke(app, ["prepare"])
+        result = runner.invoke(app, ["prepare", "--auto-create-pr"])
 
         assert result.exit_code == 0
         assert "Successfully prepared issue: my-feature" in result.stdout
@@ -146,7 +146,9 @@ class TestPrepareCommand:
 
     def test_prepare_with_custom_base_branch(self, temp_repo_dir, mock_git_ops):
         """測試指定自訂 base branch"""
-        result = runner.invoke(app, ["prepare", "feature-x", "--base", "develop"])
+        result = runner.invoke(
+            app, ["prepare", "feature-x", "--base", "develop", "--no-auto-create-pr"]
+        )
 
         assert result.exit_code == 0
         assert "Base branch: develop" in result.stdout
@@ -165,7 +167,9 @@ class TestPrepareCommand:
         # Mock branch exists
         mock_git_ops.branch_exists.return_value = True
 
-        result = runner.invoke(app, ["prepare", "existing-issue"])
+        result = runner.invoke(
+            app, ["prepare", "existing-issue", "--no-auto-create-pr"]
+        )
 
         assert result.exit_code == 0
         assert "already exists, switching to it" in result.stdout
@@ -181,7 +185,7 @@ class TestPrepareCommand:
         mock_prompt_confirm.return_value = False  # User cancels
 
         # User cancels when prompted
-        result = runner.invoke(app, ["prepare", "test-issue"])
+        result = runner.invoke(app, ["prepare", "test-issue", "--no-auto-create-pr"])
 
         assert result.exit_code == 0
         assert "Warning: You have uncommitted changes" in result.stdout
@@ -199,7 +203,7 @@ class TestPrepareCommand:
         mock_prompt_confirm.return_value = True  # User continues
 
         # User continues when prompted
-        result = runner.invoke(app, ["prepare", "test-issue"])
+        result = runner.invoke(app, ["prepare", "test-issue", "--no-auto-create-pr"])
 
         assert result.exit_code == 0
         assert "Warning: You have uncommitted changes" in result.stdout
@@ -214,7 +218,9 @@ class TestPrepareCommand:
         """測試使用 --no-check 跳過 uncommitted changes 檢查"""
         mock_git_ops.has_uncommitted_changes.return_value = True
 
-        result = runner.invoke(app, ["prepare", "test-issue", "--no-check"])
+        result = runner.invoke(
+            app, ["prepare", "test-issue", "--no-check", "--no-auto-create-pr"]
+        )
 
         assert result.exit_code == 0
         assert "Successfully prepared issue: test-issue" in result.stdout
@@ -239,6 +245,7 @@ class TestPrepareCommand:
                     "--rigor=medium",
                     "--spec-template=auto",
                     "--plan-template=default",
+                    "--no-auto-create-pr",
                 ],
             )
 
@@ -265,7 +272,9 @@ class TestPrepareCommand:
             mock_git_operations.is_repository.return_value = False
             mock_git_operations.initialize_repository.return_value = initialized
 
-            result = runner.invoke(app, ["prepare", "test-issue"])
+            result = runner.invoke(
+                app, ["prepare", "test-issue", "--no-auto-create-pr"]
+            )
 
         assert result.exit_code == 0
         assert "does not create or upload anything to GitHub" in result.stdout
@@ -282,7 +291,9 @@ class TestPrepareCommand:
         ):
             mock_git_operations.is_repository.return_value = False
 
-            result = runner.invoke(app, ["prepare", "test-issue"])
+            result = runner.invoke(
+                app, ["prepare", "test-issue", "--no-auto-create-pr"]
+            )
 
         assert result.exit_code == 1
         assert "Git was not initialized" in result.stdout
@@ -314,6 +325,7 @@ class TestPrepareCommand:
                     "--rigor=medium",
                     "--spec-template=auto",
                     "--plan-template=default",
+                    "--no-auto-create-pr",
                 ],
             )
 
@@ -335,7 +347,14 @@ class TestPrepareCommand:
 
             result = runner.invoke(
                 app,
-                ["prepare", "test-issue", "--init-git", "--worktree", "worktrees/test-issue"],
+                [
+                    "prepare",
+                    "test-issue",
+                    "--init-git",
+                    "--worktree",
+                    "worktrees/test-issue",
+                    "--no-auto-create-pr",
+                ],
             )
 
         assert result.exit_code == 1
@@ -358,7 +377,9 @@ class TestPrepareCommand:
             mock_git_operations.is_repository.return_value = True
             mock_git_operations.return_value = git
 
-            result = runner.invoke(app, ["prepare", "second-task"])
+            result = runner.invoke(
+                app, ["prepare", "second-task", "--no-auto-create-pr"]
+            )
 
         assert result.exit_code == 0
         assert "Warning: You have uncommitted changes" in result.stdout
@@ -368,7 +389,7 @@ class TestPrepareCommand:
 
     def test_prepare_creates_proper_directory_structure(self, temp_repo_dir, mock_git_ops):
         """測試創建正確目錄結構"""
-        result = runner.invoke(app, ["prepare", "my-issue"])
+        result = runner.invoke(app, ["prepare", "my-issue", "--no-auto-create-pr"])
 
         assert result.exit_code == 0
 
@@ -382,7 +403,7 @@ class TestPrepareCommand:
 
     def test_prepare_config_yaml_format(self, temp_repo_dir, mock_git_ops):
         """測試 config.yaml 格式正確"""
-        result = runner.invoke(app, ["prepare", "format-test"])
+        result = runner.invoke(app, ["prepare", "format-test", "--no-auto-create-pr"])
 
         assert result.exit_code == 0
 
@@ -398,21 +419,26 @@ class TestPrepareCommand:
             # Parse YAML
             config_data = yaml.safe_load(content)
             assert isinstance(config_data, dict)
-            assert len(config_data) == 3  # base_branch, feature_branch, playbook_id
+            assert len(config_data) == 4
             assert config_data["playbook_id"] == "standard"
+            assert config_data["pr"] == {"auto_create": False}
             assert "auto" not in config_data
 
     def test_prepare_idempotent(self, temp_repo_dir, mock_git_ops):
         """測試重複執行 prepare 是否安全（冪等性）"""
         # First execution
-        result1 = runner.invoke(app, ["prepare", "idempotent-test"])
+        result1 = runner.invoke(
+            app, ["prepare", "idempotent-test", "--no-auto-create-pr"]
+        )
         assert result1.exit_code == 0
 
         # Mock branch now exists
         mock_git_ops.branch_exists.return_value = True
 
         # Second execution
-        result2 = runner.invoke(app, ["prepare", "idempotent-test"])
+        result2 = runner.invoke(
+            app, ["prepare", "idempotent-test", "--no-auto-create-pr"]
+        )
         assert result2.exit_code == 0
         assert "already exists" in result2.stdout
 
@@ -429,7 +455,16 @@ class TestPrepareCommand:
         ]
 
         for issue_name, base_branch in test_cases:
-            result = runner.invoke(app, ["prepare", f"issue-{issue_name}", "--base", base_branch])
+            result = runner.invoke(
+                app,
+                [
+                    "prepare",
+                    f"issue-{issue_name}",
+                    "--base",
+                    base_branch,
+                    "--no-auto-create-pr",
+                ],
+            )
 
             assert result.exit_code == 0
             assert f"Base branch: {base_branch}" in result.stdout
@@ -445,7 +480,7 @@ class TestPrepareCommand:
         # Simulate: user is already on the feature branch
         mock_git_ops.get_current_branch.return_value = "my-feature"
 
-        result = runner.invoke(app, ["prepare", "my-feature"])
+        result = runner.invoke(app, ["prepare", "my-feature", "--no-auto-create-pr"])
 
         assert result.exit_code == 1
         assert "base_branch and feature_branch are both" in result.stdout
@@ -460,7 +495,9 @@ class TestPrepareCommand:
         """Test that --base flag works even when on the feature branch."""
         mock_git_ops.get_current_branch.return_value = "my-feature"
 
-        result = runner.invoke(app, ["prepare", "my-feature", "--base", "main"])
+        result = runner.invoke(
+            app, ["prepare", "my-feature", "--base", "main", "--no-auto-create-pr"]
+        )
 
         assert result.exit_code == 0
         assert "Base branch: main" in result.stdout
@@ -509,7 +546,10 @@ class TestPrepareCommandWorktree:
     def test_prepare_with_worktree_non_interactive(self, temp_repo_dir, mock_git_ops):
         """測試使用 --worktree 參數在非互動模式建立 worktree"""
         worktree_path = "worktrees/test-issue"
-        result = runner.invoke(app, ["prepare", "test-issue", "--worktree", worktree_path])
+        result = runner.invoke(
+            app,
+            ["prepare", "test-issue", "--worktree", worktree_path, "--no-auto-create-pr"],
+        )
 
         assert result.exit_code == 0
         # 驗證呼叫 create_worktree 而非 create_branch
@@ -524,7 +564,7 @@ class TestPrepareCommandWorktree:
 
     def test_prepare_without_worktree_uses_branch(self, temp_repo_dir, mock_git_ops):
         """測試不使用 --worktree 時應建立分支"""
-        result = runner.invoke(app, ["prepare", "normal-issue"])
+        result = runner.invoke(app, ["prepare", "normal-issue", "--no-auto-create-pr"])
 
         assert result.exit_code == 0
         # 驗證呼叫 create_branch 而非 create_worktree
@@ -544,7 +584,8 @@ class TestPrepareCommandWorktree:
         result = runner.invoke(app, [
             "prepare", "test-branch",
             "--worktree", worktree_path,
-            "--base", base_branch
+            "--base", base_branch,
+            "--no-auto-create-pr",
         ])
 
         assert result.exit_code == 0
@@ -569,7 +610,7 @@ class TestPrepareCommandWorktree:
         mock_phase_list.return_value = "1. Manual input"
         mock_template_list.return_value = "default (system default)"
 
-        result = runner.invoke(app, ["prepare"])
+        result = runner.invoke(app, ["prepare", "--auto-create-pr"])
 
         assert result.exit_code == 0
         # 驗證有詢問 worktree 相關問題
@@ -602,7 +643,7 @@ class TestPrepareCommandWorktree:
         mock_phase_list.return_value = "1. Manual input"
         mock_template_list.return_value = "default (system default)"
 
-        result = runner.invoke(app, ["prepare"])
+        result = runner.invoke(app, ["prepare", "--auto-create-pr"])
 
         assert result.exit_code == 0
         # 驗證呼叫 create_branch 而非 create_worktree
@@ -634,7 +675,16 @@ class TestPrepareCommandWorktree:
         # Mock create_worktree 為空操作（worktree 目錄已存在）
         mock_git_ops.create_worktree.return_value = None
 
-        result = runner.invoke(app, ["prepare", "test-issue", "--worktree", str(worktree_path)])
+        result = runner.invoke(
+            app,
+            [
+                "prepare",
+                "test-issue",
+                "--worktree",
+                str(worktree_path),
+                "--no-auto-create-pr",
+            ],
+        )
 
         assert result.exit_code == 0
 
@@ -752,7 +802,7 @@ class TestPrepareCommandWorktree:
         mock_phase_list.return_value = "1. Manual input"
         mock_template_list.return_value = "default (system default)"
 
-        result = runner.invoke(app, ["prepare"])
+        result = runner.invoke(app, ["prepare", "--no-auto-create-pr"])
 
         assert result.exit_code == 0
 
@@ -762,17 +812,18 @@ class TestPrepareCommandWorktree:
             assert "pr" in config_data
             assert config_data["pr"]["auto_create"] is False
 
-    def test_prepare_non_interactive_does_not_save_pr_config(self, temp_repo_dir, mock_git_ops):
-        """測試非互動模式不儲存 PR 配置"""
-        result = runner.invoke(app, ["prepare", "test-issue"])
+    def test_prepare_with_issue_argument_persists_local_only_choice(
+        self, temp_repo_dir, mock_git_ops
+    ):
+        """測試 issue argument 路徑原樣保存明確的 local-only 選擇。"""
+        result = runner.invoke(app, ["prepare", "test-issue", "--no-auto-create-pr"])
 
         assert result.exit_code == 0
 
         config_file = temp_repo_dir / ".cafe" / "issues" / "test-issue" / "issue.yaml"
         with open(config_file) as f:
             config_data = yaml.safe_load(f)
-            # Non-interactive mode should not have pr config
-            assert "pr" not in config_data
+            assert config_data["pr"] == {"auto_create": False}
 
     def test_prepare_worktree_overwrites_copied_active_issue_marker(self, temp_repo_dir, mock_git_ops):
         """Worktree prepare overwrites a copied stale active_issue marker."""
@@ -783,7 +834,13 @@ class TestPrepareCommandWorktree:
 
         result = runner.invoke(
             app,
-            ["prepare", "new-issue", "--worktree", str(worktree_path)],
+            [
+                "prepare",
+                "new-issue",
+                "--worktree",
+                str(worktree_path),
+                "--no-auto-create-pr",
+            ],
         )
 
         assert result.exit_code == 0
@@ -794,7 +851,13 @@ class TestPrepareCommandWorktree:
         # Execute prepare with worktree mode (non-interactive)
         result = runner.invoke(
             app,
-            ["prepare", "test-issue", "--worktree", ".cafe/worktrees/test-issue"]
+            [
+                "prepare",
+                "test-issue",
+                "--worktree",
+                ".cafe/worktrees/test-issue",
+                "--no-auto-create-pr",
+            ]
         )
 
         assert result.exit_code == 0
@@ -826,7 +889,10 @@ class TestPrepareNonInteractiveMode:
     def test_non_interactive_missing_required_input_method(self, temp_repo_dir, mock_git_ops):
         """Test 1.3: 驗證 non-interactive 模式下缺少必填參數時顯示錯誤"""
         # 測試場景：--no-interactive 但缺少 --input-method
-        result = runner.invoke(app, ["prepare", "test-issue", "--no-interactive"])
+        result = runner.invoke(
+            app,
+            ["prepare", "test-issue", "--no-interactive", "--no-auto-create-pr"],
+        )
 
         assert result.exit_code == 1
         assert "Error" in result.stdout
@@ -838,7 +904,8 @@ class TestPrepareNonInteractiveMode:
         result = runner.invoke(app, [
             "prepare", "test-issue",
             "--no-interactive",
-            "--input-method=github"
+            "--input-method=github",
+            "--no-auto-create-pr",
         ])
 
         assert result.exit_code == 1
@@ -851,7 +918,8 @@ class TestPrepareNonInteractiveMode:
         result = runner.invoke(app, [
             "prepare", "test-issue",
             "--no-interactive",
-            "--input-method=manual"
+            "--input-method=manual",
+            "--no-auto-create-pr",
         ])
 
         assert result.exit_code == 0
@@ -878,7 +946,8 @@ class TestPrepareSpecTemplateParameter:
             "--no-interactive",
             "--input-method=manual",
             "--spec-template=simple",
-            "--plan-template=bug"
+            "--plan-template=bug",
+            "--no-auto-create-pr",
         ])
 
         assert result.exit_code == 0
@@ -894,7 +963,8 @@ class TestPrepareSpecTemplateParameter:
         result = runner.invoke(app, [
             "prepare", "test-issue",
             "--no-interactive",
-            "--input-method=manual"
+            "--input-method=manual",
+            "--no-auto-create-pr",
         ])
 
         assert result.exit_code == 0
@@ -930,7 +1000,7 @@ class TestPrepareCommandSetupMode:
         # Setup mode 選擇 -> Quick setup (第二個 prompt)
         mock_cli_list.return_value = "Quick setup (use recommended defaults)"
         
-        result = runner.invoke(app, ["prepare"])
+        result = runner.invoke(app, ["prepare", "--auto-create-pr"])
 
         assert result.exit_code == 0
         
@@ -965,7 +1035,8 @@ class TestPrepareCommandSetupMode:
             "--input-method=manual",
             "--rigor=low",
             "--spec-template=auto",
-            "--plan-template=default"
+            "--plan-template=default",
+            "--no-auto-create-pr",
         ])
 
         assert result.exit_code == 0
@@ -981,7 +1052,9 @@ class TestPrepareCommandSetupMode:
 
     def test_issue_name_argument_skips_setup_mode_prompt(self, temp_repo_dir, mock_git_ops):
         """測試提供 issue name 參數時不顯示設定模式提示（向後相容）"""
-        result = runner.invoke(app, ["prepare", "backward-compat-test"])
+        result = runner.invoke(
+            app, ["prepare", "backward-compat-test", "--no-auto-create-pr"]
+        )
 
         assert result.exit_code == 0
         
@@ -994,7 +1067,7 @@ class TestPrepareCommandSetupMode:
             # 舊行為：不儲存 spec/plan 設定
             assert "spec" not in config_data
             assert "plan" not in config_data
-            assert "pr" not in config_data
+            assert config_data["pr"] == {"auto_create": False}
 
     @patch("cafe.ui.phase_prompts.prompt_text")
     @patch("cafe.ui.phase_prompts.GitHubOps")
@@ -1024,7 +1097,7 @@ class TestPrepareCommandSetupMode:
         # Setup mode 選擇 -> Quick setup (第二個 prompt，在輸入 Issue ID 後)
         mock_cli_list.return_value = "Quick setup (use recommended defaults)"
         
-        result = runner.invoke(app, ["prepare"])
+        result = runner.invoke(app, ["prepare", "--auto-create-pr"])
         
         assert result.exit_code == 0
         
@@ -1064,7 +1137,7 @@ class TestPrepareCommandPostPrTodoList:
     @patch("cafe.ui.phase_prompts.prompt_list")
     @patch("cafe.ui.cli.prompt_list")
     @patch("cafe.ui.cli.prompt_text")
-    def test_quick_setup_sets_post_todo_list_true(
+    def test_quick_setup_persists_explicit_post_todo_list_true(
         self,
         mock_prompt_text_cli,
         mock_cli_list,
@@ -1078,7 +1151,7 @@ class TestPrepareCommandPostPrTodoList:
         temp_repo_dir,
         mock_git_ops,
     ):
-        """Test 3.1: Quick setup モードでは pr_config.post_todo_list が True に設定される。"""
+        """Test 3.1: Quick setup preserves an explicit PR todo-list choice."""
         mock_github_ops = MagicMock()
         MockGitHubOps_cli.return_value = mock_github_ops
         MockGitHubOps_phase.return_value = mock_github_ops
@@ -1091,7 +1164,9 @@ class TestPrepareCommandPostPrTodoList:
         mock_phase_list.return_value = "2. GitHub issue"
         mock_cli_list.return_value = "Quick setup (use recommended defaults)"
 
-        result = runner.invoke(app, ["prepare"])
+        result = runner.invoke(
+            app, ["prepare", "--auto-create-pr", "--post-pr-todo-list"]
+        )
 
         assert result.exit_code == 0
 
@@ -1139,7 +1214,7 @@ class TestPrepareCommandPostPrTodoList:
         mock_cli_list.side_effect = ["Custom configuration", "Medium"]
         mock_template_list.return_value = "default (system default)"
 
-        result = runner.invoke(app, ["prepare"])
+        result = runner.invoke(app, ["prepare", "--auto-create-pr"])
 
         assert result.exit_code == 0
 
@@ -1188,7 +1263,7 @@ class TestPrepareCommandPostPrTodoList:
         mock_cli_list.side_effect = ["Custom configuration", "Medium"]
         mock_template_list.return_value = "default (system default)"
 
-        result = runner.invoke(app, ["prepare"])
+        result = runner.invoke(app, ["prepare", "--no-auto-create-pr"])
 
         assert result.exit_code == 0
 

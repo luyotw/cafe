@@ -279,12 +279,36 @@ def test_build_prompt_pr_phase_appends_publish_ordering_when_handoff_present(tmp
             "blackboard_path": ".cafe/issues/demo/blackboard.json",
             "handoff_summary": "Finish local PR artifact.",
             "next_step_path": ".cafe/issues/demo/next_step.txt",
+            "pr_auto_create": "true",
         },
         output_file=Path("pr.md"),
         checklist_file=Path("checklist.md"),
     )
-    assert "For the PR phase, completion is local-only" in prompt
+    assert "For the PR agent phase, completion is local-first" in prompt
     assert "host-side publish_output hook" in prompt
+    assert "published review handoff contains its verified PR URL" in prompt
+
+
+def test_build_prompt_pr_phase_identifies_local_only_workflow_mode(tmp_path: Path) -> None:
+    """Test List 7: agent-local completion is distinct from workflow local-only mode."""
+    phase = GenericPhase(_setup_loader(tmp_path))
+    prompt = phase.build_prompt(
+        skill_name="cafe-pr",
+        skill_invocation="/pr",
+        shared_skill_invocations=["/cafe-workflow-common", "/cafe-github_sync"],
+        context={
+            "blackboard_path": ".cafe/issues/demo/blackboard.json",
+            "handoff_summary": "Finish local PR artifact.",
+            "next_step_path": ".cafe/issues/demo/next_step.txt",
+            "pr_auto_create": "false",
+        },
+        output_file=Path("pr.md"),
+        checklist_file=Path("checklist.md"),
+    )
+
+    assert "For the PR agent phase, completion is local-first" in prompt
+    assert "Workflow publication mode is local-only" in prompt
+    assert "No PR URL will exist" in prompt
 
 
 def assert_runtime_handoff_guardrails_persist(prompt: str) -> None:
