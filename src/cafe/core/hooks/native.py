@@ -182,7 +182,9 @@ def _publish_requested(
     if not isinstance(playbook, dict):
         playbook = {"steps": {step_name: step_def}}
     try:
-        repo_root = phase.git_ops.get_repo_root()
+        repo_root = getattr(phase.git_ops, "repo_path", None)
+        if not isinstance(repo_root, (str, Path)):
+            repo_root = Path.cwd()
         skill_loader = SkillLoader(project_root=Path(repo_root).resolve())
         resolve_step_human_task(
             playbook_data=playbook,

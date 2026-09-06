@@ -40,10 +40,7 @@ runner = CliRunner()
 def _write_local_only_publication_contract(issue_dir: Path) -> None:
     issue_dir.mkdir(parents=True, exist_ok=True)
     (issue_dir / "issue.yaml").write_text(
-        "confirmation_contract:\n"
-        "  pr_auto_create: false\n"
-        "pr:\n"
-        "  auto_create: false\n",
+        "confirmation_contract:\n" "  pr_auto_create: false\n" "pr:\n" "  auto_create: false\n",
         encoding="utf-8",
     )
 
@@ -458,9 +455,7 @@ steps:
 
 def test_workflow_command_runs_execute_mode(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    _write_local_only_publication_contract(
-        tmp_path / ".cafe" / "issues" / "issue-200"
-    )
+    _write_local_only_publication_contract(tmp_path / ".cafe" / "issues" / "issue-200")
     executed_steps: list[str] = []
 
     class FakeExecutor:
@@ -523,9 +518,7 @@ def test_single_step_uses_the_mode_neutral_core_in_the_foreground(
 
     class FakeExecutor:
         def execute_step(self, step_name, step_def, blackboard_state, **kwargs):
-            captured["validated_pr_auto_create"] = kwargs.get(
-                "validated_pr_auto_create"
-            )
+            captured["validated_pr_auto_create"] = kwargs.get("validated_pr_auto_create")
             return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
 
     class CapturingWorkflowHost:
@@ -1391,9 +1384,7 @@ def test_workflow_command_passes_initial_user_input_to_spec_step(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    _write_local_only_publication_contract(
-        tmp_path / ".cafe" / "issues" / "issue-201"
-    )
+    _write_local_only_publication_contract(tmp_path / ".cafe" / "issues" / "issue-201")
 
     class FakeExecutor:
         def execute_step(
@@ -2706,9 +2697,7 @@ def test_workflow_accepts_add_dir_and_passes_through(tmp_path: Path, monkeypatch
     """workflow --add-dir should validate the directory and pass it to the builder."""
     monkeypatch.chdir(tmp_path)
     (tmp_path / "src").mkdir()
-    _write_local_only_publication_contract(
-        tmp_path / ".cafe" / "issues" / "issue-add-dir"
-    )
+    _write_local_only_publication_contract(tmp_path / ".cafe" / "issues" / "issue-add-dir")
 
     class FakeExecutor:
         def execute_step(
@@ -2745,9 +2734,7 @@ def test_workflow_accepts_add_dir_and_passes_through(tmp_path: Path, monkeypatch
 
 def test_workflow_command_prints_generic_event_display(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    _write_local_only_publication_contract(
-        tmp_path / ".cafe" / "issues" / "issue-238"
-    )
+    _write_local_only_publication_contract(tmp_path / ".cafe" / "issues" / "issue-238")
     executed_steps: list[str] = []
 
     class FakeExecutor:
@@ -2796,9 +2783,7 @@ def test_workflow_command_does_not_duplicate_pr_url_without_display(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    _write_local_only_publication_contract(
-        tmp_path / ".cafe" / "issues" / "issue-277"
-    )
+    _write_local_only_publication_contract(tmp_path / ".cafe" / "issues" / "issue-277")
 
     class FakeExecutor:
         def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs):
@@ -3187,9 +3172,7 @@ def test_workflow_command_prints_paused_when_human_input_is_needed(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    _write_local_only_publication_contract(
-        tmp_path / ".cafe" / "issues" / "issue-201"
-    )
+    _write_local_only_publication_contract(tmp_path / ".cafe" / "issues" / "issue-201")
 
     class FakeExecutor:
         def execute_step(
@@ -4813,9 +4796,7 @@ steps:
 
 def test_workflow_command_runs_hotfix_playbook(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    _write_local_only_publication_contract(
-        tmp_path / ".cafe" / "issues" / "issue-203"
-    )
+    _write_local_only_publication_contract(tmp_path / ".cafe" / "issues" / "issue-203")
     executed_steps: list[str] = []
 
     with (

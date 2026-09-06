@@ -258,8 +258,6 @@ issue_assessment:
   risk_factors: [public contract, integration coverage]
 model_adjustment:
   authority: driver_autonomous  # or user_approval_required
-  confirmed_by: user
-  confirmed_at: 2026-08-13
 ```
 
 With `driver_autonomous`, the driver may change future phase chains using the
@@ -301,3 +299,10 @@ Update only the future phase's chain in `.cafe/phases.yaml`. With
 first. State the new band and keep/change rationale in the driver progress
 update; do not add a separate runtime decision store. A terminal `_done` baton
 has no future chain to adjust.
+
+For a Driver-managed issue, `.cafe/phases.yaml` remains generic execution
+configuration under its existing lifecycle. The Driver contract keeps only its
+own confirmed phase/model authority and never compares or projects that generic
+file. A delegated replacement may change only explicitly delegated Driver model
+paths; proactive-review policy, confirmation ownership, or any unrelated
+Driver policy requires user reconfirmation and a complete contract replacement.

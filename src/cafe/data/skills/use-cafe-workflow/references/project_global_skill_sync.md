@@ -93,3 +93,10 @@ Digest changes trigger the bounded semantic comparison above, not an automatic
 confirmation stop. When it finds a material difference, re-render and reconfirm
 the kickoff contract; otherwise retain the post-change evidence and continue
 under the confirmed contract.
+
+For a Driver-managed issue, that confirmed contract is the one issue-scoped
+`driver/contract.json` authority. Cache files, raw source digests, labels,
+timestamps, and comparison tokens are diagnostics: an identity change makes
+them stale and requires fresh checks, but does not by itself rewrite the
+contract or force reconfirmation. Only a proved semantic/material difference
+does so; incomplete evidence fails closed.

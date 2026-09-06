@@ -187,6 +187,13 @@ Update a strategic document only when the user explicitly confirms the new
 strategic content. A driver-authored draft remains `draft` or `missing` unless
 it is a mechanical copy of already confirmed material.
 
+Driver takeover does not transfer conversation or provider-session authority.
+The replacement Driver reads the same validated issue contract, refreshes
+skill-owned evidence, and preserves every user confirmation, HumanTask,
+permission, mandate, model-adjustment, proactive-review, and generic PR
+publication boundary. If that proof is material, ambiguous, stale, malformed,
+or belongs to another workflow, stop for the documented reconfirmation path.
+
 ### Legacy or custom core checkpoints
 
 For an explicit `alignment_checkpoint`:
