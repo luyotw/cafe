@@ -26,27 +26,38 @@ policy.
   trusted builtin callback below. It is not `--single-step`: phases continue
   normally whether the callback succeeds, fails, or never starts.
 
-For event-driven mode, create the per-issue binding after `cafe prepare` and
-before launch:
+For event-driven mode, activate the confirmed Driver contract after
+`cafe prepare` and then launch the callback:
 
 ```bash
-python3 <skill-dir>/scripts/workflow_event_callback.py --write-config \
+python3 <skill-dir>/scripts/run_validated_driver_workflow.py \
+  --issue-name <issue> \
   --issue-dir .cafe/issues/<issue> \
-  --entry <primary-cli>:<exact-model> \
-  [--entry <fallback-cli>:<exact-model> ...]
-
-cafe workflow --issue <issue> --execute --mute-agent-output --background \
+  --workflow-id <prepared-workflow-id> \
+  --fresh-facts '<fresh-bounded-policy-facts-json>' \
+  --issue-config .cafe/issues/<issue>/issue.yaml \
+  --phase-config .cafe/phases.yaml \
+  --background \
   --on-workflow-event builtin:use-cafe-workflow:workflow_event_callback
 ```
 
-Version 3 uses `.cafe/issues/<issue>/driver/config.yaml`, `session.lock`, and
-one authoritative `dispatch_state.json`; it creates no session sidecar. The
-confirmed policy is bound to the prepared WorkflowInstance when configuration
-is written, before the first callback can run. Policy order, per-entry
-transport-local session provenance, attempt history, the sticky active index,
-takeover, exhaustion, and recovery state all live in that one state file. The
-event-driver lifecycle uses no session-file discovery, directory diff, sleep,
-polling, or watcher.
+The callback reads the issue-scoped `driver/contract.json` and projects the
+event CLI/model order only in memory. `dispatch_state.json` is mutable runtime
+state bound to that contract's digest: it contains sessions, attempt history,
+the sticky active index, takeover, exhaustion, recovery, and timestamps, but
+never a copy of mode, model-chain, or other confirmed policy. A changed digest
+fails closed before dispatch. `driver/config.yaml` is a legacy migration input
+only; when a contract exists it is neither read as callback authority nor a
+writer target. The event-driver lifecycle uses no session-file discovery,
+directory diff, sleep, polling, or watcher.
+
+For attached or unattended Driver-managed work, invoke the same validator
+without `--background` or `--on-workflow-event`. The supplied fresh facts are
+the current bounded semantic policy rebuilt by the skill's loaders and the
+current material assumptions; they are not a caller-selected subset. The
+launcher rejects a mismatching `issue.yaml`, phase chain, or PR choice before
+it starts generic CAFE, so generic code remains Driver-free while the
+validation-to-use boundary remains immediate.
 
 Session acquisition and actual delivery are separate boundaries. Every
 unacquired, unbound entry first runs a provider request exactly equivalent to

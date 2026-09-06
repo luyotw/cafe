@@ -8,6 +8,7 @@ import hashlib
 from typing import Any, Mapping
 
 from cafe.core.packet_io import canonical_json
+from cafe.core.types import AgentCLI
 
 
 SCHEMA_VERSION = 1
@@ -48,6 +49,20 @@ _CONTRACT_KEYS = _PROPOSAL_KEYS - {"semantic_facts", "material_assumptions"} | {
     "provenance",
     "preflight",
 }
+_POLICY_SEMANTIC_FIELDS = (
+    "playbook",
+    "locales",
+    "confirmation_contract",
+    "reactive_user_handoffs",
+    "mandate",
+    "issue_assessment",
+    "phases",
+    "proactive_review",
+    "model_adjustment",
+    "driver",
+    "checkout",
+    "pr",
+)
 
 
 def _mapping(value: Any, label: str, *, keys: set[str] | None = None) -> dict[str, Any]:
@@ -165,8 +180,35 @@ def _validate_phases(value: Any) -> list[dict[str, Any]]:
     }
     for index, raw in enumerate(value):
         phase = _mapping(raw, f"phases[{index}]", keys=expected)
-        for field in ("name", "role", "skill", "execution_profile", "rationale"):
+        for field in ("name", "role", "skill", "rationale"):
             phase[field] = _string(phase[field], f"phases[{index}].{field}")
+        profile = phase["execution_profile"]
+        if isinstance(profile, str):
+            phase["execution_profile"] = _string(
+                profile, f"phases[{index}].execution_profile"
+            )
+        else:
+            profile = _mapping(
+                profile,
+                f"phases[{index}].execution_profile",
+                keys={"workloads", "reasoning", "risk_domains", "fallback_strength", "source"},
+            )
+            profile["workloads"] = _string_list(
+                profile["workloads"], f"phases[{index}].execution_profile.workloads"
+            )
+            profile["reasoning"] = _string(
+                profile["reasoning"], f"phases[{index}].execution_profile.reasoning"
+            )
+            profile["risk_domains"] = _string_list(
+                profile["risk_domains"], f"phases[{index}].execution_profile.risk_domains"
+            )
+            profile["fallback_strength"] = _string(
+                profile["fallback_strength"],
+                f"phases[{index}].execution_profile.fallback_strength",
+            )
+            if profile["source"] not in {"declared", "defaulted"}:
+                raise ValueError("phase execution profile source is invalid")
+            phase["execution_profile"] = profile
         if phase["name"] in names:
             raise ValueError("phases must have distinct names")
         names.add(phase["name"])
@@ -181,10 +223,12 @@ def _validate_phases(value: Any) -> list[dict[str, Any]]:
             entry = _mapping(
                 raw_entry, f"phases[{index}].chain[{chain_index}]", keys={"cli", "model"}
             )
-            entry = {
-                "cli": _string(entry["cli"], "phase chain cli"),
-                "model": _string(entry["model"], "phase chain model"),
-            }
+            cli = _string(entry["cli"], "phase chain cli")
+            try:
+                cli = AgentCLI(cli).value
+            except ValueError as exc:
+                raise ValueError("phase chain CLI is unsupported") from exc
+            entry = {"cli": cli, "model": _string(entry["model"], "phase chain model")}
             if entry["cli"] in seen_clis:
                 raise ValueError("phase chain CLIs must be distinct")
             seen_clis.add(entry["cli"])
@@ -243,7 +287,12 @@ def _validate_driver(value: Any) -> dict[str, Any]:
         seen: set[str] = set()
         for raw in result["clis"]:
             entry = _mapping(raw, "event-driven CLI", keys={"cli", "model"})
-            cli, model = _string(entry["cli"], "event-driven CLI"), _string(entry["model"], "event-driven model")
+            cli = _string(entry["cli"], "event-driven CLI")
+            try:
+                cli = AgentCLI(cli).value
+            except ValueError as exc:
+                raise ValueError("event-driven CLI is unsupported") from exc
+            model = _string(entry["model"], "event-driven model")
             if cli in seen:
                 raise ValueError("event-driven CLIs must be distinct")
             seen.add(cli)
@@ -303,10 +352,6 @@ def _validate_policy(proposal: Mapping[str, Any]) -> dict[str, Any]:
         ),
         "driver": _validate_driver(raw["driver"]),
         "checkout": _validate_checkout(raw["checkout"]),
-        "preflight": {
-            "semantic_facts": _json_mapping(raw["semantic_facts"], "semantic_facts"),
-            "material_assumptions": _json_mapping(raw["material_assumptions"], "material_assumptions"),
-        },
     }
     for field in ("need_clarification", "need_permission", "alignment_checkpoint"):
         result["reactive_user_handoffs"][field] = _string(
@@ -331,6 +376,20 @@ def _validate_policy(proposal: Mapping[str, Any]) -> dict[str, Any]:
         result["pr"] = pr
     elif "pr" in raw:
         raise ValueError("PR fields are inapplicable to this playbook")
+    expected_semantics = {
+        "effective_policy": {
+            name: deepcopy(result[name]) for name in _POLICY_SEMANTIC_FIELDS if name in result
+        }
+    }
+    supplied_semantics = _json_mapping(raw["semantic_facts"], "semantic_facts")
+    if supplied_semantics != expected_semantics:
+        raise ValueError("semantic_facts must exactly represent the complete effective policy")
+    result["preflight"] = {
+        "semantic_facts": expected_semantics,
+        "material_assumptions": _json_mapping(
+            raw["material_assumptions"], "material_assumptions"
+        ),
+    }
     return result
 
 
@@ -352,7 +411,6 @@ def _semantic_projection_from_validated(contract: Mapping[str, Any]) -> dict[str
         "pr",
     )
     projection = {name: deepcopy(contract[name]) for name in fields if name in contract}
-    projection["semantic_facts"] = deepcopy(contract["preflight"]["semantic_facts"])
     projection["material_assumptions"] = deepcopy(contract["preflight"]["material_assumptions"])
     return projection
 

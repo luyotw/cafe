@@ -196,6 +196,16 @@ def test_version_three_config_rejects_non_exact_forms(tmp_path: Path, document: 
         callback._load_config(driver_dir)
 
 
+def test_callback_config_reader_rejects_oversized_input_before_parsing(tmp_path: Path) -> None:
+    callback = _callback_module()
+    driver_dir = tmp_path / "driver"
+    driver_dir.mkdir()
+    (driver_dir / "config.yaml").write_bytes(b"x" * (callback.MAX_CALLBACK_INPUT_BYTES + 1))
+
+    with pytest.raises(ValueError, match="maximum bounded size"):
+        callback._load_config(driver_dir)
+
+
 def test_version_three_host_binding_applies_only_to_first_codex_entry(
     tmp_path: Path, monkeypatch
 ) -> None:

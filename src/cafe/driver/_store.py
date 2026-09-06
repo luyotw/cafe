@@ -7,6 +7,7 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import stat
 from typing import Any, Iterator, Mapping
 
 from cafe.core.packet_io import atomic_write_bytes, canonical_json, sha256_bytes
@@ -23,8 +24,20 @@ def contract_path(issue_dir: Path) -> Path:
     return Path(issue_dir) / "driver" / CONTRACT_FILENAME
 
 
+def _reject_symlink_ancestors(path: Path) -> None:
+    """Keep a caller-provided issue root inside its lexical, non-aliased tree."""
+    for candidate in (path, *path.parents):
+        try:
+            metadata = candidate.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(metadata.st_mode):
+            raise ValueError("Driver contract paths must not traverse a symlink")
+
+
 def _safe_driver_directory(issue_dir: Path, *, create: bool) -> Path:
     issue = Path(issue_dir)
+    _reject_symlink_ancestors(issue)
     if issue.exists() and issue.is_symlink():
         raise ValueError("issue directory must not be a symlink")
     if create:
@@ -79,19 +92,44 @@ def _decode_exact(content: bytes) -> dict[str, Any]:
     return document
 
 
+def _read_bounded(path: Path, *, label: str) -> bytes:
+    """Check type and byte budget before allocating or parsing untrusted input."""
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError as exc:
+        raise ValueError(f"{label} is missing") from exc
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise ValueError(f"{label} is unsafe")
+    if metadata.st_size > MAX_CONTRACT_BYTES:
+        raise ValueError(f"{label} exceeds the maximum bounded size")
+    try:
+        with path.open("rb") as handle:
+            content = handle.read(MAX_CONTRACT_BYTES + 1)
+    except OSError as exc:
+        raise ValueError(f"{label} is unreadable") from exc
+    if len(content) > MAX_CONTRACT_BYTES:
+        raise ValueError(f"{label} exceeds the maximum bounded size")
+    return content
+
+
 def load_contract(
     issue_dir: Path, *, issue_name: str | None = None, workflow_id: str | None = None
 ) -> tuple[dict[str, Any], str]:
     """Load the sole authority after bounded, symlink-safe validation."""
-    driver = _safe_driver_directory(issue_dir, create=False)
+    try:
+        driver = _safe_driver_directory(issue_dir, create=False)
+    except ValueError as exc:
+        if "directory is unavailable" in str(exc):
+            raise ValueError("Driver contract is missing or unsafe") from exc
+        raise
     path = driver / CONTRACT_FILENAME
     if not path.is_file() or path.is_symlink():
         raise ValueError("Driver contract is missing or unsafe")
-    try:
-        content = path.read_bytes()
-    except OSError as exc:
-        raise ValueError("Driver contract is unreadable") from exc
-    return validate_contract(_decode_exact(content), issue_name=issue_name, workflow_id=workflow_id), sha256_bytes(content)
+    content = _read_bounded(path, label="Driver contract")
+    return (
+        validate_contract(_decode_exact(content), issue_name=issue_name, workflow_id=workflow_id),
+        sha256_bytes(content),
+    )
 
 
 def write_contract(
@@ -112,7 +150,7 @@ def write_contract(
     else:
         if not exists:
             raise ValueError("Driver contract predecessor is missing")
-        actual = sha256_bytes(path.read_bytes())
+        actual = sha256_bytes(_read_bounded(path, label="Driver contract predecessor"))
         if actual != expected_predecessor_sha256:
             raise ValueError("Driver contract predecessor is stale")
     validated = validate_contract(document)

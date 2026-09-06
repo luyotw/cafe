@@ -8,9 +8,38 @@ from typing import Any, Mapping
 
 import yaml
 
+from cafe.core.packet_io import canonical_json
+
 from ._freshness import Freshness, compare_freshness
 from ._schema import build_initial_contract, semantic_projection
-from ._store import contract_lock, load_contract, write_contract
+from ._store import _decode_exact, _read_bounded, contract_lock, load_contract, write_contract
+
+
+class _ExactLegacyLoader(yaml.SafeLoader):
+    """Legacy YAML remains evidence only, but ambiguous keys still fail closed."""
+
+
+def _construct_exact_legacy_mapping(
+    loader: _ExactLegacyLoader, node: yaml.MappingNode, deep: bool = False
+) -> dict[Any, Any]:
+    mapping: dict[Any, Any] = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in mapping:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                f"duplicate key: {key}",
+                key_node.start_mark,
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+_ExactLegacyLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+    _construct_exact_legacy_mapping,
+)
 
 
 def activate(
@@ -56,6 +85,22 @@ def evaluate(
     return compare_freshness(contract, fresh_facts), contract, digest
 
 
+def event_callback_policy(
+    *, issue_dir: Path, issue_name: str, workflow_id: str
+) -> tuple[dict[str, Any] | None, str]:
+    """Return the bounded event callback projection from the sole contract.
+
+    Callback delivery has no caller-authored preflight payload.  It therefore
+    deliberately projects only the already-confirmed event transport policy,
+    bound to the exact contract digest read immediately before use.  All other
+    entry paths continue through :func:`evaluate` and its freshness check.
+    """
+    contract, digest = load_contract(issue_dir, issue_name=issue_name, workflow_id=workflow_id)
+    if contract["driver"]["mode"] != "event-driven":
+        return None, digest
+    return {"clis": deepcopy(contract["driver"]["clis"])}, digest
+
+
 def _changed_paths(before: Any, after: Any, prefix: str = "") -> set[str]:
     if type(before) is not type(after):
         return {prefix}
@@ -82,7 +127,11 @@ def _assert_delegated_model_change(current: Mapping[str, Any], candidate: Mappin
     if current["model_adjustment"]["authority"] != "driver_autonomous":
         raise ValueError("the effective contract does not delegate model adjustment")
     changes = _changed_paths(semantic_projection(current), semantic_projection(candidate))
-    permitted = {path for path in changes if path.startswith("phases[") and ".chain" in path}
+    permitted = {
+        path
+        for path in changes
+        if path.startswith("phases[") and ".chain[" in path and path.endswith(".model")
+    }
     if not changes or changes != permitted:
         raise ValueError("delegated replacement may change only ordered phase CLI/model chains")
 
@@ -125,29 +174,122 @@ def replace(
         return candidate["revision"]["generation"], digest
 
 
+def _load_legacy_mapping(path: Path) -> Mapping[str, Any] | None:
+    if not _legacy_path_present(path):
+        return None
+    try:
+        content = _read_bounded(path, label=f"legacy evidence {path.name}")
+        document = (
+            _decode_exact(content)
+            if path.suffix == ".json"
+            else yaml.load(content.decode("utf-8"), Loader=_ExactLegacyLoader)
+        )
+    except (OSError, UnicodeError, ValueError, yaml.YAMLError):
+        return None
+    return document if isinstance(document, Mapping) else None
+
+
+def _legacy_path_present(path: Path) -> bool:
+    """Treat unsafe/dangling legacy locations as evidence, never as absence."""
+    return path.exists() or path.is_symlink()
+
+
 def _load_legacy_confirmation(issue_dir: Path) -> Mapping[str, Any] | None:
-    """Read only the bounded evidence needed to construct one adoption candidate."""
+    """Require every available legacy confirmation candidate to agree exactly."""
     candidates = (
         issue_dir / "driver" / "legacy_confirmation.json",
         issue_dir / "issue.yaml",
     )
+    evidence: list[Mapping[str, Any]] = []
     for path in candidates:
-        if not path.is_file() or path.is_symlink():
+        document = _load_legacy_mapping(path)
+        if document is None:
+            if _legacy_path_present(path):
+                return None
             continue
-        try:
-            if path.suffix == ".json":
-                import json
-
-                document = json.loads(path.read_text(encoding="utf-8"))
-            else:
-                document = yaml.safe_load(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, ValueError, yaml.YAMLError):
+        if isinstance(document.get("driver_contract"), Mapping):
+            evidence.append(document["driver_contract"])
+        elif isinstance(document.get("proposal"), Mapping):
+            evidence.append(document)
+    if not evidence:
+        return None
+    try:
+        first = canonical_json(dict(evidence[0]))
+        if any(canonical_json(dict(item)) != first for item in evidence[1:]):
             return None
-        if isinstance(document, Mapping) and isinstance(document.get("driver_contract"), Mapping):
-            return document["driver_contract"]
-        if isinstance(document, Mapping) and isinstance(document.get("proposal"), Mapping):
-            return document
-    return None
+    except (TypeError, ValueError):
+        return None
+    return evidence[0]
+
+
+def _legacy_sidecars_match(issue_dir: Path, proposal: Mapping[str, Any]) -> bool:
+    """Sidecars are migration evidence only; a mismatch is never guessed away."""
+    config_path = issue_dir / "driver" / "config.yaml"
+    config = _load_legacy_mapping(config_path)
+    if config is None and _legacy_path_present(config_path):
+        return False
+    expected_driver = proposal.get("driver")
+    if config is not None:
+        if not isinstance(expected_driver, Mapping) or config.get("mode") != expected_driver.get("mode"):
+            return False
+        if expected_driver.get("mode") == "event-driven" and config.get("clis") != expected_driver.get("clis"):
+            return False
+    review_path = issue_dir / "driver" / "proactive_review.yaml"
+    review = _load_legacy_mapping(review_path)
+    if review is None and _legacy_path_present(review_path):
+        return False
+    if review is not None:
+        expected_review = proposal.get("proactive_review")
+        actual_review = review.get("proactive_review", review)
+        try:
+            if canonical_json(dict(actual_review)) != canonical_json(dict(expected_review)):
+                return False
+        except (TypeError, ValueError):
+            return False
+    phases_path = _legacy_phases_path(issue_dir)
+    phases = _load_legacy_mapping(phases_path) if phases_path is not None else None
+    if phases_path is not None and phases is None and _legacy_path_present(phases_path):
+        return False
+    if phases is not None and not _legacy_phases_match(phases, proposal):
+        return False
+    return True
+
+
+def _legacy_phases_path(issue_dir: Path) -> Path | None:
+    """Locate a legacy project phase projection only for normal issue layout."""
+    issue = Path(issue_dir)
+    if issue.parent.name != "issues" or issue.parent.parent.name != ".cafe":
+        return None
+    return issue.parent.parent / "phases.yaml"
+
+
+def _legacy_phases_match(document: Mapping[str, Any], proposal: Mapping[str, Any]) -> bool:
+    """Require every available legacy phase projection to prove the same chains."""
+    raw_phases = proposal.get("phases")
+    if not isinstance(raw_phases, list):
+        return False
+    expected: dict[str, dict[str, Any]] = {}
+    for phase in raw_phases:
+        if not isinstance(phase, Mapping) or phase.get("assignee_type") not in {"agent", "hybrid"}:
+            continue
+        name = phase.get("name")
+        role = phase.get("role")
+        chain = phase.get("chain")
+        if not isinstance(name, str) or not isinstance(role, str) or not isinstance(chain, list):
+            return False
+        expected[name] = {"role": role, "clis": chain}
+    if set(document) != set(expected):
+        return False
+    for name, expected_phase in expected.items():
+        actual = document.get(name)
+        if not isinstance(actual, Mapping) or set(actual) - {"name", "role", "clis"}:
+            return False
+        if actual.get("role") != expected_phase["role"] or actual.get("clis") != expected_phase["clis"]:
+            return False
+        name_value = actual.get("name")
+        if name_value is not None and (not isinstance(name_value, str) or not name_value.strip()):
+            return False
+    return True
 
 
 def adopt_legacy(
@@ -173,12 +315,8 @@ def adopt_legacy(
             confirmed_at = evidence.get("confirmed_at")
             if not isinstance(proposal, Mapping):
                 return False, None, None, "reconfirmation_required"
-            # A surviving sidecar may be evidence, never a second reader or writer authority.
-            config_path = issue_dir / "driver" / "config.yaml"
-            if config_path.is_file() and not config_path.is_symlink():
-                config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-                if not isinstance(config, Mapping) or config.get("mode") != proposal.get("driver", {}).get("mode"):
-                    return False, None, None, "reconfirmation_required"
+            if not _legacy_sidecars_match(issue_dir, proposal):
+                return False, None, None, "reconfirmation_required"
             contract = build_initial_contract(
                 proposal=deepcopy(dict(proposal)),
                 issue_name=issue_name,

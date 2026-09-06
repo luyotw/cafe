@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 import json
 import os
 import shlex
@@ -100,7 +101,7 @@ def _strict_bool(value: str) -> bool:
 
 def _driver_policy_rows(args: argparse.Namespace) -> list[list[Any]]:
     rows: list[list[Any]] = [
-        ["contract_version", 2],
+        ["schema_version", 1],
         ["driver.mode", args.driver_mode],
     ]
     if args.driver_mode == "attached":
@@ -551,10 +552,16 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
                 "assignee_type": step.assignee_type,
                 "role": step.role,
                 "skill": step.skill,
-                "execution_profile": profile.workloads[0] if profile.workloads else "default",
+                "execution_profile": {
+                    "workloads": list(profile.workloads),
+                    "reasoning": profile.reasoning,
+                    "risk_domains": list(profile.risk_domains),
+                    "fallback_strength": profile.fallback_strength,
+                    "source": "defaulted" if profile.uses_default else "declared",
+                },
                 "chain": chain,
                 "rationale": rationale,
-                "capabilities": [],
+                "capabilities": list(step.capability_requests),
             }
         )
     if set(rationales) - set(agent_phases):
@@ -604,16 +611,8 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
         },
         "driver": {"mode": args.driver_mode},
         "checkout": checkout,
-        "semantic_facts": {
-            "effective_graph": list(model.steps),
-            "assignees": {name: step.assignee_type for name, step in model.steps.items()},
-            "confirmation_gates": {"user": user_required, "driver": driver_confirmable},
-            "publication_applicable": publication_applicable,
-        },
-        "material_assumptions": {
-            "runtime_update": {key: update[key] for key in ("status", "decision", "installed_version", "latest_version")},
-            "catalog": {key: catalog[key] for key in ("status", "decision", "effective_digests")},
-        },
+        "semantic_facts": {},
+        "material_assumptions": {},
     }
     if args.driver_mode == "attached":
         proposal["driver"]["poll_interval_seconds"] = args.poll_interval_seconds
@@ -623,10 +622,31 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
         ]
     if publication_applicable:
         proposal["pr"] = {"auto_create": args.pr_auto_create, "post_todo_list": []}
+    policy_fields = (
+        "playbook",
+        "locales",
+        "confirmation_contract",
+        "reactive_user_handoffs",
+        "mandate",
+        "issue_assessment",
+        "phases",
+        "proactive_review",
+        "model_adjustment",
+        "driver",
+        "checkout",
+        "pr",
+    )
+    proposal["semantic_facts"] = {
+        "effective_policy": {
+            name: deepcopy(proposal[name]) for name in policy_fields if name in proposal
+        }
+    }
     return proposal
 
 
-def activate_confirmed_proposal(args: argparse.Namespace) -> None:
+def activate_confirmed_proposal(
+    args: argparse.Namespace, *, proposal: dict[str, Any] | None = None
+) -> None:
     """Persist only after explicit confirmation metadata and prepared identity are present."""
     if not args.workflow_id or not args.confirmed_by or not args.confirmed_at:
         raise ValueError("activation requires workflow ID, confirmer, and timezone-aware confirmation time")
@@ -648,12 +668,14 @@ def activate_confirmed_proposal(args: argparse.Namespace) -> None:
             workflow_id=args.workflow_id,
             confirmed_by=args.confirmed_by,
             confirmed_at=confirmed_at,
-            proposal=build_confirmed_proposal(args),
+            proposal=proposal or build_confirmed_proposal(args),
         )
     )
 
 
-def render(args: argparse.Namespace) -> str:
+def render(
+    args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | None = None
+) -> str:
     project_root = args.project_root.resolve()
     playbook_rationale = args.playbook_rationale.strip()
     if not playbook_rationale:
@@ -970,6 +992,22 @@ def render(args: argparse.Namespace) -> str:
             "### Mandate",
             mandate_summary,
             _table(["Axis", "Level", "Grounds"], mandate_rows),
+            *(
+                [
+                    "### Confirmed durable policy",
+                    "The following normalized policy is persisted unchanged after confirmation.",
+                    "```json",
+                    json.dumps(
+                        {"schema_version": 1, "policy": confirmed_proposal},
+                        ensure_ascii=False,
+                        indent=2,
+                        sort_keys=True,
+                    ),
+                    "```",
+                ]
+                if confirmed_proposal is not None
+                else []
+            ),
         ]
     )
 
@@ -977,9 +1015,10 @@ def render(args: argparse.Namespace) -> str:
 def main() -> int:
     try:
         args = _parser().parse_args()
-        rendered = render(args)
+        proposal = build_confirmed_proposal(args) if args.activate_confirmed else None
+        rendered = render(args, confirmed_proposal=proposal)
         if args.activate_confirmed:
-            activate_confirmed_proposal(args)
+            activate_confirmed_proposal(args, proposal=proposal)
         print(rendered)
     except (FileNotFoundError, LookupError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)

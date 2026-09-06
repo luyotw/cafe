@@ -8,12 +8,13 @@ import copy
 import hashlib
 import json
 import os
+import stat
 import subprocess
 import tempfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, Optional, Sequence
+from typing import Any, Iterator, Mapping, Optional, Sequence
 
 import yaml
 
@@ -48,7 +49,9 @@ DISPATCH_STATE_FILENAME = "dispatch_state.json"
 LOCK_FILENAME = "session.lock"
 FAILURE_NOTIFICATIONS_FILENAME = "callback_failure_notifications.json"
 MAX_FAILURE_NOTIFICATIONS = 128
+MAX_CALLBACK_INPUT_BYTES = 256 * 1024
 _HOST_SESSION_KIND = "codex"
+_CONTRACT_CALLBACK_CONFIG_SCHEMA = 4
 
 
 class _ExactSafeLoader(yaml.SafeLoader):
@@ -104,6 +107,31 @@ def _atomic_write(path: Path, payload: bytes) -> None:
             os.unlink(temporary)
 
 
+def _read_bounded_text(path: Path, *, label: str) -> str:
+    """Read callback inputs only after type and size checks."""
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        raise
+    except OSError as exc:
+        raise ValueError(f"{label} is unreadable") from exc
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise ValueError(f"{label} is unsafe")
+    if metadata.st_size > MAX_CALLBACK_INPUT_BYTES:
+        raise ValueError(f"{label} exceeds the maximum bounded size")
+    try:
+        with path.open("rb") as handle:
+            content = handle.read(MAX_CALLBACK_INPUT_BYTES + 1)
+    except OSError as exc:
+        raise ValueError(f"{label} is unreadable") from exc
+    if len(content) > MAX_CALLBACK_INPUT_BYTES:
+        raise ValueError(f"{label} exceeds the maximum bounded size")
+    try:
+        return content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"{label} is unreadable") from exc
+
+
 @contextmanager
 def _session_lock(driver_dir: Path) -> Iterator[None]:
     driver_dir.mkdir(parents=True, exist_ok=True)
@@ -153,7 +181,7 @@ def _prepared_workflow_id(issue_dir: Path) -> str:
     if not path.is_file() or path.is_symlink():
         raise ValueError("event-driven ordered policy requires a prepared workflow")
     try:
-        document = json.loads(path.read_text(encoding="utf-8"))
+        document = json.loads(_read_bounded_text(path, label="event-driven workflow state"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError("event-driven workflow state is unreadable") from exc
     workflow_id = document.get("workflow_id") if isinstance(document, dict) else None
@@ -188,7 +216,7 @@ def write_config(
     model: str | None = None,
     clis: Sequence[tuple[str, str]] | None = None,
 ) -> None:
-    """Create the one skill-owned event-driven binding for an issue."""
+    """Create a legacy event binding only when no Driver contract exists."""
     if clis is not None:
         if cli is not None or model is not None:
             raise ValueError("event-driven config cannot mix legacy and ordered forms")
@@ -210,6 +238,23 @@ def write_config(
             raise ValueError("event-driven model must be exact and non-empty")
         proposed = {"schema_version": 1, "mode": "event-driven", "cli": cli, "model": model}
         primary_cli = cli
+    prepared = issue_dir / "blackboard.json"
+    if prepared.is_file() and not prepared.is_symlink():
+        from cafe.driver import EventCallbackRequest, event_callback_projection
+
+        try:
+            event_callback_projection(
+                EventCallbackRequest(
+                    issue_dir=issue_dir,
+                    issue_name=issue_dir.name,
+                    workflow_id=_prepared_workflow_id(issue_dir),
+                )
+            )
+        except ValueError as exc:
+            if "missing or unsafe" not in str(exc):
+                raise
+        else:
+            raise ValueError("contract-managed event drivers do not write legacy config")
     driver_dir = _driver_dir(issue_dir)
     with _session_lock(driver_dir):
         existing = _load_config(driver_dir)
@@ -247,7 +292,9 @@ def _load_config(driver_dir: Path) -> dict[str, Any] | None:
     if not path.is_file() or path.is_symlink():
         return None
     try:
-        loaded = yaml.load(path.read_text(encoding="utf-8"), Loader=_ExactSafeLoader)
+        loaded = yaml.load(
+            _read_bounded_text(path, label="event-driven config"), Loader=_ExactSafeLoader
+        )
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
         raise ValueError("event-driven config is unreadable") from exc
     if not isinstance(loaded, dict):
@@ -314,6 +361,51 @@ def _load_config(driver_dir: Path) -> dict[str, Any] | None:
     elif schema_version == 3 and "host_session" in loaded:
         raise ValueError("event-driven host session binding is invalid")
     return result
+
+
+def _contract_callback_config(
+    *, issue_dir: Path, issue_name: str, workflow_id: str
+) -> dict[str, Any] | None:
+    """Derive one callback-only transport view from the durable contract.
+
+    This value is intentionally never written as ``config.yaml``.  Mutable
+    dispatch state retains only its sessions and event history and binds itself
+    to the digest returned by this immediately preceding contract read.
+    """
+    from cafe.driver import EventCallbackRequest, event_callback_projection
+
+    projection = event_callback_projection(
+        EventCallbackRequest(
+            issue_dir=issue_dir,
+            issue_name=issue_name,
+            workflow_id=workflow_id,
+        )
+    )
+    if projection.event is None:
+        return None
+    entries = projection.event.get("clis")
+    if not isinstance(entries, tuple):
+        raise ValueError("event-driven Driver contract projection is invalid")
+    normalized = _normalize_cli_entries(
+        [
+            (entry.get("cli"), entry.get("model"))
+            for entry in entries
+            if isinstance(entry, Mapping)
+        ]
+    )
+    if len(normalized) != len(entries):
+        raise ValueError("event-driven Driver contract projection is invalid")
+    config: dict[str, Any] = {
+        "schema_version": _CONTRACT_CALLBACK_CONFIG_SCHEMA,
+        "mode": "event-driven",
+        "contract_sha256": projection.contract_sha256,
+        "clis": normalized,
+    }
+    if normalized[0]["cli"] == AgentCLI.CODEX.value:
+        host_session = _current_host_session_binding()
+        if host_session is not None:
+            config["host_session"] = host_session
+    return config
 
 
 def _valid_nonempty_string(value: Any) -> bool:
@@ -535,39 +627,66 @@ def _load_or_initialize_dispatch_state(
     workflow_id: str,
     config: dict[str, Any],
 ) -> dict[str, Any]:
-    """Load the one authoritative version 3 state and enforce immutable policy."""
-    if config.get("schema_version") != 3:
-        raise ValueError("event-driven dispatch state requires schema version 3")
+    """Load mutable state without allowing it to become transport authority."""
+    contract_managed = config.get("schema_version") == _CONTRACT_CALLBACK_CONFIG_SCHEMA
+    if config.get("schema_version") not in {3, _CONTRACT_CALLBACK_CONFIG_SCHEMA}:
+        raise ValueError("event-driven dispatch state requires an ordered configuration")
     path = driver_dir / DISPATCH_STATE_FILENAME
     if path.is_file() and not path.is_symlink():
         try:
-            state = json.loads(path.read_text(encoding="utf-8"))
+            state = json.loads(
+                _read_bounded_text(path, label="event-driven dispatch state")
+            )
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise ValueError("event-driven dispatch state is unreadable") from exc
-        if not isinstance(state, dict) or set(state) != {
-            "schema_version",
-            "workflow_id",
-            "policy",
-            "active_index",
-            "entries",
-            "events",
-            "updated_at",
-        }:
+        expected_fields = (
+            {
+                "schema_version",
+                "workflow_id",
+                "contract_sha256",
+                "active_index",
+                "entries",
+                "events",
+                "updated_at",
+            }
+            if contract_managed
+            else {
+                "schema_version",
+                "workflow_id",
+                "policy",
+                "active_index",
+                "entries",
+                "events",
+                "updated_at",
+            }
+        )
+        if not isinstance(state, dict) or set(state) != expected_fields:
             raise ValueError("event-driven dispatch state is invalid")
-        if state.get("schema_version") != 1 or state.get("workflow_id") != workflow_id:
+        expected_schema = 2 if contract_managed else 1
+        if state.get("schema_version") != expected_schema or state.get("workflow_id") != workflow_id:
             raise ValueError("event-driven dispatch state belongs to another workflow")
-        if state.get("policy") != config:
+        if not contract_managed and state.get("policy") != config:
             raise ValueError("event-driven dispatch policy cannot change within a workflow")
+        if contract_managed and state.get("contract_sha256") != config.get("contract_sha256"):
+            raise ValueError("event-driven dispatch state belongs to a stale Driver contract")
         entries = state.get("entries")
         if not isinstance(entries, list) or len(entries) != len(config["clis"]):
             raise ValueError("event-driven dispatch state is invalid")
         for index, (entry, policy_entry) in enumerate(zip(entries, config["clis"])):
-            if not isinstance(entry, dict) or set(entry) != {"index", "cli", "model", "session"}:
+            expected_entry_fields = {"index", "session"} if contract_managed else {
+                "index", "cli", "model", "session"
+            }
+            if not isinstance(entry, dict) or set(entry) != expected_entry_fields:
                 raise ValueError("event-driven dispatch state is invalid")
             if (
                 entry.get("index") != index
-                or entry.get("cli") != policy_entry["cli"]
-                or entry.get("model") != policy_entry["model"]
+                or (
+                    not contract_managed
+                    and (
+                        entry.get("cli") != policy_entry["cli"]
+                        or entry.get("model") != policy_entry["model"]
+                    )
+                )
             ):
                 raise ValueError("event-driven dispatch session provenance is invalid")
             session = entry.get("session")
@@ -587,6 +706,11 @@ def _load_or_initialize_dispatch_state(
                     raise ValueError("event-driven host session conflicts with dispatch state")
             elif isinstance(session, dict) and session.get("source") == "host_session":
                 raise ValueError("event-driven host session cannot bind a fallback")
+        if contract_managed:
+            state["entries"] = [
+                {"index": entry["index"], **policy_entry, "session": entry["session"]}
+                for entry, policy_entry in zip(entries, config["clis"])
+            ]
         active_index = state.get("active_index")
         if (
             not isinstance(active_index, int)
@@ -615,24 +739,36 @@ def _load_or_initialize_dispatch_state(
             }
         entries.append({"index": index, **policy_entry, "session": session})
     state = {
-        "schema_version": 1,
+        "schema_version": 2 if contract_managed else 1,
         "workflow_id": workflow_id,
-        "policy": config,
         "active_index": 0,
         "entries": entries,
         "events": {},
         "updated_at": now,
     }
-    _atomic_write(path, json.dumps(state, sort_keys=True).encode("utf-8"))
+    if contract_managed:
+        state["contract_sha256"] = config["contract_sha256"]
+    else:
+        state["policy"] = config
+    _write_dispatch_state(driver_dir, state)
     return state
 
 
 def _write_dispatch_state(driver_dir: Path, state: dict[str, Any]) -> dict[str, Any]:
     updated = copy.deepcopy(state)
     updated["updated_at"] = _now()
+    durable = copy.deepcopy(updated)
+    if durable.get("schema_version") == 2:
+        entries = durable.get("entries")
+        if not isinstance(entries, list):
+            raise ValueError("event-driven dispatch state is invalid")
+        durable["entries"] = [
+            {"index": entry.get("index"), "session": entry.get("session")}
+            for entry in entries
+        ]
     _atomic_write(
         driver_dir / DISPATCH_STATE_FILENAME,
-        json.dumps(updated, sort_keys=True).encode("utf-8"),
+        json.dumps(durable, sort_keys=True).encode("utf-8"),
     )
     return updated
 
@@ -662,7 +798,7 @@ def _read_legacy_session(
             raise ValueError("event-driven session is invalid")
         return None
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw = json.loads(_read_bounded_text(path, label="event-driven session"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError("event-driven session is unreadable") from exc
     expected = {
@@ -795,7 +931,19 @@ def _project_v3_events(state: dict[str, Any]) -> list[dict[str, Any]]:
 def read_status(issue_dir: Path) -> dict[str, Any]:
     """Project exact event-driver state without locks, writes, or output inference."""
     driver_dir = _driver_dir(issue_dir)
-    config = _load_config(driver_dir)
+    try:
+        config = _contract_callback_config(
+            issue_dir=issue_dir,
+            issue_name=issue_dir.name,
+            workflow_id=_prepared_workflow_id(issue_dir),
+        )
+    except ValueError as exc:
+        if (
+            "missing or unsafe" not in str(exc)
+            and "requires a prepared workflow" not in str(exc)
+        ):
+            raise
+        config = _load_config(driver_dir)
     if config is None:
         return {
             "configured": False,
@@ -852,7 +1000,9 @@ def read_status(issue_dir: Path) -> dict[str, Any]:
         state = None
     else:
         try:
-            raw_state = json.loads(state_path.read_text(encoding="utf-8"))
+            raw_state = json.loads(
+                _read_bounded_text(state_path, label="event-driven dispatch state")
+            )
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise ValueError("event-driven dispatch state is unreadable") from exc
         workflow_id = raw_state.get("workflow_id") if isinstance(raw_state, dict) else None
@@ -895,8 +1045,10 @@ def read_status(issue_dir: Path) -> dict[str, Any]:
         )
     return {
         "configured": True,
-        "schema_version": 3,
-        "mode": "ordered_transport_chain",
+        "schema_version": config["schema_version"],
+        "mode": "contract_ordered_transport_chain"
+        if config["schema_version"] == _CONTRACT_CALLBACK_CONFIG_SCHEMA
+        else "ordered_transport_chain",
         "workflow_id": state["workflow_id"] if state is not None else None,
         "active_index": active_index,
         "entries": entries,
@@ -1171,7 +1323,7 @@ class EventDriverSessionStore(SessionStore):
         if not self.path.is_file() or self.path.is_symlink():
             return None
         try:
-            loaded = json.loads(self.path.read_text(encoding="utf-8"))
+            loaded = json.loads(_read_bounded_text(self.path, label="event-driven session"))
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise ValueError("event-driven session is unreadable") from exc
         if not isinstance(loaded, dict):
@@ -1585,7 +1737,16 @@ def run_callback(event: dict[str, Any], *, repository_root: Path) -> None:
     issue_dir = repository_root / ".cafe" / "issues" / issue_name
     driver_dir = _driver_dir(issue_dir)
     with _session_lock(driver_dir):
-        config = _load_config(driver_dir)
+        try:
+            config = _contract_callback_config(
+                issue_dir=issue_dir,
+                issue_name=issue_name,
+                workflow_id=workflow_id,
+            )
+        except ValueError as exc:
+            if "missing or unsafe" not in str(exc):
+                raise
+            config = _load_config(driver_dir)
         if config is None:
             return
         from cafe.core.blackboard import BlackboardStore
@@ -1593,7 +1754,7 @@ def run_callback(event: dict[str, Any], *, repository_root: Path) -> None:
         blackboard = BlackboardStore(issue_dir).load_or_create("spec")
         if blackboard.workflow_id != workflow_id:
             raise StaleWorkflowEventError("workflow event callback is stale")
-        if config["schema_version"] == 3:
+        if config["schema_version"] in {3, _CONTRACT_CALLBACK_CONFIG_SCHEMA}:
             if not _event_is_durable(blackboard, event):
                 raise ValueError("workflow event callback is not durable")
             state = _load_or_initialize_dispatch_state(
@@ -1755,8 +1916,8 @@ def _load_callback_failure_notifications(driver_dir: Path) -> dict[str, dict[str
     """Load bounded notification receipts; malformed state is replaced safely."""
     path = driver_dir / FAILURE_NOTIFICATIONS_FILENAME
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, OSError, UnicodeError, json.JSONDecodeError):
+        raw = json.loads(_read_bounded_text(path, label="callback failure notifications"))
+    except (FileNotFoundError, OSError, UnicodeError, ValueError, json.JSONDecodeError):
         return {}
     if not isinstance(raw, dict) or raw.get("schema_version") != 1:
         return {}

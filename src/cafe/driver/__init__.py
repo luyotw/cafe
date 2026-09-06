@@ -5,6 +5,8 @@ from .api import (
     ActivationResult,
     DriverEntryRequest,
     DriverEntryResult,
+    EventCallbackPolicy,
+    EventCallbackRequest,
     Freshness,
     LegacyAdoptionRequest,
     LegacyAdoptionResult,
@@ -13,6 +15,7 @@ from .api import (
     activate_confirmed_contract,
     adopt_legacy_contract,
     evaluate_driver_entry,
+    event_callback_projection,
     replace_confirmed_contract,
 )
 
@@ -21,6 +24,8 @@ __all__ = [
     "ActivationResult",
     "DriverEntryRequest",
     "DriverEntryResult",
+    "EventCallbackPolicy",
+    "EventCallbackRequest",
     "Freshness",
     "LegacyAdoptionRequest",
     "LegacyAdoptionResult",
@@ -29,5 +34,6 @@ __all__ = [
     "activate_confirmed_contract",
     "adopt_legacy_contract",
     "evaluate_driver_entry",
+    "event_callback_projection",
     "replace_confirmed_contract",
 ]

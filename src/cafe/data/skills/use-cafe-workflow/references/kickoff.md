@@ -101,8 +101,8 @@ obtain explicit user confirmation of:
   unattended, or event-driven with one non-empty ordered list of distinct,
   conforming CLIs and an exact model selected by the user for every entry. The
   first entry is primary and every later entry is a forward-only fallback;
-  there is no fixed fallback limit. Event-driven's binding lives only in
-  `.cafe/issues/<issue>/driver/config.yaml`;
+  there is no fixed fallback limit. Event-driven's ordered binding is a
+  confirmed field of the sole Driver contract, never `driver/config.yaml`;
 - worktree choice and path when using a worktree.
 - when any effective playbook step requests `cafe.pr.publish`, one explicit
   Boolean `pr.auto_create` choice and its `confirmation_contract.pr_auto_create`
@@ -389,26 +389,20 @@ for confirmation rather than asking again.
   stale value requires a freshly rendered and confirmed kickoff contract; do
   not infer local-only from omission.
 
-  When the confirmed mode is event-driven, create the separate skill-owned
-  binding after this file is written:
-
-  ```bash
-  python3 <skill-dir>/scripts/workflow_event_callback.py --write-config \
-    --issue-dir .cafe/issues/<issue-name> \
-    --entry <primary-cli>:<exact-model> \
-    [--entry <fallback-cli>:<exact-model> ...]
-  ```
-
-  Writing a version 3 binding also creates its authoritative dispatch state, so
-  the confirmed policy is bound to the prepared WorkflowInstance when
-  configuration is written rather than when the first callback happens.
+  When the confirmed mode is event-driven, launch the trusted callback after
+  this contract is written. It loads the current issue contract immediately
+  before dispatch and derives its ordered CLI/model view in memory. Do not
+  create `driver/config.yaml`: that file is legacy migration evidence only and
+  cannot override a contract-managed callback. Its mutable
+  `dispatch_state.json` records only the active contract digest, sessions, and
+  delivery progress.
 
   Do not put the mode, CLI, model, session, callback, or any driver control
   setting in `issue.yaml`. Confirm that every entry reports `event-driven
   session-and-dispatch: conforming` before accepting the contract. When the
   primary is Codex and this command runs from a Codex App thread, the first
   Codex entry's valid runtime-owned host binding is recorded only in the
-  skill-owned binding; no fallback inherits it.
+  callback runtime; no fallback inherits it.
 
   Confirm these two separate lifecycle boundaries explicitly. An unbound entry
   first receives a bootstrap exactly equivalent to `say "HI"`; Codex, Claude,
@@ -450,7 +444,9 @@ not schedule review work. `pr.auto_create`, when the effective playbook requests
 is projected into the existing generic PR input only after entry validation.
 
 On resume, Primary and Backup Drivers must first refresh skill-owned preflight
-evidence and use `scripts/validate_driver_entry.py`. Metadata-only cache churn
-may rebuild derived views; material or unknown semantic evidence stops for
-reconfirmation. Session, dispatch, callback delivery, active CLI, and PR URL
-remain runtime state rather than contract fields.
+evidence and use `scripts/run_validated_driver_workflow.py`, which validates
+the contract and the existing generic derived views immediately before it
+launches CAFE. Metadata-only cache churn may rebuild derived views; material or
+unknown semantic evidence stops for reconfirmation. Session, dispatch, callback
+delivery, active CLI, and PR URL remain runtime state rather than contract
+fields.

@@ -436,7 +436,7 @@ mandate:
     assert "| issue_nature | feature/integration |" in result.stdout
     assert "| issue_scale | medium |" in result.stdout
     assert "| model_adjustment_authority | driver_autonomous |" in result.stdout
-    assert "| contract_version | 2 |" in result.stdout
+    assert "| schema_version | 1 |" in result.stdout
     assert "| driver.mode | unattended |" in result.stdout
     assert "### Preflight evidence" in result.stdout
     assert "| runtime_update.status | current |" in result.stdout
@@ -511,6 +511,8 @@ def test_confirmed_kickoff_activates_one_issue_scoped_driver_contract(tmp_path: 
     assert contract["identity"] == {"issue_name": "issue346", "workflow_id": "prepared-346"}
     assert contract["pr"]["auto_create"] is False
     assert "proactive_review.yaml" not in {path.name for path in (issue_dir / "driver").iterdir()}
+    assert "No proactive review was confirmed for development." in result.stdout
+    assert "| schema_version | 1 |" in result.stdout
 
     entry = subprocess.run(
         [
@@ -892,6 +894,50 @@ def test_phase_writer_installs_exact_confirmed_chains_atomically(tmp_path: Path)
         ("codex", "gpt-5.6-sol"),
         ("claude", "claude-opus-5"),
     )
+
+
+def test_driver_launcher_checks_derived_inputs_before_generic_execution(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The sole launcher binds a validated Driver projection to generic inputs."""
+    entry = _load_script_module(
+        SKILL_ROOT / "scripts" / "validate_driver_entry.py", "test_driver_entry_adapter"
+    )
+    monkeypatch.setitem(sys.modules, "validate_driver_entry", entry)
+    launcher = _load_script_module(
+        SKILL_ROOT / "scripts" / "run_validated_driver_workflow.py", "test_driver_launcher"
+    )
+    issue_config = tmp_path / "issue.yaml"
+    issue_config.write_text(
+        "playbook_id: standard\npr:\n  auto_create: false\n", encoding="utf-8"
+    )
+    phase_config = tmp_path / "phases.yaml"
+    phase_config.write_text(
+        "develop:\n  name: David\n  role: developer\n  clis:\n"
+        "    - cli: codex\n      model: exact\n",
+        encoding="utf-8",
+    )
+    projection = {
+        "generic_inputs": {
+            "playbook_id": "standard",
+            "pr_auto_create": False,
+            "phase_chains": {"develop": [{"cli": "codex", "model": "exact"}]},
+        }
+    }
+
+    launcher._verify_generic_projection(
+        projection, issue_config=issue_config, phase_config=phase_config
+    )
+
+    phase_config.write_text(
+        "develop:\n  name: David\n  role: developer\n  clis:\n"
+        "    - cli: codex\n      model: wrong\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="does not match"):
+        launcher._verify_generic_projection(
+            projection, issue_config=issue_config, phase_config=phase_config
+        )
 
 
 def test_phase_writer_accepts_primary_only_chain(tmp_path: Path) -> None:
@@ -1705,12 +1751,12 @@ def test_use_cafe_workflow_defines_event_driven_mode_and_model_authority() -> No
     assert "event-driven" in skill
     assert "explicit exact model" in normalized_skill
     assert "cafe workflow --execute --mute-agent-output" in skill
-    assert "cafe workflow --issue <issue> --execute --mute-agent-output --background" in running
+    assert "scripts/run_validated_driver_workflow.py" in running
     assert "manual diagnostic `--single-step`" in normalized_skill
     assert "callbacks are best effort" in normalized_running
     assert "No ordinary operating mode uses it" in normalized_running
     assert "--on-workflow-event builtin:use-cafe-workflow:workflow_event_callback" in running
-    assert ".cafe/issues/<issue>/driver/config.yaml" in running
+    assert "`driver/config.yaml` is a legacy migration input" in running
     assert "`codex queue`" in running
     assert "--advancement" not in normalized_running
     assert "--delegated-availability" not in normalized_running
@@ -1726,7 +1772,7 @@ def test_use_cafe_workflow_defines_event_driven_mode_and_model_authority() -> No
     assert "active worktree's `.cafe/phases.yaml`" in normalized_models
 
 
-def test_event_driver_documentation_defines_the_full_v3_lifecycle() -> None:
+def test_event_driver_documentation_defines_the_contract_managed_lifecycle() -> None:
     skill = _read_skill_resource("SKILL.md")
     kickoff = _read_skill_resource("references/kickoff.md")
     running = _read_skill_resource("references/running_workflow.md")
@@ -1741,8 +1787,8 @@ def test_event_driver_documentation_defines_the_full_v3_lifecycle() -> None:
     assert "bootstrap never counts as event delivery or acceptance" in contract
     assert "actual callback durable acceptance" in contract
     assert "Copilot never receives a caller-selected new-session ID" in contract
-    assert "one authoritative `dispatch_state.json`" in contract
-    assert "bound to the prepared WorkflowInstance when configuration is written" in contract
+    assert "`dispatch_state.json` is mutable runtime state bound to that contract's digest" in contract
+    assert "callback reads the issue-scoped `driver/contract.json`" in contract
     assert "provider acknowledgement is bound to the exact event identity" in contract
     assert "no session-file discovery, directory diff, sleep, polling, or watcher" in contract
     assert "ambiguous outcome stops forward routing" in contract

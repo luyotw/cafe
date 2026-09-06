@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime, timezone
 import importlib.util
 from pathlib import Path
@@ -60,7 +61,7 @@ def _proposal() -> dict[str, object]:
             "capabilities": ["cafe.pr.publish"],
         },
     ]
-    return {
+    proposal: dict[str, object] = {
         "playbook": {
             "id": "custom-capable",
             "source": "test:custom-capable",
@@ -100,9 +101,29 @@ def _proposal() -> dict[str, object]:
         "driver": {"mode": "unattended"},
         "checkout": {"kind": "current_checkout"},
         "pr": {"auto_create": False, "post_todo_list": []},
-        "semantic_facts": {"graph": ["develop", "publish"], "capability": "cafe.pr.publish"},
+        "semantic_facts": {},
         "material_assumptions": {"permissions": ["local"], "provider": "codex"},
     }
+    proposal["semantic_facts"] = _fresh_policy_facts(proposal)
+    return proposal
+
+
+def _fresh_policy_facts(proposal: dict[str, object]) -> dict[str, object]:
+    fields = (
+        "playbook",
+        "locales",
+        "confirmation_contract",
+        "reactive_user_handoffs",
+        "mandate",
+        "issue_assessment",
+        "phases",
+        "proactive_review",
+        "model_adjustment",
+        "driver",
+        "checkout",
+        "pr",
+    )
+    return {"effective_policy": {name: deepcopy(proposal[name]) for name in fields}}
 
 
 def _activate(issue_dir: Path) -> dict[str, object]:
@@ -140,7 +161,9 @@ def test_resume_and_cold_takeover_reach_the_same_safe_authority_decision(tmp_pat
     assert primary["generic_inputs"] == backup["generic_inputs"]
     assert primary["generic_inputs"]["pr_auto_create"] is False
 
-    facts["semantic_facts"] = {"graph": ["develop", "publish", "release"]}
+    changed = _proposal()
+    changed["phases"][0]["chain"][0]["model"] = "changed-model"
+    facts["semantic_facts"] = _fresh_policy_facts(changed)
     with pytest.raises(ValueError):
         adapter.validate_entry(
             issue_dir=issue_dir, issue_name="journey", workflow_id="workflow-journey", fresh_facts=facts
