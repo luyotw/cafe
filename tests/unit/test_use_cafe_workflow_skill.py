@@ -1926,6 +1926,21 @@ def test_proactive_review_execution_limits_are_driver_policy_only() -> None:
     assert "ordinary user-initiated chat behavior remains unchanged" in normalized
 
 
+def test_proactive_review_authority_precedence_has_no_blanket_callback_or_route_bypass() -> None:
+    running = _read_skill_resource("references/running_workflow.md")
+    handoffs = _read_skill_resource("references/handoffs_and_alignment.md")
+
+    callback_policy = " ".join(running.split())
+    correction_flow = handoffs.split("## Route proactive-review findings through existing handoffs", 1)[1]
+
+    assert "choose a user answer" in callback_policy
+    assert "correction revise is not a user answer" in callback_policy
+    assert "only this declared correction outcome is excepted" in callback_policy
+    assert "chat before any correction routing" in correction_flow
+    assert "after due review/chat consensus" in correction_flow
+    assert "advancing `confirm`" in correction_flow
+
+
 def test_proactive_review_rechecks_a_composite_snapshot_at_each_use_boundary() -> None:
     running = _read_skill_resource("references/running_workflow.md")
     normalized = " ".join(running.split()).lower()
