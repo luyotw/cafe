@@ -1985,7 +1985,8 @@ def test_event_driver_documentation_defines_the_contract_managed_lifecycle() -> 
     assert "provider-created session ID" in contract
     assert "persisted in `dispatch_state.json` before the actual callback" in contract
     assert "existing acquired session" in contract
-    assert "first Codex entry's valid runtime-owned host binding" in contract
+    assert "best-effort first-session hint" in contract
+    assert "binding failure does not block workflow execution" in contract
     assert "bootstrap never counts as event delivery or acceptance" in contract
     assert "actual callback durable acceptance" in contract
     assert "Copilot never receives a caller-selected new-session ID" in contract

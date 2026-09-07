@@ -69,11 +69,13 @@ verified structured or terminal evidence. The callback persists that ID in
 is reused without bootstrap. Copilot has the same lifecycle and never receives
 a caller-selected new-session ID.
 
-When the first entry is Codex and configuration runs from the Codex App, the
-first Codex entry's valid runtime-owned host binding is already acquired and
-uses `codex queue`; no fallback inherits it. Otherwise the actual callback
-resumes only that entry's persisted provider session. Bootstrap never counts as
-event delivery or acceptance. Only actual callback durable acceptance stops
+When the first entry is Codex and activation runs from the Codex App, its
+runtime-owned host thread is a best-effort hint for the first session. A
+persisted acquired session always wins, and host-binding failure warns without
+blocking workflow execution. A successfully bound host session uses
+`codex queue`; no fallback inherits it. Otherwise the actual callback resumes
+only that entry's persisted provider session or bootstraps an unbound entry.
+Bootstrap never counts as event delivery or acceptance. Only actual callback durable acceptance stops
 forward routing, makes that entry active for later events, and records a
 takeover. The provider acknowledgement is bound to the exact event identity in
 the dispatched invocation before it can satisfy acceptance. This is transport

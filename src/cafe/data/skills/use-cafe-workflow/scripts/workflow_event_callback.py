@@ -10,6 +10,7 @@ import json
 import os
 import stat
 import subprocess
+import sys
 import tempfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -371,7 +372,6 @@ def _contract_callback_config(
     issue_dir: Path,
     issue_name: str,
     workflow_id: str,
-    include_current_host_session: bool = True,
 ) -> dict[str, Any] | None:
     """Derive one callback-only transport view from the durable contract.
 
@@ -404,10 +404,6 @@ def _contract_callback_config(
         "contract_sha256": projection.contract_sha256,
         "clis": normalized,
     }
-    if include_current_host_session and normalized[0]["cli"] == AgentCLI.CODEX.value:
-        host_session = _current_host_session_binding()
-        if host_session is not None:
-            config["host_session"] = host_session
     return config
 
 
@@ -418,31 +414,55 @@ def activate_confirmed_contract_with_host_session(
     workflow_id: str,
     activate_contract: Callable[[], Any],
 ) -> Any:
-    """Activate the contract and bind its visible Codex thread under one lock.
+    """Activate the contract, then best-effort bind its visible Codex thread.
 
     Background workers and callback children intentionally discard Codex host
     controls. Initializing dispatch state during confirmed activation is the
     last trusted point where the originating App thread is still available.
     """
+    result = activate_contract()
     driver_dir = _driver_dir(issue_dir)
-    with _session_lock(driver_dir):
-        contract_path = driver_dir / "contract.json"
-        state_path = driver_dir / DISPATCH_STATE_FILENAME
-        if not contract_path.exists() and state_path.exists():
-            raise ValueError("event-driven dispatch state exists before Driver activation")
-        result = activate_contract()
-        config = _contract_callback_config(
-            issue_dir=issue_dir,
-            issue_name=issue_name,
-            workflow_id=workflow_id,
-        )
-        if config is not None and isinstance(config.get("host_session"), dict):
+    try:
+        with _session_lock(driver_dir):
+            config = _contract_callback_config(
+                issue_dir=issue_dir,
+                issue_name=issue_name,
+                workflow_id=workflow_id,
+            )
+            if config is None or config["clis"][0]["cli"] != AgentCLI.CODEX.value:
+                return result
+            host_session = _current_host_session_binding()
+            if host_session is None:
+                return result
+            state_path = driver_dir / DISPATCH_STATE_FILENAME
+            if state_path.exists():
+                state = _load_or_initialize_dispatch_state(
+                    driver_dir,
+                    workflow_id=workflow_id,
+                    config=config,
+                )
+                first_session = state["entries"][0]["session"]
+                if first_session is not None or state["events"]:
+                    return result
+                updated = copy.deepcopy(state)
+                updated["entries"][0]["session"] = {
+                    "id": host_session["thread_id"],
+                    "source": "host_session",
+                    "acquired_at": _now(),
+                }
+                _write_dispatch_state(driver_dir, updated)
+                return result
             _load_or_initialize_dispatch_state(
                 driver_dir,
                 workflow_id=workflow_id,
-                config=config,
+                config={**config, "host_session": host_session},
             )
-        return result
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(
+            f"Warning: Driver contract activated without Codex host binding: {exc}",
+            file=sys.stderr,
+        )
+    return result
 
 
 def _valid_nonempty_string(value: Any) -> bool:
@@ -974,7 +994,6 @@ def read_status(issue_dir: Path) -> dict[str, Any]:
             issue_dir=issue_dir,
             issue_name=issue_dir.name,
             workflow_id=_prepared_workflow_id(issue_dir),
-            include_current_host_session=False,
         )
     except ValueError as exc:
         from cafe.driver import DriverContractMissingError
