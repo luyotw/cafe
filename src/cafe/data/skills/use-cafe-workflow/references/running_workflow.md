@@ -241,12 +241,14 @@ and the chat response is discussion evidence, not workflow authority.
 
 The bounded consumer accepts at most 20 findings and at most 12,000 UTF-8
 bytes for the rendered prompt; each evidence item is limited to at most 500
-UTF-8 bytes. Run the one-shot chat with a timeout of 120 seconds. One-shot chat
-output is limited to 4,000 UTF-8 bytes; treat more as ambiguous. An over-budget batch remains
-paused and fails closed. The Driver must not truncate, split, or silently omit
-findings or evidence to fit a limit; retain the pause and obtain the applicable
-user-owned scope decision before a new full
-review can form a compliant batch.
+UTF-8 bytes. The 120-second timeout and 4,000-byte output cap are policy-only
+Driver limits: treat a breach as ambiguous and retain the pause. The generic
+`cafe chat` runtime does not enforce them, so the Driver must not claim runtime
+enforcement or fabricate a provider-side kill/receipt. Ordinary user-initiated
+chat behavior remains unchanged. An over-budget batch remains paused and fails
+closed. The Driver must not truncate, split, or silently omit findings or
+evidence to fit a limit; retain the pause and obtain the applicable user-owned
+scope decision before a new full review can form a compliant batch.
 
 Findings, chat attempts, disagreements, and rebuttals do not create an
 iteration. Independently verify a rebuttal against the same unchanged artifact.

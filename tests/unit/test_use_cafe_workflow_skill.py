@@ -1910,10 +1910,20 @@ def test_proactive_review_consensus_has_one_authority_path_and_a_bounded_input()
         "each evidence item is limited to at most 500 utf-8 bytes",
         "over-budget batch remains paused",
         "must not truncate, split, or silently omit findings",
-        "one-shot chat output is limited to 4,000 utf-8 bytes",
-        "timeout of 120 seconds",
+        "4,000-byte output cap",
+        "120-second timeout",
     ):
         assert required in contract
+
+
+def test_proactive_review_execution_limits_are_driver_policy_only() -> None:
+    running = _read_skill_resource("references/running_workflow.md")
+    normalized = " ".join(running.split()).lower()
+
+    assert "policy-only driver limits" in normalized
+    assert "generic `cafe chat` runtime does not enforce them" in normalized
+    assert "must not claim runtime enforcement" in normalized
+    assert "ordinary user-initiated chat behavior remains unchanged" in normalized
 
 
 def test_proactive_review_rechecks_a_composite_snapshot_at_each_use_boundary() -> None:
