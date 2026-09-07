@@ -2374,6 +2374,8 @@ class BlackboardWorkflowRuntime:
         contract_source: str = "workflow.pause",
         record_event: bool = True,
         execution_result: Any = None,
+        materialized_task_id: Optional[str] = None,
+        materialize_user_task: bool = True,
     ) -> PlaybookRunResult:
         replaced_handoff = self._replaced_user_handoff
         if (
@@ -2395,11 +2397,12 @@ class BlackboardWorkflowRuntime:
                 status_code=status_code,
                 source=contract_source,
             )
-        materialized_task_id = self._materialize_user_handoff_task(
-            current_step=current_step,
-            replaced_handoff=replaced_handoff,
-            execution_result=execution_result,
-        )
+        if materialize_user_task:
+            materialized_task_id = self._materialize_user_handoff_task(
+                current_step=current_step,
+                replaced_handoff=replaced_handoff,
+                execution_result=execution_result,
+            )
         if materialized_task_id:
             self._replaced_user_handoff = None
         if record_event:
@@ -3075,6 +3078,20 @@ class BlackboardWorkflowRuntime:
         status_code = result.status_code
         self._patch_reconciled_iteration_metadata(result)
 
+        # Reconciliation validates the baton directly from disk.  Publish that
+        # recovered contract to the in-memory state before following the normal
+        # pause path, whose HumanTask materializer reads the blackboard contract.
+        self.blackboard.handoff_contract = contract
+        self.blackboard_store.save(self.blackboard)
+
+        materialized_task_id: Optional[str] = None
+        if contract.to_owner == HandoffOwner.USER:
+            # A reconciliation marker suppresses future retries, so make the
+            # actionable task durable before publishing that completion point.
+            materialized_task_id = self._materialize_user_handoff_task(
+                current_step=current_step,
+            )
+
         if not self._reconciliation_event_exists(
             current_step=current_step,
             status_code=status_code,
@@ -3101,6 +3118,8 @@ class BlackboardWorkflowRuntime:
                 runtime=runtime,
                 reason="reconciled_handoff",
                 update_contract=False,
+                materialized_task_id=materialized_task_id,
+                materialize_user_task=False,
             )
 
         if contract.to_owner == HandoffOwner.DONE:
