@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -368,7 +369,10 @@ def test_use_cafe_workflow_keeps_playbook_selection_issue_owned() -> None:
         "persist the effective playbook in `.cafe/issues/<issue-name>/issue.yaml`"
         in normalized_selection
     )
-    assert "separate Driver-owned subset is persisted in `driver/contract.json`" in normalized_selection
+    assert (
+        "separate Driver-owned subset is persisted in `driver/contract.json`"
+        in normalized_selection
+    )
     assert (
         "separate Driver-owned subset is persisted in `driver/contract.json`"
         in normalized_selection
@@ -1832,6 +1836,274 @@ def test_use_cafe_workflow_defines_phase_scoped_proactive_driver_review() -> Non
     assert "must not launch a separate reviewer" in normalized
 
 
+def test_proactive_review_consensus_uses_formal_correction_and_user_owned_confirmation() -> None:
+    """The Driver contract keeps correction authority narrow and independently reviewed."""
+    skill = _read_skill_resource("SKILL.md")
+    running = _read_skill_resource("references/running_workflow.md")
+    handoffs = _read_skill_resource("references/handoffs_and_alignment.md")
+    contract = " ".join((skill + running + handoffs).split())
+
+    for required in (
+        "complete all applicable review passes before producing one bounded findings batch",
+        "exact current artifact identity",
+        "every observable blocker",
+        "requirement or boundary",
+        "concise evidence",
+        "accept or rebut each finding",
+        "`cafe chat <role> -p`",
+        "existing responsible phase-agent session",
+        "Chat must not edit the current phase output",
+        "chat response is discussion evidence, not workflow authority",
+        "findings, chat attempts, disagreements, and rebuttals do not create an iteration",
+        "formal correction iteration only through the active declared `revise` outcome",
+        "requires feedback",
+        "`correction: true`",
+        "correction rather than downstream advancement",
+        "consolidated findings, reached consensus, and acceptance conditions",
+        "--no-resume --json",
+        "verify the durable task result and correction continuation",
+        "Only the resumed runtime materializes and executes the next formal iteration",
+        "next observable pause or failure",
+        "complete Driver re-review",
+        "attached, unattended, and event-driven callback",
+        "fail closed",
+        "same unchanged artifact",
+        "accepted finding without a durable correction",
+        "partial, ambiguous, interrupted, failed, stale, or unresolved",
+    ):
+        assert required.lower() in contract.lower()
+
+    for required in (
+        "Driver may submit only a declared non-advancing `revise`",
+        "user_required and mandatory confirmation gates keep advancing `confirm` user-owned",
+        "driver_confirmable clean confirm remains driver-permitted",
+        "No user prompt occurs during an autonomous correction loop",
+        "one final user confirmation for each user-owned clean advancement candidate",
+        "later clean candidate must be presented again",
+        "clarification, permission, capability, scope, strategic, and unknown decisions remain user-owned",
+        "all eight decision-packet elements",
+        "bare confirmation requests, artifact-link-only handoffs, and raw artifact dumps are invalid",
+        "policy-only",
+        "exact next phase/model",
+        "external-side-effect boundary",
+    ):
+        assert required.lower() in contract.lower()
+
+
+def test_proactive_review_decision_packet_names_each_required_element() -> None:
+    handoffs = _read_skill_resource("references/handoffs_and_alignment.md")
+    normalized = " ".join(handoffs.split())
+
+    for element in (
+        "current phase and completed work",
+        "concrete proposed behavior/change and why it is needed",
+        "material authority or contract changes",
+        "included and excluded scope",
+        "validation evidence and Driver review disposition",
+        "remaining risks, limitations, and trade-offs",
+        "enforcement is policy-only or runtime-enforced",
+        "exact next phase/model and external-side-effect boundary",
+        "every declared option, consequence, required feedback or target, and valid reply example",
+    ):
+        assert element in normalized
+
+
+def test_proactive_review_consensus_has_one_authority_path_and_a_bounded_input() -> None:
+    running = _read_skill_resource("references/running_workflow.md")
+    handoffs = _read_skill_resource("references/handoffs_and_alignment.md")
+    contract = " ".join((running + handoffs).split()).lower()
+
+    for required in (
+        "chat before any correction routing",
+        "only user-owned clean advancement candidates receive a user confirmation",
+        "exception for an active declared non-advancing correction revise",
+        "at most 20 findings",
+        "at most 12,000 utf-8 bytes",
+        "each evidence item is limited to at most 500 utf-8 bytes",
+        "over-budget batch remains paused",
+        "must not truncate, split, or silently omit findings",
+        "4,000-byte output cap",
+        "120-second timeout",
+    ):
+        assert required in contract
+
+
+def test_proactive_review_execution_limits_are_driver_policy_only() -> None:
+    running = _read_skill_resource("references/running_workflow.md")
+    normalized = " ".join(running.split()).lower()
+
+    assert "policy-only driver limits" in normalized
+    assert "generic `cafe chat` runtime does not enforce them" in normalized
+    assert "must not claim runtime enforcement" in normalized
+    assert "ordinary user-initiated chat behavior remains unchanged" in normalized
+
+
+def test_proactive_review_authority_precedence_has_no_blanket_callback_or_route_bypass() -> None:
+    running = _read_skill_resource("references/running_workflow.md")
+    handoffs = _read_skill_resource("references/handoffs_and_alignment.md")
+
+    task_authority = " ".join(
+        running.split("The callback receives only an asynchronous durable-event notice.", 1)[1]
+        .split("## Commands and handoffs", 1)[0]
+        .split()
+    )
+    correction_flow = " ".join(
+        handoffs.split("## Route proactive-review findings through existing handoffs", 1)[1]
+        .split("## Present a self-contained user decision", 1)[0]
+        .split()
+    )
+
+    def is_consistent(task_policy: str, routing: str) -> bool:
+        task_policy = task_policy.lower()
+        routing = routing.lower()
+        task_level_rule = re.search(
+            r"(?:(except for) )?an active declared non-advancing correction revise, a mandatory, `user_required`, clarification, permission, or capability task requires a \*\*user-facing driver turn\*\*",
+            task_policy,
+        )
+        callback_blanket = re.search(
+            r"callback.{0,100}(?:must never|cannot).{0,100}correction revise",
+            task_policy,
+        )
+        route_before_chat = re.search(
+            r"(?:route|routing).{0,100}before (?:the )?chat",
+            routing,
+        )
+        return (
+            "choose a user answer" in task_policy
+            and "correction revise is not a user answer" in task_policy
+            and "only this declared correction outcome is excepted" in task_policy
+            and "except for an active declared non-advancing correction revise" in task_policy
+            and "permits the current driver, including an event-driven callback, to submit only that revise"
+            in task_policy
+            and task_level_rule is not None
+            and task_level_rule.group(1) == "except for"
+            and not callback_blanket
+            and "chat before any correction routing" in routing
+            and "after due review/chat consensus" in routing
+            and "advancing `confirm`" in routing
+            and not route_before_chat
+        )
+
+    assert is_consistent(task_authority, correction_flow)
+    assert not is_consistent(
+        task_authority.replace(
+            "Except for an active declared non-advancing correction revise, a mandatory,",
+            "An active declared non-advancing correction revise, a mandatory,",
+        ),
+        correction_flow,
+    )
+    assert not is_consistent(
+        task_authority + " The callback must never submit a correction revise.",
+        correction_flow,
+    )
+    assert not is_consistent(
+        task_authority,
+        correction_flow
+        + " The Driver may route correction before chat and before applying the authority matrix.",
+    )
+
+
+def test_proactive_review_initial_routing_task_flow_and_matrix_share_correction_precedence() -> (
+    None
+):
+    running = _read_skill_resource("references/running_workflow.md")
+    handoffs = _read_skill_resource("references/handoffs_and_alignment.md")
+
+    initial_routing = " ".join(
+        handoffs.split("Then route by intent:", 1)[1]
+        .split("## Route proactive-review findings through existing handoffs", 1)[0]
+        .split()
+    ).lower()
+    task_flow = " ".join(
+        running.split("## Completing a HumanTask", 1)[1]
+        .split("## Commands and handoffs", 1)[0]
+        .split()
+    ).lower()
+    authority_matrix = " ".join(
+        handoffs.split(
+            "Use this outcome-sensitive authority matrix after due review/chat consensus:", 1
+        )[1]
+        .split("## Present a self-contained user decision", 1)[0]
+        .split()
+    ).lower()
+
+    correction_outcome = (
+        "active declared non-advancing `revise` requiring feedback and marked `correction: true`"
+    )
+    prior_initial_routing_rules = (
+        "`confirm_output` from a mandatory humantask step: always stop for the real user.",
+        "`confirm_output` from a `user_required` step: stop for user approval or correction.",
+    )
+    prior_task_flow = " ".join(
+        """
+        2. For user-owned tasks, serialize only the user's supplied answer into that schema.
+        The driver may add the task ID required by the schema, but must not infer a decision,
+        approval, permission, or missing answer.
+        """.split()
+    ).lower()
+
+    def is_consistent(initial: str, task: str, matrix: str) -> bool:
+        return (
+            correction_outcome in initial
+            and "after complete driver review and `cafe chat` consensus" in initial
+            and "mandatory or `user_required` advancing `confirm`" in initial
+            and not any(rule in initial for rule in prior_initial_routing_rules)
+            and correction_outcome in task
+            and "driver may serialize the correction result" in task
+            and prior_task_flow not in task
+            and correction_outcome in matrix
+            and "mandatory confirmation gates keep advancing `confirm` user-owned"
+            in matrix
+        )
+
+    assert is_consistent(initial_routing, task_flow, authority_matrix)
+    for prior_rule in prior_initial_routing_rules:
+        assert not is_consistent(
+            initial_routing + " " + prior_rule,
+            task_flow,
+            authority_matrix,
+        )
+    assert not is_consistent(
+        initial_routing,
+        task_flow + " " + prior_task_flow,
+        authority_matrix,
+    )
+    assert not is_consistent(
+        initial_routing + " " + " ".join(prior_initial_routing_rules),
+        task_flow + " " + prior_task_flow,
+        authority_matrix,
+    )
+
+
+def test_proactive_review_rechecks_a_composite_snapshot_at_each_use_boundary() -> None:
+    running = _read_skill_resource("references/running_workflow.md")
+    normalized = " ".join(running.split()).lower()
+
+    for required in (
+        "composite review snapshot",
+        "artifact identity, accepted-requirements identity, correction-history identity",
+        "active task identity, handoff/baton identity, and driver-contract identity",
+        "immediately before invoking chat",
+        "immediately before task completion, confirmation, or reuse of a clean result",
+        "any mismatch invalidates the review/chat result",
+        "retain the pause and restart the full review",
+    ):
+        assert required in normalized
+
+
+def test_proactive_review_snapshot_includes_the_resolved_chat_identity() -> None:
+    running = _read_skill_resource("references/running_workflow.md")
+    normalized = " ".join(running.split()).lower()
+
+    for required in (
+        "phase configuration identity, resolved cli/model identity, persisted session identity",
+        "playbook chat-skills identity, and prepared chat-environment identity",
+        "the correction revise is not a user answer",
+        "only this declared correction outcome is excepted from the callback prohibition",
+    ):
+        assert required in normalized
+
+
 def test_kickoff_rejects_required_review_without_a_scheduled_pause(tmp_path: Path) -> None:
     strategic_context = tmp_path / "strategic_context.yaml"
     strategic_context.write_text(
@@ -2015,9 +2287,10 @@ def test_use_cafe_workflow_keeps_human_task_completion_in_the_interactive_driver
         in normalized_running
     )
     assert (
-        "cannot wait for, collect, infer, or choose an answer for a mandatory" in normalized_running
+        "cannot wait for, collect, infer, or choose a user answer for a mandatory"
+        in normalized_running
     )
-    assert "may instead be completed by any driver" in normalized_running
+    assert "may instead be completed by any driver" in normalized_running.lower()
     assert "cafe task complete <active-human-task-id>" in handoffs
     assert '--user-input \'{"task":"output-review"' not in handoffs
 

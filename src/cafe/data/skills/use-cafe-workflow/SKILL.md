@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
-metadata: {version: 1.31.1}
+metadata: {version: 1.32.0}
 ---
 
 # Use CAFE Workflow
@@ -54,7 +54,7 @@ If more than one situation applies, read every listed reference before acting; d
 - Treat planned output confirmation, reactive user handoffs, and semantic
   alignment as separate decisions. The driver owns alignment; phase agents do
   not approve themselves.
-- Make every user-owned handoff self-contained in conversation: assume no terminal, repository, or artifact access; render phase, purpose, questions, options, and plain-language reply format (paths/links are optional support only).
+- Make every user-owned handoff self-contained in conversation: assume no terminal, repository, or artifact access; render the mandatory eight-element decision packet, phase, purpose, questions, options, and plain-language reply format (paths/links are optional support only). Bare confirmation, link-only, and raw-artifact-dump handoffs are invalid.
 - Validate issue-decomposition assessments before confirming spec or plan;
   coordinate any authorized split through existing authority boundaries and
   reconstruct linked-work position from durable records.
@@ -120,10 +120,10 @@ If more than one situation applies, read every listed reference before acting; d
   unattended with the trusted callback. A callback is an asynchronous,
   best-effort notification:
   it never gates the next phase and must not use `--single-step`.
-- [ ] In a user-facing driver turn, relay only an explicit mandatory/user-required HumanTask answer with `cafe task complete --no-resume --json`, verify it durably, then resume using the confirmed mode; a confirmed `driver_confirmable` gate may be verified and completed by a driver, but detached callbacks cannot collect or infer user answers.
+- [ ] In a user-facing driver turn, relay only an explicit mandatory/user-required HumanTask answer with `cafe task complete --no-resume --json`, verify it durably, then resume using the confirmed mode. A Driver may submit an active declared non-advancing correction revise only after proactive-review consensus; advancing mandatory/user-required confirmation and every other user-owned decision remain with the user. A confirmed `driver_confirmable` gate may be verified and completed by a Driver, but detached callbacks cannot collect or infer user answers.
 - [ ] Timestamp proactive polls and user updates; handle substantive output, completion, errors, and HumanTasks immediately.
 - [ ] At each contract-defined pause or completion, inspect new phase evidence and revise only remaining model chains within confirmed authority.
-- [ ] At the existing scheduled confirmation pause after each executed required phase, the current Driver reviews its durable output before completing or relaying the confirmation, routes consolidated blockers through the existing correction path, and does not launch a separate reviewer or recursively review the result.
+- [ ] At the existing scheduled confirmation pause after each executed required phase, the current Driver completes its review before one `cafe chat <role> -p` consensus exchange, uses the declared correction path only for agreed durable changes, re-reviews every formal correction iteration, and does not launch a separate reviewer or recursively review the result.
 - [ ] When CAFE pauses, classify the handoff before supplying any input.
 - [ ] When behavior is wrong, stop normal execution and use the bounded
   diagnosis reference.

@@ -107,30 +107,40 @@ user handoffs, mandate, and model-adjustment authority.
 The callback receives only an asynchronous durable-event notice. It must
 re-check `cafe status`/`cafe show`; a notice can be stale. It may diagnose and
 perform actions already authorized by the kickoff. It cannot wait for, collect,
-infer, or choose an answer for a mandatory, `user_required`, clarification,
-permission, or capability task, nor grant permissions or capabilities. It may
-complete a declared `driver_confirmable` task only after verifying the current
-confirmation contract and evidence. It does not own the background worker or
+infer, or choose a user answer for a mandatory, `user_required`, clarification,
+permission, or capability task, nor grant permissions or capabilities. The
+correction revise is not a user answer: only this declared correction outcome
+is excepted from the callback prohibition, and only after due review/chat
+consensus. It may complete a declared `driver_confirmable` task only after
+verifying the current confirmation contract and evidence. It does not own the background worker or
 gain a safe stop channel. An existing reliable, authorized control may be used
 only after verification; this feature creates no PID registry, cancellation API,
 recovery protocol, or stop guarantee.
 
 ## Completing a HumanTask
 
-The callback is not an interaction channel. A mandatory, `user_required`,
-clarification, permission, or capability task requires a **user-facing driver
-turn** to receive the user's explicit answer. A `driver_confirmable` task may
-instead be completed by any driver, including an event-driven callback, after
-it verifies the confirmed contract and evidence. Both cases use the same durable
-task flow:
+The callback is not an interaction channel. Except for an active declared
+non-advancing correction revise, a mandatory, `user_required`, clarification,
+permission, or capability task requires a **user-facing driver turn** to
+receive the user's explicit answer. The exception for an active declared
+non-advancing correction revise permits the current Driver, including an
+event-driven callback, to submit only that revise after due review/chat
+consensus; it never permits confirmation or another user-owned decision. A
+`driver_confirmable` task may instead be completed by any Driver, including an
+event-driven callback, after it verifies the confirmed contract and evidence.
+Both cases use the same durable task flow:
 
 1. Inspect the exact pending task with `cafe task inspect <task-id>` and read
    its declared input schema. Never reuse a stale task ID.
-2. For user-owned tasks, serialize only the user's supplied answer into that
-   schema. The driver may add the task ID required by the schema, but must not
-   infer a decision, approval, permission, or missing answer. For a
-   `driver_confirmable` task, use only its declared response after the required
-   contract and evidence verification.
+2. Classify the task before serializing its result. For an active declared
+   non-advancing `revise` requiring feedback and marked `correction: true`, the
+   Driver may serialize the correction result only after complete review and
+   `cafe chat` consensus, including the consolidated findings, consensus, and
+   acceptance conditions. For a user-owned task, serialize only the user's
+   supplied answer into that schema; the Driver may add the task ID required by
+   the schema, but must not infer a decision, approval, permission, or missing
+   answer. For a `driver_confirmable` task, use only its declared response after
+   the required contract and evidence verification.
 3. Run `cafe task complete <task-id> --result '<json>' --no-resume --json`.
    Treat an uncertain command result as unconfirmed: inspect durable task and
    handoff state before retrying. If the task is already complete, do not submit
@@ -212,11 +222,58 @@ work, unnecessary abstraction, and extension work. These checks apply equally
 to code and non-code phase output. An incomplete, interrupted, or ambiguous
 pass is not a no-blocking result.
 
-Then consolidate every currently observable blocker and send it through the
-responsible phase's existing correction route; do not edit generated phase
-artifacts or invent a side channel. After any correction or other candidate
-change, re-review the changed durable artifact, its correction delta, and every
-affected original requirement, repeating both scope checks. Stop with a
+Bind that work to a composite review snapshot: artifact identity,
+accepted-requirements identity, correction-history identity, active task
+identity, handoff/baton identity, and driver-contract identity. Re-resolve and
+compare the complete snapshot immediately before invoking chat and immediately
+before task completion, confirmation, or reuse of a clean result. Any mismatch
+invalidates the review/chat result: retain the pause and restart the full
+review from the current snapshot. The snapshot also binds phase configuration
+identity, resolved CLI/model identity, persisted session identity, playbook
+chat-skills identity, and prepared chat-environment identity. An artifact-only
+match is insufficient; resolve these inputs through the same existing chat
+configuration path at both checks rather than inventing a second session or
+environment mechanism.
+
+The Driver must complete all applicable review passes before producing one
+bounded findings batch. It names the reviewed phase and role, the exact current artifact
+identity, every observable blocker, its requirement or boundary, and concise
+evidence. Deliver that one batch through `cafe chat <role> -p` to the existing
+responsible phase-agent session. Ask the agent to accept or rebut each finding.
+Chat must not edit the current phase output: the prompt is discussion only,
+and the chat response is discussion evidence, not workflow authority.
+
+The bounded consumer accepts at most 20 findings and at most 12,000 UTF-8
+bytes for the rendered prompt; each evidence item is limited to at most 500
+UTF-8 bytes. The 120-second timeout and 4,000-byte output cap are policy-only
+Driver limits: treat a breach as ambiguous and retain the pause. The generic
+`cafe chat` runtime does not enforce them, so the Driver must not claim runtime
+enforcement or fabricate a provider-side kill/receipt. Ordinary user-initiated
+chat behavior remains unchanged. An over-budget batch remains paused and fails
+closed. The Driver must not truncate, split, or silently omit findings or
+evidence to fit a limit; retain the pause and obtain the applicable user-owned
+scope decision before a new full review can form a compliant batch.
+
+Findings, chat attempts, disagreements, and rebuttals do not create an
+iteration. Independently verify a rebuttal against the same unchanged artifact.
+An accepted finding without a durable correction remains blocking. If the
+Driver and phase agent agree that an artifact correction is necessary, the
+Driver may intentionally create one formal correction iteration only through
+the active declared `revise` outcome. First verify that the decision requires
+feedback, declares `correction: true`, and routes to correction rather than
+downstream advancement. Submit `cafe task complete ... --no-resume --json` with
+consolidated findings, reached consensus, and acceptance conditions; then verify
+the durable task result and correction continuation before resuming in the
+configured mode. Only the resumed runtime materializes and executes the next
+formal iteration. Inspect its durable input, delta, and output only at the next
+observable pause or failure, then complete Driver re-review of the resulting
+artifact and every affected requirement.
+
+After any correction or other candidate change, re-review the changed durable
+artifact, its correction delta, and every affected original requirement,
+repeating both scope checks. A partial, ambiguous, interrupted, failed, stale,
+or unresolved attempt must fail closed: retain the pause, restart from the
+current artifact identity, and complete a fresh full review. Stop with a
 self-contained user handoff when correction needs user-owned authority,
 permission, capability, scope selection, or an answer. A no-blocking result is
 quality evidence only: it does not replace `driver_confirmable` evidence,
@@ -229,14 +286,17 @@ no-blocking pass. Missing, stale, incomplete, or ambiguous proof requires a
 new full pass. This fail-closed rule stores no review status or correction
 history.
 
-Apply this same contract in attached, unattended, and event-driven modes, but
-only at the existing scheduled pause. Attached mode reviews before its paused
-handoff resumes, unattended mode reviews when the user returns while that pause
-is still pending, and an event-driven callback may begin after the durable pause
-notification. A phase-terminal callback that did not pause cannot make the
-review gating and must not be treated as a valid review opportunity. The
-callback remains asynchronous, best-effort, fail-open, and non-gating for
-workflow advancement.
+Apply this same contract in attached, unattended, and event-driven callback
+modes, but only at the existing scheduled pause. Attached mode reviews before
+its paused handoff resumes, unattended mode reviews when the user returns while
+that pause is still pending, and an event-driven callback may begin after the
+durable pause notification. A callback acting as the current Driver may submit
+the same pre-authorized declared correction revise after due review/chat
+consensus, but may not choose advancing confirmation or a user-owned decision.
+A phase-terminal callback that did not pause cannot make the review gating and
+must not be treated as a valid review opportunity. Callback failure must fail
+closed at the existing pause; callbacks remain asynchronous, best-effort, and
+non-gating for workflow advancement.
 
 Do not edit workflow artifacts, blackboard, or `next_step.txt` by hand except
 when repairing confirmed broken workflow state. Do not bypass CAFE by directly

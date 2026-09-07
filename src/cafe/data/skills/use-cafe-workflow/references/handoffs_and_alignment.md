@@ -35,9 +35,12 @@ input`:
 
 Then route by intent:
 
-- `confirm_output` from a mandatory HumanTask step: always stop for the real user.
-- `confirm_output` from a `user_required` step: stop for user approval or
-  correction.
+- An active declared non-advancing `revise` requiring feedback and marked
+  `correction: true` is the sole Driver correction exception: after complete
+  Driver review and `cafe chat` consensus, submit only that declared revise
+  through the existing correction route.
+- `confirm_output` from a mandatory or `user_required` advancing `confirm`
+  stops for the real user. Other user-owned decisions also stop for the user.
 - `confirm_output` from a `driver_confirmable` step: verify the output and
   required input artifacts are complete, in-mandate, and consistent with
   accepted upstream artifacts before confirming.
@@ -56,17 +59,34 @@ At an existing scheduled confirmation pause after a required phase, finish the
 current-Driver review before completing a `driver_confirmable` task or relaying
 a `user_required` answer that would resume the workflow. When the review finds
 blockers, consolidate every currently observable finding. State both missing
-necessary scope and excessive or unnecessary scope when applicable, then return
-the batch through the responsible phase's existing correction path. Do not edit
-the phase artifact, manufacture a replacement output, or turn the review result
-into a new recursive review target.
+necessary scope and excessive or unnecessary scope when applicable, then use
+chat before any correction routing. Deliver the batch to the responsible phase
+agent through the one-shot chat contract, resolve every finding by accepted
+durable correction or independently verified rebuttal, and only then apply the
+authority matrix below. Do not edit the phase artifact, manufacture a
+replacement output, or turn the review result into a new recursive review
+target.
 
-If the existing path requires a clarification, permission, capability, scope
-choice, strategic decision, or other user-owned authority, stop and present the
-self-contained user decision above. A no-blocking driver review is quality
-evidence only, never user confirmation and never a substitute for
-`driver_confirmable` evidence. Re-review changed durable output through the
-same process; keep built-in review and final PR review obligations separate.
+Use this outcome-sensitive authority matrix after due review/chat consensus:
+
+| Active outcome | Driver authority |
+| --- | --- |
+| Active declared non-advancing `revise` requiring feedback and marked `correction: true` | Driver may submit only a declared non-advancing `revise`, with consolidated findings, consensus, and acceptance conditions, to create the formal correction iteration. |
+| `user_required` or mandatory confirmation gate advancing `confirm` | user_required and mandatory confirmation gates keep advancing `confirm` user-owned. |
+| Clean `driver_confirmable` confirmation | driver_confirmable clean confirm remains driver-permitted after independent review. |
+| Clarification, permission, capability, scope, strategic, or unknown decision | clarification, permission, capability, scope, strategic, and unknown decisions remain user-owned. |
+
+Driver-triggered revise is correction, never approval. No user prompt occurs
+during an autonomous correction loop. Only user-owned clean advancement
+candidates receive a user confirmation; a clean `driver_confirmable` candidate
+is completed by the Driver after its independent review. Present one final user
+confirmation for each user-owned clean advancement candidate immediately before
+its transition. If the user revises or rejects that candidate, the later clean
+candidate must be presented again; an earlier confirmation is not
+lifetime approval. A no-blocking Driver review is quality evidence only, never
+user confirmation and never a substitute for `driver_confirmable` evidence.
+Re-review changed durable output through the same process; keep built-in review
+and final PR review obligations separate.
 
 ## Present a self-contained user decision
 
@@ -74,6 +94,24 @@ Before asking the user to answer a HumanTask, clarification, permission, or
 confirmation, prepare the response from the current task schema and phase
 evidence. Assume the user has no terminal, repository checkout, or artifact
 viewer.
+
+Every user-owned advancing confirmation and other user-owned decision must
+first provide all eight decision-packet elements, concisely enough for the
+decision and without assuming artifact access:
+
+1. current phase and completed work;
+2. concrete proposed behavior/change and why it is needed;
+3. material authority or contract changes;
+4. included and excluded scope;
+5. validation evidence and Driver review disposition;
+6. remaining risks, limitations, and trade-offs, including whether enforcement
+   is policy-only or runtime-enforced;
+7. exact next phase/model and external-side-effect boundary; and
+8. every declared option, consequence, required feedback or target, and valid
+   reply example.
+
+Bare confirmation requests, artifact-link-only handoffs, and raw artifact dumps
+are invalid. Artifact links may support, but never replace, this packet.
 
 - State the workflow phase, what completed, why it paused, and what will happen
   after the answer.
