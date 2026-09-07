@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -368,7 +369,10 @@ def test_use_cafe_workflow_keeps_playbook_selection_issue_owned() -> None:
         "persist the effective playbook in `.cafe/issues/<issue-name>/issue.yaml`"
         in normalized_selection
     )
-    assert "separate Driver-owned subset is persisted in `driver/contract.json`" in normalized_selection
+    assert (
+        "separate Driver-owned subset is persisted in `driver/contract.json`"
+        in normalized_selection
+    )
     assert (
         "separate Driver-owned subset is persisted in `driver/contract.json`"
         in normalized_selection
@@ -1852,13 +1856,19 @@ def test_proactive_review_consensus_uses_formal_correction_and_user_owned_confir
         "chat response is discussion evidence, not workflow authority",
         "findings, chat attempts, disagreements, and rebuttals do not create an iteration",
         "formal correction iteration only through the active declared `revise` outcome",
-        "requires feedback", "`correction: true`", "correction rather than downstream advancement",
+        "requires feedback",
+        "`correction: true`",
+        "correction rather than downstream advancement",
         "consolidated findings, reached consensus, and acceptance conditions",
-        "--no-resume --json", "verify the durable task result and correction continuation",
+        "--no-resume --json",
+        "verify the durable task result and correction continuation",
         "Only the resumed runtime materializes and executes the next formal iteration",
-        "next observable pause or failure", "complete Driver re-review",
-        "attached, unattended, and event-driven callback", "fail closed",
-        "same unchanged artifact", "accepted finding without a durable correction",
+        "next observable pause or failure",
+        "complete Driver re-review",
+        "attached, unattended, and event-driven callback",
+        "fail closed",
+        "same unchanged artifact",
+        "accepted finding without a durable correction",
         "partial, ambiguous, interrupted, failed, stale, or unresolved",
     ):
         assert required.lower() in contract.lower()
@@ -1873,7 +1883,9 @@ def test_proactive_review_consensus_uses_formal_correction_and_user_owned_confir
         "clarification, permission, capability, scope, strategic, and unknown decisions remain user-owned",
         "all eight decision-packet elements",
         "bare confirmation requests, artifact-link-only handoffs, and raw artifact dumps are invalid",
-        "policy-only", "exact next phase/model", "external-side-effect boundary",
+        "policy-only",
+        "exact next phase/model",
+        "external-side-effect boundary",
     ):
         assert required.lower() in contract.lower()
 
@@ -1930,9 +1942,9 @@ def test_proactive_review_authority_precedence_has_no_blanket_callback_or_route_
     running = _read_skill_resource("references/running_workflow.md")
     handoffs = _read_skill_resource("references/handoffs_and_alignment.md")
 
-    callback_policy = " ".join(
+    task_authority = " ".join(
         running.split("The callback receives only an asynchronous durable-event notice.", 1)[1]
-        .split("## Completing a HumanTask", 1)[0]
+        .split("## Commands and handoffs", 1)[0]
         .split()
     )
     correction_flow = " ".join(
@@ -1941,28 +1953,53 @@ def test_proactive_review_authority_precedence_has_no_blanket_callback_or_route_
         .split()
     )
 
-    def is_consistent(callback: str, routing: str) -> bool:
-        callback = callback.lower()
+    def is_consistent(task_policy: str, routing: str) -> bool:
+        task_policy = task_policy.lower()
         routing = routing.lower()
+        task_level_rule = re.search(
+            r"(?:(except for) )?an active declared non-advancing correction revise, a mandatory, `user_required`, clarification, permission, or capability task requires a \*\*user-facing driver turn\*\*",
+            task_policy,
+        )
+        callback_blanket = re.search(
+            r"callback.{0,100}(?:must never|cannot).{0,100}correction revise",
+            task_policy,
+        )
+        route_before_chat = re.search(
+            r"(?:route|routing).{0,100}before (?:the )?chat",
+            routing,
+        )
         return (
-            "choose a user answer" in callback
-            and "correction revise is not a user answer" in callback
-            and "only this declared correction outcome is excepted" in callback
-            and "must never submit a correction revise" not in callback
+            "choose a user answer" in task_policy
+            and "correction revise is not a user answer" in task_policy
+            and "only this declared correction outcome is excepted" in task_policy
+            and "except for an active declared non-advancing correction revise" in task_policy
+            and "permits the current driver, including an event-driven callback, to submit only that revise"
+            in task_policy
+            and task_level_rule is not None
+            and task_level_rule.group(1) == "except for"
+            and not callback_blanket
             and "chat before any correction routing" in routing
             and "after due review/chat consensus" in routing
             and "advancing `confirm`" in routing
-            and "route findings directly to correction before chat" not in routing
+            and not route_before_chat
         )
 
-    assert is_consistent(callback_policy, correction_flow)
+    assert is_consistent(task_authority, correction_flow)
     assert not is_consistent(
-        callback_policy + " The callback must never submit a correction revise.",
+        task_authority.replace(
+            "Except for an active declared non-advancing correction revise, a mandatory,",
+            "An active declared non-advancing correction revise, a mandatory,",
+        ),
         correction_flow,
     )
     assert not is_consistent(
-        callback_policy,
-        correction_flow + " Route findings directly to correction before chat.",
+        task_authority + " The callback must never submit a correction revise.",
+        correction_flow,
+    )
+    assert not is_consistent(
+        task_authority,
+        correction_flow
+        + " The Driver may route correction before chat and before applying the authority matrix.",
     )
 
 
