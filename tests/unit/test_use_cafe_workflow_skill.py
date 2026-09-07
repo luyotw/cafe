@@ -2003,6 +2003,42 @@ def test_proactive_review_authority_precedence_has_no_blanket_callback_or_route_
     )
 
 
+def test_proactive_review_initial_routing_task_flow_and_matrix_share_correction_precedence() -> (
+    None
+):
+    running = _read_skill_resource("references/running_workflow.md")
+    handoffs = _read_skill_resource("references/handoffs_and_alignment.md")
+
+    initial_routing = " ".join(
+        handoffs.split("Then route by intent:", 1)[1]
+        .split("## Route proactive-review findings through existing handoffs", 1)[0]
+        .split()
+    ).lower()
+    task_flow = " ".join(
+        running.split("## Completing a HumanTask", 1)[1]
+        .split("## Commands and handoffs", 1)[0]
+        .split()
+    ).lower()
+    authority_matrix = " ".join(
+        handoffs.split(
+            "Use this outcome-sensitive authority matrix after due review/chat consensus:", 1
+        )[1]
+        .split("## Present a self-contained user decision", 1)[0]
+        .split()
+    ).lower()
+
+    correction_outcome = (
+        "active declared non-advancing `revise` requiring feedback and marked `correction: true`"
+    )
+    assert correction_outcome in initial_routing
+    assert "after complete driver review and `cafe chat` consensus" in initial_routing
+    assert "mandatory or `user_required` advancing `confirm`" in initial_routing
+    assert correction_outcome in task_flow
+    assert "driver may serialize the correction result" in task_flow
+    assert correction_outcome in authority_matrix
+    assert "mandatory confirmation gates keep advancing `confirm` user-owned" in authority_matrix
+
+
 def test_proactive_review_rechecks_a_composite_snapshot_at_each_use_boundary() -> None:
     running = _read_skill_resource("references/running_workflow.md")
     normalized = " ".join(running.split()).lower()

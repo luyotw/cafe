@@ -132,11 +132,15 @@ Both cases use the same durable task flow:
 
 1. Inspect the exact pending task with `cafe task inspect <task-id>` and read
    its declared input schema. Never reuse a stale task ID.
-2. For user-owned tasks, serialize only the user's supplied answer into that
-   schema. The driver may add the task ID required by the schema, but must not
-   infer a decision, approval, permission, or missing answer. For a
-   `driver_confirmable` task, use only its declared response after the required
-   contract and evidence verification.
+2. Classify the task before serializing its result. For an active declared
+   non-advancing `revise` requiring feedback and marked `correction: true`, the
+   Driver may serialize the correction result only after complete review and
+   `cafe chat` consensus, including the consolidated findings, consensus, and
+   acceptance conditions. For a user-owned task, serialize only the user's
+   supplied answer into that schema; the Driver may add the task ID required by
+   the schema, but must not infer a decision, approval, permission, or missing
+   answer. For a `driver_confirmable` task, use only its declared response after
+   the required contract and evidence verification.
 3. Run `cafe task complete <task-id> --result '<json>' --no-resume --json`.
    Treat an uncertain command result as unconfirmed: inspect durable task and
    handoff state before retrying. If the task is already complete, do not submit

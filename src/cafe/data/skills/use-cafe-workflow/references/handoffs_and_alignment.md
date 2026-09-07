@@ -35,9 +35,12 @@ input`:
 
 Then route by intent:
 
-- `confirm_output` from a mandatory HumanTask step: always stop for the real user.
-- `confirm_output` from a `user_required` step: stop for user approval or
-  correction.
+- An active declared non-advancing `revise` requiring feedback and marked
+  `correction: true` is the sole Driver correction exception: after complete
+  Driver review and `cafe chat` consensus, submit only that declared revise
+  through the existing correction route.
+- `confirm_output` from a mandatory or `user_required` advancing `confirm`
+  stops for the real user. Other user-owned decisions also stop for the user.
 - `confirm_output` from a `driver_confirmable` step: verify the output and
   required input artifacts are complete, in-mandate, and consistent with
   accepted upstream artifacts before confirming.
@@ -68,7 +71,7 @@ Use this outcome-sensitive authority matrix after due review/chat consensus:
 
 | Active outcome | Driver authority |
 | --- | --- |
-| Declared non-advancing `revise` requiring feedback and marked `correction: true` | Driver may submit only a declared non-advancing `revise`, with consolidated findings, consensus, and acceptance conditions, to create the formal correction iteration. |
+| Active declared non-advancing `revise` requiring feedback and marked `correction: true` | Driver may submit only a declared non-advancing `revise`, with consolidated findings, consensus, and acceptance conditions, to create the formal correction iteration. |
 | `user_required` or mandatory confirmation gate advancing `confirm` | user_required and mandatory confirmation gates keep advancing `confirm` user-owned. |
 | Clean `driver_confirmable` confirmation | driver_confirmable clean confirm remains driver-permitted after independent review. |
 | Clarification, permission, capability, scope, strategic, or unknown decision | clarification, permission, capability, scope, strategic, and unknown decisions remain user-owned. |
