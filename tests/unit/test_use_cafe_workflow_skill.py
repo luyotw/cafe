@@ -1930,15 +1930,40 @@ def test_proactive_review_authority_precedence_has_no_blanket_callback_or_route_
     running = _read_skill_resource("references/running_workflow.md")
     handoffs = _read_skill_resource("references/handoffs_and_alignment.md")
 
-    callback_policy = " ".join(running.split())
-    correction_flow = handoffs.split("## Route proactive-review findings through existing handoffs", 1)[1]
+    callback_policy = " ".join(
+        running.split("The callback receives only an asynchronous durable-event notice.", 1)[1]
+        .split("## Completing a HumanTask", 1)[0]
+        .split()
+    )
+    correction_flow = " ".join(
+        handoffs.split("## Route proactive-review findings through existing handoffs", 1)[1]
+        .split("## Present a self-contained user decision", 1)[0]
+        .split()
+    )
 
-    assert "choose a user answer" in callback_policy
-    assert "correction revise is not a user answer" in callback_policy
-    assert "only this declared correction outcome is excepted" in callback_policy
-    assert "chat before any correction routing" in correction_flow
-    assert "after due review/chat consensus" in correction_flow
-    assert "advancing `confirm`" in correction_flow
+    def is_consistent(callback: str, routing: str) -> bool:
+        callback = callback.lower()
+        routing = routing.lower()
+        return (
+            "choose a user answer" in callback
+            and "correction revise is not a user answer" in callback
+            and "only this declared correction outcome is excepted" in callback
+            and "must never submit a correction revise" not in callback
+            and "chat before any correction routing" in routing
+            and "after due review/chat consensus" in routing
+            and "advancing `confirm`" in routing
+            and "route findings directly to correction before chat" not in routing
+        )
+
+    assert is_consistent(callback_policy, correction_flow)
+    assert not is_consistent(
+        callback_policy + " The callback must never submit a correction revise.",
+        correction_flow,
+    )
+    assert not is_consistent(
+        callback_policy,
+        correction_flow + " Route findings directly to correction before chat.",
+    )
 
 
 def test_proactive_review_rechecks_a_composite_snapshot_at_each_use_boundary() -> None:
