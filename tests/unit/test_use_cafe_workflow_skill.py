@@ -1868,7 +1868,7 @@ def test_proactive_review_consensus_uses_formal_correction_and_user_owned_confir
         "user_required and mandatory confirmation gates keep advancing `confirm` user-owned",
         "driver_confirmable clean confirm remains driver-permitted",
         "No user prompt occurs during an autonomous correction loop",
-        "one final user confirmation for each clean advancement candidate",
+        "one final user confirmation for each user-owned clean advancement candidate",
         "later clean candidate must be presented again",
         "clarification, permission, capability, scope, strategic, and unknown decisions remain user-owned",
         "all eight decision-packet elements",
@@ -1894,6 +1894,42 @@ def test_proactive_review_decision_packet_names_each_required_element() -> None:
         "every declared option, consequence, required feedback or target, and valid reply example",
     ):
         assert element in normalized
+
+
+def test_proactive_review_consensus_has_one_authority_path_and_a_bounded_input() -> None:
+    running = _read_skill_resource("references/running_workflow.md")
+    handoffs = _read_skill_resource("references/handoffs_and_alignment.md")
+    contract = " ".join((running + handoffs).split()).lower()
+
+    for required in (
+        "chat before any correction routing",
+        "only user-owned clean advancement candidates receive a user confirmation",
+        "exception for an active declared non-advancing correction revise",
+        "at most 20 findings",
+        "at most 12,000 utf-8 bytes",
+        "each evidence item is limited to at most 500 utf-8 bytes",
+        "over-budget batch remains paused",
+        "must not truncate, split, or silently omit findings",
+        "one-shot chat output is limited to 4,000 utf-8 bytes",
+        "timeout of 120 seconds",
+    ):
+        assert required in contract
+
+
+def test_proactive_review_rechecks_a_composite_snapshot_at_each_use_boundary() -> None:
+    running = _read_skill_resource("references/running_workflow.md")
+    normalized = " ".join(running.split()).lower()
+
+    for required in (
+        "composite review snapshot",
+        "artifact identity, accepted-requirements identity, correction-history identity",
+        "active task identity, handoff/baton identity, and driver-contract identity",
+        "immediately before invoking chat",
+        "immediately before task completion, confirmation, or reuse of a clean result",
+        "any mismatch invalidates the review/chat result",
+        "retain the pause and restart the full review",
+    ):
+        assert required in normalized
 
 
 def test_kickoff_rejects_required_review_without_a_scheduled_pause(tmp_path: Path) -> None:
@@ -2081,7 +2117,7 @@ def test_use_cafe_workflow_keeps_human_task_completion_in_the_interactive_driver
     assert (
         "cannot wait for, collect, infer, or choose an answer for a mandatory" in normalized_running
     )
-    assert "may instead be completed by any driver" in normalized_running
+    assert "may instead be completed by any driver" in normalized_running.lower()
     assert "cafe task complete <active-human-task-id>" in handoffs
     assert '--user-input \'{"task":"output-review"' not in handoffs
 

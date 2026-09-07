@@ -117,12 +117,16 @@ recovery protocol, or stop guarantee.
 
 ## Completing a HumanTask
 
-The callback is not an interaction channel. A mandatory, `user_required`,
-clarification, permission, or capability task requires a **user-facing driver
-turn** to receive the user's explicit answer. A `driver_confirmable` task may
-instead be completed by any driver, including an event-driven callback, after
-it verifies the confirmed contract and evidence. Both cases use the same durable
-task flow:
+The callback is not an interaction channel. Except for an active declared
+non-advancing correction revise, a mandatory, `user_required`, clarification,
+permission, or capability task requires a **user-facing driver turn** to
+receive the user's explicit answer. The exception for an active declared
+non-advancing correction revise permits the current Driver, including an
+event-driven callback, to submit only that revise after due review/chat
+consensus; it never permits confirmation or another user-owned decision. A
+`driver_confirmable` task may instead be completed by any Driver, including an
+event-driven callback, after it verifies the confirmed contract and evidence.
+Both cases use the same durable task flow:
 
 1. Inspect the exact pending task with `cafe task inspect <task-id>` and read
    its declared input schema. Never reuse a stale task ID.
@@ -212,6 +216,14 @@ work, unnecessary abstraction, and extension work. These checks apply equally
 to code and non-code phase output. An incomplete, interrupted, or ambiguous
 pass is not a no-blocking result.
 
+Bind that work to a composite review snapshot: artifact identity,
+accepted-requirements identity, correction-history identity, active task
+identity, handoff/baton identity, and driver-contract identity. Re-resolve and
+compare the complete snapshot immediately before invoking chat and immediately
+before task completion, confirmation, or reuse of a clean result. Any mismatch
+invalidates the review/chat result: retain the pause and restart the full
+review from the current snapshot. An artifact-only match is insufficient.
+
 The Driver must complete all applicable review passes before producing one
 bounded findings batch. It names the reviewed phase and role, the exact current artifact
 identity, every observable blocker, its requirement or boundary, and concise
@@ -219,6 +231,15 @@ evidence. Deliver that one batch through `cafe chat <role> -p` to the existing
 responsible phase-agent session. Ask the agent to accept or rebut each finding.
 Chat must not edit the current phase output: the prompt is discussion only,
 and the chat response is discussion evidence, not workflow authority.
+
+The bounded consumer accepts at most 20 findings and at most 12,000 UTF-8
+bytes for the rendered prompt; each evidence item is limited to at most 500
+UTF-8 bytes. Run the one-shot chat with a timeout of 120 seconds. One-shot chat
+output is limited to 4,000 UTF-8 bytes; treat more as ambiguous. An over-budget batch remains
+paused and fails closed. The Driver must not truncate, split, or silently omit
+findings or evidence to fit a limit; retain the pause and obtain the applicable
+user-owned scope decision before a new full
+review can form a compliant batch.
 
 Findings, chat attempts, disagreements, and rebuttals do not create an
 iteration. Independently verify a rebuttal against the same unchanged artifact.

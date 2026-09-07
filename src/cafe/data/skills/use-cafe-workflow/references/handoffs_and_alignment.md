@@ -56,10 +56,13 @@ At an existing scheduled confirmation pause after a required phase, finish the
 current-Driver review before completing a `driver_confirmable` task or relaying
 a `user_required` answer that would resume the workflow. When the review finds
 blockers, consolidate every currently observable finding. State both missing
-necessary scope and excessive or unnecessary scope when applicable, then route
-the batch through the responsible phase's existing correction path. Do not edit
-the phase artifact, manufacture a replacement output, or turn the review result
-into a new recursive review target.
+necessary scope and excessive or unnecessary scope when applicable, then use
+chat before any correction routing. Deliver the batch to the responsible phase
+agent through the one-shot chat contract, resolve every finding by accepted
+durable correction or independently verified rebuttal, and only then apply the
+authority matrix below. Do not edit the phase artifact, manufacture a
+replacement output, or turn the review result into a new recursive review
+target.
 
 Use this outcome-sensitive authority matrix after due review/chat consensus:
 
@@ -71,13 +74,16 @@ Use this outcome-sensitive authority matrix after due review/chat consensus:
 | Clarification, permission, capability, scope, strategic, or unknown decision | clarification, permission, capability, scope, strategic, and unknown decisions remain user-owned. |
 
 Driver-triggered revise is correction, never approval. No user prompt occurs
-during an autonomous correction loop. Present one final user confirmation for
-each clean advancement candidate immediately before its transition. If the user
-revises or rejects that candidate, the later clean candidate must be presented
-again; an earlier confirmation is not lifetime approval. A no-blocking Driver
-review is quality evidence only, never user confirmation and never a substitute
-for `driver_confirmable` evidence. Re-review changed durable output through the
-same process; keep built-in review and final PR review obligations separate.
+during an autonomous correction loop. Only user-owned clean advancement
+candidates receive a user confirmation; a clean `driver_confirmable` candidate
+is completed by the Driver after its independent review. Present one final user
+confirmation for each user-owned clean advancement candidate immediately before
+its transition. If the user revises or rejects that candidate, the later clean
+candidate must be presented again; an earlier confirmation is not
+lifetime approval. A no-blocking Driver review is quality evidence only, never
+user confirmation and never a substitute for `driver_confirmable` evidence.
+Re-review changed durable output through the same process; keep built-in review
+and final PR review obligations separate.
 
 ## Present a self-contained user decision
 
