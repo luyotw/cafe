@@ -140,9 +140,8 @@ requires information not available in the current handoff.
 
 Driver-confirmable means the driver verifies and resumes; it does not let a
 phase agent approve itself. If the declared outcome continues to an agent
-phase, first reassess and configure that phase's model chain, because the
-driver will execute the continuation. Then submit the exact HumanTask response,
-for example:
+phase, keep its existing model chain unless the user explicitly requested a
+different one. Then submit the exact HumanTask response, for example:
 
 ```bash
 cafe task complete <active-human-task-id> \
@@ -246,7 +245,7 @@ it is a mechanical copy of already confirmed material.
 Driver takeover does not transfer conversation or provider-session authority.
 The replacement Driver reads the same validated issue contract, refreshes
 skill-owned evidence, and preserves every user confirmation, HumanTask,
-permission, mandate, model-adjustment, proactive-review, and generic PR
+permission, mandate, phase-model, proactive-review, and generic PR
 publication boundary. If that proof is material, ambiguous, stale, malformed,
 or belongs to another workflow, stop for the documented reconfirmation path.
 

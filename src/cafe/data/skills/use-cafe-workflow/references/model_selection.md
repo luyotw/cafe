@@ -168,11 +168,10 @@ Before the first phase execution:
    authentication, or failed fallback smoke test as a blocking preflight
    failure.
 
-Automatic activation of a confirmed fallback, when configured, is already
-authorized by kickoff; it is not a driver-authored adjustment. With a
-primary-only chain, a primary failure is a hard stop until the existing model-
-adjustment authority permits a replacement or the user confirms one. Preserve
-the execution record showing which CLI/model actually ran.
+Automatic activation of a configured fallback is already authorized. With a
+primary-only chain, a primary failure is a hard stop unless the user explicitly
+requests a different chain. Preserve the execution record showing which
+CLI/model actually ran.
 
 ### Reuse successful preflight evidence
 
@@ -248,61 +247,19 @@ quality_gate:
 Append further `clis` entries only for confirmed fallbacks. A single entry is
 a valid primary-only chain.
 
-Persist the issue assessment and the explicit adjustment boundary in
-`.cafe/issues/<issue-name>/issue.yaml`:
+Persist the issue assessment in `.cafe/issues/<issue-name>/issue.yaml`:
 
 ```yaml
 issue_assessment:
   nature: feature/integration
   scale: medium
   risk_factors: [public contract, integration coverage]
-model_adjustment:
-  authority: driver_autonomous  # or user_approval_required
 ```
 
-With `driver_autonomous`, the driver may change future phase chains using the
-same selection and preflight rules. With `user_approval_required`, every
-driver-authored change requires confirmation. Automatic use of a chain's
-already configured fallback, when present, is not a driver-authored change.
-
-## Reassess at contract-defined boundaries
-
-In `continuous` mode, do not stop execution merely to reconsider a successful
-phase's model choice. Reassess when CAFE naturally pauses for a user, an error,
-or a required correction. In `single_step` mode, reassess after every completed
-step before explicitly continuing. Inspect the completed phase output,
-findings, actual CLI/model, duration, verification evidence, and next baton;
-change only the still-unexecuted phase or required correction and never rewrite
-historical iteration metadata. If CAFE reaches `done`, record the actual model
-evidence but do not perform a model-selection pause with no future phase to
-configure.
-
-Keep the chain when scope and risk still match. Change it only with concrete
-evidence, including:
-
-- newly discovered security, migration, concurrency, or cross-subsystem risk;
-- repeated incomplete corrections or a review exposing a missing contract;
-- model/CLI unavailability, rate limiting, or materially poor output;
-- remaining work becoming mechanical enough for a lower capability that still
-  satisfies the resolved phase profile.
-
-De-escalate only future work. Reduced uncertainty after spec or plan may move a
-future `standard` implementation from `frontier` to `balanced` when its
-contracts, deletion/wiring map, tests, and rollback are now explicit. It does
-not justify lowering a `high` phase or an unresolved migration merely because a
-stronger phase produced a good artifact. An implementation correction may move
-to `efficiency` only when it is deterministic, narrowly verified, reversible,
-and still satisfies the phase profile.
-
-Update only the future phase's chain in `.cafe/phases.yaml`. With
-`user_approval_required`, stop and obtain approval for the exact replacement
-first. State the new band and keep/change rationale in the driver progress
-update; do not add a separate runtime decision store. A terminal `_done` baton
-has no future chain to adjust.
-
-For a Driver-managed issue, `.cafe/phases.yaml` remains generic execution
-configuration under its existing lifecycle. The Driver contract keeps only its
-own confirmed phase/model authority and never compares or projects that generic
-file. A delegated replacement may change only explicitly delegated Driver model
-paths; proactive-review policy, confirmation ownership, or any unrelated
-Driver policy requires user reconfirmation and a complete contract replacement.
+Kickoff phase chains are initial values. The Driver never changes them from its
+own judgment. When the user explicitly requests a different phase model, edit
+only the corresponding future chain in the active worktree's
+`.cafe/phases.yaml`. The next phase start or iteration uses it; an iteration
+already running finishes unchanged. Do not update the Driver contract or touch
+callback session and dispatch state. Automatic use of an already configured
+fallback does not change the contract.

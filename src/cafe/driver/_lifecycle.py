@@ -11,7 +11,7 @@ import yaml
 from cafe.core.packet_io import canonical_json
 
 from ._freshness import Freshness, compare_freshness
-from ._schema import build_initial_contract, semantic_projection
+from ._schema import build_initial_contract
 from ._store import (
     DriverContractMissingError,
     _decode_exact,
@@ -108,43 +108,6 @@ def event_callback_policy(
     return {"clis": deepcopy(contract["driver"]["clis"])}, digest
 
 
-def _changed_paths(before: Any, after: Any, prefix: str = "") -> set[str]:
-    if type(before) is not type(after):
-        return {prefix}
-    if isinstance(before, dict):
-        paths: set[str] = set()
-        for key in set(before) | set(after):
-            child = f"{prefix}.{key}" if prefix else str(key)
-            if key not in before or key not in after:
-                paths.add(child)
-            else:
-                paths |= _changed_paths(before[key], after[key], child)
-        return paths
-    if isinstance(before, list):
-        if len(before) != len(after):
-            return {prefix}
-        paths: set[str] = set()
-        for index, (left, right) in enumerate(zip(before, after)):
-            paths |= _changed_paths(left, right, f"{prefix}[{index}]")
-        return paths
-    return set() if before == after else {prefix}
-
-
-def _assert_delegated_model_change(
-    current: Mapping[str, Any], candidate: Mapping[str, Any]
-) -> None:
-    if current["model_adjustment"]["authority"] != "driver_autonomous":
-        raise ValueError("the effective contract does not delegate model adjustment")
-    changes = _changed_paths(semantic_projection(current), semantic_projection(candidate))
-    permitted = {
-        path
-        for path in changes
-        if path.startswith("phases[") and ".chain[" in path and path.endswith(".model")
-    }
-    if not changes or changes != permitted:
-        raise ValueError("delegated replacement may change only ordered phase CLI/model chains")
-
-
 def replace(
     *,
     issue_dir: Path,
@@ -155,11 +118,10 @@ def replace(
     proposal: Mapping[str, Any],
     expected_predecessor_sha256: str,
     kind: str,
-    delegated_change: Mapping[str, Any] | None = None,
 ) -> tuple[int, str]:
-    """Replace a complete contract by CAS after authorization is proved."""
-    if kind not in {"user_reconfirmation", "delegated_change"}:
-        raise ValueError("replacement requires user reconfirmation or delegated model authority")
+    """Replace a complete contract by CAS after user reconfirmation."""
+    if kind != "user_reconfirmation":
+        raise ValueError("replacement requires user reconfirmation")
     with contract_lock(issue_dir):
         current, current_sha = load_contract(
             issue_dir, issue_name=issue_name, workflow_id=workflow_id
@@ -175,10 +137,7 @@ def replace(
             revision=current["revision"]["generation"] + 1,
             previous_contract_sha256=current_sha,
             provenance_kind=kind,
-            delegated_change=delegated_change,
         )
-        if kind == "delegated_change":
-            _assert_delegated_model_change(current, candidate)
         digest = write_contract(issue_dir, candidate, expected_predecessor_sha256=current_sha)
         return candidate["revision"]["generation"], digest
 
@@ -323,7 +282,6 @@ def _driver_only_legacy_proposal(value: Mapping[str, Any]) -> dict[str, Any] | N
         "issue_assessment",
         "phases",
         "proactive_review",
-        "model_adjustment",
         "driver",
         "checkout",
     )

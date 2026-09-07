@@ -28,7 +28,7 @@
   └── session.lock
   ```
 
-- [ ] 不新增`allowed_actions`或第二套authority。driver繼續遵守既有`confirmation_contract`、mandatory HumanTask、`reactive_user_handoffs`、strategic mandate與`model_adjustment.authority`。
+- [ ] 不新增`allowed_actions`或第二套authority。driver繼續遵守既有`confirmation_contract`、mandatory HumanTask、`reactive_user_handoffs`與strategic mandate；已確認的模型鏈不可由driver自行替換。
 
 ## TODO 2：讓既有background hosting保持mode-neutral
 
@@ -50,7 +50,7 @@
 - [ ] builtin callback取得該issue的`session.lock`，核對workflow ID及config中的CLI/model；第一次成功callback acquire一次driver session，之後使用既有`SessionContinuation.resume_exact`恢復同一session。
 - [ ] 修正現有mode-neutral exact-resume invariant：session conflict或CLI/model/session mismatch只讓該次callback失敗，不得清除session後重建，也不得fallback；不重做五套transport。
 - [ ] callback只傳compact wake notice，要求driver依attached既有流程重讀`cafe status`、`cafe show`、目前handoff、pending HumanTask/permission與最新phase result/error；不建立evidence aggregation或summary schema。
-- [ ] driver沿用attached既有的bounded diagnosis、retry/resume、future phase model adjustment、HumanTask/permission、mandate與已存在的process control規則；callback本身不增加authority或process ownership。
+- [ ] driver沿用attached既有的bounded diagnosis、retry/resume、已確認的模型fallback鏈、HumanTask/permission、mandate與已存在的process control規則；callback本身不增加authority或process ownership。
 - [ ] driver採取process action前必須重讀最新state並確認目標仍是該issue的current active process；只有現有環境提供可靠且獲授權的控制方式時才可停止。資訊過期、目標不明或沒有可靠控制方式時，只inspect/diagnose。
 - [ ] retry、resume或phase config mutation必須等worker已停止並確認ownership釋放後再執行；callback到達不代表phase之間存在可安全插入mutation的空窗。
 - [ ] driver不得代答mandatory HumanTask、憑空授權permission/capability或超出既有authority；不新增action proposal/executor、action ID或background stop primitive。

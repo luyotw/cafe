@@ -73,9 +73,6 @@ def _proposal() -> dict[str, object]:
                 {"phase": "develop", "decision": "not_required", "rationale": "No schedule."},
             ]
         },
-        "model_adjustment": {
-            "authority": "user_approval_required",
-        },
         "driver": {"mode": "unattended"},
         "checkout": {"kind": "current_checkout"},
         "semantic_facts": {},
@@ -94,7 +91,6 @@ def _fresh_policy_facts(proposal: dict[str, object]) -> dict[str, object]:
         "issue_assessment",
         "phases",
         "proactive_review",
-        "model_adjustment",
         "driver",
         "checkout",
     )

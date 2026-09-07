@@ -97,8 +97,6 @@ obtain explicit user confirmation of:
   eligible for `required`, and the smallest useful eligible set is preferred;
 - the exact ordered CLI/model chain for every phase, containing one primary and
   zero or more explicitly confirmed fallbacks;
-- `model_adjustment_authority`: either `driver_autonomous` or
-  `user_approval_required`;
 - exactly one operating mode: attached with a positive `poll_interval_seconds`,
   unattended, or event-driven with one non-empty ordered list of distinct,
   conforming CLIs and an exact model selected by the user for every entry. The
@@ -194,10 +192,12 @@ and obtain confirmation before preparation or workflow execution.
    implying that mandatory stops are absent.
 
 If the playbook, effective conversation locale, repository content locale,
-operating mode, or candidate set changes, reconfirm the contract before the next
-workflow execution. A post-phase model-chain change follows the separately
-confirmed model-adjustment authority in `model_selection.md`; it does not
-silently change an event-driven driver's exact model.
+operating mode, or candidate set changes, reconfirm the kickoff contract before
+the next workflow execution. Phase model chains are kickoff initial values. The
+Driver cannot change a phase model on its own, but must apply an exact phase-only
+update for subsequent execution whenever the user explicitly requests one. A
+running iteration finishes with the model that started it. This update does not
+change the separate event-driven callback chain.
 
 `need_clarification` and `need_permission` are reactive interruptions, not
 scheduled candidates. `manual_handoff` is routing, not a planned confirmation
@@ -223,7 +223,6 @@ python3 <skill-dir>/scripts/format_kickoff_contract.py <playbook-id> \
   --issue-name <issue-name> \
   --playbook-rationale "<source/evidence, QA decision, and rejected alternative>" \
   --issue-nature <nature> --issue-scale <small|medium|large> \
-  --model-adjustment-authority <driver_autonomous|user_approval_required> \
   --update-preflight '<bounded runtime-update JSON>' \
   --catalog-preflight '<bounded all-catalog JSON>' \
   --driver-mode <attached|unattended|event-driven> \
@@ -273,8 +272,8 @@ table `driver-assessed`.
 Pass an option with no step values for an explicit empty list. The formatter
 validates the partition and includes every phase, role, skill, scheduled gate,
 owner, stop behavior, resolved skill execution profile, exact
-primary model, any configured fallbacks, their config source, autonomous
-adjustment authority, exact operating mode, reactive policy,
+primary model, any configured fallbacks, their config source, exact operating
+mode, reactive policy,
 mandate boundary, conversation locale source, repository content locale, and
 worktree choice. It
 re-executes with the Python interpreter that owns `cafe` when the shell

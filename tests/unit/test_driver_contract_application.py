@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
-from datetime import datetime, timezone
 import importlib.util
 import json
+from copy import deepcopy
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -63,9 +63,6 @@ def _proposal() -> dict[str, object]:
                 },
             ]
         },
-        "model_adjustment": {
-            "authority": "user_approval_required",
-        },
         "driver": {"mode": "unattended"},
         "checkout": {"kind": "current_checkout"},
         "semantic_facts": {},
@@ -84,7 +81,6 @@ def _fresh_policy_facts(proposal: dict[str, object]) -> dict[str, object]:
         "issue_assessment",
         "phases",
         "proactive_review",
-        "model_adjustment",
         "driver",
         "checkout",
     )
@@ -148,8 +144,8 @@ def test_public_application_contract_persists_only_a_complete_valid_policy(tmp_p
         activate_confirmed_contract(_activation(tmp_path / "runtime", runtime_state))
 
 
-def test_contract_rejects_nested_model_adjustment_confirmation_evidence(tmp_path: Path) -> None:
-    """Test List 1: v1 keeps confirmation evidence in top-level provenance only."""
+def test_contract_rejects_removed_model_adjustment_authority(tmp_path: Path) -> None:
+    """Removed model-adjustment authority cannot re-enter the v2 contract."""
     proposal = _proposal()
     proposal["model_adjustment"] = {
         "authority": "user_approval_required",
@@ -162,7 +158,7 @@ def test_contract_rejects_nested_model_adjustment_confirmation_evidence(tmp_path
         activate_confirmed_contract(_activation(tmp_path / "legacy", proposal))
 
 
-def test_canonical_model_adjustment_has_stable_activation_identity(
+def test_canonical_contract_without_model_adjustment_has_stable_activation_identity(
     tmp_path: Path,
 ) -> None:
     """Test List 2: one canonical authority shape yields an idempotent retry."""
@@ -174,7 +170,8 @@ def test_canonical_model_adjustment_has_stable_activation_identity(
     assert first.created is True
     assert retry.created is False
     assert retry.contract_sha256 == first.contract_sha256
-    assert contract["model_adjustment"] == {"authority": "user_approval_required"}
+    assert contract["schema_version"] == 2
+    assert "model_adjustment" not in contract
     assert contract["provenance"]["confirmed_by"] == "user"
     assert contract["provenance"]["confirmed_at"] == "2026-09-06T02:00:00+00:00"
 
@@ -186,7 +183,11 @@ def test_missing_contract_blocks_callback_even_with_legacy_transport_config(tmp_
     driver_dir = issue_dir / "driver"
     driver_dir.mkdir(parents=True)
     (driver_dir / "config.yaml").write_text(
-        "schema_version: 3\nworkflow_id: workflow-474\nclis:\n  - cli: gemini\n    model: legacy-exact\n",
+        "schema_version: 3\n"
+        "workflow_id: workflow-474\n"
+        "clis:\n"
+        "  - cli: gemini\n"
+        "    model: legacy-exact\n",
         encoding="utf-8",
     )
     event = {
@@ -397,7 +398,7 @@ def test_unsafe_present_contract_cannot_fall_back_to_legacy_callback_policy(
 
 def test_driver_entry_projections_are_deeply_immutable(tmp_path: Path) -> None:
     """Follow-up FUP-001: public results cannot be changed after validation."""
-    issue_dir = tmp_path / "issue"
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue474"
     proposal = _proposal()
     activate_confirmed_contract(_activation(issue_dir, proposal))
     result = evaluate_driver_entry(
@@ -445,7 +446,7 @@ def test_oversized_contract_and_legacy_evidence_fail_closed(tmp_path: Path) -> N
 def test_replacement_is_compare_and_swap_and_delegation_cannot_change_policy(
     tmp_path: Path,
 ) -> None:
-    """Test List 3: readers retain valid authority when a replacement is rejected."""
+    """Readers retain valid authority when a replacement is rejected."""
     issue_dir = tmp_path / "issue"
     issue_dir.mkdir(parents=True)
     issue_config = issue_dir / "issue.yaml"
@@ -458,7 +459,7 @@ def test_replacement_is_compare_and_swap_and_delegation_cannot_change_policy(
     before = (issue_dir / "driver" / "contract.json").read_bytes()
     proposal = _proposal()
     proposal["proactive_review"]["phase_decisions"][0]["decision"] = "required"
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="requires user reconfirmation"):
         replace_confirmed_contract(
             ReplaceConfirmedContract(
                 issue_dir,
@@ -469,7 +470,6 @@ def test_replacement_is_compare_and_swap_and_delegation_cannot_change_policy(
                 proposal,
                 activated.contract_sha256,
                 "delegated_change",
-                {"authority_field": "model_adjustment"},
             )
         )
     assert (issue_dir / "driver" / "contract.json").read_bytes() == before
@@ -479,14 +479,14 @@ def test_replacement_is_compare_and_swap_and_delegation_cannot_change_policy(
     reconfirmed["semantic_facts"] = _fresh_policy_facts(reconfirmed)
     replacement = replace_confirmed_contract(
         ReplaceConfirmedContract(
-            issue_dir,
-            "issue474",
-            "workflow-474",
-            "user",
-            datetime(2026, 9, 6, 3, tzinfo=timezone.utc),
-            reconfirmed,
-            activated.contract_sha256,
-            "user_reconfirmation",
+            issue_dir=issue_dir,
+            issue_name="issue474",
+            workflow_id="workflow-474",
+            confirmed_by="user",
+            confirmed_at=datetime(2026, 9, 6, 3, tzinfo=timezone.utc),
+            proposal=reconfirmed,
+            expected_predecessor_sha256=activated.contract_sha256,
+            kind="user_reconfirmation",
         )
     )
     assert replacement.revision == 2
@@ -494,14 +494,14 @@ def test_replacement_is_compare_and_swap_and_delegation_cannot_change_policy(
     with pytest.raises(ValueError):
         replace_confirmed_contract(
             ReplaceConfirmedContract(
-                issue_dir,
-                "issue474",
-                "workflow-474",
-                "user",
-                datetime(2026, 9, 6, 4, tzinfo=timezone.utc),
-                _proposal(),
-                activated.contract_sha256,
-                "user_reconfirmation",
+                issue_dir=issue_dir,
+                issue_name="issue474",
+                workflow_id="workflow-474",
+                confirmed_by="user",
+                confirmed_at=datetime(2026, 9, 6, 4, tzinfo=timezone.utc),
+                proposal=_proposal(),
+                expected_predecessor_sha256=activated.contract_sha256,
+                kind="user_reconfirmation",
             )
         )
 
@@ -609,69 +609,6 @@ def test_legacy_adoption_ignores_generic_phase_projection(tmp_path: Path) -> Non
     matching = prepare_legacy_issue("matching")
     adopted = adopt_legacy_contract(LegacyAdoptionRequest(matching, "issue474", "workflow-474"))
     assert adopted.adopted is True
-
-
-def test_delegated_model_adjustment_rejects_cli_and_chain_topology_changes(tmp_path: Path) -> None:
-    """Test List 3: delegation changes exact model values, never transport authority."""
-    issue_dir = tmp_path / "issue"
-    current = _proposal()
-    current["model_adjustment"]["authority"] = "driver_autonomous"
-    current["semantic_facts"] = _fresh_policy_facts(current)
-    activated = activate_confirmed_contract(_activation(issue_dir, current))
-
-    changed_cli = deepcopy(current)
-    changed_cli["phases"][0]["chain"][0]["cli"] = "unsupported-cli"
-    changed_cli["semantic_facts"] = _fresh_policy_facts(changed_cli)
-    with pytest.raises(ValueError):
-        replace_confirmed_contract(
-            ReplaceConfirmedContract(
-                issue_dir,
-                "issue474",
-                "workflow-474",
-                "driver",
-                datetime(2026, 9, 6, 3, tzinfo=timezone.utc),
-                changed_cli,
-                activated.contract_sha256,
-                "delegated_change",
-                {"authority_field": "model_adjustment"},
-            )
-        )
-
-    changed_topology = deepcopy(current)
-    changed_topology["phases"][0]["chain"].append({"cli": "claude", "model": "fallback"})
-    changed_topology["semantic_facts"] = _fresh_policy_facts(changed_topology)
-    with pytest.raises(ValueError):
-        replace_confirmed_contract(
-            ReplaceConfirmedContract(
-                issue_dir,
-                "issue474",
-                "workflow-474",
-                "driver",
-                datetime(2026, 9, 6, 3, tzinfo=timezone.utc),
-                changed_topology,
-                activated.contract_sha256,
-                "delegated_change",
-                {"authority_field": "model_adjustment"},
-            )
-        )
-
-    changed_model = deepcopy(current)
-    changed_model["phases"][0]["chain"][0]["model"] = "new-approved-model"
-    changed_model["semantic_facts"] = _fresh_policy_facts(changed_model)
-    replacement = replace_confirmed_contract(
-        ReplaceConfirmedContract(
-            issue_dir,
-            "issue474",
-            "workflow-474",
-            "driver",
-            datetime(2026, 9, 6, 3, tzinfo=timezone.utc),
-            changed_model,
-            activated.contract_sha256,
-            "delegated_change",
-            {"authority_field": "model_adjustment"},
-        )
-    )
-    assert replacement.revision == 2
 
 
 def test_legacy_sidecar_conflict_and_ancestor_symlink_fail_closed(tmp_path: Path) -> None:

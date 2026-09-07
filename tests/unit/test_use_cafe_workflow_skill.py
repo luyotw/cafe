@@ -141,8 +141,6 @@ def _kickoff_formatter_command(
         "feature/integration",
         "--issue-scale",
         "medium",
-        "--model-adjustment-authority",
-        "driver_autonomous",
         "--driver-mode",
         "unattended",
         *extra_args,
@@ -344,7 +342,7 @@ def test_use_cafe_workflow_skill_requires_playbook_derived_kickoff_contract() ->
     assert "do not infer behavior from a playbook name" in " ".join(selection.split())
     assert "every phase, role, skill, scheduled gate" in normalized
     assert "one primary and zero or more explicitly confirmed fallbacks" in normalized
-    assert "model-adjustment authority" in normalized
+    assert "Driver cannot change a phase" in normalized
     assert '--risk-factor "<risk factor; repeat as needed>"' in reference
     assert '--assessment-rationale "<repository evidence for nature and scale>"' in reference
 
@@ -453,8 +451,8 @@ mandate:
     assert "| repository_content_locale | zh-TW |" in result.stdout
     assert "| issue_nature | feature/integration |" in result.stdout
     assert "| issue_scale | medium |" in result.stdout
-    assert "| model_adjustment_authority | driver_autonomous |" in result.stdout
-    assert "| schema_version | 1 |" in result.stdout
+    assert "model_adjustment" not in result.stdout
+    assert "| schema_version | 2 |" in result.stdout
     assert "| driver.mode | unattended |" in result.stdout
     assert "### Preflight evidence" in result.stdout
     assert "| runtime_update.status | current |" in result.stdout
@@ -535,7 +533,7 @@ def test_confirmed_kickoff_activates_one_issue_scoped_driver_contract(tmp_path: 
     }
     assert "proactive_review.yaml" not in {path.name for path in (issue_dir / "driver").iterdir()}
     assert "No proactive review was confirmed for development." in result.stdout
-    assert "| schema_version | 1 |" in result.stdout
+    assert "| schema_version | 2 |" in result.stdout
 
     entry = subprocess.run(
         [
@@ -974,8 +972,6 @@ def test_kickoff_contract_formatter_accepts_primary_only_chains(tmp_path: Path) 
             "localized defect",
             "--issue-scale",
             "small",
-            "--model-adjustment-authority",
-            "user_approval_required",
             "--driver-mode",
             "unattended",
             "--pr-auto-create",
@@ -1346,8 +1342,6 @@ def test_kickoff_contract_formatter_rejects_incomplete_gate_partition(
             "localized defect",
             "--issue-scale",
             "small",
-            "--model-adjustment-authority",
-            "user_approval_required",
             "--driver-mode",
             "unattended",
             "--pr-auto-create",
@@ -1433,8 +1427,6 @@ def test_kickoff_contract_formatter_uses_cafe_python_when_site_packages_are_miss
             "localized defect",
             "--issue-scale",
             "small",
-            "--model-adjustment-authority",
-            "user_approval_required",
             "--driver-mode",
             "unattended",
             "--pr-auto-create",
@@ -1539,8 +1531,6 @@ entry_point: audit
             "security review",
             "--issue-scale",
             "medium",
-            "--model-adjustment-authority",
-            "driver_autonomous",
             "--driver-mode",
             "unattended",
             *_preflight_args(),
@@ -1597,8 +1587,6 @@ def test_kickoff_formatter_rejects_unresolved_phase_models(tmp_path: Path) -> No
             "localized defect",
             "--issue-scale",
             "small",
-            "--model-adjustment-authority",
-            "user_approval_required",
             "--driver-mode",
             "unattended",
             *_preflight_args(),
@@ -1649,8 +1637,6 @@ def test_kickoff_formatter_rejects_missing_phase_rationale(tmp_path: Path) -> No
             "localized defect",
             "--issue-scale",
             "small",
-            "--model-adjustment-authority",
-            "user_approval_required",
             "--driver-mode",
             "unattended",
             *_preflight_args(),
@@ -2238,7 +2224,7 @@ def test_use_cafe_workflow_defines_event_driven_mode_and_model_authority() -> No
     assert "Attached polling starts after the full confirmed interval" in normalized_running
     assert "exactly one operating mode" in normalized_kickoff
     assert "Do not put the mode, CLI, model, session" in normalized_kickoff
-    assert "`model_adjustment_authority`" in kickoff
+    assert "model_adjustment" not in kickoff
     assert "No provider or model is built into this skill" in normalized_models
     assert "The driver owns the capability-band classification" in normalized_models
     assert "scripts/preflight_cache.py" in models

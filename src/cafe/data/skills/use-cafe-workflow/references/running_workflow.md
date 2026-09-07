@@ -102,7 +102,7 @@ from delivery, the active transport, takeover, exhaustion, and recovery. It
 does not infer delivery from model output or claim cross-provider context
 continuity. The callback remains an ordinary driver and uses only existing
 kickoff authority: confirmation contract, mandatory HumanTask stops, reactive
-user handoffs, mandate, and model-adjustment authority.
+user handoffs, and mandate. It cannot change confirmed models.
 
 The callback receives only an asynchronous durable-event notice. It must
 re-check `cafe status`/`cafe show`; a notice can be stale. It may diagnose and
@@ -200,8 +200,9 @@ Before every start or resume, validate the confirmed
 `.cafe/issues/<issue>/driver/contract.json` and use its
 `proactive_review.phase_decisions` projection. If the contract is absent,
 invalid, stale, or its phase coverage no longer matches the active playbook,
-stop for a complete replacement proposal and user reconfirmation; do not infer
-a review policy from an earlier conversation.
+stop and require kickoff reconfirmation; do not infer a review policy from an
+earlier conversation. An explicit user-requested phase-only update does not
+reopen unrelated kickoff policy.
 
 Only an executed required phase becomes due for proactive review, and only when
 its durable output has reached an existing scheduled confirmation pause that

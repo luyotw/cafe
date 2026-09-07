@@ -33,7 +33,6 @@ class ReplaceConfirmedContract:
     proposal: Mapping[str, Any]
     expected_predecessor_sha256: str
     kind: str
-    delegated_change: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -137,7 +136,6 @@ def replace_confirmed_contract(command: ReplaceConfirmedContract) -> Replacement
         proposal=command.proposal,
         expected_predecessor_sha256=command.expected_predecessor_sha256,
         kind=command.kind,
-        delegated_change=command.delegated_change,
     )
     return ReplacementResult(revision, digest)
 

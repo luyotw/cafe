@@ -76,7 +76,6 @@ def _activate_event_contract(
                 }
             ]
         },
-        "model_adjustment": {"authority": "user_approval_required"},
         "driver": {"mode": "event-driven", "clis": driver_clis},
         "checkout": {"kind": "current_checkout"},
         "semantic_facts": {},
@@ -90,7 +89,6 @@ def _activate_event_contract(
         "issue_assessment",
         "phases",
         "proactive_review",
-        "model_adjustment",
         "driver",
         "checkout",
     )

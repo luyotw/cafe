@@ -132,13 +132,12 @@ proposal includes:
 - planned human confirmation points and reactive handoffs;
 - issue size, risk, and the mandate boundary;
 - the primary and fallback CLI/model chain for each agent phase;
-- whether the driver may adjust later model choices autonomously; and
 - whether the issue should use a worktree.
 
 Confirm or revise that contract once. The driver then prepares the issue and
 executes one phase at a time. After every completed phase it inspects the
-result, reassesses later model choices within the granted authority, and follows
-the persisted handoff. It stops when a decision still belongs to you.
+result and follows the persisted handoff. It changes a future phase model only
+when you explicitly request it. It stops when a decision still belongs to you.
 
 Common follow-up requests are similarly direct:
 
@@ -151,7 +150,7 @@ Show me the current CAFE status and explain what is waiting for me.
 ```
 
 ```text
-Continue, but require my approval before changing any phase model.
+Use <model-name> for the next develop iteration, then continue.
 ```
 
 ### Built-in playbooks
@@ -238,7 +237,7 @@ Use CAFE with the research-publication playbook for this brief.
 ```
 
 The skills are the recommended interface because they preserve kickoff,
-one-step execution, model reassessment, and human-handoff rules. The agent
+one-step execution, user-directed phase model changes, and human-handoff rules. The agent
 operates the Engine commands on your behalf and should explain outcomes and
 decisions rather than exposing command mechanics as the normal user interface.
 

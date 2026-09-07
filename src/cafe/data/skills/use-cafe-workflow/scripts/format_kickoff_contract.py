@@ -4,20 +4,16 @@
 from __future__ import annotations
 
 import argparse
-from copy import deepcopy
 import json
 import os
 import shlex
 import shutil
 import sys
+from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
-_MODEL_ADJUSTMENT_AUTHORITIES = {
-    "driver_autonomous",
-    "user_approval_required",
-}
 _DRIVER_MODES = {"attached", "unattended", "event-driven"}
 _EVENT_DRIVEN_CLIS = {"claude", "codex", "gemini", "copilot", "cursor-agent"}
 
@@ -47,14 +43,14 @@ def _reexec_with_cafe_python() -> None:
 try:
     import yaml  # type: ignore[import-untyped]
 
+    from cafe.agents.executor import AgentExecutor
     from cafe.core.playbook import (
         confirmation_gate_steps,
         mandatory_confirmation_gate_steps,
         playbook_requests_capability,
     )
-    from cafe.agents.executor import AgentExecutor
-    from cafe.driver import ActivateConfirmedContract, activate_confirmed_contract
     from cafe.core.types import AgentCLI, AgentConfig
+    from cafe.driver import ActivateConfirmedContract, activate_confirmed_contract
     from cafe.playbooks.loader import PlaybookLoader
     from cafe.skills.execution_profile import resolve_execution_profile
     from cafe.skills.loader import SkillLoader
@@ -101,7 +97,7 @@ def _strict_bool(value: str) -> bool:
 
 def _driver_policy_rows(args: argparse.Namespace) -> list[list[Any]]:
     rows: list[list[Any]] = [
-        ["schema_version", 1],
+        ["schema_version", 2],
         ["driver.mode", args.driver_mode],
     ]
     if args.driver_mode == "attached":
@@ -393,11 +389,6 @@ def _parser() -> argparse.ArgumentParser:
         choices=("small", "medium", "large"),
         required=True,
     )
-    parser.add_argument(
-        "--model-adjustment-authority",
-        choices=tuple(sorted(_MODEL_ADJUSTMENT_AUTHORITIES)),
-        required=True,
-    )
     parser.add_argument("--update-preflight", type=_json_mapping, required=True)
     parser.add_argument("--catalog-preflight", type=_json_mapping, required=True)
     parser.add_argument("--driver-mode", choices=tuple(sorted(_DRIVER_MODES)), required=True)
@@ -621,9 +612,6 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
                 eligible_phases=set(candidates) | set(mandatory_human_tasks),
             )
         },
-        "model_adjustment": {
-            "authority": args.model_adjustment_authority,
-        },
         "driver": {"mode": args.driver_mode},
         "checkout": checkout,
         "semantic_facts": {},
@@ -655,7 +643,6 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
         "issue_assessment",
         "phases",
         "proactive_review",
-        "model_adjustment",
         "driver",
         "checkout",
     )
@@ -826,7 +813,6 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
         ["issue_scale", args.issue_scale],
         ["risk_factors", ", ".join(args.risk_factor)],
         ["assessment_rationale", args.assessment_rationale],
-        ["model_adjustment_authority", args.model_adjustment_authority],
         *_driver_policy_rows(args),
         ["user_required", ", ".join(user_required) or "[]"],
         ["driver_confirmable", ", ".join(driver_confirmable) or "[]"],
@@ -1031,7 +1017,7 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
                     "The following Driver-owned policy must be confirmed unchanged before activation.",
                     "```json",
                     json.dumps(
-                        {"schema_version": 1, "policy": confirmed_proposal},
+                        {"schema_version": 2, "policy": confirmed_proposal},
                         ensure_ascii=False,
                         indent=2,
                         sort_keys=True,

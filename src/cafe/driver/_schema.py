@@ -11,7 +11,7 @@ from cafe.core.packet_io import canonical_json
 from cafe.core.types import AgentCLI
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 _RUNTIME_KEYS = {
     "session",
     "sessions",
@@ -34,7 +34,6 @@ _PROPOSAL_KEYS = {
     "issue_assessment",
     "phases",
     "proactive_review",
-    "model_adjustment",
     "driver",
     "checkout",
     "semantic_facts",
@@ -55,7 +54,6 @@ _POLICY_SEMANTIC_FIELDS = (
     "issue_assessment",
     "phases",
     "proactive_review",
-    "model_adjustment",
     "driver",
     "checkout",
 )
@@ -263,9 +261,6 @@ def _validate_policy(proposal: Mapping[str, Any]) -> dict[str, Any]:
     if set(raw) != _PROPOSAL_KEYS:
         raise ValueError("confirmed proposal is incomplete")
     phases = _validate_phases(raw["phases"])
-    adjustment = _json_mapping(raw["model_adjustment"], "model_adjustment")
-    if set(adjustment) != {"authority"}:
-        raise ValueError("model_adjustment has unsupported or missing fields")
     result: dict[str, Any] = {
         "locales": _validate_locales(raw["locales"]),
         "confirmation_contract": _validate_confirmation(raw["confirmation_contract"]),
@@ -282,7 +277,6 @@ def _validate_policy(proposal: Mapping[str, Any]) -> dict[str, Any]:
         ),
         "phases": phases,
         "proactive_review": _validate_proactive(raw["proactive_review"], phases),
-        "model_adjustment": adjustment,
         "driver": _validate_driver(raw["driver"]),
         "checkout": _validate_checkout(raw["checkout"]),
     }
@@ -295,9 +289,6 @@ def _validate_policy(proposal: Mapping[str, Any]) -> dict[str, Any]:
     assessment["scale"] = _string(assessment["scale"], "issue_assessment.scale")
     assessment["risks"] = _string_list(assessment["risks"], "issue_assessment.risks")
     assessment["rationale"] = _string(assessment["rationale"], "issue_assessment.rationale")
-    adjustment = result["model_adjustment"]
-    if adjustment["authority"] not in {"driver_autonomous", "user_approval_required"}:
-        raise ValueError("model adjustment authority is invalid")
     expected_semantics = {
         "effective_policy": {
             name: deepcopy(result[name]) for name in _POLICY_SEMANTIC_FIELDS if name in result
@@ -324,7 +315,6 @@ def _semantic_projection_from_validated(contract: Mapping[str, Any]) -> dict[str
         "issue_assessment",
         "phases",
         "proactive_review",
-        "model_adjustment",
         "driver",
         "checkout",
     )
@@ -352,18 +342,12 @@ def build_initial_contract(
     revision: int = 1,
     previous_contract_sha256: str | None = None,
     provenance_kind: str = "initial",
-    delegated_change: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Normalize a purpose-specific proposal into a strict durable document."""
     if not isinstance(revision, int) or isinstance(revision, bool) or revision <= 0:
         raise ValueError("revision must be a positive integer")
-    if provenance_kind not in {"initial", "user_reconfirmation", "delegated_change"}:
+    if provenance_kind not in {"initial", "user_reconfirmation"}:
         raise ValueError("provenance kind is invalid")
-    if provenance_kind == "delegated_change":
-        if delegated_change is None:
-            raise ValueError("delegated change provenance is required")
-    elif delegated_change is not None:
-        raise ValueError("only delegated changes may include delegated provenance")
     policy = _validate_policy(proposal)
     document: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
@@ -380,10 +364,6 @@ def build_initial_contract(
         },
         **policy,
     }
-    if delegated_change is not None:
-        document["provenance"]["delegated_change"] = _json_mapping(
-            delegated_change, "delegated_change"
-        )
     document["provenance"]["proposal_digest"] = proposal_digest(document)
     return validate_contract(document)
 
@@ -422,12 +402,10 @@ def validate_contract(
         raise ValueError("previous contract digest is invalid")
     provenance_keys = {"kind", "confirmed_by", "confirmed_at", "proposal_digest"}
     provenance = _mapping(raw["provenance"], "provenance")
-    if provenance.get("kind") == "delegated_change":
-        provenance_keys.add("delegated_change")
     if set(provenance) != provenance_keys:
         raise ValueError("contract provenance is invalid")
     kind = _string(provenance["kind"], "provenance.kind")
-    if kind not in {"initial", "user_reconfirmation", "delegated_change"}:
+    if kind not in {"initial", "user_reconfirmation"}:
         raise ValueError("contract provenance kind is invalid")
     provenance["confirmed_by"] = _string(provenance["confirmed_by"], "provenance.confirmed_by")
     provenance["confirmed_at"] = _aware_time(provenance["confirmed_at"], "provenance.confirmed_at")
@@ -457,10 +435,6 @@ def validate_contract(
         "provenance": provenance,
         **policy,
     }
-    if kind == "delegated_change":
-        normalized["provenance"]["delegated_change"] = _json_mapping(
-            provenance["delegated_change"], "delegated_change"
-        )
     expected = hashlib.sha256(
         canonical_json(_semantic_projection_from_validated(normalized))
     ).hexdigest()
