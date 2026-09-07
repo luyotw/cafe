@@ -212,11 +212,34 @@ work, unnecessary abstraction, and extension work. These checks apply equally
 to code and non-code phase output. An incomplete, interrupted, or ambiguous
 pass is not a no-blocking result.
 
-Then consolidate every currently observable blocker and send it through the
-responsible phase's existing correction route; do not edit generated phase
-artifacts or invent a side channel. After any correction or other candidate
-change, re-review the changed durable artifact, its correction delta, and every
-affected original requirement, repeating both scope checks. Stop with a
+The Driver must complete all applicable review passes before producing one
+bounded findings batch. It names the reviewed phase and role, the exact current artifact
+identity, every observable blocker, its requirement or boundary, and concise
+evidence. Deliver that one batch through `cafe chat <role> -p` to the existing
+responsible phase-agent session. Ask the agent to accept or rebut each finding.
+Chat must not edit the current phase output: the prompt is discussion only,
+and the chat response is discussion evidence, not workflow authority.
+
+Findings, chat attempts, disagreements, and rebuttals do not create an
+iteration. Independently verify a rebuttal against the same unchanged artifact.
+An accepted finding without a durable correction remains blocking. If the
+Driver and phase agent agree that an artifact correction is necessary, the
+Driver may intentionally create one formal correction iteration only through
+the active declared `revise` outcome. First verify that the decision requires
+feedback, declares `correction: true`, and routes to correction rather than
+downstream advancement. Submit `cafe task complete ... --no-resume --json` with
+consolidated findings, reached consensus, and acceptance conditions; then verify
+the durable task result and correction continuation before resuming in the
+configured mode. Only the resumed runtime materializes and executes the next
+formal iteration. Inspect its durable input, delta, and output only at the next
+observable pause or failure, then complete Driver re-review of the resulting
+artifact and every affected requirement.
+
+After any correction or other candidate change, re-review the changed durable
+artifact, its correction delta, and every affected original requirement,
+repeating both scope checks. A partial, ambiguous, interrupted, failed, stale,
+or unresolved attempt must fail closed: retain the pause, restart from the
+current artifact identity, and complete a fresh full review. Stop with a
 self-contained user handoff when correction needs user-owned authority,
 permission, capability, scope selection, or an answer. A no-blocking result is
 quality evidence only: it does not replace `driver_confirmable` evidence,
@@ -229,14 +252,17 @@ no-blocking pass. Missing, stale, incomplete, or ambiguous proof requires a
 new full pass. This fail-closed rule stores no review status or correction
 history.
 
-Apply this same contract in attached, unattended, and event-driven modes, but
-only at the existing scheduled pause. Attached mode reviews before its paused
-handoff resumes, unattended mode reviews when the user returns while that pause
-is still pending, and an event-driven callback may begin after the durable pause
-notification. A phase-terminal callback that did not pause cannot make the
-review gating and must not be treated as a valid review opportunity. The
-callback remains asynchronous, best-effort, fail-open, and non-gating for
-workflow advancement.
+Apply this same contract in attached, unattended, and event-driven callback
+modes, but only at the existing scheduled pause. Attached mode reviews before
+its paused handoff resumes, unattended mode reviews when the user returns while
+that pause is still pending, and an event-driven callback may begin after the
+durable pause notification. A callback acting as the current Driver may submit
+the same pre-authorized declared correction revise after due review/chat
+consensus, but may not choose advancing confirmation or a user-owned decision.
+A phase-terminal callback that did not pause cannot make the review gating and
+must not be treated as a valid review opportunity. Callback failure must fail
+closed at the existing pause; callbacks remain asynchronous, best-effort, and
+non-gating for workflow advancement.
 
 Do not edit workflow artifacts, blackboard, or `next_step.txt` by hand except
 when repairing confirmed broken workflow state. Do not bypass CAFE by directly

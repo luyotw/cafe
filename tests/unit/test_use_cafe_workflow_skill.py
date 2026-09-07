@@ -1832,6 +1832,70 @@ def test_use_cafe_workflow_defines_phase_scoped_proactive_driver_review() -> Non
     assert "must not launch a separate reviewer" in normalized
 
 
+def test_proactive_review_consensus_uses_formal_correction_and_user_owned_confirmation() -> None:
+    """The Driver contract keeps correction authority narrow and independently reviewed."""
+    skill = _read_skill_resource("SKILL.md")
+    running = _read_skill_resource("references/running_workflow.md")
+    handoffs = _read_skill_resource("references/handoffs_and_alignment.md")
+    contract = " ".join((skill + running + handoffs).split())
+
+    for required in (
+        "complete all applicable review passes before producing one bounded findings batch",
+        "exact current artifact identity",
+        "every observable blocker",
+        "requirement or boundary",
+        "concise evidence",
+        "accept or rebut each finding",
+        "`cafe chat <role> -p`",
+        "existing responsible phase-agent session",
+        "Chat must not edit the current phase output",
+        "chat response is discussion evidence, not workflow authority",
+        "findings, chat attempts, disagreements, and rebuttals do not create an iteration",
+        "formal correction iteration only through the active declared `revise` outcome",
+        "requires feedback", "`correction: true`", "correction rather than downstream advancement",
+        "consolidated findings, reached consensus, and acceptance conditions",
+        "--no-resume --json", "verify the durable task result and correction continuation",
+        "Only the resumed runtime materializes and executes the next formal iteration",
+        "next observable pause or failure", "complete Driver re-review",
+        "attached, unattended, and event-driven callback", "fail closed",
+        "same unchanged artifact", "accepted finding without a durable correction",
+        "partial, ambiguous, interrupted, failed, stale, or unresolved",
+    ):
+        assert required.lower() in contract.lower()
+
+    for required in (
+        "Driver may submit only a declared non-advancing `revise`",
+        "user_required and mandatory confirmation gates keep advancing `confirm` user-owned",
+        "driver_confirmable clean confirm remains driver-permitted",
+        "No user prompt occurs during an autonomous correction loop",
+        "one final user confirmation for each clean advancement candidate",
+        "later clean candidate must be presented again",
+        "clarification, permission, capability, scope, strategic, and unknown decisions remain user-owned",
+        "all eight decision-packet elements",
+        "bare confirmation requests, artifact-link-only handoffs, and raw artifact dumps are invalid",
+        "policy-only", "exact next phase/model", "external-side-effect boundary",
+    ):
+        assert required.lower() in contract.lower()
+
+
+def test_proactive_review_decision_packet_names_each_required_element() -> None:
+    handoffs = _read_skill_resource("references/handoffs_and_alignment.md")
+    normalized = " ".join(handoffs.split())
+
+    for element in (
+        "current phase and completed work",
+        "concrete proposed behavior/change and why it is needed",
+        "material authority or contract changes",
+        "included and excluded scope",
+        "validation evidence and Driver review disposition",
+        "remaining risks, limitations, and trade-offs",
+        "enforcement is policy-only or runtime-enforced",
+        "exact next phase/model and external-side-effect boundary",
+        "every declared option, consequence, required feedback or target, and valid reply example",
+    ):
+        assert element in normalized
+
+
 def test_kickoff_rejects_required_review_without_a_scheduled_pause(tmp_path: Path) -> None:
     strategic_context = tmp_path / "strategic_context.yaml"
     strategic_context.write_text(
