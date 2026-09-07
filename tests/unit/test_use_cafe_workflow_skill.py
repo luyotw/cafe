@@ -659,7 +659,7 @@ def test_kickoff_formatter_requires_and_binds_explicit_publication_choice(
     assert result.returncode == 0, result.stderr
     token = str(choice).lower()
     assert result.stdout.count(f"| pr.auto_create | {token} |") == 1
-    assert f"| confirmation_contract.pr_auto_create | {token} |" in result.stdout
+    assert "confirmation_contract.pr_auto_create" not in result.stdout
     assert "verified PR URL" in result.stdout
     assert "Publication mode: local-only. No PR URL exists." in result.stdout
 

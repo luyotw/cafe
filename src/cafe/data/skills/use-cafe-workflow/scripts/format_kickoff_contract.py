@@ -832,7 +832,6 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
         summary_rows.extend(
             [
                 ["pr.auto_create", choice],
-                ["confirmation_contract.pr_auto_create", choice],
             ]
         )
         publication_contract = "\n\n".join(
