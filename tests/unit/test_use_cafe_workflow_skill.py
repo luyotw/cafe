@@ -558,6 +558,55 @@ def test_confirmed_kickoff_activates_one_issue_scoped_driver_contract(tmp_path: 
     assert entry_projection["phase_model_authority"]["develop"][0]["model"] == "implementation-main"
 
 
+def test_confirmed_event_driven_kickoff_binds_the_visible_codex_thread(
+    tmp_path: Path,
+) -> None:
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text(
+        "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
+        encoding="utf-8",
+    )
+    issue_dir = tmp_path / "issues" / "issue346"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps({"workflow_id": "prepared-346"}), encoding="utf-8"
+    )
+    command = _kickoff_formatter_command(
+        strategic_context,
+        "--activate-confirmed",
+        "--workflow-id",
+        "prepared-346",
+        "--confirmed-by",
+        "user",
+        "--confirmed-at",
+        "2026-09-06T02:00:00+00:00",
+        "--issue-dir",
+        str(issue_dir),
+    )
+    mode_index = command.index("--driver-mode") + 1
+    command[mode_index] = "event-driven"
+    command[mode_index + 1 : mode_index + 1] = [
+        "--event-driver",
+        "codex:gpt-5.6-terra",
+    ]
+    environment = dict(os.environ)
+    environment["CODEX_THREAD_ID"] = "visible-thread"
+
+    result = subprocess.run(
+        command,
+        cwd=PROJECT_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    state = json.loads((issue_dir / "driver" / "dispatch_state.json").read_text(encoding="utf-8"))
+    assert state["entries"][0]["session"]["id"] == "visible-thread"
+    assert state["entries"][0]["session"]["source"] == "host_session"
+
+
 def test_kickoff_formatter_renders_the_complete_normalized_policy_before_activation(
     tmp_path: Path,
 ) -> None:
@@ -659,7 +708,7 @@ def test_kickoff_formatter_requires_and_binds_explicit_publication_choice(
     assert result.returncode == 0, result.stderr
     token = str(choice).lower()
     assert result.stdout.count(f"| pr.auto_create | {token} |") == 1
-    assert f"| confirmation_contract.pr_auto_create | {token} |" in result.stdout
+    assert "confirmation_contract.pr_auto_create" not in result.stdout
     assert "verified PR URL" in result.stdout
     assert "Publication mode: local-only. No PR URL exists." in result.stdout
 
@@ -1767,6 +1816,106 @@ def test_use_cafe_workflow_prefers_user_conversation_locale() -> None:
     assert "commands, paths, playbook and step names, intents, artifact keys" in normalized
 
 
+def test_use_cafe_workflow_defines_phase_scoped_proactive_driver_review() -> None:
+    skill = _read_skill_resource("SKILL.md")
+    kickoff = _read_skill_resource("references/kickoff.md")
+    running = _read_skill_resource("references/running_workflow.md")
+    handoffs = _read_skill_resource("references/handoffs_and_alignment.md")
+    normalized = " ".join((skill + kickoff + running + handoffs).split())
+
+    assert "smallest useful eligible set" in normalized
+    assert "`proactive_review.phase_decisions` projection" in running
+    assert "existing scheduled confirmation pause" in normalized
+    assert "current Driver performs the review directly" in normalized
+    assert "missing necessary scope and excessive or unnecessary scope" in normalized
+    assert "code and non-code phase output" in normalized
+    assert "must not launch a separate reviewer" in normalized
+
+
+def test_kickoff_rejects_required_review_without_a_scheduled_pause(tmp_path: Path) -> None:
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text(
+        "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
+        encoding="utf-8",
+    )
+
+    for ineligible_phase in ("develop", "review"):
+        decisions: list[str] = []
+        for phase in PRIMARY_ONLY_PHASE_CHAINS:
+            state = "required" if phase == ineligible_phase else "not_required"
+            decisions.extend(
+                [
+                    "--proactive-review-decision",
+                    f"{phase}={state}:Confirmed review decision for {phase}.",
+                ]
+            )
+        result = subprocess.run(
+            _kickoff_formatter_command(strategic_context, *decisions),
+            cwd=PROJECT_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        assert result.returncode == 2
+        assert (
+            f"proactive review phase '{ineligible_phase}' cannot be required because it has no "
+            "scheduled confirmation pause"
+        ) in result.stderr
+
+
+def test_kickoff_rejects_proactive_review_without_a_rationale(tmp_path: Path) -> None:
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text(
+        "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
+        encoding="utf-8",
+    )
+    decisions = _proactive_review_args("standard")
+    decisions[1] = "spec=not_required:   "
+
+    result = subprocess.run(
+        _kickoff_formatter_command(strategic_context, *decisions),
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "proactive review decision for 'spec' requires a rationale" in result.stderr
+
+
+def test_kickoff_accepts_required_review_at_scheduled_pauses(tmp_path: Path) -> None:
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text(
+        "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
+        encoding="utf-8",
+    )
+    decisions: list[str] = []
+    for phase in PRIMARY_ONLY_PHASE_CHAINS:
+        state = "required" if phase in {"spec", "plan"} else "not_required"
+        decisions.extend(
+            [
+                "--proactive-review-decision",
+                f"{phase}={state}:Confirmed review decision for {phase}.",
+            ]
+        )
+
+    result = subprocess.run(
+        _kickoff_formatter_command(strategic_context, *decisions),
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    rendered = result.stdout.split("```json\n", 1)[1].split("\n```", 1)[0]
+    phase_decisions = json.loads(rendered)["policy"]["proactive_review"]["phase_decisions"]
+    required = {item["phase"] for item in phase_decisions if item["decision"] == "required"}
+    assert required == {"spec", "plan"}
+
+
 def test_use_cafe_workflow_requires_confirmed_repository_content_locale() -> None:
     skill = _read_skill_resource("SKILL.md")
     reference = _read_skill_resource("references/kickoff.md")
@@ -1836,7 +1985,8 @@ def test_event_driver_documentation_defines_the_contract_managed_lifecycle() -> 
     assert "provider-created session ID" in contract
     assert "persisted in `dispatch_state.json` before the actual callback" in contract
     assert "existing acquired session" in contract
-    assert "first Codex entry's valid runtime-owned host binding" in contract
+    assert "best-effort first-session hint" in contract
+    assert "binding failure does not block workflow execution" in contract
     assert "bootstrap never counts as event delivery or acceptance" in contract
     assert "actual callback durable acceptance" in contract
     assert "Copilot never receives a caller-selected new-session ID" in contract

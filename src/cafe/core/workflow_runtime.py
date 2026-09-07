@@ -443,7 +443,7 @@ class BlackboardWorkflowRuntime:
             self.automatic_registry.validate_inputs(executor_id, inputs)
 
     def _publication_contract_error(self) -> tuple[str, str] | None:
-        """Validate the confirmed and persisted publication choice for this run."""
+        """Validate the generic publication setting for this run."""
         self._validated_pr_auto_create = None
         issue_yaml = self.issue_dir / "issue.yaml"
         config: Mapping[str, Any] = {}
@@ -461,17 +461,10 @@ class BlackboardWorkflowRuntime:
                 return ("invalid_issue_config", "issue.yaml must contain a mapping")
             config = loaded
 
-        confirmation = config.get("confirmation_contract")
         pr_config = config.get("pr")
-        confirmation_mapping = confirmation if isinstance(confirmation, Mapping) else {}
         pr_mapping = pr_config if isinstance(pr_config, Mapping) else {}
-        confirmed_present = "pr_auto_create" in confirmation_mapping
         persisted_present = "auto_create" in pr_mapping
-        has_publication_config = (
-            confirmed_present
-            or persisted_present
-            or "post_todo_list" in pr_mapping
-        )
+        has_publication_config = persisted_present or "post_todo_list" in pr_mapping
         capable = playbook_requests_capability(self.playbook, CAPABILITY_PR_PUBLISH_ID)
 
         if not capable:
@@ -481,27 +474,11 @@ class BlackboardWorkflowRuntime:
                     "the effective playbook does not request cafe.pr.publish",
                 )
             return None
-        if not confirmed_present:
-            return (
-                "missing_confirmed_choice",
-                "confirmation_contract.pr_auto_create is required",
-            )
-        confirmed = confirmation_mapping["pr_auto_create"]
-        if not isinstance(confirmed, bool):
-            return (
-                "invalid_confirmed_choice",
-                "confirmation_contract.pr_auto_create must be Boolean",
-            )
         if not persisted_present:
             return ("missing_persisted_choice", "pr.auto_create is required")
         persisted = pr_mapping["auto_create"]
         if not isinstance(persisted, bool):
             return ("invalid_persisted_choice", "pr.auto_create must be Boolean")
-        if confirmed is not persisted:
-            return (
-                "publication_choice_mismatch",
-                "confirmation_contract.pr_auto_create must equal pr.auto_create",
-            )
         self._validated_pr_auto_create = persisted
         return None
 

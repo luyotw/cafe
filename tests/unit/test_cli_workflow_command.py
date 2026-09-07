@@ -40,7 +40,7 @@ runner = CliRunner()
 def _write_local_only_publication_contract(issue_dir: Path) -> None:
     issue_dir.mkdir(parents=True, exist_ok=True)
     (issue_dir / "issue.yaml").write_text(
-        "confirmation_contract:\n" "  pr_auto_create: false\n" "pr:\n" "  auto_create: false\n",
+        "pr:\n  auto_create: false\n",
         encoding="utf-8",
     )
 
@@ -508,8 +508,6 @@ def test_single_step_uses_the_mode_neutral_core_in_the_foreground(
         "contract_version: 2\n"
         "driver:\n"
         "  mode: unattended\n"
-        "confirmation_contract:\n"
-        "  pr_auto_create: false\n"
         "pr:\n"
         "  auto_create: false\n",
         encoding="utf-8",

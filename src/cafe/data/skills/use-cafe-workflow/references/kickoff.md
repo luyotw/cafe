@@ -91,6 +91,10 @@ obtain explicit user confirmation of:
 - `reactive_user_handoffs`;
 - mandate preset, axes, levels, and out-of-mandate list;
 - issue nature, scale, and risk factors;
+- one `required` or `not_required` proactive-review decision with an
+  issue-specific rationale for every agent or hybrid phase; only phases followed
+  by an existing scheduled confirmation pause before workflow advancement are
+  eligible for `required`, and the smallest useful eligible set is preferred;
 - the exact ordered CLI/model chain for every phase, containing one primary and
   zero or more explicitly confirmed fallbacks;
 - `model_adjustment_authority`: either `driver_autonomous` or
@@ -105,8 +109,8 @@ obtain explicit user confirmation of:
 
 The same kickoff presentation also contains the generic PR choice when any
 effective playbook step requests `cafe.pr.publish`. It is persisted only in
-`issue.yaml` under the existing #467 contract, including its generic
-`confirmation_contract.pr_auto_create` binding. `true` means the feature branch is pushed and the PR is created or
+`issue.yaml` as the sole authoritative generic setting `pr.auto_create`.
+`true` means the feature branch is pushed and the PR is created or
   updated only after local material and authorization succeed, and the review
   handoff receives a verified PR URL. `false` means `Publication mode:
   local-only. No PR URL exists.`
@@ -335,7 +339,7 @@ for confirmation rather than asking again.
 - [ ] Enter the reported worktree before running workflow commands.
 - [ ] Verify that `cafe prepare` persisted the active `playbook_id`, then add
   the confirmation contract, reactive handoff policy,
-  generic confirmation data required by #467 to
+  and generic workflow configuration to
   `.cafe/issues/<issue-name>/issue.yaml` in the active checkout before the first
   workflow execution:
 
@@ -365,7 +369,6 @@ for confirmation rather than asking again.
   confirmation_contract:
     user_required: [spec, plan]
     driver_confirmable: []
-    pr_auto_create: false
     confirmed_by: user
     confirmed_at: 2026-07-16
   pr:
@@ -373,12 +376,13 @@ for confirmation rather than asking again.
   ```
 
   For a playbook requesting `cafe.pr.publish`, verify that the prepare flag
-  persisted the exact confirmed Boolean at `pr.auto_create` and that #467
-  persists the matching `confirmation_contract.pr_auto_create`. For a playbook without
-  that capability, pass neither flag and verify that neither `pr.auto_create`
-  nor `confirmation_contract.pr_auto_create` exists. A missing, changed, or
-  stale value requires a freshly rendered and confirmed kickoff contract; do
-  not infer local-only from omission.
+  persisted the exact confirmed Boolean at `pr.auto_create`. For a playbook
+  without that capability, pass neither flag and verify that `pr.auto_create`
+  does not exist. A missing, changed, or stale value requires a freshly
+  rendered and confirmed kickoff contract; do not infer local-only from
+  omission. The former `confirmation_contract.pr_auto_create` field is
+  obsolete and inert: remove it when updating an existing configuration, and
+  never use it to authorize, reject, or override `pr.auto_create`.
 
   When the confirmed mode is event-driven, launch the trusted callback after
   this contract is written. It loads the current issue contract immediately
@@ -391,16 +395,18 @@ for confirmation rather than asking again.
   Do not put the mode, CLI, model, session, callback, or any driver control
   setting in `issue.yaml`. Confirm that every entry reports `event-driven
   session-and-dispatch: conforming` before accepting the contract. When the
-  primary is Codex and this command runs from a Codex App thread, the first
-  Codex entry's valid runtime-owned host binding is recorded only in the
-  callback runtime; no fallback inherits it.
+  primary is Codex and this command runs from a Codex App thread, that thread
+  is a best-effort first-session hint recorded only in callback runtime state;
+  a persisted acquired session wins, binding failure does not block workflow
+  execution, and no fallback inherits the host binding.
 
   Confirm these two separate lifecycle boundaries explicitly. An unbound entry
   first receives a bootstrap exactly equivalent to `say "HI"`; Codex, Claude,
   Gemini, Cursor, and Copilot must each return a provider-created session ID.
   That ID is persisted in `dispatch_state.json` before the actual callback is
-  sent. An existing acquired session or the first Codex entry's valid
-  runtime-owned host binding is reused without bootstrap. The bootstrap never
+  sent. An existing acquired session wins over a new host hint; otherwise a
+  successfully recorded first Codex host binding is reused without bootstrap.
+  The bootstrap never
   counts as event delivery or acceptance; only actual callback durable
   acceptance can stop routing and select the sticky active entry. The provider
   acknowledgement is bound to the exact event identity in that dispatched

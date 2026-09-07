@@ -1,7 +1,8 @@
 """Global pytest configuration."""
 
-import sys
+import os
 import shutil
+import sys
 from copy import deepcopy
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -10,6 +11,10 @@ import pytest
 
 from cafe.core.git import BranchHealth
 
+# Route every pytest process, including runs started from a Git worktree and
+# subprocesses spawned by tests, to the dedicated test notification credential.
+# The notification resolver fails closed when that credential is unavailable.
+os.environ["CAFE_TEST_RUN_SLACK_NOTIFICATIONS"] = "1"
 
 _BUILTIN_SKILL_FRONTMATTER_CACHE: dict[Path, dict[str, object]] = {}
 _BUILTIN_PLAYBOOK_CACHE: dict[str, object] = {}

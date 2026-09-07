@@ -79,13 +79,14 @@ clean repository.
 
 ### Keep coverage-test notifications separate
 
-`scripts/test-coverage.sh` marks only its own process as a coverage test run.
-HumanTasks materialized by test fixtures then use the separate fixed credential
-`~/.cafe/test-slack-webhook`; it must also be a private regular file owned by
-the login user. If that credential is missing or invalid, test-run HumanTask
-delivery fails closed and never falls back to the normal HumanTask channel.
-The marker chooses only between these two package-defined paths: it cannot
-supply a URL, channel, or credential path from a project or environment value.
+The global pytest bootstrap marks every test process, whether pytest starts in
+the repository root or a Git worktree. HumanTasks materialized by test fixtures
+then use the separate fixed credential `~/.cafe/test-slack-webhook`; subprocesses
+spawned by those tests inherit the same route. The credential must be a private
+regular file owned by the login user. If it is missing or invalid, test-run
+HumanTask delivery fails closed and never falls back to the normal HumanTask
+channel. The marker chooses only between these two package-defined paths: it
+cannot supply a URL, channel, or credential path from project content.
 
 ## What the notification contains
 

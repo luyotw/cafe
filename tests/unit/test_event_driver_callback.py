@@ -446,13 +446,24 @@ def _contract_event_context(
     *,
     issue_name: str = "issue457",
     event_type: str = "phase_terminal",
+    bind_host: bool = False,
 ):
     from cafe.core.blackboard import BlackboardStore
 
     issue_dir = tmp_path / ".cafe" / "issues" / issue_name
     store = BlackboardStore(issue_dir)
     blackboard = store.load_or_create("spec")
-    _activate_event_contract(issue_dir, workflow_id=blackboard.workflow_id, clis=clis)
+    if bind_host:
+        callback.activate_confirmed_contract_with_host_session(
+            issue_dir=issue_dir,
+            issue_name=issue_dir.name,
+            workflow_id=blackboard.workflow_id,
+            activate_contract=lambda: _activate_event_contract(
+                issue_dir, workflow_id=blackboard.workflow_id, clis=clis
+            ),
+        )
+    else:
+        _activate_event_contract(issue_dir, workflow_id=blackboard.workflow_id, clis=clis)
     event = store.prepare_workflow_callback_event(
         blackboard,
         {
@@ -1130,6 +1141,139 @@ def test_bound_codex_delivery_uses_queue_without_bootstrap(tmp_path: Path, monke
     assert updated["entries"][1]["session"] is None
 
 
+def test_confirmed_activation_delivers_to_host_after_detaching_environment(
+    tmp_path: Path, monkeypatch
+) -> None:
+    callback = _callback_module()
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue456"
+    blackboard = _prepare_issue(issue_dir)
+    monkeypatch.setenv("CODEX_THREAD_ID", "visible-thread")
+    callback.activate_confirmed_contract_with_host_session(
+        issue_dir=issue_dir,
+        issue_name=issue_dir.name,
+        workflow_id=blackboard.workflow_id,
+        activate_contract=lambda: _activate_event_contract(
+            issue_dir,
+            workflow_id=blackboard.workflow_id,
+            clis=[("codex", "exact")],
+        ),
+    )
+    monkeypatch.delenv("CODEX_THREAD_ID")
+    from cafe.core.blackboard import BlackboardStore
+
+    store = BlackboardStore(issue_dir)
+    event = store.prepare_workflow_callback_event(
+        blackboard,
+        {
+            "workflow_id": blackboard.workflow_id,
+            "issue": issue_dir.name,
+            "event_type": "human_task",
+            "step": "pr",
+            "status_code": "waiting",
+        },
+    )
+
+    with patch.object(callback.subprocess, "run") as run:
+        callback.run_callback(event, repository_root=tmp_path)
+
+    command = run.call_args.args[0]
+    assert command[:4] == ["codex", "queue", "--thread", "visible-thread"]
+    assert "say" not in command
+    state = json.loads((issue_dir / "driver" / "dispatch_state.json").read_text(encoding="utf-8"))
+    assert state["entries"][0]["session"]["source"] == "host_session"
+    assert state["events"][event["event_id"]]["status"] == "accepted"
+
+
+def test_confirmed_activation_binding_failure_warns_and_is_safely_retryable(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    callback = _callback_module()
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue456"
+    blackboard = _prepare_issue(issue_dir)
+    monkeypatch.setenv("CODEX_THREAD_ID", "visible-thread")
+    original = callback._load_or_initialize_dispatch_state
+
+    def fail_once(*_args, **_kwargs):
+        raise OSError("simulated state write failure")
+
+    monkeypatch.setattr(callback, "_load_or_initialize_dispatch_state", fail_once)
+
+    def activate():
+        return _activate_event_contract(
+            issue_dir,
+            workflow_id=blackboard.workflow_id,
+            clis=[("codex", "exact")],
+        )
+
+    callback.activate_confirmed_contract_with_host_session(
+        issue_dir=issue_dir,
+        issue_name=issue_dir.name,
+        workflow_id=blackboard.workflow_id,
+        activate_contract=activate,
+    )
+
+    assert (issue_dir / "driver" / "contract.json").is_file()
+    assert not (issue_dir / "driver" / "dispatch_state.json").exists()
+    assert "activated without Codex host binding" in capsys.readouterr().err
+    monkeypatch.setattr(callback, "_load_or_initialize_dispatch_state", original)
+    callback.activate_confirmed_contract_with_host_session(
+        issue_dir=issue_dir,
+        issue_name=issue_dir.name,
+        workflow_id=blackboard.workflow_id,
+        activate_contract=activate,
+    )
+
+    state = json.loads((issue_dir / "driver" / "dispatch_state.json").read_text(encoding="utf-8"))
+    assert state["entries"][0]["session"]["id"] == "visible-thread"
+
+
+def test_confirmed_activation_keeps_an_existing_acquired_session(
+    tmp_path: Path, monkeypatch
+) -> None:
+    callback = _callback_module()
+    driver_dir, state, _event = _contract_event_context(
+        callback, tmp_path, [("codex", "exact")], issue_name="issue456"
+    )
+    state["entries"][0]["session"] = {
+        "id": "provider-session",
+        "source": "provider",
+        "acquired_at": "2026-09-07T00:00:00+00:00",
+    }
+    callback._write_dispatch_state(driver_dir, state)
+    monkeypatch.setenv("CODEX_THREAD_ID", "different-visible-thread")
+    blackboard = _prepare_issue(driver_dir.parent)
+
+    callback.activate_confirmed_contract_with_host_session(
+        issue_dir=driver_dir.parent,
+        issue_name=driver_dir.parent.name,
+        workflow_id=blackboard.workflow_id,
+        activate_contract=lambda: _activate_event_contract(
+            driver_dir.parent,
+            workflow_id=blackboard.workflow_id,
+            clis=[("codex", "exact")],
+        ),
+    )
+
+    persisted = json.loads((driver_dir / "dispatch_state.json").read_text(encoding="utf-8"))
+    assert persisted["entries"][0]["session"]["id"] == "provider-session"
+    assert persisted["entries"][0]["session"]["source"] == "provider"
+
+
+def test_confirmed_contract_activation_failure_still_propagates(tmp_path: Path) -> None:
+    callback = _callback_module()
+
+    def fail_activation():
+        raise RuntimeError("invalid confirmed contract")
+
+    with pytest.raises(RuntimeError, match="invalid confirmed contract"):
+        callback.activate_confirmed_contract_with_host_session(
+            issue_dir=tmp_path / ".cafe" / "issues" / "issue456",
+            issue_name="issue456",
+            workflow_id="workflow",
+            activate_contract=fail_activation,
+        )
+
+
 def test_conclusive_bootstrap_failure_moves_to_next_entry(tmp_path: Path) -> None:
     callback = _callback_module()
     driver_dir, state, event = _v3_event_context(
@@ -1299,6 +1443,28 @@ def test_status_projects_order_conformance_and_unacquired_without_writing(
         for path in driver_dir.iterdir()
         if path.is_file()
     } == before
+
+
+def test_status_does_not_rebind_existing_provider_session_to_current_host(
+    tmp_path: Path, monkeypatch
+) -> None:
+    callback = _callback_module()
+    driver_dir, state, _event = _contract_event_context(callback, tmp_path, [("codex", "exact")])
+    state["entries"][0]["session"] = {
+        "id": "provider-session",
+        "source": "provider",
+        "acquired_at": "2026-09-07T00:00:00+00:00",
+    }
+    callback._write_dispatch_state(driver_dir, state)
+    monkeypatch.setenv("CODEX_THREAD_ID", "current-host-thread")
+
+    status = callback.read_status(driver_dir.parent)
+
+    assert status["entries"][0]["acquisition"]["session"] == {
+        "id": "provider-session",
+        "source": "provider",
+        "acquired_at": "2026-09-07T00:00:00+00:00",
+    }
 
 
 def test_status_projects_acquisition_delivery_takeover_and_recovery(
@@ -1603,6 +1769,7 @@ def test_callback_queues_the_bound_codex_host_thread(tmp_path: Path, monkeypatch
         [("codex", "exact")],
         issue_name="issue456",
         event_type="human_task",
+        bind_host=True,
     )
     with patch.object(callback.subprocess, "run") as run:
         callback.run_callback(event, repository_root=tmp_path)
@@ -1635,6 +1802,7 @@ def test_bound_host_thread_queue_failure_never_creates_a_new_session(
         [("codex", "exact")],
         issue_name="issue456",
         event_type="human_task",
+        bind_host=True,
     )
     failure = subprocess.CalledProcessError(1, ["codex", "queue"], stderr="not found")
     with patch.object(callback.subprocess, "run", side_effect=failure) as run:

@@ -328,7 +328,6 @@ def _write_baton(
 def _write_publication_contract(
     issue_dir: Path,
     *,
-    confirmed: object = False,
     persisted: object = False,
 ) -> None:
     issue_dir.mkdir(parents=True, exist_ok=True)
@@ -336,7 +335,6 @@ def _write_publication_contract(
         yaml.safe_dump(
             {
                 "playbook_id": "publication-contract",
-                "confirmation_contract": {"pr_auto_create": confirmed},
                 "pr": {"auto_create": persisted},
             },
             sort_keys=False,
@@ -364,23 +362,9 @@ def _publication_contract_playbook(*, capable: bool = True) -> dict[str, object]
     ("config", "capable", "reason"),
     [
         (
-            {"playbook_id": "publication-contract", "pr": {"auto_create": False}},
-            True,
-            "missing_confirmed_choice",
-        ),
-        (
             {
                 "playbook_id": "publication-contract",
-                "confirmation_contract": {"pr_auto_create": "false"},
-                "pr": {"auto_create": False},
-            },
-            True,
-            "invalid_confirmed_choice",
-        ),
-        (
-            {
-                "playbook_id": "publication-contract",
-                "confirmation_contract": {"pr_auto_create": True},
+                "confirmation_contract": {"pr_auto_create": False},
             },
             True,
             "missing_persisted_choice",
@@ -388,7 +372,6 @@ def _publication_contract_playbook(*, capable: bool = True) -> dict[str, object]
         (
             {
                 "playbook_id": "publication-contract",
-                "confirmation_contract": {"pr_auto_create": True},
                 "pr": {"auto_create": "true"},
             },
             True,
@@ -397,17 +380,15 @@ def _publication_contract_playbook(*, capable: bool = True) -> dict[str, object]
         (
             {
                 "playbook_id": "publication-contract",
-                "confirmation_contract": {"pr_auto_create": True},
                 "pr": {"auto_create": False},
             },
-            True,
-            "publication_choice_mismatch",
+            False,
+            "inapplicable_publication_config",
         ),
         (
             {
                 "playbook_id": "publication-contract",
-                "confirmation_contract": {"pr_auto_create": False},
-                "pr": {"auto_create": False},
+                "pr": {"post_todo_list": False},
             },
             False,
             "inapplicable_publication_config",
@@ -449,13 +430,13 @@ def test_runtime_rejects_invalid_publication_contract_before_agent_execution(
 
 
 @pytest.mark.parametrize("choice", [True, False])
-def test_runtime_accepts_matching_explicit_publication_contract(
+def test_runtime_accepts_explicit_publication_setting(
     tmp_path: Path,
     choice: bool,
 ) -> None:
-    """Test List 5: both confirmed Boolean modes reach the public executor path."""
+    """Test List 5: both Boolean publication modes reach the public executor path."""
     issue_dir = tmp_path / ".cafe" / "issues" / f"valid-{choice}"
-    _write_publication_contract(issue_dir, confirmed=choice, persisted=choice)
+    _write_publication_contract(issue_dir, persisted=choice)
     calls: list[str] = []
 
     def executor(step: str, *_args: object, **_kwargs: object) -> StepExecutionResult:
@@ -487,22 +468,33 @@ def test_runtime_accepts_matching_explicit_publication_contract(
 
 
 def test_runtime_reads_publication_contract_at_run_time(tmp_path: Path) -> None:
-    """Test List 5: resume/start validation does not reuse a cached prepare value."""
+    """Test List 5: run validation reads the current sole publication setting."""
     issue_dir = tmp_path / ".cafe" / "issues" / "changed-before-run"
-    _write_publication_contract(issue_dir, confirmed=True, persisted=True)
-    calls: list[str] = []
+    _write_publication_contract(issue_dir, persisted=True)
+    received_choices: list[object] = []
+
+    def executor(step: str, *_args: object, **kwargs: object) -> StepExecutionResult:
+        received_choices.append(kwargs.get("validated_pr_auto_create"))
+        _write_baton(
+            issue_dir,
+            from_step=step,
+            to_owner="done",
+            to_step="done",
+            intent="workflow_complete",
+        )
+        return StepExecutionResult(response="", artifacts={})
+
     runtime = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
         playbook=_publication_contract_playbook(),
-        executor=lambda step, *_args, **_kwargs: calls.append(step),
+        executor=executor,
     )
-    _write_publication_contract(issue_dir, confirmed=True, persisted=False)
+    _write_publication_contract(issue_dir, persisted=False)
 
     result = runtime.run(start_step="build")
 
-    assert result.final_status_code == "INVALID_WORKFLOW_CONFIG"
-    assert "publication_choice_mismatch" in (result.detail or "")
-    assert calls == []
+    assert result.completed is True
+    assert received_choices == [False]
 
 
 def test_runtime_revalidates_publication_contract_before_each_agent_execution(
@@ -510,7 +502,7 @@ def test_runtime_revalidates_publication_contract_before_each_agent_execution(
 ) -> None:
     """Test List 5: a between-hop config change fails before the next agent."""
     issue_dir = tmp_path / ".cafe" / "issues" / "changed-between-hops"
-    _write_publication_contract(issue_dir, confirmed=False, persisted=False)
+    _write_publication_contract(issue_dir, persisted=False)
     playbook = {
         "playbook": {"id": "between-hop-contract"},
         "steps": {
@@ -534,7 +526,7 @@ def test_runtime_revalidates_publication_contract_before_each_agent_execution(
     def executor(step: str, *_args: object, **_kwargs: object) -> StepExecutionResult:
         calls.append(step)
         if step == "review":
-            _write_publication_contract(issue_dir, confirmed=False, persisted=True)
+            _write_publication_contract(issue_dir, persisted="true")
             _write_baton(
                 issue_dir,
                 from_step=step,
@@ -563,8 +555,95 @@ def test_runtime_revalidates_publication_contract_before_each_agent_execution(
     ).run(start_step="review")
 
     assert result.final_status_code == "INVALID_WORKFLOW_CONFIG"
-    assert "publication_choice_mismatch" in (result.detail or "")
+    assert "invalid_persisted_choice" in (result.detail or "")
     assert calls == ["review"]
+
+
+@pytest.mark.parametrize(
+    ("legacy_choice", "persisted"),
+    [(True, False), (False, True)],
+)
+def test_runtime_ignores_legacy_confirmation_publication_choice(
+    tmp_path: Path,
+    legacy_choice: bool,
+    persisted: bool,
+) -> None:
+    """Legacy confirmation data cannot authorize or veto generic publication."""
+    issue_dir = tmp_path / ".cafe" / "issues" / f"legacy-{persisted}"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "playbook_id": "publication-contract",
+                "confirmation_contract": {"pr_auto_create": legacy_choice},
+                "pr": {"auto_create": persisted},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    received_choices: list[object] = []
+
+    def executor(step: str, *_args: object, **kwargs: object) -> StepExecutionResult:
+        received_choices.append(kwargs.get("validated_pr_auto_create"))
+        _write_baton(
+            issue_dir,
+            from_step=step,
+            to_owner="done",
+            to_step="done",
+            intent="workflow_complete",
+        )
+        events = (
+            [{"type": "pr_synced", "url": "https://example.test/pull/483"}]
+            if persisted
+            else []
+        )
+        return StepExecutionResult(response="", artifacts={}, events=events)
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_publication_contract_playbook(),
+        executor=executor,
+    ).run(start_step="build")
+
+    assert result.completed is True
+    assert received_choices == [persisted]
+
+
+def test_non_pr_runtime_ignores_legacy_confirmation_publication_choice(
+    tmp_path: Path,
+) -> None:
+    """A legacy confirmation-only field is not generic PR configuration."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "legacy-non-pr"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "playbook_id": "publication-contract",
+                "confirmation_contract": {"pr_auto_create": True},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    def executor(step: str, *_args: object, **_kwargs: object) -> StepExecutionResult:
+        _write_baton(
+            issue_dir,
+            from_step=step,
+            to_owner="done",
+            to_step="done",
+            intent="workflow_complete",
+        )
+        return StepExecutionResult(response="", artifacts={})
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_publication_contract_playbook(capable=False),
+        executor=executor,
+    ).run(start_step="build")
+
+    assert result.completed is True
 
 
 @pytest.mark.parametrize("choice", [True, False])
@@ -574,7 +653,7 @@ def test_local_review_task_reports_the_current_publication_outcome(
 ) -> None:
     """Test List 6/7: durable review text matches the explicit workflow mode."""
     issue_dir = tmp_path / ".cafe" / "issues" / f"review-outcome-{choice}"
-    _write_publication_contract(issue_dir, confirmed=choice, persisted=choice)
+    _write_publication_contract(issue_dir, persisted=choice)
     playbook = PlaybookLoader().load("standard")
     url = "https://github.com/acme/widgets/pull/467"
 
@@ -641,7 +720,7 @@ def test_published_review_rejects_missing_or_failed_current_url_evidence(
 ) -> None:
     """Test List 6/8: stale or generic receipts cannot create a success handoff."""
     issue_dir = tmp_path / ".cafe" / "issues" / "unverified-review"
-    _write_publication_contract(issue_dir, confirmed=True, persisted=True)
+    _write_publication_contract(issue_dir, persisted=True)
 
     def executor(step: str, *_args: object, **_kwargs: object) -> StepExecutionResult:
         _write_baton(
@@ -778,7 +857,7 @@ def test_runtime_rejects_undeclared_alignment_legacy_status(
 
 def test_runtime_blocks_pr_done_without_publish_receipt(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-pr"
-    _write_publication_contract(issue_dir, confirmed=True, persisted=True)
+    _write_publication_contract(issue_dir, persisted=True)
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
@@ -819,7 +898,7 @@ def test_runtime_blocks_pr_done_without_publish_receipt(tmp_path: Path) -> None:
 
 def test_runtime_explicit_local_mode_does_not_require_publish_receipt(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-local-pr"
-    _write_publication_contract(issue_dir, confirmed=False, persisted=False)
+    _write_publication_contract(issue_dir, persisted=False)
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
@@ -854,7 +933,7 @@ def test_runtime_explicit_local_mode_does_not_require_publish_receipt(tmp_path: 
 
 def test_runtime_completes_pr_when_publish_receipt_exists(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-pr"
-    _write_publication_contract(issue_dir, confirmed=True, persisted=True)
+    _write_publication_contract(issue_dir, persisted=True)
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
@@ -892,7 +971,7 @@ def test_runtime_completes_pr_when_publish_receipt_exists(tmp_path: Path) -> Non
 
 def test_runtime_rejects_pr_capability_receipt_without_verified_url(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-pr-cap"
-    _write_publication_contract(issue_dir, confirmed=True, persisted=True)
+    _write_publication_contract(issue_dir, persisted=True)
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
@@ -1259,7 +1338,7 @@ def test_runtime_rejects_legacy_text_baton_in_core_path(tmp_path: Path) -> None:
 
 def test_runtime_hands_off_to_pr_runtime_boundary(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-boundary"
-    _write_publication_contract(issue_dir, confirmed=False, persisted=False)
+    _write_publication_contract(issue_dir, persisted=False)
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
@@ -1663,7 +1742,7 @@ def test_runtime_ignores_stale_baton_when_status_missing(tmp_path: Path) -> None
 
 def test_runtime_legacy_step_honors_review_confirmed_advance(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-review-advance"
-    _write_publication_contract(issue_dir, confirmed=False, persisted=False)
+    _write_publication_contract(issue_dir, persisted=False)
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
@@ -1716,7 +1795,7 @@ def test_runtime_legacy_step_honors_review_confirmed_advance(tmp_path: Path) -> 
 
 def test_runtime_review_confirmed_routes_to_pr_without_legacy_class(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "review-confirmed"
-    _write_publication_contract(issue_dir, confirmed=False, persisted=False)
+    _write_publication_contract(issue_dir, persisted=False)
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
@@ -2529,7 +2608,7 @@ def test_runtime_prefers_step_baton_over_invalid_status_text(tmp_path: Path) -> 
 def test_runtime_revision_materializes_a_fresh_plan_confirmation_task(tmp_path: Path) -> None:
     """A revised plan must not reuse an earlier completed output-review task."""
     issue_dir = tmp_path / ".cafe" / "issues" / "revised-plan-confirmation"
-    _write_publication_contract(issue_dir, confirmed=False, persisted=False)
+    _write_publication_contract(issue_dir, persisted=False)
     playbook = PlaybookLoader().load("standard-qa")
     store = BlackboardStore(issue_dir)
     state = store.load_or_create("plan", playbook_id="standard-qa")
@@ -2593,7 +2672,7 @@ def test_runtime_revision_materializes_a_fresh_plan_confirmation_task(tmp_path: 
 def test_runtime_enforces_confirmation_gate_over_agent_baton(tmp_path: Path) -> None:
     """A confirmation-gated phase cannot advance itself with an agent baton."""
     issue_dir = tmp_path / ".cafe" / "issues" / "enforced-plan-confirmation"
-    _write_publication_contract(issue_dir, confirmed=False, persisted=False)
+    _write_publication_contract(issue_dir, persisted=False)
     playbook = PlaybookLoader().load("standard-qa")
 
     def executor(step_name: str, step_def: dict, blackboard: object) -> StepExecutionResult:
@@ -2913,7 +2992,7 @@ def test_runtime_materializes_one_declared_task_and_recovers_it_after_restart(
     import cafe.core.workflow_runtime as runtime_mod
 
     issue_dir = tmp_path / ".cafe" / "issues" / "durable-restart"
-    _write_publication_contract(issue_dir, confirmed=False, persisted=False)
+    _write_publication_contract(issue_dir, persisted=False)
     playbook = PlaybookLoader().load("standard")
     capability_calls: list[dict[str, object]] = []
     monkeypatch.setattr(runtime_mod, "load_capability_registry", lambda _dirs: {"registered": True})
@@ -3158,7 +3237,7 @@ def test_notification_failure_preserves_pending_task_and_user_handoff(
     import cafe.core.workflow_runtime as runtime_mod
 
     issue_dir = tmp_path / ".cafe" / "issues" / "notification-failure"
-    _write_publication_contract(issue_dir, confirmed=False, persisted=False)
+    _write_publication_contract(issue_dir, persisted=False)
     playbook = PlaybookLoader().load("standard")
     monkeypatch.setattr(runtime_mod, "load_capability_registry", lambda _dirs: {"registered": True})
     monkeypatch.setattr(runtime_mod, "default_capability_definition_dirs", lambda _root: [])
@@ -3206,7 +3285,7 @@ def test_runtime_recovers_notification_when_task_commit_precedes_attempt(
     import cafe.core.workflow_runtime as runtime_mod
 
     issue_dir = tmp_path / ".cafe" / "issues" / "notification-before-attempt-stop"
-    _write_publication_contract(issue_dir, confirmed=False, persisted=False)
+    _write_publication_contract(issue_dir, persisted=False)
     playbook = PlaybookLoader().load("standard")
 
     def _executor(*_args: object) -> StepExecutionResult:
@@ -3263,7 +3342,7 @@ def test_runtime_audits_interrupted_attempt_without_duplicate_dispatch(
     import cafe.core.workflow_runtime as runtime_mod
 
     issue_dir = tmp_path / ".cafe" / "issues" / "notification-after-dispatch-stop"
-    _write_publication_contract(issue_dir, confirmed=False, persisted=False)
+    _write_publication_contract(issue_dir, persisted=False)
 
     def _executor(*_args: object) -> StepExecutionResult:
         return StepExecutionResult(
@@ -3485,7 +3564,7 @@ def test_unavailable_process_lock_preserves_user_handoff(
         ),
     )
     issue_dir = tmp_path / ".cafe" / "issues" / "lock-unavailable-user-handoff"
-    _write_publication_contract(issue_dir, confirmed=False, persisted=False)
+    _write_publication_contract(issue_dir, persisted=False)
 
     result = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
@@ -3738,7 +3817,7 @@ def test_runtime_continues_when_auto_continue_is_true(tmp_path: Path) -> None:
 def test_runtime_emits_expected_runtime_labels_per_path(tmp_path: Path) -> None:
     # legacy -> boundary_handoff
     issue_dir_legacy = tmp_path / ".cafe" / "issues" / "runtime-labels-legacy"
-    _write_publication_contract(issue_dir_legacy, confirmed=False, persisted=False)
+    _write_publication_contract(issue_dir_legacy, persisted=False)
     playbook_legacy = {
         "playbook": {"id": "default"},
         "steps": {
@@ -3791,7 +3870,7 @@ def test_runtime_emits_expected_runtime_labels_per_path(tmp_path: Path) -> None:
 
     # baton-driven
     issue_dir_pr = tmp_path / ".cafe" / "issues" / "runtime-labels-pr"
-    _write_publication_contract(issue_dir_pr, confirmed=True, persisted=True)
+    _write_publication_contract(issue_dir_pr, persisted=True)
     playbook_pr = {
         "playbook": {"id": "default"},
         "steps": {
@@ -4701,7 +4780,7 @@ def test_execute_one_iteration_does_not_retry_an_internal_executor_type_error(
     tmp_path: Path,
 ) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "internal-type-error"
-    _write_publication_contract(issue_dir, confirmed=False, persisted=False)
+    _write_publication_contract(issue_dir, persisted=False)
     playbook = _simple_playbook()
     playbook["steps"]["spec"]["capability_requests"] = ["cafe.pr.publish"]
     received_choices: list[object] = []

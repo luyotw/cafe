@@ -473,7 +473,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _proactive_review_decisions(
-    values: Iterable[str], *, agent_phases: list[str]
+    values: Iterable[str], *, agent_phases: list[str], eligible_phases: set[str]
 ) -> list[dict[str, str]]:
     """Parse the complete, ordered confirmed review policy without a sidecar."""
     decisions: dict[str, dict[str, str]] = {}
@@ -483,8 +483,15 @@ def _proactive_review_decisions(
         phase, state, rationale = phase.strip(), state.strip(), rationale.strip()
         if not separator or not rationale_separator or state not in {"required", "not_required"}:
             raise ValueError("proactive review decisions use PHASE=required|not_required:RATIONALE")
+        if not rationale:
+            raise ValueError(f"proactive review decision for '{phase}' requires a rationale")
         if phase in decisions:
             raise ValueError(f"duplicate proactive review decision: {phase}")
+        if state == "required" and phase not in eligible_phases:
+            raise ValueError(
+                f"proactive review phase '{phase}' cannot be required because it has no "
+                "scheduled confirmation pause before workflow advancement"
+            )
         decisions[phase] = {"phase": phase, "decision": state, "rationale": rationale}
     if list(decisions) != agent_phases:
         raise ValueError("proactive review decisions must cover agent phases in playbook order")
@@ -609,7 +616,9 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
         "phases": phases,
         "proactive_review": {
             "phase_decisions": _proactive_review_decisions(
-                args.proactive_review_decision, agent_phases=agent_phases
+                args.proactive_review_decision,
+                agent_phases=agent_phases,
+                eligible_phases=set(candidates) | set(mandatory_human_tasks),
             )
         },
         "model_adjustment": {
@@ -677,16 +686,27 @@ def activate_confirmed_proposal(
     if not isinstance(prepared, dict) or prepared.get("workflow_id") != args.workflow_id:
         raise ValueError("activation workflow ID does not match the prepared issue")
     confirmed_at = datetime.fromisoformat(args.confirmed_at.replace("Z", "+00:00"))
-    activate_confirmed_contract(
-        ActivateConfirmedContract(
+    confirmed_proposal = proposal or build_confirmed_proposal(args)
+    command = ActivateConfirmedContract(
+        issue_dir=issue_dir,
+        issue_name=args.issue_name,
+        workflow_id=args.workflow_id,
+        confirmed_by=args.confirmed_by,
+        confirmed_at=confirmed_at,
+        proposal=confirmed_proposal,
+    )
+    driver = confirmed_proposal.get("driver")
+    if isinstance(driver, dict) and driver.get("mode") == "event-driven":
+        from workflow_event_callback import activate_confirmed_contract_with_host_session
+
+        activate_confirmed_contract_with_host_session(
             issue_dir=issue_dir,
             issue_name=args.issue_name,
             workflow_id=args.workflow_id,
-            confirmed_by=args.confirmed_by,
-            confirmed_at=confirmed_at,
-            proposal=proposal or build_confirmed_proposal(args),
+            activate_contract=lambda: activate_confirmed_contract(command),
         )
-    )
+    else:
+        activate_confirmed_contract(command)
 
 
 def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | None = None) -> str:
@@ -823,7 +843,6 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
         summary_rows.extend(
             [
                 ["pr.auto_create", choice],
-                ["confirmation_contract.pr_auto_create", choice],
             ]
         )
         publication_contract = "\n\n".join(

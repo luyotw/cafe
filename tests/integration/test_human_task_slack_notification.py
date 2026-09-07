@@ -29,6 +29,12 @@ VALID_WEBHOOK = "https://hooks.slack.com/services/T00000000/B00000000/integratio
 runner = CliRunner()
 
 
+@pytest.fixture(autouse=True)
+def _exercise_normal_notification_routes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These journeys use temporary credentials and a mocked Slack transport."""
+    monkeypatch.delenv("CAFE_TEST_RUN_SLACK_NOTIFICATIONS", raising=False)
+
+
 class _SlackResponse:
     status = 200
 
@@ -58,7 +64,13 @@ def _write_credential(home: Path, value: str = VALID_WEBHOOK) -> Path:
     return credential
 
 
+def _write_local_publication_setting(issue_dir: Path) -> None:
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    (issue_dir / "issue.yaml").write_text("pr:\n  auto_create: false\n", encoding="utf-8")
+
+
 def _pause_for_output_review(issue_dir: Path, *, response: str = "ready_for_review"):
+    _write_local_publication_setting(issue_dir)
     playbook = PlaybookLoader().load("standard")
     runtime = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
@@ -75,6 +87,7 @@ def _pause_for_output_review(issue_dir: Path, *, response: str = "ready_for_revi
 
 def _pause_for_iteration_limit(issue_dir: Path):
     """Hit a declared review cap before the agent is invoked."""
+    _write_local_publication_setting(issue_dir)
     playbook = PlaybookLoader().load("standard")
     playbook["steps"]["review"]["max_attempts_per_cycle"] = 1
     runtime = BlackboardWorkflowRuntime(
@@ -258,6 +271,7 @@ def test_project_playbook_named_standard_receives_machine_controlled_notificatio
         "_open_slack_request",
         lambda request, *, timeout: posts.append((request, timeout)) or _SlackResponse(),
     )
+    _write_local_publication_setting(issue_dir)
 
     BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
@@ -307,6 +321,7 @@ def test_global_playbook_receives_machine_controlled_notification(
         "_open_slack_request",
         lambda request, *, timeout: posts.append((request, timeout)) or _SlackResponse(),
     )
+    _write_local_publication_setting(issue_dir)
 
     BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
