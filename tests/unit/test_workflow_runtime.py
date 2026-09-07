@@ -4417,6 +4417,90 @@ def test_runtime_recovered_user_handoff_materializes_one_actionable_task(
     assert materialized[0].data["task_id"] == task.id
 
 
+def test_runtime_recovered_user_handoff_remains_actionable_after_reconciliation_marker_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A crash after the completion marker cannot strand a user handoff without its task."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "reconcile-user-marker-crash"
+    _write_publication_contract(issue_dir, confirmed=False, persisted=False)
+    _write_baton(
+        issue_dir,
+        from_step="spec",
+        to_owner="user",
+        to_step="spec",
+        intent="confirm_output",
+    )
+    _write_iteration_evidence(issue_dir, "spec")
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "current_step": "spec",
+                "playbook_id": "tdd-qa",
+                "artifacts": {},
+                "events": [
+                    {
+                        "timestamp": "2026-04-26T23:00:00+08:00",
+                        "step": "spec",
+                        "event_type": "step_interrupted",
+                        "message": "{}",
+                        "data": {"step": "spec", "reason": "agent_error"},
+                    }
+                ],
+                "decisions": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    interrupted_runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=PlaybookLoader().load("tdd-qa"),
+        executor=lambda *_args, **_kwargs: pytest.fail("reconciliation must not rerun the agent"),
+    )
+    _write_baton(
+        issue_dir,
+        from_step="spec",
+        to_owner="user",
+        to_step="user",
+        intent="confirm_output",
+    )
+    record_event = interrupted_runtime.blackboard_store.record_event
+
+    def crash_after_reconciliation_marker(*args: object, **kwargs: object) -> object:
+        result = record_event(*args, **kwargs)
+        event_type = args[1] if len(args) > 1 else kwargs.get("event_type")
+        if event_type == "step_reconciled":
+            raise RuntimeError("simulated crash after reconciliation marker")
+        return result
+
+    monkeypatch.setattr(
+        interrupted_runtime.blackboard_store,
+        "record_event",
+        crash_after_reconciliation_marker,
+    )
+
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        interrupted_runtime.run()
+
+    interrupted_tasks = HumanTaskRecordStore(issue_dir).tasks()
+    assert len(interrupted_tasks) == 1
+    assert interrupted_tasks[0].status is HumanTaskStatus.PENDING
+
+    resumed = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=PlaybookLoader().load("tdd-qa"),
+        executor=lambda *_args, **_kwargs: pytest.fail("resume must not rerun the agent"),
+    ).run()
+
+    assert resumed.completed is False
+    assert resumed.final_status_code == "BATON_CONFIRM_OUTPUT"
+    tasks = HumanTaskRecordStore(issue_dir).tasks()
+    assert len(tasks) == 1
+    assert tasks[0].id == interrupted_tasks[0].id
+    assert tasks[0].status is HumanTaskStatus.PENDING
+    assert tasks[0].policy_id == "output-review"
+
+
 def test_runtime_reconciles_after_consumed_handoff_start_step(tmp_path: Path) -> None:
     """Normal workflow resume repairs a consumed downstream baton before running target."""
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-reconcile-consumed"
