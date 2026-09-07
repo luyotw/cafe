@@ -107,10 +107,12 @@ user handoffs, mandate, and model-adjustment authority.
 The callback receives only an asynchronous durable-event notice. It must
 re-check `cafe status`/`cafe show`; a notice can be stale. It may diagnose and
 perform actions already authorized by the kickoff. It cannot wait for, collect,
-infer, or choose an answer for a mandatory, `user_required`, clarification,
-permission, or capability task, nor grant permissions or capabilities. It may
-complete a declared `driver_confirmable` task only after verifying the current
-confirmation contract and evidence. It does not own the background worker or
+infer, or choose a user answer for a mandatory, `user_required`, clarification,
+permission, or capability task, nor grant permissions or capabilities. The
+correction revise is not a user answer: only this declared correction outcome
+is excepted from the callback prohibition, and only after due review/chat
+consensus. It may complete a declared `driver_confirmable` task only after
+verifying the current confirmation contract and evidence. It does not own the background worker or
 gain a safe stop channel. An existing reliable, authorized control may be used
 only after verification; this feature creates no PID registry, cancellation API,
 recovery protocol, or stop guarantee.
@@ -222,7 +224,12 @@ identity, handoff/baton identity, and driver-contract identity. Re-resolve and
 compare the complete snapshot immediately before invoking chat and immediately
 before task completion, confirmation, or reuse of a clean result. Any mismatch
 invalidates the review/chat result: retain the pause and restart the full
-review from the current snapshot. An artifact-only match is insufficient.
+review from the current snapshot. The snapshot also binds phase configuration
+identity, resolved CLI/model identity, persisted session identity, playbook
+chat-skills identity, and prepared chat-environment identity. An artifact-only
+match is insufficient; resolve these inputs through the same existing chat
+configuration path at both checks rather than inventing a second session or
+environment mechanism.
 
 The Driver must complete all applicable review passes before producing one
 bounded findings batch. It names the reviewed phase and role, the exact current artifact

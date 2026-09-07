@@ -1932,6 +1932,19 @@ def test_proactive_review_rechecks_a_composite_snapshot_at_each_use_boundary() -
         assert required in normalized
 
 
+def test_proactive_review_snapshot_includes_the_resolved_chat_identity() -> None:
+    running = _read_skill_resource("references/running_workflow.md")
+    normalized = " ".join(running.split()).lower()
+
+    for required in (
+        "phase configuration identity, resolved cli/model identity, persisted session identity",
+        "playbook chat-skills identity, and prepared chat-environment identity",
+        "the correction revise is not a user answer",
+        "only this declared correction outcome is excepted from the callback prohibition",
+    ):
+        assert required in normalized
+
+
 def test_kickoff_rejects_required_review_without_a_scheduled_pause(tmp_path: Path) -> None:
     strategic_context = tmp_path / "strategic_context.yaml"
     strategic_context.write_text(
@@ -2115,7 +2128,8 @@ def test_use_cafe_workflow_keeps_human_task_completion_in_the_interactive_driver
         in normalized_running
     )
     assert (
-        "cannot wait for, collect, infer, or choose an answer for a mandatory" in normalized_running
+        "cannot wait for, collect, infer, or choose a user answer for a mandatory"
+        in normalized_running
     )
     assert "may instead be completed by any driver" in normalized_running.lower()
     assert "cafe task complete <active-human-task-id>" in handoffs
