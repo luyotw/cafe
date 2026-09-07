@@ -3098,6 +3098,12 @@ class BlackboardWorkflowRuntime:
         status_code = result.status_code
         self._patch_reconciled_iteration_metadata(result)
 
+        # Reconciliation validates the baton directly from disk.  Publish that
+        # recovered contract to the in-memory state before following the normal
+        # pause path, whose HumanTask materializer reads the blackboard contract.
+        self.blackboard.handoff_contract = contract
+        self.blackboard_store.save(self.blackboard)
+
         if not self._reconciliation_event_exists(
             current_step=current_step,
             status_code=status_code,

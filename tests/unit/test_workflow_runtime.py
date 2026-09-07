@@ -4325,6 +4325,98 @@ def test_runtime_resume_reconciliation_is_idempotent(tmp_path: Path) -> None:
     assert [e.event_type for e in bb.events].count("step_reconciled") == 1
 
 
+@pytest.mark.parametrize(
+    ("intent", "policy_id", "input_schema", "questions"),
+    [
+        ("confirm_output", "output-review", "decision", None),
+        (
+            "need_clarification",
+            "clarification-answers",
+            "answers",
+            """<?xml version="1.0" encoding="UTF-8"?>
+<questions>
+  <question id="scope">
+    <title>Which scope should the specification cover?</title>
+    <options><option>Current workflow only</option></options>
+  </question>
+</questions>
+""",
+        ),
+    ],
+)
+def test_runtime_recovered_user_handoff_materializes_one_actionable_task(
+    tmp_path: Path,
+    intent: str,
+    policy_id: str,
+    input_schema: str,
+    questions: str | None,
+) -> None:
+    """An agent-error recovery exposes each declared user handoff exactly once."""
+    issue_dir = tmp_path / ".cafe" / "issues" / f"reconcile-user-{intent}"
+    _write_publication_contract(issue_dir, confirmed=False, persisted=False)
+    _write_baton(
+        issue_dir,
+        from_step="spec",
+        to_owner="user",
+        to_step="spec",
+        intent=intent,
+    )
+    _write_iteration_evidence(issue_dir, "spec", questions=questions)
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "current_step": "spec",
+                "playbook_id": "tdd-qa",
+                "artifacts": {},
+                "events": [
+                    {
+                        "timestamp": "2026-04-26T23:00:00+08:00",
+                        "step": "spec",
+                        "event_type": "step_interrupted",
+                        "message": "{}",
+                        "data": {"step": "spec", "reason": "agent_error"},
+                    }
+                ],
+                "decisions": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=PlaybookLoader().load("tdd-qa"),
+        executor=lambda *_args, **_kwargs: pytest.fail("reconciliation must not rerun the agent"),
+    )
+    _write_baton(
+        issue_dir,
+        from_step="spec",
+        to_owner="user",
+        to_step="user",
+        intent=intent,
+    )
+
+    first = runtime.run()
+    second = runtime.run()
+
+    assert first.completed is False
+    assert first.final_status_code == f"BATON_{intent.upper()}"
+    assert second.completed is False
+    tasks = HumanTaskRecordStore(issue_dir).tasks()
+    assert len(tasks) == 1
+    task = tasks[0]
+    assert task.status is HumanTaskStatus.PENDING
+    assert task.trigger == intent
+    assert task.policy_id == policy_id
+    assert task.expected_result["input_schema"] == input_schema
+    bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="tdd-qa")
+    assert bb.current_step == "user"
+    assert [e.event_type for e in bb.events].count("step_reconciled") == 1
+    materialized = [e for e in bb.events if e.event_type == "human_task_materialized"]
+    assert len(materialized) == 1
+    assert materialized[0].data["task_id"] == task.id
+
+
 def test_runtime_reconciles_after_consumed_handoff_start_step(tmp_path: Path) -> None:
     """Normal workflow resume repairs a consumed downstream baton before running target."""
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-reconcile-consumed"
