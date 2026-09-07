@@ -26,6 +26,16 @@ from cafe.core.human_task_notifications import (
 VALID_WEBHOOK = "https://hooks.slack.com/services/T00000000/B00000000/secret-value"
 
 
+@pytest.fixture(autouse=True)
+def _exercise_normal_notification_routes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> bool:
+    """These contract tests use temporary credentials and a mocked transport."""
+    pytest_route_enabled = os.environ.get("CAFE_TEST_RUN_SLACK_NOTIFICATIONS") == "1"
+    monkeypatch.delenv("CAFE_TEST_RUN_SLACK_NOTIFICATIONS", raising=False)
+    return pytest_route_enabled
+
+
 class _SlackResponse:
     def __init__(self, *, status: int = 200, body: bytes = b"ok") -> None:
         self.status = status
@@ -452,10 +462,12 @@ def test_project_route_requires_private_machine_config(
     assert exc.value.code == "human_task_notification_config_unsafe"
 
 
-def test_credential_resolver_uses_the_test_channel_only_for_the_coverage_runner(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_pytest_credential_resolver_uses_the_test_channel_without_runner_wrapper(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    _exercise_normal_notification_routes: bool,
 ) -> None:
-    """The test runner can select only its separately provisioned local credential."""
+    """Direct pytest runs use the dedicated credential without a shell wrapper."""
     import cafe.core.human_task_notifications as notification_mod
 
     home = tmp_path / "home"
@@ -467,6 +479,7 @@ def test_credential_resolver_uses_the_test_channel_only_for_the_coverage_runner(
     monkeypatch.setattr(notification_mod, "_login_user_home", lambda: home)
     monkeypatch.setenv("CAFE_TEST_RUN_SLACK_NOTIFICATIONS", "1")
 
+    assert _exercise_normal_notification_routes is True
     assert load_slack_webhook_url() == test_webhook
 
 
