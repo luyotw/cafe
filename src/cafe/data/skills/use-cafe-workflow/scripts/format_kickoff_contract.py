@@ -686,16 +686,27 @@ def activate_confirmed_proposal(
     if not isinstance(prepared, dict) or prepared.get("workflow_id") != args.workflow_id:
         raise ValueError("activation workflow ID does not match the prepared issue")
     confirmed_at = datetime.fromisoformat(args.confirmed_at.replace("Z", "+00:00"))
-    activate_confirmed_contract(
-        ActivateConfirmedContract(
+    confirmed_proposal = proposal or build_confirmed_proposal(args)
+    command = ActivateConfirmedContract(
+        issue_dir=issue_dir,
+        issue_name=args.issue_name,
+        workflow_id=args.workflow_id,
+        confirmed_by=args.confirmed_by,
+        confirmed_at=confirmed_at,
+        proposal=confirmed_proposal,
+    )
+    driver = confirmed_proposal.get("driver")
+    if isinstance(driver, dict) and driver.get("mode") == "event-driven":
+        from workflow_event_callback import activate_confirmed_contract_with_host_session
+
+        activate_confirmed_contract_with_host_session(
             issue_dir=issue_dir,
             issue_name=args.issue_name,
             workflow_id=args.workflow_id,
-            confirmed_by=args.confirmed_by,
-            confirmed_at=confirmed_at,
-            proposal=proposal or build_confirmed_proposal(args),
+            activate_contract=lambda: activate_confirmed_contract(command),
         )
-    )
+    else:
+        activate_confirmed_contract(command)
 
 
 def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | None = None) -> str:

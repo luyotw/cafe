@@ -10,11 +10,12 @@ import json
 import os
 import stat
 import subprocess
+import sys
 import tempfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, Mapping, Optional, Sequence
+from typing import Any, Callable, Iterator, Mapping, Optional, Sequence
 
 import yaml
 
@@ -367,7 +368,10 @@ def _load_config(driver_dir: Path) -> dict[str, Any] | None:
 
 
 def _contract_callback_config(
-    *, issue_dir: Path, issue_name: str, workflow_id: str
+    *,
+    issue_dir: Path,
+    issue_name: str,
+    workflow_id: str,
 ) -> dict[str, Any] | None:
     """Derive one callback-only transport view from the durable contract.
 
@@ -400,11 +404,65 @@ def _contract_callback_config(
         "contract_sha256": projection.contract_sha256,
         "clis": normalized,
     }
-    if normalized[0]["cli"] == AgentCLI.CODEX.value:
-        host_session = _current_host_session_binding()
-        if host_session is not None:
-            config["host_session"] = host_session
     return config
+
+
+def activate_confirmed_contract_with_host_session(
+    *,
+    issue_dir: Path,
+    issue_name: str,
+    workflow_id: str,
+    activate_contract: Callable[[], Any],
+) -> Any:
+    """Activate the contract, then best-effort bind its visible Codex thread.
+
+    Background workers and callback children intentionally discard Codex host
+    controls. Initializing dispatch state during confirmed activation is the
+    last trusted point where the originating App thread is still available.
+    """
+    result = activate_contract()
+    driver_dir = _driver_dir(issue_dir)
+    try:
+        with _session_lock(driver_dir):
+            config = _contract_callback_config(
+                issue_dir=issue_dir,
+                issue_name=issue_name,
+                workflow_id=workflow_id,
+            )
+            if config is None or config["clis"][0]["cli"] != AgentCLI.CODEX.value:
+                return result
+            host_session = _current_host_session_binding()
+            if host_session is None:
+                return result
+            state_path = driver_dir / DISPATCH_STATE_FILENAME
+            if state_path.exists():
+                state = _load_or_initialize_dispatch_state(
+                    driver_dir,
+                    workflow_id=workflow_id,
+                    config=config,
+                )
+                first_session = state["entries"][0]["session"]
+                if first_session is not None or state["events"]:
+                    return result
+                updated = copy.deepcopy(state)
+                updated["entries"][0]["session"] = {
+                    "id": host_session["thread_id"],
+                    "source": "host_session",
+                    "acquired_at": _now(),
+                }
+                _write_dispatch_state(driver_dir, updated)
+                return result
+            _load_or_initialize_dispatch_state(
+                driver_dir,
+                workflow_id=workflow_id,
+                config={**config, "host_session": host_session},
+            )
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(
+            f"Warning: Driver contract activated without Codex host binding: {exc}",
+            file=sys.stderr,
+        )
+    return result
 
 
 def _valid_nonempty_string(value: Any) -> bool:
@@ -699,9 +757,15 @@ def _load_or_initialize_dispatch_state(
                 raise ValueError("event-driven dispatch session provenance is invalid")
             host_session = config.get("host_session")
             if index == 0 and isinstance(host_session, dict):
-                if session is None or session.get("id") != host_session["thread_id"]:
+                if (
+                    session is None
+                    or session.get("id") != host_session["thread_id"]
+                    or session.get("source") != "host_session"
+                ):
                     raise ValueError("event-driven host session conflicts with dispatch state")
-            elif isinstance(session, dict) and session.get("source") == "host_session":
+            elif (
+                index != 0 and isinstance(session, dict) and session.get("source") == "host_session"
+            ):
                 raise ValueError("event-driven host session cannot bind a fallback")
         if contract_managed:
             state["entries"] = [

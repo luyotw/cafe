@@ -395,16 +395,18 @@ for confirmation rather than asking again.
   Do not put the mode, CLI, model, session, callback, or any driver control
   setting in `issue.yaml`. Confirm that every entry reports `event-driven
   session-and-dispatch: conforming` before accepting the contract. When the
-  primary is Codex and this command runs from a Codex App thread, the first
-  Codex entry's valid runtime-owned host binding is recorded only in the
-  callback runtime; no fallback inherits it.
+  primary is Codex and this command runs from a Codex App thread, that thread
+  is a best-effort first-session hint recorded only in callback runtime state;
+  a persisted acquired session wins, binding failure does not block workflow
+  execution, and no fallback inherits the host binding.
 
   Confirm these two separate lifecycle boundaries explicitly. An unbound entry
   first receives a bootstrap exactly equivalent to `say "HI"`; Codex, Claude,
   Gemini, Cursor, and Copilot must each return a provider-created session ID.
   That ID is persisted in `dispatch_state.json` before the actual callback is
-  sent. An existing acquired session or the first Codex entry's valid
-  runtime-owned host binding is reused without bootstrap. The bootstrap never
+  sent. An existing acquired session wins over a new host hint; otherwise a
+  successfully recorded first Codex host binding is reused without bootstrap.
+  The bootstrap never
   counts as event delivery or acceptance; only actual callback durable
   acceptance can stop routing and select the sticky active entry. The provider
   acknowledgement is bound to the exact event identity in that dispatched
