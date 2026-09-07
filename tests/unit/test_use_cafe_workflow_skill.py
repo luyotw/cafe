@@ -2030,13 +2030,49 @@ def test_proactive_review_initial_routing_task_flow_and_matrix_share_correction_
     correction_outcome = (
         "active declared non-advancing `revise` requiring feedback and marked `correction: true`"
     )
-    assert correction_outcome in initial_routing
-    assert "after complete driver review and `cafe chat` consensus" in initial_routing
-    assert "mandatory or `user_required` advancing `confirm`" in initial_routing
-    assert correction_outcome in task_flow
-    assert "driver may serialize the correction result" in task_flow
-    assert correction_outcome in authority_matrix
-    assert "mandatory confirmation gates keep advancing `confirm` user-owned" in authority_matrix
+    prior_initial_routing_rules = (
+        "`confirm_output` from a mandatory humantask step: always stop for the real user.",
+        "`confirm_output` from a `user_required` step: stop for user approval or correction.",
+    )
+    prior_task_flow = " ".join(
+        """
+        2. For user-owned tasks, serialize only the user's supplied answer into that schema.
+        The driver may add the task ID required by the schema, but must not infer a decision,
+        approval, permission, or missing answer.
+        """.split()
+    ).lower()
+
+    def is_consistent(initial: str, task: str, matrix: str) -> bool:
+        return (
+            correction_outcome in initial
+            and "after complete driver review and `cafe chat` consensus" in initial
+            and "mandatory or `user_required` advancing `confirm`" in initial
+            and not any(rule in initial for rule in prior_initial_routing_rules)
+            and correction_outcome in task
+            and "driver may serialize the correction result" in task
+            and prior_task_flow not in task
+            and correction_outcome in matrix
+            and "mandatory confirmation gates keep advancing `confirm` user-owned"
+            in matrix
+        )
+
+    assert is_consistent(initial_routing, task_flow, authority_matrix)
+    for prior_rule in prior_initial_routing_rules:
+        assert not is_consistent(
+            initial_routing + " " + prior_rule,
+            task_flow,
+            authority_matrix,
+        )
+    assert not is_consistent(
+        initial_routing,
+        task_flow + " " + prior_task_flow,
+        authority_matrix,
+    )
+    assert not is_consistent(
+        initial_routing + " " + " ".join(prior_initial_routing_rules),
+        task_flow + " " + prior_task_flow,
+        authority_matrix,
+    )
 
 
 def test_proactive_review_rechecks_a_composite_snapshot_at_each_use_boundary() -> None:
