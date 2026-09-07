@@ -109,8 +109,8 @@ obtain explicit user confirmation of:
 
 The same kickoff presentation also contains the generic PR choice when any
 effective playbook step requests `cafe.pr.publish`. It is persisted only in
-`issue.yaml` under the existing #467 contract, including its generic
-`confirmation_contract.pr_auto_create` binding. `true` means the feature branch is pushed and the PR is created or
+`issue.yaml` as the sole authoritative generic setting `pr.auto_create`.
+`true` means the feature branch is pushed and the PR is created or
   updated only after local material and authorization succeed, and the review
   handoff receives a verified PR URL. `false` means `Publication mode:
   local-only. No PR URL exists.`
@@ -339,7 +339,7 @@ for confirmation rather than asking again.
 - [ ] Enter the reported worktree before running workflow commands.
 - [ ] Verify that `cafe prepare` persisted the active `playbook_id`, then add
   the confirmation contract, reactive handoff policy,
-  generic confirmation data required by #467 to
+  and generic workflow configuration to
   `.cafe/issues/<issue-name>/issue.yaml` in the active checkout before the first
   workflow execution:
 
@@ -369,7 +369,6 @@ for confirmation rather than asking again.
   confirmation_contract:
     user_required: [spec, plan]
     driver_confirmable: []
-    pr_auto_create: false
     confirmed_by: user
     confirmed_at: 2026-07-16
   pr:
@@ -377,12 +376,13 @@ for confirmation rather than asking again.
   ```
 
   For a playbook requesting `cafe.pr.publish`, verify that the prepare flag
-  persisted the exact confirmed Boolean at `pr.auto_create` and that #467
-  persists the matching `confirmation_contract.pr_auto_create`. For a playbook without
-  that capability, pass neither flag and verify that neither `pr.auto_create`
-  nor `confirmation_contract.pr_auto_create` exists. A missing, changed, or
-  stale value requires a freshly rendered and confirmed kickoff contract; do
-  not infer local-only from omission.
+  persisted the exact confirmed Boolean at `pr.auto_create`. For a playbook
+  without that capability, pass neither flag and verify that `pr.auto_create`
+  does not exist. A missing, changed, or stale value requires a freshly
+  rendered and confirmed kickoff contract; do not infer local-only from
+  omission. The former `confirmation_contract.pr_auto_create` field is
+  obsolete and inert: remove it when updating an existing configuration, and
+  never use it to authorize, reject, or override `pr.auto_create`.
 
   When the confirmed mode is event-driven, launch the trusted callback after
   this contract is written. It loads the current issue contract immediately

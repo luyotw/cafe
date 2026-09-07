@@ -450,7 +450,7 @@ def test_replacement_is_compare_and_swap_and_delegation_cannot_change_policy(
     issue_dir.mkdir(parents=True)
     issue_config = issue_dir / "issue.yaml"
     issue_config.write_text(
-        "confirmation_contract:\n  pr_auto_create: false\npr:\n  auto_create: false\n",
+        "pr:\n  auto_create: false\n",
         encoding="utf-8",
     )
     original_issue_config = issue_config.read_bytes()

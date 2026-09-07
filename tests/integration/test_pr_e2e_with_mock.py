@@ -126,8 +126,6 @@ def _seed_pr_artifacts(issue_dir: Path, *, auto_create: bool = True) -> None:
     store.set_artifact(state, "plan", str(plan_file))
     (issue_dir / "issue.yaml").write_text(
         "base_branch: main\n"
-        "confirmation_contract:\n"
-        f"  pr_auto_create: {str(auto_create).lower()}\n"
         "pr:\n"
         f"  auto_create: {str(auto_create).lower()}\n",
         encoding="utf-8",
@@ -260,7 +258,7 @@ def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(
     issue_dir = tmp_path / ".cafe" / "issues" / "pr-feedback"
     issue_dir.mkdir(parents=True)
     (issue_dir / "issue.yaml").write_text(
-        "confirmation_contract:\n" "  pr_auto_create: true\n" "pr:\n" "  auto_create: true\n",
+        "pr:\n  auto_create: true\n",
         encoding="utf-8",
     )
     playbook = _load_default_playbook()
