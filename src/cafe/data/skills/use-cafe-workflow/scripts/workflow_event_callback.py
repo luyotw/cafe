@@ -14,7 +14,7 @@ import tempfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, Mapping, Optional, Sequence
+from typing import Any, Callable, Iterator, Mapping, Optional, Sequence
 
 import yaml
 
@@ -367,7 +367,11 @@ def _load_config(driver_dir: Path) -> dict[str, Any] | None:
 
 
 def _contract_callback_config(
-    *, issue_dir: Path, issue_name: str, workflow_id: str
+    *,
+    issue_dir: Path,
+    issue_name: str,
+    workflow_id: str,
+    include_current_host_session: bool = True,
 ) -> dict[str, Any] | None:
     """Derive one callback-only transport view from the durable contract.
 
@@ -400,11 +404,45 @@ def _contract_callback_config(
         "contract_sha256": projection.contract_sha256,
         "clis": normalized,
     }
-    if normalized[0]["cli"] == AgentCLI.CODEX.value:
+    if include_current_host_session and normalized[0]["cli"] == AgentCLI.CODEX.value:
         host_session = _current_host_session_binding()
         if host_session is not None:
             config["host_session"] = host_session
     return config
+
+
+def activate_confirmed_contract_with_host_session(
+    *,
+    issue_dir: Path,
+    issue_name: str,
+    workflow_id: str,
+    activate_contract: Callable[[], Any],
+) -> Any:
+    """Activate the contract and bind its visible Codex thread under one lock.
+
+    Background workers and callback children intentionally discard Codex host
+    controls. Initializing dispatch state during confirmed activation is the
+    last trusted point where the originating App thread is still available.
+    """
+    driver_dir = _driver_dir(issue_dir)
+    with _session_lock(driver_dir):
+        contract_path = driver_dir / "contract.json"
+        state_path = driver_dir / DISPATCH_STATE_FILENAME
+        if not contract_path.exists() and state_path.exists():
+            raise ValueError("event-driven dispatch state exists before Driver activation")
+        result = activate_contract()
+        config = _contract_callback_config(
+            issue_dir=issue_dir,
+            issue_name=issue_name,
+            workflow_id=workflow_id,
+        )
+        if config is not None and isinstance(config.get("host_session"), dict):
+            _load_or_initialize_dispatch_state(
+                driver_dir,
+                workflow_id=workflow_id,
+                config=config,
+            )
+        return result
 
 
 def _valid_nonempty_string(value: Any) -> bool:
@@ -699,9 +737,15 @@ def _load_or_initialize_dispatch_state(
                 raise ValueError("event-driven dispatch session provenance is invalid")
             host_session = config.get("host_session")
             if index == 0 and isinstance(host_session, dict):
-                if session is None or session.get("id") != host_session["thread_id"]:
+                if (
+                    session is None
+                    or session.get("id") != host_session["thread_id"]
+                    or session.get("source") != "host_session"
+                ):
                     raise ValueError("event-driven host session conflicts with dispatch state")
-            elif isinstance(session, dict) and session.get("source") == "host_session":
+            elif (
+                index != 0 and isinstance(session, dict) and session.get("source") == "host_session"
+            ):
                 raise ValueError("event-driven host session cannot bind a fallback")
         if contract_managed:
             state["entries"] = [
@@ -930,6 +974,7 @@ def read_status(issue_dir: Path) -> dict[str, Any]:
             issue_dir=issue_dir,
             issue_name=issue_dir.name,
             workflow_id=_prepared_workflow_id(issue_dir),
+            include_current_host_session=False,
         )
     except ValueError as exc:
         from cafe.driver import DriverContractMissingError

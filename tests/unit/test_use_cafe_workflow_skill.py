@@ -558,6 +558,55 @@ def test_confirmed_kickoff_activates_one_issue_scoped_driver_contract(tmp_path: 
     assert entry_projection["phase_model_authority"]["develop"][0]["model"] == "implementation-main"
 
 
+def test_confirmed_event_driven_kickoff_binds_the_visible_codex_thread(
+    tmp_path: Path,
+) -> None:
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text(
+        "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
+        encoding="utf-8",
+    )
+    issue_dir = tmp_path / "issues" / "issue346"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps({"workflow_id": "prepared-346"}), encoding="utf-8"
+    )
+    command = _kickoff_formatter_command(
+        strategic_context,
+        "--activate-confirmed",
+        "--workflow-id",
+        "prepared-346",
+        "--confirmed-by",
+        "user",
+        "--confirmed-at",
+        "2026-09-06T02:00:00+00:00",
+        "--issue-dir",
+        str(issue_dir),
+    )
+    mode_index = command.index("--driver-mode") + 1
+    command[mode_index] = "event-driven"
+    command[mode_index + 1 : mode_index + 1] = [
+        "--event-driver",
+        "codex:gpt-5.6-terra",
+    ]
+    environment = dict(os.environ)
+    environment["CODEX_THREAD_ID"] = "visible-thread"
+
+    result = subprocess.run(
+        command,
+        cwd=PROJECT_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    state = json.loads((issue_dir / "driver" / "dispatch_state.json").read_text(encoding="utf-8"))
+    assert state["entries"][0]["session"]["id"] == "visible-thread"
+    assert state["entries"][0]["session"]["source"] == "host_session"
+
+
 def test_kickoff_formatter_renders_the_complete_normalized_policy_before_activation(
     tmp_path: Path,
 ) -> None:
