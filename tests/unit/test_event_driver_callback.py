@@ -40,7 +40,11 @@ def _activate_event_contract(
     """Create the complete Driver authority required by public callback tests."""
     from cafe.driver import ActivateConfirmedContract, activate_confirmed_contract
 
-    driver_clis = [{"cli": cli, "model": model} for cli, model in clis]
+    phase_clis = [{"cli": cli, "model": model} for cli, model in clis]
+    driver_clis = [
+        {"cli": cli} if index == 0 else {"cli": cli, "model": model}
+        for index, (cli, model) in enumerate(clis)
+    ]
     proposal: dict[str, object] = {
         "locales": {"conversation": {"value": "en", "source": "test"}},
         "confirmation_contract": {
@@ -63,7 +67,7 @@ def _activate_event_contract(
         "phases": [
             {
                 "name": "develop",
-                "chain": driver_clis,
+                "chain": phase_clis,
                 "rationale": "The confirmed event-driven callback chain.",
             }
         ],
@@ -1176,6 +1180,7 @@ def test_confirmed_activation_delivers_to_host_after_detaching_environment(
 
     command = run.call_args.args[0]
     assert command[:4] == ["codex", "queue", "--thread", "visible-thread"]
+    assert "--model" not in command
     assert "say" not in command
     state = json.loads((issue_dir / "driver" / "dispatch_state.json").read_text(encoding="utf-8"))
     assert state["entries"][0]["session"]["source"] == "host_session"
@@ -1317,10 +1322,12 @@ def test_public_callback_path_executes_version_three_lifecycle(tmp_path: Path, m
     callback = _callback_module()
     driver_dir, state, event = _contract_event_context(callback, tmp_path, [("gemini", "exact")])
     calls = []
+    models = []
 
     class FakeExecutor:
         def __init__(self, config, **_kwargs):
             self.config = config
+            models.append(config.model)
 
         def execute_event_driver(self, _prompt, **kwargs):
             calls.append(kwargs.get("expected_session_id"))
@@ -1343,6 +1350,7 @@ def test_public_callback_path_executes_version_three_lifecycle(tmp_path: Path, m
         ),
     )
     assert calls == [None, "gemini-session"]
+    assert models == [None, None]
     assert persisted["events"][event["event_id"]]["status"] == "accepted"
 
 
@@ -1774,7 +1782,7 @@ def test_callback_queues_the_bound_codex_host_thread(tmp_path: Path, monkeypatch
 
     command = run.call_args.args[0]
     assert command[:4] == ["codex", "queue", "--thread", "visible-thread"]
-    assert command[command.index("--model") + 1] == "exact"
+    assert "--model" not in command
     assert command[command.index("--cd") + 1] == str(tmp_path)
     prompt = command[command.index("--message") + 1]
     assert "event-driven CAFE workflow driver" in prompt

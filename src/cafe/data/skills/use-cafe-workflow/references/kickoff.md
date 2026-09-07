@@ -99,9 +99,10 @@ obtain explicit user confirmation of:
   zero or more explicitly confirmed fallbacks;
 - exactly one operating mode: attached with a positive `poll_interval_seconds`,
   unattended, or event-driven with one non-empty ordered list of distinct,
-  conforming CLIs and an exact model selected by the user for every entry. The
-  first entry is primary and every later entry is a forward-only fallback;
-  there is no fixed fallback limit. Event-driven's ordered binding is a
+  conforming CLIs. The first entry is primary: it uses the current user session
+  and stores no model, so callbacks cannot override that session's model. Every
+  later entry is a forward-only fallback with an exact model selected by the
+  user; there is no fixed fallback limit. Event-driven's ordered binding is a
   confirmed field of the sole Driver contract, never `driver/config.yaml`;
 - worktree choice and path when using a worktree.
 
@@ -227,7 +228,7 @@ python3 <skill-dir>/scripts/format_kickoff_contract.py <playbook-id> \
   --catalog-preflight '<bounded all-catalog JSON>' \
   --driver-mode <attached|unattended|event-driven> \
   [--poll-interval-seconds <positive-integer>] \
-  [--event-driver <claude|codex|gemini|copilot|cursor-agent>:<exact-model> ...] \
+  [--event-driver <primary-cli> [--event-driver <fallback-cli>:<exact-model> ...]] \
   --risk-factor "<risk factor; repeat as needed>" \
   --assessment-rationale "<repository evidence for nature and scale>" \
   --phase-rationale "<step>=<capability band, profile/risk evidence, and optional fallback justification>" \
@@ -385,7 +386,8 @@ for confirmation rather than asking again.
 
   When the confirmed mode is event-driven, launch the trusted callback after
   this contract is written. It loads the current issue contract immediately
-  before dispatch and derives its ordered CLI/model view in memory. Do not
+  before dispatch and derives its primary CLI plus fallback CLI/model view in
+  memory. Do not
   create `driver/config.yaml`: that file is legacy migration evidence only and
   cannot override a contract-managed callback. Its mutable
   `dispatch_state.json` records only the active contract digest, sessions, and

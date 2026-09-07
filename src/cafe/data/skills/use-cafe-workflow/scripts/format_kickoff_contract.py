@@ -61,6 +61,7 @@ except ModuleNotFoundError:
 
 
 ModelChain = list[tuple[str, str]]
+EventDriverChain = list[tuple[str, str | None]]
 
 
 def _project_path(path: Path, project_root: Path) -> Path:
@@ -97,7 +98,7 @@ def _strict_bool(value: str) -> bool:
 
 def _driver_policy_rows(args: argparse.Namespace) -> list[list[Any]]:
     rows: list[list[Any]] = [
-        ["schema_version", 2],
+        ["schema_version", 3],
         ["driver.mode", args.driver_mode],
     ]
     if args.driver_mode == "attached":
@@ -129,7 +130,10 @@ def _driver_policy_rows(args: argparse.Namespace) -> list[list[Any]]:
         for index, (cli, model) in enumerate(entries):
             rows.extend(
                 [
-                    [f"driver.clis[{index}]", f"{cli}:{model}"],
+                    [
+                        f"driver.clis[{index}]",
+                        cli if model is None else f"{cli}:{model}",
+                    ],
                     [
                         f"driver.clis[{index}].contract",
                         "event-driven session-and-dispatch: conforming",
@@ -154,14 +158,14 @@ def _driver_policy_rows(args: argparse.Namespace) -> list[list[Any]]:
     return rows
 
 
-def _parse_event_driver_entries(values: Iterable[str] | None) -> ModelChain:
-    entries: ModelChain = []
+def _parse_event_driver_entries(values: Iterable[str] | None) -> EventDriverChain:
+    entries: EventDriverChain = []
     seen: set[str] = set()
-    for value in values or ():
+    for index, value in enumerate(values or ()):
         raw_cli, separator, raw_model = value.partition(":")
         cli, model = raw_cli.strip(), raw_model.strip()
-        if not separator or not cli or not model:
-            raise ValueError("event-driven entries must use CLI:MODEL")
+        if not cli or (index == 0 and separator) or (index > 0 and (not separator or not model)):
+            raise ValueError("event-driven primary must use CLI and fallbacks must use CLI:MODEL")
         try:
             cli = AgentCLI(cli).value
         except ValueError as exc:
@@ -177,9 +181,9 @@ def _parse_event_driver_entries(values: Iterable[str] | None) -> ModelChain:
         if cli in seen:
             raise ValueError(f"duplicate event-driven CLI '{cli}'")
         seen.add(cli)
-        entries.append((cli, model))
+        entries.append((cli, None if index == 0 else model))
     if not entries:
-        raise ValueError("event-driven driver requires at least one --event-driver CLI:MODEL")
+        raise ValueError("event-driven driver requires a primary --event-driver CLI")
     return entries
 
 
@@ -400,7 +404,7 @@ def _parser() -> argparse.ArgumentParser:
         "--event-driver",
         action="append",
         default=[],
-        metavar="CLI:MODEL",
+        metavar="CLI[:MODEL]",
     )
     parser.add_argument("--risk-factor", action="append", required=True)
     parser.add_argument("--assessment-rationale", required=True)
@@ -632,7 +636,7 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
         proposal["driver"]["poll_interval_seconds"] = args.poll_interval_seconds
     elif args.driver_mode == "event-driven":
         proposal["driver"]["clis"] = [
-            {"cli": cli, "model": model_name}
+            {"cli": cli} if model_name is None else {"cli": cli, "model": model_name}
             for cli, model_name in _parse_event_driver_entries(args.event_driver)
         ]
     policy_fields = (
@@ -1017,7 +1021,7 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
                     "The following Driver-owned policy must be confirmed unchanged before activation.",
                     "```json",
                     json.dumps(
-                        {"schema_version": 2, "policy": confirmed_proposal},
+                        {"schema_version": 3, "policy": confirmed_proposal},
                         ensure_ascii=False,
                         indent=2,
                         sort_keys=True,

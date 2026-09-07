@@ -191,13 +191,23 @@ def _prepared_workflow_id(issue_dir: Path) -> str:
     return workflow_id
 
 
-def _normalize_cli_entries(clis: Sequence[tuple[str, str]]) -> list[dict[str, str]]:
+def _normalize_cli_entries(
+    clis: Sequence[tuple[str, str | None]], *, implicit_primary_model: bool = False
+) -> list[dict[str, str]]:
     if not clis:
         raise ValueError("event-driven clis must be non-empty")
     normalized: list[dict[str, str]] = []
     seen: set[str] = set()
-    for raw_cli, raw_model in clis:
-        if not isinstance(raw_cli, str) or not isinstance(raw_model, str) or not raw_model.strip():
+    for index, (raw_cli, raw_model) in enumerate(clis):
+        model = raw_model.strip() if isinstance(raw_model, str) else None
+        if (
+            not isinstance(raw_cli, str)
+            or (
+                implicit_primary_model
+                and ((index == 0 and raw_model is not None) or (index > 0 and not model))
+            )
+            or (not implicit_primary_model and not model)
+        ):
             raise ValueError("event-driven CLI entries require exact cli and model values")
         try:
             cli = AgentCLI(raw_cli).value
@@ -206,7 +216,10 @@ def _normalize_cli_entries(clis: Sequence[tuple[str, str]]) -> list[dict[str, st
         if cli in seen:
             raise ValueError("event-driven clis must use distinct CLIs")
         seen.add(cli)
-        normalized.append({"cli": cli, "model": raw_model})
+        entry = {"cli": cli}
+        if model is not None:
+            entry["model"] = model
+        normalized.append(entry)
     return normalized
 
 
@@ -393,11 +406,13 @@ def _contract_callback_config(
     entries = projection.event.get("clis")
     if not isinstance(entries, tuple):
         raise ValueError("event-driven Driver contract projection is invalid")
-    normalized = _normalize_cli_entries(
-        [(entry.get("cli"), entry.get("model")) for entry in entries if isinstance(entry, Mapping)]
-    )
-    if len(normalized) != len(entries):
-        raise ValueError("event-driven Driver contract projection is invalid")
+    raw_entries: list[tuple[str, str | None]] = []
+    for index, entry in enumerate(entries):
+        expected = {"cli"} if index == 0 else {"cli", "model"}
+        if not isinstance(entry, Mapping) or set(entry) != expected:
+            raise ValueError("event-driven Driver contract projection is invalid")
+        raw_entries.append((entry.get("cli"), entry.get("model")))
+    normalized = _normalize_cli_entries(raw_entries, implicit_primary_model=True)
     config: dict[str, Any] = {
         "schema_version": _CONTRACT_CALLBACK_CONFIG_SCHEMA,
         "mode": "event-driven",
@@ -838,7 +853,7 @@ def _entry_is_conforming(entry: dict[str, str]) -> bool:
         AgentConfig(
             name=DRIVER_AGENT_NAME,
             cli=AgentCLI(entry["cli"]),
-            model=entry["model"],
+            model=entry.get("model"),
             clis=[],
             backup_clis=[],
         ),
@@ -1301,7 +1316,7 @@ def _acquire_v3_session(
         AgentConfig(
             name=DRIVER_AGENT_NAME,
             cli=AgentCLI(entry["cli"]),
-            model=entry["model"],
+            model=entry.get("model"),
             clis=[],
             backup_clis=[],
         ),
@@ -1507,23 +1522,16 @@ def _queue_host_callback(
     prompt: str,
     *,
     thread_id: str,
-    model: str,
+    model: str | None,
     repository_root: Path,
 ) -> None:
     """Ask the Codex host daemon to wake its existing visible session."""
+    command = ["codex", "queue", "--thread", thread_id, "--message", prompt]
+    if model is not None:
+        command.extend(["--model", model])
+    command.extend(["--cd", str(repository_root)])
     subprocess.run(
-        [
-            "codex",
-            "queue",
-            "--thread",
-            thread_id,
-            "--message",
-            prompt,
-            "--model",
-            model,
-            "--cd",
-            str(repository_root),
-        ],
+        command,
         check=True,
         capture_output=True,
         text=True,
@@ -1633,7 +1641,7 @@ def _deliver_v3_callback(
             _queue_host_callback(
                 _callback_prompt(event, repository_root=repository_root),
                 thread_id=session_id,
-                model=entry["model"],
+                model=entry.get("model"),
                 repository_root=repository_root,
             )
             accepted = True
@@ -1644,7 +1652,7 @@ def _deliver_v3_callback(
                 AgentConfig(
                     name=DRIVER_AGENT_NAME,
                     cli=AgentCLI(entry["cli"]),
-                    model=entry["model"],
+                    model=entry.get("model"),
                     session_id=session_id,
                     clis=[],
                     backup_clis=[],

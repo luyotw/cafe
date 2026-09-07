@@ -43,7 +43,8 @@ cafe workflow --issue <issue> --execute --mute-agent-output \
 ```
 
 The callback reads the issue-scoped `driver/contract.json` and projects the
-event CLI/model order only in memory. `dispatch_state.json` is mutable runtime
+primary CLI plus fallback CLI/model order only in memory. Waking the primary
+session never includes a model override. `dispatch_state.json` is mutable runtime
 state bound to that contract's digest: it contains sessions, attempt history,
 the sticky active index, takeover, exhaustion, recovery, and timestamps, but
 never a copy of mode, model-chain, or other confirmed policy. A changed digest

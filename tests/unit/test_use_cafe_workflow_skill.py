@@ -452,7 +452,7 @@ mandate:
     assert "| issue_nature | feature/integration |" in result.stdout
     assert "| issue_scale | medium |" in result.stdout
     assert "model_adjustment" not in result.stdout
-    assert "| schema_version | 2 |" in result.stdout
+    assert "| schema_version | 3 |" in result.stdout
     assert "| driver.mode | unattended |" in result.stdout
     assert "### Preflight evidence" in result.stdout
     assert "| runtime_update.status | current |" in result.stdout
@@ -533,7 +533,7 @@ def test_confirmed_kickoff_activates_one_issue_scoped_driver_contract(tmp_path: 
     }
     assert "proactive_review.yaml" not in {path.name for path in (issue_dir / "driver").iterdir()}
     assert "No proactive review was confirmed for development." in result.stdout
-    assert "| schema_version | 2 |" in result.stdout
+    assert "| schema_version | 3 |" in result.stdout
 
     entry = subprocess.run(
         [
@@ -589,7 +589,7 @@ def test_confirmed_event_driven_kickoff_binds_the_visible_codex_thread(
     command[mode_index] = "event-driven"
     command[mode_index + 1 : mode_index + 1] = [
         "--event-driver",
-        "codex:gpt-5.6-terra",
+        "codex",
     ]
     environment = dict(os.environ)
     environment["CODEX_THREAD_ID"] = "visible-thread"
@@ -824,7 +824,7 @@ mandate:
             "--driver-mode",
             "event-driven",
             "--event-driver",
-            "codex:gpt-5.6-codex",
+            "codex",
             "--event-driver",
             "claude:claude-opus-exact",
             "--event-driver",
@@ -839,7 +839,7 @@ mandate:
     assert result.returncode == 0, result.stderr
     assert "| driver.mode | event-driven |" in result.stdout
     positions = [
-        result.stdout.index("codex:gpt-5.6-codex"),
+        result.stdout.index("| driver.clis[0] | codex |"),
         result.stdout.index("claude:claude-opus-exact"),
         result.stdout.index("gemini:gemini-pro-exact"),
     ]
@@ -854,17 +854,26 @@ mandate:
     [
         ("--driver-mode", "event-driven"),
         ("--driver-mode", "event-driven", "--event-driver", "codex:"),
+        ("--driver-mode", "event-driven", "--event-driver", "codex:one"),
         (
             "--driver-mode",
             "event-driven",
             "--event-driver",
-            "codex:one",
+            "codex",
             "--event-driver",
             "codex:two",
         ),
-        ("--driver-mode", "attached", "--event-driver", "codex:one"),
-        ("--driver-mode", "unattended", "--event-driver", "codex:one"),
-        ("--driver-mode", "event-driven", "--event-driver", "unsupported:one"),
+        (
+            "--driver-mode",
+            "event-driven",
+            "--event-driver",
+            "codex",
+            "--event-driver",
+            "claude",
+        ),
+        ("--driver-mode", "attached", "--event-driver", "codex"),
+        ("--driver-mode", "unattended", "--event-driver", "codex"),
+        ("--driver-mode", "event-driven", "--event-driver", "unsupported"),
     ],
 )
 def test_kickoff_contract_rejects_nonconforming_event_driver_chains(
@@ -897,7 +906,7 @@ def test_kickoff_contract_accepts_one_event_driver_entry(tmp_path: Path) -> None
             "--driver-mode",
             "event-driven",
             "--event-driver",
-            "copilot:exact-model",
+            "copilot",
         ),
         cwd=PROJECT_ROOT,
         text=True,
@@ -906,7 +915,7 @@ def test_kickoff_contract_accepts_one_event_driver_entry(tmp_path: Path) -> None
     )
 
     assert result.returncode == 0, result.stderr
-    assert "| driver.clis[0] | copilot:exact-model |" in result.stdout
+    assert "| driver.clis[0] | copilot |" in result.stdout
 
 
 @pytest.mark.parametrize(
@@ -2038,8 +2047,7 @@ def test_proactive_review_initial_routing_task_flow_and_matrix_share_correction_
             and "driver may serialize the correction result" in task
             and prior_task_flow not in task
             and correction_outcome in matrix
-            and "mandatory confirmation gates keep advancing `confirm` user-owned"
-            in matrix
+            and "mandatory confirmation gates keep advancing `confirm` user-owned" in matrix
         )
 
     assert is_consistent(initial_routing, task_flow, authority_matrix)
@@ -2208,7 +2216,7 @@ def test_use_cafe_workflow_defines_event_driven_mode_and_model_authority() -> No
     assert "references/model_selection.md" in skill
     assert "attached with positive polling" in normalized_skill
     assert "event-driven" in skill
-    assert "explicit exact model" in normalized_skill
+    assert "fallback entry requires one explicit exact model" in normalized_skill
     assert "cafe workflow --execute --mute-agent-output" in skill
     assert "scripts/validate_driver_entry.py" in running
     assert "does not inspect `issue.yaml`, phase chains, or PR choices" in running

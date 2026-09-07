@@ -145,7 +145,7 @@ def test_public_application_contract_persists_only_a_complete_valid_policy(tmp_p
 
 
 def test_contract_rejects_removed_model_adjustment_authority(tmp_path: Path) -> None:
-    """Removed model-adjustment authority cannot re-enter the v2 contract."""
+    """Removed model-adjustment authority cannot re-enter the contract."""
     proposal = _proposal()
     proposal["model_adjustment"] = {
         "authority": "user_approval_required",
@@ -170,10 +170,28 @@ def test_canonical_contract_without_model_adjustment_has_stable_activation_ident
     assert first.created is True
     assert retry.created is False
     assert retry.contract_sha256 == first.contract_sha256
-    assert contract["schema_version"] == 2
+    assert contract["schema_version"] == 3
     assert "model_adjustment" not in contract
     assert contract["provenance"]["confirmed_by"] == "user"
     assert contract["provenance"]["confirmed_at"] == "2026-09-06T02:00:00+00:00"
+
+
+@pytest.mark.parametrize(
+    "clis",
+    [
+        [{"cli": "codex", "model": "must-not-pin-primary"}],
+        [{"cli": "codex"}, {"cli": "claude"}],
+    ],
+)
+def test_event_driver_contract_keeps_primary_model_implicit_and_fallback_exact(
+    tmp_path: Path, clis: list[dict[str, str]]
+) -> None:
+    proposal = _proposal()
+    proposal["driver"] = {"mode": "event-driven", "clis": clis}
+    proposal["semantic_facts"] = _fresh_policy_facts(proposal)
+
+    with pytest.raises(ValueError):
+        activate_confirmed_contract(_activation(tmp_path / "invalid-event-driver", proposal))
 
 
 def test_missing_contract_blocks_callback_even_with_legacy_transport_config(tmp_path: Path) -> None:
@@ -283,7 +301,7 @@ def test_contract_only_event_callback_derives_and_digest_binds_runtime_state(
     proposal = _proposal()
     proposal["driver"] = {
         "mode": "event-driven",
-        "clis": [{"cli": "claude", "model": "exact"}],
+        "clis": [{"cli": "claude"}, {"cli": "codex", "model": "exact"}],
     }
     proposal["semantic_facts"] = _fresh_policy_facts(proposal)
     activation = activate_confirmed_contract(
@@ -324,10 +342,13 @@ def test_contract_only_event_callback_derives_and_digest_binds_runtime_state(
         "updated_at",
     }
     assert persisted["schema_version"] == 2
-    assert persisted["entries"] == [{"index": 0, "session": None}]
+    assert persisted["entries"] == [
+        {"index": 0, "session": None},
+        {"index": 1, "session": None},
+    ]
 
     replacement = deepcopy(proposal)
-    replacement["driver"]["clis"][0]["model"] = "reconfirmed-model"
+    replacement["driver"]["clis"][1]["model"] = "reconfirmed-model"
     replacement["semantic_facts"] = _fresh_policy_facts(replacement)
     replace_confirmed_contract(
         ReplaceConfirmedContract(
@@ -367,7 +388,7 @@ def test_unsafe_present_contract_cannot_fall_back_to_legacy_callback_policy(
     proposal = _proposal()
     proposal["driver"] = {
         "mode": "event-driven",
-        "clis": [{"cli": "claude", "model": "exact"}],
+        "clis": [{"cli": "claude"}],
     }
     proposal["semantic_facts"] = _fresh_policy_facts(proposal)
     activate_confirmed_contract(

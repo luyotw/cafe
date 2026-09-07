@@ -11,7 +11,7 @@ from cafe.core.packet_io import canonical_json
 from cafe.core.types import AgentCLI
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 _RUNTIME_KEYS = {
     "session",
     "sessions",
@@ -220,21 +220,27 @@ def _validate_driver(value: Any) -> dict[str, Any]:
             or not isinstance(result["clis"], list)
             or not result["clis"]
         ):
-            raise ValueError("event-driven driver requires an ordered CLI/model chain")
+            raise ValueError("event-driven driver requires an ordered CLI chain")
         clis: list[dict[str, str]] = []
         seen: set[str] = set()
-        for raw in result["clis"]:
-            entry = _mapping(raw, "event-driven CLI", keys={"cli", "model"})
+        for index, raw in enumerate(result["clis"]):
+            entry = _mapping(
+                raw,
+                "event-driven CLI",
+                keys={"cli"} if index == 0 else {"cli", "model"},
+            )
             cli = _string(entry["cli"], "event-driven CLI")
             try:
                 cli = AgentCLI(cli).value
             except ValueError as exc:
                 raise ValueError("event-driven CLI is unsupported") from exc
-            model = _string(entry["model"], "event-driven model")
             if cli in seen:
                 raise ValueError("event-driven CLIs must be distinct")
             seen.add(cli)
-            clis.append({"cli": cli, "model": model})
+            normalized = {"cli": cli}
+            if index > 0:
+                normalized["model"] = _string(entry["model"], "event-driven fallback model")
+            clis.append(normalized)
         result["clis"] = clis
     else:
         raise ValueError("driver.mode is invalid")

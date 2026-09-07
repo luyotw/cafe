@@ -18,7 +18,7 @@
 - [ ] 更新`format_kickoff_contract.py`：
   - `attached`只接受正整數`poll_interval_seconds`；
   - `unattended`不接受mode-specific欄位；
-  - `event-driven`必須指定支援的CLI與exact model。
+  - `event-driven`的primary只指定支援的CLI並沿用user目前session model；fallback才指定exact model。
 - [ ] event-driven每個issue使用獨立的skill-owned資料：
 
   ```text
