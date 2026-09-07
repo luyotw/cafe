@@ -328,13 +328,14 @@ def _write_baton(
 def _write_publication_contract(
     issue_dir: Path,
     *,
+    playbook_id: str = "publication-contract",
     persisted: object = False,
 ) -> None:
     issue_dir.mkdir(parents=True, exist_ok=True)
     (issue_dir / "issue.yaml").write_text(
         yaml.safe_dump(
             {
-                "playbook_id": "publication-contract",
+                "playbook_id": playbook_id,
                 "pr": {"auto_create": persisted},
             },
             sort_keys=False,
@@ -4432,7 +4433,7 @@ def test_runtime_recovered_user_handoff_materializes_one_actionable_task(
 ) -> None:
     """An agent-error recovery exposes each declared user handoff exactly once."""
     issue_dir = tmp_path / ".cafe" / "issues" / f"reconcile-user-{intent}"
-    _write_publication_contract(issue_dir, confirmed=False, persisted=False)
+    _write_publication_contract(issue_dir, playbook_id="tdd-qa", persisted=False)
     _write_baton(
         issue_dir,
         from_step="spec",
@@ -4501,7 +4502,7 @@ def test_runtime_recovered_user_handoff_remains_actionable_after_reconciliation_
 ) -> None:
     """A crash after the completion marker cannot strand a user handoff without its task."""
     issue_dir = tmp_path / ".cafe" / "issues" / "reconcile-user-marker-crash"
-    _write_publication_contract(issue_dir, confirmed=False, persisted=False)
+    _write_publication_contract(issue_dir, playbook_id="tdd-qa", persisted=False)
     _write_baton(
         issue_dir,
         from_step="spec",
