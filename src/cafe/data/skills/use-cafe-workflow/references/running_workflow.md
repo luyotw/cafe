@@ -7,9 +7,13 @@ execution and whenever agent work remains.
 Before every start or resume, follow `project_global_skill_sync.md`: validate
 the persisted runtime/catalog preflight against fresh read-only checks. A
 changed comparison token triggers the reference's bounded semantic comparison,
-not an automatic user stop. Request the exact separately scoped approval only
-for a fresh action, and reconfirm kickoff only for a material difference found
-by that comparison. Verified metadata-only churn may continue, while uncertain
+not an automatic user stop. A catalog publication action exists only when the
+user explicitly requests it; ordinary project-only entries and the optional
+end-of-contract mismatch recommendation never stop start or resume. Use
+`cafe catalog check --json` directly during ordinary start or resume checks;
+the reminder script runs only while rendering a complete new or stale kickoff
+contract. Reconfirm kickoff only for a material difference found by the semantic
+comparison. Verified metadata-only churn may continue, while uncertain
 differences fail closed.
 
 ## Operating modes

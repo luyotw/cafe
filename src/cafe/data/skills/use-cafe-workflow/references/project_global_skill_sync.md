@@ -6,56 +6,66 @@ repository or active linked worktree:
 
 ```bash
 cafe update check --json
-cafe catalog check --json
+python3 <skill-dir>/scripts/catalog_version_check.py
 ```
 
-The catalog command compares intentional project entries across playbooks,
-phase skills, and agents against their Global destinations. It resolves the
-canonical repository plus active worktree overlay and reports content-bound
-digests without copying fallback entries into the project.
+The script directly invokes `cafe catalog check --json` with an argv list. On a
+successful check it returns the raw report under `catalog_check` and a
+language-neutral `content_mismatch_entry_ids` list. It does not render reminder
+prose. The underlying catalog command compares intentional project entries
+across playbooks, phase skills, and agents against their Global destinations.
+Only unwrap those two fields when the script exits zero. On a nonzero exit, the
+script deliberately returns the raw catalog stdout, stderr, and exit code
+without a wrapper; do not read nested keys or reminder IDs. Route that raw
+result through the existing catalog preflight handling, including the
+`over_budget` rules below.
 
 ## Route the check results
 
 - An update status of `unavailable` must be recorded and clearly warned about,
   but it must not be described as current and kickoff continues with the
   installed version.
-- An empty catalog difference list means identical content or no project
-  entries are eligible. Stay silent and do not ask a catalog question.
+- An empty `content_mismatch_entry_ids` list means no reminder. Stay silent and
+  do not ask a catalog question.
 - A catalog status of `over_budget` is an explicit incomplete preflight, not a
-  no-difference result. When `discovery_complete` is true, its single
-  `affected_entry_ids` set is complete within the reported hard discovery
-  limit. Present that set in one bounded decision, then run one exact combined
-  `--entry` scope for the approved selection (up to the reported entry limit)
-  to obtain its content-bound token. The exact token also binds the complete
-  discovery scope. The Driver must not paginate, repeat whole-catalog scans, or
-  treat the discovery token as publication approval. If `discovery_complete`
-  is false, stop the preflight with the reported hard-limit error instead of
-  presenting a partial decision.
-- When catalog differences exist, show one bounded report covering all three
-  catalog kinds and ask one combined catalog decision for the exact selected
-  entry IDs.
+  no-difference result. When `discovery_complete` is true, record its complete
+  bounded `affected_entry_ids` and effective digests without asking a
+  publication question or reminder. If `discovery_complete` is false, stop the
+  preflight with the reported hard-limit error instead of presenting a partial
+  result.
+- `missing_global` is an ordinary project-only entry and never appears in the
+  mismatch list. Only entries already classified by CAFE as `content_mismatch`
+  appear. When that list is non-empty, use the effective conversation locale to
+  append one non-blocking recommendation with those exact IDs at the very end
+  of the kickoff contract. State that kickoff confirmation does not approve
+  publication and that synchronization may be requested separately.
 - A runtime update and a catalog publication are separate approval scopes.
-  Never infer either approval from kickoff confirmation, a generic `continue`,
-  or approval of the other scope.
+  Never infer publication approval from the kickoff confirmation, its catalog
+  reminder, a generic `continue`, or approval of the runtime-update scope.
 
 Persist each check's timestamp, status, installed/latest versions when
 applicable, comparison token, effective catalog digests, decision, and any
-post-change evidence in the active issue's `preflight` mapping. Reuse a prior
-decision only when the complete bound token is unchanged.
+post-change evidence in the active issue's `preflight` mapping. The reminder
+list is transient and is not persisted. Record `not_requested` when no explicit
+publication request exists; project-only entries do not require a decline
+decision.
 
 A changed comparison token invalidates its cached decision, but does not by
 itself show a semantic change or require kickoff reconfirmation. Re-run the
-check, handle only any separately scoped action it reports, and perform a
-bounded semantic comparison of the effective confirmed contract and execution
-behavior. Reconfirm only for a contract or observable-behavior change, or a
-material runtime, dependency, or permission difference. Verified metadata-only
-churn such as paths, timestamps, caches, or labels may continue after recording
-the classification and evidence. If the difference cannot be shown to be
-non-semantic, fail closed.
+check and perform a bounded semantic comparison of the effective confirmed
+contract and execution behavior. Ordinary start or resume checks use
+`cafe catalog check --json` directly and never display a synchronization
+reminder. Run the reminder script only while rendering a complete new or stale
+kickoff contract. Reconfirm only for a contract or observable-behavior change,
+or a material runtime, dependency, or permission difference. Verified
+metadata-only churn may continue after recording the classification and
+evidence. If the difference cannot be shown to be non-semantic, fail closed.
 
-## Apply only an exact approval
+## Apply only an explicitly requested, exact approval
 
-Use the token and selection the user approved:
+Do not initiate catalog publication from preflight. Only after the user
+separately requests synchronization, use the fresh token and exact selection
+the user approved:
 
 ```bash
 cafe update apply --token <token-from-update-check> --json
@@ -66,7 +76,7 @@ cafe catalog sync-global --token <token-from-catalog-check> \
   --json
 ```
 
-Do not run either apply command when that scope was declined. Catalog
+Do not run either apply command without that explicit request. Catalog
 publication flows only from the effective project view to matching Global
 paths; it does not modify project content or CLI-native helper-skill installs.
 `cafe skill sync-global` remains a separate helper installation command.

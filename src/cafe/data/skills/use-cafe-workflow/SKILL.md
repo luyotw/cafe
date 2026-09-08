@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
-metadata: {version: 1.34.0}
+metadata: {version: 1.35.0}
 ---
 
 # Use CAFE Workflow
@@ -11,7 +11,7 @@ metadata: {version: 1.34.0}
 - Drive CAFE through spec, plan, develop, review, and PR without bypassing its artifacts, blackboard state, or baton handoffs.
 - Keep driver decisions grounded in the confirmed kickoff contract and
   `.cafe/strategic_context.yaml`.
-- Preflight runtime updates and all three catalogs read-only; apply only exact, separately approved tokens and recheck afterward.
+- Preflight runtime updates and all three catalogs read-only; keep catalog publication non-blocking and apply only explicitly requested, exact approved tokens.
 - Prefer non-interactive commands so work can run unattended and resume cleanly.
 
 ## Progressive disclosure

@@ -239,30 +239,42 @@ def test_use_cafe_workflow_preflights_runtime_and_all_catalogs_before_execution(
     assert "new kickoff" in normalized
     assert "stale kickoff contract" in normalized
     assert "stay silent" in normalized_lower
-    assert "one combined catalog decision" in normalized
+    assert "do not ask a catalog question" in normalized_lower
+    assert "`missing_global` is an ordinary project-only entry" in reference
+    assert "`content_mismatch_entry_ids`" in reference
+    assert "at the very end of the kickoff contract" in normalized
+    assert "scripts/catalog_version_check.py" in reference
+    assert "effective conversation locale" in normalized
+    assert "Only unwrap those two fields when the script exits zero" in reference
+    assert "do not read nested keys or reminder IDs" in normalized
+    assert "route its raw catalog stdout, stderr, and exit code" in " ".join(
+        _read_skill_resource("references/kickoff.md").split()
+    )
+    assert (SKILL_ROOT / "scripts" / "catalog_version_check.py").is_file()
+    assert "not_requested" in reference
     assert "separate approval scopes" in normalized
     assert "must not be described as current" in normalized
     assert "continues with the installed version" in normalized
     assert "over_budget" in reference
     assert "affected_entry_ids" in reference
     assert "discovery_complete" in reference
-    assert "must not paginate" in normalized
-    assert "one exact combined `--entry` scope" in normalized
+    assert "one exact combined `--entry` scope" not in normalized
     assert "cafe update apply --token" in reference
     assert "cafe catalog sync-global --token" in reference
     assert "re-run both read-only checks" in normalized_lower
     assert "re-render and reconfirm the kickoff contract" in normalized
     assert "before every start or resume" in normalized_running.lower()
+    assert "user explicitly requests it" in normalized_running
+    assert "reminder script runs only while rendering" in normalized_running
 
 
 def test_skill_local_catalog_sync_path_has_no_write_authority() -> None:
-    script = SKILL_ROOT / "scripts" / "project_global_skill_sync.py"
+    script = SKILL_ROOT / "scripts" / "catalog_version_check.py"
+    source = script.read_text(encoding="utf-8")
 
-    if script.exists():
-        source = script.read_text(encoding="utf-8")
-        assert "update_skills" not in source
-        assert "os.replace" not in source
-        assert "shutil.copytree" not in source
+    assert "shell=True" not in source
+    assert "os.replace" not in source
+    assert "shutil.copytree" not in source
 
 
 def test_use_cafe_workflow_skill_makes_driver_own_alignment_decisions() -> None:
@@ -480,6 +492,115 @@ mandate:
     assert "| need_clarification | user_required | 否 |" in result.stdout
     assert "| product_scope | escalate | roadmap, positioning |" in result.stdout
     assert result.stdout.count("| playbook_id |") == 1
+
+
+def _write_fake_cafe(
+    path: Path,
+    *,
+    stdout: str,
+    stderr: str = "",
+    exit_code: int = 0,
+) -> None:
+    path.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        f"sys.stdout.write({json.dumps(stdout)})\n"
+        f"sys.stderr.write({json.dumps(stderr)})\n"
+        f"raise SystemExit({exit_code})\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+
+
+def test_catalog_version_check_reports_only_content_mismatch_ids(
+    tmp_path: Path,
+) -> None:
+    report = {
+        "entries": [
+            {
+                "entry_id": "agent:developer/project-only",
+                "reason": "missing_global",
+            },
+            {
+                "entry_id": "agent:developer/shared",
+                "reason": "content_mismatch",
+            },
+        ]
+    }
+    executable_dir = tmp_path / "quoted'bin"
+    executable_dir.mkdir()
+    executable = executable_dir / "cafe"
+    _write_fake_cafe(executable, stdout=json.dumps(report))
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SKILL_ROOT / "scripts" / "catalog_version_check.py"),
+            "--cafe-executable",
+            str(executable),
+        ],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "catalog_check": report,
+        "content_mismatch_entry_ids": ["agent:developer/shared"],
+    }
+
+
+def test_catalog_version_check_ignores_missing_global() -> None:
+    module = _load_script_module(
+        SKILL_ROOT / "scripts" / "catalog_version_check.py", "catalog_version_check"
+    )
+
+    assert module.content_mismatch_entry_ids(
+        {
+            "entries": [
+                {
+                    "entry_id": "agent:developer/project-only",
+                    "reason": "missing_global",
+                }
+            ]
+        }
+    ) == []
+
+
+def test_catalog_version_check_forwards_catalog_command_failure(tmp_path: Path) -> None:
+    executable = tmp_path / "cafe"
+    _write_fake_cafe(
+        executable,
+        stdout='{"status":"over_budget"}\n',
+        stderr="catalog limit exceeded\n",
+        exit_code=7,
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SKILL_ROOT / "scripts" / "catalog_version_check.py"),
+            "--cafe-executable",
+            str(executable),
+        ],
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 7
+    assert result.stdout == '{"status":"over_budget"}\n'
+    assert result.stderr == "catalog limit exceeded\n"
+
+
+def test_kickoff_formatter_contains_no_fixed_language_catalog_reminder() -> None:
+    source = _read_skill_resource("scripts/format_kickoff_contract.py")
+
+    assert "Catalog 同步提醒" not in source
+    assert "Catalog synchronization reminder" not in source
 
 
 def test_confirmed_kickoff_activates_one_issue_scoped_driver_contract(tmp_path: Path) -> None:

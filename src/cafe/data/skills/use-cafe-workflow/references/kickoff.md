@@ -159,17 +159,29 @@ missing, invalid, or stale.
 
 Before rendering a new contract, and before resuming one that is stale, follow
 `project_global_skill_sync.md`. Run `cafe update check --json` and
-`cafe catalog check --json`, then record both bounded results. Identical content
-and a catalog with no eligible project entries are silent. An unavailable
-runtime check is visible and recorded but continues with the installed version.
-A catalog `over_budget` result is incomplete and must be narrowed by kind or
-entry before kickoff continues; it must not be treated as a no-difference result.
+`scripts/catalog_version_check.py`. When the script exits zero, record its
+nested `catalog_check` with the ordinary preflight metadata and use its mismatch
+IDs only for the optional reminder. When it exits nonzero, do not read wrapper
+fields; route its raw catalog stdout, stderr, and exit code through the existing
+catalog preflight first. If that handling permits kickoff to continue, add the
+ordinary metadata to the raw catalog payload. Identical content and a catalog
+with no eligible project entries are silent. An unavailable runtime check is
+visible and recorded but continues with the installed version.
+A catalog `over_budget` result with complete discovery retains its bounded IDs
+and effective digests without triggering a publication question; incomplete
+discovery still fails closed.
 
 Runtime installation and project-to-Global catalog publication are separate
-approval scopes. Bind each decision to its reported comparison token. After an
-approved change, run both checks again and compare effective workflow digests.
-When effective behavior changed, present a freshly rendered kickoff contract
-and obtain confirmation before preparation or workflow execution.
+approval scopes. Missing Global entries are ordinary project-only definitions
+and produce no reminder. Only when `content_mismatch_entry_ids` is non-empty,
+append those IDs as a non-blocking synchronization recommendation in the
+effective conversation locale at the very end of the rendered contract. Never
+ask a separate pre-kickoff catalog question or infer publication approval from
+contract confirmation. If the user separately requests publication, bind its
+exact selection to the reported comparison token. After an approved change,
+run both checks again and compare effective workflow digests. When effective
+behavior changed, present a freshly rendered kickoff contract and obtain
+confirmation before preparation or workflow execution.
 
 ### Derive confirmation gates
 
@@ -279,6 +291,15 @@ mandate boundary, conversation locale source, repository content locale, and
 worktree choice. It
 re-executes with the Python interpreter that owns `cafe` when the shell
 interpreter lacks CAFE dependencies.
+
+Add the existing preflight metadata (`checked_at`, `decision`, and
+`post_change_evidence`) to the script's nested `catalog_check` payload after a
+zero exit before passing it to `--catalog-preflight`. After a handled nonzero
+exit, add them to the raw catalog payload instead; no mismatch reminder exists
+for that branch. The formatter contains no fixed-language synchronization
+reminder. After formatting, append a reminder in the effective conversation
+locale only when `content_mismatch_entry_ids` is non-empty. It lists those IDs,
+stays last, and does not become a kickoff decision.
 
 If the user already chose values in the current request, render and restate them
 for confirmation rather than asking again.
