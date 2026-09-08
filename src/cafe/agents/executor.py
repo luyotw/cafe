@@ -767,6 +767,7 @@ class AgentExecutor:
             "rate limit",
             "status 429",
             "quota exceeded",
+            "exceeded your monthly quota",
             "you have no quota",
             "capierror: 402",
         ],

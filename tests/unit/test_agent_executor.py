@@ -254,6 +254,18 @@ class TestAgentExecutorErrorHandling:
         assert error_type == "rate_limit"
         assert "API rate limit reached" in (display_message or "")
 
+    def test_copilot_monthly_quota_signal_is_rate_limit(self) -> None:
+        """Copilot's monthly-quota wording should allow chain fallback."""
+        config = AgentConfig(name="David", cli=AgentCLI.COPILOT)
+        executor = AgentExecutor(config)
+
+        error_type, display_message = executor._classify_execution_error(
+            "Copilot", "You have exceeded your monthly quota"
+        )
+
+        assert error_type == "rate_limit"
+        assert "API rate limit reached" in (display_message or "")
+
     @pytest.mark.parametrize(
         "event",
         [
