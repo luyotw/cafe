@@ -124,7 +124,7 @@ def replace(
         raise ValueError("replacement requires user reconfirmation")
     with contract_lock(issue_dir):
         current, current_sha = load_contract(
-            issue_dir, issue_name=issue_name, workflow_id=workflow_id
+            issue_dir, issue_name=issue_name, workflow_id=workflow_id, allow_legacy_upgrade=True
         )
         if current_sha != expected_predecessor_sha256:
             raise ValueError("Driver contract predecessor is stale")
@@ -275,6 +275,7 @@ def _driver_only_legacy_proposal(value: Mapping[str, Any]) -> dict[str, Any] | N
                 return None
         proposal["phases"] = normalized_phases
     policy_fields = (
+        "delivery_contract",
         "locales",
         "confirmation_contract",
         "reactive_user_handoffs",

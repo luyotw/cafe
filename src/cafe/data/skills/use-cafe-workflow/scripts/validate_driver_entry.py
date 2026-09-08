@@ -51,6 +51,7 @@ def validate_entry(
     return {
         "contract_sha256": result.contract_sha256,
         "revision": result.revision,
+        "delivery_contract": _plain(result.delivery_contract),
         "runtime": _plain(result.runtime),
         "event": _plain(result.event),
         "proactive_review": _plain(result.proactive_review),

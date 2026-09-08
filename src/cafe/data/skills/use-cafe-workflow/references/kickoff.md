@@ -81,6 +81,7 @@ resuming and whenever the playbook changes.
 Before `cafe prepare`, any repository mutation, or the first workflow execution,
 obtain explicit user confirmation of:
 
+- the versioned `delivery_contract` described below;
 - `playbook_id`;
 - `playbook_selection_rationale`, including the independent-QA decision and the
   closest rejected alternative;
@@ -227,6 +228,52 @@ reactive policy in the kickoff:
 Any other runtime `to_owner=user` baton or `Workflow is waiting for user input`
 output is a hard stop.
 
+### Delivery facts to confirm
+
+Before rendering, read the request and relevant existing evidence, then propose
+one complete `delivery_contract` object. Use the user's language. The required
+version-1 fields are:
+
+| Field | Content |
+| --- | --- |
+| `schema_version` | `1` |
+| `outcome`, `motivation` | User-visible result and why it matters |
+| `in_scope`, `out_of_scope` | Explicit lists; include required edge cases and integrations |
+| `acceptance_invariants`, `required_evidence` | Complete conditions and proof needed for acceptance |
+| `implementation_direction` | Recommended approach and relevant tradeoffs |
+| `constraints` | Explicit lists under `architecture`, `dependencies`, `compatibility`, `quality`, `permissions`, `external_side_effects`, and `cost` |
+| `allowed_variations` | Internal substitutions that preserve every requirement |
+| `deviation_triggers` | Material changes that require a user-owned handoff |
+
+Use explicit empty lists for categories with no applicable constraint or allowed
+variation; never omit a required field. Outcome, motivation, scope, invariants,
+evidence, direction and deviation triggers must not be empty. Do not infer
+permission or an external-effect approval from product scope. Always preserve:
+
+> The Driver may accept a requirement-equivalent implementation with a smaller
+> or simpler implementation footprint. It must not accept reduced user-visible
+> behavior, feature scope, acceptance coverage, edge-case coverage, or required
+> integrations.
+
+Render these facts with the complete kickoff, resolve material ambiguity, and
+interpret the user's response semantically in any language. Acknowledgement of
+one part does not confirm unreviewed facts. Retain existing explicit decisions;
+do not repeatedly ask for unchanged choices. Only the confirmed facts become
+`delivery_contract` in the single version-4 durable Driver contract. The nested
+Delivery Contract has its own version; no feature-specific sidecar is authority.
+
+Inspect the selected effective entry point, transitions, `initial_input`,
+`input_artifacts`, and `output_artifact` declarations. Supply the confirmed
+product facts through the entry step's existing initial-input provider/binding
+and ordinary input interfaces where needed. Pass outcome/scope/acceptance and
+implementation facts, not Driver authority instructions or the policy JSON.
+Preserve the original issue input as well. When no such input is declared, use
+only an existing supported input boundary; do not synthesize a phase, artifact,
+or gate. If required facts cannot be conveyed, raise the existing clarification
+handoff. Specification/planning outputs, when present, may refine these facts
+but cannot silently reduce or extend them. The same rule applies to diagnosis,
+development, drafting, research, or any other entry step.
+
 ### Render the proposal
 
 Use the bundled formatter instead of a prose-only summary:
@@ -234,6 +281,7 @@ Use the bundled formatter instead of a prose-only summary:
 ```bash
 python3 <skill-dir>/scripts/format_kickoff_contract.py <playbook-id> \
   --issue-name <issue-name> \
+  --delivery-contract '<complete version-1 delivery JSON>' \
   --playbook-rationale "<source/evidence, QA decision, and rejected alternative>" \
   --issue-nature <nature> --issue-scale <small|medium|large> \
   --update-preflight '<bounded runtime-update JSON>' \
@@ -472,3 +520,17 @@ Metadata-only cache churn may rebuild runtime views; material or unknown Driver
 semantic evidence stops for reconfirmation. Session, dispatch, callback
 delivery, active CLI, and PR URL remain runtime state rather than contract
 fields.
+
+Delivery facts participate in normalized semantic facts and the proposal digest.
+Resume and cross-provider takeover reconstruct them from the same validated
+contract through `validate_driver_entry.py`; provider session memory is not
+confirmation evidence. Missing Delivery Contract fields, old contract versions,
+malformed values, stale identity or a mismatched digest require the existing
+reconfirmation path, never defaults or silent migration of product scope.
+Generic CAFE workflows without a Driver contract remain usable unchanged.
+
+After explicit reconfirmation, `replace_confirmed_contract` may upgrade a valid
+version-3 predecessor using its exact file SHA-256 as the CAS predecessor. It
+validates the old identity and digest, adds the confirmed Delivery Contract and
+advances the revision atomically. Old contracts are never accepted for entry or
+callback authority, and malformed predecessors are never silently overwritten.

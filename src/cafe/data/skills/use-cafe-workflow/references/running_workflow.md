@@ -307,3 +307,27 @@ non-gating for workflow advancement.
 Do not edit workflow artifacts, blackboard, or `next_step.txt` by hand except
 when repairing confirmed broken workflow state. Do not bypass CAFE by directly
 asking an agent to implement the issue.
+
+## Delivery evidence during execution and takeover
+
+Before Driver-owned work, the entry adapter returns the confirmed
+`delivery_contract` with its contract digest. Rebuild fresh facts from confirmed
+user decisions and current bounded evidence; never echo persisted facts merely
+to force a freshness match. Reuse the same product contract across providers.
+A missing, malformed, stale or digest-mismatched contract stops Driver-owned
+work for the existing reconfirmation handoff.
+
+At each existing eligible output confirmation, use the Delivery comparison in
+`handoffs_and_alignment.md`. Derive the step and artifact names from the loaded
+playbook and active task. Preserve authoritative phase outputs and declared
+input edges; omitted `input_artifacts` means the existing full-source fallback,
+whereas an explicit empty list means isolated inputs. Read complete sources
+when excerpts cannot establish coverage. Do not insert a confirmation gate
+where none exists or require a specification/planning phase.
+
+A clean comparison only permits a confirmed `driver_confirmable` output.
+Mandatory/user-required confirmations and reactive decisions retain their
+owners in attached, unattended and event-driven modes. Callbacks remain
+asynchronous and non-gating; they cannot collect or infer a user's answer.
+Delivery comparison supplements proactive review, built-in review and final
+convergent review; all existing obligations still apply.

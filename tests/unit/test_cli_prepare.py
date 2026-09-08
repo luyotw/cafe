@@ -14,6 +14,7 @@ from typer.testing import CliRunner
 
 from cafe.ui.cli import app
 from cafe.ui.commands.lifecycle import _ensure_worktree_cafe_excluded
+from tests.fixtures.delivery_contract import delivery_contract
 
 runner = CliRunner()
 
@@ -38,6 +39,7 @@ def _load_kickoff_formatter():
 
 def _confirmed_driver_proposal() -> dict[str, object]:
     policy: dict[str, object] = {
+        "delivery_contract": delivery_contract(),
         "locales": {"conversation": {"value": "en", "source": "user"}},
         "confirmation_contract": {
             "user_required": [],

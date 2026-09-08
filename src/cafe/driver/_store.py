@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
 import fcntl
 import json
 import os
-from pathlib import Path
 import stat
+from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Iterator, Mapping
 
 from cafe.core.packet_io import atomic_write_bytes, canonical_json, sha256_bytes
 
 from ._schema import validate_contract
-
 
 CONTRACT_FILENAME = "contract.json"
 LOCK_FILENAME = "contract.lock"
@@ -121,7 +120,11 @@ def _read_bounded(path: Path, *, label: str) -> bytes:
 
 
 def load_contract(
-    issue_dir: Path, *, issue_name: str | None = None, workflow_id: str | None = None
+    issue_dir: Path,
+    *,
+    issue_name: str | None = None,
+    workflow_id: str | None = None,
+    allow_legacy_upgrade: bool = False,
 ) -> tuple[dict[str, Any], str]:
     """Load the sole authority after bounded, symlink-safe validation."""
     issue = Path(issue_dir)
@@ -140,7 +143,12 @@ def load_contract(
         raise DriverContractUnsafeError("Driver contract is unsafe")
     content = _read_bounded(path, label="Driver contract")
     return (
-        validate_contract(_decode_exact(content), issue_name=issue_name, workflow_id=workflow_id),
+        validate_contract(
+            _decode_exact(content),
+            issue_name=issue_name,
+            workflow_id=workflow_id,
+            allow_legacy_upgrade=allow_legacy_upgrade,
+        ),
         sha256_bytes(content),
     )
 

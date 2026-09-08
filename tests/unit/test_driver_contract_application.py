@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.fixtures.delivery_contract import delivery_contract
+
 from cafe.driver import (
     ActivateConfirmedContract,
     DriverContractMissingError,
@@ -27,6 +29,7 @@ from cafe.driver import (
 def _proposal() -> dict[str, object]:
     """Return a complete Driver-owned policy without generic configuration."""
     proposal: dict[str, object] = {
+        "delivery_contract": delivery_contract(),
         "locales": {
             "conversation": {"value": "en", "source": "playbook:standard"},
         },
@@ -74,6 +77,7 @@ def _proposal() -> dict[str, object]:
 
 def _fresh_policy_facts(proposal: dict[str, object]) -> dict[str, object]:
     fields = (
+        "delivery_contract",
         "locales",
         "confirmation_contract",
         "reactive_user_handoffs",
@@ -170,7 +174,7 @@ def test_canonical_contract_without_model_adjustment_has_stable_activation_ident
     assert first.created is True
     assert retry.created is False
     assert retry.contract_sha256 == first.contract_sha256
-    assert contract["schema_version"] == 3
+    assert contract["schema_version"] == 4
     assert "model_adjustment" not in contract
     assert contract["provenance"]["confirmed_by"] == "user"
     assert contract["provenance"]["confirmed_at"] == "2026-09-06T02:00:00+00:00"

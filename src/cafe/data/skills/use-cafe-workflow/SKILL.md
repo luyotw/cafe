@@ -1,14 +1,14 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
-metadata: {version: 1.35.0}
+metadata: {version: 1.36.0}
 ---
 
 # Use CAFE Workflow
 
 ## Purpose
 
-- Drive CAFE through spec, plan, develop, review, and PR without bypassing its artifacts, blackboard state, or baton handoffs.
+- Drive CAFE through the selected playbook’s effective step graph without bypassing its artifacts, blackboard state, or baton handoffs.
 - Keep driver decisions grounded in the confirmed kickoff contract and
   `.cafe/strategic_context.yaml`.
 - Preflight runtime updates and all three catalogs read-only; keep catalog publication non-blocking and apply only explicitly requested, exact approved tokens.
@@ -50,6 +50,7 @@ If more than one situation applies, read every listed reference before acting; d
 - Use `.cafe/strategic_context.yaml` as the single source for strategic
   documents and authority. Do not invent strategy or silently create issue
   overrides.
+- Confirm a complete versioned Delivery Contract in the same kickoff before `cafe prepare`: outcome, full scope, acceptance/evidence, implementation direction, constraints, permitted variations and deviation triggers. Store it only in `driver/contract.json`. At existing eligible output gates, follow the evidence comparison in `references/handoffs_and_alignment.md`; a smaller implementation must preserve all requirements. Never add a gate or assume particular step/artifact names.
 - Treat planned output confirmation, reactive user handoffs, and semantic
   alignment as separate decisions. The driver owns alignment; phase agents do
   not approve themselves.
@@ -105,7 +106,7 @@ If more than one situation applies, read every listed reference before acting; d
   capability band, exact primary and any fallbacks, rationale, cached or tested
   primary evidence, and configured fallback smoke evidence.
 - [ ] Assess every agent-executed phase for proactive review and render one `required` or `not_required` decision and rationale for each.
-- [ ] Present the deterministic kickoff table and obtain explicit confirmation.
+- [ ] Include the complete Delivery Contract in the deterministic kickoff table and obtain semantic user confirmation once; no exact approval-string matching.
 - [ ] Record the confirmed operating mode. For event-driven, create its exact
   per-issue callback binding with the bundled callback script before launch.
 

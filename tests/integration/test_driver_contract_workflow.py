@@ -15,6 +15,7 @@ from cafe.driver import (
     activate_confirmed_contract,
     adopt_legacy_contract,
 )
+from tests.fixtures.delivery_contract import delivery_contract
 
 
 PROJECT_ROOT = Path(__file__).parents[2]
@@ -47,6 +48,7 @@ def _proposal() -> dict[str, object]:
         },
     ]
     proposal: dict[str, object] = {
+        "delivery_contract": delivery_contract(),
         "locales": {
             "conversation": {"value": "en", "source": "playbook"},
         },
@@ -84,6 +86,7 @@ def _proposal() -> dict[str, object]:
 
 def _fresh_policy_facts(proposal: dict[str, object]) -> dict[str, object]:
     fields = (
+        "delivery_contract",
         "locales",
         "confirmation_contract",
         "reactive_user_handoffs",
@@ -130,6 +133,7 @@ def test_resume_and_cold_takeover_reach_the_same_safe_authority_decision(tmp_pat
         issue_dir=issue_dir, issue_name="journey", workflow_id="workflow-journey", fresh_facts=facts
     )
     assert primary["runtime"] == backup["runtime"]
+    assert primary["delivery_contract"] == backup["delivery_contract"] == delivery_contract()
     assert "generic_inputs" not in primary
 
     changed = _proposal()

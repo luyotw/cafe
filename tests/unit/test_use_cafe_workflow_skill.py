@@ -18,6 +18,7 @@ from cafe.core.status_codes import (
 )
 from cafe.phases.generic_phase import GenericPhase
 from cafe.playbooks.loader import PlaybookLoader
+from tests.fixtures.delivery_contract import delivery_contract
 
 pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
@@ -79,6 +80,7 @@ def _proactive_review_args(playbook_id: str, *, project_root: Path = PROJECT_ROO
 
 def _preflight_args() -> list[str]:
     return [
+        "--delivery-contract", json.dumps(delivery_contract()),
         "--update-preflight",
         json.dumps(
             {
@@ -449,6 +451,9 @@ mandate:
 
     assert result.returncode == 0, result.stderr
     assert "## Kickoff Contract — issue346" in result.stdout
+    assert "### Delivery Contract" in result.stdout
+    assert delivery_contract()["outcome"] in result.stdout
+    assert delivery_contract()["required_evidence"][0] in result.stdout
     assert (
         "| playbook_selection_rationale | Repository policy requires the standard graph; "
         "QA is not independently required, so standard-qa is unnecessary. |" in result.stdout
@@ -464,7 +469,7 @@ mandate:
     assert "| issue_nature | feature/integration |" in result.stdout
     assert "| issue_scale | medium |" in result.stdout
     assert "model_adjustment" not in result.stdout
-    assert "| schema_version | 3 |" in result.stdout
+    assert "| schema_version | 4 |" in result.stdout
     assert "| driver.mode | unattended |" in result.stdout
     assert "### Preflight evidence" in result.stdout
     assert "| runtime_update.status | current |" in result.stdout
@@ -654,7 +659,7 @@ def test_confirmed_kickoff_activates_one_issue_scoped_driver_contract(tmp_path: 
     }
     assert "proactive_review.yaml" not in {path.name for path in (issue_dir / "driver").iterdir()}
     assert "No proactive review was confirmed for development." in result.stdout
-    assert "| schema_version | 3 |" in result.stdout
+    assert "| schema_version | 4 |" in result.stdout
 
     entry = subprocess.run(
         [
@@ -2522,3 +2527,19 @@ mandate:
             "| driver.poll_timestamp | capture and print current system time "
             "with every proactive poll |" in result.stdout
         )
+
+
+@pytest.mark.parametrize("damage", ["missing", "malformed"])
+def test_kickoff_rejects_incomplete_delivery_before_activation(tmp_path, damage):
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text("mandate: {preset: technical-led, axes: {}}\n")
+    command = _kickoff_formatter_command(strategic_context)
+    index = command.index("--delivery-contract")
+    if damage == "missing":
+        del command[index:index + 2]
+    else:
+        command[index + 1] = json.dumps({"schema_version": 1, "outcome": "Incomplete."})
+    result = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True)
+    assert result.returncode != 0
+    assert ("--delivery-contract" if damage == "missing" else "DeliveryContract") in result.stderr
+    assert not (tmp_path / ".cafe").exists()

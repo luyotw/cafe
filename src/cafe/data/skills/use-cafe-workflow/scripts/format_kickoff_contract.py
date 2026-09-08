@@ -51,6 +51,7 @@ try:
     )
     from cafe.core.types import AgentCLI, AgentConfig
     from cafe.driver import ActivateConfirmedContract, activate_confirmed_contract
+    from cafe.driver.delivery import normalize_delivery_contract
     from cafe.playbooks.loader import PlaybookLoader
     from cafe.skills.execution_profile import resolve_execution_profile
     from cafe.skills.loader import SkillLoader
@@ -98,7 +99,7 @@ def _strict_bool(value: str) -> bool:
 
 def _driver_policy_rows(args: argparse.Namespace) -> list[list[Any]]:
     rows: list[list[Any]] = [
-        ["schema_version", 3],
+        ["schema_version", 4],
         ["driver.mode", args.driver_mode],
     ]
     if args.driver_mode == "attached":
@@ -151,7 +152,8 @@ def _driver_policy_rows(args: argparse.Namespace) -> list[list[Any]]:
                 ],
                 [
                     "driver.authority",
-                    "callback scope only; does not grant HumanTask, permission, or capability authority",
+                    "callback scope only; does not grant HumanTask, permission, "
+                    "or capability authority",
                 ],
             ]
         )
@@ -389,6 +391,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--playbook-rationale", required=True)
     parser.add_argument("--issue-nature", required=True)
     parser.add_argument(
+        "--delivery-contract",
+        type=_json_mapping,
+        required=True,
+        help="Complete versioned delivery facts to confirm at kickoff.",
+    )
+    parser.add_argument(
         "--issue-scale",
         choices=("small", "medium", "large"),
         required=True,
@@ -588,6 +596,7 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
         else {"kind": "current_checkout"}
     )
     proposal: dict[str, Any] = {
+        "delivery_contract": normalize_delivery_contract(args.delivery_contract),
         "locales": {
             "conversation": {"value": effective_locale, "source": locale_source},
         },
@@ -640,6 +649,7 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
             for cli, model_name in _parse_event_driver_entries(args.event_driver)
         ]
     policy_fields = (
+        "delivery_contract",
         "locales",
         "confirmation_contract",
         "reactive_user_handoffs",
@@ -844,7 +854,8 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
                         [
                             "true",
                             "Push the feature branch and create or update the PR after local "
-                            "material and authorization succeed; review receives a verified PR URL.",
+                            "material and authorization succeed; review receives "
+                            "a verified PR URL.",
                         ],
                         [
                             "false",
@@ -987,6 +998,25 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
         [
             title,
             summary,
+            "### Delivery Contract",
+            _table(
+                summary_headers,
+                [
+                    [
+                        key,
+                        (
+                            json.dumps(value, ensure_ascii=False)
+                            if isinstance(value, (dict, list))
+                            else value
+                        ),
+                    ]
+                    for key, value in normalize_delivery_contract(args.delivery_contract).items()
+                ],
+            ),
+            "The Driver may accept a requirement-equivalent implementation with a smaller "
+            "or simpler implementation footprint. It must not accept reduced user-visible "
+            "behavior, feature scope, acceptance coverage, edge-case coverage, or required "
+            "integrations.",
             *([publication_contract] if publication_contract else []),
             "### Preflight evidence",
             preflight,
@@ -1018,10 +1048,11 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
             *(
                 [
                     "### Confirmed durable policy",
-                    "The following Driver-owned policy must be confirmed unchanged before activation.",
+                    "The following Driver-owned policy must be confirmed unchanged "
+                    "before activation.",
                     "```json",
                     json.dumps(
-                        {"schema_version": 3, "policy": confirmed_proposal},
+                        {"schema_version": 4, "policy": confirmed_proposal},
                         ensure_ascii=False,
                         indent=2,
                         sort_keys=True,

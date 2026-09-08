@@ -14,6 +14,7 @@ import pytest
 import yaml
 
 from cafe.core.types import AgentCLI, AgentResponse, TokenUsage
+from tests.fixtures.delivery_contract import delivery_contract
 
 
 def _callback_module():
@@ -46,6 +47,7 @@ def _activate_event_contract(
         for index, (cli, model) in enumerate(clis)
     ]
     proposal: dict[str, object] = {
+        "delivery_contract": delivery_contract(),
         "locales": {"conversation": {"value": "en", "source": "test"}},
         "confirmation_contract": {
             "user_required": ["spec", "plan"],
@@ -86,6 +88,7 @@ def _activate_event_contract(
         "material_assumptions": {"provider": "test", "permissions": ["local"]},
     }
     policy_fields = (
+        "delivery_contract",
         "locales",
         "confirmation_contract",
         "reactive_user_handoffs",
