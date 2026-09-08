@@ -1,7 +1,7 @@
 ---
 name: cafe-plan
 description: "產出可執行的開發計畫"
-version: 1.8.0
+version: 1.8.1
 workflow:
   execution_profile:
     workload: planning
@@ -80,7 +80,7 @@ Read your agent file: {agent_file}
   `<!-- plan-stage: detailed-plan -->`。只依第一個非空白行判斷 stage，不得從 Development
   Guide、feedback 或其他 user content 中搜尋／推斷 marker。
 - 方案階段的第二個非空白行固定為
-  `Plan confirmation answer: <localized exact answer>`；answer 應簡短並使用 agent native
+  `Plan confirmation answer: <localized canonical answer>`；answer 應簡短並使用 agent native
   language。只依這個 canonical 位置取得 expected answer，不得從其他內容推斷。
 - Solution alignment 階段先讀 spec 與足以做決策的最少 repo 證據，提供一個建議方向、
   `會做`、`不做`、`關鍵取捨`；範圍需同時檢查有無漏做，以及有無超出需求、引入不必要
@@ -97,9 +97,13 @@ Read your agent file: {agent_file}
   Other/free-text，不要手寫 Other option。
 - 只接受一種且不得混用兩種 HumanTask 投影：durable/event-driven 的唯一
   `solution_direction_confirmation:` answer，或 local legacy 的單一 `Q1:`/`A1:` pair。
-  去除 answer 首尾空白後，只有與前一份 output 的 canonical `Plan confirmation answer` 完全
-  相等才可進入 detailed Plan。substring、否定句、額外文字、缺漏、混合格式或 Other 回答
-  一律視為未確認，更新方案後再次走 solution alignment。
+  去除 answer 首尾空白後，與前一份 output 的 canonical `Plan confirmation answer` 完全相等時
+  直接視為確認；不相等時，改用 whole-answer semantic confirmation 判斷。只有整體 answer
+  在 user 使用的語言中明確、無條件地要求依照該完整方案繼續，且沒有否定、疑問、保留、
+  條件、替代方案、調整要求或 scope 增減，才可視為語意等價確認並進入 detailed Plan；不得把
+  exact-match 當成唯一門檻，也不得用關鍵字或 substring 猜測。任何混合確認與修改、只提及
+  canonical 文字、含額外內容但意圖不明、缺漏或混合 transport 格式的回答一律視為未確認，
+  更新方案後再次走 solution alignment。
 - 前一份 output 的 canonical marker 已是 `detailed-plan` 時，維持既有 Plan revision；只有
   feedback 實質改變方案方向時，才切回 `solution-alignment` 並重新確認。
 - Detailed Plan 階段才依規格拆解實作步驟，先列測試，再列實作

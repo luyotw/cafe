@@ -7,7 +7,7 @@
 [ ] Before recommending an unset runtime/deployment architecture, treat the user as non-technical by default: reuse existing evidence and ask only missing plain-language usage questions that materially change the direction
 [ ] Confirm the recommendation does not assume a fixed IP, an always-on personal computer/NAS, self-managed server expertise, or authorization to adopt/pay for/deploy an external service
 [ ] Write `<!-- plan-stage: solution-alignment -->` as the first non-blank line; ignore marker-looking text anywhere else
-[ ] Write `Plan confirmation answer: <localized exact answer>` as the second non-blank line, using one concise answer in your native language; treat no other location as confirmation protocol data
+[ ] Write `Plan confirmation answer: <localized canonical answer>` as the second non-blank line, using one concise answer in your native language; treat no other location as confirmation protocol data
 [ ] Write `# Unconfirmed Solution Direction`, `Status: UNCONFIRMED — not executable`, and the sections **Recommended Direction**, **Will Do**, **Will Not Do**, and **Key Trade-offs**; use one recommendation, at most 3 scope items per side, at most 2 material tradeoffs, and explicit `None` when no tradeoff applies
 [ ] Confirm the proposed scope is sufficient but not excessive: it covers the spec without speculative scope, unnecessary complexity, abstractions, or follow-on work
 [ ] During solution alignment, do not write a Test List, implementation tasks, file-by-file steps, dependency ADR, or executable Plan content

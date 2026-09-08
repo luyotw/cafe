@@ -98,15 +98,17 @@ def test_plan_uses_same_phase_solution_alignment_checkpoint() -> None:
     assert "solution_direction_confirmation" in skill
     assert "`solution_direction_confirmation:` answer" in skill
     assert "local legacy" in skill
-    assert "完全 相等" in " ".join(skill.split())
+    assert "whole-answer semantic confirmation" in skill
+    assert "exact-match 當成唯一門檻" in skill
+    assert "語意等價確認" in skill
     assert "Plan confirmation answer" in skill
     assert "localized" in first
-    assert "localized expected answer" in later
+    assert "localized canonical answer" in later
     assert "substring" in skill
     assert "不得另建 phase" in skill
     assert "do not write a Test List" in first
     assert "do not infer stage from iteration number" in later
-    assert "only contains the confirmation phrase as a substring" in later
+    assert "only mentions the canonical phrase as a substring" in later
     xml_instruction = (
         PLAN_SKILL.parent / "references" / "xml_questions_instruction.md"
     ).read_text(encoding="utf-8")
@@ -166,6 +168,7 @@ def test_solution_confirmation_matches_the_real_human_task_projection(
         assert "solution_direction_confirmation:" in content
         assert "Q1:" in content and "A1:" in content
         assert "substring" in content
+        assert "whole-answer semantic confirmation" in content
 
 
 def test_plan_skill_discovers_usage_context_before_unset_architecture() -> None:
