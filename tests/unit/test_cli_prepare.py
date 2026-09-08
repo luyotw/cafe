@@ -1,7 +1,11 @@
 """Tests for prepare CLI command."""
 
+import importlib.util
+import json
 import subprocess
+from copy import deepcopy
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -12,6 +16,70 @@ from cafe.ui.cli import app
 from cafe.ui.commands.lifecycle import _ensure_worktree_cafe_excluded
 
 runner = CliRunner()
+
+
+def _load_kickoff_formatter():
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "cafe"
+        / "data"
+        / "skills"
+        / "use-cafe-workflow"
+        / "scripts"
+        / "format_kickoff_contract.py"
+    )
+    spec = importlib.util.spec_from_file_location("prepare_identity_kickoff_formatter", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _confirmed_driver_proposal() -> dict[str, object]:
+    policy: dict[str, object] = {
+        "locales": {"conversation": {"value": "en", "source": "user"}},
+        "confirmation_contract": {
+            "user_required": [],
+            "driver_confirmable": [],
+            "mandatory_human_stops": [],
+        },
+        "reactive_user_handoffs": {
+            "need_clarification": "user_required",
+            "need_permission": "user_required",
+            "alignment_checkpoint": "driver_resolvable_when_clear",
+        },
+        "mandate": {"source": "test", "boundaries": ["issue"]},
+        "issue_assessment": {
+            "nature": "defect",
+            "scale": "small",
+            "risks": [],
+            "rationale": "Exercise the prepare-to-Driver activation boundary.",
+        },
+        "phases": [
+            {
+                "name": "spec",
+                "chain": [{"cli": "codex", "model": "exact"}],
+                "rationale": "Confirmed test chain.",
+            }
+        ],
+        "proactive_review": {
+            "phase_decisions": [
+                {
+                    "phase": "spec",
+                    "decision": "not_required",
+                    "rationale": "No scheduled review in this test.",
+                }
+            ]
+        },
+        "driver": {"mode": "unattended"},
+        "checkout": {"kind": "current_checkout"},
+    }
+    return {
+        **policy,
+        "semantic_facts": {"effective_policy": deepcopy(policy)},
+        "material_assumptions": {"permissions": ["local"]},
+    }
 
 
 @pytest.fixture(scope="module")
@@ -100,6 +168,17 @@ class TestPrepareCommand:
         assert issue_dir.exists()
         assert (issue_dir / "spec").exists()
         assert (issue_dir / "sessions").exists()
+
+        blackboard = json.loads(
+            (issue_dir / "blackboard.json").read_text(encoding="utf-8")
+        )
+        assert blackboard["workflow_id"]
+        assert blackboard["playbook_id"] == "standard"
+        assert blackboard["current_step"] == "spec"
+        assert blackboard["events"] == []
+        assert blackboard["step_attempt_counts"] == {}
+        assert (issue_dir / "next_step.txt").is_file()
+        assert f"Workflow ID: {blackboard['workflow_id']}" in result.stdout
 
         # Verify config.yaml created
         config_file = issue_dir / "issue.yaml"
@@ -431,6 +510,12 @@ class TestPrepareCommand:
             app, ["prepare", "idempotent-test", "--no-auto-create-pr"]
         )
         assert result1.exit_code == 0
+        blackboard_file = (
+            temp_repo_dir / ".cafe" / "issues" / "idempotent-test" / "blackboard.json"
+        )
+        first_workflow_id = json.loads(
+            blackboard_file.read_text(encoding="utf-8")
+        )["workflow_id"]
 
         # Mock branch now exists
         mock_git_ops.branch_exists.return_value = True
@@ -441,10 +526,75 @@ class TestPrepareCommand:
         )
         assert result2.exit_code == 0
         assert "already exists" in result2.stdout
+        assert (
+            json.loads(blackboard_file.read_text(encoding="utf-8"))["workflow_id"]
+            == first_workflow_id
+        )
 
         # Config should still exist and be valid
         config_file = temp_repo_dir / ".cafe" / "issues" / "idempotent-test" / "issue.yaml"
         assert config_file.exists()
+
+    def test_prepare_rejects_workflow_identity_after_execution_starts(
+        self, temp_repo_dir, mock_git_ops
+    ):
+        result = runner.invoke(
+            app, ["prepare", "active-test", "--no-auto-create-pr"]
+        )
+        assert result.exit_code == 0
+
+        issue_dir = temp_repo_dir / ".cafe" / "issues" / "active-test"
+        blackboard_file = issue_dir / "blackboard.json"
+        blackboard = json.loads(blackboard_file.read_text(encoding="utf-8"))
+        blackboard["step_attempt_counts"] = {"spec": 1}
+        blackboard_file.write_text(json.dumps(blackboard), encoding="utf-8")
+        mock_git_ops.branch_exists.return_value = True
+
+        repeated = runner.invoke(
+            app, ["prepare", "active-test", "--no-auto-create-pr"]
+        )
+
+        assert repeated.exit_code == 1
+        assert "active workflow state exists" in repeated.stdout
+
+    def test_prepare_identity_can_activate_driver_contract_before_first_phase(
+        self, temp_repo_dir, mock_git_ops
+    ):
+        result = runner.invoke(
+            app, ["prepare", "driver-ready", "--no-auto-create-pr"]
+        )
+        assert result.exit_code == 0
+
+        issue_dir = temp_repo_dir / ".cafe" / "issues" / "driver-ready"
+        workflow_id = json.loads(
+            (issue_dir / "blackboard.json").read_text(encoding="utf-8")
+        )["workflow_id"]
+        formatter = _load_kickoff_formatter()
+
+        formatter.activate_confirmed_proposal(
+            SimpleNamespace(
+                workflow_id=workflow_id,
+                confirmed_by="user",
+                confirmed_at="2026-09-08T10:00:00+08:00",
+                issue_dir=issue_dir,
+                project_root=temp_repo_dir,
+                issue_name="driver-ready",
+            ),
+            proposal=_confirmed_driver_proposal(),
+        )
+
+        contract = json.loads(
+            (issue_dir / "driver" / "contract.json").read_text(encoding="utf-8")
+        )
+        assert contract["identity"] == {
+            "issue_name": "driver-ready",
+            "workflow_id": workflow_id,
+        }
+        blackboard = json.loads(
+            (issue_dir / "blackboard.json").read_text(encoding="utf-8")
+        )
+        assert blackboard["events"] == []
+        assert blackboard["step_attempt_counts"] == {}
 
     def test_prepare_with_different_base_branches(self, temp_repo_dir, mock_git_ops):
         """測試不同 base branches 配置"""
@@ -538,6 +688,13 @@ class TestPrepareCommand:
         assert "Remote base origin/main is not" in result.stdout
         assert "contained in main" in result.stdout
         mock_git_ops.create_branch.assert_not_called()
+        assert not (
+            temp_repo_dir
+            / ".cafe"
+            / "issues"
+            / "remote-drift"
+            / "blackboard.json"
+        ).exists()
 
 
 class TestPrepareCommandWorktree:
@@ -561,6 +718,19 @@ class TestPrepareCommandWorktree:
         with open(config_file) as f:
             config_data = yaml.safe_load(f)
             assert config_data["worktree_path"] == worktree_path
+
+        issue_dir = config_file.parent
+        blackboard = json.loads(
+            (issue_dir / "blackboard.json").read_text(encoding="utf-8")
+        )
+        assert blackboard["workflow_id"]
+        assert not (
+            temp_repo_dir
+            / ".cafe"
+            / "issues"
+            / "test-issue"
+            / "blackboard.json"
+        ).exists()
 
     def test_prepare_without_worktree_uses_branch(self, temp_repo_dir, mock_git_ops):
         """測試不使用 --worktree 時應建立分支"""

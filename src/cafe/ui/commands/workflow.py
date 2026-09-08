@@ -12,7 +12,12 @@ from typing import Any, Dict, List, Optional
 import typer
 from rich.console import Console
 
-from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
+from cafe.core.blackboard import (
+    BlackboardStore,
+    HandoffIntent,
+    HandoffOwner,
+    is_genuine_cold_start,
+)
 from cafe.workflow_execution.worker_launch import FixedWorkerLauncher, WorkerLaunchStore
 from cafe.workflow_execution.event_callback import (
     ResolvedWorkflowEventCallback,
@@ -200,29 +205,6 @@ def _persist_background_step_user_inputs(
         iteration_dir = step_dir / f"iteration_{iteration:03d}"
         iteration_dir.mkdir(parents=True, exist_ok=True)
         (iteration_dir / "user_input.md").write_text(value, encoding="utf-8")
-
-
-def _is_genuine_cold_start(blackboard: Any, *, entry_point: str) -> bool:
-    """Return whether invocation input can still be the workflow requirement."""
-    contract = getattr(blackboard, "handoff_contract", None)
-    bootstrap_handoff = contract is None or (
-        contract.from_step == entry_point
-        and contract.to_owner is HandoffOwner.AGENT
-        and contract.to_step == entry_point
-        and contract.intent is HandoffIntent.AWAIT_AGENT
-        and contract.source == "bootstrap"
-    )
-    return (
-        blackboard.current_step == entry_point
-        and not blackboard.events
-        and not blackboard.decisions
-        and not blackboard.artifacts
-        and not blackboard.capability_receipts
-        and not blackboard.step_attempt_counts
-        and blackboard.ownership_cursor is None
-        and not blackboard.handoff_summary
-        and bootstrap_handoff
-    )
 
 
 def _validate_allowed_directories(config_manager: Any, add_dir: List[str]) -> None:
@@ -789,7 +771,7 @@ def workflow(
             and user_input is not None
             and start_step is None
             and resume_blackboard.current_step not in {"user", "done"}
-            and not _is_genuine_cold_start(resume_blackboard, entry_point=entry_point)
+            and not is_genuine_cold_start(resume_blackboard, entry_point=entry_point)
         ):
             console.print(
                 "[red]Error: --user-input is valid only for a new workflow or its "

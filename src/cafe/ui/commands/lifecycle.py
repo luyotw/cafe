@@ -12,6 +12,11 @@ import typer
 import yaml
 
 from cafe.core.active_issue import clear_marker_if_matches, write_marker
+from cafe.core.blackboard import (
+    BlackboardState,
+    BlackboardStore,
+    is_genuine_cold_start,
+)
 from cafe.utils.issue_config import resolve_issue_config_path, resolve_issue_id
 
 VALID_PHASES = ["spec", "plan", "develop", "review", "pr"]
@@ -33,6 +38,31 @@ prompt_for_rigor: Any = None
 select_template: Any = None
 _ensure_default_content: Any = None
 _resolve_iteration_index: Any = None
+
+
+def _prepared_identity_is_reusable(
+    issue_dir: Path,
+    *,
+    entry_step: str,
+    playbook_id: str,
+) -> bool:
+    """Accept only the untouched identity created by a completed prepare."""
+    blackboard_path = issue_dir / "blackboard.json"
+    if not blackboard_path.exists() and not blackboard_path.is_symlink():
+        return False
+    if not blackboard_path.is_file() or blackboard_path.is_symlink():
+        raise ValueError("prepared workflow identity is not a regular file")
+    try:
+        raw = json.loads(blackboard_path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict) or not raw.get("workflow_id"):
+            raise ValueError("prepared workflow identity has no workflow ID")
+        state = BlackboardState.from_dict(raw, initial_step=entry_step)
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        raise ValueError("prepared workflow identity is invalid") from exc
+    return (
+        state.playbook_id == playbook_id
+        and is_genuine_cold_start(state, entry_point=entry_step)
+    )
 
 
 def _ensure_worktree_cafe_excluded(worktree_root: Path) -> None:
@@ -445,6 +475,7 @@ def prepare(
             if existing_config.exists()
             else root_issue_dir
         )
+        reusable_identity_dirs: set[Path] = set()
         for candidate in (
             existing_issue_dir,
             (
@@ -453,11 +484,26 @@ def prepare(
                 else None
             ),
         ):
-            if candidate is not None and (candidate / "blackboard.json").exists():
+            if candidate is None:
+                continue
+            blackboard_path = candidate / "blackboard.json"
+            if not blackboard_path.exists() and not blackboard_path.is_symlink():
+                continue
+            try:
+                reusable = _prepared_identity_is_reusable(
+                    candidate,
+                    entry_step=entry_step_name,
+                    playbook_id=playbook_name,
+                )
+            except ValueError as exc:
+                console.print(f"[red]Error: {exc}[/red]")
+                raise typer.Exit(1)
+            if not reusable:
                 console.print(
                     "[red]Error: active workflow state exists; prepare would overwrite it[/red]"
                 )
                 raise typer.Exit(1)
+            reusable_identity_dirs.add(candidate.resolve())
 
         # Templates remain materialized, but no preparation mutation occurs
         # until an active workflow has been ruled out.
@@ -636,6 +682,18 @@ def prepare(
                     default=default_path,
                 )
                 worktree_path = user_path.strip() if user_path.strip() else default_path
+
+        target_issue_dir = (
+            (Path(str(worktree_path)).resolve() / ".cafe" / "issues" / issue_name)
+            if use_worktree
+            else root_issue_dir.resolve()
+        )
+        if reusable_identity_dirs and reusable_identity_dirs != {target_issue_dir}:
+            console.print(
+                "[red]Error: a prepared workflow identity already belongs to a different "
+                "checkout; close it before changing the prepare target[/red]"
+            )
+            raise typer.Exit(1)
 
         console.print()
         console.print(f"[bold blue]🔧 Preparing issue: {issue_name}[/bold blue]")
@@ -975,12 +1033,23 @@ def prepare(
         else:
             write_marker(cafe_dir, issue_name)
 
+        # Preparation owns workflow identity creation. This makes the confirmed
+        # Driver contract bindable before the first runtime visit without
+        # executing a phase. A repeated prepare reuses the untouched identity.
+        blackboard = BlackboardStore(issue_dir).load_or_create(
+            entry_step_name,
+            playbook_id=playbook_name,
+        )
+        if not is_genuine_cold_start(blackboard, entry_point=entry_step_name):
+            raise ValueError("workflow state became active during prepare")
+
         # 12. Display success message
         console.print()
         console.print(f"[green]✓ Successfully prepared issue: {issue_name}[/green]")
         console.print(f"  📁 Directory: .cafe/issues/{issue_name}/")
         console.print(f"  🌿 Feature branch: {feature_branch}")
         console.print(f"  ⚓ Base branch: {base_branch}")
+        console.print(f"  🆔 Workflow ID: {blackboard.workflow_id}")
         if use_worktree:
             console.print(f"  📂 Worktree: {worktree_path}")
         console.print(f"  ⚙️  Config: .cafe/issues/{issue_name}/issue.yaml")

@@ -671,6 +671,29 @@ class BlackboardState:
         return state
 
 
+def is_genuine_cold_start(state: BlackboardState, *, entry_point: str) -> bool:
+    """Return whether no workflow execution or user handoff has started yet."""
+    contract = state.handoff_contract
+    bootstrap_handoff = contract is None or (
+        contract.from_step == entry_point
+        and contract.to_owner is HandoffOwner.AGENT
+        and contract.to_step == entry_point
+        and contract.intent is HandoffIntent.AWAIT_AGENT
+        and contract.source == "bootstrap"
+    )
+    return (
+        state.current_step == entry_point
+        and not state.events
+        and not state.decisions
+        and not state.artifacts
+        and not state.capability_receipts
+        and not state.step_attempt_counts
+        and state.ownership_cursor is None
+        and not state.handoff_summary
+        and bootstrap_handoff
+    )
+
+
 class BlackboardStore:
     """Persist blackboard data in issue directory."""
 
