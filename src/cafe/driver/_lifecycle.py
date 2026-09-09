@@ -1,0 +1,350 @@
+"""Contract lifecycle transitions behind the narrow public application API."""
+
+from __future__ import annotations
+
+from copy import deepcopy
+from pathlib import Path
+from typing import Any, Mapping
+
+import yaml
+
+from cafe.core.packet_io import canonical_json
+
+from ._freshness import Freshness, compare_freshness
+from ._schema import build_initial_contract
+from ._store import (
+    DriverContractMissingError,
+    _decode_exact,
+    _read_bounded,
+    contract_lock,
+    load_contract,
+    write_contract,
+)
+
+
+class _ExactLegacyLoader(yaml.SafeLoader):
+    """Legacy YAML remains evidence only, but ambiguous keys still fail closed."""
+
+
+def _construct_exact_legacy_mapping(
+    loader: _ExactLegacyLoader, node: yaml.MappingNode, deep: bool = False
+) -> dict[Any, Any]:
+    mapping: dict[Any, Any] = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in mapping:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                f"duplicate key: {key}",
+                key_node.start_mark,
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+_ExactLegacyLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+    _construct_exact_legacy_mapping,
+)
+
+
+def activate(
+    *,
+    issue_dir: Path,
+    issue_name: str,
+    workflow_id: str,
+    confirmed_by: str,
+    confirmed_at: str,
+    proposal: Mapping[str, Any],
+) -> tuple[int, str, bool]:
+    """Durably activate once, allowing only an exactly matching retry."""
+    candidate = build_initial_contract(
+        proposal=proposal,
+        issue_name=issue_name,
+        workflow_id=workflow_id,
+        confirmed_by=confirmed_by,
+        confirmed_at=confirmed_at,
+    )
+    with contract_lock(issue_dir):
+        try:
+            current, current_sha = load_contract(
+                issue_dir, issue_name=issue_name, workflow_id=workflow_id
+            )
+        except DriverContractMissingError:
+            digest = write_contract(issue_dir, candidate, expected_predecessor_sha256=None)
+            return 1, digest, True
+        if current["provenance"]["proposal_digest"] != candidate["provenance"]["proposal_digest"]:
+            raise ValueError(
+                "a different confirmed contract already exists; reconfirmation is required"
+            )
+        return current["revision"]["generation"], current_sha, False
+
+
+def evaluate(
+    *,
+    issue_dir: Path,
+    issue_name: str,
+    workflow_id: str,
+    fresh_facts: Mapping[str, Any],
+) -> tuple[Freshness, dict[str, Any], str]:
+    contract, digest = load_contract(issue_dir, issue_name=issue_name, workflow_id=workflow_id)
+    return compare_freshness(contract, fresh_facts), contract, digest
+
+
+def event_callback_policy(
+    *, issue_dir: Path, issue_name: str, workflow_id: str
+) -> tuple[dict[str, Any] | None, str]:
+    """Return the bounded event callback projection from the sole contract.
+
+    Callback delivery has no caller-authored preflight payload.  It therefore
+    deliberately projects only the already-confirmed event transport policy,
+    bound to the exact contract digest read immediately before use.  A fully
+    validated v3 predecessor is safe to read for this narrow, read-only
+    transport projection: it neither activates product policy nor upgrades the
+    contract.  All other entry paths continue through :func:`evaluate` and its
+    freshness check, which require the current contract schema.
+    """
+    contract, digest = load_contract(
+        issue_dir,
+        issue_name=issue_name,
+        workflow_id=workflow_id,
+        allow_legacy_upgrade=True,
+    )
+    if contract["driver"]["mode"] != "event-driven":
+        return None, digest
+    return {"clis": deepcopy(contract["driver"]["clis"])}, digest
+
+
+def replace(
+    *,
+    issue_dir: Path,
+    issue_name: str,
+    workflow_id: str,
+    confirmed_by: str,
+    confirmed_at: str,
+    proposal: Mapping[str, Any],
+    expected_predecessor_sha256: str,
+    kind: str,
+) -> tuple[int, str]:
+    """Replace a complete contract by CAS after user reconfirmation."""
+    if kind != "user_reconfirmation":
+        raise ValueError("replacement requires user reconfirmation")
+    with contract_lock(issue_dir):
+        current, current_sha = load_contract(
+            issue_dir, issue_name=issue_name, workflow_id=workflow_id, allow_legacy_upgrade=True
+        )
+        if current_sha != expected_predecessor_sha256:
+            raise ValueError("Driver contract predecessor is stale")
+        candidate = build_initial_contract(
+            proposal=proposal,
+            issue_name=issue_name,
+            workflow_id=workflow_id,
+            confirmed_by=confirmed_by,
+            confirmed_at=confirmed_at,
+            revision=current["revision"]["generation"] + 1,
+            previous_contract_sha256=current_sha,
+            provenance_kind=kind,
+        )
+        digest = write_contract(issue_dir, candidate, expected_predecessor_sha256=current_sha)
+        return candidate["revision"]["generation"], digest
+
+
+def _load_legacy_mapping(path: Path) -> Mapping[str, Any] | None:
+    if not _legacy_path_present(path):
+        return None
+    try:
+        content = _read_bounded(path, label=f"legacy evidence {path.name}")
+        document = (
+            _decode_exact(content)
+            if path.suffix == ".json"
+            else yaml.load(content.decode("utf-8"), Loader=_ExactLegacyLoader)
+        )
+    except (OSError, UnicodeError, ValueError, yaml.YAMLError):
+        return None
+    return document if isinstance(document, Mapping) else None
+
+
+def _legacy_path_present(path: Path) -> bool:
+    """Treat unsafe/dangling legacy locations as evidence, never as absence."""
+    return path.exists() or path.is_symlink()
+
+
+def _load_legacy_confirmation(issue_dir: Path) -> Mapping[str, Any] | None:
+    """Require every available legacy confirmation candidate to agree exactly."""
+    candidates = (issue_dir / "driver" / "legacy_confirmation.json",)
+    evidence: list[Mapping[str, Any]] = []
+    for path in candidates:
+        document = _load_legacy_mapping(path)
+        if document is None:
+            if _legacy_path_present(path):
+                return None
+            continue
+        if isinstance(document.get("driver_contract"), Mapping):
+            evidence.append(document["driver_contract"])
+        elif isinstance(document.get("proposal"), Mapping):
+            evidence.append(document)
+    if not evidence:
+        return None
+    try:
+        first = canonical_json(dict(evidence[0]))
+        if any(canonical_json(dict(item)) != first for item in evidence[1:]):
+            return None
+    except (TypeError, ValueError):
+        return None
+    return evidence[0]
+
+
+def _legacy_sidecars_match(issue_dir: Path, proposal: Mapping[str, Any]) -> bool:
+    """Sidecars are migration evidence only; a mismatch is never guessed away."""
+    config_path = issue_dir / "driver" / "config.yaml"
+    config = _load_legacy_mapping(config_path)
+    if config is None and _legacy_path_present(config_path):
+        return False
+    expected_driver = proposal.get("driver")
+    if config is not None:
+        if not isinstance(expected_driver, Mapping) or config.get("mode") != expected_driver.get(
+            "mode"
+        ):
+            return False
+        if expected_driver.get("mode") == "event-driven" and config.get(
+            "clis"
+        ) != expected_driver.get("clis"):
+            return False
+    review_path = issue_dir / "driver" / "proactive_review.yaml"
+    review = _load_legacy_mapping(review_path)
+    if review is None and _legacy_path_present(review_path):
+        return False
+    if review is not None:
+        expected_review = proposal.get("proactive_review")
+        actual_review = review.get("proactive_review", review)
+        try:
+            if canonical_json(dict(actual_review)) != canonical_json(dict(expected_review)):
+                return False
+        except (TypeError, ValueError):
+            return False
+    return True
+
+
+def _driver_only_legacy_proposal(value: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Extract known Driver evidence without adopting co-located generic policy."""
+    proposal = deepcopy(dict(value))
+    proposal.pop("playbook", None)
+    proposal.pop("pr", None)
+    locales = proposal.get("locales")
+    if isinstance(locales, Mapping):
+        if set(locales) - {"conversation", "repository_content"}:
+            return None
+        proposal["locales"] = {
+            name: deepcopy(item) for name, item in locales.items() if name == "conversation"
+        }
+    confirmation = proposal.get("confirmation_contract")
+    if isinstance(confirmation, Mapping):
+        if set(confirmation) - {
+            "user_required",
+            "driver_confirmable",
+            "mandatory_human_stops",
+            "pr_auto_create",
+        }:
+            return None
+        proposal["confirmation_contract"] = {
+            name: deepcopy(item)
+            for name, item in confirmation.items()
+            if name in {"user_required", "driver_confirmable", "mandatory_human_stops"}
+        }
+    phases = proposal.get("phases")
+    if isinstance(phases, list):
+        normalized_phases: list[dict[str, Any]] = []
+        for phase in phases:
+            if not isinstance(phase, Mapping):
+                return None
+            if phase.get("assignee_type") == "human":
+                continue
+            if set(phase) - {
+                "name",
+                "assignee_type",
+                "role",
+                "skill",
+                "execution_profile",
+                "chain",
+                "rationale",
+                "capabilities",
+            }:
+                return None
+            try:
+                normalized_phases.append(
+                    {
+                        "name": deepcopy(phase["name"]),
+                        "chain": deepcopy(phase["chain"]),
+                        "rationale": deepcopy(phase["rationale"]),
+                    }
+                )
+            except KeyError:
+                return None
+        proposal["phases"] = normalized_phases
+    policy_fields = (
+        "delivery_contract",
+        "locales",
+        "confirmation_contract",
+        "reactive_user_handoffs",
+        "mandate",
+        "issue_assessment",
+        "phases",
+        "proactive_review",
+        "driver",
+        "checkout",
+    )
+    proposal["semantic_facts"] = {
+        "effective_policy": {
+            name: deepcopy(proposal[name]) for name in policy_fields if name in proposal
+        }
+    }
+    return proposal
+
+
+def adopt_legacy(
+    *, issue_dir: Path, issue_name: str, workflow_id: str
+) -> tuple[bool, int | None, str | None, str]:
+    """Adopt only complete deterministic legacy evidence; every ambiguity fails closed."""
+    with contract_lock(issue_dir):
+        try:
+            current, digest = load_contract(
+                issue_dir, issue_name=issue_name, workflow_id=workflow_id
+            )
+            return True, current["revision"]["generation"], digest, "already_adopted"
+        except DriverContractMissingError:
+            pass
+        except ValueError:
+            return False, None, None, "reconfirmation_required"
+        evidence = _load_legacy_confirmation(issue_dir)
+        if evidence is None:
+            return False, None, None, "reconfirmation_required"
+        try:
+            identity = evidence.get("identity") if isinstance(evidence, Mapping) else None
+            if (
+                not isinstance(identity, Mapping)
+                or identity.get("issue_name") != issue_name
+                or identity.get("workflow_id") != workflow_id
+            ):
+                return False, None, None, "reconfirmation_required"
+            proposal = evidence.get("proposal")
+            confirmed_by = evidence.get("confirmed_by")
+            confirmed_at = evidence.get("confirmed_at")
+            if not isinstance(proposal, Mapping):
+                return False, None, None, "reconfirmation_required"
+            proposal = _driver_only_legacy_proposal(proposal)
+            if proposal is None:
+                return False, None, None, "reconfirmation_required"
+            if not _legacy_sidecars_match(issue_dir, proposal):
+                return False, None, None, "reconfirmation_required"
+            contract = build_initial_contract(
+                proposal=deepcopy(dict(proposal)),
+                issue_name=issue_name,
+                workflow_id=workflow_id,
+                confirmed_by=str(confirmed_by),
+                confirmed_at=str(confirmed_at),
+            )
+        except (AttributeError, OSError, ValueError, yaml.YAMLError):
+            return False, None, None, "reconfirmation_required"
+        digest = write_contract(issue_dir, contract, expected_predecessor_sha256=None)
+        return True, 1, digest, "adopted"

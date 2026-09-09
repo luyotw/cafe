@@ -8,9 +8,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
+from cafe.catalogs.resolver import CatalogKind, CatalogResolver, global_catalog_lock
 from cafe.core.playbook import LoadedPlaybook, load_playbook_file
 from cafe.skills.loader import SkillLoader
-from cafe.utils.config import get_global_cafe_dir
 
 
 def apply_issue_playbook_overrides(
@@ -53,22 +53,35 @@ def apply_issue_playbook_overrides(
             raise ValueError(f"{field_path} names unknown playbook step '{step_name}'")
         if not isinstance(step_override, dict):
             raise ValueError(f"{field_path} must be a mapping")
-        unsupported = sorted(
-            str(key) for key in set(step_override) - {"max_iterations"}
-        )
+        supported_attempt_limits = {"max_attempts_per_cycle", "max_iterations"}
+        unsupported = sorted(str(key) for key in set(step_override) - supported_attempt_limits)
         if unsupported:
             raise ValueError(
-                f"{field_path} supports only max_iterations; unsupported field(s): "
+                f"{field_path} supports only max_attempts_per_cycle; unsupported field(s): "
                 + ", ".join(unsupported)
             )
-        if "max_iterations" not in step_override:
+        declared_attempt_limits = supported_attempt_limits.intersection(step_override)
+        if len(declared_attempt_limits) > 1:
+            raise ValueError(
+                f"{field_path} cannot declare both max_attempts_per_cycle and "
+                "legacy max_iterations"
+            )
+        if not declared_attempt_limits:
             continue
-        max_iterations = step_override["max_iterations"]
-        if isinstance(max_iterations, bool) or not isinstance(max_iterations, int):
-            raise ValueError(f"{field_path}.max_iterations must be a positive integer")
-        if max_iterations < 1:
-            raise ValueError(f"{field_path}.max_iterations must be a positive integer")
-        playbook_steps[step_name]["max_iterations"] = max_iterations
+        attempt_limit_field = declared_attempt_limits.pop()
+        max_attempts_per_cycle = step_override[attempt_limit_field]
+        if isinstance(max_attempts_per_cycle, bool) or not isinstance(
+            max_attempts_per_cycle, int
+        ):
+            raise ValueError(
+                f"{field_path}.max_attempts_per_cycle must be a positive integer"
+            )
+        if max_attempts_per_cycle < 1:
+            raise ValueError(
+                f"{field_path}.max_attempts_per_cycle must be a positive integer"
+            )
+        playbook_steps[step_name].pop("max_iterations", None)
+        playbook_steps[step_name]["max_attempts_per_cycle"] = max_attempts_per_cycle
     return resolved
 
 
@@ -82,9 +95,14 @@ class PlaybookLoader:
         global_root: Optional[Path] = None,
         builtin_root: Optional[Path] = None,
     ) -> None:
-        self.project_root = project_root or self._find_project_root(Path.cwd())
-        self.global_root = global_root or get_global_cafe_dir()
-        self.builtin_root = builtin_root or (Path(__file__).parent.parent / "data")
+        self.resolver = CatalogResolver(
+            project_root=project_root,
+            global_root=global_root,
+            builtin_root=builtin_root,
+        )
+        self.project_root = self.resolver.project_root
+        self.global_root = self.resolver.global_root
+        self.builtin_root = self.resolver.builtin_root
 
     @staticmethod
     def _find_project_root(start: Path) -> Path:
@@ -96,50 +114,36 @@ class PlaybookLoader:
         return start.resolve()
 
     def _roots(self) -> List[Path]:
-        return [
-            self.builtin_root / "playbooks",
-            self.global_root / "playbooks",
-            self.project_root / ".cafe" / "playbooks",
-        ]
+        return [root for _source, root, _layer in self.resolver.catalog_roots(CatalogKind.PLAYBOOK)]
 
     def _source_roots(self) -> List[Tuple[str, Path]]:
         return [
-            ("builtin", self.builtin_root / "playbooks"),
-            ("global", self.global_root / "playbooks"),
-            ("project", self.project_root / ".cafe" / "playbooks"),
+            (source, root)
+            for source, root, _layer in self.resolver.catalog_roots(CatalogKind.PLAYBOOK)
         ]
 
     def list_playbooks(self) -> List[str]:
-        names = set()
-        for root in self._roots():
-            if not root.exists():
-                continue
-            for file in root.glob("*.yaml"):
-                names.add(file.stem)
-        return sorted(names)
+        return self.resolver.keys(CatalogKind.PLAYBOOK)
 
     def _resolve_path(self, name: str) -> tuple[str, Path]:
-        filename = f"{name}.yaml" if not name.endswith(".yaml") else name
-        for source, root in reversed(self._source_roots()):
-            path = root / filename
-            if path.exists():
-                return source, path
-        raise FileNotFoundError(f"Playbook not found: {name}")
+        entry = self.resolver.resolve(CatalogKind.PLAYBOOK, name)
+        return entry.source, entry.path
 
     def load_model(self, name: str, *, strict: bool = False) -> LoadedPlaybook:
-        source, path = self._resolve_path(name)
-        skill_loader = SkillLoader(
-            project_root=self.project_root,
-            global_root=self.global_root,
-            builtin_root=self.builtin_root,
-        )
-        skill_loader.discover(strict=strict)
-        return load_playbook_file(
-            path,
-            source=source,
-            skill_loader=skill_loader,
-            strict=strict,
-        )
+        with global_catalog_lock(self.global_root):
+            source, path = self._resolve_path(name)
+            skill_loader = SkillLoader(
+                project_root=self.project_root,
+                global_root=self.global_root,
+                builtin_root=self.builtin_root,
+            )
+            skill_loader.discover(strict=strict)
+            return load_playbook_file(
+                path,
+                source=source,
+                skill_loader=skill_loader,
+                strict=strict,
+            )
 
     def load(self, name: str, *, strict: bool = False) -> Dict:
         return self.load_model(name, strict=strict).as_dict()

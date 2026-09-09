@@ -2,6 +2,14 @@ playbook:
   id: editorial
   name: "Editorial Workflow（撰稿 → 審閱 → 發佈）"
   conversation_locale: en-US
+  applicability:
+    summary: "Editorial production for a confirmed publication outcome and audience."
+    use_when:
+      - "The primary deliverable is publishable written content."
+      - "Editorial quality and audience fit require independent review."
+    avoid_when:
+      - "The primary outcome is software implementation or operational recovery."
+      - "The request is evidence discovery without a publication-ready manuscript."
 
 behavior:
   completion: status_code

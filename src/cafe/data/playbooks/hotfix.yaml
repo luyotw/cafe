@@ -2,6 +2,14 @@ playbook:
   id: hotfix
   name: "Hotfix Workflow"
   conversation_locale: en-US
+  applicability:
+    summary: "Urgent, tightly bounded production correction with independent code review."
+    use_when:
+      - "A confirmed production defect needs a minimal, time-sensitive correction."
+      - "The rollback and regression boundaries are already understood."
+    avoid_when:
+      - "The request includes unconfirmed product scope or architectural change."
+      - "Acceptance requires broader independent QA or exploratory validation."
 
 behavior:
   completion: status_code
@@ -66,6 +74,9 @@ steps:
       - trigger: need_clarification
         task_id: clarification-feedback
         outcomes: {submit: develop}
+      - trigger: need_permission
+        task_id: permission-answers
+        outcomes: {submit: develop}
     allowed_tools: [Read, Edit, Write, Grep, Glob, Bash, WebFetch, WebSearch]
     hooks:
       prepare_input: [UserInputCollector]
@@ -89,8 +100,11 @@ steps:
       - trigger: need_clarification
         task_id: clarification-feedback
         outcomes: {submit: review}
-    allowed_tools: [Read, Grep, Glob, "Bash(git:*)", "Bash(cafe verification check:*)", "Bash(cafe verification focus:*)"]
-    max_iterations: 1
+      - trigger: manual_handoff
+        task_id: iteration-limit
+        outcomes: {resume: review}
+    allowed_tools: [Read, Grep, Glob, "Bash(git:*)"]
+    max_attempts_per_cycle: 1
     allowed_goto: [develop]
     hooks:
       prepare_input: [UserInputCollector]
@@ -121,11 +135,10 @@ steps:
     human_tasks:
       - trigger: confirm_output
         task_id: local-review
-        outcomes: {approve: _done, request_changes: develop}
+        outcomes: {fix_now: develop, create_follow_up: _done, continue_without_issue: _done}
         feedback_delivery: {artifact: workflow_feedback, source_kind: local_review}
     "on":
       confirm_output: pr
-      await_agent: _done
       need_permission: pr
       manual_handoff: develop
 

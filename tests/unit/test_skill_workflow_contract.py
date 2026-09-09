@@ -48,6 +48,15 @@ def _contract_data() -> dict:
     }
 
 
+def _write_agent(tmp_path, name: str = "Ada") -> str:
+    path = tmp_path / "agent.md"
+    path.write_text(
+        f"---\nname: {name}\ndescription: test\n---\n\nTest guidance.\n",
+        encoding="utf-8",
+    )
+    return str(path)
+
+
 def test_workflow_contract_parses_declared_inputs_checklists_and_templates() -> None:
     """Valid metadata keeps declared ordering and the custom catalog intact."""
     contract = SkillWorkflowContract.model_validate(_contract_data())
@@ -253,9 +262,10 @@ def test_custom_contract_composes_selected_variant_and_explicit_role_guidance(
     )
     loader = SkillLoader(project_root=tmp_path)
     loader.discover()
+    agent_file = _write_agent(tmp_path)
     monkeypatch.setattr(
         "cafe.skills.checklist_composer.AgentManager.get_agent_file_path",
-        lambda *_: "agent.md",
+        lambda *_: agent_file,
     )
     output = tmp_path / "checklist.md"
 
@@ -299,8 +309,10 @@ def test_custom_contract_rejects_unresolved_optional_instruction_when_absent(
     )
     loader = SkillLoader(project_root=tmp_path)
     loader.discover()
+    agent_file = _write_agent(tmp_path)
     monkeypatch.setattr(
-        "cafe.skills.checklist_composer.AgentManager.get_agent_file_path", lambda *_: "agent.md"
+        "cafe.skills.checklist_composer.AgentManager.get_agent_file_path",
+        lambda *_: agent_file,
     )
     output = tmp_path / "checklist.md"
 
@@ -348,8 +360,10 @@ def test_context_reference_omits_only_its_dedicated_optional_instruction(
     )
     loader = SkillLoader(project_root=tmp_path)
     loader.discover()
+    agent_file = _write_agent(tmp_path)
     monkeypatch.setattr(
-        "cafe.skills.checklist_composer.AgentManager.get_agent_file_path", lambda *_: "agent.md"
+        "cafe.skills.checklist_composer.AgentManager.get_agent_file_path",
+        lambda *_: agent_file,
     )
 
     without_review = tmp_path / "without-review.md"

@@ -52,7 +52,7 @@ def config(
     \b
     Examples:
         cafe config
-        cafe config set settings.playbook default
+        cafe config set settings.playbook standard
         cafe config get settings.playbook
         cafe config edit
         cafe config reset

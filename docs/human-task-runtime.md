@@ -1,8 +1,10 @@
 # Durable human-task runtime
 
-CAFE persists user-owned handoffs as workflow-local records. This is a runtime
-foundation only: it does not provide an inbox, scheduling, reminders,
-notifications, or a task-management UI.
+CAFE persists user-owned handoffs as workflow-local records and exposes them
+through the repository task inbox. The built-in `standard` workflow also has
+one optional, fixed-destination [Slack notification path](human-task-slack-notifications.md)
+for newly materialized tasks. It does not provide scheduling, reminders,
+bidirectional Slack interaction, or a general task-management service.
 
 ## Files and ownership
 
@@ -36,6 +38,9 @@ Each task has:
 Invalid responses retain the pending wait and append rejection evidence. A
 cancelled or completed task cannot create another result. Replaying a completed
 request leaves the original result intact and never emits another continuation.
+Only the transaction that creates a new task is eligible for the optional
+standard-workflow Slack attempt; task recovery after a restart does not send a
+duplicate notification.
 
 ## Completion and correlation
 

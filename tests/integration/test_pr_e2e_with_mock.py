@@ -10,6 +10,7 @@ import pytest
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.hooks import HookResult
+from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.status_codes import PhaseStatusCode
 from cafe.core.types import AgentCLI, TokenUsage
 from cafe.core.workflow_models import StepExecutionResult
@@ -21,9 +22,73 @@ from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
 from cafe.utils.phase_config import PhaseStepModelResolution
 
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
+
+
+def test_pr_publish_generic_journey_preserves_outputs_and_correlates_receipt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import cafe.core.capabilities as cap_mod
+
+    output_file = tmp_path / ".cafe/issues/demo/pr/iteration_001/output.md"
+    output_file.parent.mkdir(parents=True)
+    output_file.write_text("# PR\n", encoding="utf-8")
+
+    class Result:
+        returncode = 0
+        stderr = ""
+        stdout = (
+            '{"action":"created","pr_number":"42",'
+            '"pr_url":"https://github.com/acme/widgets/pull/42"}\n'
+        )
+
+    monkeypatch.setattr(cap_mod.subprocess, "run", lambda *_args, **_kwargs: Result())
+    registry = cap_mod.load_capability_registry([cap_mod._package_capabilities_dir()])
+    run = cap_mod.run_capability_request(
+        repo_root=tmp_path,
+        registry=registry,
+        capability_request={
+            "capability": "cafe.pr.publish",
+            "args": {
+                "output": ".cafe/issues/demo/pr/iteration_001/output.md",
+                "base": "main",
+            },
+            "effects": {
+                "browser_open": [],
+                "network_destinations": ["github.com", "api.github.com"],
+                "writes": [
+                    ".cafe/issues/demo/pr/iteration_001/output.md",
+                    ".git",
+                    ".cafe/issues/demo",
+                ],
+            },
+            "credentials": ["gh"],
+            "permissions": {
+                "network": ["github.com", "api.github.com"],
+                "writes": [
+                    ".cafe/issues/demo/pr/iteration_001/output.md",
+                    ".git",
+                    ".cafe/issues/demo",
+                ],
+            },
+        },
+        output_file=output_file,
+    )
+
+    assert run.receipt["success"] is True
+    assert run.receipt["outputs"] == {
+        "pr_url": "https://github.com/acme/widgets/pull/42",
+        "pr_number": "42",
+        "action": "created",
+    }
+    assert run.receipt["request_fingerprint"]
+    assert run.receipt["manifest"]["id"] == "cafe.pr.publish"
+    assert run.receipt["decision"]["outcome"] == "allow"
+    assert run.receipt["outcome"] == "success"
+
 
 def _load_default_playbook() -> dict:
-    return PlaybookLoader().load("default")
+    return PlaybookLoader().load("standard")
 
 
 def _write_baton(
@@ -48,7 +113,7 @@ def _write_baton(
     )
 
 
-def _seed_pr_artifacts(issue_dir: Path) -> None:
+def _seed_pr_artifacts(issue_dir: Path, *, auto_create: bool = True) -> None:
     spec_file = issue_dir / "spec" / "iteration_001" / "output.md"
     plan_file = issue_dir / "plan" / "iteration_001" / "output.md"
     spec_file.parent.mkdir(parents=True, exist_ok=True)
@@ -59,11 +124,18 @@ def _seed_pr_artifacts(issue_dir: Path) -> None:
     state = store.load_or_create("pr")
     store.set_artifact(state, "spec", str(spec_file))
     store.set_artifact(state, "plan", str(plan_file))
-    (issue_dir / "issue.yaml").write_text("base_branch: main\n", encoding="utf-8")
+    (issue_dir / "issue.yaml").write_text(
+        "base_branch: main\n"
+        "pr:\n"
+        f"  auto_create: {str(auto_create).lower()}\n",
+        encoding="utf-8",
+    )
 
 
 @pytest.mark.e2e
-def test_pr_runtime_completes_with_capability_receipt(tmp_path: Path) -> None:
+def test_pr_runtime_rejects_generic_success_receipt_without_verified_url(
+    tmp_path: Path,
+) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-pr-e2e"
     playbook = _load_default_playbook()
     assert playbook["steps"]["pr"]["capability_requests"] == ["cafe.pr.publish"]
@@ -75,9 +147,9 @@ def test_pr_runtime_completes_with_capability_receipt(tmp_path: Path) -> None:
         _write_baton(
             issue_dir,
             from_step="pr",
-            to_owner=HandoffOwner.DONE,
-            to_step="done",
-            intent=HandoffIntent.WORKFLOW_COMPLETE,
+            to_owner=HandoffOwner.USER,
+            to_step="user",
+            intent=HandoffIntent.CONFIRM_OUTPUT,
         )
         return StepExecutionResult(
             response="done",
@@ -101,16 +173,60 @@ def test_pr_runtime_completes_with_capability_receipt(tmp_path: Path) -> None:
     )
     result = runtime.run(start_step="pr", max_transitions=5)
 
-    assert result.completed is True
+    assert result.completed is False
     assert result.final_step == "pr"
-    blackboard = json.loads((issue_dir / "blackboard.json").read_text(encoding="utf-8"))
-    receipts = blackboard.get("capability_receipts") or []
-    assert any(
-        r.get("capability") == "cafe.pr.publish" for r in receipts
-    ) or result.final_status_code in {
-        "BATON_WORKFLOW_COMPLETE",
-        "confirmed",
-    }
+    assert result.final_status_code == "MISSING_CAPABILITY_RECEIPT"
+
+
+@pytest.mark.e2e
+@pytest.mark.parametrize("auto_create", [True, False])
+@pytest.mark.parametrize("with_driver_contract", [False, True])
+def test_pr_review_handoff_tracks_published_or_local_only_journey(
+    tmp_path: Path,
+    auto_create: bool,
+    with_driver_contract: bool,
+) -> None:
+    """Integration 4: #467 publication has identical Driver-free outcomes."""
+    issue_dir = tmp_path / ".cafe" / "issues" / f"review-{auto_create}-{with_driver_contract}"
+    _seed_pr_artifacts(issue_dir, auto_create=auto_create)
+    if with_driver_contract:
+        driver_dir = issue_dir / "driver"
+        driver_dir.mkdir()
+        (driver_dir / "contract.json").write_text('{"not": "generic authority"}', encoding="utf-8")
+    verified_url = "https://github.com/acme/widgets/pull/467"
+
+    def executor(step_name: str, *_args: object, **_kwargs: object) -> StepExecutionResult:
+        _write_baton(
+            issue_dir,
+            from_step=step_name,
+            to_owner=HandoffOwner.USER,
+            to_step="user",
+            intent=HandoffIntent.CONFIRM_OUTPUT,
+            status_code="BATON_CONFIRM_OUTPUT",
+        )
+        events = (
+            [{"type": "pr_synced", "url": verified_url, "source": "capability"}]
+            if auto_create
+            else []
+        )
+        return StepExecutionResult(
+            response="done",
+            artifacts={"pr": str(issue_dir / "pr" / "iteration_001" / "output.md")},
+            events=events,
+        )
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_load_default_playbook(),
+        executor=executor,
+    ).run(start_step="pr", max_transitions=5)
+
+    assert result.final_status_code == "BATON_CONFIRM_OUTPUT"
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    if auto_create:
+        assert f"Verified PR URL: {verified_url}" in task.prompt
+    else:
+        assert "Publication mode: local-only. No PR URL exists." in task.prompt
 
 
 @pytest.mark.e2e
@@ -141,9 +257,13 @@ def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(
     )
     issue_dir = tmp_path / ".cafe" / "issues" / "pr-feedback"
     issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        "pr:\n  auto_create: true\n",
+        encoding="utf-8",
+    )
     playbook = _load_default_playbook()
     store = BlackboardStore(issue_dir)
-    state = store.load_or_create("pr", playbook_id="default")
+    state = store.load_or_create("pr", playbook_id="standard")
 
     class Phase:
         def __init__(self) -> None:
@@ -192,11 +312,14 @@ def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(
     assert second.events == []
 
     phase.git_ops.reset_mock()
-    assert _find_external_resume_step(
-        issue_dir=issue_dir,
-        playbook_data=playbook,
-        git_ops=phase.git_ops,
-    ) == "develop"
+    assert (
+        _find_external_resume_step(
+            issue_dir=issue_dir,
+            playbook_data=playbook,
+            git_ops=phase.git_ops,
+        )
+        == "develop"
+    )
     assert len(ledger.pending(target_step="develop")) == 2
     phase.git_ops.get_current_branch.assert_not_called()
 
@@ -249,9 +372,7 @@ def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(
         )
 
     paused_playbook = json.loads(json.dumps(playbook))
-    paused_playbook["steps"]["develop"]["hooks"] = {
-        "before_execute": ["PauseBeforeAgent"]
-    }
+    paused_playbook["steps"]["develop"]["hooks"] = {"before_execute": ["PauseBeforeAgent"]}
     paused_manager = AgentManager()
     paused_executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,

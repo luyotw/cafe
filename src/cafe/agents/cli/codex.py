@@ -9,12 +9,30 @@ from cafe.core.types import PermissionDenial, TokenUsage
 from cafe.utils.git_utils import get_git_dir
 
 
+_HOST_SESSION_ENVIRONMENT_KEYS = (
+    "CODEX_REMOTE_PAYLOAD",
+    "CODEX_SESSION_ID",
+    "CODEX_THREAD_ID",
+)
+
+
 class CodexCLI(AbstractCLI):
     """Concrete implementation of Codex CLI tool."""
 
     def build_environment(self) -> dict[str, str]:
-        """Build the child environment without changing provider configuration."""
-        return super().build_environment()
+        """Build an isolated child environment while preserving provider configuration.
+
+        CAFE can itself run inside a Codex app-server session.  Its thread and
+        remote-launch controls belong to that parent session; forwarding them to
+        a separate ``codex exec`` can bind or stall the workflow agent on the
+        parent's transport.  Keep durable provider configuration such as
+        ``CODEX_HOME``, but always start the workflow child with fresh session
+        controls.
+        """
+        environment = super().build_environment()
+        for key in _HOST_SESSION_ENVIRONMENT_KEYS:
+            environment.pop(key, None)
+        return environment
 
     @staticmethod
     def extract_turn_usages(output_lines: List[str]) -> List[Dict[str, Any]]:
@@ -176,6 +194,27 @@ class CodexCLI(AbstractCLI):
                 return data["session_id"]
 
         return None
+
+    @property
+    def event_driver_conforming(self) -> bool:
+        return True
+
+    def extract_event_driver_session(self, records) -> Optional[str]:
+        return self._verified_event_driver_session(
+            records,
+            matches=lambda record: record.get("type") == "thread.started",
+            field="thread_id",
+        )
+
+    def accepts_event_driver_callback(self, records, *, session_id: str, event_id: str) -> bool:
+        return self._verified_event_driver_acceptance(
+            records,
+            session_matches=lambda record: record.get("type") == "thread.started",
+            acceptance_matches=lambda record: record.get("type") == "turn.started",
+            session_field="thread_id",
+            session_id=session_id,
+            event_id=event_id,
+        )
 
     def create_session(self) -> str:
         """Codex sessions are created by the real exec command itself."""

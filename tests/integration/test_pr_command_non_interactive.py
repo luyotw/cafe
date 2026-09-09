@@ -19,6 +19,7 @@ from cafe.utils.pr import parse_pr_body, parse_pr_title
 
 SCRIPT_PATH = Path("src/cafe/data/skills/cafe-pr/scripts/sync_pr.sh")
 runner = CliRunner()
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
 
 def _write_executable(path: Path, content: str) -> None:
@@ -36,6 +37,8 @@ def _setup_fake_bin(tmp_path: Path, *, create_body: str) -> Path:
 set -euo pipefail
 if [[ "$1" == "rev-parse" ]]; then echo "test-issue"; exit 0; fi
 if [[ "$1" == "status" && "$2" == "--porcelain" ]]; then exit 0; fi
+if [[ "$1" == "fetch" ]]; then exit 0; fi
+if [[ "$1" == "merge-base" && "$2" == "--is-ancestor" ]]; then exit 0; fi
 if [[ "$1" == "push" ]]; then exit 0; fi
 exit 1
 """,
@@ -102,6 +105,11 @@ def test_cafe_workflow_pr_non_interactive_routes_through_runtime(tmp_path: Path,
     create_minimal_config(tmp_path)
     issue_name = "test-issue"
     issue_dir = tmp_path / ".cafe" / "issues" / issue_name
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        "playbook: standard\npr:\n  auto_create: false\ncontract_version: 2\ndriver:\n  mode: unattended\n",
+        encoding="utf-8",
+    )
     spec_dir = issue_dir / "spec" / "iteration_001"
     plan_dir = issue_dir / "plan" / "iteration_001"
     spec_dir.mkdir(parents=True)
@@ -112,7 +120,7 @@ def test_cafe_workflow_pr_non_interactive_routes_through_runtime(tmp_path: Path,
         json.dumps(
             {
                 "schema_version": 1,
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "current_step": "pr",
                 "artifacts": {},
                 "events": [],
@@ -133,8 +141,8 @@ def test_cafe_workflow_pr_non_interactive_routes_through_runtime(tmp_path: Path,
                 response="confirmed",
                 artifacts={"pr": str(pr_output)},
                 status_code="confirmed",
-                handoff_owner=HandoffOwner.DONE,
-                handoff_intent=HandoffIntent.WORKFLOW_COMPLETE,
+                handoff_owner=HandoffOwner.USER,
+                handoff_intent=HandoffIntent.CONFIRM_OUTPUT,
             )
 
     with patch("cafe.ui.cli.GitOperations") as mock_git_cls, patch(

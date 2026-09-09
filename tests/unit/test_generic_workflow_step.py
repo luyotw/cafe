@@ -1,7 +1,6 @@
 """Tests for direct workflow step execution."""
 
 import json
-import os
 from collections.abc import Iterator
 from pathlib import Path
 from types import MethodType, SimpleNamespace
@@ -10,48 +9,30 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from cafe.agents.executor import AgentExecutionError
+from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import (
     ArtifactEntry,
     ArtifactKind,
     BlackboardStore,
     HandoffIntent,
     HandoffOwner,
-    LongRunningOperationArtifact as _LongRunningOperationArtifact,
-    LongRunningOperationState,
-    OperationLogPolicy,
-    OperationMonitoring,
-    OperationRisk,
-    operation_artifact_path,
-    operation_receipt_path,
 )
-
-
-def LongRunningOperationArtifact(**kwargs):
-    """Create explicit test operation decisions without production defaults."""
-    return _LongRunningOperationArtifact(
-        risk=OperationRisk.LOW,
-        monitoring=OperationMonitoring.FINAL_ONLY,
-        log_policy=OperationLogPolicy.SUMMARY_ONLY,
-        stop_condition="test operation reaches a terminal state",
-        recovery="inspect the same operation id",
-        **kwargs,
-    )
-
 from cafe.core.hooks import HookResult
-from cafe.core.downstream_contract import ContractValidationError
+from cafe.core.human_task_records import HumanTaskRecordStore
+from cafe.core.human_tasks import agent_execution_interrupted_human_task
 from cafe.core.resume_user_input import CONTINUE_USER_INPUT
 from cafe.core.session_continuation import (
     SessionContinuation,
     SessionContinuationPolicy,
 )
 from cafe.core.status_codes import PhaseStatusCode
-from cafe.core.types import AgentCLI, AgentConfig, TokenUsage
-from cafe.core.workflow_runtime import operation_artifact_is_trusted
+from cafe.core.types import AgentCLI, AgentConfig, AgentResponse, CliEntry, TokenUsage
 from cafe.phases.generic_phase import GenericPhase, GenericPhaseExecution
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
-from cafe.utils.phase_config import PhaseStepModelResolution
+from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
+from cafe.utils.phase_config import PhaseStepModelResolution
 
 
 @pytest.fixture(autouse=True)
@@ -325,6 +306,66 @@ def test_generic_workflow_step_executor_writes_iteration_files(tmp_path: Path, m
     assert reloaded.handoff_contract.source == "workflow.status_transition_adapter"
 
 
+def test_backup_cli_skill_sync_refuses_external_symlink(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    external_root = tmp_path / "external-claude"
+    external_skills = external_root / "skills"
+    external_skills.mkdir(parents=True)
+    sentinel = external_skills / "sentinel.txt"
+    sentinel.write_text("protected\n", encoding="utf-8")
+    (tmp_path / ".claude").symlink_to(external_root)
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-backup-symlink"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"pm": {"default_agent": "Roger"}},
+        "steps": {
+            "spec": {
+                "skill": "spec_first",
+                "role": "pm",
+                "output_artifact": "spec",
+                "allowed_tools": ["Read"],
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+
+    class BackupManager(FakeAgentManager):
+        def get_execution_config(self, agent_name, phase_name=None, continuation=None):
+            return AgentConfig(
+                name=agent_name,
+                cli=AgentCLI.CODEX,
+                model="primary-model",
+                clis=[
+                    CliEntry(cli=AgentCLI.CODEX, model="primary-model"),
+                    CliEntry(cli=AgentCLI.CLAUDE, model="backup-model"),
+                ],
+                backup_clis=[AgentCLI.CLAUDE],
+            )
+
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-backup-symlink",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=BackupManager("confirmed"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"pm": "Roger"},
+    )
+
+    with pytest.raises(SkillDiscoveryError, match="Refusing to traverse"):
+        executor.execute_step("spec", playbook["steps"]["spec"], state)
+
+    assert sentinel.read_text(encoding="utf-8") == "protected\n"
+    assert not (external_skills / NativeSkillBridge.MANAGED_SKILLS_MANIFEST).exists()
+    assert not (external_skills / "cafe-spec").exists()
+
+
 def test_generic_step_passes_declared_read_only_guard_to_agent_manager(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -380,9 +421,7 @@ def test_generic_step_forwards_declared_read_only_guard_on_checklist_retry(
         def execute(self, *args, continuation=None, **kwargs):
             result = super().execute(*args, **kwargs)
             checklist.write_text(
-                "[ ] complete task\n"
-                if self.execute_call_count == 1
-                else "[x] complete task\n",
+                "[ ] complete task\n" if self.execute_call_count == 1 else "[x] complete task\n",
                 encoding="utf-8",
             )
             return result
@@ -485,7 +524,12 @@ def test_generic_workflow_step_agent_written_baton_preserved(tmp_path: Path, mon
                 "allowed_tools": ["Read"],
                 "valid_intents": ["confirmed"],
                 "on": {"await_agent": "_done"},
-            }
+            },
+            "plan": {
+                "skill": "cafe-plan",
+                "role": "pm",
+                "on": {"await_agent": "_done"},
+            },
         },
     }
 
@@ -710,85 +754,6 @@ def test_hybrid_portion_replaces_control_file_symlink_without_following_it(
     assert protected_target.read_text(encoding="utf-8") == "must remain unchanged"
     assert not (issue_dir / "blackboard.json").is_symlink()
     assert store.load_or_create("mixed").current_step == "mixed"
-
-
-def test_hybrid_portion_discards_agent_authored_operation_metadata(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """UT-010: hybrid rollback does not trust operation metadata from an agent portion."""
-    monkeypatch.chdir(tmp_path)
-    issue_dir = tmp_path / ".cafe" / "issues" / "hybrid-operation-metadata"
-    playbook = {
-        "playbook": {"id": "default"},
-        "roles": {"developer": {"default_agent": "David"}},
-        "steps": {
-            "mixed": {
-                "skill": "develop",
-                "role": "developer",
-                "output_artifact": "code",
-                "allowed_tools": ["Read", "Edit", "Write", "Bash"],
-                "valid_intents": ["confirmed"],
-                "on": {"await_agent": "_done"},
-                "hybrid_portion": {"id": "draft"},
-            }
-        },
-    }
-    store = BlackboardStore(issue_dir)
-    state = store.load_or_create("mixed")
-    operation: _LongRunningOperationArtifact | None = None
-    iteration_dir: Path | None = None
-
-    def on_execute(*, streaming_output_file: str | None, **_kwargs: object) -> None:
-        nonlocal iteration_dir, operation
-        assert streaming_output_file is not None
-        iteration_dir = Path(streaming_output_file).parent
-        operation = store.write_operation_artifact(
-            store.load_or_create("mixed"),
-            step="mixed",
-            iteration_dir=iteration_dir,
-            artifact=LongRunningOperationArtifact(
-                state=LongRunningOperationState.RUNNING,
-                reason="hybrid agent started a controlled operation",
-                operation_id="hybrid-operation",
-            ),
-        )
-        portion_baton = iteration_dir / "hybrid_portion_baton.json"
-        portion_baton.write_text(
-            json.dumps(
-                {
-                    "from_step": "mixed",
-                    "to_owner": "agent",
-                    "to_step": "mixed",
-                    "intent": "await_agent",
-                    "source": "hybrid_portion:mixed:draft",
-                }
-            ),
-            encoding="utf-8",
-        )
-
-    executor = GenericWorkflowStepExecutor(
-        issue_dir=issue_dir,
-        issue_name="hybrid-operation-metadata",
-        playbook=playbook,
-        generic_phase=_build_loader(tmp_path),
-        agent_manager=FakeAgentManager("confirmed", on_execute=on_execute),
-        git_ops=FakeGitOperations(),
-        role_agent_map={"developer": "David"},
-    )
-
-    executor.execute_step("mixed", playbook["steps"]["mixed"], state)
-
-    assert iteration_dir is not None
-    assert operation is not None
-    reloaded = store.load_or_create("mixed")
-    assert not operation_artifact_is_trusted(
-        blackboard_store=store,
-        blackboard=reloaded,
-        current_step="mixed",
-        iteration_dir=iteration_dir,
-        artifact=operation,
-    )
-    assert "mixed_operation" not in reloaded.artifacts
 
 
 def test_generic_workflow_step_writes_review_pause_contract(tmp_path: Path, monkeypatch) -> None:
@@ -1235,7 +1200,7 @@ def test_first_iteration_declared_initial_task_uses_empty_optional_input(
     assert executor._load_iteration_user_input_candidate("draft") == ""
 
 
-def test_generic_workflow_step_executor_installs_workflow_common_and_phase_skill(
+def test_review_step_installs_phase_skill_for_effective_cli_chain(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -1285,7 +1250,21 @@ def test_generic_workflow_step_executor_installs_workflow_common_and_phase_skill
         return original_install_skill(name, cli, context)
 
     monkeypatch.setattr(generic_phase.skill_bridge, "install_skill", record_skill_install)
-    agent_manager = FakeAgentManager("confirmed")
+
+    class StickyProviderManager(FakeAgentManager):
+        def get_execution_config(self, agent_name, phase_name=None, continuation=None):
+            return AgentConfig(
+                name=agent_name,
+                cli=AgentCLI.COPILOT,
+                model="sticky-review-model",
+                clis=[
+                    CliEntry(cli=AgentCLI.COPILOT, model="sticky-review-model"),
+                    CliEntry(cli=AgentCLI.CODEX, model="backup-review-model"),
+                ],
+                backup_clis=[AgentCLI.CODEX],
+            )
+
+    agent_manager = StickyProviderManager("confirmed")
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name="issue-review-skill",
@@ -1298,11 +1277,19 @@ def test_generic_workflow_step_executor_installs_workflow_common_and_phase_skill
 
     result = executor.execute_step("review", playbook["steps"]["review"], state)
 
-    assert (tmp_path / ".codex" / "skills" / "cafe-workflow-common" / "SKILL.md").exists()
-    assert (tmp_path / ".codex" / "skills" / "cafe-github_sync" / "SKILL.md").exists()
-    assert (tmp_path / ".codex" / "skills" / "cafe-review" / "SKILL.md").exists()
-    assert installed_skill_names == ["cafe-workflow-common", "cafe-github_sync", "review"]
     iteration_dir = issue_dir / "review" / "iteration_001"
+    assert (tmp_path / ".copilot" / "skills" / "cafe-workflow-common" / "SKILL.md").exists()
+    assert (tmp_path / ".copilot" / "skills" / "cafe-github_sync" / "SKILL.md").exists()
+    assert (tmp_path / ".copilot" / "skills" / "cafe-review" / "SKILL.md").exists()
+    assert (tmp_path / ".codex" / "skills" / "cafe-review" / "SKILL.md").exists()
+    assert installed_skill_names == [
+        "cafe-workflow-common",
+        "cafe-github_sync",
+        "review",
+        "cafe-workflow-common",
+        "cafe-github_sync",
+        "review",
+    ]
     output_file = iteration_dir / "output.md"
     checklist_file = iteration_dir / "checklist.md"
     assert result.artifacts["review_feedback"] == str(output_file)
@@ -1318,7 +1305,8 @@ def test_generic_workflow_step_executor_installs_workflow_common_and_phase_skill
         "write(./.cafe/issues/issue-review-skill/review/iteration_001/output.md)" in allowed_tools
     )
     assert (
-        "write(./.cafe/issues/issue-review-skill/review/iteration_001/checklist.md)" in allowed_tools
+        "write(./.cafe/issues/issue-review-skill/review/iteration_001/checklist.md)"
+        in allowed_tools
     )
     assert "edit(./.cafe/issues/issue-review-skill/blackboard.json)" not in allowed_tools
     assert "edit(./.cafe/issues/issue-review-skill/next_step.txt)" in allowed_tools
@@ -1326,7 +1314,10 @@ def test_generic_workflow_step_executor_installs_workflow_common_and_phase_skill
     assert "write(./.cafe/issues/issue-review-skill/next_step.txt)" in allowed_tools
 
     prompt = agent_manager.prompts[-1]
-    assert "Phase skill: $cafe-review" in prompt
+    assert "Phase skill: select the invocation for the CLI executing this prompt" in prompt
+    assert "/cafe-review for copilot" in prompt
+    assert "$cafe-review for codex" in prompt
+    assert "Runtime hook instructions:" not in prompt
     assert f"output_file={output_file}" in prompt
     assert f"checklist_file={checklist_file}" in prompt
     assert "blackboard_file=./.cafe/issues/issue-review-skill/blackboard.json" in prompt
@@ -1467,6 +1458,9 @@ def test_generic_workflow_step_prompt_keeps_skill_invocations_only(
     assert "Phase skill instructions:" not in prompt
     assert "Read blackboard first." not in prompt
     assert "Write PR content to:" not in prompt
+    assert "workflow_complete→done" in prompt
+    assert "await_agent→done" not in prompt
+    assert "valid intent values: [workflow_complete]" in prompt
 
 
 def test_generic_workflow_step_pr_prompt_overrides_external_state_guardrail(
@@ -1514,7 +1508,7 @@ def test_generic_workflow_step_pr_prompt_overrides_external_state_guardrail(
 
     prompt = agent_manager.prompts[-1]
     assert "Do not wait for, verify, or require a remote GitHub branch/PR" in prompt
-    assert "Remote PR publish happens later in the host-side publish_output hook." in prompt
+    assert "Remote PR publication, when enabled, happens later" in prompt
     assert (
         "Before updating the workflow baton, verify whether the requested state change has actually happened in files or external state relevant to this phase."
         not in prompt
@@ -1580,10 +1574,135 @@ def test_generic_workflow_step_writes_pr_publish_request_contract(
         "base": "v02",
     }
     assert publish_request["permissions"]["network"] == ["github.com", "api.github.com"]
-    assert publish_request["permissions"]["writes"] == [".git", ".cafe/issues/issue-pr-contract"]
+    assert publish_request["permissions"]["writes"] == [
+        ".cafe/issues/issue-pr-contract/pr/iteration_001/output.md",
+        ".git",
+        ".cafe/issues/issue-pr-contract",
+    ]
+    assert publish_request["effects"] == {
+        "browser_open": [],
+        "network_destinations": ["github.com", "api.github.com"],
+        "writes": [
+            ".cafe/issues/issue-pr-contract/pr/iteration_001/output.md",
+            ".git",
+            ".cafe/issues/issue-pr-contract",
+        ],
+    }
+    assert publish_request["credentials"] == ["gh"]
 
 
-def test_generic_workflow_step_writes_declared_capability_request_for_non_pr_step(
+def test_generic_step_forwards_runtime_validated_publication_choice(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Test List 5/8: hook and prompt context use the runtime-bound choice."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "bound-publication-choice"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        "base_branch: develop\npr:\n  auto_create: true\n",
+        encoding="utf-8",
+    )
+    playbook = {
+        "playbook": {"id": "bound-publication-choice"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "publish": {
+                "skill": "pr",
+                "role": "developer",
+                "behavior": {"completion": "baton", "publish_confirmation": True},
+                "capability_requests": ["cafe.pr.publish"],
+                "output_artifact": "pr",
+                "allowed_tools": ["Read"],
+                "on": {"workflow_complete": "_done"},
+            }
+        },
+    }
+    state = BlackboardStore(issue_dir).load_or_create("publish")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="bound-publication-choice",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("unused"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+    captured: dict[str, object] = {}
+
+    def fake_execute(*_args, **kwargs):
+        captured.update(kwargs)
+        return GenericPhaseExecution(
+            response="confirmed",
+            status_code=PhaseStatusCode.CONFIRMED,
+            goto_target=None,
+            context_updates={},
+            events=[],
+        )
+
+    executor.generic_phase.execute = fake_execute
+
+    executor.execute_step(
+        "publish",
+        playbook["steps"]["publish"],
+        state,
+        validated_pr_auto_create=False,
+    )
+
+    assert captured["context"]["pr_auto_create"] == "false"
+    assert captured["hook_context"]["validated_pr_auto_create"] is False
+
+
+def test_remote_pr_git_history_uses_fetched_remote_base(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-remote-history"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        "base_branch: develop\npr:\n  auto_create: true\n",
+        encoding="utf-8",
+    )
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "pr": {
+                "skill": "pr",
+                "role": "developer",
+                "behavior": {
+                    "completion": "baton",
+                    "context_providers": ["git_history"],
+                },
+                "output_artifact": "pr",
+                "allowed_tools": ["Read"],
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("pr")
+    git_ops = MagicMock()
+    git_ops.ensure_remote_base_ancestor.return_value = "origin/develop"
+    git_ops.get_commits_between.return_value = "abc123 direct bootstrap"
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-remote-history",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("confirmed"),
+        git_ops=git_ops,
+        role_agent_map={"developer": "David"},
+    )
+
+    executor.execute_step("pr", playbook["steps"]["pr"], state)
+
+    git_ops.ensure_remote_base_ancestor.assert_called_once_with("develop", "HEAD")
+    git_ops.get_commits_between.assert_called_once_with(
+        base="origin/develop",
+        head="HEAD",
+    )
+
+
+def test_generic_workflow_step_writes_exact_current_pr_browser_request(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1598,7 +1717,7 @@ def test_generic_workflow_step_writes_declared_capability_request_for_non_pr_ste
                 "role": "developer",
                 "output_artifact": "code",
                 "allowed_tools": ["Read"],
-                "capability_requests": ["demo.unknown"],
+                "capability_requests": ["cafe.browser.open"],
                 "valid_intents": ["confirmed"],
                 "on": {"await_agent": "_done"},
             }
@@ -1632,8 +1751,14 @@ def test_generic_workflow_step_writes_declared_capability_request_for_non_pr_ste
         )
     )
     assert capability_request == {
-        "capability": "demo.unknown",
-        "args": {},
+        "capability": "cafe.browser.open",
+        "args": {"target_ref": "current_pr"},
+        "effects": {
+            "browser_open": ["current_pr"],
+            "writes": [],
+            "network_destinations": [],
+        },
+        "credentials": [],
         "permissions": {},
     }
     assert not (issue_dir / "publish" / "iteration_001" / "publish_request.json").exists()
@@ -1689,8 +1814,28 @@ def test_generic_workflow_step_writes_multi_capability_request_contract(
     )
     assert capability_request == {
         "requests": [
-            {"capability": "demo.first", "args": {}, "permissions": {}},
-            {"capability": "demo.second", "args": {}, "permissions": {}},
+            {
+                "capability": "demo.first",
+                "args": {},
+                "effects": {
+                    "browser_open": [],
+                    "writes": [],
+                    "network_destinations": [],
+                },
+                "credentials": [],
+                "permissions": {},
+            },
+            {
+                "capability": "demo.second",
+                "args": {},
+                "effects": {
+                    "browser_open": [],
+                    "writes": [],
+                    "network_destinations": [],
+                },
+                "credentials": [],
+                "permissions": {},
+            },
         ]
     }
     assert not (issue_dir / "publish" / "iteration_001" / "publish_request.json").exists()
@@ -3121,86 +3266,95 @@ def test_workflow_limits_prompt_inputs_to_step_artifacts(tmp_path: Path) -> None
         )
 
 
-def test_build_context_includes_operation_helper_paths(tmp_path: Path) -> None:
+def test_build_context_materializes_agent_for_later_external_read(tmp_path: Path) -> None:
     executor = _make_minimal_executor(tmp_path)
-    state = BlackboardStore(executor.issue_dir).load_or_create("develop")
-    step_def = {"skill": "cafe-plan", "role": "developer", "input_artifacts": []}
-    output_file = executor.issue_dir / "develop" / "iteration_012" / "output.md"
+    state = BlackboardStore(executor.issue_dir).load_or_create("plan")
+    source = tmp_path / "global" / "agents" / "developer" / "David.md"
+    source.parent.mkdir(parents=True)
+    source.write_text("---\nname: David\n---\n\nold guidance\n", encoding="utf-8")
+    output_file = executor.issue_dir / "plan" / "iteration_001" / "output.md"
 
-    context = executor._build_context(
-        step_name="develop",
-        step_def=step_def,
-        blackboard_state=state,
-        agent_name="David",
-        output_file=output_file,
-    )
+    with patch.object(AgentManager, "get_agent_file_path", return_value=str(source)):
+        context = executor._build_context(
+            step_name="plan",
+            step_def={"skill": "cafe-plan", "role": "developer"},
+            blackboard_state=state,
+            agent_name="David",
+            output_file=output_file,
+        )
 
-    assert context["issue_dir"] == executor._display_path(executor.issue_dir)
-    assert context["current_step"] == "develop"
-    assert context["iteration_dir"] == executor._display_path(output_file.parent)
-    assert context["playbook_id"] == "default"
+    source.write_text("---\nname: David\n---\n\nnew guidance\n", encoding="utf-8")
+
+    materialized = Path(context["agent_file"])
+    assert materialized != source
+    assert "old guidance" in materialized.read_text(encoding="utf-8")
 
 
-def test_agent_launched_operation_metadata_survives_phase_artifact_write(
-    tmp_path: Path, monkeypatch
+def test_build_context_resolves_builtin_agent_from_declared_qa_role(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Post-agent writes must not erase helper metadata published during the agent call."""
-    monkeypatch.chdir(tmp_path)
-    issue_dir = tmp_path / ".cafe" / "issues" / "issue-operation-refresh"
+    working_dir = tmp_path / "working"
+    working_dir.mkdir()
+    monkeypatch.chdir(working_dir)
+    issue_dir = tmp_path / ".cafe" / "issues" / "qa-fallback"
     playbook = {
-        "playbook": {"id": "default"},
-        "roles": {"developer": {"default_agent": "David"}},
+        "playbook": {"id": "qa-fallback"},
+        "roles": {"qa": {"default_agent": "Quinn"}},
         "steps": {
-            "develop": {
-                "skill": "develop",
-                "role": "developer",
-                "output_artifact": "code",
-                "allowed_tools": ["Read"],
-                "on": {"await_agent": "develop"},
+            "qa": {
+                "skill": "cafe-plan",
+                "role": "qa",
+                "output_artifact": "qa_feedback",
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
             }
         },
     }
-    store = BlackboardStore(issue_dir)
-    stale_state = store.load_or_create("develop")
-    operation_path: Path | None = None
-
-    def launch_operation(*, streaming_output_file, **kwargs) -> None:
-        nonlocal operation_path
-        iteration_dir = Path(streaming_output_file).parent
-        (iteration_dir / "output.md").write_text("# waiting\n", encoding="utf-8")
-        fresh_state = store.load_or_create("develop")
-        operation = store.write_operation_artifact(
-            fresh_state,
-            step="develop",
-            iteration_dir=iteration_dir,
-            artifact=LongRunningOperationArtifact(
-                state=LongRunningOperationState.RUNNING,
-                reason="test_agent_launch",
-                operation_id="operation-refresh",
-            ),
-        )
-        operation_path = iteration_dir / "operation.json"
-        assert operation.operation_id
-
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
-        issue_name="issue-operation-refresh",
+        issue_name="qa-fallback",
         playbook=playbook,
         generic_phase=_build_loader(tmp_path),
-        agent_manager=FakeAgentManager("waiting", on_execute=launch_operation),
+        agent_manager=FakeAgentManager("confirmed"),
         git_ops=FakeGitOperations(),
-        role_agent_map={"developer": "David"},
+        role_agent_map={},
     )
+    state = BlackboardStore(executor.issue_dir).load_or_create("qa")
 
-    executor.execute_step("develop", playbook["steps"]["develop"], stale_state)
+    with patch.object(Path, "home", return_value=tmp_path / "empty-home"):
+        _source, expected_guidance = AgentManager.read_agent_file("Quinn", "qa")
+        result = executor.execute_step("qa", playbook["steps"]["qa"], state)
 
-    persisted = store.load_or_create("develop")
-    assert operation_path is not None
-    assert persisted.artifacts["develop_operation"].path == str(operation_path)
-    assert (
-        persisted.artifacts["develop_operation"].summary
-        == "long_running_operation:operation-refresh:running"
-    )
+    assert result.status_code == "confirmed"
+    materialized = issue_dir / "qa" / "iteration_001" / "context_agent_file.md"
+    assert materialized.read_text(encoding="utf-8") == expected_guidance
+
+
+def test_build_context_resolves_global_agent_from_custom_declared_role(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    working_dir = tmp_path / "working"
+    working_dir.mkdir()
+    monkeypatch.chdir(working_dir)
+    global_home = tmp_path / "global-home"
+    global_agent = global_home / ".cafe" / "agents" / "security" / "Avery.md"
+    global_agent.parent.mkdir(parents=True)
+    expected_guidance = "---\nname: Avery\n---\n\nReview security boundaries.\n"
+    global_agent.write_text(expected_guidance, encoding="utf-8")
+    executor = _make_minimal_executor(tmp_path)
+    state = BlackboardStore(executor.issue_dir).load_or_create("audit")
+    output_file = executor.issue_dir / "audit" / "iteration_001" / "output.md"
+
+    with patch.object(Path, "home", return_value=global_home):
+        context = executor._build_context(
+            step_name="audit",
+            step_def={"skill": "cafe-plan", "role": "security"},
+            blackboard_state=state,
+            agent_name="Avery",
+            output_file=output_file,
+        )
+
+    assert Path(context["agent_file"]).read_text(encoding="utf-8") == expected_guidance
 
 
 def test_workflow_limits_checklist_inputs_to_step_artifacts(tmp_path: Path) -> None:
@@ -3384,6 +3538,79 @@ workflow:
     )
     assert "review/iteration_001/output.md" in checklist
     assert "pr/iteration_001/output.md" not in checklist
+
+
+def test_workflow_refreshes_declared_checklist_on_interrupted_resume(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A resumed iteration must receive new skill gates without losing stable progress."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-checklist-refresh"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "knowledge": {
+                "skill": "resume-checklist",
+                "role": "developer",
+                "output_artifact": "knowledge",
+                "allowed_tools": ["Read"],
+                "valid_intents": ["confirmed"],
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+    skill_dir = tmp_path / ".cafe" / "skills" / "resume-checklist"
+    (skill_dir / "references").mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: resume-checklist
+description: legacy test skill
+---
+""",
+        encoding="utf-8",
+    )
+    (skill_dir / "references" / "execution_steps_normal.md").write_text(
+        "[ ] Keep completed work\n[ ] Read {blackboard_path}\n[ ] New checkpoint barrier\n",
+        encoding="utf-8",
+    )
+    iteration_dir = issue_dir / "knowledge" / "iteration_001"
+    iteration_dir.mkdir(parents=True)
+    (iteration_dir / "output.md").write_text("partial output\n", encoding="utf-8")
+    (iteration_dir / "iteration.json").write_text('{"iteration": 1}', encoding="utf-8")
+    (iteration_dir / "checklist.md").write_text(
+        "[x] Keep completed work\n[ ] Retired instruction\n",
+        encoding="utf-8",
+    )
+    observed: dict[str, str] = {}
+
+    def assert_refreshed_checklist(*, streaming_output_file: str, **_kwargs) -> None:
+        checklist = Path(streaming_output_file).parent / "checklist.md"
+        observed["content"] = checklist.read_text(encoding="utf-8")
+        checklist.write_text(
+            "[x] Keep completed work\n[x] New checkpoint barrier\n", encoding="utf-8"
+        )
+
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-checklist-refresh",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("confirmed", on_execute=assert_refreshed_checklist),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+    state = BlackboardStore(issue_dir).load_or_create("knowledge")
+
+    result = executor.execute_step("knowledge", playbook["steps"]["knowledge"], state)
+
+    assert result.status_code == "confirmed"
+    assert observed["content"].startswith(
+        "[x] Keep completed work\n[ ] Read ./.cafe/issues/issue-checklist-refresh/blackboard.json\n"
+    )
+    assert "{blackboard_path}" not in observed["content"]
+    assert "[ ] New checkpoint barrier" in observed["content"]
+    assert "Retired instruction" not in observed["content"]
 
 
 def _write_skill_with_basic_principles(
@@ -3783,175 +4010,6 @@ def _minimal_spec_executor(
     )
 
 
-def test_cold_takeover_reports_absent_when_no_operation_has_started(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """UT-011 — a missing operation artifact is distinct from bad evidence."""
-    monkeypatch.chdir(tmp_path)
-    issue_dir = tmp_path / ".cafe" / "issues" / "issue-takeover-absent"
-    step = {
-        "skill": "cafe-develop",
-        "role": "developer",
-        "input_artifacts": [],
-        "output_artifact": "code",
-    }
-    store = BlackboardStore(issue_dir)
-    state = store.load_or_create("develop")
-    executor = GenericWorkflowStepExecutor(
-        issue_dir=issue_dir,
-        issue_name="issue-takeover-absent",
-        playbook={
-            "playbook": {"id": "default"},
-            "roles": {"developer": {"default_agent": "David"}},
-            "steps": {"develop": step},
-        },
-        generic_phase=_build_loader(tmp_path),
-        agent_manager=FakeAgentManager("confirmed"),
-        git_ops=FakeGitOperations(),
-        role_agent_map={"developer": "David"},
-    )
-    executor.iteration = 1
-    iteration_dir = issue_dir / "develop" / "iteration_001"
-    iteration_dir.mkdir(parents=True)
-
-    snapshot = json.loads(
-        executor._build_backup_takeover_context(
-            error="primary failed",
-            step_name="develop",
-            step_def=step,
-            blackboard_state=state,
-            output_file=iteration_dir / "output.md",
-            checklist_file=iteration_dir / "checklist.md",
-            iteration_dir=iteration_dir,
-        )
-    )
-
-    assert snapshot["operation"] == {"state": "absent"}
-
-    (iteration_dir / "operation.json").write_text("not valid json", encoding="utf-8")
-    untrusted_snapshot = json.loads(
-        executor._build_backup_takeover_context(
-            error="primary failed",
-            step_name="develop",
-            step_def=step,
-            blackboard_state=state,
-            output_file=iteration_dir / "output.md",
-            checklist_file=iteration_dir / "checklist.md",
-            iteration_dir=iteration_dir,
-        )
-    )
-
-    assert untrusted_snapshot["operation"] == {"state": "unknown"}
-
-
-def test_cold_takeover_rejects_untrusted_operation_evidence(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """UT-011 — takeover state uses the runtime's operation trust boundary."""
-    monkeypatch.chdir(tmp_path)
-    issue_dir = tmp_path / ".cafe" / "issues" / "issue-takeover-trust"
-    step = {
-        "skill": "cafe-develop",
-        "role": "developer",
-        "input_artifacts": [],
-        "output_artifact": "code",
-    }
-    store = BlackboardStore(issue_dir)
-    state = store.load_or_create("develop")
-    executor = GenericWorkflowStepExecutor(
-        issue_dir=issue_dir,
-        issue_name="issue-takeover-trust",
-        playbook={
-            "playbook": {"id": "default"},
-            "roles": {"developer": {"default_agent": "David"}},
-            "steps": {"develop": step},
-        },
-        generic_phase=_build_loader(tmp_path),
-        agent_manager=FakeAgentManager("confirmed"),
-        git_ops=FakeGitOperations(),
-        role_agent_map={"developer": "David"},
-    )
-    executor.iteration = 1
-    iteration_dir = issue_dir / "develop" / "iteration_001"
-    iteration_dir.mkdir(parents=True)
-    forged = LongRunningOperationArtifact(
-        operation_id="forged-running",
-        state=LongRunningOperationState.RUNNING,
-        reason="agent_timeout",
-    )
-    operation_artifact_path(iteration_dir).write_text(
-        json.dumps(forged.to_dict()), encoding="utf-8"
-    )
-    (iteration_dir / "operation_handle.json").write_text(
-        json.dumps(
-            {
-                "operation_id": forged.operation_id,
-                "monitor_pid": os.getpid(),
-                "monitor_start_time": None,
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    def snapshot() -> dict[str, object]:
-        return json.loads(
-            executor._build_backup_takeover_context(
-                error="primary failed",
-                step_name="develop",
-                step_def=step,
-                blackboard_state=state,
-                output_file=iteration_dir / "output.md",
-                checklist_file=iteration_dir / "checklist.md",
-                iteration_dir=iteration_dir,
-            )
-        )
-
-    with patch("cafe.phases.generic_workflow_step.get_operation_status") as status_check:
-        assert snapshot()["operation"] == {"state": "unknown"}
-        status_check.assert_not_called()
-
-    trusted = store.write_operation_artifact(
-        state,
-        step="develop",
-        iteration_dir=iteration_dir,
-        artifact=LongRunningOperationArtifact(
-            operation_id="trusted-running",
-            state=LongRunningOperationState.RUNNING,
-            reason="agent_timeout",
-        ),
-    )
-    with patch(
-        "cafe.phases.generic_workflow_step.get_operation_status", return_value=trusted
-    ) as status_check:
-        assert snapshot()["operation"] == {"state": "running", "id": trusted.operation_id}
-        status_check.assert_called_once()
-
-    replaced = LongRunningOperationArtifact(
-        operation_id="replaced-running",
-        state=LongRunningOperationState.RUNNING,
-        reason="agent_timeout",
-    )
-    operation_artifact_path(iteration_dir).write_text(
-        json.dumps(replaced.to_dict()), encoding="utf-8"
-    )
-    with patch("cafe.phases.generic_workflow_step.get_operation_status") as status_check:
-        assert snapshot()["operation"] == {"state": "unknown"}
-        status_check.assert_not_called()
-
-    operation_receipt_path(iteration_dir).write_text(
-        json.dumps(
-            LongRunningOperationArtifact(
-                operation_id=trusted.operation_id,
-                state=LongRunningOperationState.SUCCEEDED,
-            ).to_dict()
-        ),
-        encoding="utf-8",
-    )
-    with patch("cafe.phases.generic_workflow_step.get_operation_status") as status_check:
-        assert snapshot()["operation"] == {"state": "unknown"}
-        status_check.assert_not_called()
-
-
 def test_resolve_iteration_user_input_first_start_unchanged(tmp_path: Path) -> None:
     executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
     executor.phase_dir = tmp_path / ".cafe" / "issues" / "issue-resume-input" / "spec"
@@ -4340,6 +4398,44 @@ def test_execute_step_interrupted_fresh_session_surfaces_declared_current_scope(
     state.handoff_summary = "Continue the old batch."
     store.set_artifact(state, "batch_scope", str(replacement))
     store.set_artifact(state, "historical_output", str(historical))
+    policy, binding = agent_execution_interrupted_human_task(step_name="develop")
+    task_records = HumanTaskRecordStore(issue_dir)
+    recovery_task = task_records.materialize(
+        workflow_id=state.workflow_id,
+        step="develop",
+        iteration=1,
+        trigger="agent_execution_interrupted",
+        policy_id=policy.id,
+        prompt=policy.prompt,
+        expected_result=policy.model_dump(mode="json"),
+        continuations=binding.outcomes,
+        assignee_type="user",
+    )
+    task_records.complete(
+        workflow_id=state.workflow_id,
+        task_id=recovery_task.id,
+        payload={
+            "task": policy.id,
+            "decision": "retry_fresh_session",
+            "continuation": "develop",
+            "session_continuation": {
+                "schema_version": 1,
+                "policy": "new",
+                "reason": "user_selected_fresh_session",
+                "next_action": "resume_same_step_same_iteration",
+                "workflow_id": state.workflow_id,
+                "human_task_id": recovery_task.id,
+                "step": "develop",
+                "iteration": 1,
+                "previous": {
+                    "cli": "codex",
+                    "model": "gpt-5-test",
+                    "session_id": "interrupted-session",
+                },
+            },
+        },
+        source="command",
+    )
 
     playbook = {
         "playbook": {"id": "default"},
@@ -4374,11 +4470,17 @@ def test_execute_step_interrupted_fresh_session_surfaces_declared_current_scope(
 
     assert manager.prompts
     prompt = manager.prompts[0]
+    assert "Fresh-session recovery:" in prompt
+    assert "same phase, iteration, model, and authority" in prompt
     assert "Current resume scope (declared step inputs):" in prompt
     scope = prompt.split("Current resume scope (declared step inputs):", maxsplit=1)[1]
     scope = scope.split("Current user input for this iteration:", maxsplit=1)[0]
     assert str(replacement) in scope
     assert str(historical) not in scope
+    iteration_data = json.loads((current_iter / "iteration.json").read_text(encoding="utf-8"))
+    assert iteration_data["session_continuation"]["policy"] == "new"
+    assert iteration_data["session_recovery"]["previous"]["session_id"] == "interrupted-session"
+    assert iteration_data["model"] == "gpt-5-test"
 
 
 def _make_alignment_executor(tmp_path: Path, issue_name: str, step_def: dict, user_input: str):
@@ -4556,7 +4658,7 @@ mandate:
     assert agent_manager.prompts
 
 
-def test_completed_correction_selects_new_session_by_default(tmp_path: Path) -> None:
+def test_completed_correction_resumes_previous_session_by_default(tmp_path: Path) -> None:
     executor = _minimal_spec_executor(
         tmp_path,
         agent_manager=FakeAgentManager("confirmed"),
@@ -4581,10 +4683,12 @@ def test_completed_correction_selects_new_session_by_default(tmp_path: Path) -> 
         step_def=executor.playbook["steps"]["spec"],
     )
 
-    assert continuation.policy == SessionContinuationPolicy.NEW
+    assert continuation.policy == SessionContinuationPolicy.RESUME_EXACT
+    assert continuation.cli == AgentCLI.CODEX
+    assert continuation.session_id == "old-session"
 
 
-def test_completed_correction_ignores_resume_override(tmp_path: Path) -> None:
+def test_completed_correction_fresh_override_starts_new_session(tmp_path: Path) -> None:
     executor = _minimal_spec_executor(
         tmp_path,
         agent_manager=FakeAgentManager("confirmed"),
@@ -4605,7 +4709,7 @@ def test_completed_correction_ignores_resume_override(tmp_path: Path) -> None:
     executor.iteration = 2
     step_def = {
         **executor.playbook["steps"]["spec"],
-        "correction_session": "resume",
+        "correction_session": "fresh",
     }
 
     continuation = executor._select_session_continuation(
@@ -4614,6 +4718,73 @@ def test_completed_correction_ignores_resume_override(tmp_path: Path) -> None:
     )
 
     assert continuation.policy == SessionContinuationPolicy.NEW
+
+
+def test_exact_fallback_session_is_persisted_and_resumed_by_next_correction(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    manager = AgentManager(issue_name="issue-resume-input")
+    manager.register_agent(
+        AgentConfig(
+            name="Roger",
+            cli=AgentCLI.CODEX,
+            clis=[
+                CliEntry(cli=AgentCLI.CODEX, model="codex-model"),
+                CliEntry(cli=AgentCLI.GEMINI, model="gemini-model"),
+            ],
+        )
+    )
+    executor = _minimal_spec_executor(tmp_path, agent_manager=manager)
+    executor.phase_dir = executor.issue_dir / "spec"
+    executor.phase_dir.mkdir(parents=True)
+    executor.phase_name = "spec"
+    executor.iteration = 2
+    executor._session_continuation = SessionContinuation.resume_exact(
+        AgentCLI.CODEX,
+        "prior-codex",
+    )
+    attempts: list[tuple[AgentCLI, str | None]] = []
+
+    def execute(self, *args, **kwargs):
+        attempts.append((self.config.cli, self.config.session_id))
+        if self.config.cli == AgentCLI.CODEX:
+            raise AgentExecutionError("rate limit", error_type="rate_limit")
+        return AgentResponse(
+            response="confirmed",
+            token_usage=TokenUsage(),
+            cli=AgentCLI.GEMINI,
+            session_id="fallback-gemini",
+        )
+
+    with patch("cafe.agents.executor.AgentExecutor.execute", execute):
+        executor._execute_agent_iteration(
+            agent_name="Roger",
+            prompt="continue correction",
+            user_input="workflow execute",
+            valid_intents=[],
+            require_status_code=False,
+            allowed_tools=[],
+            phase_specific_data={"step_name": "spec"},
+            backup_context_callback=lambda _error: '{"operation":{"state":"running"}}',
+        )
+
+    iteration_data = json.loads(
+        (executor.phase_dir / "iteration_002" / "iteration.json").read_text(encoding="utf-8")
+    )
+    assert attempts == [(AgentCLI.CODEX, "prior-codex"), (AgentCLI.GEMINI, None)]
+    assert iteration_data["cli"] == "gemini"
+    assert iteration_data["session_id"] == "fallback-gemini"
+
+    executor.iteration = 3
+    continuation = executor._select_session_continuation(
+        agent_name="Roger",
+        step_def=executor.playbook["steps"]["spec"],
+    )
+    assert continuation.policy == SessionContinuationPolicy.RESUME_EXACT
+    assert continuation.cli == AgentCLI.GEMINI
+    assert continuation.session_id == "fallback-gemini"
 
 
 def test_incomplete_iteration_selects_exact_resume(tmp_path: Path) -> None:
@@ -4854,7 +5025,7 @@ def test_same_invocation_baton_retry_resumes_actual_session(
     assert "[BATON ERROR] repair next_step.txt" in snapshot.read_text(encoding="utf-8")
 
 
-def test_pre_step_baton_repair_after_prior_run_starts_new_session(
+def test_pre_step_baton_repair_after_prior_run_resumes_session(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -4895,7 +5066,8 @@ def test_pre_step_baton_repair_after_prior_run_starts_new_session(
         same_invocation_retry=False,
     )
 
-    assert manager.continuations[0].policy == SessionContinuationPolicy.NEW
+    assert manager.continuations[0].policy == SessionContinuationPolicy.RESUME_EXACT
+    assert manager.continuations[0].session_id == "prior-run-session"
 
 
 def test_correction_writes_and_inlines_delta_packet(
@@ -5099,9 +5271,7 @@ def test_persisted_packet_decision_rejects_missing_effective_inputs(tmp_path: Pa
     """UT-004: an interrupted iteration cannot replace a lost packet decision."""
     iteration_dir = tmp_path / "develop" / "iteration_001"
     iteration_dir.mkdir(parents=True)
-    (iteration_dir / "iteration.json").write_text(
-        json.dumps({"iteration": 1}), encoding="utf-8"
-    )
+    (iteration_dir / "iteration.json").write_text(json.dumps({"iteration": 1}), encoding="utf-8")
 
     with pytest.raises(ValueError, match="context packet decision"):
         GenericWorkflowStepExecutor._load_persisted_effective_inputs(
@@ -5235,7 +5405,12 @@ Prepare packet inputs.
 
     assert reloaded_context["spec_file"] == reloaded_context["spec_file_path"]
     assert reloaded_context["input_loading_modes"] == "spec_file=packet, spec_file_path=packet"
-    assert json.loads((iteration_dir / "iteration.json").read_text(encoding="utf-8"))["effective_inputs"] == persisted
+    assert (
+        json.loads((iteration_dir / "iteration.json").read_text(encoding="utf-8"))[
+            "effective_inputs"
+        ]
+        == persisted
+    )
 
 
 def test_primary_and_backup_reject_persisted_full_active_packet_binding(
@@ -5339,14 +5514,29 @@ def test_persisted_packet_binding_must_match_declared_authority_and_envelope(
     _write_valid_spec_contract(source)
     other.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
     contract = SkillWorkflowContract.model_validate(
-        {"prompt_inputs": [
-            {"artifacts": ["spec"], "placeholder": "spec_file", "load_policy": [{"mode": "packet", "contract_kind": "spec"}]},
-            {"artifacts": ["spec"], "placeholder": "spec_file_path", "load_policy": [{"mode": "packet", "contract_kind": "spec"}]},
-        ]}
+        {
+            "prompt_inputs": [
+                {
+                    "artifacts": ["spec"],
+                    "placeholder": "spec_file",
+                    "load_policy": [{"mode": "packet", "contract_kind": "spec"}],
+                },
+                {
+                    "artifacts": ["spec"],
+                    "placeholder": "spec_file_path",
+                    "load_policy": [{"mode": "packet", "contract_kind": "spec"}],
+                },
+            ]
+        }
     )
     iteration_dir = tmp_path / "develop" / "iteration_001"
     effective = resolve_effective_prompt_inputs(
-        contract, {"spec": source}, step="develop", iteration=1, feedback=False, packet_dir=iteration_dir
+        contract,
+        {"spec": source},
+        step="develop",
+        iteration=1,
+        feedback=False,
+        packet_dir=iteration_dir,
     )
     (iteration_dir / "iteration.json").write_text(
         json.dumps({"effective_inputs": effective}), encoding="utf-8"
@@ -5391,9 +5581,11 @@ def test_persisted_packet_binding_must_match_declared_authority_and_envelope(
 
     tampered_packet = json.loads(original_packet)
     tampered_packet["contract"]["bytes"] = "agent-substituted contract"
-    tampered_packet["contract"]["sha256"] = __import__("hashlib").sha256(
-        tampered_packet["contract"]["bytes"].encode("utf-8")
-    ).hexdigest()
+    tampered_packet["contract"]["sha256"] = (
+        __import__("hashlib")
+        .sha256(tampered_packet["contract"]["bytes"].encode("utf-8"))
+        .hexdigest()
+    )
     packet_path.write_text(json.dumps(tampered_packet), encoding="utf-8")
     (iteration_dir / "iteration.json").write_text(json.dumps(original), encoding="utf-8")
     with pytest.raises(ValueError, match="context packet decision"):
@@ -5438,9 +5630,12 @@ def test_persisted_packet_decision_fails_closed_on_tampered_runtime_fields(
     iteration_dir = tmp_path / "develop" / "iteration_001"
     iteration_dir.mkdir(parents=True)
     binding = {
-        "requested_mode": "packet", "mode": "full_fallback", "path": "spec.md",
+        "requested_mode": "packet",
+        "mode": "full_fallback",
+        "path": "spec.md",
         "source": {"artifact_name": "spec", "artifact_version": 1},
-        "reason": "packet_invalid", "fallback_reason": "packet_invalid",
+        "reason": "packet_invalid",
+        "fallback_reason": "packet_invalid",
         "detail": "context packet validation failed",
     }
     binding[field] = value

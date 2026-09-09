@@ -15,6 +15,7 @@ from cafe.core.blackboard import (
     HandoffIntent,
     HandoffOwner,
 )
+from cafe.core.capability_approvals import CapabilityApprovalService
 from cafe.core.human_task_records import (
     HumanTask,
     HumanTaskCorrelationError,
@@ -23,12 +24,15 @@ from cafe.core.human_task_records import (
     TaskResult,
 )
 from cafe.core.human_tasks import (
+    AGENT_EXECUTION_FRESH_SESSION_DECISION,
+    AGENT_EXECUTION_INTERRUPTED_TRIGGER,
     HumanTaskBinding,
     HumanTaskCompletion,
     HumanTaskPolicy,
     HumanTaskPolicyError,
     HumanTaskQuestion,
     HumanTaskRejection,
+    agent_execution_interrupted_human_task,
     resolve_human_task_continuation,
     validate_human_task_completion,
 )
@@ -36,6 +40,7 @@ from cafe.core.human_tasks import (
     resolve_step_human_task as _resolve_step_human_task,
 )
 from cafe.core.phase_state_mixin import next_runnable_iteration_number
+from cafe.core.playbook import resolve_step_attempt_limit
 from cafe.core.workflow_feedback import WorkflowFeedbackError, WorkflowFeedbackLedger
 from cafe.skills.loader import SkillLoader
 
@@ -49,6 +54,8 @@ def resolve_step_human_task(
     iteration: int = 1,
 ) -> tuple[HumanTaskPolicy, HumanTaskBinding]:
     """UI adapter that preserves the existing configurable skill-loader boundary."""
+    if trigger == AGENT_EXECUTION_INTERRUPTED_TRIGGER:
+        return agent_execution_interrupted_human_task(step_name=step_name)
     return _resolve_step_human_task(
         playbook_data=playbook_data,
         step_name=step_name,
@@ -76,9 +83,7 @@ def validate_step_human_task_completion(
         skill_loader=skill_loader,
         iteration=iteration,
     )
-    return policy, binding, validate_human_task_completion(
-        policy, raw_payload, questions=questions
-    )
+    return policy, binding, validate_human_task_completion(policy, raw_payload, questions=questions)
 
 
 def resolve_step_human_task_continuation(
@@ -121,7 +126,9 @@ def collect_human_task_payload(
         return payload
 
     if policy.input_schema == "feedback":
-        return with_record_id({"task": policy.id, "feedback": prompt_multiline(policy.prompt).strip()})
+        return with_record_id(
+            {"task": policy.id, "feedback": prompt_multiline(policy.prompt).strip()}
+        )
     if policy.input_schema == "decision":
         choices = [{"name": item.label, "value": item.id} for item in policy.decisions]
         if role and issue_name:
@@ -138,12 +145,14 @@ def collect_human_task_payload(
         feedback = ""
         if selected is not None and selected.requires_feedback:
             feedback = prompt_multiline(policy.prompt).strip()
-        return with_record_id({
-            "task": policy.id,
-            "decision": decision,
-            "target": target,
-            "feedback": feedback,
-        })
+        return with_record_id(
+            {
+                "task": policy.id,
+                "decision": decision,
+                "target": target,
+                "feedback": feedback,
+            }
+        )
     if policy.input_schema == "target":
         target = prompt_list(
             policy.prompt,
@@ -157,15 +166,18 @@ def collect_human_task_payload(
             return None
         from cafe.ui.interactive_qa import interactive_qa_answers
 
-        return with_record_id({
-            "task": policy.id,
-            "answers": interactive_qa_answers(
-                list(questions), role=role, issue_name=issue_name, agent_name=agent_name
-            ),
-        })
+        return with_record_id(
+            {
+                "task": policy.id,
+                "answers": interactive_qa_answers(
+                    list(questions), role=role, issue_name=issue_name, agent_name=agent_name
+                ),
+            }
+        )
 
     answers: dict[str, str | list[str]] = {}
     for question in policy.questions:
+        answer: str | list[str]
         if question.multiple and question.options:
             answer = prompt_checkbox(question.prompt, list(question.options))
         elif question.options:
@@ -185,6 +197,72 @@ class HumanTaskApplication:
     rejection: Optional[HumanTaskRejection] = None
 
 
+def apply_capability_approval_payload(
+    *,
+    issue_dir: Path,
+    blackboard: Any,
+    task: HumanTask,
+    raw_payload: object,
+) -> HumanTaskApplication:
+    """Apply an exact capability decision without using alignment task policy."""
+    service = CapabilityApprovalService(
+        issue_dir=issue_dir,
+        workflow_id=task.workflow_id,
+        step=task.step,
+        iteration=task.iteration,
+    )
+    service.record_decision(task.id, raw_payload)
+    store = BlackboardStore(issue_dir)
+    store.update_handoff_contract(
+        blackboard,
+        from_step=task.step,
+        to_owner=HandoffOwner.AGENT,
+        to_step=task.step,
+        intent=HandoffIntent.AWAIT_AGENT,
+        source="command.capability_approval",
+    )
+    store.set_current_step(blackboard, task.step)
+    store.record_event(
+        blackboard,
+        "capability_approval_completed",
+        {"step": task.step, "task_id": task.id},
+    )
+    return HumanTaskApplication(target=task.step, policy=None)
+
+
+def apply_capability_cancellation(
+    *,
+    issue_dir: Path,
+    blackboard: Any,
+    task: HumanTask,
+    reason: str,
+) -> HumanTaskApplication:
+    """Cancel one exact capability task and release its owning workflow."""
+    service = CapabilityApprovalService(
+        issue_dir=issue_dir,
+        workflow_id=task.workflow_id,
+        step=task.step,
+        iteration=task.iteration,
+    )
+    service.cancel(task.id, reason=reason)
+    store = BlackboardStore(issue_dir)
+    store.update_handoff_contract(
+        blackboard,
+        from_step=task.step,
+        to_owner=HandoffOwner.AGENT,
+        to_step=task.step,
+        intent=HandoffIntent.AWAIT_AGENT,
+        source="command.capability_approval_cancel",
+    )
+    store.set_current_step(blackboard, task.step)
+    store.record_event(
+        blackboard,
+        "capability_approval_cancelled",
+        {"step": task.step, "task_id": task.id},
+    )
+    return HumanTaskApplication(target=task.step, policy=None)
+
+
 def apply_human_task_payload(
     *,
     issue_dir: Path,
@@ -198,6 +276,27 @@ def apply_human_task_payload(
     """Validate and apply one response while retaining a pause on rejection."""
     record_store = HumanTaskRecordStore(issue_dir)
     with record_store.transaction():
+        submitted_id = _submitted_human_task_id(raw_payload)
+        if submitted_id is not None:
+            try:
+                submitted_task = record_store.get_task(submitted_id)
+            except HumanTaskCorrelationError:
+                submitted_task = None
+            if (
+                submitted_task is not None
+                and submitted_task.workflow_id == getattr(blackboard, "workflow_id", None)
+                and submitted_task.status is HumanTaskStatus.PENDING
+                and getattr(
+                    getattr(blackboard, "handoff_contract", None), "has_meaningful_source", False
+                )
+                and not durable_task_matches_current_handoff(submitted_task, blackboard)
+            ):
+                return _durable_task_routing_rejection(
+                    issue_dir=issue_dir,
+                    blackboard=blackboard,
+                    task_id=submitted_id,
+                    message="This durable human task no longer belongs to the current handoff.",
+                )
         return _apply_human_task_payload(
             issue_dir=issue_dir,
             playbook_data=playbook_data,
@@ -208,6 +307,149 @@ def apply_human_task_payload(
             source=source,
             record_store=record_store,
         )
+
+
+def apply_durable_human_task_payload_if_present(
+    *,
+    issue_dir: Path,
+    playbook_data: Mapping[str, Any],
+    blackboard: Any,
+    raw_payload: str | Mapping[str, Any],
+    source: str,
+) -> Optional[HumanTaskApplication]:
+    """Apply a durable task response before intent-based user-input routing.
+
+    A durable task is the authority for its originating step and trigger.  This
+    prevents a valid ``human_task_id`` from falling through as ordinary phase
+    input when the blackboard intent is a generic or custom user handoff.
+    """
+    submitted_id = _submitted_human_task_id(raw_payload)
+    record_store = HumanTaskRecordStore(issue_dir)
+    if not record_store.exists:
+        if submitted_id is None:
+            return None
+        return _durable_task_routing_rejection(
+            issue_dir=issue_dir,
+            blackboard=blackboard,
+            task_id=submitted_id,
+            message=f"Unknown durable human task {submitted_id!r}.",
+        )
+
+    with record_store.transaction():
+        active_tasks = [
+            task
+            for task in record_store.tasks()
+            if task.workflow_id == blackboard.workflow_id
+            and task.status is HumanTaskStatus.PENDING
+            and record_store.get_wait_state(task.id).released_at is None
+        ]
+        if submitted_id is not None:
+            try:
+                task = record_store.get_task(submitted_id)
+            except HumanTaskCorrelationError:
+                return _durable_task_routing_rejection(
+                    issue_dir=issue_dir,
+                    blackboard=blackboard,
+                    task_id=submitted_id,
+                    message=f"Unknown durable human task {submitted_id!r}.",
+                )
+            if task.workflow_id != blackboard.workflow_id:
+                return _durable_task_routing_rejection(
+                    issue_dir=issue_dir,
+                    blackboard=blackboard,
+                    task_id=submitted_id,
+                    message="This durable human task belongs to a different workflow.",
+                )
+            if not durable_task_matches_current_handoff(task, blackboard):
+                return _durable_task_routing_rejection(
+                    issue_dir=issue_dir,
+                    blackboard=blackboard,
+                    task_id=submitted_id,
+                    message="This durable human task no longer belongs to the current handoff.",
+                )
+            if active_tasks and all(active.id != task.id for active in active_tasks):
+                return _durable_task_routing_rejection(
+                    issue_dir=issue_dir,
+                    blackboard=blackboard,
+                    task_id=submitted_id,
+                    message="This response belongs to a different pending durable human task.",
+                )
+        elif not active_tasks:
+            return None
+        elif len(active_tasks) == 1:
+            task = active_tasks[0]
+        else:
+            return _durable_task_routing_rejection(
+                issue_dir=issue_dir,
+                blackboard=blackboard,
+                task_id=None,
+                message="This workflow has multiple pending durable human tasks.",
+            )
+
+        if task.capability_approval is not None:
+            return _durable_task_routing_rejection(
+                issue_dir=issue_dir,
+                blackboard=blackboard,
+                task_id=task.id,
+                message="Capability approval tasks must be completed through the task command.",
+            )
+        return _apply_human_task_payload(
+            issue_dir=issue_dir,
+            playbook_data=playbook_data,
+            blackboard=blackboard,
+            from_step=task.step,
+            trigger=task.trigger,
+            raw_payload=raw_payload,
+            source=source,
+            record_store=record_store,
+        )
+
+
+def durable_task_matches_current_handoff(task: HumanTask, blackboard: Any) -> bool:
+    contract = getattr(blackboard, "handoff_contract", None)
+    if (
+        getattr(blackboard, "current_step", None) != "user"
+        or contract is None
+        or contract.to_owner is not HandoffOwner.USER
+        or contract.to_step != "user"
+        or contract.from_step != task.step
+    ):
+        return False
+    current_key = ":".join(
+        (
+            "user-handoff",
+            task.workflow_id,
+            contract.from_step,
+            contract.intent.value,
+            contract.created_at,
+        )
+    )
+    if task.handoff_key.startswith("user-handoff:"):
+        # Human-owned and hybrid tasks intentionally use a generic
+        # ``manual_handoff`` contract while retaining ``initial`` or the
+        # portion ID as their executable trigger.  The structured key is the
+        # identity shared by both sides of that boundary.
+        return task.handoff_key == current_key
+    return task.status is HumanTaskStatus.PENDING and contract.intent.value == task.trigger
+
+
+def _durable_task_routing_rejection(
+    *,
+    issue_dir: Path,
+    blackboard: Any,
+    task_id: Optional[str],
+    message: str,
+) -> HumanTaskApplication:
+    rejection = HumanTaskRejection(
+        message=message,
+        correction_guidance=("Inspect the pending task and submit its exact structured response."),
+    )
+    BlackboardStore(issue_dir).record_event(
+        blackboard,
+        "human_task_rejected",
+        {"task_id": task_id, "reason": message},
+    )
+    return HumanTaskApplication(target=None, policy=None, rejection=rejection)
 
 
 def _apply_human_task_payload(
@@ -285,8 +527,9 @@ def _apply_human_task_payload(
 
     recovered_agent_input = ""
     if durable_result is not None:
+        assert durable_task is not None
         blackboard = store.load_or_create(
-            from_step, playbook_id=getattr(blackboard, "playbook_id", "default")
+            from_step, playbook_id=getattr(blackboard, "playbook_id", "standard")
         )
         if blackboard.current_step != "user":
             rejection = HumanTaskRejection(
@@ -374,16 +617,17 @@ def _apply_human_task_payload(
             )
             return HumanTaskApplication(target=None, policy=policy, rejection=continuation)
 
-    feedback = (
-        durable_result.payload.get("feedback", "")
-        if durable_result is not None
-        else completion.feedback
-    )
-    decision = (
-        durable_result.payload.get("decision")
-        if durable_result is not None
-        else completion.decision
-    )
+    validated_completion = completion if isinstance(completion, HumanTaskCompletion) else None
+    if durable_result is None:
+        assert validated_completion is not None
+
+    if durable_result is not None:
+        feedback = durable_result.payload.get("feedback", "")
+        decision = durable_result.payload.get("decision")
+    else:
+        assert validated_completion is not None
+        feedback = validated_completion.feedback
+        decision = validated_completion.decision
     delivery_decision = next(
         (item for item in policy.decisions if item.id == decision),
         None,
@@ -407,9 +651,7 @@ def _apply_human_task_payload(
                 target_step=continuation,
                 content=feedback,
             )
-            previous = getattr(blackboard, "artifacts", {}).get(
-                binding.feedback_delivery.artifact
-            )
+            previous = getattr(blackboard, "artifacts", {}).get(binding.feedback_delivery.artifact)
             store.put_artifact(
                 blackboard,
                 ArtifactEntry(
@@ -445,10 +687,16 @@ def _apply_human_task_payload(
 
     if durable_task is not None:
         permitted_continuations = set(durable_task.continuations.values())
-        if not permitted_continuations:
-            raw_allowed = durable_task.expected_result.get("allowed_targets", [])
-            if isinstance(raw_allowed, list):
-                permitted_continuations = {item for item in raw_allowed if isinstance(item, str)}
+        raw_allowed = durable_task.expected_result.get("allowed_targets", [])
+        if isinstance(raw_allowed, list):
+            # A decision such as ``revise`` can route to a target selected from
+            # the task's declared correction targets.  Those targets are
+            # deliberately separate from the fixed decision outcomes (for
+            # example, ``confirm -> closeout``), so both sources must be
+            # accepted by the durable-task correlation fence.
+            permitted_continuations.update(
+                item for item in raw_allowed if isinstance(item, str)
+            )
         if continuation not in permitted_continuations:
             rejection = HumanTaskRejection(
                 message="This response does not select the pending task's declared continuation.",
@@ -471,14 +719,30 @@ def _apply_human_task_payload(
             )
             return HumanTaskApplication(target=None, policy=policy, rejection=rejection)
         if durable_result is None:
+            assert validated_completion is not None
             try:
+                completion_payload = _validated_completion_payload(
+                    validated_completion,
+                    continuation,
+                )
+                if (
+                    trigger == AGENT_EXECUTION_INTERRUPTED_TRIGGER
+                    and validated_completion.decision == AGENT_EXECUTION_FRESH_SESSION_DECISION
+                ):
+                    completion_payload["session_continuation"] = _fresh_session_recovery_payload(
+                        issue_dir=issue_dir,
+                        workflow_id=blackboard.workflow_id,
+                        task_id=durable_task.id,
+                        step_name=from_step,
+                        iteration=iteration,
+                    )
                 record_store.complete(
                     workflow_id=blackboard.workflow_id,
                     task_id=durable_task.id,
-                    payload=_validated_completion_payload(completion, continuation),
+                    payload=completion_payload,
                     source=source,
                 )
-            except HumanTaskCorrelationError as exc:
+            except (HumanTaskCorrelationError, OSError, ValueError) as exc:
                 rejection = HumanTaskRejection(
                     message=str(exc), correction_guidance=policy.correction_guidance
                 )
@@ -489,19 +753,34 @@ def _apply_human_task_payload(
                 )
                 return HumanTaskApplication(target=None, policy=policy, rejection=rejection)
 
-    agent_input = (
-        ""
-        if binding.feedback_delivery is not None
-        else recovered_agent_input
-        if durable_result is not None
-        else completion.agent_input()
-    )
-    if agent_input:
-        has_feedback = (
-            isinstance(durable_result.payload.get("feedback"), str)
-            if durable_result is not None
-            else bool(completion.feedback)
+    if binding.feedback_delivery is not None:
+        agent_input = ""
+    elif durable_result is not None:
+        agent_input = recovered_agent_input
+    else:
+        assert validated_completion is not None
+        agent_input = validated_completion.agent_input()
+    if (
+        not agent_input
+        and durable_task is not None
+        and trigger == HandoffIntent.CONFIRM_OUTPUT.value
+        and continuation == from_step
+        and continuation != "_done"
+        and isinstance(decision, str)
+        and decision
+    ):
+        agent_input = _durable_decision_continuation_input(
+            task=durable_task,
+            policy=policy,
+            decision=decision,
+            continuation=continuation,
         )
+    if agent_input:
+        if durable_result is not None:
+            has_feedback = isinstance(durable_result.payload.get("feedback"), str)
+        else:
+            assert validated_completion is not None
+            has_feedback = bool(validated_completion.feedback)
         input_step = continuation if has_feedback and continuation != "_done" else from_step
         _write_next_iteration_user_input(
             issue_dir=issue_dir,
@@ -509,6 +788,24 @@ def _apply_human_task_payload(
             text=agent_input,
         )
     is_done = continuation == "_done"
+    playbook_steps = playbook_data.get("steps", {})
+    from_step_def = (
+        playbook_steps.get(from_step, {}) if isinstance(playbook_steps, Mapping) else {}
+    )
+    if (
+        not is_done
+        and continuation != from_step
+        and not (delivery_decision is not None and delivery_decision.correction)
+        and isinstance(from_step_def, Mapping)
+        and resolve_step_attempt_limit(from_step_def) is not None
+    ):
+        store.reset_step_attempt_count(
+            blackboard,
+            step=from_step,
+            next_step=continuation,
+            transition_intent=HandoffIntent.AWAIT_AGENT.value,
+            transition_source=f"human_task.{source}",
+        )
     store.set_current_step(blackboard, "done" if is_done else continuation)
     store.set_handoff_summary(blackboard, f"Completed human task {policy.id} for {from_step}")
     store.update_handoff_contract(
@@ -572,9 +869,13 @@ def _resolve_durable_task(
                 task_id=active.id,
                 reason="response omits the required durable task id",
             )
-            return None, None, HumanTaskRejection(
-                message="This response must identify the pending durable human task.",
-                correction_guidance=policy.correction_guidance,
+            return (
+                None,
+                None,
+                HumanTaskRejection(
+                    message="This response must identify the pending durable human task.",
+                    correction_guidance=policy.correction_guidance,
+                ),
             )
         if submitted_id != active.id:
             record_store.record_rejection(
@@ -582,16 +883,24 @@ def _resolve_durable_task(
                 task_id=active.id,
                 reason="response references a different durable task",
             )
-            return None, None, HumanTaskRejection(
-                message="This response belongs to a different durable human task.",
-                correction_guidance=policy.correction_guidance,
+            return (
+                None,
+                None,
+                HumanTaskRejection(
+                    message="This response belongs to a different durable human task.",
+                    correction_guidance=policy.correction_guidance,
+                ),
             )
         return active, None, None
 
     if not matching:
-        return None, None, HumanTaskRejection(
-            message="This response cannot be correlated to a durable human task.",
-            correction_guidance=policy.correction_guidance,
+        return (
+            None,
+            None,
+            HumanTaskRejection(
+                message="This response cannot be correlated to a durable human task.",
+                correction_guidance=policy.correction_guidance,
+            ),
         )
 
     if submitted_id is None:
@@ -600,13 +909,21 @@ def _resolve_durable_task(
             task_id=matching[0].id,
             reason="response omits the required durable task id",
         )
-        return None, None, HumanTaskRejection(
-            message="This response must identify the pending durable human task.",
-            correction_guidance=policy.correction_guidance,
+        return (
+            None,
+            None,
+            HumanTaskRejection(
+                message="This response must identify the pending durable human task.",
+                correction_guidance=policy.correction_guidance,
+            ),
         )
 
     completed = next(
-        (task for task in matching if task.id == submitted_id and task.status is HumanTaskStatus.COMPLETED),
+        (
+            task
+            for task in matching
+            if task.id == submitted_id and task.status is HumanTaskStatus.COMPLETED
+        ),
         None,
     )
     if completed is not None:
@@ -620,9 +937,13 @@ def _resolve_durable_task(
         task_id=rejected_task.id,
         reason="the task is no longer pending",
     )
-    return None, None, HumanTaskRejection(
-        message="This workflow is not waiting for a matching human task.",
-        correction_guidance=policy.correction_guidance,
+    return (
+        None,
+        None,
+        HumanTaskRejection(
+            message="This workflow is not waiting for a matching human task.",
+            correction_guidance=policy.correction_guidance,
+        ),
     )
 
 
@@ -650,8 +971,10 @@ def _recorded_result_continuation(
         ), ""
     lines = []
     for question, answer in answers.items():
-        if not isinstance(question, str) or not isinstance(answer, list) or not all(
-            isinstance(item, str) for item in answer
+        if (
+            not isinstance(question, str)
+            or not isinstance(answer, list)
+            or not all(isinstance(item, str) for item in answer)
         ):
             return HumanTaskRejection(
                 message="The completed durable human task has invalid recorded answers.",
@@ -676,7 +999,9 @@ def _submitted_human_task_id(raw_payload: str | Mapping[str, Any]) -> Optional[s
     return value.strip()
 
 
-def _validated_completion_payload(completion: HumanTaskCompletion, continuation: str) -> dict[str, Any]:
+def _validated_completion_payload(
+    completion: HumanTaskCompletion, continuation: str
+) -> dict[str, Any]:
     """Store the validated, transport-neutral completion rather than raw input."""
     payload: dict[str, Any] = {"task": completion.task_id, "continuation": continuation}
     if completion.decision is not None:
@@ -688,6 +1013,88 @@ def _validated_completion_payload(completion: HumanTaskCompletion, continuation:
     if completion.target is not None:
         payload["target"] = completion.target
     return payload
+
+
+def _fresh_session_recovery_payload(
+    *,
+    issue_dir: Path,
+    workflow_id: str,
+    task_id: str,
+    step_name: str,
+    iteration: int,
+) -> dict[str, Any]:
+    """Bind a user-owned fresh-session choice to the interrupted session evidence."""
+    iteration_dir = issue_dir / step_name / f"iteration_{iteration:03d}"
+    iteration_data = _load_recovery_json(iteration_dir / "iteration.json")
+    prior_cli = iteration_data.get("cli")
+    prior_session_id = iteration_data.get("session_id")
+    if not isinstance(prior_cli, str) or not prior_cli.strip():
+        raise ValueError("Fresh-session recovery requires the interrupted CLI identity.")
+    if not isinstance(prior_session_id, str) or not prior_session_id.strip():
+        raise ValueError("Fresh-session recovery requires the interrupted session identity.")
+
+    previous: dict[str, str] = {
+        "cli": prior_cli.strip(),
+        "session_id": prior_session_id.strip(),
+    }
+    prior_model = iteration_data.get("model")
+    if isinstance(prior_model, str) and prior_model.strip():
+        previous["model"] = prior_model.strip()
+
+    recovery: dict[str, Any] = {
+        "schema_version": 1,
+        "policy": "new",
+        "reason": "user_selected_fresh_session",
+        "next_action": "resume_same_step_same_iteration",
+        "workflow_id": workflow_id,
+        "human_task_id": task_id,
+        "step": step_name,
+        "iteration": iteration,
+        "previous": previous,
+    }
+    error_path = iteration_dir / "error.json"
+    if error_path.exists():
+        error_type = _load_recovery_json(error_path).get("error_type")
+        if isinstance(error_type, str) and error_type.strip():
+            recovery["last_error_type"] = error_type.strip()
+    return recovery
+
+
+def _load_recovery_json(path: Path) -> dict[str, Any]:
+    """Read bounded, ordinary JSON evidence used to authorize session rotation."""
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"Fresh-session recovery evidence is missing: {path.name}")
+    if path.stat().st_size > 1_048_576:
+        raise ValueError(f"Fresh-session recovery evidence is too large: {path.name}")
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Fresh-session recovery evidence is invalid: {path.name}") from exc
+    if not isinstance(raw, dict):
+        raise ValueError(f"Fresh-session recovery evidence is invalid: {path.name}")
+    return raw
+
+
+def _durable_decision_continuation_input(
+    *,
+    task: HumanTask,
+    policy: HumanTaskPolicy,
+    decision: str,
+    continuation: str,
+) -> str:
+    """Project one validated self-loop confirmation into its continuation iteration."""
+    receipt = {
+        "schema_version": 1,
+        "type": "human_task_completion",
+        "human_task_id": task.id,
+        "task": policy.id,
+        "decision": decision,
+        "continuation": continuation,
+    }
+    return (
+        "CAFE validated this HumanTask response for the continuation phase:\n"
+        f"{json.dumps(receipt, ensure_ascii=False, sort_keys=True)}"
+    )
 
 
 def _write_next_iteration_user_input(*, issue_dir: Path, step_name: str, text: str) -> None:

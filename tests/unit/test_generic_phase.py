@@ -3,9 +3,11 @@
 import json
 import subprocess
 from pathlib import Path
+from threading import Event, Thread
 
 import pytest
 
+from cafe.catalogs.resolver import global_catalog_lock
 from cafe.core.hooks import HookResult
 from cafe.core.status_codes import PhaseStatusCode
 from cafe.core.types import AgentCLI
@@ -13,8 +15,39 @@ from cafe.phases.generic_phase import GenericPhase
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _sandbox_script_index(command: list[str]) -> int:
+    index = command.index("--sandbox-state-disable-network") + 1
+    while command[index] == "--sandbox-state-readable-root":
+        index += 2
+    return index
+
+
+@pytest.fixture(autouse=True)
+def _sandbox_cli_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Mock the external Codex process while retaining the typed sandbox request."""
+    native_run = subprocess.run
+
+    def run(command, **kwargs):
+        script_index = _sandbox_script_index(command)
+        return native_run(
+            ["/bin/bash", *command[script_index:]],
+            cwd=kwargs["cwd"],
+            env=kwargs["env"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=kwargs["timeout"],
+        )
+
+    from cafe.core.sandbox_execution import SandboxExecutor
+
+    monkeypatch.setattr(
+        "cafe.phases.generic_phase.SandboxExecutor",
+        lambda: SandboxExecutor(codex_path="/usr/bin/codex", runner=run),
+    )
 
 
 def _setup_loader(tmp_path: Path) -> SkillLoader:
@@ -67,6 +100,24 @@ def test_build_prompt_lists_only_effective_baton_intents(tmp_path: Path) -> None
 
     assert "valid intent values: [await_agent, need_clarification]" in prompt
     assert "alignment_checkpoint" not in prompt
+
+
+def test_build_prompt_distinguishes_confirmation_baton_from_continuation(tmp_path: Path) -> None:
+    phase = GenericPhase(_setup_loader(tmp_path))
+
+    prompt = phase.build_prompt(
+        skill_name="cafe-plan",
+        skill_invocation="/plan",
+        context={
+            "valid_baton_intents": "confirm_output, await_agent",
+            "valid_to_steps": "plan, develop, user",
+            "step_transitions": "confirm_output→plan, await_agent→develop",
+        },
+    )
+
+    assert "confirm_output→plan" in prompt
+    assert "to_owner='user', to_step='user', intent='confirm_output'" in prompt
+    assert "continuation after the human task is completed, not the baton target" in prompt
 
 
 def test_build_prompt_includes_files_and_checklist_guard(tmp_path: Path) -> None:
@@ -228,12 +279,36 @@ def test_build_prompt_pr_phase_appends_publish_ordering_when_handoff_present(tmp
             "blackboard_path": ".cafe/issues/demo/blackboard.json",
             "handoff_summary": "Finish local PR artifact.",
             "next_step_path": ".cafe/issues/demo/next_step.txt",
+            "pr_auto_create": "true",
         },
         output_file=Path("pr.md"),
         checklist_file=Path("checklist.md"),
     )
-    assert "For the PR phase, completion is local-only" in prompt
+    assert "For the PR agent phase, completion is local-first" in prompt
     assert "host-side publish_output hook" in prompt
+    assert "published review handoff contains its verified PR URL" in prompt
+
+
+def test_build_prompt_pr_phase_identifies_local_only_workflow_mode(tmp_path: Path) -> None:
+    """Test List 7: agent-local completion is distinct from workflow local-only mode."""
+    phase = GenericPhase(_setup_loader(tmp_path))
+    prompt = phase.build_prompt(
+        skill_name="cafe-pr",
+        skill_invocation="/pr",
+        shared_skill_invocations=["/cafe-workflow-common", "/cafe-github_sync"],
+        context={
+            "blackboard_path": ".cafe/issues/demo/blackboard.json",
+            "handoff_summary": "Finish local PR artifact.",
+            "next_step_path": ".cafe/issues/demo/next_step.txt",
+            "pr_auto_create": "false",
+        },
+        output_file=Path("pr.md"),
+        checklist_file=Path("checklist.md"),
+    )
+
+    assert "For the PR agent phase, completion is local-first" in prompt
+    assert "Workflow publication mode is local-only" in prompt
+    assert "No PR URL will exist" in prompt
 
 
 def assert_runtime_handoff_guardrails_persist(prompt: str) -> None:
@@ -507,8 +582,9 @@ def test_prepare_skill_installs_skill_and_returns_cli_invocation(tmp_path: Path)
     assert (project_root / ".codex" / "skills" / "cafe-plan" / "SKILL.md").exists()
 
 
-def test_packaged_develop_instruction_declares_all_monitoring_journeys(tmp_path: Path) -> None:
-    """IT-006: the installed agent instruction owns each monitoring intensity."""
+def test_packaged_develop_instruction_uses_repository_owned_quality_gates(
+    tmp_path: Path,
+) -> None:
     project_root = tmp_path / "project"
     project_root.mkdir()
     loader = SkillLoader(
@@ -527,10 +603,8 @@ def test_packaged_develop_instruction_declares_all_monitoring_journeys(tmp_path:
     instruction = (project_root / ".codex/skills/cafe-develop/SKILL.md").read_text(
         encoding="utf-8"
     )
-    assert "low 使用 `final-only`／`summary-only`" in instruction
-    assert "medium 使用 `periodic`／`incremental-tail`" in instruction
-    assert "high 使用 `active`／`filtered-stream`" in instruction
-    assert "同一 operation ID 檢查，不得重新啟動" in instruction
+    assert "與變更直接相關的 targeted checks" in instruction
+    assert "Repository-owned quality gates" in instruction
 
 
 def test_prepare_skill_renders_iteration_context_without_mutating_source(
@@ -563,7 +637,7 @@ def test_prepare_skill_renders_iteration_context_without_mutating_source(
     assert source_file.read_text(encoding="utf-8") == source_before
 
 
-def test_build_prompt_renders_complete_operation_helper_commands(tmp_path: Path) -> None:
+def test_build_prompt_does_not_advertise_removed_operation_commands(tmp_path: Path) -> None:
     phase = GenericPhase(_setup_loader(tmp_path))
     issue_dir = tmp_path / ".cafe" / "issues" / "issue386"
     iteration_dir = issue_dir / "develop" / "iteration_012"
@@ -579,17 +653,7 @@ def test_build_prompt_renders_complete_operation_helper_commands(tmp_path: Path)
         },
     )
 
-    assert (
-        f"cafe operation run --issue-dir {issue_dir} --step develop "
-        f"--iteration-dir {iteration_dir} --playbook default -- <command>"
-    ) in prompt
-    assert (
-        f"cafe operation status --issue-dir {issue_dir} --step develop "
-        f"--iteration-dir {iteration_dir} --playbook default"
-    ) in prompt
-    assert "cafe operation status`; " not in prompt
-    assert "<issue_dir>" not in prompt
-    assert "<iteration_dir>" not in prompt
+    assert "cafe operation" not in prompt
 
 
 def test_prepare_skill_omits_declared_optional_prompt_reference_when_input_is_absent(
@@ -683,6 +747,55 @@ def test_prepare_builtin_pr_skill_omits_unavailable_contexts(tmp_path: Path) -> 
     assert "Implementation Plan:" not in installed
     assert "{spec_file}" not in installed
     assert "{plan_file}" not in installed
+
+
+def test_prepare_builtin_qa_skill_omits_optional_plan_and_review_contexts(
+    tmp_path: Path,
+) -> None:
+    """The shipped QA skill supports simple while preserving richer QA context."""
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    loader = SkillLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+    )
+    loader.discover()
+    phase = GenericPhase(
+        loader,
+        skill_bridge=NativeSkillBridge(
+            loader,
+            project_root=project_root,
+            home_dir=tmp_path / "home",
+        ),
+    )
+
+    phase.prepare_skill(
+        skill_name="cafe-qa",
+        agent_cli=AgentCLI.CODEX,
+        context={"spec_file": "spec.md", "develop_file": "code.md"},
+    )
+
+    installed_path = project_root / ".codex" / "skills" / "cafe-qa" / "SKILL.md"
+    installed = installed_path.read_text(encoding="utf-8")
+    assert "Requirements Specification: spec.md" in installed
+    assert "Development Summary: code.md" in installed
+    assert "Implementation Plan:" not in installed
+    assert "Review Result:" not in installed
+
+    phase.prepare_skill(
+        skill_name="cafe-qa",
+        agent_cli=AgentCLI.CODEX,
+        context={
+            "spec_file": "spec.md",
+            "develop_file": "code.md",
+            "plan_file": "plan.md",
+            "review_file": "review.md",
+        },
+    )
+
+    installed = installed_path.read_text(encoding="utf-8")
+    assert "Implementation Plan: plan.md" in installed
+    assert "Review Result: review.md" in installed
 
 
 def test_prepare_skills_installs_shared_and_phase_skills(tmp_path: Path) -> None:
@@ -841,6 +954,204 @@ def test_execute_runs_script_hook_with_schema_and_interpolation(tmp_path: Path) 
     assert event["stage"] == "before_execute"
     assert "--phase|plan|--output" in event["stdout"]
     assert str(output_file) in event["stdout"]
+    assert event["execution_class"] == "sandbox"
+    assert event["trust_source"] == "workflow"
+    assert event["canonical_identity"]
+    assert event["correlation_id"] == event["receipt"]["correlation_id"]
+    assert event["effective_boundary"] == event["receipt"]["boundary"]
+    assert event["receipt"]["boundary"]["writable_roots"] == [str(Path.cwd().resolve())]
+
+
+def test_execute_script_hook_preserves_declared_skill_script_layout(
+    tmp_path: Path,
+) -> None:
+    loader = _setup_loader(tmp_path)
+    project_skill = loader.project_root / ".cafe" / "skills" / "cafe-plan"
+    project_skill.mkdir(parents=True)
+    (project_skill / "SKILL.md").write_text(
+        "---\nname: cafe-plan\ndescription: project plan\n---\n",
+        encoding="utf-8",
+    )
+    skill_scripts = project_skill / "scripts"
+    skill_scripts.mkdir(parents=True, exist_ok=True)
+    (skill_scripts / "message.txt").write_text("sibling resource\n", encoding="utf-8")
+
+    builtin_shared_scripts = (
+        loader.builtin_root / "skills" / "cafe-workflow-common" / "scripts"
+    )
+    builtin_shared_scripts.mkdir(parents=True)
+    (builtin_shared_scripts / "shared.sh").write_text(
+        "#!/usr/bin/env bash\necho shadowed builtin script\n", encoding="utf-8"
+    )
+    global_shared = loader.global_root / "skills" / "cafe-workflow-common"
+    global_shared.mkdir(parents=True)
+    (global_shared / "SKILL.md").write_text(
+        "---\nname: cafe-workflow-common\ndescription: global common\n---\n",
+        encoding="utf-8",
+    )
+    shared_scripts = global_shared / "scripts"
+    shared_scripts.mkdir(parents=True, exist_ok=True)
+    (shared_scripts / "shared.sh").write_text(
+        "#!/usr/bin/env bash\necho effective global script\n", encoding="utf-8"
+    )
+
+    undeclared = loader.global_root / "skills" / "undeclared" / "scripts"
+    undeclared.mkdir(parents=True)
+    (undeclared.parent / "SKILL.md").write_text(
+        "---\nname: undeclared\ndescription: secret sibling\n---\n", encoding="utf-8"
+    )
+    (undeclared / "secret.txt").write_text("must stay unreadable\n", encoding="utf-8")
+    loader.discover()
+
+    _write_skill_script(
+        loader,
+        skill_name="cafe-plan",
+        script_name="read_relative_files.sh",
+        body=(
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n"
+            'SCRIPT_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"\n'
+            'cat "$SCRIPT_DIR/message.txt"\n'
+            '/bin/bash "$SCRIPT_DIR/../../cafe-workflow-common/scripts/shared.sh"\n'
+            'test ! -e "$SCRIPT_DIR/../../undeclared/scripts/secret.txt"\n'
+        ),
+    )
+
+    result = GenericPhase(loader).execute(
+        skill_name="cafe-plan",
+        skill_invocation="/plan",
+        shared_skill_invocations=["/cafe-workflow-common"],
+        step_def={
+            "hooks": {"before_execute": [{"script": "read_relative_files.sh", "args": {}}]},
+            "valid_intents": ["confirmed"],
+        },
+        agent_executor=lambda _prompt: "confirmed",
+    )
+
+    event = next(item for item in result.events if item.get("type") == "script_hook")
+    assert event["status"] == "success"
+    assert event["stdout"].splitlines() == [
+        "sibling resource",
+        "effective global script",
+    ]
+    assert len(event["effective_boundary"]["readable_roots"]) == 2
+    first_identity = event["canonical_identity"]
+
+    (shared_scripts / "shared.sh").write_text(
+        "#!/usr/bin/env bash\necho updated global script\n", encoding="utf-8"
+    )
+    updated = GenericPhase(loader).execute(
+        skill_name="cafe-plan",
+        skill_invocation="/plan",
+        shared_skill_invocations=["/cafe-workflow-common"],
+        step_def={
+            "hooks": {"before_execute": [{"script": "read_relative_files.sh", "args": {}}]},
+            "valid_intents": ["confirmed"],
+        },
+        agent_executor=lambda _prompt: "confirmed",
+    )
+    updated_event = next(
+        item for item in updated.events if item.get("type") == "script_hook"
+    )
+    assert updated_event["stdout"].splitlines() == [
+        "sibling resource",
+        "updated global script",
+    ]
+    assert updated_event["canonical_identity"] != first_identity
+
+
+def test_execute_script_hook_denies_when_runtime_snapshot_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loader = _setup_loader(tmp_path)
+    _write_skill_script(
+        loader,
+        skill_name="cafe-plan",
+        script_name="must_not_run.sh",
+        body="#!/bin/sh\necho should-not-run\n",
+    )
+
+    def reject_snapshot(*_args, **_kwargs):
+        raise ValueError("runtime file-count limit exceeded")
+
+    monkeypatch.setattr(
+        "cafe.phases.generic_phase.snapshot_script_tree", reject_snapshot
+    )
+    result = GenericPhase(loader).execute(
+        skill_name="cafe-plan",
+        skill_invocation="/plan",
+        shared_skill_invocations=["/cafe-workflow-common"],
+        step_def={
+            "hooks": {"before_execute": [{"script": "must_not_run.sh", "args": {}}]},
+            "valid_intents": ["confirmed", "need_permission"],
+        },
+        agent_executor=lambda _prompt: "confirmed",
+    )
+
+    event = next(item for item in result.events if item.get("type") == "script_hook")
+    assert result.status_code == PhaseStatusCode.NEED_PERMISSION
+    assert event["status"] == "denied"
+    assert event["stdout"] == ""
+    assert event["receipt"]["details"]["reason"] == "script_identity_invalid"
+
+
+def test_script_hook_holds_catalog_lock_until_the_script_is_snapshotted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loader = _setup_loader(tmp_path)
+    _write_skill_script(
+        loader,
+        skill_name="cafe-plan",
+        script_name="stable.sh",
+        body="#!/bin/sh\necho stable\n",
+    )
+    phase = GenericPhase(loader)
+    resolved = Event()
+    allow_snapshot = Event()
+    writer_entered = Event()
+    errors: list[BaseException] = []
+    original_resolve = phase._resolve_script_path
+
+    def pause_after_resolution(*, skill_name: str, script: str) -> Path:
+        path = original_resolve(skill_name=skill_name, script=script)
+        resolved.set()
+        assert allow_snapshot.wait(timeout=5)
+        return path
+
+    def run_hook() -> None:
+        try:
+            phase.execute(
+                skill_name="cafe-plan",
+                skill_invocation="/plan",
+                shared_skill_invocations=["/cafe-workflow-common"],
+                step_def={
+                    "hooks": {"before_execute": [{"script": "stable.sh", "args": {}}]},
+                    "valid_intents": ["confirmed"],
+                },
+                agent_executor=lambda _prompt: "confirmed",
+            )
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    def publish() -> None:
+        with global_catalog_lock(loader.global_root, exclusive=True):
+            writer_entered.set()
+
+    monkeypatch.setattr(phase, "_resolve_script_path", pause_after_resolution)
+    reader = Thread(target=run_hook)
+    writer = Thread(target=publish)
+    reader.start()
+    assert resolved.wait(timeout=5)
+    writer.start()
+    try:
+        assert not writer_entered.wait(timeout=0.2)
+    finally:
+        allow_snapshot.set()
+    reader.join(timeout=5)
+    writer.join(timeout=5)
+
+    assert errors == []
+    assert writer_entered.is_set()
 
 
 def test_execute_rejects_script_hook_path_traversal(tmp_path: Path) -> None:
@@ -882,24 +1193,70 @@ def test_execute_rejects_script_hook_symlink_outside_scripts_dir(tmp_path: Path)
     link_script = scripts_dir / "escape.sh"
     link_script.symlink_to(escaped_script)
 
-    with pytest.raises(ValueError, match="must stay inside"):
-        phase.execute(
-            skill_name="cafe-plan",
-            skill_invocation="/plan",
-            shared_skill_invocations=["/cafe-workflow-common"],
-            step_def={
-                "hooks": {
-                    "before_execute": [
-                        {
-                            "script": "escape.sh",
-                            "args": {},
-                        }
-                    ]
-                },
-                "valid_intents": ["confirmed"],
-            },
-            agent_executor=lambda prompt: "confirmed",
+    result = phase.execute(
+        skill_name="cafe-plan",
+        skill_invocation="/plan",
+        shared_skill_invocations=["/cafe-workflow-common"],
+        step_def={
+            "hooks": {"before_execute": [{"script": "escape.sh", "args": {}}]},
+            "valid_intents": ["confirmed", "need_permission"],
+        },
+        agent_executor=lambda prompt: "confirmed",
+    )
+
+    event = next(item for item in result.events if item.get("type") == "script_hook")
+    assert result.status_code == PhaseStatusCode.NEED_PERMISSION
+    assert event["status"] == "denied"
+    assert event["receipt"]["details"]["reason"] == "script_identity_invalid"
+    assert event["correlation_id"]
+
+
+def test_execute_script_hook_uses_snapshot_if_target_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loader = _setup_loader(tmp_path)
+    script = _write_skill_script(
+        loader,
+        skill_name="cafe-plan",
+        script_name="stable.sh",
+        body="#!/bin/sh\necho safe\n",
+    )
+    native_run = subprocess.run
+
+    def replace_then_run(command, **kwargs):
+        script.write_text("#!/bin/sh\necho attacker\n", encoding="utf-8")
+        snapshot = command[_sandbox_script_index(command)]
+        return native_run(
+            ["/bin/sh", snapshot],
+            cwd=kwargs["cwd"],
+            env=kwargs["env"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=kwargs["timeout"],
         )
+
+    from cafe.core.sandbox_execution import SandboxExecutor
+
+    monkeypatch.setattr(
+        "cafe.phases.generic_phase.SandboxExecutor",
+        lambda: SandboxExecutor(codex_path="/usr/bin/codex", runner=replace_then_run),
+    )
+
+    result = GenericPhase(loader).execute(
+        skill_name="cafe-plan",
+        skill_invocation="/plan",
+        shared_skill_invocations=["/cafe-workflow-common"],
+        step_def={
+            "hooks": {"before_execute": [{"script": "stable.sh", "args": {}}]},
+            "valid_intents": ["confirmed"],
+        },
+        agent_executor=lambda _prompt: "confirmed",
+    )
+
+    event = next(item for item in result.events if item.get("type") == "script_hook")
+    assert event["status"] == "success"
+    assert event["stdout"].strip() == "safe"
 
 
 def test_execute_script_hook_validation_failure_stops_pipeline(tmp_path: Path) -> None:
@@ -909,11 +1266,7 @@ def test_execute_script_hook_validation_failure_stops_pipeline(tmp_path: Path) -
         loader,
         skill_name="cafe-plan",
         script_name="touch_marker.sh",
-        body=(
-            "#!/usr/bin/env bash\n"
-            "set -euo pipefail\n"
-            "echo touched > \"" + str(marker) + "\"\n"
-        ),
+        body=('#!/usr/bin/env bash\nset -euo pipefail\necho touched > "' + str(marker) + '"\n'),
     )
     phase = GenericPhase(loader)
 
@@ -1291,7 +1644,11 @@ def test_execute_script_hook_passes_timeout_to_subprocess(tmp_path: Path, monkey
         captured["timeout"] = kwargs.get("timeout")
         return subprocess.CompletedProcess(args=args[0], returncode=0, stdout="ok\n", stderr="")
 
-    monkeypatch.setattr("cafe.phases.generic_phase.subprocess.run", _run)
+    from cafe.core.sandbox_execution import SandboxExecutor
+    monkeypatch.setattr(
+        "cafe.phases.generic_phase.SandboxExecutor",
+        lambda: SandboxExecutor(codex_path="/usr/bin/codex", runner=_run),
+    )
 
     result = phase.execute(
         skill_name="cafe-plan",
@@ -1330,7 +1687,11 @@ def test_execute_script_hook_timeout_stops_pipeline(tmp_path: Path, monkeypatch:
     def _run(*args, **kwargs):
         raise subprocess.TimeoutExpired(cmd=args[0], timeout=1.0, output="partial", stderr="timed out")
 
-    monkeypatch.setattr("cafe.phases.generic_phase.subprocess.run", _run)
+    from cafe.core.sandbox_execution import SandboxExecutor
+    monkeypatch.setattr(
+        "cafe.phases.generic_phase.SandboxExecutor",
+        lambda: SandboxExecutor(codex_path="/usr/bin/codex", runner=_run),
+    )
 
     result = phase.execute(
         skill_name="cafe-plan",
@@ -1374,7 +1735,11 @@ def test_execute_script_hook_timeout_decodes_bytes_output(
     def _run(*args, **kwargs):
         raise subprocess.TimeoutExpired(cmd=args[0], timeout=1.0, output=b"partial-bytes", stderr=b"timed-bytes")
 
-    monkeypatch.setattr("cafe.phases.generic_phase.subprocess.run", _run)
+    from cafe.core.sandbox_execution import SandboxExecutor
+    monkeypatch.setattr(
+        "cafe.phases.generic_phase.SandboxExecutor",
+        lambda: SandboxExecutor(codex_path="/usr/bin/codex", runner=_run),
+    )
 
     result = phase.execute(
         skill_name="cafe-plan",

@@ -2,23 +2,22 @@
 
 from __future__ import annotations
 
+import json
+import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import Enum
-import json
 from pathlib import Path
-import threading
-from typing import Any, Mapping, Optional
+from typing import Any, Iterator, Mapping, Optional, Sequence
 from uuid import uuid4
 
 try:
     import fcntl
 except ImportError:  # pragma: no cover - Windows falls back to the local lock.
-    fcntl = None
+    fcntl = None  # type: ignore[assignment]
 
 from cafe.core.packet_io import atomic_write_bytes, canonical_json
-
 
 HUMAN_TASK_RECORD_FILENAME = "human_tasks.json"
 HUMAN_TASK_RECORD_SCHEMA_VERSION = 1
@@ -65,8 +64,10 @@ class HumanTask:
     continuations: dict[str, str]
     status: HumanTaskStatus
     created_at: str
+    capability_approval: Optional[dict[str, Any]] = None
     completed_at: Optional[str] = None
     cancelled_at: Optional[str] = None
+    superseded_by_task_id: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -82,8 +83,12 @@ class HumanTask:
             "continuations": dict(self.continuations),
             "status": self.status.value,
             "created_at": self.created_at,
+            "capability_approval": (
+                dict(self.capability_approval) if self.capability_approval is not None else None
+            ),
             "completed_at": self.completed_at,
             "cancelled_at": self.cancelled_at,
+            "superseded_by_task_id": self.superseded_by_task_id,
         }
 
     @classmethod
@@ -102,11 +107,25 @@ class HumanTask:
                 continuations=_string_mapping(data, "continuations"),
                 status=HumanTaskStatus(_required_text(data, "status")),
                 created_at=_required_text(data, "created_at"),
+                capability_approval=(
+                    _mapping(data, "capability_approval")
+                    if data.get("capability_approval") is not None
+                    else None
+                ),
                 completed_at=_optional_text(data.get("completed_at")),
                 cancelled_at=_optional_text(data.get("cancelled_at")),
+                superseded_by_task_id=_optional_text(data.get("superseded_by_task_id")),
             )
         except (TypeError, ValueError) as exc:
             raise HumanTaskRecordSchemaError(f"invalid human task: {exc}") from exc
+
+
+@dataclass(frozen=True)
+class HumanTaskMaterialization:
+    """The durable task and whether this transaction created it."""
+
+    task: HumanTask
+    created: bool
 
 
 @dataclass(frozen=True)
@@ -270,7 +289,8 @@ class _Envelope:
         version = data.get("schema_version")
         if version != HUMAN_TASK_RECORD_SCHEMA_VERSION:
             raise HumanTaskRecordSchemaError(
-                f"unsupported human-task schema version {version!r}; expected {HUMAN_TASK_RECORD_SCHEMA_VERSION}"
+                f"unsupported human-task schema version {version!r}; "
+                f"expected {HUMAN_TASK_RECORD_SCHEMA_VERSION}"
             )
         workflow_id = _required_text(data, "workflow_id")
         tasks = _records_by_task_id(data, "tasks", HumanTask.from_dict)
@@ -280,7 +300,9 @@ class _Envelope:
         raw_events = data.get("lifecycle_events", [])
         if not isinstance(raw_events, list):
             raise HumanTaskRecordSchemaError("lifecycle_events must be a list")
-        events = [LifecycleEvent.from_dict(_as_mapping(item, "lifecycle event")) for item in raw_events]
+        events = [
+            LifecycleEvent.from_dict(_as_mapping(item, "lifecycle event")) for item in raw_events
+        ]
         envelope = cls(workflow_id, tasks, assignments, waits, results, events)
         envelope.validate()
         return envelope
@@ -288,17 +310,25 @@ class _Envelope:
     def validate(self) -> None:
         for task_id, task in self.tasks.items():
             if task_id != task.id or task.workflow_id != self.workflow_id:
-                raise HumanTaskRecordSchemaError("task identity does not match its workflow envelope")
+                raise HumanTaskRecordSchemaError(
+                    "task identity does not match its workflow envelope"
+                )
             assignment = self.assignments.get(task_id)
             wait_state = self.wait_states.get(task_id)
             if assignment is None or assignment.task_id != task_id:
                 raise HumanTaskRecordSchemaError("every task requires a matching assignment")
-            if wait_state is None or wait_state.task_id != task_id or wait_state.workflow_id != self.workflow_id:
+            if (
+                wait_state is None
+                or wait_state.task_id != task_id
+                or wait_state.workflow_id != self.workflow_id
+            ):
                 raise HumanTaskRecordSchemaError("every task requires a matching wait state")
             result = self.results.get(task_id)
             if task.status is HumanTaskStatus.COMPLETED and result is None:
                 raise HumanTaskRecordSchemaError("completed task has no result")
-            if result is not None and (result.task_id != task_id or result.workflow_id != self.workflow_id):
+            if result is not None and (
+                result.task_id != task_id or result.workflow_id != self.workflow_id
+            ):
                 raise HumanTaskRecordSchemaError("result does not match its task/workflow")
 
 
@@ -312,7 +342,7 @@ class HumanTaskRecordStore:
         self.issue_dir = issue_dir
         self.file_path = issue_dir / HUMAN_TASK_RECORD_FILENAME
         self.lock_path = issue_dir / f".{HUMAN_TASK_RECORD_FILENAME}.lock"
-        self._transaction_depth = 0
+        self._transaction_local = threading.local()
 
     @property
     def exists(self) -> bool:
@@ -381,19 +411,69 @@ class HumanTaskRecordStore:
         continuations: Mapping[str, str],
         assignee_type: str,
         assignee_id: Optional[str] = None,
+        capability_approval: Optional[Mapping[str, Any]] = None,
+        handoff_key: Optional[str] = None,
+        superseded_task_ids: Sequence[str] = (),
     ) -> HumanTask:
+        return self.materialize_with_status(
+            workflow_id=workflow_id,
+            step=step,
+            iteration=iteration,
+            trigger=trigger,
+            policy_id=policy_id,
+            prompt=prompt,
+            expected_result=expected_result,
+            continuations=continuations,
+            assignee_type=assignee_type,
+            assignee_id=assignee_id,
+            capability_approval=capability_approval,
+            handoff_key=handoff_key,
+            superseded_task_ids=superseded_task_ids,
+        ).task
+
+    def materialize_with_status(
+        self,
+        *,
+        workflow_id: str,
+        step: str,
+        iteration: int,
+        trigger: str,
+        policy_id: str,
+        prompt: str,
+        expected_result: Mapping[str, Any],
+        continuations: Mapping[str, str],
+        assignee_type: str,
+        assignee_id: Optional[str] = None,
+        capability_approval: Optional[Mapping[str, Any]] = None,
+        handoff_key: Optional[str] = None,
+        superseded_task_ids: Sequence[str] = (),
+    ) -> HumanTaskMaterialization:
         with self.transaction():
             envelope = self._load_for_workflow(workflow_id, create=True)
-            handoff_key = _handoff_key(workflow_id, step, iteration, trigger, policy_id)
+            resolved_handoff_key = handoff_key or _handoff_key(
+                workflow_id, step, iteration, trigger, policy_id
+            )
             existing = next(
-                (task for task in envelope.tasks.values() if task.handoff_key == handoff_key), None
+                (
+                    task
+                    for task in envelope.tasks.values()
+                    if task.handoff_key == resolved_handoff_key
+                    and task.status is HumanTaskStatus.PENDING
+                ),
+                None,
             )
             if existing is not None:
-                return existing
+                return HumanTaskMaterialization(task=existing, created=False)
             now = _now_iso()
+            task_id = str(uuid4())
+            capability_metadata = (
+                {**dict(capability_approval), "task_id": task_id}
+                if capability_approval is not None
+                else None
+            )
             task = HumanTask(
-                id=str(uuid4()),
-                handoff_key=handoff_key,
+                id=task_id,
+                handoff_key=resolved_handoff_key,
                 workflow_id=workflow_id,
                 step=_text(step, "step"),
                 iteration=_positive(iteration, "iteration"),
@@ -404,6 +484,7 @@ class HumanTaskRecordStore:
                 continuations=_string_mapping_value(continuations, "continuations"),
                 status=HumanTaskStatus.PENDING,
                 created_at=now,
+                capability_approval=capability_metadata,
             )
             envelope.tasks[task.id] = task
             envelope.assignments[task.id] = Assignment(
@@ -418,9 +499,190 @@ class HumanTaskRecordStore:
                 pause_reason=task.trigger,
                 created_at=now,
             )
-            self._append_event(envelope, "created", task_id=task.id, context={"handoff_key": handoff_key})
+            for obsolete_task_id in dict.fromkeys(superseded_task_ids):
+                obsolete = envelope.tasks.get(obsolete_task_id)
+                if obsolete is None or obsolete.status is not HumanTaskStatus.PENDING:
+                    continue
+                cancelled = replace(
+                    obsolete,
+                    status=HumanTaskStatus.CANCELLED,
+                    cancelled_at=now,
+                    superseded_by_task_id=task.id,
+                )
+                envelope.tasks[obsolete.id] = cancelled
+                wait = envelope.wait_states[obsolete.id]
+                envelope.wait_states[obsolete.id] = replace(wait, released_at=now)
+                self._append_event(
+                    envelope,
+                    "superseded",
+                    task_id=obsolete.id,
+                    context={"replacement_task_id": task.id},
+                )
+            self._append_event(
+                envelope,
+                "created",
+                task_id=task.id,
+                context={"handoff_key": resolved_handoff_key},
+            )
             self._save(envelope)
-            return task
+            return HumanTaskMaterialization(task=task, created=True)
+
+    def update_capability_approval(
+        self,
+        *,
+        workflow_id: str,
+        task_id: str,
+        metadata: Mapping[str, Any],
+        event_type: str,
+    ) -> HumanTask:
+        """Atomically replace capability-specific state and append audit evidence."""
+        with self.transaction():
+            envelope = self._load_for_workflow(workflow_id, create=False)
+            task = self._task(envelope, task_id)
+            if task.capability_approval is None:
+                raise HumanTaskCorrelationError(f"task {task.id} is not a capability approval")
+            updated = replace(task, capability_approval=dict(metadata))
+            envelope.tasks[task.id] = updated
+            self._append_event(
+                envelope,
+                _text(event_type, "event_type"),
+                task_id=task.id,
+                context={
+                    "request_fingerprint": metadata.get("fingerprint"),
+                    "state": metadata.get("state"),
+                },
+            )
+            self._save(envelope)
+            return updated
+
+    def refresh_pending_contract(
+        self,
+        *,
+        workflow_id: str,
+        task_id: str,
+        prompt: str,
+        expected_result: Mapping[str, Any],
+        continuations: Mapping[str, str],
+    ) -> HumanTask:
+        """Atomically apply one compatible runtime-policy update to an active task."""
+        with self.transaction():
+            envelope = self._load_for_workflow(workflow_id, create=False)
+            task = self._task(envelope, task_id)
+            if task.status is not HumanTaskStatus.PENDING:
+                raise HumanTaskCorrelationError(f"task {task.id} is not pending")
+            wait_state = envelope.wait_states[task.id]
+            if wait_state.released_at is not None or task.id in envelope.results:
+                raise HumanTaskCorrelationError(f"task {task.id} has no active wait state")
+            if task.capability_approval is not None:
+                raise HumanTaskCorrelationError(
+                    f"task {task.id} is a capability approval, not a runtime policy task"
+                )
+
+            refreshed = replace(
+                task,
+                prompt=_text(prompt, "prompt"),
+                expected_result=dict(expected_result),
+                continuations=_string_mapping_value(continuations, "continuations"),
+            )
+            if refreshed == task:
+                return task
+
+            envelope.tasks[task.id] = refreshed
+            self._append_event(
+                envelope,
+                "contract_refreshed",
+                task_id=task.id,
+                context={
+                    "policy_id": task.policy_id,
+                    "continuations": sorted(refreshed.continuations),
+                },
+            )
+            self._save(envelope)
+            return refreshed
+
+    def transition_capability_approval_if_state(
+        self,
+        *,
+        workflow_id: str,
+        task_id: str,
+        expected_state: str,
+        metadata: Mapping[str, Any],
+        event_type: str,
+    ) -> tuple[HumanTask, bool]:
+        """Replace capability state only when the persisted prior state matches."""
+        with self.transaction():
+            envelope = self._load_for_workflow(workflow_id, create=False)
+            task = self._task(envelope, task_id)
+            current = task.capability_approval
+            if current is None:
+                raise HumanTaskCorrelationError(f"task {task.id} is not a capability approval")
+            if current.get("state") != expected_state:
+                return task, False
+            updated = replace(task, capability_approval=dict(metadata))
+            envelope.tasks[task.id] = updated
+            self._append_event(
+                envelope,
+                _text(event_type, "event_type"),
+                task_id=task.id,
+                context={
+                    "request_fingerprint": metadata.get("fingerprint"),
+                    "state": metadata.get("state"),
+                },
+            )
+            self._save(envelope)
+            return updated, True
+
+    def transition_capability_approval(
+        self,
+        *,
+        workflow_id: str,
+        task_id: str,
+        metadata: Mapping[str, Any],
+        event_type: str,
+        terminal_status: Optional[HumanTaskStatus] = None,
+        result_payload: Optional[Mapping[str, Any]] = None,
+        result_source: str = "capability_approval",
+    ) -> HumanTask:
+        """Persist capability state and its wait/result boundary in one transaction."""
+        with self.transaction():
+            envelope = self._load_for_workflow(workflow_id, create=False)
+            task = self._task(envelope, task_id)
+            if task.capability_approval is None:
+                raise HumanTaskCorrelationError(f"task {task.id} is not a capability approval")
+            now = _now_iso()
+            updates: dict[str, Any] = {"capability_approval": dict(metadata)}
+            if terminal_status is HumanTaskStatus.COMPLETED:
+                updates["status"] = HumanTaskStatus.COMPLETED
+                updates["completed_at"] = task.completed_at or now
+            elif terminal_status is HumanTaskStatus.CANCELLED:
+                updates["status"] = HumanTaskStatus.CANCELLED
+                updates["cancelled_at"] = task.cancelled_at or now
+            updated = replace(task, **updates)
+            envelope.tasks[task.id] = updated
+            if terminal_status is not None:
+                wait = envelope.wait_states[task.id]
+                if wait.released_at is None:
+                    envelope.wait_states[task.id] = replace(wait, released_at=now)
+            if result_payload is not None and task.id not in envelope.results:
+                envelope.results[task.id] = TaskResult(
+                    id=str(uuid4()),
+                    task_id=task.id,
+                    workflow_id=workflow_id,
+                    payload=dict(result_payload),
+                    source=_text(result_source, "result_source"),
+                    completed_at=now,
+                )
+            self._append_event(
+                envelope,
+                _text(event_type, "event_type"),
+                task_id=task.id,
+                context={
+                    "request_fingerprint": metadata.get("fingerprint"),
+                    "state": metadata.get("state"),
+                },
+            )
+            self._save(envelope)
+            return updated
 
     def complete(
         self,
@@ -451,9 +713,13 @@ class HumanTaskRecordStore:
                 completed_at=now,
             )
             envelope.results[task.id] = result
-            envelope.tasks[task.id] = replace(task, status=HumanTaskStatus.COMPLETED, completed_at=now)
+            envelope.tasks[task.id] = replace(
+                task, status=HumanTaskStatus.COMPLETED, completed_at=now
+            )
             envelope.wait_states[task.id] = replace(wait_state, released_at=now)
-            self._append_event(envelope, "completed", task_id=task.id, context={"result_id": result.id})
+            self._append_event(
+                envelope, "completed", task_id=task.id, context={"result_id": result.id}
+            )
             self._save(envelope)
             return result
 
@@ -507,14 +773,15 @@ class HumanTaskRecordStore:
             self._save(envelope)
 
     @contextmanager
-    def transaction(self):
+    def transaction(self) -> Iterator[None]:
         """Serialize a durable record transition across threads and POSIX processes."""
-        if self._transaction_depth:
-            self._transaction_depth += 1
+        depth = getattr(self._transaction_local, "depth", 0)
+        if depth:
+            self._transaction_local.depth = depth + 1
             try:
                 yield
             finally:
-                self._transaction_depth -= 1
+                self._transaction_local.depth -= 1
             return
 
         with self._thread_lock_for(self.file_path):
@@ -522,11 +789,11 @@ class HumanTaskRecordStore:
             with self.lock_path.open("a+", encoding="utf-8") as lock_file:
                 if fcntl is not None:
                     fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-                self._transaction_depth = 1
+                self._transaction_local.depth = 1
                 try:
                     yield
                 finally:
-                    self._transaction_depth = 0
+                    self._transaction_local.depth = 0
                     if fcntl is not None:
                         fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
@@ -616,7 +883,9 @@ def _string_mapping(data: Mapping[str, Any], field_name: str) -> dict[str, str]:
 
 
 def _string_mapping_value(value: Mapping[str, Any], field_name: str) -> dict[str, str]:
-    return {_text(str(key), field_name): _text(str(item), field_name) for key, item in value.items()}
+    return {
+        _text(str(key), field_name): _text(str(item), field_name) for key, item in value.items()
+    }
 
 
 def _required_text(data: Mapping[str, Any], field_name: str) -> str:

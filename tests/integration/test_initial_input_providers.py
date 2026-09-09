@@ -20,6 +20,8 @@ from cafe.skills.native_bridge import NativeSkillBridge
 from cafe.ui.cli import app
 from cafe.utils.phase_config import PhaseStepModelResolution
 
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
+
 runner = CliRunner()
 
 
@@ -117,7 +119,7 @@ playbook:
   id: intake
 roles:
   researcher:
-    default_agent: David
+    default_agent: Morgan
 entry_point: intake
 steps:
   intake:
@@ -231,7 +233,7 @@ def _prepare_intake_issue(
         generic_phase=generic_phase,
         agent_manager=manager,
         git_ops=_GitOps(),
-        role_agent_map={"researcher": "David"},
+        role_agent_map={"researcher": "Morgan"},
         step_user_inputs=step_user_inputs,
     )
     return executor, manager, issue_dir, step
@@ -263,7 +265,13 @@ def _prepare_builtin_issue(
     ):
         result = runner.invoke(
             app,
-            ["prepare", issue_name, "--no-interactive", "--input-method=manual"],
+            [
+                "prepare",
+                issue_name,
+                "--no-interactive",
+                "--input-method=manual",
+                "--no-auto-create-pr",
+            ],
         )
     assert result.exit_code == 0, result.stdout
 
@@ -338,7 +346,7 @@ def test_builtin_workflows_prepare_and_seed_their_first_spec_step(
 ) -> None:
     """I3 — the shared built-in contract preserves prepare and first-step seeding."""
     monkeypatch.chdir(tmp_path)
-    playbook_id = "default"
+    playbook_id = "standard"
     executor, manager, issue_dir, step = _prepare_builtin_issue(
         tmp_path, playbook_id=playbook_id
     )

@@ -11,10 +11,11 @@
 [ ] Confirm: All issues are fixed
 [ ] Read the plan **Test List** in .cafe/issues/test/plan/iteration_001/output.md; new or changed tests still map to listed items and follow `src/cafe/data/skills/cafe-plan/references/test_invariants_policy.md`
 [ ] Confirm: Corrected tests do not reintroduce brittle bindings (UI copy, CSS classes, DOM structure, internal state shape) unless the spec explicitly allows them
-[ ] Confirm: All correction commits are made and the worktree is clean, then run the final repository-defined full test command exactly once through `cafe verification run --output-file .cafe/issues/test/develop/iteration_001/output.md --scope full -- <command>`
-[ ] Confirm: `cafe verification run` reported a valid receipt; do not change HEAD or tracked files afterward
-[ ] Confirm: All tests pass and are not fragile
-[ ] Write a non-empty development summary to .cafe/issues/test/develop/iteration_001/output.md; the verification receipt does not replace this summary
+[ ] Run targeted tests for corrected behavior with bounded output; when a plan is supplied, map them to its Test List; do not rerun repository full-suite, coverage, release, or pre-push gates from this phase
+[ ] Confirm: All correction commits are made and the worktree is clean
+[ ] Confirm: Repository pre-commit hooks ran for normal commits when configured; any user-authorized bypass is recorded in the development summary
+[ ] Confirm: Targeted checks pass and tests are not fragile
+[ ] Write a non-empty development summary to .cafe/issues/test/develop/iteration_001/output.md
 [ ] Write the next-step baton to hand off to the next workflow target; the runtime updates blackboard
 
 ## Handoff Targets
@@ -27,6 +28,7 @@
 
 [ ] 新增或修改 declaration、設定欄位或共用 runtime 參數時，追蹤 `schema/validation → effective resolver/defaults → production callers` 的完整接線；明確檢查適用的 primary、backup、retry 與 resume 路徑，不適用者需留下理由
 [ ] 為上述接線新增至少一個經過 public caller path 的 regression test，且移除任一必要 forwarding 時該測試必須失敗；只直接測 helper 或手動傳值不足以證明 production 接線
+[ ] 確認 long-running script 不會造成不可接受的系統負荷或資源放大
 
 
 ## Agent Guidelines Checklist

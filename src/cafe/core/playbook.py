@@ -6,10 +6,17 @@ import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Mapping, Optional, Union
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from cafe.core.human_tasks import HumanTaskBinding
 from cafe.core.initial_input import (
@@ -35,6 +42,10 @@ RUNTIME_TOOL_GRANTS = frozenset({"web_research", "git_inspection"})
 RigorLevel = Literal["low", "medium", "high"]
 InputMethodDefault = Literal["manual", "github"]
 CONVERSATION_LOCALE_PATTERN = re.compile(r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$")
+APPLICABILITY_SUMMARY_MAX_LENGTH = 160
+APPLICABILITY_CONDITION_MAX_LENGTH = 200
+APPLICABILITY_CONDITION_MIN_COUNT = 1
+APPLICABILITY_CONDITION_MAX_COUNT = 6
 
 
 def _non_empty(value: str, *, field_name: str) -> str:
@@ -42,6 +53,84 @@ def _non_empty(value: str, *, field_name: str) -> str:
     if not token:
         raise ValueError(f"{field_name} must not be empty")
     return token
+
+
+def _normalize_applicability_text(value: str) -> str:
+    return " ".join(value.split())
+
+
+class PlaybookApplicability(BaseModel):
+    """Bounded, machine-readable workflow selection intent."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    summary: str
+    use_when: List[str]
+    avoid_when: List[str]
+
+    @field_validator("summary")
+    @classmethod
+    def _validate_summary(cls, value: str) -> str:
+        normalized = _normalize_applicability_text(value)
+        if not normalized:
+            raise ValueError("playbook.applicability.summary must not be empty")
+        if len(normalized) > APPLICABILITY_SUMMARY_MAX_LENGTH:
+            raise ValueError(
+                "playbook.applicability.summary must be at most "
+                f"{APPLICABILITY_SUMMARY_MAX_LENGTH} characters"
+            )
+        return normalized
+
+    @field_validator("use_when", "avoid_when")
+    @classmethod
+    def _validate_conditions(cls, value: List[str], info) -> List[str]:
+        field_name = info.field_name
+        if not (
+            APPLICABILITY_CONDITION_MIN_COUNT
+            <= len(value)
+            <= APPLICABILITY_CONDITION_MAX_COUNT
+        ):
+            raise ValueError(
+                f"playbook.applicability.{field_name} must contain "
+                f"{APPLICABILITY_CONDITION_MIN_COUNT}–"
+                f"{APPLICABILITY_CONDITION_MAX_COUNT} conditions"
+            )
+
+        normalized: List[str] = []
+        seen: set[str] = set()
+        for condition in value:
+            token = _normalize_applicability_text(condition)
+            if not token:
+                raise ValueError(
+                    f"playbook.applicability.{field_name} conditions must not be empty"
+                )
+            if len(token) > APPLICABILITY_CONDITION_MAX_LENGTH:
+                raise ValueError(
+                    f"playbook.applicability.{field_name} conditions must be at most "
+                    f"{APPLICABILITY_CONDITION_MAX_LENGTH} characters"
+                )
+            comparison_key = token.casefold()
+            if comparison_key in seen:
+                raise ValueError(
+                    f"playbook.applicability.{field_name} must not contain duplicate "
+                    "conditions after whitespace and case normalization"
+                )
+            seen.add(comparison_key)
+            normalized.append(token)
+        return normalized
+
+    @model_validator(mode="after")
+    def _validate_consistency(self) -> "PlaybookApplicability":
+        positive = {condition.casefold() for condition in self.use_when}
+        contradictions = [
+            condition for condition in self.avoid_when if condition.casefold() in positive
+        ]
+        if contradictions:
+            raise ValueError(
+                "playbook.applicability.avoid_when must not contradict use_when after "
+                "whitespace and case normalization"
+            )
+        return self
 
 
 class PlaybookMeta(BaseModel):
@@ -52,6 +141,7 @@ class PlaybookMeta(BaseModel):
     id: str
     name: Optional[str] = None
     conversation_locale: str = "auto"
+    applicability: Optional[PlaybookApplicability] = None
 
     @field_validator("conversation_locale")
     @classmethod
@@ -136,6 +226,17 @@ class StepHooks(BaseModel):
     prepare_input: List[Union[str, Dict[str, Any]]] = Field(default_factory=list)
     after_execute: List[Union[str, Dict[str, Any]]] = Field(default_factory=list)
     publish_output: List[Union[str, Dict[str, Any]]] = Field(default_factory=list)
+
+    @field_validator("before_execute", "prepare_input", "after_execute", "publish_output")
+    @classmethod
+    def _reject_playbook_capability_hooks(
+        cls, value: List[Union[str, Dict[str, Any]]]
+    ) -> List[Union[str, Dict[str, Any]]]:
+        if any(isinstance(item, dict) and "capability" in item for item in value):
+            raise ValueError(
+                "capability hooks are runtime-owned and cannot be declared by playbooks"
+            )
+        return value
 
 
 SkillSelector = Union[str, Dict[str, str]]
@@ -414,8 +515,8 @@ class StepConfig(BaseModel):
     capability_requests: List[str] = Field(default_factory=list)
     behavior: StepBehaviorDeclaration = Field(default_factory=StepBehaviorDeclaration)
     valid_intents: List[str] = Field(default_factory=list)
-    max_iterations: Optional[Union[int, str]] = None
-    correction_session: Literal["fresh", "resume"] = "fresh"
+    max_attempts_per_cycle: Optional[int] = None
+    correction_session: Literal["fresh", "resume"] = "resume"
     allowed_goto: List[str] = Field(default_factory=list)
     hooks: StepHooks = Field(default_factory=StepHooks)
     auto_snapshot: bool = True
@@ -424,6 +525,30 @@ class StepConfig(BaseModel):
     alignment: Optional[StepAlignmentConfig] = None
     human_tasks: tuple[HumanTaskBinding, ...] = ()
     on: Dict[str, str]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_attempt_limit(cls, data: Any) -> Any:
+        if not isinstance(data, dict) or "max_iterations" not in data:
+            return data
+        if "max_attempts_per_cycle" in data:
+            raise ValueError(
+                "step cannot declare both max_attempts_per_cycle and legacy max_iterations"
+            )
+        migrated = dict(data)
+        migrated["max_attempts_per_cycle"] = migrated.pop("max_iterations")
+        return migrated
+
+    @field_validator("max_attempts_per_cycle", mode="before")
+    @classmethod
+    def _validate_attempt_limit(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, str) and value.isdigit():
+            value = int(value)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError("max_attempts_per_cycle must be a positive integer")
+        return value
 
     @model_validator(mode="after")
     def _validate_input_artifact_scope(self) -> "StepConfig":
@@ -525,6 +650,25 @@ class StepConfig(BaseModel):
         if "default" not in normalized and not any(key.isdigit() for key in normalized):
             raise ValueError("skill mapping must include 'default' or numbered iteration keys")
         return normalized
+
+
+def resolve_step_attempt_limit(step_def: Mapping[str, Any]) -> Optional[int]:
+    """Resolve the current or legacy per-cycle attempt limit."""
+    if "max_attempts_per_cycle" in step_def and "max_iterations" in step_def:
+        raise ValueError(
+            "step cannot declare both max_attempts_per_cycle and legacy max_iterations"
+        )
+    raw_limit = step_def.get(
+        "max_attempts_per_cycle",
+        step_def.get("max_iterations"),
+    )
+    if raw_limit is None:
+        return None
+    if isinstance(raw_limit, str) and raw_limit.isdigit():
+        raw_limit = int(raw_limit)
+    if isinstance(raw_limit, bool) or not isinstance(raw_limit, int) or raw_limit < 1:
+        raise ValueError("max_attempts_per_cycle must be a positive integer")
+    return raw_limit
 
 
 class PrepareSetupModeEntry(BaseModel):
@@ -661,7 +805,7 @@ _PREPARE_FIELDS_ONLY_KEYS = frozenset({"fields", "fields_ref"})
 
 
 def default_prepare_config() -> PrepareConfig:
-    """Return backward-compatible prepare defaults matching the built-in default playbook."""
+    """Return backward-compatible prepare defaults matching the standard playbook."""
     return PrepareConfig()
 
 
@@ -672,21 +816,57 @@ def resolve_prepare_config(model: PlaybookDefinition) -> PrepareConfig:
     return default_prepare_config()
 
 
+def playbook_requests_capability(
+    model: PlaybookDefinition | Mapping[str, Any],
+    capability_id: str,
+) -> bool:
+    """Return whether any effective step requests ``capability_id``."""
+    steps = model.steps if isinstance(model, PlaybookDefinition) else model.get("steps", {})
+    if not isinstance(steps, Mapping):
+        return False
+    return any(
+        capability_id
+        in (
+            step.capability_requests
+            if isinstance(step, StepConfig)
+            else step.get("capability_requests", [])
+            if isinstance(step, Mapping)
+            else []
+        )
+        for step in steps.values()
+    )
+
+
 def confirmation_gate_steps(model: PlaybookDefinition) -> tuple[str, ...]:
-    """Return ordered steps that declare a planned user confirmation gate.
+    """Return ordered confirmation gates assignable in the kickoff contract.
 
     ``on.confirm_output`` is the playbook-level declaration that a completed
-    step may hand its output to the user for approval. A binding that declares
-    feedback delivery is a runtime local-review loop, not a kickoff scheduling
-    choice. Other user-owned intents such as clarification, permission, and
-    alignment checkpoints are reactive safety interruptions rather than
-    kickoff confirmation choices.
+    step may hand its output to the user for approval. A matching binding that
+    declares feedback delivery is a mandatory human task, not an assignable
+    kickoff choice. Other user-owned intents such as clarification, permission,
+    and alignment checkpoints are reactive safety interruptions.
     """
     return tuple(
         step_name
         for step_name, step in model.steps.items()
         if "confirm_output" in step.on
-        and not any(binding.feedback_delivery is not None for binding in step.human_tasks)
+        and not _has_mandatory_confirmation_gate(step)
+    )
+
+
+def mandatory_confirmation_gate_steps(model: PlaybookDefinition) -> tuple[str, ...]:
+    """Return ordered confirmation gates that always require a HumanTask."""
+    return tuple(
+        step_name
+        for step_name, step in model.steps.items()
+        if "confirm_output" in step.on and _has_mandatory_confirmation_gate(step)
+    )
+
+
+def _has_mandatory_confirmation_gate(step: StepConfig) -> bool:
+    return any(
+        binding.trigger == "confirm_output" and binding.feedback_delivery is not None
+        for binding in step.human_tasks
     )
 
 
@@ -709,9 +889,8 @@ class PlaybookDefinition(BaseModel):
             self.entry_point = next(iter(self.steps.keys()))
 
         def declares_workflow_feedback(step: StepConfig) -> bool:
-            return (
-                "input_artifacts" in step.model_fields_set
-                and "workflow_feedback" in (step.input_artifacts or [])
+            return "input_artifacts" in step.model_fields_set and "workflow_feedback" in (
+                step.input_artifacts or []
             )
 
         def github_pr_feedback_source_stages(step: StepConfig) -> list[str]:
@@ -725,10 +904,7 @@ class PlaybookDefinition(BaseModel):
                 )
                 if any(
                     hook == "GitHubPRFeedbackSource"
-                    or (
-                        isinstance(hook, dict)
-                        and hook.get("name") == "GitHubPRFeedbackSource"
-                    )
+                    or (isinstance(hook, dict) and hook.get("name") == "GitHubPRFeedbackSource")
                     for hook in hooks
                 )
             ]
@@ -774,14 +950,23 @@ class PlaybookDefinition(BaseModel):
                             f"steps.{step_name}.human_tasks feedback_delivery target "
                             f"{delivery_target!r} must declare workflow_feedback in input_artifacts"
                         )
-            if (
-                behavior.publish_confirmation
-                and "cafe.pr.publish" not in step.capability_requests
-            ):
+            if behavior.publish_confirmation and "cafe.pr.publish" not in step.capability_requests:
                 raise ValueError(
                     f"steps.{step_name}.behavior.publish_confirmation requires "
                     "the cafe.pr.publish capability request"
                 )
+            if behavior.completion == "baton":
+                invalid_terminal_intents = sorted(
+                    intent
+                    for intent, target in step.on.items()
+                    if target in {DONE_TARGET, "done"} and intent != "workflow_complete"
+                )
+                if invalid_terminal_intents:
+                    raise ValueError(
+                        f"steps.{step_name}.behavior.completion='baton' requires terminal "
+                        "transitions to use workflow_complete; invalid intents: "
+                        f"{invalid_terminal_intents}"
+                    )
             _validate_ownership_contract(step_name, step, self.steps)
         return self
 
@@ -893,8 +1078,32 @@ class LoadedPlaybook:
     source: str
     warnings: List[str]
 
+    @property
+    def automatic_selection_eligible(self) -> bool:
+        """Whether selection has explicit evidence instead of inferred metadata."""
+        return self.model.playbook.applicability is not None
+
     def as_dict(self) -> Dict:
-        return self.model.model_dump(exclude_none=True)
+        return PlaybookData(
+            self.model.model_dump(exclude_none=True),
+            source=self.source,
+            path=self.path,
+        )
+
+
+class PlaybookData(dict):
+    """Validated playbook data retaining trusted loader provenance out of band."""
+
+    def __init__(
+        self,
+        *args: Any,
+        source: str = "unknown",
+        path: Optional[Path] = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.source = source
+        self.path = path
 
 
 def normalize_playbook_yaml(data: Dict) -> Dict:
@@ -933,7 +1142,31 @@ def load_playbook_file(
     if data is None:
         raise ValueError(f"Playbook is empty: {path}")
     data = normalize_playbook_yaml(data)
-    model = PlaybookDefinition.model_validate(data)
+    try:
+        model = PlaybookDefinition.model_validate(data)
+    except ValidationError as exc:
+        applicability_errors = [
+            error
+            for error in exc.errors()
+            if tuple(error.get("loc", ()))[:2] == ("playbook", "applicability")
+        ]
+        if not applicability_errors:
+            raise
+        raw_playbook = data.get("playbook") if isinstance(data, dict) else None
+        playbook_id = (
+            raw_playbook.get("id", path.stem)
+            if isinstance(raw_playbook, dict)
+            else path.stem
+        )
+        details = "; ".join(
+            f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
+            for error in exc.errors()
+        )
+        raise ValueError(
+            f"Playbook '{playbook_id}' has invalid playbook.applicability: {details}. "
+            "Repair summary, use_when, and avoid_when, then run "
+            f"cafe playbook validate {playbook_id} --strict"
+        ) from exc
     warnings = validate_playbook(
         model,
         skill_loader=skill_loader,
@@ -955,6 +1188,14 @@ def validate_playbook(
     """Apply semantic validation and return non-fatal warnings."""
     warnings: List[str] = []
     steps = model.steps
+
+    if model.playbook.applicability is None:
+        warnings.append(
+            f"Playbook '{model.playbook.id}' is missing playbook.applicability; add "
+            "summary, use_when, and avoid_when, then run "
+            f"cafe playbook validate {model.playbook.id} --strict. The playbook remains "
+            "available for explicit selection but is ineligible for automatic recommendation."
+        )
 
     entry = model.entry_point
     if entry is not None and entry not in steps:
@@ -1048,7 +1289,8 @@ def _validate_initial_input_declarations(model: PlaybookDefinition, *, source: s
         if step_name != model.entry_point:
             raise ValueError(f"{field_path} is only allowed on entry_point {model.entry_point!r}")
         if declaration.legacy_presentation and (
-            source != "builtin" or model.playbook.id not in {"default", "simple", "tdd"}
+            source != "builtin"
+            or model.playbook.id not in {"standard", "standard-qa", "simple", "tdd", "tdd-qa"}
         ):
             raise ValueError(
                 f"{field_path}.legacy_presentation is reserved for bundled development playbooks"
@@ -1275,6 +1517,7 @@ def _validate_feedback_target_prompt_inputs(
     skill_loader: SkillLoader,
 ) -> None:
     """Ensure routed feedback is exposed to every possible target skill."""
+
     def receives_workflow_feedback(skill_name: str) -> bool:
         return any(
             mapping.artifacts[0] == "workflow_feedback"
@@ -1298,9 +1541,7 @@ def _validate_feedback_target_prompt_inputs(
         for source, target_name in targets:
             target = model.steps[target_name]
             selectors = (
-                [target.skill]
-                if isinstance(target.skill, str)
-                else list(target.skill.values())
+                [target.skill] if isinstance(target.skill, str) else list(target.skill.values())
             )
             missing = [
                 canonical_skill_name(skill_name)

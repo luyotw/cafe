@@ -1,13 +1,14 @@
 ---
 name: write-cafe-playbook
-description: Use this skill when creating, restructuring, reviewing, or repairing a CAFE playbook YAML under src/cafe/data/playbooks or .cafe/playbooks. Covers conversation locale, step graphs, roles, artifacts, plan/checklist handoffs, forward plan chains, user review loops, conditional skips, hooks, tools, and strict validation. Use it whenever a user asks to write or update a CAFE playbook, or use-cafe-workflow identifies a playbook declarative defect.
-version: 1.4.0
+description: Use this skill when creating, restructuring, reviewing, or repairing a CAFE playbook YAML under src/cafe/data/playbooks or .cafe/playbooks. Covers applicability, conversation locale, step graphs, roles, artifacts, plan/checklist handoffs, forward plan chains, user review loops, conditional skips, hooks, tools, and strict validation. Use it whenever a user asks to write or update a CAFE playbook, or use-cafe-workflow identifies a playbook declarative defect.
+version: 1.4.1
 ---
 
 # Write CAFE Playbook
 
 ## Purpose
 - Turn a confirmed workflow and its phase skills into a runtime-valid CAFE playbook.
+- Make the playbook's bounded selection intent explicit without duplicating graph facts.
 - Make ownership, artifact flow, user gates, optional phases, and recovery paths explicit before execution.
 - Own and repair the playbook declarative layer without crossing into phase, driver, or CAFE runtime implementation.
 
@@ -24,6 +25,8 @@ version: 1.4.0
 - Locate every phase skill and read its `## Context`, `## Output`, user confirmation gates, routing rules, external-cost approvals, and completion conditions.
 - Draw the intended happy path and identify optional phases, same-phase user revision loops, and exceptional recovery routes.
 - Build an artifact matrix before writing YAML. Distinguish ordinary result/report handoffs from true plan → execute pairs.
+- Draft concrete positive and negative applicability conditions, then compare them
+  with the resolved graph for consistency and contradictions.
 - If one phase executes an incoming plan and its user-confirmed result determines the next phase, use a serial `plan` bridge instead of adding a checklist-only phase.
 - Stop and fix the skill contracts with `write-cafe-phase` when a downstream phase would otherwise rediscover scope, guess source files, or implement work without a confirmed plan.
 
@@ -31,8 +34,8 @@ version: 1.4.0
 
 - Accept a repair classification from `use-cafe-workflow` only when the evidence
   points to the playbook graph or declarations: steps, transitions, roles,
-  artifacts, intents, allowed tools, hooks, prepare metadata, or confirmation
-  gates.
+  applicability, artifacts, intents, allowed tools, hooks, prepare metadata, or
+  confirmation gates.
 - Edit the writable source of truth: `.cafe/playbooks/<id>.yaml` for a project
   playbook, or `src/cafe/data/playbooks/<id>.yaml` only when the current
   authorized repository is CAFE. Do not repair installed package contents,
@@ -50,6 +53,12 @@ version: 1.4.0
 
 ## Design Rules
 - Put builtin playbooks at `src/cafe/data/playbooks/<id>.yaml`; put project playbooks at `.cafe/playbooks/<id>.yaml`. Keep filename stem and `playbook.id` identical.
+- Declare `playbook.applicability` with a non-empty summary, 1–6 positive
+  `use_when` conditions, and 1–6 negative `avoid_when` conditions. Keep the
+  summary within 160 characters and each condition within 200 characters.
+  Describe suitability and selection intent; do not restate graph facts such as
+  steps, gates, QA ownership, or publication behavior. The resolved graph
+  remains authoritative.
 - Set `playbook.conversation_locale` to a BCP 47 language tag such as `zh-TW`
   or `en-US` when the workflow driver should use a fixed conversation language.
   Use `auto` only when the current user's language should be inherited. Locale
@@ -67,7 +76,7 @@ version: 1.4.0
 - For a workflow with interactive setup, declare `commands.prepare.fields` or `fields_ref`; own all prompt copy and defaults there. For a workflow without setup, explicitly set `commands.prepare.prompt_for_spec_plan_config: false`.
 
 ## Writing Process
-1. Inventory the conversation locale, skills, expected outputs, user gates,
+1. Inventory applicability, conversation locale, skills, expected outputs, user gates,
    paid operations, and source-of-truth files.
 2. Write the happy-path step order and mark every optional phase and terminal step.
 3. Create an artifact matrix with producer, artifact key, consumer, and whether the artifact is a result or implementation plan.
@@ -75,8 +84,8 @@ version: 1.4.0
 5. Write the YAML using the template and field rules in `references/playbook-spec.md`.
 6. Run `cafe skill validate --strict` so the referenced skills and placeholders are valid.
 7. Run `cafe playbook validate <id> --strict`, inspect `cafe playbook show <id>`,
-   and run `cafe playbook confirmation-gates <id>` to verify the planned user
-   confirmation candidates.
+   and run `cafe playbook confirmation-gates <id>` to verify both assignable
+   confirmation candidates and mandatory HumanTask gates.
 8. Run `cafe playbook simulate <id> --dot`; fix unreachable steps, missing intent handlers, dead ends, and unintended directed cycles.
 9. Add a focused schema or artifact assertion when using serial `plan` bridges or nontrivial skip branches.
 
@@ -90,7 +99,11 @@ version: 1.4.0
 - `playbook.conversation_locale` is `auto` or a valid BCP 47 language tag, and
   its user-facing effect is documented without implying that technical
   identifiers are translated.
+- `playbook.applicability` has complete bounded summary, positive and negative
+  conditions; normalized conditions are unique, non-contradictory, and
+  consistent with the graph without copying graph facts.
 - Every declared `valid_intents` outcome has a matching transition key.
+- Every mandatory HumanTask gate is excluded from kickoff assignment and remains user-owned.
 - User review loops stay in the current phase; normal workflow progress remains forward-only.
 - Every implementation plan has exactly one producer and an execute consumer reading `plan`.
 - Optional phases have an explicit skip and do not leave unchecked tasks in a `not_required` plan.

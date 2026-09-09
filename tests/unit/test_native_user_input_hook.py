@@ -1,11 +1,16 @@
 """Tests for workflow user-input hooks."""
 
+import hashlib
 import json
+from contextlib import nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from cafe.core.capabilities import pr_synced_event_from_receipt
+from cafe.core.git import GitOperations
 from cafe.core.hooks.native import (
     GitHubIssueFetcher,
     GitHubPRCreator,
@@ -19,16 +24,75 @@ from cafe.core.workflow_models import StepExecutionResult
 from cafe.phases.generic_phase import GenericPhaseExecution
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
 
-
 PUBLISH_STEP = {
     "capability_requests": ["cafe.pr.publish"],
     "behavior": {"publish_confirmation": True},
 }
 
+BATON_REVIEW_PUBLISH_STEP = {
+    "skill": "cafe-pr",
+    "capability_requests": ["cafe.pr.publish"],
+    "behavior": {"completion": "baton", "publish_confirmation": True},
+    "human_tasks": [
+        {
+            "trigger": "confirm_output",
+            "task_id": "local-review",
+            "outcomes": {
+                "fix_now": "develop",
+                "create_follow_up": "_done",
+                "continue_without_issue": "_done",
+            },
+        }
+    ],
+    "on": {"confirm_output": "pr"},
+}
+
+BATON_TERMINAL_PUBLISH_STEP = {
+    "skill": "cafe-pr",
+    "capability_requests": ["cafe.pr.publish"],
+    "behavior": {"completion": "baton", "publish_confirmation": True},
+    "on": {"workflow_complete": "_done"},
+}
+
+BATON_UNBOUND_REVIEW_PUBLISH_STEP = {
+    "skill": "cafe-pr",
+    "capability_requests": ["cafe.pr.publish"],
+    "behavior": {"completion": "baton", "publish_confirmation": True},
+    "on": {"confirm_output": "pr"},
+}
+
+
+def _browser_phase(*, open_pr: bool) -> SimpleNamespace:
+    return SimpleNamespace(open_pr=open_pr)
+
 
 def _enable_remote_pr(issue_dir: Path) -> None:
     issue_dir.mkdir(parents=True, exist_ok=True)
     (issue_dir / "issue.yaml").write_text("pr:\n  auto_create: true\n", encoding="utf-8")
+
+
+def test_successful_publish_receipt_yields_one_validated_pr_synced_event() -> None:
+    """Test List 6/8: direct and approval-resume receipts share URL validation."""
+    receipt = {
+        "capability": "cafe.pr.publish",
+        "success": True,
+        "outputs": {
+            "pr_url": "https://github.com/acme/widgets/pull/467",
+            "pr_number": "467",
+            "action": "updated",
+        },
+    }
+
+    event = pr_synced_event_from_receipt(receipt)
+
+    assert event is not None
+    assert event["type"] == "pr_synced"
+    assert event["url"] == "https://github.com/acme/widgets/pull/467"
+    assert event["source"] == "capability"
+    assert pr_synced_event_from_receipt({**receipt, "success": False}) is None
+    assert pr_synced_event_from_receipt(
+        {**receipt, "outputs": {"pr_number": "467"}}
+    ) is None
 
 
 class _FakePhase:
@@ -151,6 +215,7 @@ def test_user_input_collector_brief_ready_for_review_uses_delta_when_confirm_out
 
     mock_display_output.assert_not_called()
     mock_display_delta.assert_called_once()
+    assert phase._ask_user_for_review_decision.call_args.kwargs["role"] == "editor"
 
 
 def test_user_input_collector_plan_ready_for_review_skips_full_output_display_when_delta_available(
@@ -248,11 +313,11 @@ def test_user_input_collector_uses_resolved_publish_contract_from_context(tmp_pa
 
 
 def test_user_input_collector_loads_interactive_qa_for_need_clarification(tmp_path: Path) -> None:
-    phase_dir = tmp_path / "spec"
+    phase_dir = tmp_path / "qa"
     prev_iter_dir = phase_dir / "iteration_001"
     prev_iter_dir.mkdir(parents=True, exist_ok=True)
     (prev_iter_dir / "output.md").write_text("# Spec\n", encoding="utf-8")
-    _record_previous_step_status(tmp_path, "spec", "need_clarification")
+    _record_previous_step_status(tmp_path, "qa", "need_clarification")
     (prev_iter_dir / "questions.xml").write_text(
         """<?xml version="1.0" encoding="UTF-8"?>
 <questions>
@@ -277,18 +342,19 @@ def test_user_input_collector_loads_interactive_qa_for_need_clarification(tmp_pa
         result = hook.run(
             stage="prepare_input",
             phase=phase,
-            step_name="spec",
-            step_def={"role": "pm"},
-            agent_name="Roger",
+            step_name="qa",
+            step_def={"role": "qa"},
+            agent_name="Quinn",
         )
 
     assert result.context_updates["user_input"] == "Q1: Question?\nA1: Answer"
     assert result.events == [
-        {"type": "user_input_collected", "step": "spec", "source": "questions_xml"}
+        {"type": "user_input_collected", "step": "qa", "source": "questions_xml"}
     ]
-    assert phase.step_user_inputs["spec"] == "Q1: Question?\nA1: Answer"
+    assert phase.step_user_inputs["qa"] == "Q1: Question?\nA1: Answer"
     mock_display_output.assert_called_once()
     mock_qa.assert_called_once()
+    assert mock_qa.call_args.kwargs["role"] == "qa"
 
 
 def test_user_input_collector_falls_back_to_prompt_when_no_questions_xml(tmp_path: Path) -> None:
@@ -551,9 +617,7 @@ def test_github_issue_fetcher_fetches_configured_issue_noninteractively(tmp_path
 
     assert "Restore legacy input" in output_file.read_text(encoding="utf-8")
     assert result.context_updates == {"user_input": "**Issue Title:** Restore legacy input"}
-    assert result.events == [
-        {"type": "user_input_collected", "step": "spec", "source": "github"}
-    ]
+    assert result.events == [{"type": "user_input_collected", "step": "spec", "source": "github"}]
     mock_prompt_method.assert_not_called()
     mock_prompt_manual.assert_not_called()
     mock_fetch_issue.assert_called_once_with(346)
@@ -583,9 +647,7 @@ def test_github_only_provider_prompts_for_issue_id_interactively(tmp_path: Path)
         initial_input_fetch_github_issue=fetch,
     )
 
-    assert output_file.read_text(encoding="utf-8") == (
-        "**Issue Title:** Gather requirements\n"
-    )
+    assert output_file.read_text(encoding="utf-8") == ("**Issue Title:** Gather requirements\n")
     assert result.context_updates == {"user_input": "**Issue Title:** Gather requirements"}
     prompt.assert_called_once_with()
     fetch.assert_called_once_with(346)
@@ -643,9 +705,7 @@ def test_initial_input_provider_delivers_prefilled_manual_text_to_custom_entry_s
         context={"user_input": "Summarize the incoming customer report."},
     )
 
-    assert output_file.read_text(encoding="utf-8") == (
-        "Summarize the incoming customer report.\n"
-    )
+    assert output_file.read_text(encoding="utf-8") == ("Summarize the incoming customer report.\n")
     assert result.context_updates == {"user_input": "Summarize the incoming customer report."}
     assert result.events == [
         {"type": "initial_input_resolved", "step": "intake", "provider": "manual_text"}
@@ -698,7 +758,7 @@ def test_builtin_initial_input_preserves_legacy_requirements_seed(
     """I3 — the shared built-in resolver retains the legacy initial-input experience."""
     import yaml
 
-    playbook_name = "default"
+    playbook_name = "standard"
     playbook_file = (
         Path(__file__).parents[2] / "src" / "cafe" / "data" / "playbooks" / f"{playbook_name}.yaml"
     )
@@ -721,9 +781,7 @@ def test_builtin_initial_input_preserves_legacy_requirements_seed(
     assert output_file.read_text(encoding="utf-8") == (
         "# Initial Requirements\n\nPreserve the established workflow kickoff.\n"
     )
-    assert result.context_updates == {
-        "user_input": "Preserve the established workflow kickoff."
-    }
+    assert result.context_updates == {"user_input": "Preserve the established workflow kickoff."}
 
 
 def test_builtin_initial_input_seeds_empty_legacy_requirements_non_interactively(
@@ -732,7 +790,7 @@ def test_builtin_initial_input_seeds_empty_legacy_requirements_non_interactively
     """I3 — the shared built-in resolver retains the empty legacy requirements seed."""
     import yaml
 
-    playbook_name = "default"
+    playbook_name = "standard"
     playbook_file = (
         Path(__file__).parents[2] / "src" / "cafe" / "data" / "playbooks" / f"{playbook_name}.yaml"
     )
@@ -764,7 +822,7 @@ def test_builtin_initial_input_reuses_legacy_github_ui_and_formatter(tmp_path: P
     """I3 — generic built-in resolution keeps the established GitHub interaction."""
     import yaml
 
-    playbook_file = Path(__file__).parents[2] / "src/cafe/data/playbooks/default.yaml"
+    playbook_file = Path(__file__).parents[2] / "src/cafe/data/playbooks/standard.yaml"
     step_def = yaml.safe_load(playbook_file.read_text(encoding="utf-8"))["steps"]["spec"]
     phase = _FakePhase(phase_dir=tmp_path / "spec", iteration=1)
     output_file = phase._get_iteration_dir(1) / "output.md"
@@ -911,16 +969,20 @@ def test_pr_link_opener_opens_current_pr_url_when_confirmed() -> None:
     hook = PRLinkOpener()
 
     with (
-        patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops,
-        patch("cafe.core.hooks.native.webbrowser.open") as mock_open,
-        patch("cafe.core.hooks.native.sys.stdin.isatty", return_value=True),
+        patch("cafe.core.capabilities.GitHubOps") as mock_github_ops,
+        patch("cafe.core.capabilities.webbrowser.open") as mock_open,
+        patch("cafe.core.capabilities.sys.stdin.isatty", return_value=True),
+        patch("cafe.core.capabilities._current_repo_slug", return_value="test/repo"),
     ):
         mock_github_ops.return_value.get_current_pr_url.return_value = (
             "https://github.com/test/repo/pull/123"
         )
 
         result = hook.run(
-            stage="publish_output", status_code=PhaseStatusCode.CONFIRMED, step_def=PUBLISH_STEP
+            stage="publish_output",
+            phase=_browser_phase(open_pr=True),
+            status_code=PhaseStatusCode.CONFIRMED,
+            step_def=PUBLISH_STEP,
         )
 
     mock_open.assert_called_once_with("https://github.com/test/repo/pull/123")
@@ -929,20 +991,24 @@ def test_pr_link_opener_opens_current_pr_url_when_confirmed() -> None:
     ]
 
 
-def test_pr_link_opener_skips_browser_in_non_interactive() -> None:
+def test_pr_link_opener_requires_explicit_opt_in_even_with_a_tty() -> None:
     hook = PRLinkOpener()
 
     with (
-        patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops,
-        patch("cafe.core.hooks.native.webbrowser.open") as mock_open,
-        patch("cafe.core.hooks.native.sys.stdin.isatty", return_value=False),
+        patch("cafe.core.capabilities.GitHubOps") as mock_github_ops,
+        patch("cafe.core.capabilities.webbrowser.open") as mock_open,
+        patch("cafe.core.capabilities.sys.stdin.isatty", return_value=True),
+        patch("cafe.core.capabilities._current_repo_slug", return_value="test/repo"),
     ):
         mock_github_ops.return_value.get_current_pr_url.return_value = (
             "https://github.com/test/repo/pull/123"
         )
 
         result = hook.run(
-            stage="publish_output", status_code=PhaseStatusCode.CONFIRMED, step_def=PUBLISH_STEP
+            stage="publish_output",
+            phase=_browser_phase(open_pr=False),
+            status_code=PhaseStatusCode.CONFIRMED,
+            step_def=PUBLISH_STEP,
         )
 
     mock_open.assert_not_called()
@@ -953,13 +1019,17 @@ def test_pr_link_opener_noops_when_pr_url_unavailable() -> None:
     hook = PRLinkOpener()
 
     with (
-        patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops,
-        patch("cafe.core.hooks.native.webbrowser.open") as mock_open,
+        patch("cafe.core.capabilities.GitHubOps") as mock_github_ops,
+        patch("cafe.core.capabilities.webbrowser.open") as mock_open,
+        patch("cafe.core.capabilities._current_repo_slug", return_value="test/repo"),
     ):
         mock_github_ops.return_value.get_current_pr_url.side_effect = Exception("no pr")
 
         result = hook.run(
-            stage="publish_output", status_code=PhaseStatusCode.CONFIRMED, step_def=PUBLISH_STEP
+            stage="publish_output",
+            phase=_browser_phase(open_pr=True),
+            status_code=PhaseStatusCode.CONFIRMED,
+            step_def=PUBLISH_STEP,
         )
 
     mock_open.assert_not_called()
@@ -970,18 +1040,22 @@ def test_pr_link_opener_noops_when_browser_open_fails() -> None:
     hook = PRLinkOpener()
 
     with (
-        patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops,
+        patch("cafe.core.capabilities.GitHubOps") as mock_github_ops,
         patch(
-            "cafe.core.hooks.native.webbrowser.open", side_effect=Exception("blocked")
+            "cafe.core.capabilities.webbrowser.open", side_effect=Exception("blocked")
         ) as mock_open,
-        patch("cafe.core.hooks.native.sys.stdin.isatty", return_value=True),
+        patch("cafe.core.capabilities.sys.stdin.isatty", return_value=True),
+        patch("cafe.core.capabilities._current_repo_slug", return_value="test/repo"),
     ):
         mock_github_ops.return_value.get_current_pr_url.return_value = (
             "https://github.com/test/repo/pull/123"
         )
 
         result = hook.run(
-            stage="publish_output", status_code=PhaseStatusCode.CONFIRMED, step_def=PUBLISH_STEP
+            stage="publish_output",
+            phase=_browser_phase(open_pr=True),
+            status_code=PhaseStatusCode.CONFIRMED,
+            step_def=PUBLISH_STEP,
         )
 
     mock_open.assert_called_once_with("https://github.com/test/repo/pull/123")
@@ -1057,6 +1131,56 @@ def test_github_pr_creator_publish_output_runs_sync_pr_script(tmp_path: Path) ->
     assert result.events[1]["success"] is True
 
 
+def test_github_pr_creator_prepares_history_from_fetched_remote_base(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    _enable_remote_pr(issue_dir)
+    (issue_dir / "issue.yaml").write_text(
+        "base_branch: develop\npr:\n  auto_create: true\n",
+        encoding="utf-8",
+    )
+    phase = _FakePhase(phase_dir=issue_dir / "pr", iteration=1)
+    phase.git_ops = MagicMock()
+    phase.git_ops.get_current_branch.return_value = "feature/demo"
+    phase.git_ops.ensure_remote_base_ancestor.return_value = "origin/develop"
+    phase.git_ops.get_commits_between.return_value = "abc123 local base commit"
+
+    with patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops:
+        mock_github_ops.return_value.get_pr_for_branch.return_value = None
+        result = GitHubPRCreator().run(stage="prepare_input", phase=phase)
+
+    phase.git_ops.ensure_remote_base_ancestor.assert_called_once_with("develop", "HEAD")
+    phase.git_ops.get_commits_between.assert_called_once_with("origin/develop", "HEAD")
+    assert result.context_updates["commits"] == "abc123 local base commit"
+
+
+def test_github_pr_creator_local_mode_keeps_existing_pr_metadata_without_fetch(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        "base_branch: develop\npr:\n  auto_create: false\n",
+        encoding="utf-8",
+    )
+    phase = _FakePhase(phase_dir=issue_dir / "pr", iteration=1)
+    phase.git_ops = MagicMock()
+    phase.git_ops.get_current_branch.return_value = "feature/demo"
+
+    with patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops:
+        mock_github_ops.return_value.get_pr_for_branch.return_value = {
+            "number": 42,
+            "url": "https://github.com/example/repo/pull/42",
+        }
+        result = GitHubPRCreator().run(stage="prepare_input", phase=phase)
+
+    phase.git_ops.ensure_remote_base_ancestor.assert_not_called()
+    phase.git_ops.get_commits_between.assert_not_called()
+    assert result.context_updates == {
+        "pr_number": "42",
+        "pr_url": "https://github.com/example/repo/pull/42",
+    }
+
+
 def test_github_pr_creator_publish_output_rejects_unknown_generic_capability_without_script(
     tmp_path: Path,
 ) -> None:
@@ -1105,6 +1229,247 @@ def test_github_pr_creator_publish_output_rejects_unknown_generic_capability_wit
     loaded = store.load_or_create("publish")
     assert loaded.capability_receipts[-1]["capability"] == "demo.unknown"
     assert loaded.capability_receipts[-1]["success"] is False
+
+
+@pytest.mark.parametrize(
+    "failure", ["request_json", "request_encoding", "request_read", "registry"]
+)
+def test_github_pr_creator_load_failures_persist_correlated_rejection_receipts(
+    tmp_path: Path, failure: str
+) -> None:
+    from cafe.core.blackboard import BlackboardStore
+    from cafe.core.capabilities import CapabilityRegistryError, default_capability_definition_dirs
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    phase_dir = issue_dir / "publish"
+    output_file = phase_dir / "iteration_001" / "output.md"
+    capability_request_file = phase_dir / "iteration_001" / "capability_request.json"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text("# Publish\n", encoding="utf-8")
+    valid_request = {"capability": "demo.echo", "args": {"target_ref": "current_pr"}}
+    if failure == "request_encoding":
+        capability_request_file.write_bytes(b"{\xff}")
+    else:
+        capability_request_file.write_text(
+            "not-json" if failure == "request_json" else json.dumps(valid_request),
+            encoding="utf-8",
+        )
+    phase = _FakePhase(phase_dir=phase_dir, iteration=1)
+    phase.git_ops = MagicMock()
+    phase.git_ops.get_repo_root.return_value = tmp_path
+    store = BlackboardStore(issue_dir)
+    blackboard_state = store.load_or_create("publish")
+
+    hook = GitHubPRCreator()
+    registry_patch = patch(
+        "cafe.core.capabilities.load_capability_registry",
+        side_effect=CapabilityRegistryError("invalid registry"),
+    )
+    original_read_text = Path.read_text
+    original_read_bytes = Path.read_bytes
+
+    def read_text(path: Path, *args, **kwargs):
+        if path == capability_request_file:
+            raise PermissionError("request unreadable")
+        return original_read_text(path, *args, **kwargs)
+
+    def read_bytes(path: Path, *args, **kwargs):
+        if path == capability_request_file:
+            raise PermissionError("request unreadable")
+        return original_read_bytes(path, *args, **kwargs)
+
+    read_patch = (
+        patch.object(Path, "read_text", new=read_text)
+        if failure == "request_read"
+        else nullcontext()
+    )
+    bytes_patch = (
+        patch.object(Path, "read_bytes", new=read_bytes)
+        if failure == "request_read"
+        else nullcontext()
+    )
+    with registry_patch, read_patch, bytes_patch:
+        result = hook.run(
+            stage="publish_output",
+            phase=phase,
+            step_name="publish",
+            step_def={"capability_requests": ["demo.echo"]},
+            output_file=output_file,
+            capability_request_file=capability_request_file,
+            blackboard_state=blackboard_state,
+            status_code=PhaseStatusCode.CONFIRMED,
+        )
+
+    receipt = store.load_or_create("publish").capability_receipts[-1]
+    assert result.events[0]["type"] == "capability_receipt"
+    assert receipt["request_fingerprint"]
+    assert receipt["manifest"] is None
+    assert "requested_effects" in receipt
+    assert receipt["allowed_effects"] == {}
+    assert receipt["decision"]["outcome"] == "deny"
+    assert receipt["outcome"] == "validation_rejection"
+    assert receipt["rejection"]["error_detail"]
+    if failure.startswith("request_"):
+        expected_source = {
+            "kind": "request_artifact",
+            "path": str(capability_request_file.resolve()),
+        }
+        if failure != "request_read":
+            expected_source["content_sha256"] = hashlib.sha256(
+                capability_request_file.read_bytes()
+            ).hexdigest()
+        assert receipt["rejection"]["source"] == expected_source
+        if failure == "request_json":
+            assert receipt["rejection"]["rejected_value"] == "not-json"
+        elif failure == "request_encoding":
+            assert receipt["rejection"]["rejected_value"] == "{\ufffd}"
+        else:
+            assert receipt["rejection"]["rejected_value"] is None
+    else:
+        assert receipt["rejection"]["source"] == {
+            "kind": "capability_registry",
+            "paths": [str(path) for path in default_capability_definition_dirs(tmp_path)],
+        }
+        assert receipt["rejection"]["rejected_value"] == {
+            "capability": "demo.echo",
+            "args": {"target_ref": "current_pr"},
+        }
+        assert "invalid registry" in receipt["rejection"]["error_detail"]
+
+
+def test_github_pr_creator_malformed_request_fingerprint_tracks_rejected_artifact(
+    tmp_path: Path,
+) -> None:
+    from cafe.core.blackboard import BlackboardStore
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    phase_dir = issue_dir / "publish"
+    output_file = phase_dir / "iteration_001" / "output.md"
+    capability_request_file = phase_dir / "iteration_001" / "capability_request.json"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text("# Publish\n", encoding="utf-8")
+    phase = _FakePhase(phase_dir=phase_dir, iteration=1)
+    phase.git_ops = MagicMock()
+    phase.git_ops.get_repo_root.return_value = tmp_path
+    store = BlackboardStore(issue_dir)
+    blackboard_state = store.load_or_create("publish")
+    hook = GitHubPRCreator()
+    fingerprints: list[str] = []
+
+    for malformed in ("not-json", "also-not-json"):
+        capability_request_file.write_text(malformed, encoding="utf-8")
+        hook.run(
+            stage="publish_output",
+            phase=phase,
+            step_name="publish",
+            step_def={"capability_requests": ["demo.echo"]},
+            output_file=output_file,
+            capability_request_file=capability_request_file,
+            blackboard_state=blackboard_state,
+            status_code=PhaseStatusCode.CONFIRMED,
+        )
+        fingerprints.append(
+            store.load_or_create("publish").capability_receipts[-1]["request_fingerprint"]
+        )
+
+    assert fingerprints[0] != fingerprints[1]
+
+
+def test_github_pr_creator_unreadable_request_fingerprint_tracks_source_path(
+    tmp_path: Path,
+) -> None:
+    from cafe.core.blackboard import BlackboardStore
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    phase_dir = issue_dir / "publish"
+    output_file = phase_dir / "iteration_001" / "output.md"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text("# Publish\n", encoding="utf-8")
+    phase = _FakePhase(phase_dir=phase_dir, iteration=1)
+    phase.git_ops = MagicMock()
+    phase.git_ops.get_repo_root.return_value = tmp_path
+    store = BlackboardStore(issue_dir)
+    blackboard_state = store.load_or_create("publish")
+    hook = GitHubPRCreator()
+    fingerprints: list[str] = []
+    request_files = tuple(
+        output_file.parent / filename for filename in ("first.json", "second.json")
+    )
+    for request_file in request_files:
+        request_file.write_text("same request", encoding="utf-8")
+    original_read_text = Path.read_text
+    original_read_bytes = Path.read_bytes
+
+    def read_text(path: Path, *args, **kwargs):
+        if path in request_files:
+            raise PermissionError("request unreadable")
+        return original_read_text(path, *args, **kwargs)
+
+    def read_bytes(path: Path, *args, **kwargs):
+        if path in request_files:
+            raise PermissionError("request unreadable")
+        return original_read_bytes(path, *args, **kwargs)
+
+    with (
+        patch.object(Path, "read_text", new=read_text),
+        patch.object(Path, "read_bytes", new=read_bytes),
+    ):
+        for request_file in request_files:
+            hook.run(
+                stage="publish_output",
+                phase=phase,
+                step_name="publish",
+                step_def={"capability_requests": ["demo.echo"]},
+                output_file=output_file,
+                capability_request_file=request_file,
+                blackboard_state=blackboard_state,
+                status_code=PhaseStatusCode.CONFIRMED,
+            )
+            fingerprints.append(
+                blackboard_state.capability_receipts[-1]["request_fingerprint"]
+            )
+
+    assert fingerprints[0] != fingerprints[1]
+
+
+def test_github_pr_creator_invalid_utf8_fingerprint_tracks_original_bytes(
+    tmp_path: Path,
+) -> None:
+    from cafe.core.blackboard import BlackboardStore
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    phase_dir = issue_dir / "publish"
+    output_file = phase_dir / "iteration_001" / "output.md"
+    capability_request_file = output_file.parent / "capability_request.json"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text("# Publish\n", encoding="utf-8")
+    phase = _FakePhase(phase_dir=phase_dir, iteration=1)
+    phase.git_ops = MagicMock()
+    phase.git_ops.get_repo_root.return_value = tmp_path
+    store = BlackboardStore(issue_dir)
+    blackboard_state = store.load_or_create("publish")
+    hook = GitHubPRCreator()
+    fingerprints: list[str] = []
+
+    for malformed in (b"{\xff}", b"{\xfe}"):
+        capability_request_file.write_bytes(malformed)
+        hook.run(
+            stage="publish_output",
+            phase=phase,
+            step_name="publish",
+            step_def={"capability_requests": ["demo.echo"]},
+            output_file=output_file,
+            capability_request_file=capability_request_file,
+            blackboard_state=blackboard_state,
+            status_code=PhaseStatusCode.CONFIRMED,
+        )
+        fingerprints.append(
+            store.load_or_create("publish").capability_receipts[-1][
+                "request_fingerprint"
+            ]
+        )
+
+    assert fingerprints[0] != fingerprints[1]
 
 
 def test_github_pr_creator_publish_output_records_all_multi_capability_receipts(
@@ -1161,9 +1526,54 @@ def test_github_pr_creator_publish_output_records_all_multi_capability_receipts(
     ]
 
 
-def test_github_pr_creator_publish_output_runs_from_workflow_complete_baton_without_status_code(
+@pytest.mark.parametrize(
+    ("step_def", "to_owner", "to_step", "intent", "baton_status", "should_publish"),
+    [
+        (
+            BATON_TERMINAL_PUBLISH_STEP,
+            "done",
+            "done",
+            "workflow_complete",
+            "BATON_WORKFLOW_COMPLETE",
+            True,
+        ),
+        (
+            BATON_REVIEW_PUBLISH_STEP,
+            "user",
+            "user",
+            "confirm_output",
+            "BATON_CONFIRM_OUTPUT",
+            True,
+        ),
+        (
+            BATON_REVIEW_PUBLISH_STEP,
+            "done",
+            "done",
+            "workflow_complete",
+            "BATON_WORKFLOW_COMPLETE",
+            False,
+        ),
+        (
+            BATON_UNBOUND_REVIEW_PUBLISH_STEP,
+            "user",
+            "user",
+            "confirm_output",
+            "BATON_CONFIRM_OUTPUT",
+            False,
+        ),
+    ],
+)
+def test_github_pr_creator_publish_output_honors_declared_pr_handoff_without_status_code(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    step_def: dict,
+    to_owner: str,
+    to_step: str,
+    intent: str,
+    baton_status: str,
+    should_publish: bool,
 ) -> None:
+    monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     _enable_remote_pr(issue_dir)
     phase_dir = issue_dir / "pr"
@@ -1189,10 +1599,10 @@ def test_github_pr_creator_publish_output_runs_from_workflow_complete_baton_with
             {
                 "version": 1,
                 "from_step": "pr",
-                "to_owner": "done",
-                "to_step": "done",
-                "intent": "workflow_complete",
-                "status_code": "BATON_WORKFLOW_COMPLETE",
+                "to_owner": to_owner,
+                "to_step": to_step,
+                "intent": intent,
+                "status_code": baton_status,
                 "created_at": "2026-04-26T22:49:02.559908+08:00",
                 "source": "agent.test",
             }
@@ -1201,8 +1611,7 @@ def test_github_pr_creator_publish_output_runs_from_workflow_complete_baton_with
     )
 
     phase = _FakePhase(phase_dir=phase_dir, iteration=1)
-    phase.git_ops = MagicMock()
-    phase.git_ops.get_repo_root.return_value = tmp_path
+    phase.git_ops = GitOperations(str(tmp_path))
 
     completed = MagicMock()
     completed.returncode = 0
@@ -1217,22 +1626,28 @@ def test_github_pr_creator_publish_output_runs_from_workflow_complete_baton_with
             stage="publish_output",
             phase=phase,
             step_name="pr",
-            step_def=PUBLISH_STEP,
+            step_def=step_def,
             output_file=output_file,
             publish_request_file=publish_request_file,
             context={"next_step_path": str(next_step_file)},
             status_code=None,
         )
 
-    assert mock_run.call_count == 2
-    assert mock_run.call_args_list[0].args[0][0] == "git"
-    assert mock_run.call_args_list[1].args[0][0] == "/bin/bash"
+    if not should_publish:
+        assert all(call.args[0][0] != "/bin/bash" for call in mock_run.call_args_list)
+        assert result.events == []
+        assert result.context_updates == {}
+        return
+
+    commands = [call.args[0][0] for call in mock_run.call_args_list]
+    assert "git" in commands
+    assert commands.count("/bin/bash") == 1
     assert result.events[0]["type"] == "pr_synced"
     assert result.events[0]["source"] == "capability"
     assert result.events[1]["type"] == "capability_receipt"
 
 
-def test_github_pr_creator_publish_output_runs_from_pr_done_await_agent_baton(
+def test_github_pr_creator_publish_output_rejects_pr_done_await_agent_baton(
     tmp_path: Path,
 ) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
@@ -1295,12 +1710,76 @@ def test_github_pr_creator_publish_output_runs_from_pr_done_await_agent_baton(
             status_code=None,
         )
 
-    assert mock_run.call_count == 2
-    assert mock_run.call_args_list[0].args[0][0] == "git"
-    assert mock_run.call_args_list[1].args[0][0] == "/bin/bash"
-    assert result.events[0]["type"] == "pr_synced"
-    assert result.events[1]["type"] == "capability_receipt"
-    assert result.context_updates["pr_sync_action"] == "updated"
+    mock_run.assert_not_called()
+    assert result.events == []
+    assert result.context_updates == {}
+
+
+def test_github_pr_creator_rejects_invalid_baton_with_inherited_baton_completion(
+    tmp_path: Path,
+) -> None:
+    """A playbook-level baton contract must gate confirmed PR publication too."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    _enable_remote_pr(issue_dir)
+    phase_dir = issue_dir / "pr"
+    output_file = phase_dir / "iteration_001" / "output.md"
+    publish_request_file = phase_dir / "iteration_001" / "publish_request.json"
+    next_step_file = issue_dir / "next_step.txt"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text("# Test PR\n\nBody\n", encoding="utf-8")
+    publish_request_file.write_text(
+        json.dumps(
+            {
+                "capability": "cafe.pr.publish",
+                "args": {"output": ".cafe/issues/demo/pr/iteration_001/output.md"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    next_step_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "from_step": "pr",
+                "to_owner": "done",
+                "to_step": "done",
+                "intent": "await_agent",
+            }
+        ),
+        encoding="utf-8",
+    )
+    step_def = {
+        "capability_requests": ["cafe.pr.publish"],
+        "on": {"workflow_complete": "_done"},
+    }
+    phase = _FakePhase(phase_dir=phase_dir, iteration=1)
+    phase.git_ops = MagicMock()
+    phase.git_ops.get_repo_root.return_value = tmp_path
+    phase.playbook = {
+        "behavior": {"completion": "baton", "publish_confirmation": True},
+        "steps": {"pr": step_def},
+    }
+
+    hook = GitHubPRCreator()
+    with patch("cafe.core.capabilities.subprocess.run") as mock_run:
+        result = hook.run(
+            stage="publish_output",
+            phase=phase,
+            step_name="pr",
+            step_def=step_def,
+            output_file=output_file,
+            publish_request_file=publish_request_file,
+            context={
+                "next_step_path": str(next_step_file),
+                "publish_confirmation": True,
+                "behavior_completion": "baton",
+            },
+            status_code=PhaseStatusCode.CONFIRMED,
+        )
+
+    mock_run.assert_not_called()
+    assert result.events == []
+    assert result.context_updates == {}
 
 
 def test_github_pr_creator_publish_output_runs_from_legacy_done_baton(
@@ -1360,18 +1839,36 @@ def test_github_pr_creator_publish_output_runs_from_legacy_done_baton(
     assert result.events[1]["type"] == "capability_receipt"
 
 
-def test_github_pr_creator_publish_output_skips_local_pr_mode(tmp_path: Path) -> None:
+def test_github_pr_creator_publish_output_uses_runtime_validated_local_mode(
+    tmp_path: Path,
+) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     phase_dir = issue_dir / "pr"
     output_file = phase_dir / "iteration_001" / "output.md"
     publish_request_file = phase_dir / "iteration_001" / "publish_request.json"
     output_file.parent.mkdir(parents=True, exist_ok=True)
     output_file.write_text("# Test PR\n\nBody\n", encoding="utf-8")
-    publish_request_file.write_text("{}", encoding="utf-8")
-    (issue_dir / "issue.yaml").write_text("pr:\n  auto_create: false\n", encoding="utf-8")
+    publish_request_file.write_text(
+        json.dumps(
+            {
+                "capability": "cafe.pr.publish",
+                "args": {
+                    "output": ".cafe/issues/demo/pr/iteration_001/output.md",
+                    "base": "develop",
+                },
+                "permissions": {
+                    "network": ["github.com", "api.github.com"],
+                    "writes": [".git", ".cafe/issues/demo"],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (issue_dir / "issue.yaml").write_text("pr:\n  auto_create: true\n", encoding="utf-8")
 
     phase = _FakePhase(phase_dir=phase_dir, iteration=1)
     phase.git_ops = MagicMock()
+    phase.git_ops.get_repo_root.return_value = tmp_path
 
     hook = GitHubPRCreator()
     with patch("cafe.core.capabilities.subprocess.run") as mock_run:
@@ -1383,6 +1880,7 @@ def test_github_pr_creator_publish_output_skips_local_pr_mode(tmp_path: Path) ->
             output_file=output_file,
             publish_request_file=publish_request_file,
             status_code=PhaseStatusCode.CONFIRMED,
+            validated_pr_auto_create=False,
         )
 
     mock_run.assert_not_called()
@@ -1424,10 +1922,10 @@ def test_github_pr_creator_publish_output_fails_safe_without_explicit_true(
     assert result.events == []
 
 
-def test_github_pr_creator_publish_ignores_untrusted_script_field_in_request(
+def test_github_pr_creator_publish_rejects_untrusted_script_field_before_dispatch(
     tmp_path: Path,
 ) -> None:
-    """Registry-resolved script is used; agent-supplied script path must not change dispatch."""
+    """Agent-supplied executable authority invalidates the request."""
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     _enable_remote_pr(issue_dir)
     phase_dir = issue_dir / "pr"
@@ -1462,7 +1960,7 @@ def test_github_pr_creator_publish_ignores_untrusted_script_field_in_request(
 
     hook = GitHubPRCreator()
     with patch("cafe.core.capabilities.subprocess.run", return_value=completed) as mock_run:
-        hook.run(
+        result = hook.run(
             stage="publish_output",
             phase=phase,
             step_name="pr",
@@ -1472,8 +1970,10 @@ def test_github_pr_creator_publish_ignores_untrusted_script_field_in_request(
             status_code=PhaseStatusCode.CONFIRMED,
         )
 
-    cmd = mock_run.call_args.args[0]
-    assert cmd[1] == str(hook._resolve_sync_script(tmp_path))
+    mock_run.assert_not_called()
+    assert result.events[-1]["type"] == "capability_receipt"
+    assert result.events[-1]["success"] is False
+    assert result.events[-1]["code"] == "malformed_request"
 
 
 def test_pr_comment_poster_posts_todo_comment_only_when_confirmed_and_complete(

@@ -11,8 +11,10 @@ import typer
 from cafe.verification import (
     VerificationReceiptError,
     check_verification_receipt,
+    reuse_verification_receipt,
     run_focused_verification,
     run_verification,
+    verification_log_excerpt,
 )
 
 verification_app = typer.Typer(
@@ -29,7 +31,7 @@ def verification_run(
     output_file: Path = typer.Option(..., "--output-file"),
     scope: str = typer.Option("full", "--scope"),
 ) -> None:
-    """Run a command after ``--`` and write an iteration-local receipt."""
+    """Run a command after ``--`` and write an iteration-local log and receipt."""
     command: List[str] = list(ctx.args)
     if command[:1] == ["--"]:
         command = command[1:]
@@ -43,6 +45,10 @@ def verification_run(
         typer.echo(f"verification_error={exc}", err=True)
         raise typer.Exit(code=2)
 
+    excerpt, output_truncated = verification_log_excerpt(receipt_path)
+    if excerpt:
+        typer.echo(excerpt, err=bool(exit_code))
+    output_log = payload["output_log"]
     typer.echo(
         json.dumps(
             {
@@ -50,6 +56,9 @@ def verification_run(
                 "valid": payload["valid"],
                 "exit_code": payload["exit_code"],
                 "scope": payload["scope"],
+                "output_log": str(receipt_path.parent / output_log["path"]),
+                "output_bytes": output_log["size_bytes"],
+                "output_truncated": output_truncated,
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -91,6 +100,38 @@ def verification_check(
     )
     if not result.valid:
         raise typer.Exit(code=1)
+
+
+@verification_app.command(name="reuse")
+def verification_reuse(
+    source_output_file: Path = typer.Option(..., "--source-output-file"),
+    output_file: Path = typer.Option(..., "--output-file"),
+    required_scope: str = typer.Option("full", "--require-scope"),
+) -> None:
+    """Reuse a still-valid receipt for a new iteration on the same clean HEAD."""
+    try:
+        receipt_path, payload = reuse_verification_receipt(
+            source_output_file=source_output_file,
+            output_file=output_file,
+            required_scope=required_scope,
+        )
+    except VerificationReceiptError as exc:
+        typer.echo(f"verification_error={exc}", err=True)
+        raise typer.Exit(code=2)
+
+    typer.echo(
+        json.dumps(
+            {
+                "receipt": str(receipt_path),
+                "reused": True,
+                "reused_from": payload["reused_from"],
+                "scope": payload["scope"],
+                "valid": payload["valid"],
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
 
 
 @verification_app.command(

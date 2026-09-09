@@ -10,6 +10,8 @@ from cafe.core.prepare_profile import PrepareProfile, PrepareRigorError
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.loader import SkillLoader
 
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
+
 
 def _write_skill(root: Path, name: str) -> None:
     skill_dir = root / name
@@ -26,6 +28,7 @@ def _minimal_playbook_yaml(*, prepare_block: str = "", include_pr_step: bool = F
   pr:
     role: developer
     skill: spec_first
+    capability_requests: [cafe.pr.publish]
     "on":
       await_agent: _done
 """
@@ -113,7 +116,7 @@ class TestPrepareProfileQuickSetup:
         assert result.spec["sync_github"] is False
         assert result.plan["sync_github"] is False
 
-    def test_github_repo_sets_pr_defaults_from_metadata(self) -> None:
+    def test_quick_setup_does_not_infer_a_publication_choice(self) -> None:
         profile = PrepareProfile.from_playbook(
             PlaybookDefinition.model_validate(
                 yaml.safe_load(_minimal_playbook_yaml(include_pr_step=True))
@@ -121,10 +124,10 @@ class TestPrepareProfileQuickSetup:
             is_github_repo=True,
         )
         result = profile.quick_setup_issue_config(issue_id=None)
-        assert result.pr["auto_create"] is True
+        assert "auto_create" not in result.pr
         assert result.pr["post_todo_list"] is True
 
-    def test_non_github_repo_skips_pr_auto_create(self) -> None:
+    def test_non_github_repo_does_not_infer_a_local_only_choice(self) -> None:
         profile = PrepareProfile.from_playbook(
             PlaybookDefinition.model_validate(
                 yaml.safe_load(_minimal_playbook_yaml(include_pr_step=True))
@@ -132,8 +135,7 @@ class TestPrepareProfileQuickSetup:
             is_github_repo=False,
         )
         result = profile.quick_setup_issue_config(issue_id=None)
-        assert result.pr["auto_create"] is False
-        assert "post_todo_list" not in result.pr
+        assert result.pr == {}
 
     def test_playbook_without_pr_step_omits_pr_config(self) -> None:
         profile = PrepareProfile.from_playbook(
@@ -142,6 +144,24 @@ class TestPrepareProfileQuickSetup:
         )
         result = profile.quick_setup_issue_config(issue_id=None)
         assert result.pr == {}
+
+    def test_pr_config_support_follows_capability_instead_of_step_name(self) -> None:
+        capable = yaml.safe_load(_minimal_playbook_yaml())
+        capable["steps"]["spec"]["capability_requests"] = ["cafe.pr.publish"]
+        capable_profile = PrepareProfile.from_playbook(
+            PlaybookDefinition.model_validate(capable),
+            is_github_repo=True,
+        )
+
+        named_pr = yaml.safe_load(_minimal_playbook_yaml(include_pr_step=True))
+        named_pr["steps"]["pr"]["capability_requests"] = []
+        named_pr_profile = PrepareProfile.from_playbook(
+            PlaybookDefinition.model_validate(named_pr),
+            is_github_repo=True,
+        )
+
+        assert capable_profile.supports_pr_config() is True
+        assert named_pr_profile.supports_pr_config() is False
 
 
 class TestPrepareProfileNonInteractive:
@@ -261,9 +281,9 @@ class TestPrepareProfileResolvedFields:
             is not None
         )
 
-    def test_returns_fields_for_default_playbook(self) -> None:
+    def test_returns_fields_for_standard_playbook(self) -> None:
         loader = PlaybookLoader()
-        loaded = loader.load_model("default")
+        loaded = loader.load_model("standard")
         profile = PrepareProfile.from_playbook(loaded.model, is_github_repo=True)
         parsed = profile.resolved_prepare_fields(
             playbook_path=loaded.path,

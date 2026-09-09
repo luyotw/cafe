@@ -10,6 +10,7 @@ from cafe.ui.menu import InteractiveMenu
 
 
 runner = CliRunner()
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
 
 @pytest.mark.parametrize(

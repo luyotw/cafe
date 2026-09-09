@@ -1,27 +1,74 @@
 """Tests for playbook/skill catalog CLI commands."""
 
+import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from cafe.ui.cli import app
 
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
+
 runner = CliRunner()
 
 
-def test_playbook_list_includes_builtin_entries(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.chdir(tmp_path)
+@pytest.fixture(autouse=True)
+def _isolate_global_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "cafe.utils.config.get_global_cafe_dir", lambda: tmp_path / "global"
+    )
 
-    result = runner.invoke(app, ["playbook", "list"])
 
-    assert result.exit_code == 0
-    assert "default" in result.stdout
-    assert "hotfix" in result.stdout
-    assert "simple" in result.stdout
-    assert "editorial" in result.stdout
-    assert "research" in result.stdout
-    assert "incident" in result.stdout
+def _write_catalog_playbook(
+    root: Path,
+    playbook_id: str,
+    *,
+    summary: str | None,
+    use_when: tuple[str, ...] = (
+        "The current scope needs focused implementation.",
+        "Independent review is required.",
+    ),
+    avoid_when: tuple[str, ...] = (
+        "The current scope requires a separate planning phase.",
+    ),
+) -> None:
+    applicability = ""
+    if summary is not None:
+        use_when_yaml = "\n".join(f'      - "{value}"' for value in use_when)
+        avoid_when_yaml = "\n".join(f'      - "{value}"' for value in avoid_when)
+        applicability = f"""
+  applicability:
+    summary: "{summary}"
+    use_when:
+{use_when_yaml}
+    avoid_when:
+{avoid_when_yaml}
+"""
+    root.mkdir(parents=True, exist_ok=True)
+    (root / f"{playbook_id}.yaml").write_text(
+        f"""
+playbook:
+  id: {playbook_id}{applicability}
+skills:
+  workflow: {{shared: []}}
+  chat: {{shared: []}}
+roles:
+  developer: {{}}
+commands:
+  prepare:
+    prompt_for_spec_plan_config: false
+steps:
+  develop:
+    skill: cafe-develop
+    role: developer
+    "on": {{await_agent: _done}}
+""".strip(),
+        encoding="utf-8",
+    )
 
 
 def test_playbook_show_displays_custom_override(tmp_path: Path, monkeypatch) -> None:
@@ -51,22 +98,141 @@ steps:
     assert "source=project" in result.stdout
 
 
+def test_playbook_list_and_show_render_complete_bounded_applicability(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """U6 — operators can compare complete stable applicability fields."""
+    monkeypatch.chdir(tmp_path)
+    _write_catalog_playbook(
+        tmp_path / ".cafe" / "playbooks",
+        "focused",
+        summary="A focused implementation workflow with independent review.",
+    )
+    _write_catalog_playbook(
+        tmp_path / ".cafe" / "playbooks",
+        "later",
+        summary="A later-sorted comparison workflow.",
+    )
+
+    list_result = runner.invoke(app, ["playbook", "list"])
+    show_result = runner.invoke(app, ["playbook", "show", "focused"])
+
+    assert list_result.exit_code == 0
+    assert show_result.exit_code == 0
+    assert list_result.stdout.index("focused") < list_result.stdout.index("later")
+    for result in (list_result, show_result):
+        assert "focused" in result.stdout
+        assert "source=project" in result.stdout
+        assert "A focused implementation workflow with independent review." in result.stdout
+        assert "The current scope needs focused implementation." in result.stdout
+        assert "Independent review is required." in result.stdout
+        assert "The current scope requires a separate planning phase." in result.stdout
+    assert "Applicability" in show_result.stdout
+
+
+@pytest.mark.parametrize(
+    "command",
+    (
+        ("playbook", "list"),
+        ("playbook", "show", "markup"),
+    ),
+)
+def test_playbook_catalog_renders_markup_like_applicability_as_literal_text(
+    tmp_path: Path,
+    monkeypatch,
+    command: tuple[str, ...],
+) -> None:
+    """U6 — valid contract text is data, never Rich markup."""
+    monkeypatch.chdir(tmp_path)
+    values = (
+        "A [red]literal[/red] summary.",
+        "A [bold]literal[/bold] positive condition.",
+        "[/red]A literal negative condition.",
+    )
+    _write_catalog_playbook(
+        tmp_path / ".cafe" / "playbooks",
+        "markup",
+        summary=values[0],
+        use_when=(values[1],),
+        avoid_when=(values[2],),
+    )
+
+    result = runner.invoke(app, list(command))
+
+    assert result.exit_code == 0
+    for value in values:
+        assert value in result.stdout
+
+
+def test_playbook_catalog_marks_missing_contract_with_migration_action(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """U4/U6 — legacy inspection is explicit and actionable."""
+    monkeypatch.chdir(tmp_path)
+    _write_catalog_playbook(
+        tmp_path / ".cafe" / "playbooks",
+        "legacy",
+        summary=None,
+    )
+
+    list_result = runner.invoke(app, ["playbook", "list"])
+    show_result = runner.invoke(app, ["playbook", "show", "legacy"])
+
+    assert list_result.exit_code == 0
+    assert show_result.exit_code == 0
+    for result in (list_result, show_result):
+        assert "legacy" in result.stdout
+        assert "ineligible" in result.stdout
+        assert "playbook.applicability" in result.stdout
+        assert "cafe playbook validate legacy --strict" in result.stdout
+
+
+def test_playbook_catalog_uses_only_project_first_effective_definition(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """U7/I2 — shadowed applicability never becomes a second candidate."""
+    monkeypatch.chdir(tmp_path)
+    _write_catalog_playbook(
+        tmp_path / "global" / "playbooks",
+        "override",
+        summary="Shadowed Global applicability.",
+    )
+    _write_catalog_playbook(
+        tmp_path / ".cafe" / "playbooks",
+        "override",
+        summary="Effective project applicability.",
+    )
+
+    list_result = runner.invoke(app, ["playbook", "list"])
+    show_result = runner.invoke(app, ["playbook", "show", "override"])
+
+    assert list_result.exit_code == 0
+    assert show_result.exit_code == 0
+    assert list_result.stdout.count("Effective project applicability.") == 1
+    assert "Shadowed Global applicability." not in list_result.stdout
+    assert "Effective project applicability." in show_result.stdout
+    assert "Shadowed Global applicability." not in show_result.stdout
+    assert "source=project" in show_result.stdout
+
+
 def test_playbook_confirmation_gates_are_derived_from_confirm_output(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
 
-    default_result = runner.invoke(app, ["playbook", "confirmation-gates", "default"])
+    default_result = runner.invoke(app, ["playbook", "confirmation-gates", "standard"])
     research_result = runner.invoke(app, ["playbook", "confirmation-gates", "research"])
 
     assert default_result.exit_code == 0
     assert "Conversation locale: en-US" in default_result.stdout
-    assert "steps declaring on.confirm_output" in default_result.stdout
+    assert "Assignable confirmation gates" in default_result.stdout
     assert "  - spec" in default_result.stdout
     assert "  - plan" in default_result.stdout
     assert "  - develop" not in default_result.stdout
+    assert "Mandatory human-task gates" in default_result.stdout
+    assert "  - pr" in default_result.stdout
     assert research_result.exit_code == 0
-    assert "(none)" in research_result.stdout
+    assert research_result.stdout.count("(none)") == 2
     assert "Reactive clarification, permission, and alignment pauses" in research_result.stdout
 
 
@@ -88,7 +254,10 @@ def test_skill_sync_global_installs_bundled_helper_skills(
         result = runner.invoke(app, ["skill", "sync-global"])
 
     assert result.exit_code == 0
-    assert "Synced 3 installation(s)" in result.stdout
+    assert "Source:" in result.stdout
+    assert "4 destination result(s)" in result.stdout
+    assert "4 unique helper(s) across 1 CLI destination(s)" in result.stdout
+    assert (home_dir / ".codex/skills/write-cafe-agent/SKILL.md").is_file()
     assert (home_dir / ".codex/skills/write-cafe-playbook/SKILL.md").is_file()
     assert not (home_dir / ".claude").exists()
 
@@ -104,10 +273,11 @@ def test_skill_sync_global_can_limit_target_clis(tmp_path: Path, monkeypatch) ->
         result = runner.invoke(
             app,
             ["skill", "sync-global", "--cli", "codex", "--cli", "cursor"],
-        )
+    )
 
     assert result.exit_code == 0
-    assert "Synced 6 installation(s)" in result.stdout
+    assert "8 destination result(s)" in result.stdout
+    assert "4 unique helper(s) across 2 CLI destination(s)" in result.stdout
     assert (home_dir / ".codex/skills/use-cafe-workflow/SKILL.md").is_file()
     assert (home_dir / ".cursor/skills/use-cafe-workflow/SKILL.md").is_file()
     assert not (home_dir / ".claude").exists()
@@ -126,8 +296,66 @@ def test_skill_sync_global_reports_when_no_cli_is_detected(
         result = runner.invoke(app, ["skill", "sync-global"])
 
     assert result.exit_code == 0
+    assert "Source:" in result.stdout
     assert "No supported CLI agents detected" in result.stdout
     assert not home_dir.exists()
+
+
+def test_skill_sync_global_reports_unchanged_source_and_destination_outcomes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    home_dir = tmp_path / "home"
+
+    with (
+        patch("cafe.skills.global_installer._default_home_dir", return_value=home_dir),
+        patch(
+            "cafe.skills.global_installer.shutil.which",
+            side_effect=lambda executable: (
+                "/test-bin/codex" if executable == "codex" else None
+            ),
+        ),
+    ):
+        first = runner.invoke(app, ["skill", "sync-global"])
+        second = runner.invoke(app, ["skill", "sync-global"])
+
+    assert first.exit_code == 0
+    assert second.exit_code == 0
+    assert "0 unique helper(s) across 0 CLI destination(s)" in second.stdout
+    assert "4 unchanged" in second.stdout
+
+
+def test_skill_sync_global_does_not_report_failure_as_success() -> None:
+    summary = MagicMock(
+        source_root=Path("/trusted/[red]source[/red]"),
+        results=[
+            MagicMock(
+                status="failed",
+                cli="codex",
+                skill="use-cafe-workflow",
+                destination=Path(
+                    "/home/[blue]test[/blue]/.codex/skills/use-cafe-workflow"
+                ),
+                reason="permission denied",
+            )
+        ],
+        installed_count=0,
+        updated_count=0,
+        unchanged_count=0,
+        failed_count=1,
+        changed_skill_count=0,
+        changed_cli_count=0,
+    )
+
+    with patch("cafe.ui.commands.catalog.sync_global_skills", return_value=summary):
+        result = runner.invoke(app, ["skill", "sync-global", "--cli", "codex"])
+
+    assert result.exit_code == 1
+    rendered = result.stdout.replace("\n", "")
+    assert "Source: /trusted/[red]source[/red]" in rendered
+    assert "/home/[blue]test[/blue]/.codex/skills/use-cafe-workflow" in rendered
+    assert "1 failed" in result.stdout
+    assert "permission denied" in result.stdout
 
 
 def test_playbook_validate_reports_warning_and_strict_failure(tmp_path: Path, monkeypatch) -> None:
@@ -491,3 +719,337 @@ def test_help_hides_legacy_phase_aliases() -> None:
     commands_section = result.stdout.split("╭─ Commands", 1)[1]
     for command_name in ("spec", "plan", "develop", "dev", "review", "pr"):
         assert f"│ {command_name} " not in commands_section
+
+
+def _write_catalog_entries(project: Path) -> None:
+    playbook = project / ".cafe" / "playbooks" / "standard.yaml"
+    playbook.parent.mkdir(parents=True, exist_ok=True)
+    playbook.write_text("playbook: {id: standard}\nsteps: {}\n", encoding="utf-8")
+    skill = project / ".cafe" / "skills" / "develop" / "SKILL.md"
+    skill.parent.mkdir(parents=True, exist_ok=True)
+    skill.write_text(
+        "---\nname: develop\ndescription: project\n---\n\nDevelop\n",
+        encoding="utf-8",
+    )
+    agent = project / ".cafe" / "agents" / "developer" / "David.md"
+    agent.parent.mkdir(parents=True, exist_ok=True)
+    agent.write_text(
+        "---\nname: David\ndescription: project\n---\n\nDevelop\n",
+        encoding="utf-8",
+    )
+
+
+def test_catalog_check_defaults_to_all_three_kinds_with_complete_json(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    global_root = tmp_path / "global"
+    monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_root)
+    _write_catalog_entries(tmp_path)
+
+    result = runner.invoke(app, ["catalog", "check", "--json"])
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert {item["entry_id"] for item in payload["entries"]} == {
+        "playbook:standard",
+        "phase:develop",
+        "agent:developer/David",
+    }
+    assert payload["difference_count"] == 3
+    assert set(payload["effective_digests"]) == {"playbook", "phase", "agent"}
+
+
+def test_catalog_check_json_reports_a_bounded_over_budget_state(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from cafe.catalogs.resolver import (
+        MAX_CATALOG_DISCOVERY_ENTRIES,
+        MAX_CATALOG_OPERATION_ENTRIES,
+    )
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "cafe.utils.config.get_global_cafe_dir", lambda: tmp_path / "global"
+    )
+    entry_count = (MAX_CATALOG_OPERATION_ENTRIES * 2) + 1
+    for index in range(entry_count):
+        skill = tmp_path / ".cafe" / "skills" / f"phase-{index:03d}" / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text(
+            f"---\nname: phase-{index:03d}\ndescription: project\n---\n",
+            encoding="utf-8",
+        )
+
+    result = runner.invoke(app, ["catalog", "check", "--kind", "phase", "--json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["entry_limit"] == MAX_CATALOG_OPERATION_ENTRIES
+    assert payload["discovery_entry_limit"] == MAX_CATALOG_DISCOVERY_ENTRIES
+    assert payload["discovery_complete"] is True
+    assert payload["schema_version"] == 1
+    assert payload["status"] == "over_budget"
+    assert payload["affected_entry_ids"][0] == "phase:phase-000"
+    assert set(payload["affected_entry_ids"]) == {
+        f"phase:phase-{index:03d}" for index in range(entry_count)
+    }
+    assert "next_cursor" not in payload
+
+    narrowed = runner.invoke(
+        app,
+        [
+            "catalog",
+            "check",
+            "--kind",
+            "phase",
+            "--entry",
+            "phase:phase-000",
+            "--json",
+        ],
+    )
+    assert narrowed.exit_code == 0, narrowed.stdout
+    assert [item["entry_id"] for item in json.loads(narrowed.stdout)["entries"]] == [
+        "phase:phase-000"
+    ]
+
+
+def test_catalog_check_scoped_over_budget_does_not_fall_back_to_unscoped_discovery(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from cafe.catalogs.resolver import MAX_CATALOG_OPERATION_ENTRIES
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "cafe.utils.config.get_global_cafe_dir", lambda: tmp_path / "global"
+    )
+    entry_ids: list[str] = []
+    for index in range(MAX_CATALOG_OPERATION_ENTRIES + 1):
+        name = f"phase-{index:03d}"
+        entry_ids.append(f"phase:{name}")
+        skill = tmp_path / ".cafe" / "skills" / name / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text(
+            f"---\nname: {name}\ndescription: project\n---\n",
+            encoding="utf-8",
+        )
+    unrelated = tmp_path / ".cafe" / "skills" / "aaa" / "SKILL.md"
+    unrelated.parent.mkdir(parents=True)
+    unrelated.write_text(
+        "---\nname: aaa\ndescription: unrelated\n---\n",
+        encoding="utf-8",
+    )
+
+    arguments = ["catalog", "check", "--kind", "phase", "--json"]
+    arguments.extend(value for entry_id in entry_ids for value in ("--entry", entry_id))
+    result = runner.invoke(app, arguments)
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "over_budget"
+    assert payload["scope"] == "explicit"
+    assert payload["requested_entry_count"] == MAX_CATALOG_OPERATION_ENTRIES + 1
+    assert "affected_entry_ids" not in payload
+
+
+def test_catalog_check_json_reports_fallback_only_effective_digests(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    global_root = tmp_path / "global"
+    monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_root)
+
+    before = runner.invoke(app, ["catalog", "check", "--json"])
+    global_playbook = global_root / "playbooks" / "global-only.yaml"
+    global_playbook.parent.mkdir(parents=True)
+    global_playbook.write_text(
+        "playbook: {id: global-only}\nsteps: {}\n", encoding="utf-8"
+    )
+    after = runner.invoke(app, ["catalog", "check", "--json"])
+
+    assert before.exit_code == 0, before.stdout
+    assert after.exit_code == 0, after.stdout
+    before_payload = json.loads(before.stdout)
+    after_payload = json.loads(after.stdout)
+    assert set(before_payload["effective_digests"]) == {
+        "playbook",
+        "phase",
+        "agent",
+    }
+    assert before_payload["status"] == "no_project_entries"
+    assert after_payload["effective_digests"]["playbook"] != before_payload[
+        "effective_digests"
+    ]["playbook"]
+    assert after_payload["comparison_token"] != before_payload["comparison_token"]
+
+
+def test_catalog_check_supports_kind_and_entry_filters(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "cafe.utils.config.get_global_cafe_dir", lambda: tmp_path / "global"
+    )
+    _write_catalog_entries(tmp_path)
+
+    result = runner.invoke(
+        app,
+        [
+            "catalog",
+            "check",
+            "--kind",
+            "playbook",
+            "--entry",
+            "playbook:standard",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert [item["entry_id"] for item in payload["entries"]] == ["playbook:standard"]
+
+
+def test_catalog_sync_global_requires_and_honors_exact_noninteractive_approval(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    global_root = tmp_path / "global"
+    monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_root)
+    _write_catalog_entries(tmp_path)
+    check = runner.invoke(
+        app,
+        [
+            "catalog",
+            "check",
+            "--entry",
+            "playbook:standard",
+            "--json",
+        ],
+    )
+    token = json.loads(check.stdout)["comparison_token"]
+
+    missing_approval = runner.invoke(
+        app, ["catalog", "sync-global", "--token", token, "--json"]
+    )
+    result = runner.invoke(
+        app,
+        [
+            "catalog",
+            "sync-global",
+            "--entry",
+            "playbook:standard",
+            "--token",
+            token,
+            "--approve",
+            "playbook:standard",
+            "--json",
+        ],
+    )
+
+    assert missing_approval.exit_code == 1
+    assert result.exit_code == 0, result.stdout
+    assert json.loads(result.stdout)["updated"] == ["playbook:standard"]
+    assert (global_root / "playbooks" / "standard.yaml").is_file()
+
+
+def test_catalog_sync_global_rejects_stale_cli_token(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    global_root = tmp_path / "global"
+    monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_root)
+    _write_catalog_entries(tmp_path)
+    check = runner.invoke(app, ["catalog", "check", "--json"])
+    token = json.loads(check.stdout)["comparison_token"]
+    agent = tmp_path / ".cafe" / "agents" / "developer" / "David.md"
+    agent.write_text(agent.read_text(encoding="utf-8") + "changed\n", encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "catalog",
+            "sync-global",
+            "--token",
+            token,
+            "--approve",
+            "agent:developer/David",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert not (global_root / "agents" / "developer" / "David.md").exists()
+
+
+def test_catalog_sync_global_interactive_preview_updates_only_selected_entry(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    global_root = tmp_path / "global"
+    monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_root)
+    _write_catalog_entries(tmp_path)
+
+    with (
+        patch("cafe.ui.cli.prompt_checkbox", return_value=["phase:develop"]),
+        patch("cafe.ui.cli.prompt_confirm", return_value=True),
+    ):
+        result = runner.invoke(app, ["catalog", "sync-global"])
+
+    assert result.exit_code == 0, result.stdout
+    assert (global_root / "skills" / "develop" / "SKILL.md").is_file()
+    assert not (global_root / "playbooks" / "standard.yaml").exists()
+
+
+def test_catalog_sync_global_bounds_human_summary_and_keeps_json_complete(
+    tmp_path: Path, monkeypatch
+) -> None:
+    current_global = {"path": tmp_path / "human-global"}
+    monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: current_global["path"])
+
+    def run_sync(project: Path, *, json_output: bool):
+        project.mkdir()
+        monkeypatch.chdir(project)
+        entry_ids = []
+        for index in range(52):
+            name = f"item-{index}"
+            entry_ids.append(f"playbook:{name}")
+            path = project / ".cafe" / "playbooks" / f"{name}.yaml"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                f"playbook: {{id: {name}}}\nsteps: {{}}\n",
+                encoding="utf-8",
+            )
+        check = runner.invoke(app, ["catalog", "check", "--kind", "playbook", "--json"])
+        assert check.exit_code == 0, check.stdout
+        token = json.loads(check.stdout)["comparison_token"]
+        approvals = [value for entry_id in entry_ids for value in ("--approve", entry_id)]
+        arguments = [
+            "catalog",
+            "sync-global",
+            "--kind",
+            "playbook",
+            "--token",
+            token,
+            *approvals,
+        ]
+        if json_output:
+            arguments.append("--json")
+        return runner.invoke(app, arguments), entry_ids
+
+    human_result, entry_ids = run_sync(tmp_path / "human-project", json_output=False)
+    current_global["path"] = tmp_path / "json-global"
+    json_result, json_entry_ids = run_sync(tmp_path / "json-project", json_output=True)
+
+    assert human_result.exit_code == 0, human_result.stdout
+    assert sum("playbook:item-" in line for line in human_result.stdout.splitlines()) == 50
+    assert entry_ids[50] not in human_result.stdout
+    assert "--json" in human_result.stdout
+    assert json_result.exit_code == 0, json_result.stdout
+    assert set(json.loads(json_result.stdout)["updated"]) == set(json_entry_ids)
+
+
+def test_catalog_exposes_comparison_and_sync_without_migration_command() -> None:
+    result = runner.invoke(app, ["catalog", "--help"])
+    removed_command = "-".join(("migrate", "agents"))
+    removed = runner.invoke(app, ["catalog", removed_command])
+
+    assert result.exit_code == 0
+    assert "check" in result.stdout
+    assert "sync-global" in result.stdout
+    assert removed.exit_code != 0

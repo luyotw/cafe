@@ -3,6 +3,7 @@
 import json
 import os
 import subprocess
+import time
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -11,8 +12,8 @@ from cafe.agents.diagnostics import (
     is_transient_same_cli_error,
     sanitize_error_excerpt,
 )
-from cafe.agents.executor import AgentExecutor, AgentExecutionError
-from cafe.core.session import SessionManager
+from cafe.agents.executor import AgentExecutionControl, AgentExecutionError, AgentExecutor
+from cafe.core.session import SessionManager, SessionStore
 from cafe.core.session_continuation import (
     SessionContinuation,
     SessionContinuationPolicy,
@@ -32,24 +33,37 @@ class AgentManager:
     # Agent directory constants
     CAFE_DIR = ".cafe"
     AGENTS_DIR = "agents"
-    FALLBACKABLE_ERROR_TYPES = ("rate_limit", "cli_not_found", "cli_unavailable", "model_not_found")
+    FALLBACKABLE_ERROR_TYPES = (
+        "rate_limit",
+        "provider_overloaded",
+        "cli_not_found",
+        "cli_unavailable",
+        "model_not_found",
+    )
+    PROVIDER_OVERLOAD_RETRY_DELAYS_SECONDS = (60, 120, 300)
     SUPPORTS_COLD_TAKEOVER = True
 
     def __init__(
-        self, session_manager: Optional[SessionManager] = None, issue_name: Optional[str] = None
+        self,
+        session_manager: Optional[SessionStore] = None,
+        issue_name: Optional[str] = None,
+        stream_agent_output: bool = True,
     ) -> None:
         """Initialize agent manager.
 
         Args:
             session_manager: Session manager for handling agent sessions
             issue_name: Issue name for issue-specific sessions
+            stream_agent_output: Whether executors print agent response narration
         """
         self.session_manager = session_manager or SessionManager()
         self.issue_name = issue_name
+        self.stream_agent_output = stream_agent_output
         self.agents: Dict[str, AgentExecutor] = {}
         self.current_agent_name: Optional[str] = None
         self._total_token_usage = TokenUsage()
         self._last_model: Optional[str] = None  # Track latest model used
+        self._last_reported_model: Optional[str] = None
         self._last_cli: Optional[AgentCLI] = None
         self._last_session_id: Optional[str] = None
         self._failed_attempts: List[Dict[str, object]] = []
@@ -93,6 +107,7 @@ class AgentManager:
 
         # Create executor
         executor = AgentExecutor(config_with_session)
+        executor.stream_output = self.stream_agent_output
         self.agents[config.name] = executor
 
     def _load_active_cli_from_file(
@@ -305,7 +320,7 @@ class AgentManager:
                 None,
             )
             if exact_index is None:
-                continuation = SessionContinuation.new()
+                raise ValueError("exact continuation CLI is not configured for this agent")
             elif exact_index:
                 chain = [chain[exact_index], *chain[:exact_index], *chain[exact_index + 1 :]]
 
@@ -408,6 +423,7 @@ class AgentManager:
         phase_name: Optional[str] = None,
         continuation: Optional[SessionContinuation] = None,
         backup_context_callback: Optional[Callable[[AgentExecutionError], str]] = None,
+        execution_control: AgentExecutionControl | None = None,
     ) -> Tuple[str, TokenUsage, List, Optional[List[str]], List[str], Optional[str]]:
         """Execute prompt with specified agent.
 
@@ -429,21 +445,24 @@ class AgentManager:
         self._failed_attempts = []
         base_executor = self.get_agent(agent_name)
 
+        effective_continuation = continuation or SessionContinuation.auto()
         try:
             execution_config = self.get_execution_config(
                 agent_name,
                 phase_name=phase_name,
-                continuation=continuation,
+                continuation=effective_continuation,
             )
         except Exception:
+            if effective_continuation.is_exact:
+                raise
             execution_config = self._base_config_for_continuation(
                 base_executor.config,
-                continuation or SessionContinuation.auto(),
+                effective_continuation,
             )
 
         if not self._config_is_equivalent(base_executor.config, execution_config):
             executor = AgentExecutor(execution_config)
-            effective_continuation = continuation or SessionContinuation.auto()
+            executor.stream_output = self.stream_agent_output
             if effective_continuation.policy == SessionContinuationPolicy.AUTO:
                 self.agents[agent_name] = executor
         else:
@@ -460,16 +479,27 @@ class AgentManager:
         # Track if we've already retried for session conflict
         retried = False
         transient_retry_done = False
+        provider_overload_retries = 0
         primary_attempt = 1
         attempt_prompt = prompt
 
         while True:
             try:
+                control_kwargs = (
+                    {"execution_control": execution_control}
+                    if execution_control is not None
+                    else {}
+                )
+                exact_session_kwargs = (
+                    {"exact_session": True} if effective_continuation.is_exact else {}
+                )
                 agent_response = executor.execute(
                     attempt_prompt,
                     allowed_tools,
                     allowed_directories,
                     streaming_output_file,
+                    **control_kwargs,
+                    **exact_session_kwargs,
                 )
                 break  # Success, exit loop
             except AgentExecutionError as e:
@@ -481,7 +511,10 @@ class AgentManager:
                 )
                 # Handle session conflict (only retry once)
                 if (
-                    hasattr(e, "error_type") and e.error_type == "SESSION_CONFLICT" and not retried
+                    hasattr(e, "error_type")
+                    and e.error_type == "SESSION_CONFLICT"
+                    and not retried
+                    and not effective_continuation.is_exact
                 ):
                     retried = True
                     # Clear session ID to force creation of new session on next execution
@@ -497,7 +530,28 @@ class AgentManager:
                         f"⚠️  {executor.config.cli.value} connection closed unexpectedly, "
                         "retrying once..."
                     )
-                elif hasattr(e, "error_type") and e.error_type in self.FALLBACKABLE_ERROR_TYPES:
+                elif getattr(
+                    e, "error_type", None
+                ) == "provider_overloaded" and provider_overload_retries < len(
+                    self.PROVIDER_OVERLOAD_RETRY_DELAYS_SECONDS
+                ):
+                    delay = self.PROVIDER_OVERLOAD_RETRY_DELAYS_SECONDS[provider_overload_retries]
+                    provider_overload_retries += 1
+                    primary_attempt += 1
+                    print(
+                        f"⚠️  {executor.config.cli.value} provider is temporarily at capacity; "
+                        f"retrying in {delay}s ({provider_overload_retries}/"
+                        f"{len(self.PROVIDER_OVERLOAD_RETRY_DELAYS_SECONDS)})..."
+                    )
+                    time.sleep(delay)
+                elif (
+                    hasattr(e, "error_type")
+                    and e.error_type in self.FALLBACKABLE_ERROR_TYPES
+                    and (
+                        not effective_continuation.is_exact
+                        or backup_context_callback is not None
+                    )
+                ):
                     # Try backup agents
                     agent_response = self._try_backup_agents(
                         primary_error=e,
@@ -507,8 +561,9 @@ class AgentManager:
                         allowed_directories=allowed_directories,
                         streaming_output_file=streaming_output_file,
                         phase_name=phase_name,
-                        continuation=continuation,
+                        continuation=effective_continuation,
                         backup_context_callback=backup_context_callback,
+                        execution_control=execution_control,
                     )
                     break  # Backup succeeded, exit loop
                 else:
@@ -521,7 +576,8 @@ class AgentManager:
         permission_denials = agent_response.permission_denials
         cli_command_args = agent_response.cli_command_args
         streaming_log = agent_response.streaming_log
-        model = agent_response.model
+        reported_model = agent_response.model
+        model = reported_model
         actual_cli = agent_response.cli or executor.config.cli
         actual_session_id = agent_response.session_id
         if model is None and actual_cli == executor.config.cli:
@@ -529,6 +585,7 @@ class AgentManager:
 
         self._last_cli = actual_cli
         self._last_session_id = actual_session_id
+        self._last_reported_model = reported_model
 
         # Save session ID if it was created during execution
         if actual_session_id:
@@ -575,6 +632,7 @@ class AgentManager:
         allowed_directories: Optional[List[str]] = None,
         phase_name: Optional[str] = None,
         continuation: Optional[SessionContinuation] = None,
+        execution_control: AgentExecutionControl | None = None,
     ) -> Optional[List[str]]:
         """Preview CLI command args before execution starts."""
         executor = AgentExecutor(
@@ -584,7 +642,12 @@ class AgentManager:
                 continuation=continuation,
             )
         )
-        return executor.preview_cli_command_args(prompt, allowed_tools, allowed_directories)
+        return executor.preview_cli_command_args(
+            prompt,
+            allowed_tools,
+            allowed_directories,
+            execution_control=execution_control,
+        )
 
     def preview_cli_environment(
         self,
@@ -613,6 +676,7 @@ class AgentManager:
         phase_name: Optional[str] = None,
         continuation: Optional[SessionContinuation] = None,
         backup_context_callback: Optional[Callable[[AgentExecutionError], str]] = None,
+        execution_control: AgentExecutionControl | None = None,
     ) -> "AgentResponse":
         """Try backup agents in order until one succeeds or all fail.
 
@@ -642,6 +706,10 @@ class AgentManager:
             AgentExecutionError: Raised when all agents (primary + backups) fail
         """
         config = primary_executor.config
+        requires_takeover_context = bool(continuation and continuation.is_exact)
+
+        if requires_takeover_context and backup_context_callback is None:
+            raise primary_error
 
         # Use clis chain when available; fall back to legacy backup_clis + models_config
         chain = config.clis
@@ -686,6 +754,7 @@ class AgentManager:
             # durable runtime snapshot at this last responsible moment instead
             # of carrying a provider session or an earlier in-memory summary.
             backup_prompt = prompt
+            takeover_context = ""
             if backup_context_callback is not None:
                 try:
                     takeover_context = backup_context_callback(takeover_error)
@@ -697,11 +766,19 @@ class AgentManager:
                         f"❌ {entry.cli.value} takeover context unavailable; trying next agent..."
                     )
                     continue
-                if takeover_context:
+                if isinstance(takeover_context, str) and takeover_context.strip():
                     backup_prompt = (
                         f"{prompt}\n\nCold backup takeover context (fresh, provider-neutral):\n"
                         f"{takeover_context}"
                     )
+                elif requires_takeover_context:
+                    failed_agents.append(
+                        f"{entry.cli.value} (takeover context unavailable: empty context)"
+                    )
+                    print(
+                        f"❌ {entry.cli.value} takeover context unavailable; trying next agent..."
+                    )
+                    continue
 
             # Explicit workflow policies never continue a different fallback
             # session. AUTO preserves legacy sticky-session behavior.
@@ -719,16 +796,24 @@ class AgentManager:
                 session_id=fallback_session_id,
             )
             backup_executor = AgentExecutor(backup_config)
+            backup_executor.stream_output = self.stream_agent_output
 
             backup_attempt = 1
             transient_retry_done = False
+            provider_overload_retries = 0
             while True:
                 try:
+                    control_kwargs = (
+                        {"execution_control": execution_control}
+                        if execution_control is not None
+                        else {}
+                    )
                     agent_response = backup_executor.execute(
                         backup_prompt,
                         allowed_tools,
                         allowed_directories,
                         streaming_output_file,
+                        **control_kwargs,
                     )
                     if agent_response.cli is None:
                         agent_response.cli = entry.cli
@@ -751,6 +836,23 @@ class AgentManager:
                         print(
                             f"⚠️  {entry.cli.value} connection closed unexpectedly, retrying once..."
                         )
+                        continue
+                    if getattr(
+                        backup_error, "error_type", None
+                    ) == "provider_overloaded" and provider_overload_retries < len(
+                        self.PROVIDER_OVERLOAD_RETRY_DELAYS_SECONDS
+                    ):
+                        delay = self.PROVIDER_OVERLOAD_RETRY_DELAYS_SECONDS[
+                            provider_overload_retries
+                        ]
+                        provider_overload_retries += 1
+                        backup_attempt += 1
+                        print(
+                            f"⚠️  {entry.cli.value} provider is temporarily at capacity; "
+                            f"retrying in {delay}s ({provider_overload_retries}/"
+                            f"{len(self.PROVIDER_OVERLOAD_RETRY_DELAYS_SECONDS)})..."
+                        )
+                        time.sleep(delay)
                         continue
                     if (
                         hasattr(backup_error, "error_type")
@@ -806,6 +908,8 @@ class AgentManager:
         error_type = getattr(error, "error_type", None)
         if error_type == "rate_limit":
             return "rate limit"
+        if error_type == "provider_overloaded":
+            return "provider temporarily overloaded"
         if error_type == "cli_not_found":
             return "CLI not found"
         if error_type == "cli_unavailable":
@@ -979,7 +1083,7 @@ class AgentManager:
         """Get the path to agent md file (for use in prompts).
 
         Searches in order: local .cafe/agents/ first, then ~/.cafe/agents/,
-        then falls back to src/cafe/data/agents/.
+        then falls back to the builtin agent catalog.
 
         Args:
             agent_name: Agent name (e.g. "Roger", "David", "Richard", "John")
@@ -989,22 +1093,29 @@ class AgentManager:
         Returns:
             str: Agent file path
         """
-        from pathlib import Path
+        from cafe.catalogs.resolver import CatalogKind, CatalogResolver
 
-        agent_filename = f"{agent_name}.md"
+        project_root = Path(cafe_dir).parent if cafe_dir else None
+        resolver = CatalogResolver(project_root=project_root)
+        entry = resolver.resolve(CatalogKind.AGENT, f"{role}/{agent_name}")
+        return str(entry.path)
 
-        # Search upward from cwd for .cafe/agents/ (works in worktrees and subdirectories)
-        current = Path.cwd().resolve()
-        while current != current.parent:
-            local_path = current / ".cafe" / "agents" / role / agent_filename
-            if local_path.exists():
-                return str(local_path)
-            current = current.parent
+    @classmethod
+    def read_agent_file(cls, agent_name: str, role: str, cafe_dir: str = None) -> tuple[str, str]:
+        """Resolve and read an agent definition under one shared catalog lock."""
+        from cafe.catalogs.resolver import (
+            CatalogResolver,
+            global_catalog_lock,
+            read_valid_agent_definition,
+        )
 
-        # Fall back to global ~/.cafe/agents/
-        home_path = Path.home() / ".cafe" / "agents" / role / agent_filename
-        if home_path.exists():
-            return str(home_path)
-
-        # Fall back to system default
-        return f"src/cafe/data/agents/{role}/{agent_name}.md"
+        project_root = Path(cafe_dir).parent if cafe_dir else None
+        resolver = CatalogResolver(project_root=project_root)
+        with global_catalog_lock(resolver.global_root):
+            path = Path(
+                cls.get_agent_file_path(agent_name, role, cafe_dir)
+                if cafe_dir is not None
+                else cls.get_agent_file_path(agent_name, role)
+            )
+            content = read_valid_agent_definition(path, f"{role}/{agent_name}")
+            return str(path), content

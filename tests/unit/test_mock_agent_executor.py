@@ -7,6 +7,17 @@ from cafe.core.types import AgentCLI, AgentConfig, TokenUsage
 class TestMockAgentExecutor:
     """測試 MockAgentExecutor 基本功能"""
 
+    def test_execute_accepts_environment_overrides(self):
+        config = AgentConfig(name="TestAgent", cli=AgentCLI.CLAUDE)
+        executor = MockAgentExecutor(config=config)
+
+        response = executor.execute(
+            "prompt",
+            environment_overrides={"CAFE_ISSUE_NAME": "issue478"},
+        )
+
+        assert response.response == executor._response
+
     def test_default_response(self):
         """測試預設回應為 READY_FOR_REVIEW"""
         # Arrange

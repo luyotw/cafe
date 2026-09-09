@@ -34,12 +34,13 @@ You can contribute to this project in several ways:
     ```bash
     ./setup-hooks.sh
     ```
-    The configured post-commit and post-merge hooks verify and synchronize
-    bundled workflow helper skills to supported agent CLIs. CAFE CLI
-    startup also uses a per-machine fingerprint as a cross-check for fresh
-    checkouts and package upgrades. Concurrent development machines keep
-    independent sync state and pick up each other's committed changes through
-    the normal Git push/pull flow; CAFE never auto-pulls or modifies a checkout.
+    The configured hooks run repository quality checks only. Commits and merges
+    never publish bundled workflow helpers into user-level agent CLI directories.
+    Ordinary observational CLI commands also leave those directories untouched.
+    Eligible mutating commands may fill missing helpers from the released package
+    or canonical main checkout, but never update an existing copy. Use
+    `cafe skill sync-global` deliberately to publish feature-worktree helper
+    changes; its output identifies the exact source and each destination result.
 
 ## Pull Request Process
 
@@ -55,8 +56,9 @@ You can contribute to this project in several ways:
     pytest
     ```
     Fast local commits run a bounded contract smoke suite plus tests related to
-    staged files. A complete no-coverage test run executes on `git push` via the
-    `pre-push` hook. Run the coverage gate separately when changing behavior:
+    staged files. The `pre-push` hook re-runs the bounded contract smoke suite;
+    the complete unit/integration and coverage checks run only in the release
+    gate. You may run the coverage gate separately when changing behavior:
     ```bash
     ./scripts/test-coverage.sh
     ```

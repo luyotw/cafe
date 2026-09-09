@@ -168,6 +168,38 @@ class TestAgentExecution:
             assert streaming_log == []
             assert token_usage.output_tokens == 50
 
+    def test_execute_retries_provider_overload_after_a_bounded_delay(self) -> None:
+        """Temporary provider capacity retries the same CLI before any fallback."""
+        from cafe.core.types import AgentResponse, TokenUsage
+
+        manager = AgentManager()
+        manager.register_agent(AgentConfig(name="Nick", cli=AgentCLI.CODEX))
+        overloaded = AgentExecutionError(
+            "Selected model is at capacity.",
+            error_type="provider_overloaded",
+            display_message="Codex provider is temporarily at capacity.",
+        )
+        success = AgentResponse(response="completed", token_usage=TokenUsage())
+
+        with (
+            patch.object(AgentExecutor, "execute", side_effect=[overloaded, success]) as execute,
+            patch("cafe.agents.manager.time.sleep") as sleep,
+        ):
+            result = manager.execute("Nick", "Test prompt")
+
+        assert result[0] == "completed"
+        assert execute.call_count == 2
+        sleep.assert_called_once_with(60)
+        assert manager.get_failed_attempts() == [
+            {
+                "cli": "codex",
+                "chain_role": "primary",
+                "attempt": 1,
+                "error_type": "provider_overloaded",
+                "error_excerpt": "Codex provider is temporarily at capacity.",
+            }
+        ]
+
     def test_execute_current_agent(self) -> None:
         """Test executing the current agent."""
         manager = AgentManager()
@@ -455,13 +487,17 @@ class TestGetAgentFilePath:
         repo_root = tmp_path / "repo"
         local_agent = repo_root / ".cafe" / "agents" / "pm" / "Roger.md"
         local_agent.parent.mkdir(parents=True)
-        local_agent.write_text("# Roger (local)")
+        local_agent.write_text(
+            "---\nname: Roger\ndescription: local\n---\n\n# Roger (local)\n"
+        )
 
         # Set up global agent
         global_home = tmp_path / "global_home"
         global_agent = global_home / ".cafe" / "agents" / "pm" / "Roger.md"
         global_agent.parent.mkdir(parents=True)
-        global_agent.write_text("# Roger (global)")
+        global_agent.write_text(
+            "---\nname: Roger\ndescription: global\n---\n\n# Roger (global)\n"
+        )
 
         # Run from a subdirectory to verify upward search finds .cafe/agents/
         subdir = repo_root / "src" / "nested"
@@ -488,7 +524,9 @@ class TestGetAgentFilePath:
         global_home = tmp_path / "global_home"
         global_agent = global_home / ".cafe" / "agents" / "pm" / "Roger.md"
         global_agent.parent.mkdir(parents=True)
-        global_agent.write_text("# Roger (global)")
+        global_agent.write_text(
+            "---\nname: Roger\ndescription: global\n---\n\n# Roger (global)\n"
+        )
 
         # Run from a subdirectory
         subdir = repo_root / "subdir"
@@ -521,5 +559,39 @@ class TestGetAgentFilePath:
         with patch.object(RealPath, "home", return_value=global_home):
             result = AgentManager.get_agent_file_path("Roger", "pm")
 
-        # Falls back to system default path
-        assert result == "src/cafe/data/agents/pm/Roger.md"
+        resolved_path = RealPath(result)
+        assert resolved_path.is_absolute()
+        assert resolved_path.is_file()
+
+    def test_reads_builtin_agent_outside_source_checkout(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Builtin guidance remains readable when CWD is outside the source tree."""
+        from pathlib import Path as RealPath
+
+        working_dir = tmp_path / "working"
+        working_dir.mkdir()
+        monkeypatch.chdir(working_dir)
+
+        with patch.object(RealPath, "home", return_value=tmp_path / "empty-home"):
+            path, content = AgentManager.read_agent_file("David", "developer")
+
+        resolved_path = RealPath(path)
+        assert resolved_path.is_absolute()
+        assert resolved_path.is_file()
+        assert content.strip()
+
+    def test_read_agent_file_never_substitutes_empty_invalid_guidance(
+        self, tmp_path
+    ) -> None:
+        from cafe.catalogs.resolver import CatalogValidationError
+
+        project = tmp_path / "project"
+        invalid = project / ".cafe" / "agents" / "developer" / "David.md"
+        invalid.parent.mkdir(parents=True)
+        invalid.write_bytes(b"\xff\xfeinvalid-agent")
+
+        with pytest.raises(CatalogValidationError):
+            AgentManager.read_agent_file(
+                "David", "developer", str(project / ".cafe")
+            )

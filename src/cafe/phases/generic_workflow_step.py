@@ -33,7 +33,16 @@ from cafe.core.delta_packet import (
     persist_delta_packet,
 )
 from cafe.core.git import GitOperations
-from cafe.core.long_running_operation_helper import get_operation_status
+from cafe.core.human_task_records import (
+    HumanTaskRecordError,
+    HumanTaskRecordStore,
+    HumanTaskStatus,
+)
+from cafe.core.human_tasks import (
+    AGENT_EXECUTION_FRESH_SESSION_DECISION,
+    AGENT_EXECUTION_INTERRUPTED_TASK_ID,
+    AGENT_EXECUTION_INTERRUPTED_TRIGGER,
+)
 from cafe.core.phase import Phase
 from cafe.core.playbook import resolve_playbook_skills, resolve_step_behavior
 from cafe.core.resume_user_input import (
@@ -57,12 +66,11 @@ from cafe.core.status_codes import (
 from cafe.core.takeover import build_takeover_snapshot
 from cafe.core.types import AgentCLI
 from cafe.core.workflow_models import BatonRejected, StepExecutionResult
-from cafe.core.workflow_runtime import (
-    operation_artifact_is_trusted,
-    operation_receipt_is_trusted,
-)
 from cafe.phases.generic_phase import GenericPhase
-from cafe.skills.checklist_composer import compose_declared_checklist
+from cafe.skills.checklist_composer import (
+    compose_declared_checklist,
+    generate_custom_skill_checklist,
+)
 from cafe.skills.contracts import (
     DeclaredArtifactError,
     SkillWorkflowContract,
@@ -72,6 +80,7 @@ from cafe.skills.contracts import (
 )
 from cafe.skills.loader import SkillLoader, canonical_skill_name
 from cafe.templates.manager import TemplateManager
+from cafe.utils.checklist_utils import generate_checklist_file
 from cafe.utils.git_utils import get_git_toplevel, get_repo_root, to_cwd_relative_path
 from cafe.utils.phase_config import load_phase_step_model
 
@@ -140,10 +149,12 @@ class GenericWorkflowStepExecutor(Phase):
         role_configs: Optional[Dict[str, Dict[str, Any]]] = None,
         step_user_inputs: Optional[Dict[str, str]] = None,
         interactive: bool = False,
+        open_pr: bool = False,
         config_allowed_directories: Optional[List[str]] = None,
         extra_allowed_directories: Optional[List[str]] = None,
     ) -> None:
         self.interactive = interactive
+        self.open_pr = open_pr
         self.issue_dir = issue_dir
         self.issue_name = issue_name
         self.playbook = playbook
@@ -161,6 +172,7 @@ class GenericWorkflowStepExecutor(Phase):
         # execute_step() replaces this with an explicit invocation-scoped
         # decision; AUTO only preserves legacy behavior for direct helper use.
         self._session_continuation = SessionContinuation.auto()
+        self._session_recovery: Optional[Dict[str, Any]] = None
         self._delta_packet_metadata: Optional[Dict[str, Any]] = None
         self._config_allowed_directories: List[str] = list(config_allowed_directories or [])
         self._extra_allowed_directories: List[str] = list(extra_allowed_directories or [])
@@ -273,6 +285,7 @@ class GenericWorkflowStepExecutor(Phase):
         blackboard_state: BlackboardState,
         extra_prompt: Optional[str] = None,
         same_invocation_retry: bool = False,
+        validated_pr_auto_create: Optional[bool] = None,
     ) -> StepExecutionResult:
         hybrid_portion = step_def.get("hybrid_portion")
         is_hybrid_portion = isinstance(hybrid_portion, Mapping)
@@ -283,6 +296,7 @@ class GenericWorkflowStepExecutor(Phase):
 
         self.iteration = self._get_next_iteration_number(step_name, self.phase_dir)
         self._resolved_iteration_user_input = None
+        self._session_recovery = None
         self._delta_packet_metadata = None
         iteration_dir = self._get_iteration_dir(self.iteration)
         iteration_dir.mkdir(parents=True, exist_ok=True)
@@ -328,9 +342,14 @@ class GenericWorkflowStepExecutor(Phase):
             agent_name=agent_name,
             step_def=step_def,
             same_invocation_retry=same_invocation_retry,
+            workflow_id=blackboard_state.workflow_id,
         )
         self._apply_step_agent_model(step_name=step_name, step_def=step_def, agent_name=agent_name)
-        agent_cli = self.agent_manager.get_agent(agent_name).config.cli
+        effective_agent_config = self._resolve_execution_config_for_iteration(
+            agent_name=agent_name,
+            step_name=step_name,
+            continuation=self._session_continuation,
+        )
         context = self._build_context(
             step_name=step_name,
             step_def=step_def,
@@ -338,6 +357,7 @@ class GenericWorkflowStepExecutor(Phase):
             agent_name=agent_name,
             output_file=output_file,
             baton_path=portion_baton_path or baton_path,
+            validated_pr_auto_create=validated_pr_auto_create,
         )
         contract = self._get_skill_loader().get_workflow_contract(skill_name)
         self._template_allowed_directories = self._template_allowed_directories_for(
@@ -352,32 +372,53 @@ class GenericWorkflowStepExecutor(Phase):
             role=step_def.get("role"),
             step_name=step_name,
         )
-        self.generic_phase.skill_bridge.synchronize_skills(
-            [*workflow_skill_names, skill_name],
-            agent_cli,
-            install=False,
-        )
-        shared_skill_invocations = self.generic_phase.prepare_skills(
-            skill_names=workflow_skill_names,
-            agent_cli=agent_cli,
-            context=context,
-        )
-        skill_invocation = self.generic_phase.prepare_skill(
-            skill_name=skill_name,
-            agent_cli=agent_cli,
-            context=context,
-        )
-        if not checklist_file.exists():
-            self._generate_checklist(
-                step_name=step_name,
-                skill_name=skill_name,
-                agent_name=agent_name,
-                step_def=step_def,
-                blackboard_state=blackboard_state,
-                checklist_file=checklist_file,
-                output_file=output_file,
-                questions_xml_file=questions_xml_file,
+        managed_skill_names = [*workflow_skill_names, skill_name]
+        runtime_agent_clis = self._configured_clis_from_config(effective_agent_config)
+
+        shared_invocations_by_skill: List[Dict[AgentCLI, str]] = [{} for _ in workflow_skill_names]
+        phase_invocations: Dict[AgentCLI, str] = {}
+        for target_cli in runtime_agent_clis:
+            self.generic_phase.skill_bridge.synchronize_skills(
+                managed_skill_names,
+                target_cli,
+                install=False,
             )
+            target_shared_invocations = self.generic_phase.prepare_skills(
+                skill_names=workflow_skill_names,
+                agent_cli=target_cli,
+                context=context,
+            )
+            for index, invocation in enumerate(target_shared_invocations):
+                shared_invocations_by_skill[index][target_cli] = invocation
+            phase_invocations[target_cli] = self.generic_phase.prepare_skill(
+                skill_name=skill_name,
+                agent_cli=target_cli,
+                context=context,
+            )
+        shared_skill_invocations = [
+            self.generic_phase.skill_bridge.provider_aware_invocation(invocations)
+            for invocations in shared_invocations_by_skill
+        ]
+        skill_invocation = self.generic_phase.skill_bridge.provider_aware_invocation(
+            phase_invocations
+        )
+        # A checklist is a derived phase contract, whether the skill uses the
+        # current declaration or the legacy execution_steps convention.
+        # Refresh it on resume so a phase update cannot leave an interrupted
+        # iteration governed by stale gates.  Unchanged completed items retain
+        # their marks; changed and newly declared items remain open.
+        self._generate_checklist(
+            step_name=step_name,
+            skill_name=skill_name,
+            agent_name=agent_name,
+            step_def=step_def,
+            blackboard_state=blackboard_state,
+            checklist_file=checklist_file,
+            output_file=output_file,
+            questions_xml_file=questions_xml_file,
+            preserve_completed_items=checklist_file.exists(),
+            runtime_context=context,
+        )
 
         last_prompt: List[str] = []
         allowed_tools = self._build_allowed_tools(
@@ -393,6 +434,8 @@ class GenericWorkflowStepExecutor(Phase):
             "skill_name": skill_name,
             "playbook_id": self.playbook.get("playbook", {}).get("id"),
         }
+        if self._session_recovery is not None:
+            phase_specific_data["session_recovery"] = dict(self._session_recovery)
         require_status_code = self._step_requires_status_code(step_name)
 
         def run_agent(prompt: str) -> str:
@@ -405,51 +448,45 @@ class GenericWorkflowStepExecutor(Phase):
                 if self._is_baton_retry_user_input(resolved_user_input)
                 else allowed_tools
             )
-            try:
 
-                def execute_agent() -> tuple[str, Optional[PhaseStatusCode]]:
-                    return self._execute_agent_iteration(
-                        agent_name=agent_name,
-                        prompt=prompt,
-                        user_input=resolved_user_input,
-                        valid_intents=valid_intents,
-                        require_status_code=False,
-                        persist_status=False,
-                        allowed_tools=attempt_allowed_tools,
-                        phase_specific_data=phase_specific_data,
-                        backup_context_callback=lambda error: self._build_backup_takeover_context(
-                            error=error,
-                            step_name=step_name,
-                            step_def=step_def,
-                            blackboard_state=blackboard_state,
-                            output_file=output_file,
-                            checklist_file=checklist_file,
-                            iteration_dir=iteration_dir,
-                        ),
-                    )
-
-                if is_hybrid_portion:
-                    response, _ = self._preserve_hybrid_control_files(
-                        execute_agent,
+            def execute_agent() -> tuple[str, Optional[PhaseStatusCode]]:
+                return self._execute_agent_iteration(
+                    agent_name=agent_name,
+                    prompt=prompt,
+                    user_input=resolved_user_input,
+                    valid_intents=valid_intents,
+                    require_status_code=False,
+                    persist_status=False,
+                    allowed_tools=attempt_allowed_tools,
+                    phase_specific_data=phase_specific_data,
+                    backup_context_callback=lambda error: self._build_backup_takeover_context(
+                        error=error,
                         step_name=step_name,
+                        step_def=step_def,
+                        blackboard_state=blackboard_state,
+                        output_file=output_file,
+                        checklist_file=checklist_file,
                         iteration_dir=iteration_dir,
-                    )
-                else:
-                    response, _ = execute_agent()
-            finally:
-                # A phase agent can launch a controlled long-running operation,
-                # whose helper publishes runtime-owned metadata while this
-                # executor still holds the blackboard snapshot from before the
-                # agent call. Refresh that shared object before after-execute
-                # hooks or artifact writes can persist the stale snapshot and
-                # erase the operation's trust record.
-                refreshed = BlackboardStore(self.issue_dir).load_or_create(
-                    step_name,
-                    playbook_id=str(self.playbook.get("playbook", {}).get("id", "default")),
-                    tolerate_invalid_baton=True,
+                    ),
                 )
-                blackboard_state.__dict__.update(refreshed.__dict__)
+
+            if is_hybrid_portion:
+                response, _ = self._preserve_hybrid_control_files(
+                    execute_agent,
+                    step_name=step_name,
+                    iteration_dir=iteration_dir,
+                )
+            else:
+                response, _ = execute_agent()
             return response
+
+        def transform_runtime_context(runtime_context: Dict[str, str]) -> Dict[str, str]:
+            return self._apply_resume_to_runtime_context(
+                runtime_context,
+                step_name,
+                blackboard_state,
+                extra_prompt,
+            )
 
         execution = self.generic_phase.execute(
             skill_name=skill_name,
@@ -476,14 +513,8 @@ class GenericWorkflowStepExecutor(Phase):
                     else None
                 ),
                 "blackboard_state": blackboard_state,
-                "transform_runtime_context": (
-                    lambda runtime_context: self._apply_resume_to_runtime_context(
-                        runtime_context,
-                        step_name,
-                        blackboard_state,
-                        extra_prompt,
-                    )
-                ),
+                "validated_pr_auto_create": validated_pr_auto_create,
+                "transform_runtime_context": transform_runtime_context,
             },
         )
 
@@ -502,6 +533,7 @@ class GenericWorkflowStepExecutor(Phase):
             and self._should_validate_checklist(status_code)
         ):
             resolved_user_input = self._get_resolved_iteration_user_input(step_name)
+
             def validate_completion():
                 return self._validate_and_retry_checklist_completion(
                     agent_name=agent_name,
@@ -511,6 +543,7 @@ class GenericWorkflowStepExecutor(Phase):
                     allowed_tools=allowed_tools,
                     max_retries=3,
                 )
+
             response, validated_status, validation_passed = (
                 self._preserve_hybrid_control_files(
                     validate_completion,
@@ -677,46 +710,6 @@ class GenericWorkflowStepExecutor(Phase):
         except Exception:
             workspace["state"] = "unknown"
 
-        operation: dict[str, Any] | None = None
-        operation_store = BlackboardStore(self.issue_dir)
-        try:
-            stored_operation = operation_store.read_operation_artifact(iteration_dir)
-            if stored_operation is not None:
-                current_blackboard = operation_store.load_or_create(step_name)
-                if not operation_artifact_is_trusted(
-                    blackboard_store=operation_store,
-                    blackboard=current_blackboard,
-                    current_step=step_name,
-                    iteration_dir=iteration_dir,
-                    artifact=stored_operation,
-                ):
-                    operation = {"state": "unknown"}
-                else:
-                    receipt = operation_store.read_operation_receipt(iteration_dir)
-                    if receipt is not None and not operation_receipt_is_trusted(
-                        blackboard_store=operation_store,
-                        blackboard=current_blackboard,
-                        current_step=step_name,
-                        iteration_dir=iteration_dir,
-                        operation=stored_operation,
-                        receipt=receipt,
-                    ):
-                        operation = {"state": "unknown"}
-                    else:
-                        current = get_operation_status(
-                            issue_dir=self.issue_dir,
-                            step=step_name,
-                            iteration_dir=iteration_dir,
-                            playbook=self.playbook,
-                        )
-                        operation = {
-                            "state": "running" if current.state.value == "running" else "terminal",
-                            "id": current.operation_id,
-                        }
-        except (OSError, ValueError, json.JSONDecodeError):
-            # Unknown operation evidence is unsafe to treat as absent: a cold
-            # backup must status-check rather than risk relaunching it.
-            operation = {"state": "unknown"}
         snapshot = build_takeover_snapshot(
             reason=error,
             step=step_name,
@@ -724,7 +717,6 @@ class GenericWorkflowStepExecutor(Phase):
             resolved_inputs=resolved_inputs,
             output_file=output_file,
             checklist_file=checklist_file,
-            operation=operation,
             workspace=workspace,
         )
         return json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))
@@ -955,15 +947,18 @@ class GenericWorkflowStepExecutor(Phase):
             config = self.agent_manager.get_agent(agent_name).config
         except Exception:
             return []
-        if getattr(config, "clis", None):
-            return [
-                entry.cli
-                for entry in config.clis
-                if hasattr(entry, "cli") and isinstance(entry.cli, AgentCLI)
-            ]
-        configured = []
+        return self._configured_clis_from_config(config)
+
+    @staticmethod
+    def _configured_clis_from_config(config: Any) -> list[AgentCLI]:
+        """Return the active CLI followed by every configured failover CLI."""
+        configured: list[AgentCLI] = []
         if isinstance(getattr(config, "cli", None), AgentCLI):
             configured.append(config.cli)
+        for entry in getattr(config, "clis", None) or []:
+            cli = getattr(entry, "cli", None)
+            if isinstance(cli, AgentCLI) and cli not in configured:
+                configured.append(cli)
         configured.extend(
             cli
             for cli in getattr(config, "backup_clis", [])
@@ -977,6 +972,7 @@ class GenericWorkflowStepExecutor(Phase):
         agent_name: str,
         step_def: Dict[str, Any],
         same_invocation_retry: bool = False,
+        workflow_id: Optional[str] = None,
     ) -> SessionContinuation:
         """Choose once per step invocation; retries update it after success."""
         previous_data = self._load_previous_iteration_data()
@@ -988,6 +984,13 @@ class GenericWorkflowStepExecutor(Phase):
             previous_iteration_data=previous_data,
             current_iteration_data=current_data,
         ):
+            recovery = self._selected_fresh_session_recovery(
+                workflow_id=workflow_id,
+                current_data=current_data,
+            )
+            if recovery is not None:
+                self._session_recovery = recovery
+                return SessionContinuation.new()
             exact = exact_continuation_from_context(
                 current_data,
                 configured_clis=configured_clis,
@@ -1001,7 +1004,107 @@ class GenericWorkflowStepExecutor(Phase):
             )
             return exact or SessionContinuation.new()
 
+        if self.iteration > 1 and step_def.get("correction_session", "resume") == "resume":
+            exact = exact_continuation_from_context(
+                previous_data,
+                configured_clis=configured_clis,
+            )
+            return exact or SessionContinuation.new()
+
         return SessionContinuation.new()
+
+    def _selected_fresh_session_recovery(
+        self,
+        *,
+        workflow_id: Optional[str],
+        current_data: Optional[dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        """Return the latest applicable user-authorized session rotation."""
+        store = HumanTaskRecordStore(self.issue_dir)
+        if not workflow_id or not store.exists or not isinstance(current_data, dict):
+            return None
+
+        try:
+            matching = [
+                task
+                for task in store.tasks()
+                if task.workflow_id == workflow_id
+                and task.step == self.phase_name
+                and task.iteration == self.iteration
+                and task.trigger == AGENT_EXECUTION_INTERRUPTED_TRIGGER
+                and task.policy_id == AGENT_EXECUTION_INTERRUPTED_TASK_ID
+                and task.status is HumanTaskStatus.COMPLETED
+            ]
+        except HumanTaskRecordError as exc:
+            raise RuntimeError("Cannot validate fresh-session recovery evidence") from exc
+        if not matching:
+            return None
+
+        latest = max(matching, key=lambda task: (task.completed_at or "", task.id))
+        try:
+            result = store.get_result(latest.id)
+        except HumanTaskRecordError as exc:
+            raise RuntimeError("Cannot validate fresh-session recovery result") from exc
+        if result is None:
+            return None
+        if result.payload.get("decision") != AGENT_EXECUTION_FRESH_SESSION_DECISION:
+            return None
+
+        declared_decisions = latest.expected_result.get("decisions")
+        if not isinstance(declared_decisions, list) or not any(
+            isinstance(decision, Mapping)
+            and decision.get("id") == AGENT_EXECUTION_FRESH_SESSION_DECISION
+            for decision in declared_decisions
+        ):
+            raise RuntimeError("Fresh-session recovery was not declared by the completed task")
+        if latest.continuations.get(AGENT_EXECUTION_FRESH_SESSION_DECISION) != self.phase_name:
+            raise RuntimeError("Fresh-session recovery does not target the current step")
+
+        recovery = result.payload.get("session_continuation")
+        if not isinstance(recovery, Mapping):
+            raise RuntimeError("Fresh-session recovery result has no durable session evidence")
+        expected_binding = {
+            "policy": "new",
+            "workflow_id": workflow_id,
+            "human_task_id": latest.id,
+            "step": self.phase_name,
+            "iteration": self.iteration,
+        }
+        if any(recovery.get(key) != value for key, value in expected_binding.items()):
+            raise RuntimeError("Fresh-session recovery result does not match this workflow run")
+
+        previous = recovery.get("previous")
+        if not isinstance(previous, Mapping):
+            raise RuntimeError("Fresh-session recovery result has no prior-session identity")
+        previous_cli = previous.get("cli")
+        previous_session = previous.get("session_id")
+        if not isinstance(previous_cli, str) or not previous_cli.strip():
+            raise RuntimeError("Fresh-session recovery prior CLI is invalid")
+        if not isinstance(previous_session, str) or not previous_session.strip():
+            raise RuntimeError("Fresh-session recovery prior session is invalid")
+
+        persisted_recovery = current_data.get("session_recovery")
+        if persisted_recovery == dict(recovery):
+            current_session = current_data.get("session_id")
+            if isinstance(current_session, str) and current_session != previous_session:
+                return None
+            return dict(recovery)
+
+        if current_data.get("cli") != previous_cli:
+            return None
+        if current_data.get("session_id") != previous_session:
+            return None
+        previous_model = previous.get("model")
+        current_model = current_data.get("model")
+        if (
+            isinstance(previous_model, str)
+            and previous_model
+            and isinstance(current_model, str)
+            and current_model
+            and current_model != previous_model
+        ):
+            return None
+        return dict(recovery)
 
     def _git_snapshot(self) -> Dict[str, str]:
         snapshot: Dict[str, str] = {}
@@ -1251,16 +1354,9 @@ class GenericWorkflowStepExecutor(Phase):
         agent_name: str,
         output_file: Path,
         baton_path: Optional[Path] = None,
+        validated_pr_auto_create: Optional[bool] = None,
     ) -> Dict[str, str]:
         role = str(step_def.get("role", "developer"))
-        role_dir = {
-            "pm": "pm",
-            "reviewer": "reviewer",
-            "writer": "writer",
-            "editor": "editor",
-            "researcher": "researcher",
-            "ops": "ops",
-        }.get(role, "developer")
         # 這條 playbook 實際可用的 to_step（= 所有 step 名 + 內建 user/done），
         # 與 baton 驗證器一致。注入 prompt 讓 agent 不會憑共用 skill 的範例（如 pr）
         # 猜出本 playbook 不存在的 step。
@@ -1268,13 +1364,30 @@ class GenericWorkflowStepExecutor(Phase):
         valid_to_steps = list(playbook.get("steps", {}).keys()) + ["user", "done"]
         # 本 step 依 intent 定義的下一步（含 _done → done 正規化），給 agent 明確指向。
         step_on = step_def.get("on", {}) if isinstance(step_def.get("on"), dict) else {}
-        step_transitions = {
-            str(k): ("done" if str(v) in ("_done", "done") else str(v)) for k, v in step_on.items()
-        }
-        valid_baton_intents = effective_step_handoff_intents(step_def)
         behavior = resolve_step_behavior(playbook, step_name)
+        _agent_source, agent_content = AgentManager.read_agent_file(agent_name, role)
+        materialized_agent = output_file.parent / "context_agent_file.md"
+        self._restore_control_file(materialized_agent, agent_content.encode("utf-8"))
+        terminal_targets = {"_done", "done"}
+        terminal_route_intents = {
+            str(intent) for intent, target in step_on.items() if str(target) in terminal_targets
+        }
+        step_transitions: Dict[str, str] = {}
+        for raw_intent, raw_target in step_on.items():
+            target = "done" if str(raw_target) in terminal_targets else str(raw_target)
+            intent = str(raw_intent)
+            if behavior.completion == "baton" and target == "done":
+                intent = HandoffIntent.WORKFLOW_COMPLETE.value
+            step_transitions[intent] = target
+        valid_baton_intents = effective_step_handoff_intents(step_def)
+        if behavior.completion == "baton" and terminal_route_intents:
+            valid_baton_intents = [
+                intent for intent in valid_baton_intents if intent not in terminal_route_intents
+            ]
+            if HandoffIntent.WORKFLOW_COMPLETE.value not in valid_baton_intents:
+                valid_baton_intents.append(HandoffIntent.WORKFLOW_COMPLETE.value)
         context = {
-            "agent_file": AgentManager.get_agent_file_path(agent_name, role_dir),
+            "agent_file": self._display_path(materialized_agent),
             "handoff_summary": getattr(blackboard_state, "handoff_summary", ""),
             "blackboard_digest": self._build_blackboard_digest(blackboard_state),
             "issue_dir": self._display_path(self.issue_dir),
@@ -1287,8 +1400,25 @@ class GenericWorkflowStepExecutor(Phase):
             "valid_to_steps": ", ".join(valid_to_steps),
             "valid_baton_intents": ", ".join(valid_baton_intents),
             "step_transitions": ", ".join(f"{i}→{s}" for i, s in step_transitions.items()),
+            "behavior_completion": behavior.completion,
             "publish_confirmation": behavior.publish_confirmation,
         }
+        if getattr(self, "_session_recovery", None) is not None:
+            context["session_recovery"] = (
+                "The user explicitly selected a fresh provider session after an interruption. "
+                "Continue the same phase, iteration, model, and authority. Reconstruct the "
+                "current state only from the bounded runtime files and declared inputs in this "
+                "prompt; do not assume memory from the previous provider session."
+            )
+        publication_choice = validated_pr_auto_create
+        if publication_choice is None:
+            publication_choice = self._get_issue_config_value(
+                self.issue_dir / "issue.yaml",
+                "pr.auto_create",
+            )
+        if behavior.publish_confirmation:
+            if isinstance(publication_choice, bool):
+                context["pr_auto_create"] = str(publication_choice).lower()
 
         skill_name = self._resolve_skill_name(step_def, self.iteration)
         contract = self._get_skill_loader().get_workflow_contract(skill_name)
@@ -1363,10 +1493,17 @@ class GenericWorkflowStepExecutor(Phase):
         if "git_history" in behavior.context_providers:
             base_branch = self._get_issue_config_value(self.issue_dir / "issue.yaml", "base_branch")
             resolved_base = str(base_branch or self.git_ops.get_default_base_branch())
+            comparison_base = resolved_base
+            if publication_choice is True:
+                comparison_base = self.git_ops.ensure_remote_base_ancestor(
+                    resolved_base,
+                    "HEAD",
+                )
             context["base_branch"] = resolved_base
+            context["pr_comparison_base"] = comparison_base
             context["commits"] = self._get_current_branch_commits(
                 self.git_ops,
-                resolved_base,
+                comparison_base,
             )
 
         if "local_review" in behavior.context_providers:
@@ -1374,8 +1511,7 @@ class GenericWorkflowStepExecutor(Phase):
             context["review_base"] = str(base_branch or self.git_ops.get_default_base_branch())
             context["review_head"] = "HEAD"
             context["review_required"] = str(
-                self._get_issue_config_value(self.issue_dir / "issue.yaml", "pr.auto_create")
-                is not True
+                publication_choice is not True
             ).lower()
 
         return context
@@ -1448,6 +1584,8 @@ class GenericWorkflowStepExecutor(Phase):
         checklist_file: Path,
         output_file: Path,
         questions_xml_file: Path,
+        preserve_completed_items: bool = False,
+        runtime_context: Optional[Mapping[str, str]] = None,
     ) -> None:
         canonical_name = canonical_skill_name(skill_name)
         contract = self._get_skill_loader().get_workflow_contract(skill_name)
@@ -1462,10 +1600,13 @@ class GenericWorkflowStepExecutor(Phase):
             previous_output = self._display_path(
                 self._get_versioned_file_path(step_name, self.iteration - 1, self.phase_dir)
             )
-        context = {
-            placeholder: self._display_path(Path(path))
-            for placeholder, path in declared_inputs.items()
-        }
+        context = dict(runtime_context or {})
+        context.update(
+            {
+                placeholder: self._display_path(Path(path))
+                for placeholder, path in declared_inputs.items()
+            }
+        )
         context.update(
             {
                 "output_file": self._display_path(output_file),
@@ -1479,6 +1620,19 @@ class GenericWorkflowStepExecutor(Phase):
             }
         )
         feedback = bool(input_artifacts.get("review_feedback") or input_artifacts.get("pr_result"))
+        if contract.checklist is None:
+            generated = generate_custom_skill_checklist(
+                skill_name=canonical_name,
+                agent_name=agent_name,
+                role=str(step_def.get("role", "developer")),
+                checklist_file_path=checklist_file,
+                correction_mode=feedback,
+                placeholders=context,
+                preserve_completed_items=preserve_completed_items,
+            )
+            if not generated and not checklist_file.exists():
+                generate_checklist_file(checklist_file, "")
+            return
         compose_declared_checklist(
             skill_name=canonical_name,
             contract=contract,
@@ -1497,6 +1651,7 @@ class GenericWorkflowStepExecutor(Phase):
                 canonical_name,
                 contract,
             ),
+            preserve_completed_items=preserve_completed_items,
         )
 
     def _resolved_template_mode(self, step_name: str, step_def: Dict[str, Any]) -> str:
@@ -1721,6 +1876,7 @@ class GenericWorkflowStepExecutor(Phase):
                 payload,
                 current_step=step_name,
             )
+            contract.validate(allowed_steps=list(self.playbook.get("steps", {}).keys()))
             allowed_handoff_intents = set(effective_step_handoff_intents(step_def or {}))
             return (
                 contract.from_step == step_name
@@ -2011,10 +2167,29 @@ class GenericWorkflowStepExecutor(Phase):
         output_file: Path,
         capability_id: str,
     ) -> Dict[str, Any]:
+        if capability_id == "cafe.browser.open":
+            return {
+                "capability": capability_id,
+                "args": {"target_ref": "current_pr"},
+                "effects": {
+                    "browser_open": ["current_pr"],
+                    "writes": [],
+                    "network_destinations": [],
+                },
+                "credentials": [],
+                "permissions": {},
+            }
+
         if capability_id != CAPABILITY_PR_PUBLISH_ID:
             return {
                 "capability": capability_id,
                 "args": {},
+                "effects": {
+                    "browser_open": [],
+                    "writes": [],
+                    "network_destinations": [],
+                },
+                "credentials": [],
                 "permissions": {},
             }
 
@@ -2026,9 +2201,20 @@ class GenericWorkflowStepExecutor(Phase):
                 "output": self._repo_relative_path(output_file),
                 "base": resolved_base,
             },
+            "effects": {
+                "browser_open": [],
+                "network_destinations": ["github.com", "api.github.com"],
+                "writes": [
+                    self._repo_relative_path(output_file),
+                    ".git",
+                    self._repo_relative_path(self.issue_dir),
+                ],
+            },
+            "credentials": ["gh"],
             "permissions": {
                 "network": ["github.com", "api.github.com"],
                 "writes": [
+                    self._repo_relative_path(output_file),
                     ".git",
                     self._repo_relative_path(self.issue_dir),
                 ],

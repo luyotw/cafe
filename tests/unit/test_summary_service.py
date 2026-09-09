@@ -179,7 +179,7 @@ class TestLoadPhaseStatus:
                 {
                     "schema_version": 1,
                     "current_step": "done",
-                    "playbook_id": "default",
+                    "playbook_id": "standard",
                     "artifacts": {},
                     "events": [],
                     "decisions": [],
@@ -254,7 +254,7 @@ class TestLoadPhaseStatus:
                 {
                     "schema_version": 1,
                     "current_step": "user",
-                    "playbook_id": "default",
+                    "playbook_id": "standard",
                     "artifacts": {},
                     "events": [],
                     "decisions": [],

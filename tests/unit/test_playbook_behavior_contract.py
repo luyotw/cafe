@@ -5,15 +5,21 @@ import inspect
 
 import pytest
 
-from cafe.core import workflow_runtime
 from cafe.agents import manager as agent_manager
+from cafe.core import workflow_runtime
 from cafe.core.hooks import native as native_hooks
-from cafe.core.playbook import PlaybookDefinition, resolve_step_behavior
-from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.core.hooks.native import _publish_requested
+from cafe.core.playbook import (
+    PlaybookDefinition,
+    playbook_requests_capability,
+    resolve_step_behavior,
+)
+from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.phases import generic_phase, generic_workflow_step
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.ui import cli_shared
+
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
 
 def test_agent_manager_has_no_fixed_read_only_retry_policy():
@@ -188,6 +194,47 @@ def test_publish_confirmation_requires_the_publish_capability():
         PlaybookDefinition.model_validate(payload)
 
 
+def test_publication_applicability_uses_effective_capability_declarations():
+    """Test List 1: capability applicability is independent of workflow names."""
+    payload = _playbook()
+    payload["playbook"]["id"] = "name-does-not-grant-publication"
+    payload["steps"]["build"]["capability_requests"] = ["cafe.pr.publish"]
+    payload["steps"]["verify"]["capability_requests"] = ["cafe.pr.publish"]
+    model = PlaybookDefinition.model_validate(payload)
+
+    assert playbook_requests_capability(model, "cafe.pr.publish") is True
+
+    payload["steps"]["build"]["capability_requests"] = []
+    payload["steps"]["verify"]["capability_requests"] = []
+    payload["steps"]["pr"] = payload["steps"].pop("build")
+    model = PlaybookDefinition.model_validate(payload)
+
+    assert playbook_requests_capability(model, "cafe.pr.publish") is False
+
+
+def test_baton_completion_requires_workflow_complete_for_terminal_transition():
+    """A baton-driven terminal route must be valid for the done owner."""
+    payload = {
+        "playbook": {"id": "terminal-baton"},
+        "steps": {
+            "publish": {
+                "role": "operator",
+                "skill": "phase",
+                "behavior": {"completion": "baton"},
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+
+    with pytest.raises(ValueError, match="requires terminal transitions to use workflow_complete"):
+        PlaybookDefinition.model_validate(payload)
+
+    payload["steps"]["publish"]["on"] = {"workflow_complete": "_done"}
+    model = PlaybookDefinition.model_validate(payload)
+
+    assert model.steps["publish"].on == {"workflow_complete": "_done"}
+
+
 def test_custom_named_publish_step_uses_declared_baton_and_receipt_contract(tmp_path):
     """UT-003/UT-004: completion and publish gates have no reserved step name."""
     playbook = _playbook(
@@ -233,6 +280,7 @@ def test_custom_named_publish_hook_accepts_declared_terminal_baton(tmp_path):
             "publish_confirmation": True,
             "next_step_path": str(baton_file),
         },
+        step_def={"on": {"workflow_complete": "_done"}},
     )
 
 

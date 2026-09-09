@@ -18,7 +18,9 @@ class CursorCLI(AbstractCLI):
     ) -> List[str]:
         """Build Cursor CLI command line arguments.
 
-        Note: Cursor doesn't support tool restrictions and directory restrictions, always uses --force to automatically approve all tools.
+        Cursor cannot allow-list individual tools. An explicit empty tool scope
+        therefore omits ``--force`` so non-interactive permission requests fail
+        closed instead of auto-approving tools.
 
         Parameter order: cursor-agent -> -p -> --model -> --resume -> --force -> --output-format
 
@@ -40,8 +42,10 @@ class CursorCLI(AbstractCLI):
         if self.config.session_id:
             cmd.extend(["--resume", self.config.session_id])
 
-        # Cursor doesn't support allowed-tools, use --force to automatically approve all tools
-        cmd.append("--force")
+        # Preserve legacy auto-approval only when callers did not provide a
+        # capability scope. Decision-only callers pass an explicit empty list.
+        if allowed_tools is None or allowed_tools:
+            cmd.append("--force")
 
         # Add output format parameter
         cmd.extend(self.get_output_format())
@@ -102,16 +106,17 @@ class CursorCLI(AbstractCLI):
     def translate_allowed_tools(self, tools: List[str]) -> List[str]:
         """Convert tool names to Cursor format.
 
-        Cursor doesn't support tool restrictions, return empty list.
+        Cursor doesn't support tool restrictions. Preserve the list only so
+        the command builder can distinguish a normal nonempty request from an
+        explicit empty capability scope.
 
         Args:
             tools: List of tool names
 
         Returns:
-            Empty list (Cursor doesn't support tool restrictions)
+            Original list as a capability-scope marker
         """
-        # Cursor doesn't support tool restrictions, return empty list
-        return []
+        return list(tools)
 
     def add_directories(self, cmd: List[str], directories: List[str]) -> List[str]:
         """Add allowed directories to command line arguments.
@@ -137,15 +142,46 @@ class CursorCLI(AbstractCLI):
         return ["--output-format", "stream-json"]
 
     def extract_session_id(self, output_lines: List[str]) -> Optional[str]:
-        """Extract session ID from output.
-
-        Cursor automatically manages session, no need to extract from output.
+        """Extract the acquired Cursor session ID from stream-json output.
 
         Args:
             output_lines: List of lines from CLI output
 
         Returns:
-            None (Cursor automatically manages session)
+            Session ID from the initialization event, when present.
         """
-        # Cursor automatically manages session, no need to extract from output
+        for line in output_lines:
+            try:
+                payload = json.loads(line)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            session_id = payload.get("session_id")
+            if isinstance(session_id, str) and session_id.strip():
+                return session_id
         return None
+
+    @property
+    def event_driver_conforming(self) -> bool:
+        return True
+
+    def extract_event_driver_session(self, records) -> Optional[str]:
+        return self._verified_event_driver_session(
+            records,
+            matches=lambda record: record.get("type") == "system"
+            and record.get("subtype") == "init",
+            field="session_id",
+        )
+
+    def accepts_event_driver_callback(self, records, *, session_id: str, event_id: str) -> bool:
+        return self._verified_event_driver_acceptance(
+            records,
+            session_matches=lambda record: record.get("type") == "system"
+            and record.get("subtype") == "init",
+            acceptance_matches=lambda record: record.get("type") == "user"
+            and self._event_driver_record_contains_text(record.get("message"), event_id),
+            session_field="session_id",
+            session_id=session_id,
+            event_id=event_id,
+        )

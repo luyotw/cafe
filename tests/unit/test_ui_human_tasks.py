@@ -296,7 +296,7 @@ def test_command_completion_uses_the_same_policy_and_declared_destination(tmp_pa
     """A JSON response advances only through its policy's permitted continuation."""
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("spec", playbook_id="default")
+    blackboard = store.load_or_create("spec", playbook_id="standard")
     store.update_handoff_contract(
         blackboard,
         from_step="spec",
@@ -332,7 +332,7 @@ def test_command_completion_uses_the_same_policy_and_declared_destination(tmp_pa
     )
 
     assert result.target == "plan"
-    reloaded = store.load_or_create("spec", playbook_id="default")
+    reloaded = store.load_or_create("spec", playbook_id="standard")
     assert reloaded.current_step == "plan"
     assert reloaded.handoff_contract.to_owner == HandoffOwner.AGENT
     assert reloaded.handoff_contract.to_step == "plan"
@@ -342,7 +342,7 @@ def test_command_completion_binds_the_current_durable_task_before_routing(tmp_pa
     """IT-003: command input cannot bypass the active task/wait correlation."""
     issue_dir = tmp_path / ".cafe" / "issues" / "durable-command"
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("spec", playbook_id="default")
+    blackboard = store.load_or_create("spec", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -400,31 +400,205 @@ def test_command_completion_binds_the_current_durable_task_before_routing(tmp_pa
     assert HumanTaskRecordStore(issue_dir).get_task(task.id).status is HumanTaskStatus.COMPLETED
 
 
+def test_durable_task_accepts_a_declared_revision_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A correction target remains valid beside a fixed approval outcome."""
+    builtin_root = tmp_path / "builtin"
+    skill_dir = builtin_root / "skills" / "review-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: review-skill
+description: test review skill
+workflow:
+  human_tasks:
+    - id: output-review
+      pattern: confirm_output
+      prompt: Review output
+      input_schema: decision
+      decisions:
+        - id: confirm
+          label: Confirm
+        - id: revise
+          label: Revise
+          requires_feedback: true
+          requires_target: true
+          correction: true
+      allowed_targets: [knowledge]
+---
+""",
+        encoding="utf-8",
+    )
+    loader = SkillLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+    monkeypatch.setattr("cafe.ui.human_tasks.SkillLoader", lambda: loader)
+    issue_dir = tmp_path / ".cafe" / "issues" / "durable-revision"
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("review", playbook_id="standard")
+    store.set_current_step(blackboard, "user")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="review",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.CONFIRM_OUTPUT,
+        source="test",
+    )
+    playbook = {
+        "steps": {
+            "review": {
+                "skill": "review-skill",
+                "human_tasks": [
+                    {
+                        "trigger": "confirm_output",
+                        "task_id": "output-review",
+                        "outcomes": {"confirm": "closeout"},
+                        "allowed_targets": ["knowledge"],
+                    }
+                ],
+            },
+            "knowledge": {"skill": "review-skill"},
+            "closeout": {"skill": "review-skill"},
+        }
+    }
+    policy, binding = resolve_step_human_task(
+        playbook_data=playbook,
+        step_name="review",
+        trigger="confirm_output",
+        skill_loader=loader,
+    )
+    task = HumanTaskRecordStore(issue_dir).materialize(
+        workflow_id=blackboard.workflow_id,
+        step="review",
+        iteration=1,
+        trigger="confirm_output",
+        policy_id=policy.id,
+        prompt=policy.prompt,
+        expected_result=policy.model_dump(mode="json"),
+        continuations=binding.outcomes,
+        assignee_type="user",
+    )
+
+    result = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=blackboard,
+        from_step="review",
+        trigger="confirm_output",
+        raw_payload={
+            "task": "output-review",
+            "decision": "revise",
+            "target": "knowledge",
+            "feedback": "Repair the schema fields.",
+            "human_task_id": task.id,
+        },
+        source="command",
+    )
+
+    assert result.rejection is None
+    assert result.target == "knowledge"
+    assert HumanTaskRecordStore(issue_dir).get_task(task.id).status is HumanTaskStatus.COMPLETED
+
+
+def test_stale_durable_task_cannot_be_completed_by_the_task_command_path(tmp_path: Path) -> None:
+    """A task command cannot route an obsolete handoff back into its old step."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "stale-task-command"
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("spec", playbook_id="standard")
+    store.set_current_step(blackboard, "user")
+    old_contract = store.update_handoff_contract(
+        blackboard,
+        from_step="develop",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.NEED_CLARIFICATION,
+        source="test",
+    )
+    records = HumanTaskRecordStore(issue_dir)
+    stale = records.materialize(
+        workflow_id=blackboard.workflow_id,
+        step="develop",
+        iteration=1,
+        trigger="need_clarification",
+        policy_id="develop-feedback",
+        prompt="Clarify develop",
+        expected_result={"input_schema": "feedback"},
+        continuations={"submit": "develop"},
+        assignee_type="user",
+        handoff_key=":".join(
+            (
+                "user-handoff",
+                blackboard.workflow_id,
+                old_contract.from_step,
+                old_contract.intent.value,
+                old_contract.created_at,
+            )
+        ),
+    )
+    store.update_handoff_contract(
+        blackboard,
+        from_step="spec",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.NEED_CLARIFICATION,
+        source="test",
+    )
+
+    result = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data={"steps": {"develop": {"skill": "cafe-develop"}}},
+        blackboard=blackboard,
+        from_step="develop",
+        trigger="need_clarification",
+        raw_payload={
+            "task": "develop-feedback",
+            "feedback": "Resume develop",
+            "human_task_id": stale.id,
+        },
+        source="command",
+    )
+
+    assert result.rejection is not None
+    assert HumanTaskRecordStore(issue_dir).get_task(stale.id).status is HumanTaskStatus.PENDING
+
+
 def test_feedback_delivery_records_before_the_declared_correction_route(tmp_path: Path) -> None:
     """Feedback metadata persists work without creating a parallel input file."""
     from cafe.core.workflow_feedback import WorkflowFeedbackLedger
 
     issue_dir = tmp_path / ".cafe" / "issues" / "local-review"
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("pr", playbook_id="default")
+    blackboard = store.load_or_create("pr", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     playbook = {
         "steps": {
             "pr": {
                 "skill": "cafe-pr",
-                "human_tasks": [{
-                    "trigger": "confirm_output",
-                    "task_id": "local-review",
-                    "outcomes": {"approve": "_done", "request_changes": "develop"},
-                    "feedback_delivery": {
-                        "artifact": "workflow_feedback",
-                        "source_kind": "local_review",
-                    },
-                }],
+                "max_attempts_per_cycle": 5,
+                "human_tasks": [
+                    {
+                        "trigger": "confirm_output",
+                        "task_id": "local-review",
+                        "outcomes": {
+                            "fix_now": "develop",
+                            "create_follow_up": "_done",
+                            "continue_without_issue": "_done",
+                        },
+                        "feedback_delivery": {
+                            "artifact": "workflow_feedback",
+                            "source_kind": "local_review",
+                        },
+                    }
+                ],
             },
             "develop": {"skill": "cafe-develop"},
         }
     }
+    blackboard.step_attempt_counts["pr"] = 3
 
     result = apply_human_task_payload(
         issue_dir=issue_dir,
@@ -434,7 +608,7 @@ def test_feedback_delivery_records_before_the_declared_correction_route(tmp_path
         trigger="confirm_output",
         raw_payload={
             "task": "local-review",
-            "decision": "request_changes",
+            "decision": "fix_now",
             "feedback": "Cover the empty input boundary.",
         },
         source="command",
@@ -445,30 +619,39 @@ def test_feedback_delivery_records_before_the_declared_correction_route(tmp_path
         "Cover the empty input boundary."
     ]
     assert "workflow_feedback" in blackboard.artifacts
+    assert blackboard.step_attempt_counts == {"pr": 3}
     assert not (issue_dir / "develop" / "iteration_001" / "user_input.md").exists()
 
 
-def test_feedback_delivery_approval_does_not_record_optional_feedback(tmp_path: Path) -> None:
-    """Approval notes do not become actionable correction feedback."""
+def test_feedback_delivery_terminal_disposition_does_not_record_feedback(
+    tmp_path: Path,
+) -> None:
+    """Terminal disposition notes do not become actionable correction feedback."""
     from cafe.core.workflow_feedback import WorkflowFeedbackLedger
 
     issue_dir = tmp_path / ".cafe" / "issues" / "local-review-approval"
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("pr", playbook_id="default")
+    blackboard = store.load_or_create("pr", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     playbook = {
         "steps": {
             "pr": {
                 "skill": "cafe-pr",
-                "human_tasks": [{
-                    "trigger": "confirm_output",
-                    "task_id": "local-review",
-                    "outcomes": {"approve": "_done", "request_changes": "develop"},
-                    "feedback_delivery": {
-                        "artifact": "workflow_feedback",
-                        "source_kind": "local_review",
-                    },
-                }],
+                "human_tasks": [
+                    {
+                        "trigger": "confirm_output",
+                        "task_id": "local-review",
+                        "outcomes": {
+                            "fix_now": "develop",
+                            "create_follow_up": "_done",
+                            "continue_without_issue": "_done",
+                        },
+                        "feedback_delivery": {
+                            "artifact": "workflow_feedback",
+                            "source_kind": "local_review",
+                        },
+                    }
+                ],
             },
             "develop": {"skill": "cafe-develop"},
         }
@@ -482,7 +665,7 @@ def test_feedback_delivery_approval_does_not_record_optional_feedback(tmp_path: 
         trigger="confirm_output",
         raw_payload={
             "task": "local-review",
-            "decision": "approve",
+            "decision": "continue_without_issue",
             "feedback": "Approved with a non-actionable note.",
         },
         source="command",
@@ -497,7 +680,7 @@ def test_cross_step_revision_feedback_is_written_for_the_selected_target(tmp_pat
     """Feedback follows a cross-step revision route instead of staying at the review step."""
     issue_dir = tmp_path / ".cafe" / "issues" / "cross-step-revision"
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("spec", playbook_id="default")
+    blackboard = store.load_or_create("spec", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -554,7 +737,7 @@ def test_cross_step_revision_feedback_reuses_unfinished_target_iteration(tmp_pat
         json.dumps({"iteration": 1, "step_name": "develop"}), encoding="utf-8"
     )
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("spec", playbook_id="default")
+    blackboard = store.load_or_create("spec", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -611,7 +794,7 @@ def test_cross_step_revision_feedback_replaces_pending_input_without_state(
     target_iteration.mkdir(parents=True)
     (target_iteration / "user_input.md").write_text("Old feedback", encoding="utf-8")
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("spec", playbook_id="default")
+    blackboard = store.load_or_create("spec", playbook_id="standard")
     playbook = {
         "steps": {
             "spec": {
@@ -708,7 +891,7 @@ workflow:
     invalid_packet = tmp_path / "invalid-knowledge.md"
     invalid_packet.write_text("# Missing spec packet\n", encoding="utf-8")
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("review", playbook_id="default")
+    blackboard = store.load_or_create("review", playbook_id="standard")
     blackboard.artifacts["knowledge"] = ArtifactEntry(
         name="knowledge",
         kind=ArtifactKind.DOCUMENT,
@@ -819,7 +1002,7 @@ workflow:
     invalid_packet.write_text("# Missing packet\n", encoding="utf-8")
     issue_dir = tmp_path / ".cafe" / "issues" / "reasoned-approval"
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("review", playbook_id="default")
+    blackboard = store.load_or_create("review", playbook_id="standard")
     blackboard.artifacts["spec"] = ArtifactEntry(
         name="spec",
         kind=ArtifactKind.DOCUMENT,
@@ -877,7 +1060,7 @@ def test_confirmation_does_not_overwrite_unfinished_producer_input(tmp_path: Pat
     original_input = producer_iteration / "user_input.md"
     original_input.write_text("Original requirements", encoding="utf-8")
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("spec", playbook_id="default")
+    blackboard = store.load_or_create("spec", playbook_id="standard")
     playbook = {
         "steps": {
             "spec": {
@@ -926,7 +1109,7 @@ def test_dynamic_xml_questions_reject_incomplete_command_answers(tmp_path: Path)
         encoding="utf-8",
     )
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("spec", playbook_id="default")
+    blackboard = store.load_or_create("spec", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,

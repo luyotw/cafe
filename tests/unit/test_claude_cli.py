@@ -102,6 +102,13 @@ class TestClaudeCLIBuildCommand:
         assert cmd[format_idx + 1] == "stream-json"
         assert "--verbose" in cmd
 
+    def test_event_driver_command_requests_provider_turn_start(self, claude_config):
+        cli = ClaudeCLI(claude_config)
+
+        cmd = cli.build_event_driver_command("callback event-1")
+
+        assert "--include-partial-messages" in cmd
+
 
 class TestClaudeCLITranslateAllowedTools:
     """測試 translate_allowed_tools() 方法."""
@@ -332,6 +339,24 @@ class TestClaudeCLIParseResponse:
         response, token_usage, permission_denials = cli.parse_response(output_lines)
 
         # 應該忽略非 JSON 行
+        assert response == "Valid JSON"
+
+    def test_parse_response_ignores_permission_denial_message_string(self, claude_config):
+        """權限拒絕事件的字串 message 不可被當成 message.content 解析."""
+        cli = ClaudeCLI(claude_config)
+        output_lines = [
+            json.dumps(
+                {
+                    "type": "system",
+                    "subtype": "permission_denied",
+                    "message": "Approval required for content.xml",
+                }
+            ),
+            json.dumps({"message": {"content": [{"type": "text", "text": "Valid JSON"}]}}),
+        ]
+
+        response, _, _ = cli.parse_response(output_lines)
+
         assert response == "Valid JSON"
 
 

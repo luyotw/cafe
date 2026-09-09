@@ -1,10 +1,12 @@
 """Tests for AgentExecutor."""
 
 from pathlib import Path
-import pytest
 from unittest.mock import MagicMock, patch
 
-from cafe.agents.executor import AgentExecutor, AgentExecutionError
+import pytest
+
+from cafe.agents.cli.copilot import CopilotCLI
+from cafe.agents.executor import AgentExecutionControl, AgentExecutionError, AgentExecutor
 from cafe.core.types import AgentConfig, AgentCLI, AgentResponse, TokenUsage
 
 
@@ -252,6 +254,18 @@ class TestAgentExecutorErrorHandling:
         assert error_type == "rate_limit"
         assert "API rate limit reached" in (display_message or "")
 
+    def test_copilot_monthly_quota_signal_is_rate_limit(self) -> None:
+        """Copilot's monthly-quota wording should allow chain fallback."""
+        config = AgentConfig(name="David", cli=AgentCLI.COPILOT)
+        executor = AgentExecutor(config)
+
+        error_type, display_message = executor._classify_execution_error(
+            "Copilot", "You have exceeded your monthly quota"
+        )
+
+        assert error_type == "rate_limit"
+        assert "API rate limit reached" in (display_message or "")
+
     @pytest.mark.parametrize(
         "event",
         [
@@ -279,6 +293,69 @@ class TestAgentExecutorErrorHandling:
                 executor.execute("Test prompt")
 
         assert exc_info.value.error_type == "rate_limit"
+
+    def test_codex_server_overloaded_is_not_a_rate_limit(self) -> None:
+        """Codex capacity errors must not be presented as account quota exhaustion."""
+        config = AgentConfig(name="Nick", cli=AgentCLI.CODEX)
+        executor = AgentExecutor(config)
+        event = {
+            "type": "event_msg",
+            "payload": {
+                "type": "task_complete",
+                "error": {
+                    "message": "Selected model is at capacity. Please try a different model.",
+                    "codex_error_info": "server_overloaded",
+                },
+            },
+        }
+
+        error_text = executor._extract_stream_json_error_text(event)
+        error_type, display_message = executor._classify_execution_error("Codex", error_text)
+
+        assert error_type == "provider_overloaded"
+        assert display_message == "Codex provider is temporarily at capacity."
+
+    def test_codex_server_overloaded_stream_event_is_classified_before_exit(self) -> None:
+        """Nested Codex terminal errors should retain their provider capacity code."""
+        config = AgentConfig(name="Nick", cli=AgentCLI.CODEX)
+        executor = AgentExecutor(config)
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"type":"thread.started","thread_id":"abc"}\n',
+            (
+                '{"type":"event_msg","payload":{"type":"task_complete",'
+                '"error":{"message":"Selected model is at capacity. Please try a '
+                'different model.","codex_error_info":"server_overloaded"}}}\n'
+            ),
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 1
+        mock_process.terminate.return_value = None
+
+        with patch("subprocess.Popen", return_value=mock_process), patch("sys.platform", "win32"):
+            with pytest.raises(AgentExecutionError) as exc_info:
+                executor.execute("Test prompt")
+
+        assert exc_info.value.error_type == "provider_overloaded"
+        assert exc_info.value.display_message == "Codex provider is temporarily at capacity."
+
+    def test_codex_normal_nested_message_is_not_an_error(self) -> None:
+        """A normal agent message must not be inferred as a terminal error."""
+        config = AgentConfig(name="Nick", cli=AgentCLI.CODEX)
+        executor = AgentExecutor(config)
+
+        error_text = executor._extract_stream_json_error_text(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "agent_message",
+                    "message": "The selected model is at capacity for this example.",
+                },
+            }
+        )
+
+        assert error_text == ""
 
     def test_unrelated_codex_failure_is_not_rate_limit(self) -> None:
         """Unrelated Codex failures should retain normal non-fallback behavior."""
@@ -441,6 +518,50 @@ class TestCodexPermissionExtraction:
             executor.execute("Test prompt")
 
         assert mock_popen.call_args.kwargs["env"]["CODEX_HOME"] == codex_home
+
+    def test_execute_adds_environment_overrides(self) -> None:
+        config = AgentConfig(name="Nick", cli=AgentCLI.CODEX)
+        executor = AgentExecutor(config)
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"type":"item.completed","item":{"type":"agent_message","text":"done"}}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with (
+            patch("subprocess.Popen", return_value=mock_process) as mock_popen,
+            patch("sys.platform", "win32"),
+        ):
+            executor.execute(
+                "Test prompt",
+                environment_overrides={"CAFE_ISSUE_NAME": "issue478"},
+            )
+
+        assert mock_popen.call_args.kwargs["env"]["CAFE_ISSUE_NAME"] == "issue478"
+
+    def test_codex_turn_completed_is_a_durable_stream_terminal_event(self, tmp_path: Path) -> None:
+        """Codex's terminal event completes an iteration-backed stream."""
+        config = AgentConfig(name="Nick", cli=AgentCLI.CODEX)
+        executor = AgentExecutor(config)
+        streaming_file = tmp_path / "streaming.jsonl"
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"type":"thread.started","thread_id":"abc"}\n',
+            '{"type":"item.completed","item":{"type":"agent_message","text":"done"}}\n',
+            '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with patch("subprocess.Popen", return_value=mock_process), patch("sys.platform", "win32"):
+            response = executor.execute("Test prompt", streaming_output_file=str(streaming_file))
+
+        assert response.response == "done"
+        assert response.token_usage.input_tokens == 1
+        assert '"type":"turn.completed"' in streaming_file.read_text(encoding="utf-8")
 
 
 class TestTokenUsageTracking:
@@ -754,6 +875,250 @@ class TestCopilotTokenUsageExtraction:
             assert "Usage by model:" not in agent_response.response
 
 
+class TestEventDriverObservation:
+    """測試 callback-only provider evidence 觀察邊界。"""
+
+    def test_bootstrap_extracts_provider_session_without_delivery(self) -> None:
+        executor = AgentExecutor(
+            AgentConfig(name="driver", cli=AgentCLI.CODEX, model="exact"),
+            stream_output=False,
+        )
+
+        def execute_stream(**kwargs):
+            kwargs["structured_records"].append(
+                {"type": "thread.started", "thread_id": "provider-session"}
+            )
+            return AgentResponse(response="HI", token_usage=TokenUsage())
+
+        with patch.object(executor, "_execute_with_streaming", side_effect=execute_stream) as run:
+            observed = executor.execute_event_driver('say "HI"')
+
+        assert observed.session_id == "provider-session"
+        assert observed.accepted is False
+        assert run.call_args.kwargs["parse_stream_json"] is True
+        assert run.call_args.kwargs["cmd"].count('say "HI"') == 1
+
+    def test_ordinary_copilot_preserves_provider_session_for_later_turns(self) -> None:
+        executor = AgentExecutor(
+            AgentConfig(name="ordinary", cli=AgentCLI.COPILOT, model="exact"),
+            stream_output=False,
+        )
+        response = AgentResponse(
+            response="plain response",
+            token_usage=TokenUsage(),
+            streaming_log=["plain response"],
+        )
+
+        with (
+            patch.object(CopilotCLI, "record_existing_sessions") as snapshot,
+            patch.object(
+                CopilotCLI,
+                "extract_session_id",
+                return_value="ordinary-session",
+            ),
+            patch.object(executor, "_execute_with_streaming", return_value=response),
+        ):
+            observed = executor.execute("ordinary prompt")
+
+        snapshot.assert_called_once_with()
+        assert observed.session_id == "ordinary-session"
+        assert executor.config.session_id == "ordinary-session"
+
+    def test_actual_callback_uses_exact_session_and_ignores_model_output(self) -> None:
+        executor = AgentExecutor(
+            AgentConfig(
+                name="driver",
+                cli=AgentCLI.CODEX,
+                model="exact",
+                session_id="provider-session",
+            ),
+            stream_output=False,
+        )
+
+        def execute_stream(**kwargs):
+            kwargs["structured_records"].extend(
+                [
+                    {"type": "thread.started", "thread_id": "provider-session"},
+                    {"type": "turn.started"},
+                    {"type": "item.completed", "item": {"type": "agent_message"}},
+                ]
+            )
+            return AgentResponse(response="", token_usage=TokenUsage())
+
+        with (
+            patch.object(executor, "_execute_with_streaming", side_effect=execute_stream) as run,
+            patch.object(
+                executor,
+                "_execute_with_session_recovery",
+                side_effect=AssertionError("cold retry is forbidden"),
+            ),
+        ):
+            observed = executor.execute_event_driver(
+                "callback event-1",
+                expected_session_id="provider-session",
+                event_id="event-1",
+            )
+
+        assert observed.accepted is True
+        assert observed.event_id == "event-1"
+        command = run.call_args.kwargs["cmd"]
+        assert command[command.index("resume") + 1] == "provider-session"
+
+    def test_actual_callback_requires_its_event_identity_in_the_dispatched_prompt(
+        self,
+    ) -> None:
+        executor = AgentExecutor(
+            AgentConfig(
+                name="driver",
+                cli=AgentCLI.CODEX,
+                model="exact",
+                session_id="provider-session",
+            ),
+            stream_output=False,
+        )
+
+        with pytest.raises(ValueError, match="event identity"):
+            executor.execute_event_driver(
+                "callback for a different event",
+                expected_session_id="provider-session",
+                event_id="event-1",
+            )
+
+    def test_actual_callback_notifies_acceptance_before_later_stream_output(self) -> None:
+        executor = AgentExecutor(
+            AgentConfig(
+                name="driver",
+                cli=AgentCLI.CLAUDE,
+                model="exact",
+                session_id="provider-session",
+            ),
+            stream_output=False,
+        )
+        order = []
+
+        def execute_stream(**kwargs):
+            init = {
+                "type": "system",
+                "subtype": "init",
+                "session_id": "provider-session",
+            }
+            kwargs["structured_records"].append(init)
+            kwargs["structured_record_observer"](init)
+            assert order == []
+            turn_started = {
+                "type": "stream_event",
+                "event": {"type": "message_start"},
+            }
+            kwargs["structured_records"].append(turn_started)
+            kwargs["structured_record_observer"](turn_started)
+            assert order == ["accepted"]
+            order.append("model-output")
+            return AgentResponse(response="later", token_usage=TokenUsage())
+
+        with patch.object(executor, "_execute_with_streaming", side_effect=execute_stream):
+            observed = executor.execute_event_driver(
+                "callback event-1",
+                expected_session_id="provider-session",
+                event_id="event-1",
+                on_acceptance=lambda: order.append("accepted"),
+            )
+
+        assert observed.accepted is True
+        assert order == ["accepted", "model-output"]
+
+    def test_copilot_accepts_captured_resume_shape_only_after_terminal_session(self) -> None:
+        executor = AgentExecutor(
+            AgentConfig(
+                name="driver",
+                cli=AgentCLI.COPILOT,
+                model="exact",
+                session_id="provider-session",
+            ),
+            stream_output=False,
+        )
+        order = []
+
+        def execute_stream(**kwargs):
+            user_message = {
+                "type": "user.message",
+                "data": {"content": "callback event-1"},
+            }
+            kwargs["structured_records"].append(user_message)
+            kwargs["structured_record_observer"](user_message)
+            assert order == []
+            terminal = {"type": "result", "sessionId": "provider-session"}
+            kwargs["structured_records"].append(terminal)
+            kwargs["structured_record_observer"](terminal)
+            assert order == ["accepted"]
+            return AgentResponse(response="", token_usage=TokenUsage())
+
+        with patch.object(executor, "_execute_with_streaming", side_effect=execute_stream):
+            observed = executor.execute_event_driver(
+                "callback event-1",
+                expected_session_id="provider-session",
+                event_id="event-1",
+                on_acceptance=lambda: order.append("accepted"),
+            )
+
+        assert observed.accepted is True
+        assert observed.session_id == "provider-session"
+        assert order == ["accepted"]
+
+    def test_eventless_provider_init_does_not_accept_actual_callback(self) -> None:
+        executor = AgentExecutor(
+            AgentConfig(
+                name="driver",
+                cli=AgentCLI.CLAUDE,
+                model="exact",
+                session_id="provider-session",
+            ),
+            stream_output=False,
+        )
+        accepted = []
+
+        def execute_stream(**kwargs):
+            init = {
+                "type": "system",
+                "subtype": "init",
+                "session_id": "provider-session",
+            }
+            kwargs["structured_records"].append(init)
+            kwargs["structured_record_observer"](init)
+            return AgentResponse(response="", token_usage=TokenUsage())
+
+        with patch.object(executor, "_execute_with_streaming", side_effect=execute_stream):
+            observed = executor.execute_event_driver(
+                "callback event-1",
+                expected_session_id="provider-session",
+                event_id="event-1",
+                on_acceptance=lambda: accepted.append(True),
+            )
+
+        assert observed.accepted is False
+        assert accepted == []
+
+    def test_callback_observer_bounds_provider_records(self) -> None:
+        executor = AgentExecutor(
+            AgentConfig(name="driver", cli=AgentCLI.CODEX, model="exact"),
+            stream_output=False,
+        )
+
+        def execute_stream(**kwargs):
+            kwargs["structured_records"].append(
+                {"type": "thread.started", "thread_id": "provider-session"}
+            )
+            kwargs["structured_records"].extend(
+                {"type": "noise", "index": index} for index in range(100)
+            )
+            return AgentResponse(response="", token_usage=TokenUsage())
+
+        with patch.object(executor, "_execute_with_streaming", side_effect=execute_stream):
+            observed = executor.execute_event_driver('say "HI"')
+
+        assert len(observed.records) == 64
+        assert observed.session_id == "provider-session"
+
+
 class TestStreamingExecution:
     """測試 streaming 輸出功能"""
 
@@ -794,6 +1159,136 @@ class TestStreamingExecution:
         assert "Line 1" in captured.out
         assert "Line 2" in captured.out
         assert "Line 3" in captured.out
+
+    def test_execution_control_stops_before_unbounded_output_is_retained(self) -> None:
+        executor = AgentExecutor(AgentConfig(name="Driver", cli=AgentCLI.COPILOT))
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = ["12345\n"] * 20_000
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = -15
+
+        with patch("subprocess.Popen", return_value=mock_process), patch(
+            "sys.platform", "win32"
+        ):
+            with pytest.raises(AgentExecutionError) as exc_info:
+                executor._execute_with_streaming(
+                    cmd=["copilot"],
+                    cli_name="Copilot",
+                    execution_control=AgentExecutionControl(
+                        max_duration_seconds=60,
+                        max_output_bytes=1024,
+                        max_output_lines=2,
+                    ),
+                )
+
+        assert exc_info.value.error_type == "execution_limit"
+        assert mock_process.stdout.readline.call_count == 3
+        mock_process.terminate.assert_called_once()
+
+    def test_execution_control_absolute_deadline_terminates_continuous_process(self) -> None:
+        executor = AgentExecutor(AgentConfig(name="Driver", cli=AgentCLI.COPILOT))
+        mock_process = MagicMock()
+        mock_process.stdout.readline.return_value = "still running\n"
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = -15
+
+        class ImmediateTimer:
+            def __init__(self, _seconds, callback) -> None:
+                self.callback = callback
+                self.daemon = False
+
+            def start(self) -> None:
+                self.callback()
+
+            def cancel(self) -> None:
+                return None
+
+        with (
+            patch("subprocess.Popen", return_value=mock_process),
+            patch("cafe.agents.executor.Timer", ImmediateTimer),
+            patch("sys.platform", "win32"),
+        ):
+            with pytest.raises(AgentExecutionError) as exc_info:
+                executor._execute_with_streaming(
+                    cmd=["copilot"],
+                    cli_name="Copilot",
+                    execution_control=AgentExecutionControl(
+                        max_duration_seconds=1,
+                        max_output_bytes=1024,
+                        max_output_lines=20,
+                    ),
+                )
+
+        assert exc_info.value.error_type == "execution_limit"
+        mock_process.terminate.assert_called()
+
+    def test_execute_with_streaming_can_mute_agent_output_without_losing_data(
+        self, tmp_path, capsys
+    ) -> None:
+        """Mute only console narration while preserving parsed and durable output."""
+        config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)
+        executor = AgentExecutor(config, stream_output=False)
+        streaming_file = tmp_path / "streaming.jsonl"
+
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = ["Line 1\n", "Line 2\n", ""]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with (
+            patch(
+                "subprocess.run",
+                return_value=MagicMock(stdout='{"session_id": "test-session"}', returncode=0),
+            ),
+            patch("subprocess.Popen", return_value=mock_process),
+            patch("sys.platform", "win32"),
+        ):
+            agent_response = executor._execute_with_streaming(
+                cmd=["test", "cmd"],
+                cli_name="TestCLI",
+                parse_stream_json=False,
+                streaming_output_file=str(streaming_file),
+            )
+
+        assert agent_response.response == "Line 1\nLine 2\n"
+        assert agent_response.streaming_log == ["Line 1\n", "Line 2\n"]
+        assert '"content": "Line 1"' in streaming_file.read_text(encoding="utf-8")
+        assert capsys.readouterr().out == ""
+
+    def test_muted_stream_json_preserves_extracted_response(self, tmp_path, capsys) -> None:
+        config = AgentConfig(name="David", cli=AgentCLI.CLAUDE)
+        executor = AgentExecutor(config, stream_output=False)
+        streaming_file = tmp_path / "streaming.jsonl"
+
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"content": "Hello"}\n',
+            '{"session_id": "session-123"}\n',
+            '{"type": "result"}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with (
+            patch(
+                "subprocess.run",
+                return_value=MagicMock(stdout='{"session_id": "test-session"}', returncode=0),
+            ),
+            patch("subprocess.Popen", return_value=mock_process),
+            patch("sys.platform", "win32"),
+        ):
+            agent_response = executor._execute_with_streaming(
+                cmd=["claude", "--print", "test"],
+                cli_name="Claude",
+                parse_stream_json=True,
+                streaming_output_file=str(streaming_file),
+            )
+
+        assert agent_response.response == "Hello"
+        assert agent_response.streaming_log == ["Hello"]
+        assert '"content": "Hello"' in streaming_file.read_text(encoding="utf-8")
+        assert capsys.readouterr().out == ""
 
     def test_execute_with_streaming_stream_json(self, capsys) -> None:
         """測試 stream-json parsing（Claude 風格）"""
@@ -843,6 +1338,32 @@ class TestStreamingExecution:
         assert "Claude Response (streaming):" in captured.out
         assert "Hello" in captured.out
         assert "world" in captured.out
+
+    def test_execute_with_streaming_ignores_permission_denial_message_string(self) -> None:
+        """Claude 權限拒絕的字串 message 不可中斷 stream-json 執行."""
+        config = AgentConfig(name="Roger", cli=AgentCLI.CLAUDE)
+        executor = AgentExecutor(config)
+        mock_process = MagicMock()
+        mock_process.stdout.readline.side_effect = [
+            '{"type":"system","subtype":"permission_denied","message":"Approval required for content.xml"}\n',
+            '{"type":"assistant","message":{"content":[{"type":"text","text":"Review complete"}]}}\n',
+            '{"type":"result"}\n',
+            "",
+        ]
+        mock_process.stderr.read.return_value = ""
+        mock_process.wait.return_value = 0
+
+        with patch("subprocess.run", return_value=MagicMock(stdout="", returncode=0)), \
+             patch("subprocess.Popen", return_value=mock_process), \
+             patch("sys.platform", "win32"):
+            agent_response = executor._execute_with_streaming(
+                cmd=["claude", "--print", "test"],
+                cli_name="Claude",
+                parse_stream_json=True,
+            )
+
+        assert agent_response.response == "Review complete"
+        assert agent_response.streaming_log == ["Review complete"]
 
     def test_execute_with_streaming_handles_error(self) -> None:
         """測試 streaming 執行失敗時拋出錯誤"""
@@ -1552,8 +2073,8 @@ class TestToolNameTranslation:
             "run_shell_command(git status)"
         ]
 
-    def test_translate_returns_none_for_empty_tools(self):
-        """測試空工具列表返回 None"""
+    def test_translate_preserves_explicit_empty_tool_scope(self):
+        """測試未指定工具與明確空權限維持不同語意。"""
         config = AgentConfig(
             name="test",
             cli=AgentCLI.CLAUDE,
@@ -1562,7 +2083,7 @@ class TestToolNameTranslation:
         executor = AgentExecutor(config)
 
         assert executor._translate_tool_names(None) is None
-        assert executor._translate_tool_names([]) is None
+        assert executor._translate_tool_names([]) == []
 
 
 class TestGeminiIgnoreSetup:

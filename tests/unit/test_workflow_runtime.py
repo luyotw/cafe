@@ -1,44 +1,301 @@
 """Tests for the blackboard-first workflow runtime."""
 
 import json
+import multiprocessing
+import subprocess
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+import yaml
 
-from cafe.core.blackboard import (
-    BlackboardStore,
-    HandoffIntent,
-    HandoffOwner,
-    LongRunningOperationArtifact as _LongRunningOperationArtifact,
-    LongRunningOperationState,
-    OperationLogPolicy,
-    OperationMonitoring,
-    OperationRisk,
-)
-from cafe.core.human_task_records import HumanTaskRecordStore
-from cafe.core.workflow_models import BatonRejected, StepExecutionResult
+from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
+from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
+from cafe.core.human_tasks import HumanTaskBinding, HumanTaskDecision, HumanTaskPolicy
+from cafe.core.workflow_models import BatonRejected, PlaybookRunResult, StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.playbooks.loader import PlaybookLoader
+from cafe.ui.human_tasks import resolve_step_human_task
 
-_OPERATION_DECISION = {
-    "risk": "low",
-    "monitoring": "final-only",
-    "log_policy": "summary-only",
-    "stop_condition": "operation reaches a terminal state",
-    "recovery": "inspect the same operation id",
-}
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
 
-def LongRunningOperationArtifact(**kwargs):
-    """Create explicit test operation decisions without production defaults."""
-    return _LongRunningOperationArtifact(
-        risk=OperationRisk.LOW,
-        monitoring=OperationMonitoring.FINAL_ONLY,
-        log_policy=OperationLogPolicy.SUMMARY_ONLY,
-        stop_condition="test operation reaches a terminal state",
-        recovery="inspect the same operation id",
-        **kwargs,
+def test_event_callback_wakes_once_after_a_phase_transition(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "callback-transition"
+    events: list[dict[str, object]] = []
+    playbook = {
+        "playbook": {"id": "callback"},
+        "steps": {
+            "spec": {
+                "skill": "spec",
+                "role": "pm",
+                "on": {"await_agent": "develop"},
+            },
+            "develop": {
+                "skill": "develop",
+                "role": "developer",
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+
+    def executor(step_name: str, _step: dict, _state: object) -> StepExecutionResult:
+        if step_name == "spec":
+            _write_baton(
+                issue_dir,
+                from_step="spec",
+                to_owner="agent",
+                to_step="develop",
+                intent="await_agent",
+            )
+        else:
+            _write_baton(
+                issue_dir,
+                from_step="develop",
+                to_owner="done",
+                to_step="done",
+                intent="workflow_complete",
+            )
+        return StepExecutionResult(response="", artifacts={})
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+        workflow_event_callback=events.append,
+    ).run(start_step="spec")
+
+    assert result.completed is True
+    assert [event["event_type"] for event in events] == [
+        "phase_terminal",
+        "workflow_completed",
+    ]
+    assert events[0]["step"] == "spec"
+    assert events[1]["step"] == "develop"
+    assert [event["sequence"] for event in events] == [1, 2]
+    assert all(event["event_id"] for event in events)
+    assert all(event["occurred_at"] for event in events)
+
+
+def test_callback_sequence_is_allocated_from_latest_durable_state(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "concurrent-callbacks"
+    first_store = BlackboardStore(issue_dir)
+    first_state = first_store.load_or_create("spec")
+    stale_store = BlackboardStore(issue_dir)
+    stale_state = stale_store.load_or_create("spec")
+    payload = {
+        "workflow_id": first_state.workflow_id,
+        "issue": issue_dir.name,
+        "event_type": "phase_terminal",
+        "step": "spec",
+    }
+
+    first = first_store.prepare_workflow_callback_event(first_state, payload)
+    second = stale_store.prepare_workflow_callback_event(stale_state, payload)
+
+    durable = BlackboardStore(issue_dir).load_or_create("spec")
+    callback_events = [
+        event.data
+        for event in durable.events
+        if event.event_type == "workflow_event_callback_enqueued"
+    ]
+    assert first["sequence"] == 1
+    assert second["sequence"] == 2
+    assert [event["sequence"] for event in callback_events] == [1, 2]
+
+
+def test_legacy_blackboard_events_load_without_callback_identity(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "legacy-events"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "current_step": "spec",
+                "events": [
+                    {
+                        "timestamp": "2026-01-01T00:00:00+00:00",
+                        "step": "spec",
+                        "type": "legacy",
+                        "payload": {"step": "spec"},
+                    }
+                ],
+            }
+        )
     )
+
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+
+    assert state.events[0].data == {"step": "spec"}
+
+
+def test_event_callback_failure_never_blocks_workflow_advancement(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "callback-failure"
+    playbook = {
+        "playbook": {"id": "callback"},
+        "steps": {"spec": {"skill": "spec", "role": "pm", "on": {"await_agent": "_done"}}},
+    }
+
+    def executor(_step_name: str, _step: dict, _state: object) -> StepExecutionResult:
+        _write_baton(
+            issue_dir,
+            from_step="spec",
+            to_owner="done",
+            to_step="done",
+            intent="workflow_complete",
+        )
+        return StepExecutionResult(response="", artifacts={})
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+        workflow_event_callback=lambda _event: (_ for _ in ()).throw(OSError("offline")),
+    ).run(start_step="spec")
+
+    assert result.completed is True
+    events = BlackboardStore(issue_dir).load_or_create("spec").events
+    assert any(event.event_type == "workflow_event_callback_dispatch_failed" for event in events)
+
+
+def test_event_callback_diagnostic_failure_never_blocks_workflow_advancement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "callback-diagnostic-failure"
+    playbook = {
+        "playbook": {"id": "callback"},
+        "steps": {"spec": {"skill": "spec", "role": "pm", "on": {"await_agent": "_done"}}},
+    }
+
+    def executor(_step_name: str, _step: dict, _state: object) -> StepExecutionResult:
+        _write_baton(
+            issue_dir,
+            from_step="spec",
+            to_owner="done",
+            to_step="done",
+            intent="workflow_complete",
+        )
+        return StepExecutionResult(response="", artifacts={})
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+        workflow_event_callback=lambda _event: (_ for _ in ()).throw(OSError("offline")),
+    )
+    original_record = runtime.blackboard_store.record_event
+
+    def record_event(state, event_type, payload):
+        if event_type == "workflow_event_callback_dispatch_failed":
+            raise OSError("disk unavailable")
+        return original_record(state, event_type, payload)
+
+    monkeypatch.setattr(runtime.blackboard_store, "record_event", record_event)
+    assert runtime.run(start_step="spec").completed is True
+
+
+def test_pause_without_completed_phase_still_wakes_callback(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "callback-pause"
+    events: list[dict[str, object]] = []
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook={
+            "playbook": {"id": "callback"},
+            "steps": {"spec": {"skill": "spec", "role": "pm", "on": {}}},
+        },
+        executor=lambda *_args: None,
+        workflow_event_callback=events.append,
+    )
+
+    result = runtime._emit_pause(
+        current_step="spec", status_code="ITERATION_LIMIT_REACHED", runtime="test", reason="limit"
+    )
+
+    assert result.final_status_code == "ITERATION_LIMIT_REACHED"
+    assert len(events) == 1
+    assert events[0].items() >= {
+        "workflow_id": runtime.blackboard.workflow_id,
+        "issue": "callback-pause",
+        "event_type": "workflow_interruption",
+        "step": "spec",
+        "status_code": "ITERATION_LIMIT_REACHED",
+        "reason": "limit",
+    }.items()
+    assert events[0]["event_id"]
+    assert events[0]["sequence"] == 1
+    assert events[0]["occurred_at"]
+
+
+def test_terminal_status_rewrite_dispatches_one_callback(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "callback-no-baton"
+    callback_events: list[dict[str, object]] = []
+    playbook = {
+        "playbook": {"id": "callback"},
+        "steps": {"spec": {"skill": "spec", "role": "pm", "on": {}}},
+    }
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=lambda *_args: None,
+        workflow_event_callback=callback_events.append,
+    )
+
+    runtime._record_step_completion(
+        event_type="step_completed",
+        current_step="spec",
+        status_code="confirmed",
+        runtime="test",
+    )
+    result = runtime._finalize_observed_result(
+        PlaybookRunResult(
+            final_step="spec",
+            final_status_code="NO_BATON_TRANSITION",
+            completed=False,
+        )
+    )
+
+    assert result.final_status_code == "NO_BATON_TRANSITION"
+    assert len(callback_events) == 1
+    assert callback_events[0]["event_type"] == "workflow_interruption"
+    assert callback_events[0]["status_code"] == "NO_BATON_TRANSITION"
+
+
+def _notify_human_task_in_process(
+    issue_dir_value: str,
+    rendezvous: object,
+    result_queue: object,
+) -> None:
+    """Run one stale notification claimant in an independent process."""
+    import cafe.core.workflow_runtime as runtime_mod
+
+    dispatched = False
+
+    def _dispatch(**_kwargs: object) -> SimpleNamespace:
+        nonlocal dispatched
+        dispatched = True
+        time.sleep(0.25)
+        return SimpleNamespace(receipt={"capability": "cafe.slack.human_task", "success": True})
+
+    try:
+        issue_dir = Path(issue_dir_value)
+        runtime_mod.load_capability_registry = lambda _dirs: {}
+        runtime_mod.default_capability_definition_dirs = lambda _root: []
+        runtime_mod.run_capability_request = _dispatch
+        runtime = BlackboardWorkflowRuntime(
+            issue_dir=issue_dir,
+            playbook=PlaybookLoader().load("standard"),
+            executor=lambda *_args: None,
+        )
+        task = HumanTaskRecordStore(issue_dir).tasks()[0]
+        rendezvous.wait(timeout=10)
+        runtime._notify_new_human_task(task)
+    except BaseException as exc:
+        result_queue.put(("error", repr(exc)))
+        return
+    result_queue.put(("ok", dispatched))
 
 
 def _write_baton(
@@ -66,6 +323,435 @@ def _write_baton(
         ),
         encoding="utf-8",
     )
+
+
+def _write_publication_contract(
+    issue_dir: Path,
+    *,
+    playbook_id: str = "publication-contract",
+    persisted: object = False,
+) -> None:
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    (issue_dir / "issue.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "playbook_id": playbook_id,
+                "pr": {"auto_create": persisted},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _publication_contract_playbook(*, capable: bool = True) -> dict[str, object]:
+    step = {
+        "skill": "develop",
+        "role": "developer",
+        "behavior": {"completion": "baton", "publish_confirmation": True},
+        "on": {"workflow_complete": "_done"},
+    }
+    if capable:
+        step["capability_requests"] = ["cafe.pr.publish"]
+    return {
+        "playbook": {"id": "publication-contract"},
+        "steps": {"build": step},
+    }
+
+
+@pytest.mark.parametrize(
+    ("config", "capable", "reason"),
+    [
+        (
+            {
+                "playbook_id": "publication-contract",
+                "confirmation_contract": {"pr_auto_create": False},
+            },
+            True,
+            "missing_persisted_choice",
+        ),
+        (
+            {
+                "playbook_id": "publication-contract",
+                "pr": {"auto_create": "true"},
+            },
+            True,
+            "invalid_persisted_choice",
+        ),
+        (
+            {
+                "playbook_id": "publication-contract",
+                "pr": {"auto_create": False},
+            },
+            False,
+            "inapplicable_publication_config",
+        ),
+        (
+            {
+                "playbook_id": "publication-contract",
+                "pr": {"post_todo_list": False},
+            },
+            False,
+            "inapplicable_publication_config",
+        ),
+    ],
+)
+def test_runtime_rejects_invalid_publication_contract_before_agent_execution(
+    tmp_path: Path,
+    config: dict[str, object],
+    capable: bool,
+    reason: str,
+) -> None:
+    """Test List 5: startup fails closed on every contract inconsistency."""
+    issue_dir = tmp_path / ".cafe" / "issues" / reason
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        yaml.safe_dump(config, sort_keys=False),
+        encoding="utf-8",
+    )
+    calls: list[str] = []
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_publication_contract_playbook(capable=capable),
+        executor=lambda step, *_args, **_kwargs: calls.append(step),
+    )
+
+    result = runtime.run(start_step="build")
+
+    assert result.completed is False
+    assert result.final_status_code == "INVALID_WORKFLOW_CONFIG"
+    assert reason in (result.detail or "")
+    assert calls == []
+    state = BlackboardStore(issue_dir).load_or_create("build")
+    assert any(
+        event.event_type == "workflow_configuration_invalid"
+        and json.loads(event.message).get("reason") == reason
+        for event in state.events
+    )
+
+
+@pytest.mark.parametrize("choice", [True, False])
+def test_runtime_accepts_explicit_publication_setting(
+    tmp_path: Path,
+    choice: bool,
+) -> None:
+    """Test List 5: both Boolean publication modes reach the public executor path."""
+    issue_dir = tmp_path / ".cafe" / "issues" / f"valid-{choice}"
+    _write_publication_contract(issue_dir, persisted=choice)
+    calls: list[str] = []
+
+    def executor(step: str, *_args: object, **_kwargs: object) -> StepExecutionResult:
+        calls.append(step)
+        _write_baton(
+            issue_dir,
+            from_step=step,
+            to_owner="done",
+            to_step="done",
+            intent="workflow_complete",
+        )
+        events = (
+            [{"type": "pr_synced", "url": "https://github.com/test/repo/pull/467"}]
+            if choice
+            else []
+        )
+        return StepExecutionResult(response="", artifacts={}, events=events)
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_publication_contract_playbook(),
+        executor=executor,
+    )
+
+    result = runtime.run(start_step="build")
+
+    assert result.completed is True
+    assert calls == ["build"]
+
+
+def test_runtime_reads_publication_contract_at_run_time(tmp_path: Path) -> None:
+    """Test List 5: run validation reads the current sole publication setting."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "changed-before-run"
+    _write_publication_contract(issue_dir, persisted=True)
+    received_choices: list[object] = []
+
+    def executor(step: str, *_args: object, **kwargs: object) -> StepExecutionResult:
+        received_choices.append(kwargs.get("validated_pr_auto_create"))
+        _write_baton(
+            issue_dir,
+            from_step=step,
+            to_owner="done",
+            to_step="done",
+            intent="workflow_complete",
+        )
+        return StepExecutionResult(response="", artifacts={})
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_publication_contract_playbook(),
+        executor=executor,
+    )
+    _write_publication_contract(issue_dir, persisted=False)
+
+    result = runtime.run(start_step="build")
+
+    assert result.completed is True
+    assert received_choices == [False]
+
+
+def test_runtime_revalidates_publication_contract_before_each_agent_execution(
+    tmp_path: Path,
+) -> None:
+    """Test List 5: a between-hop config change fails before the next agent."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "changed-between-hops"
+    _write_publication_contract(issue_dir, persisted=False)
+    playbook = {
+        "playbook": {"id": "between-hop-contract"},
+        "steps": {
+            "review": {
+                "skill": "review",
+                "role": "reviewer",
+                "behavior": {"completion": "baton"},
+                "on": {"await_agent": "publish"},
+            },
+            "publish": {
+                "skill": "pr",
+                "role": "developer",
+                "behavior": {"completion": "baton", "publish_confirmation": True},
+                "capability_requests": ["cafe.pr.publish"],
+                "on": {"workflow_complete": "_done"},
+            },
+        },
+    }
+    calls: list[str] = []
+
+    def executor(step: str, *_args: object, **_kwargs: object) -> StepExecutionResult:
+        calls.append(step)
+        if step == "review":
+            _write_publication_contract(issue_dir, persisted="true")
+            _write_baton(
+                issue_dir,
+                from_step=step,
+                to_owner="agent",
+                to_step="publish",
+                intent="await_agent",
+            )
+            return StepExecutionResult(response="", artifacts={})
+        _write_baton(
+            issue_dir,
+            from_step=step,
+            to_owner="done",
+            to_step="done",
+            intent="workflow_complete",
+        )
+        return StepExecutionResult(
+            response="",
+            artifacts={},
+            events=[{"type": "pr_synced", "url": "https://example.test/pull/467"}],
+        )
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    ).run(start_step="review")
+
+    assert result.final_status_code == "INVALID_WORKFLOW_CONFIG"
+    assert "invalid_persisted_choice" in (result.detail or "")
+    assert calls == ["review"]
+
+
+@pytest.mark.parametrize(
+    ("legacy_choice", "persisted"),
+    [(True, False), (False, True)],
+)
+def test_runtime_ignores_legacy_confirmation_publication_choice(
+    tmp_path: Path,
+    legacy_choice: bool,
+    persisted: bool,
+) -> None:
+    """Legacy confirmation data cannot authorize or veto generic publication."""
+    issue_dir = tmp_path / ".cafe" / "issues" / f"legacy-{persisted}"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "playbook_id": "publication-contract",
+                "confirmation_contract": {"pr_auto_create": legacy_choice},
+                "pr": {"auto_create": persisted},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    received_choices: list[object] = []
+
+    def executor(step: str, *_args: object, **kwargs: object) -> StepExecutionResult:
+        received_choices.append(kwargs.get("validated_pr_auto_create"))
+        _write_baton(
+            issue_dir,
+            from_step=step,
+            to_owner="done",
+            to_step="done",
+            intent="workflow_complete",
+        )
+        events = (
+            [{"type": "pr_synced", "url": "https://example.test/pull/483"}]
+            if persisted
+            else []
+        )
+        return StepExecutionResult(response="", artifacts={}, events=events)
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_publication_contract_playbook(),
+        executor=executor,
+    ).run(start_step="build")
+
+    assert result.completed is True
+    assert received_choices == [persisted]
+
+
+def test_non_pr_runtime_ignores_legacy_confirmation_publication_choice(
+    tmp_path: Path,
+) -> None:
+    """A legacy confirmation-only field is not generic PR configuration."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "legacy-non-pr"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "playbook_id": "publication-contract",
+                "confirmation_contract": {"pr_auto_create": True},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    def executor(step: str, *_args: object, **_kwargs: object) -> StepExecutionResult:
+        _write_baton(
+            issue_dir,
+            from_step=step,
+            to_owner="done",
+            to_step="done",
+            intent="workflow_complete",
+        )
+        return StepExecutionResult(response="", artifacts={})
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_publication_contract_playbook(capable=False),
+        executor=executor,
+    ).run(start_step="build")
+
+    assert result.completed is True
+
+
+@pytest.mark.parametrize("choice", [True, False])
+def test_local_review_task_reports_the_current_publication_outcome(
+    tmp_path: Path,
+    choice: bool,
+) -> None:
+    """Test List 6/7: durable review text matches the explicit workflow mode."""
+    issue_dir = tmp_path / ".cafe" / "issues" / f"review-outcome-{choice}"
+    _write_publication_contract(issue_dir, persisted=choice)
+    playbook = PlaybookLoader().load("standard")
+    url = "https://github.com/acme/widgets/pull/467"
+
+    def executor(step: str, *_args: object, **_kwargs: object) -> StepExecutionResult:
+        _write_baton(
+            issue_dir,
+            from_step=step,
+            to_owner="user",
+            to_step="user",
+            intent="confirm_output",
+        )
+        events = [{"type": "pr_synced", "url": url, "source": "capability"}] if choice else []
+        return StepExecutionResult(response="", artifacts={}, events=events)
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    runtime.blackboard_store.append_capability_receipt(
+        runtime.blackboard,
+        {
+            "capability": "cafe.pr.publish",
+            "success": True,
+            "outputs": {"pr_url": "https://github.com/stale/project/pull/1"},
+        },
+    )
+
+    result = runtime.run(start_step="pr")
+
+    assert result.final_status_code == "BATON_CONFIRM_OUTPUT"
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    if choice:
+        assert f"Verified PR URL: {url}" in task.prompt
+    else:
+        assert "Publication mode: local-only. No PR URL exists." in task.prompt
+        assert "https://github.com/stale/project/pull/1" not in task.prompt
+
+
+@pytest.mark.parametrize(
+    "events",
+    [
+        [
+            {
+                "type": "capability_receipt",
+                "capability": "cafe.pr.publish",
+                "success": True,
+            }
+        ],
+        [
+            {
+                "type": "capability_receipt",
+                "capability": "cafe.pr.publish",
+                "success": False,
+                "code": "policy_denied",
+            }
+        ],
+        [{"type": "pr_synced", "url": "", "source": "capability"}],
+    ],
+)
+def test_published_review_rejects_missing_or_failed_current_url_evidence(
+    tmp_path: Path,
+    events: list[dict[str, object]],
+) -> None:
+    """Test List 6/8: stale or generic receipts cannot create a success handoff."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "unverified-review"
+    _write_publication_contract(issue_dir, persisted=True)
+
+    def executor(step: str, *_args: object, **_kwargs: object) -> StepExecutionResult:
+        _write_baton(
+            issue_dir,
+            from_step=step,
+            to_owner="user",
+            to_step="user",
+            intent="confirm_output",
+        )
+        return StepExecutionResult(response="", artifacts={}, events=events)
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=PlaybookLoader().load("standard"),
+        executor=executor,
+    )
+    runtime.blackboard_store.append_capability_receipt(
+        runtime.blackboard,
+        {
+            "capability": "cafe.pr.publish",
+            "success": True,
+            "outputs": {"pr_url": "https://github.com/stale/project/pull/1"},
+        },
+    )
+
+    result = runtime.run(start_step="pr")
+
+    assert result.completed is False
+    assert result.final_status_code == "MISSING_CAPABILITY_RECEIPT"
+    assert HumanTaskRecordStore(issue_dir).tasks() == ()
 
 
 def _write_iteration_evidence(
@@ -135,9 +821,7 @@ def test_runtime_rejects_undeclared_alignment_baton_before_routing(
     assert result.completed is True
     assert calls == 2
     blackboard = BlackboardStore(issue_dir).load_or_create("develop")
-    rejected = [
-        event for event in blackboard.events if event.event_type == "baton_rejected"
-    ]
+    rejected = [event for event in blackboard.events if event.event_type == "baton_rejected"]
     assert rejected[-1].data["field"] == "intent"
     assert rejected[-1].data["invalid_value"] == "alignment_checkpoint"
 
@@ -174,12 +858,17 @@ def test_runtime_rejects_undeclared_alignment_legacy_status(
 
 def test_runtime_blocks_pr_done_without_publish_receipt(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-pr"
-    issue_dir.mkdir(parents=True)
-    (issue_dir / "issue.yaml").write_text("pr:\n  auto_create: true\n", encoding="utf-8")
+    _write_publication_contract(issue_dir, persisted=True)
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
-            "pr": {"skill": "spec_first", "role": "developer", "behavior": {"completion": "baton", "publish_confirmation": True}, "capability_requests": ["cafe.pr.publish"], "on": {"await_agent": "_done"}},
+            "pr": {
+                "skill": "spec_first",
+                "role": "developer",
+                "behavior": {"completion": "baton", "publish_confirmation": True},
+                "capability_requests": ["cafe.pr.publish"],
+                "on": {"confirm_output": "pr", "workflow_complete": "_done"},
+            },
         },
     }
 
@@ -189,10 +878,12 @@ def test_runtime_blocks_pr_done_without_publish_receipt(tmp_path: Path) -> None:
         )
         return StepExecutionResult(response="done", artifacts={"pr_result": "p1"})
 
+    callback_events: list[dict[str, object]] = []
     runtime = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
         playbook=playbook,
         executor=executor,
+        workflow_event_callback=callback_events.append,
     )
     result = runtime.run(start_step="pr")
 
@@ -201,10 +892,14 @@ def test_runtime_blocks_pr_done_without_publish_receipt(tmp_path: Path) -> None:
     assert result.final_status_code == "MISSING_CAPABILITY_RECEIPT"
     blackboard = BlackboardStore(issue_dir).load_or_create("pr")
     assert blackboard.current_step == "pr"
+    assert len(callback_events) == 1
+    assert callback_events[0]["event_type"] == "workflow_interruption"
+    assert callback_events[0]["status_code"] == "MISSING_CAPABILITY_RECEIPT"
 
 
-def test_runtime_missing_pr_config_does_not_require_publish_receipt(tmp_path: Path) -> None:
+def test_runtime_explicit_local_mode_does_not_require_publish_receipt(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-local-pr"
+    _write_publication_contract(issue_dir, persisted=False)
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
@@ -239,10 +934,17 @@ def test_runtime_missing_pr_config_does_not_require_publish_receipt(tmp_path: Pa
 
 def test_runtime_completes_pr_when_publish_receipt_exists(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-pr"
+    _write_publication_contract(issue_dir, persisted=True)
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
-            "pr": {"skill": "spec_first", "role": "developer", "behavior": {"completion": "baton", "publish_confirmation": True}, "capability_requests": ["cafe.pr.publish"], "on": {"await_agent": "_done"}},
+            "pr": {
+                "skill": "spec_first",
+                "role": "developer",
+                "behavior": {"completion": "baton", "publish_confirmation": True},
+                "capability_requests": ["cafe.pr.publish"],
+                "on": {"await_agent": "_done"},
+            },
         },
     }
 
@@ -268,12 +970,19 @@ def test_runtime_completes_pr_when_publish_receipt_exists(tmp_path: Path) -> Non
     assert result.final_status_code == "BATON_WORKFLOW_COMPLETE"
 
 
-def test_runtime_completes_pr_when_capability_receipt_success_exists(tmp_path: Path) -> None:
+def test_runtime_rejects_pr_capability_receipt_without_verified_url(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-pr-cap"
+    _write_publication_contract(issue_dir, persisted=True)
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
-            "pr": {"skill": "spec_first", "role": "developer", "behavior": {"completion": "baton", "publish_confirmation": True}, "capability_requests": ["cafe.pr.publish"], "on": {"await_agent": "_done"}},
+            "pr": {
+                "skill": "spec_first",
+                "role": "developer",
+                "behavior": {"completion": "baton", "publish_confirmation": True},
+                "capability_requests": ["cafe.pr.publish"],
+                "on": {"await_agent": "_done"},
+            },
         },
     }
 
@@ -303,8 +1012,8 @@ def test_runtime_completes_pr_when_capability_receipt_success_exists(tmp_path: P
     )
     result = runtime.run(start_step="pr")
 
-    assert result.completed is True
-    assert result.final_status_code == "BATON_WORKFLOW_COMPLETE"
+    assert result.completed is False
+    assert result.final_status_code == "MISSING_CAPABILITY_RECEIPT"
 
 
 def test_runtime_blocks_declared_capability_step_without_receipt(tmp_path: Path) -> None:
@@ -347,6 +1056,62 @@ def test_runtime_blocks_declared_capability_step_without_receipt(tmp_path: Path)
         event for event in blackboard.events if event.event_type == "workflow_blocked"
     ]
     assert blocked_events[-1].data["missing_capabilities"] == ["demo.publish"]
+
+
+def test_runtime_pauses_on_distinct_capability_approval_task(tmp_path: Path) -> None:
+    """Test List integration 1/7: approval pending routes to user, not alignment."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo-capability-approval"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "publish": {
+                "skill": "spec_first",
+                "role": "developer",
+                "capability_requests": ["demo.publish"],
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        _write_baton(
+            issue_dir,
+            from_step="publish",
+            to_owner="done",
+            to_step="done",
+            intent="workflow_complete",
+        )
+        return StepExecutionResult(
+            response="done",
+            artifacts={"publish_result": "p1"},
+            events=[
+                {
+                    "type": "capability_approval_pending",
+                    "capability": "demo.publish",
+                    "task_id": "approval-task",
+                    "request_fingerprint": "fingerprint",
+                }
+            ],
+        )
+
+    callback_events: list[dict[str, object]] = []
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+        workflow_event_callback=callback_events.append,
+    ).run(start_step="publish")
+
+    assert result.final_status_code == "CAPABILITY_APPROVAL_PENDING"
+    assert result.detail == "approval-task"
+    blackboard = BlackboardStore(issue_dir).load_or_create("publish")
+    assert blackboard.current_step == "user"
+    assert blackboard.handoff_contract is not None
+    assert blackboard.handoff_contract.intent.value == "manual_handoff"
+    assert len(callback_events) == 1
+    assert callback_events[0]["event_type"] == "human_task"
+    assert callback_events[0]["status_code"] == "CAPABILITY_APPROVAL_PENDING"
+    assert callback_events[0]["task_id"] == "approval-task"
 
 
 def test_runtime_completes_declared_capability_step_with_receipt(tmp_path: Path) -> None:
@@ -538,7 +1303,7 @@ def test_runtime_rejects_legacy_text_baton_in_core_path(tmp_path: Path) -> None:
         json.dumps(
             {
                 "schema_version": 1,
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "current_step": "spec",
                 "artifacts": {},
                 "events": [],
@@ -574,6 +1339,7 @@ def test_runtime_rejects_legacy_text_baton_in_core_path(tmp_path: Path) -> None:
 
 def test_runtime_hands_off_to_pr_runtime_boundary(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-boundary"
+    _write_publication_contract(issue_dir, persisted=False)
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
@@ -690,7 +1456,6 @@ def test_runtime_single_step_executes_pr_without_legacy_runner(tmp_path: Path) -
 def test_runtime_preserves_strict_done_baton_metadata_after_reload(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-pr-strict-done"
     issue_dir.mkdir(parents=True, exist_ok=True)
-    (issue_dir / "issue.yaml").write_text("pr:\n  auto_create: false\n", encoding="utf-8")
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
@@ -734,7 +1499,6 @@ def test_runtime_preserves_strict_done_baton_metadata_after_reload(tmp_path: Pat
 def test_runtime_done_baton_status_overrides_phase_parser_status(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-pr-status"
     issue_dir.mkdir(parents=True, exist_ok=True)
-    (issue_dir / "issue.yaml").write_text("pr:\n  auto_create: false\n", encoding="utf-8")
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
@@ -979,6 +1743,7 @@ def test_runtime_ignores_stale_baton_when_status_missing(tmp_path: Path) -> None
 
 def test_runtime_legacy_step_honors_review_confirmed_advance(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-review-advance"
+    _write_publication_contract(issue_dir, persisted=False)
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
@@ -1031,6 +1796,7 @@ def test_runtime_legacy_step_honors_review_confirmed_advance(tmp_path: Path) -> 
 
 def test_runtime_review_confirmed_routes_to_pr_without_legacy_class(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "review-confirmed"
+    _write_publication_contract(issue_dir, persisted=False)
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
@@ -1256,7 +2022,7 @@ def test_runtime_resumes_from_blackboard_current_step(tmp_path: Path) -> None:
     assert executed_steps == ["plan"]
 
 
-def test_runtime_pauses_after_realigning_stale_current_step_from_handoff_contract(
+def test_continuous_runtime_executes_after_realigning_stale_current_step(
     tmp_path: Path,
 ) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-stale-current-step"
@@ -1278,7 +2044,7 @@ def test_runtime_pauses_after_realigning_stale_current_step_from_handoff_contrac
             {
                 "schema_version": 1,
                 "current_step": "spec",
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "artifacts": {},
                 "events": [],
                 "decisions": [],
@@ -1289,9 +2055,9 @@ def test_runtime_pauses_after_realigning_stale_current_step_from_handoff_contrac
     _write_baton(
         issue_dir,
         from_step="spec",
-        to_owner="agent",
+        to_owner=HandoffOwner.AGENT,
         to_step="plan",
-        intent="await_agent",
+        intent=HandoffIntent.AWAIT_AGENT,
         status_code="confirmed",
     )
     executed_steps: list[str] = []
@@ -1308,12 +2074,11 @@ def test_runtime_pauses_after_realigning_stale_current_step_from_handoff_contrac
 
     result = runtime.run(max_transitions=5)
 
-    assert result.completed is False
-    assert result.final_step == "spec"
-    assert result.final_status_code == "BATON_POSITION_REALIGNED"
-    assert executed_steps == []
+    assert result.completed is True
+    assert result.final_step == "plan"
+    assert executed_steps == ["plan"]
     blackboard = BlackboardStore(issue_dir).load_or_create("spec")
-    assert blackboard.current_step == "plan"
+    assert blackboard.current_step == "done"
     realigned_events = [
         event for event in blackboard.events if event.event_type == "runtime_position_realigned"
     ]
@@ -1332,6 +2097,148 @@ def test_runtime_pauses_after_realigning_stale_current_step_from_handoff_contrac
     assert executed_steps == ["plan"]
 
 
+def test_single_step_reports_a_stale_handoff_realign_without_executing_it(tmp_path: Path) -> None:
+    issue_dir = tmp_path / "single-step-realign"
+    playbook = {
+        "playbook": {"id": "single-step-realign"},
+        "steps": {
+            "spec": {"skill": "spec_first", "role": "pm", "on": {"await_agent": "plan"}},
+            "plan": {"skill": "spec_first", "role": "developer", "on": {"await_agent": "_done"}},
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("spec")
+    store.update_handoff_contract(
+        state,
+        from_step="spec",
+        to_owner=HandoffOwner.AGENT,
+        to_step="plan",
+        intent=HandoffIntent.AWAIT_AGENT,
+        status_code="confirmed",
+        source="test",
+    )
+    executed: list[str] = []
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=lambda step, *_args: executed.append(step)
+        or StepExecutionResult(response="confirmed", artifacts={}, status_code="confirmed"),
+    )
+
+    result = runtime.run(single_step=True)
+
+    assert result.completed is False
+    assert result.final_step == "spec"
+    assert result.final_status_code == "confirmed"
+    assert executed == []
+
+
+def test_replay_resets_attempt_cycle_when_transition_event_survives_first(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / "transition-attempt-reset"
+    playbook = {
+        "playbook": {"id": "transition-attempt-reset"},
+        "steps": {
+            "spec": {
+                "skill": "spec_first",
+                "role": "pm",
+                "max_attempts_per_cycle": 1,
+                "on": {"await_agent": "plan"},
+            },
+            "plan": {
+                "skill": "spec_first",
+                "role": "developer",
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=lambda *_args: StepExecutionResult(
+            response="await_agent", artifacts={}, status_code="await_agent"
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="crash after transition event"):
+        with pytest.MonkeyPatch.context() as patcher:
+            patcher.setattr(
+                runtime,
+                "_reset_step_attempts_after_successful_advance",
+                lambda **_kwargs: (_ for _ in ()).throw(
+                    RuntimeError("crash after transition event")
+                ),
+            )
+            runtime.run(start_step="spec")
+
+    crashed = BlackboardStore(issue_dir).load_or_create("spec")
+    assert crashed.current_step == "spec"
+    assert crashed.step_attempt_counts == {"spec": 1}
+
+    replay = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=lambda *_args: pytest.fail("replay must not execute the completed step"),
+    ).run(single_step=True)
+
+    recovered = BlackboardStore(issue_dir).load_or_create("spec")
+    assert replay.final_step == "spec"
+    assert recovered.current_step == "plan"
+    assert recovered.step_attempt_counts == {}
+    assert any(event.event_type == "step_attempt_count_reset" for event in recovered.events)
+
+
+def test_replay_does_not_overwrite_a_newer_target_user_handoff(tmp_path: Path) -> None:
+    issue_dir = tmp_path / "transition-newer-target-handoff"
+    playbook = {
+        "playbook": {"id": "transition-newer-target-handoff"},
+        "steps": {
+            "spec": {"skill": "spec_first", "role": "pm", "on": {"await_agent": "plan"}},
+            "plan": {"skill": "spec_first", "role": "developer", "on": {"await_agent": "_done"}},
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("spec")
+    store.record_event(
+        state,
+        "transition",
+        {
+            "from": "spec",
+            "to": "plan",
+            "status_code": "await_agent",
+            "transition_id": "transition-458-old",
+        },
+    )
+    store.set_current_step(state, "plan")
+    store.update_handoff_contract(
+        state,
+        from_step="plan",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.NEED_CLARIFICATION,
+        status_code="need_clarification",
+        source="test.newer_target_handoff",
+    )
+    executed: list[str] = []
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=lambda step, *_args: executed.append(step)
+        or StepExecutionResult(response="await_agent", artifacts={}, status_code="await_agent"),
+    ).run(single_step=True)
+
+    recovered = BlackboardStore(issue_dir).load_or_create("spec")
+    assert result.final_status_code == "need_clarification"
+    assert executed == []
+    assert recovered.current_step == "user"
+    assert recovered.handoff_contract.from_step == "plan"
+    assert recovered.handoff_contract.to_owner is HandoffOwner.USER
+    assert recovered.handoff_contract.intent is HandoffIntent.NEED_CLARIFICATION
+    assert not any(event.event_type == "transition_recovered" for event in recovered.events)
+
+
 def test_runtime_resumes_to_user_wait_from_handoff_contract(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-user-wait-contract"
     issue_dir.mkdir(parents=True)
@@ -1347,7 +2254,7 @@ def test_runtime_resumes_to_user_wait_from_handoff_contract(tmp_path: Path) -> N
             {
                 "schema_version": 1,
                 "current_step": "develop",
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "artifacts": {},
                 "events": [],
                 "decisions": [],
@@ -1398,7 +2305,7 @@ def test_runtime_resumes_to_done_from_handoff_contract(tmp_path: Path) -> None:
             {
                 "schema_version": 1,
                 "current_step": "pr",
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "artifacts": {},
                 "events": [],
                 "decisions": [],
@@ -1699,8 +2606,314 @@ def test_runtime_prefers_step_baton_over_invalid_status_text(tmp_path: Path) -> 
     assert transitions[0].data["source"] == "baton"
 
 
+def test_runtime_revision_materializes_a_fresh_plan_confirmation_task(tmp_path: Path) -> None:
+    """A revised plan must not reuse an earlier completed output-review task."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "revised-plan-confirmation"
+    _write_publication_contract(issue_dir, persisted=False)
+    playbook = PlaybookLoader().load("standard-qa")
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("plan", playbook_id="standard-qa")
+    records = HumanTaskRecordStore(issue_dir)
+    policy, binding = resolve_step_human_task(
+        playbook_data=playbook,
+        step_name="plan",
+        trigger="confirm_output",
+        iteration=4,
+    )
+    previous = records.materialize(
+        workflow_id=state.workflow_id,
+        step="plan",
+        iteration=4,
+        trigger="confirm_output",
+        policy_id=policy.id,
+        prompt=policy.prompt,
+        expected_result=policy.model_dump(mode="json"),
+        continuations=binding.outcomes,
+        assignee_type="user",
+    )
+    records.complete(
+        workflow_id=state.workflow_id,
+        task_id=previous.id,
+        payload={"task": policy.id, "decision": "revise", "feedback": "Narrow the plan."},
+        source="test",
+    )
+    (issue_dir / "plan" / "iteration_005").mkdir(parents=True)
+
+    def executor(step_name: str, step_def: dict, blackboard: object) -> StepExecutionResult:
+        BlackboardStore(issue_dir).update_handoff_contract(
+            blackboard,
+            from_step="plan",
+            to_owner=HandoffOwner.USER,
+            to_step="user",
+            intent=HandoffIntent.CONFIRM_OUTPUT,
+            source="test.revised_plan",
+        )
+        return StepExecutionResult(response="confirmed plan revision", artifacts={})
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    ).run(start_step="plan")
+
+    current = BlackboardStore(issue_dir).load_or_create("plan")
+    tasks = records.tasks()
+    pending = [task for task in tasks if task.status.value == "pending"]
+
+    assert result.completed is False
+    assert result.final_status_code == "BATON_CONFIRM_OUTPUT"
+    assert current.current_step == "user"
+    assert records.get_task(previous.id).status.value == "completed"
+    assert len(pending) == 1
+    assert pending[0].id != previous.id
+    assert pending[0].iteration == 5
+    assert pending[0].trigger == "confirm_output"
+
+
+def test_runtime_enforces_confirmation_gate_over_agent_baton(tmp_path: Path) -> None:
+    """A confirmation-gated phase cannot advance itself with an agent baton."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "enforced-plan-confirmation"
+    _write_publication_contract(issue_dir, persisted=False)
+    playbook = PlaybookLoader().load("standard-qa")
+
+    def executor(step_name: str, step_def: dict, blackboard: object) -> StepExecutionResult:
+        assert step_name == "plan"
+        BlackboardStore(issue_dir).update_handoff_contract(
+            blackboard,
+            from_step="plan",
+            to_owner=HandoffOwner.AGENT,
+            to_step="develop",
+            intent=HandoffIntent.AWAIT_AGENT,
+            source="test.plan_agent_bypass",
+        )
+        return StepExecutionResult(response="plan complete", artifacts={})
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    ).run(start_step="plan")
+
+    current = BlackboardStore(issue_dir).load_or_create("plan")
+    pending = [
+        task
+        for task in HumanTaskRecordStore(issue_dir).tasks()
+        if task.status is HumanTaskStatus.PENDING
+    ]
+    enforced = [
+        event for event in current.events if event.event_type == "confirmation_gate_enforced"
+    ]
+
+    assert result.completed is False
+    assert result.final_status_code == "BATON_CONFIRM_OUTPUT"
+    assert current.current_step == "user"
+    assert current.handoff_contract is not None
+    assert current.handoff_contract.to_owner is HandoffOwner.USER
+    assert current.handoff_contract.to_step == "user"
+    assert current.handoff_contract.intent is HandoffIntent.CONFIRM_OUTPUT
+    assert len(pending) == 1
+    assert pending[0].step == "plan"
+    assert pending[0].trigger == "confirm_output"
+    assert enforced[-1].data == {
+        "step": "plan",
+        "original_owner": "agent",
+        "original_step": "develop",
+        "original_intent": "await_agent",
+    }
+
+
+@pytest.mark.parametrize(
+    ("decision", "correction", "completes"),
+    [("confirm", False, True), ("revise", True, False)],
+)
+def test_runtime_allows_only_a_non_correction_self_loop_confirmation_to_advance(
+    tmp_path: Path, decision: str, correction: bool, completes: bool
+) -> None:
+    """Only a non-correction self-loop decision may advance the approved output."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "confirmed-review"
+    issue_dir.mkdir(parents=True)
+    playbook = {
+        "playbook": {"id": "confirmed-review"},
+        "steps": {
+            "review": {
+                "skill": "cafe-spec",
+                "role": "reviewer",
+                "human_tasks": [
+                    {
+                        "trigger": "confirm_output",
+                        "task_id": "output-review",
+                        "outcomes": {decision: "review"},
+                    }
+                ],
+                "on": {"await_agent": "closeout", "confirm_output": "review"},
+            },
+            "closeout": {
+                "skill": "cafe-spec",
+                "role": "developer",
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("review", playbook_id="confirmed-review")
+    records = HumanTaskRecordStore(issue_dir)
+    task = records.materialize(
+        workflow_id=state.workflow_id,
+        step="review",
+        iteration=1,
+        trigger="confirm_output",
+        policy_id="output-review",
+        prompt="Confirm review output",
+        expected_result={"decisions": [{"id": decision, "correction": correction}]},
+        continuations={decision: "review"},
+        assignee_type="user",
+    )
+    records.complete(
+        workflow_id=state.workflow_id,
+        task_id=task.id,
+        payload={"task": "output-review", "decision": decision, "continuation": "review"},
+        source="test",
+    )
+    continuation_dir = issue_dir / "review" / "iteration_002"
+    continuation_dir.mkdir(parents=True)
+    (continuation_dir / "user_input.md").write_text(
+        "CAFE validated this HumanTask response for the continuation phase:\n"
+        + json.dumps(
+            {
+                "schema_version": 1,
+                "type": "human_task_completion",
+                "human_task_id": task.id,
+                "task": "output-review",
+                "decision": decision,
+                "continuation": "review",
+            }
+        ),
+        encoding="utf-8",
+    )
+    store.update_handoff_contract(
+        state,
+        from_step="review",
+        to_owner=HandoffOwner.AGENT,
+        to_step="review",
+        intent=HandoffIntent.AWAIT_AGENT,
+        source="human_task.test",
+    )
+
+    def executor(step_name: str, _step_def: dict, blackboard: object) -> StepExecutionResult:
+        if step_name == "review":
+            BlackboardStore(issue_dir).update_handoff_contract(
+                blackboard,
+                from_step="review",
+                to_owner=HandoffOwner.AGENT,
+                to_step="closeout",
+                intent=HandoffIntent.AWAIT_AGENT,
+                source="test.review_confirmed",
+            )
+        else:
+            BlackboardStore(issue_dir).update_handoff_contract(
+                blackboard,
+                from_step="closeout",
+                to_owner=HandoffOwner.DONE,
+                to_step="done",
+                intent=HandoffIntent.WORKFLOW_COMPLETE,
+                source="test.closeout",
+            )
+        return StepExecutionResult(response="complete", artifacts={})
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    ).run()
+
+    current = BlackboardStore(issue_dir).load_or_create("review")
+    assert result.completed is completes
+    if completes:
+        assert current.current_step == "done"
+        assert not [
+            event for event in current.events if event.event_type == "confirmation_gate_enforced"
+        ]
+    else:
+        assert result.final_status_code == "BATON_CONFIRM_OUTPUT"
+        assert current.current_step == "user"
+        assert [
+            event for event in current.events if event.event_type == "confirmation_gate_enforced"
+        ]
+
+
+def test_runtime_preserves_declared_manual_handoff_from_confirmation_gate(
+    tmp_path: Path,
+) -> None:
+    """A blocking review returns to its declared correction step without approval."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "review-correction"
+    issue_dir.mkdir(parents=True)
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "review": {
+                "skill": "review",
+                "role": "reviewer",
+                "on": {
+                    "await_agent": "closeout",
+                    "confirm_output": "review",
+                    "manual_handoff": "knowledge",
+                },
+            },
+            "knowledge": {
+                "skill": "knowledge",
+                "role": "developer",
+                "on": {"await_agent": "_done"},
+            },
+            "closeout": {
+                "skill": "closeout",
+                "role": "developer",
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+    calls: list[str] = []
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        calls.append(step_name)
+        store = BlackboardStore(issue_dir)
+        if step_name == "review":
+            store.update_handoff_contract(
+                state,
+                from_step="review",
+                to_owner=HandoffOwner.AGENT,
+                to_step="knowledge",
+                intent=HandoffIntent.MANUAL_HANDOFF,
+                source="test.review_blocking",
+            )
+        else:
+            store.update_handoff_contract(
+                state,
+                from_step="knowledge",
+                to_owner=HandoffOwner.DONE,
+                to_step="done",
+                intent=HandoffIntent.WORKFLOW_COMPLETE,
+                source="test.knowledge_complete",
+            )
+        return StepExecutionResult(response="complete", artifacts={})
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    ).run(start_step="review")
+
+    current = BlackboardStore(issue_dir).load_or_create("review")
+    enforced = [
+        event for event in current.events if event.event_type == "confirmation_gate_enforced"
+    ]
+
+    assert result.completed is True
+    assert calls == ["review", "knowledge"]
+    assert enforced == []
+
+
 def test_runtime_status_code_missing_no_handoff_contract(tmp_path: Path) -> None:
-    """When the agent omits a status code and no handoff contract exists, the runtime still pauses."""
+    """When status and handoff are absent, the runtime still pauses."""
     issue_dir = tmp_path / ".cafe" / "issues" / "missing-no-handoff"
     playbook = {
         "playbook": {"id": "default"},
@@ -1773,10 +2986,31 @@ def test_runtime_pauses_ready_for_review_with_confirm_output_intent(tmp_path: Pa
     assert blackboard.handoff_contract.intent == HandoffIntent.CONFIRM_OUTPUT
 
 
-def test_runtime_materializes_one_declared_task_and_recovers_it_after_restart(tmp_path: Path) -> None:
+def test_runtime_materializes_one_declared_task_and_recovers_it_after_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """IT-001: pause/restart preserves the exact durable task and wait state."""
+    import cafe.core.workflow_runtime as runtime_mod
+
     issue_dir = tmp_path / ".cafe" / "issues" / "durable-restart"
-    playbook = PlaybookLoader().load("default")
+    _write_publication_contract(issue_dir, persisted=False)
+    playbook = PlaybookLoader().load("standard")
+    capability_calls: list[dict[str, object]] = []
+    monkeypatch.setattr(runtime_mod, "load_capability_registry", lambda _dirs: {"registered": True})
+    monkeypatch.setattr(runtime_mod, "default_capability_definition_dirs", lambda _root: [])
+
+    def _run_capability_request(**kwargs: object) -> SimpleNamespace:
+        capability_calls.append(kwargs)
+        request = kwargs["capability_request"]
+        return SimpleNamespace(
+            receipt={
+                "capability": "cafe.slack.human_task",
+                "success": True,
+                "inputs": dict(request["args"]),
+            }
+        )
+
+    monkeypatch.setattr(runtime_mod, "run_capability_request", _run_capability_request)
 
     def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
         return StepExecutionResult(
@@ -1803,6 +3037,627 @@ def test_runtime_materializes_one_declared_task_and_recovers_it_after_restart(tm
     assert restored.tasks()[0].id == task.id
     assert restored.get_wait_state(task.id) == wait
     assert state.workflow_id == task.workflow_id
+    assert len(capability_calls) == 1
+    request = capability_calls[0]["capability_request"]
+    assert request["args"]["task_id"] == task.id
+    assert request["args"]["workflow_id"] == task.workflow_id
+    assert request["args"]["repository"] == tmp_path.name
+
+
+def test_human_task_notification_routes_custom_git_worktrees_to_the_parent_repository(
+    tmp_path: Path,
+) -> None:
+    """A route for the primary checkout covers a linked custom worktree."""
+    from cafe.core.workflow_runtime import HumanTaskNotificationDispatcher
+
+    repository = tmp_path / "main-repository"
+    worktree = tmp_path / "custom-checkout"
+    repository.mkdir()
+    subprocess.run(("git", "init"), cwd=repository, check=True, capture_output=True, text=True)
+    subprocess.run(
+        ("git", "config", "user.email", "cafe-test@example.test"),
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ("git", "config", "user.name", "CAFE Test"),
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    (repository / "README.md").write_text("test\n", encoding="utf-8")
+    subprocess.run(
+        ("git", "add", "README.md"),
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ("git", "commit", "-m", "Initial"),
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ("git", "worktree", "add", "--detach", str(worktree)),
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    issue_dir = worktree / ".cafe" / "issues" / "issue-38"
+    issue_dir.mkdir(parents=True)
+    dispatcher = HumanTaskNotificationDispatcher(
+        issue_dir=issue_dir,
+        blackboard_store=SimpleNamespace(),
+        blackboard=SimpleNamespace(),
+    )
+
+    assert dispatcher._repository_root() == repository.resolve()
+
+
+def test_human_task_notification_ignores_git_environment_route_injection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Git environment variables cannot replace the linked-worktree route key."""
+    from cafe.core.workflow_runtime import HumanTaskNotificationDispatcher
+
+    repository = tmp_path / "main-repository"
+    other_repository = tmp_path / "other-repository"
+    worktree = tmp_path / "custom-checkout"
+    for root in (repository, other_repository):
+        root.mkdir()
+        subprocess.run(("git", "init"), cwd=root, check=True, capture_output=True, text=True)
+        subprocess.run(
+            ("git", "config", "user.email", "cafe-test@example.test"),
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ("git", "config", "user.name", "CAFE Test"),
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        (root / "README.md").write_text("test\n", encoding="utf-8")
+        subprocess.run(
+            ("git", "add", "README.md"),
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ("git", "commit", "-m", "Initial"),
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    subprocess.run(
+        ("git", "worktree", "add", "--detach", str(worktree)),
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    issue_dir = worktree / ".cafe" / "issues" / "issue-38"
+    issue_dir.mkdir(parents=True)
+    monkeypatch.setenv("GIT_DIR", str(other_repository / ".git"))
+    dispatcher = HumanTaskNotificationDispatcher(
+        issue_dir=issue_dir,
+        blackboard_store=SimpleNamespace(),
+        blackboard=SimpleNamespace(),
+    )
+
+    assert dispatcher._repository_root() == repository.resolve()
+
+
+def test_runtime_notifies_human_owned_creation_for_builtin_and_project_playbooks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both builtin and project playbooks use the same registered capability."""
+    import cafe.core.workflow_runtime as runtime_mod
+
+    policy = HumanTaskPolicy(
+        id="approval",
+        pattern="no_changes_needed",
+        prompt="Approve this work",
+        input_schema="decision",
+        decisions=(HumanTaskDecision(id="accept", label="Accept"),),
+    )
+    binding = HumanTaskBinding(trigger="initial", task_id="approval", outcomes={"accept": "done"})
+    monkeypatch.setattr(runtime_mod, "resolve_step_human_task", lambda **_kwargs: (policy, binding))
+    monkeypatch.setattr(runtime_mod, "load_capability_registry", lambda _dirs: {"registered": True})
+    monkeypatch.setattr(runtime_mod, "default_capability_definition_dirs", lambda _root: [])
+    calls: list[dict[str, object]] = []
+
+    def _run_capability_request(**kwargs: object) -> SimpleNamespace:
+        calls.append(kwargs)
+        return SimpleNamespace(receipt={"capability": "cafe.slack.human_task", "success": True})
+
+    monkeypatch.setattr(runtime_mod, "run_capability_request", _run_capability_request)
+
+    def _human_playbook(playbook_id: str) -> dict[str, object]:
+        return {
+            "playbook": {"id": playbook_id},
+            "entry_point": "approval",
+            "steps": {
+                "approval": {
+                    "skill": "phase",
+                    "role": "operator",
+                    "assignee_type": "human",
+                    "human_tasks": [binding.model_dump()],
+                    "on": {},
+                }
+            },
+        }
+
+    trusted_playbook = PlaybookLoader().load("standard")
+    trusted_playbook.clear()
+    trusted_playbook.update(_human_playbook("standard"))
+    standard_dir = tmp_path / ".cafe" / "issues" / "human-standard"
+    standard = BlackboardWorkflowRuntime(
+        issue_dir=standard_dir,
+        playbook=trusted_playbook,
+        executor=lambda *_args: (_ for _ in ()).throw(AssertionError("human step ran agent")),
+    )
+    standard.run(start_step="approval")
+    standard.run(max_transitions=2)
+
+    project_dir = tmp_path / ".cafe" / "issues" / "spoofed-standard"
+    BlackboardWorkflowRuntime(
+        issue_dir=project_dir,
+        playbook=_human_playbook("standard"),
+        executor=lambda *_args: (_ for _ in ()).throw(AssertionError("human step ran agent")),
+    ).run(start_step="approval")
+
+    assert len(calls) == 2
+    standard_task = HumanTaskRecordStore(standard_dir).tasks()[0]
+    project_task = HumanTaskRecordStore(project_dir).tasks()[0]
+    assert calls[0]["capability_request"]["args"]["task_id"] == standard_task.id
+    assert calls[1]["capability_request"]["args"]["task_id"] == project_task.id
+    assert calls[0]["timeout_sec"] == 5.0
+    assert project_task.id != standard_task.id
+    project_receipts = BlackboardStore(project_dir).load_or_create("approval").capability_receipts
+    assert project_receipts[0]["task_id"] == project_task.id
+
+
+def test_notification_failure_preserves_pending_task_and_user_handoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed delivery is audited but cannot consume or reroute human work."""
+    import cafe.core.workflow_runtime as runtime_mod
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "notification-failure"
+    _write_publication_contract(issue_dir, persisted=False)
+    playbook = PlaybookLoader().load("standard")
+    monkeypatch.setattr(runtime_mod, "load_capability_registry", lambda _dirs: {"registered": True})
+    monkeypatch.setattr(runtime_mod, "default_capability_definition_dirs", lambda _root: [])
+    monkeypatch.setattr(
+        runtime_mod,
+        "run_capability_request",
+        lambda **_kwargs: SimpleNamespace(
+            receipt={
+                "capability": "cafe.slack.human_task",
+                "success": False,
+                "code": "slack_transport_error",
+            }
+        ),
+    )
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=lambda *_args: StepExecutionResult(
+            response="ready_for_review",
+            artifacts={},
+            status_code="ready_for_review",
+            auto_continue=False,
+        ),
+    ).run(start_step="spec")
+
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    receipt = state.capability_receipts[0]
+
+    assert result.completed is False
+    assert task.status.value == "pending"
+    assert state.current_step == "user"
+    assert state.handoff_contract.to_owner is HandoffOwner.USER
+    assert state.handoff_contract.from_step == "spec"
+    assert receipt["success"] is False
+    assert receipt["workflow_id"] == task.workflow_id
+    assert receipt["task_id"] == task.id
+
+
+def test_runtime_recovers_notification_when_task_commit_precedes_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unit Tests 7-8: recovery repairs a durable task with no begun attempt."""
+    import cafe.core.workflow_runtime as runtime_mod
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "notification-before-attempt-stop"
+    _write_publication_contract(issue_dir, persisted=False)
+    playbook = PlaybookLoader().load("standard")
+
+    def _executor(*_args: object) -> StepExecutionResult:
+        return StepExecutionResult(
+            response="ready_for_review",
+            artifacts={},
+            status_code="ready_for_review",
+            auto_continue=False,
+        )
+
+    interrupted = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=_executor,
+    )
+    monkeypatch.setattr(
+        interrupted,
+        "_notify_new_human_task",
+        lambda _task: (_ for _ in ()).throw(SystemExit("simulated process stop")),
+    )
+    with pytest.raises(SystemExit, match="simulated process stop"):
+        interrupted.run(start_step="spec")
+
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    assert BlackboardStore(issue_dir).load_or_create("spec").capability_receipts == []
+    calls = []
+    monkeypatch.setattr(runtime_mod, "load_capability_registry", lambda _dirs: {})
+    monkeypatch.setattr(runtime_mod, "default_capability_definition_dirs", lambda _root: [])
+    monkeypatch.setattr(
+        runtime_mod,
+        "run_capability_request",
+        lambda **kwargs: (
+            calls.append(kwargs)
+            or SimpleNamespace(receipt={"capability": "cafe.slack.human_task", "success": True})
+        ),
+    )
+
+    BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=PlaybookLoader().load("standard"),
+        executor=_executor,
+    ).run(start_step="spec")
+
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    assert len(calls) == 1
+    assert len(state.capability_receipts) == 1
+    assert state.capability_receipts[0]["task_id"] == task.id
+
+
+def test_runtime_audits_interrupted_attempt_without_duplicate_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unit Tests 7-8: a begun attempt is durable before I/O and never duplicated."""
+    import cafe.core.workflow_runtime as runtime_mod
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "notification-after-dispatch-stop"
+    _write_publication_contract(issue_dir, persisted=False)
+
+    def _executor(*_args: object) -> StepExecutionResult:
+        return StepExecutionResult(
+            response="ready_for_review",
+            artifacts={},
+            status_code="ready_for_review",
+            auto_continue=False,
+        )
+
+    monkeypatch.setattr(runtime_mod, "load_capability_registry", lambda _dirs: {})
+    monkeypatch.setattr(runtime_mod, "default_capability_definition_dirs", lambda _root: [])
+
+    def _stop_after_attempt_begins(**_kwargs: object):
+        receipt = BlackboardStore(issue_dir).load_or_create("spec").capability_receipts[0]
+        assert receipt["outcome"] == "attempting"
+        raise SystemExit("simulated process stop")
+
+    monkeypatch.setattr(runtime_mod, "run_capability_request", _stop_after_attempt_begins)
+    with pytest.raises(SystemExit, match="simulated process stop"):
+        BlackboardWorkflowRuntime(
+            issue_dir=issue_dir,
+            playbook=PlaybookLoader().load("standard"),
+            executor=_executor,
+        ).run(start_step="spec")
+
+    dispatches = []
+    monkeypatch.setattr(
+        runtime_mod,
+        "run_capability_request",
+        lambda **kwargs: (
+            dispatches.append(kwargs)
+            or SimpleNamespace(receipt={"capability": "cafe.slack.human_task", "success": True})
+        ),
+    )
+    BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=PlaybookLoader().load("standard"),
+        executor=_executor,
+    ).run(start_step="spec")
+
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    assert dispatches == []
+    assert len(state.capability_receipts) == 1
+    assert state.capability_receipts[0]["code"] == "slack_notification_interrupted"
+    assert state.capability_receipts[0]["task_id"] == task.id
+
+
+def test_concurrent_stale_runtimes_claim_one_notification_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unit Tests 7-8: concurrent recovery has one dispatch and one audited attempt."""
+    import cafe.core.workflow_runtime as runtime_mod
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "concurrent-notification-recovery"
+
+    monkeypatch.setattr(runtime_mod, "load_capability_registry", lambda _dirs: {})
+    monkeypatch.setattr(runtime_mod, "default_capability_definition_dirs", lambda _root: [])
+    dispatches: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        runtime_mod,
+        "run_capability_request",
+        lambda **kwargs: (
+            dispatches.append(kwargs)
+            or SimpleNamespace(receipt={"capability": "cafe.slack.human_task", "success": True})
+        ),
+    )
+
+    runtimes = [
+        BlackboardWorkflowRuntime(
+            issue_dir=issue_dir,
+            playbook=PlaybookLoader().load("standard"),
+            executor=lambda *_args: None,
+        )
+        for _ in range(2)
+    ]
+    task = HumanTaskRecordStore(issue_dir).materialize(
+        workflow_id=runtimes[0].blackboard.workflow_id,
+        step="spec",
+        iteration=1,
+        trigger="output_ready",
+        policy_id="output-review",
+        prompt="Review the requirements specification and choose how to continue.",
+        expected_result={"input_schema": "decision"},
+        continuations={"agree": "plan"},
+        assignee_type="human",
+    )
+    rendezvous = threading.Barrier(2)
+
+    def _notify(runtime: BlackboardWorkflowRuntime) -> None:
+        rendezvous.wait(timeout=5)
+        runtime._notify_new_human_task(task)
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        futures = [workers.submit(_notify, runtime) for runtime in runtimes]
+        for future in futures:
+            future.result(timeout=10)
+
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    matching_receipts = [
+        receipt
+        for receipt in state.capability_receipts
+        if receipt.get("capability") == "cafe.slack.human_task"
+        and receipt.get("task_id") == task.id
+    ]
+    assert len(dispatches) == 1
+    assert len(matching_receipts) == 2
+    assert any(receipt.get("success") is True for receipt in matching_receipts)
+    assert any(
+        receipt.get("code") == "human_task_notification_deduplicated"
+        for receipt in matching_receipts
+    )
+
+
+def test_independent_runtimes_claim_one_notification_attempt_across_processes(
+    tmp_path: Path,
+) -> None:
+    """Unit Tests 7-8: process-level claim serialization permits one dispatch."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "process-notification-recovery"
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=PlaybookLoader().load("standard"),
+        executor=lambda *_args: None,
+    )
+    task = HumanTaskRecordStore(issue_dir).materialize(
+        workflow_id=runtime.blackboard.workflow_id,
+        step="spec",
+        iteration=1,
+        trigger="output_ready",
+        policy_id="output-review",
+        prompt="Review the requirements specification and choose how to continue.",
+        expected_result={"input_schema": "decision"},
+        continuations={"agree": "plan"},
+        assignee_type="human",
+    )
+    context = multiprocessing.get_context("spawn")
+    rendezvous = context.Barrier(2)
+    result_queue = context.Queue()
+    workers = [
+        context.Process(
+            target=_notify_human_task_in_process,
+            args=(str(issue_dir), rendezvous, result_queue),
+        )
+        for _ in range(2)
+    ]
+
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=15)
+
+    assert [worker.exitcode for worker in workers] == [0, 0]
+    results = [result_queue.get(timeout=5) for _ in workers]
+    assert [result[0] for result in results] == ["ok", "ok"]
+    assert sum(bool(result[1]) for result in results) == 1
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    matching_receipts = [
+        receipt
+        for receipt in state.capability_receipts
+        if receipt.get("capability") == "cafe.slack.human_task"
+        and receipt.get("task_id") == task.id
+    ]
+    assert len(matching_receipts) == 2
+    assert any(receipt.get("success") is True for receipt in matching_receipts)
+    assert any(
+        receipt.get("code") == "human_task_notification_deduplicated"
+        for receipt in matching_receipts
+    )
+
+
+def test_receipt_transaction_uses_windows_process_lock_without_fcntl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unit Test 7: the Windows fallback remains a cross-process file lock."""
+    import cafe.core.blackboard as blackboard_mod
+
+    lock_calls: list[tuple[int, int, int]] = []
+    windows_lock = SimpleNamespace(
+        LK_LOCK=1,
+        LK_UNLCK=2,
+        locking=lambda descriptor, mode, count: lock_calls.append((descriptor, mode, count)),
+    )
+    monkeypatch.setattr(blackboard_mod, "fcntl", None)
+    monkeypatch.setattr(blackboard_mod, "msvcrt", windows_lock)
+    store = BlackboardStore(tmp_path / "issue")
+    state = store.load_or_create("spec")
+    lock_calls.clear()
+
+    with store.capability_receipt_transaction(state):
+        assert [(mode, count) for _, mode, count in lock_calls] == [(1, 1)]
+
+    assert [(mode, count) for _, mode, count in lock_calls] == [(1, 1), (2, 1)]
+    assert lock_calls[0][0] == lock_calls[1][0]
+
+    monkeypatch.setattr(blackboard_mod, "msvcrt", None)
+    unavailable_store = BlackboardStore(tmp_path / "unavailable")
+    unavailable_state = unavailable_store.load_or_create("spec")
+    with pytest.raises(RuntimeError, match="cross-process file locking is unavailable"):
+        with unavailable_store.capability_receipt_transaction(unavailable_state):
+            pytest.fail("a process-local fallback must not enter the transaction")
+
+
+def test_unavailable_process_lock_preserves_user_handoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unit Tests 7-8: no lock backend cannot block a durable user handoff."""
+    import cafe.core.blackboard as blackboard_mod
+    import cafe.core.workflow_runtime as runtime_mod
+
+    monkeypatch.setattr(blackboard_mod, "fcntl", None)
+    monkeypatch.setattr(blackboard_mod, "msvcrt", None)
+    dispatches: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        runtime_mod,
+        "run_capability_request",
+        lambda **kwargs: (
+            dispatches.append(kwargs)
+            or SimpleNamespace(receipt={"capability": "cafe.slack.human_task", "success": True})
+        ),
+    )
+    issue_dir = tmp_path / ".cafe" / "issues" / "lock-unavailable-user-handoff"
+    _write_publication_contract(issue_dir, persisted=False)
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=PlaybookLoader().load("standard"),
+        executor=lambda *_args: StepExecutionResult(
+            response="ready_for_review",
+            artifacts={},
+            status_code="ready_for_review",
+            auto_continue=False,
+        ),
+    ).run(start_step="spec")
+
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    assert result.completed is False
+    assert task.status.value == "pending"
+    assert state.current_step == "user"
+    assert state.handoff_contract.to_owner is HandoffOwner.USER
+    assert dispatches == []
+
+
+def test_windows_process_lock_failure_preserves_human_owned_handoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unit Tests 7-8: Windows lock failure cannot block human-owned work."""
+    import cafe.core.blackboard as blackboard_mod
+    import cafe.core.workflow_runtime as runtime_mod
+
+    lock_calls: list[tuple[int, int, int]] = []
+
+    def _fail_lock(descriptor: int, mode: int, count: int) -> None:
+        lock_calls.append((descriptor, mode, count))
+        raise OSError("simulated Windows process lock failure")
+
+    monkeypatch.setattr(blackboard_mod, "fcntl", None)
+    monkeypatch.setattr(
+        blackboard_mod,
+        "msvcrt",
+        SimpleNamespace(LK_LOCK=1, LK_UNLCK=2, locking=_fail_lock),
+    )
+    dispatches: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        runtime_mod,
+        "run_capability_request",
+        lambda **kwargs: (
+            dispatches.append(kwargs)
+            or SimpleNamespace(receipt={"capability": "cafe.slack.human_task", "success": True})
+        ),
+    )
+    policy = HumanTaskPolicy(
+        id="approval",
+        pattern="no_changes_needed",
+        prompt="Approve this work",
+        input_schema="decision",
+        decisions=(HumanTaskDecision(id="accept", label="Accept"),),
+    )
+    binding = HumanTaskBinding(trigger="initial", task_id="approval", outcomes={"accept": "done"})
+    monkeypatch.setattr(runtime_mod, "resolve_step_human_task", lambda **_kwargs: (policy, binding))
+    playbook = PlaybookLoader().load("standard")
+    playbook.clear()
+    playbook.update(
+        {
+            "playbook": {"id": "standard"},
+            "entry_point": "approval",
+            "steps": {
+                "approval": {
+                    "skill": "phase",
+                    "role": "operator",
+                    "assignee_type": "human",
+                    "human_tasks": [binding.model_dump()],
+                    "on": {},
+                }
+            },
+        }
+    )
+    issue_dir = tmp_path / ".cafe" / "issues" / "lock-failure-human-owned"
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=lambda *_args: (_ for _ in ()).throw(AssertionError("human step ran agent")),
+    ).run(start_step="approval")
+
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    state = BlackboardStore(issue_dir).load_or_create("approval")
+    assert result.completed is False
+    assert task.status.value == "pending"
+    assert state.current_step == "user"
+    assert state.handoff_contract.to_owner is HandoffOwner.USER
+    assert lock_calls
+    assert {(mode, count) for _, mode, count in lock_calls} == {(1, 1)}
+    assert dispatches == []
 
 
 def test_runtime_records_non_actionable_configuration_error_for_bad_task_binding(
@@ -1963,6 +3818,7 @@ def test_runtime_continues_when_auto_continue_is_true(tmp_path: Path) -> None:
 def test_runtime_emits_expected_runtime_labels_per_path(tmp_path: Path) -> None:
     # legacy -> boundary_handoff
     issue_dir_legacy = tmp_path / ".cafe" / "issues" / "runtime-labels-legacy"
+    _write_publication_contract(issue_dir_legacy, persisted=False)
     playbook_legacy = {
         "playbook": {"id": "default"},
         "steps": {
@@ -1972,7 +3828,13 @@ def test_runtime_emits_expected_runtime_labels_per_path(tmp_path: Path) -> None:
                 "valid_intents": ["confirmed"],
                 "on": {"await_agent": "pr"},
             },
-            "pr": {"skill": "spec_first", "role": "developer", "behavior": {"completion": "baton", "publish_confirmation": True}, "capability_requests": ["cafe.pr.publish"], "on": {"await_agent": "_done"}},
+            "pr": {
+                "skill": "spec_first",
+                "role": "developer",
+                "behavior": {"completion": "baton", "publish_confirmation": True},
+                "capability_requests": ["cafe.pr.publish"],
+                "on": {"await_agent": "_done"},
+            },
         },
     }
 
@@ -2009,10 +3871,17 @@ def test_runtime_emits_expected_runtime_labels_per_path(tmp_path: Path) -> None:
 
     # baton-driven
     issue_dir_pr = tmp_path / ".cafe" / "issues" / "runtime-labels-pr"
+    _write_publication_contract(issue_dir_pr, persisted=True)
     playbook_pr = {
         "playbook": {"id": "default"},
         "steps": {
-            "pr": {"skill": "spec_first", "role": "developer", "behavior": {"completion": "baton", "publish_confirmation": True}, "capability_requests": ["cafe.pr.publish"], "on": {"await_agent": "_done"}},
+            "pr": {
+                "skill": "spec_first",
+                "role": "developer",
+                "behavior": {"completion": "baton", "publish_confirmation": True},
+                "capability_requests": ["cafe.pr.publish"],
+                "on": {"await_agent": "_done"},
+            },
         },
     }
 
@@ -2027,7 +3896,12 @@ def test_runtime_emits_expected_runtime_labels_per_path(tmp_path: Path) -> None:
         return StepExecutionResult(
             response="done",
             artifacts={},
-            events=[{"type": "pr_synced"}],
+            events=[
+                {
+                    "type": "pr_synced",
+                    "url": "https://github.com/test/repo/pull/467",
+                }
+            ],
         )
 
     pr_runtime = BlackboardWorkflowRuntime(
@@ -2089,7 +3963,7 @@ def test_runtime_chains_pr_need_changes_through_develop_to_review(tmp_path: Path
             {
                 "schema_version": 1,
                 "current_step": "pr",
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "artifacts": {},
                 "events": [],
                 "decisions": [],
@@ -2103,7 +3977,13 @@ def test_runtime_chains_pr_need_changes_through_develop_to_review(tmp_path: Path
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
-            "pr": {"skill": "spec_first", "role": "developer", "assignee_type": "agent", "behavior": {"completion": "baton", "feedback_target": "develop"}, "on": {}},
+            "pr": {
+                "skill": "spec_first",
+                "role": "developer",
+                "assignee_type": "agent",
+                "behavior": {"completion": "baton", "feedback_target": "develop"},
+                "on": {},
+            },
             "develop": {
                 "skill": "develop",
                 "role": "developer",
@@ -2178,7 +4058,7 @@ def test_runtime_chains_pr_need_changes_through_develop_to_review(tmp_path: Path
 
 
 def test_runtime_rejects_plain_text_baton_written_by_pr_agent(tmp_path: Path) -> None:
-    """Issue #386: a plain step-name baton is never normalized, even at the pr/baton-driven boundary."""
+    """Issue #386: a plain step-name baton is never normalized at the PR boundary."""
     issue_dir = tmp_path / ".cafe" / "issues" / "legacy-pr-handoff"
     issue_dir.mkdir(parents=True)
     _write_baton(issue_dir, from_step="pr", to_owner="agent", to_step="pr", intent="await_agent")
@@ -2218,7 +4098,7 @@ def test_runtime_rejects_plain_text_baton_written_by_pr_agent(tmp_path: Path) ->
 
 
 def test_runtime_handles_keyboard_interrupt(tmp_path: Path) -> None:
-    """KeyboardInterrupt during step execution records step_interrupted event and returns INTERRUPTED result."""
+    """KeyboardInterrupt records step_interrupted and returns INTERRUPTED."""
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-interrupt"
     playbook = {
         "playbook": {"id": "default"},
@@ -2255,7 +4135,7 @@ def test_runtime_handles_keyboard_interrupt(tmp_path: Path) -> None:
     assert result.final_step == "spec"
 
     # Verify event was recorded
-    bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="default")
+    bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="standard")
     interrupted_events = [e for e in bb.events if e.event_type == "step_interrupted"]
     assert len(interrupted_events) == 1
     msg = (
@@ -2264,12 +4144,15 @@ def test_runtime_handles_keyboard_interrupt(tmp_path: Path) -> None:
         else interrupted_events[0].message
     )
     assert msg["step"] == "spec"
-    assert bb.step_visit_counts == {}
+    assert bb.step_attempt_counts == {}
 
 
-def test_runtime_handles_agent_execution_error(tmp_path: Path) -> None:
-    """AgentExecutionError (e.g. rate_limit) records step_interrupted event and returns INTERRUPTED result."""
+def test_runtime_handles_agent_execution_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AgentExecutionError pauses for a notified retry task instead of inferring completion."""
     from cafe.agents.executor import AgentExecutionError
+    from cafe.ui.human_tasks import apply_human_task_payload
 
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-agent-error"
     playbook = {
@@ -2285,11 +4168,15 @@ def test_runtime_handles_agent_execution_error(tmp_path: Path) -> None:
             raise AgentExecutionError("Rate limit exceeded", error_type="rate_limit")
         return StepExecutionResult(response="done", artifacts={}, status_code="confirmed")
 
+    callback_events: list[dict[str, object]] = []
     runtime = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
         playbook=playbook,
         executor=executor,
+        workflow_event_callback=callback_events.append,
     )
+    notifications = []
+    monkeypatch.setattr(runtime, "_notify_new_human_task", notifications.append)
 
     result = runtime.run(start_step="spec", max_transitions=5)
 
@@ -2297,7 +4184,7 @@ def test_runtime_handles_agent_execution_error(tmp_path: Path) -> None:
     assert "agent_rate_limit" in result.final_status_code
     assert result.final_step == "spec"
 
-    bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="default")
+    bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="standard")
     interrupted_events = [e for e in bb.events if e.event_type == "step_interrupted"]
     assert len(interrupted_events) == 1
     msg = (
@@ -2307,11 +4194,63 @@ def test_runtime_handles_agent_execution_error(tmp_path: Path) -> None:
     )
     assert msg["step"] == "spec"
     assert msg["reason"] == "agent_rate_limit"
-    assert bb.step_visit_counts == {}
+    assert bb.step_attempt_counts == {}
+    assert bb.current_step == "user"
+    assert bb.handoff_contract is not None
+    assert bb.handoff_contract.to_owner is HandoffOwner.USER
+    assert bb.handoff_contract.source == "workflow.agent_execution_interrupted"
+
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    assert task.step == "spec"
+    assert task.trigger == "agent_execution_interrupted"
+    assert task.policy_id == "agent-execution-interrupted"
+    assert task.continuations == {
+        "retry": "spec",
+        "retry_fresh_session": "spec",
+    }
+    assert notifications == [task]
+    assert len(callback_events) == 1
+    assert callback_events[0].items() >= {
+        "workflow_id": bb.workflow_id,
+        "issue": "demo-agent-error",
+        "event_type": "human_task",
+        "step": "spec",
+        "status_code": "INTERRUPTED:agent_rate_limit",
+        "reason": "agent_rate_limit",
+        "task_id": task.id,
+    }.items()
+    assert callback_events[0]["event_id"]
+    assert callback_events[0]["sequence"] == 1
+    assert callback_events[0]["occurred_at"]
+    assert not any(event.event_type == "step_reconciled" for event in bb.events)
+
+    applied = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=bb,
+        from_step="spec",
+        trigger=task.trigger,
+        raw_payload={
+            "task": task.policy_id,
+            "decision": "retry",
+            "human_task_id": task.id,
+        },
+        source="test",
+    )
+
+    assert applied.target == "spec"
+    resumed = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="standard")
+    assert resumed.current_step == "spec"
+    assert resumed.handoff_contract is not None
+    assert resumed.handoff_contract.to_owner is HandoffOwner.AGENT
+    assert resumed.handoff_contract.to_step == "spec"
+    assert runtime._try_reconcile_current_step(current_step="spec") is None
 
 
-def test_runtime_reconciles_agent_error_after_valid_handoff(tmp_path: Path) -> None:
-    """Agent failure after a complete on-disk handoff records a reconciled transition."""
+def test_runtime_does_not_reconcile_agent_error_after_valid_handoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An agent process error always pauses for review, even after partial handoff evidence."""
     from cafe.agents.executor import AgentExecutionError
 
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-reconcile-agent-error"
@@ -2342,35 +4281,30 @@ def test_runtime_reconciles_agent_error_after_valid_handoff(tmp_path: Path) -> N
         playbook=playbook,
         executor=executor,
     )
+    notifications = []
+    monkeypatch.setattr(runtime, "_notify_new_human_task", notifications.append)
 
     result = runtime.run(start_step="spec", max_transitions=5)
 
     assert result.completed is False
     assert result.final_step == "spec"
-    assert result.final_status_code == "confirmed"
+    assert result.final_status_code == "INTERRUPTED:agent_connection_stalled"
 
-    bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="default")
-    assert bb.current_step == "plan"
-    assert [e.event_type for e in bb.events].count("step_reconciled") == 1
-    reconciled_event = next(e for e in bb.events if e.event_type == "step_reconciled")
-    assert reconciled_event.data["to_step"] == "plan"
-    assert reconciled_event.data["validated_evidence"] == ["baton", "output", "checklist"]
-    assert not any(
-        e.event_type == "workflow_paused" and e.data.get("status_code") == "INTERRUPTED"
-        for e in bb.events
-    )
-
-    iteration_data = json.loads(
-        (issue_dir / "spec" / "iteration_001" / "iteration.json").read_text()
-    )
-    assert iteration_data["status_code"] == "confirmed"
-    assert iteration_data["end_time"]
+    bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="standard")
+    assert bb.current_step == "user"
+    assert not any(e.event_type == "step_reconciled" for e in bb.events)
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    assert task.continuations == {
+        "retry": "spec",
+        "retry_fresh_session": "spec",
+    }
+    assert notifications == [task]
 
 
 def test_runtime_preserves_interrupted_when_reconciliation_evidence_incomplete(
     tmp_path: Path,
 ) -> None:
-    """Incomplete persisted evidence should not be inferred as a completed handoff."""
+    """An incomplete agent error pauses with a retry task rather than a stale baton."""
     from cafe.agents.executor import AgentExecutionError
 
     issue_dir = tmp_path / ".cafe" / "issues" / "demo-reconcile-incomplete"
@@ -2405,10 +4339,13 @@ def test_runtime_preserves_interrupted_when_reconciliation_evidence_incomplete(
     assert result.completed is False
     assert result.final_status_code == "INTERRUPTED:agent_connection_stalled"
 
-    bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="default")
-    assert bb.current_step == "spec"
-    failed_event = next(e for e in bb.events if e.event_type == "step_reconciliation_failed")
-    assert "checklist_complete" in failed_event.data["missing_evidence"]
+    bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="standard")
+    assert bb.current_step == "user"
+    assert HumanTaskRecordStore(issue_dir).tasks()[0].continuations == {
+        "retry": "spec",
+        "retry_fresh_session": "spec",
+    }
+    assert not any(e.event_type == "step_reconciliation_failed" for e in bb.events)
     assert any(
         e.event_type == "workflow_paused" and e.data.get("status_code") == "INTERRUPTED"
         for e in bb.events
@@ -2433,7 +4370,7 @@ def test_runtime_resume_reconciliation_is_idempotent(tmp_path: Path) -> None:
             {
                 "schema_version": 1,
                 "current_step": "spec",
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "artifacts": {},
                 "events": [
                     {
@@ -2472,9 +4409,185 @@ def test_runtime_resume_reconciliation_is_idempotent(tmp_path: Path) -> None:
 
     assert first is not None
     assert second is None
-    bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="default")
+    bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="standard")
     assert bb.current_step == "plan"
     assert [e.event_type for e in bb.events].count("step_reconciled") == 1
+
+
+@pytest.mark.parametrize(
+    ("intent", "policy_id", "input_schema", "questions"),
+    [
+        ("confirm_output", "output-review", "decision", None),
+        (
+            "need_clarification",
+            "clarification-answers",
+            "answers",
+            """<?xml version="1.0" encoding="UTF-8"?>
+<questions>
+  <question id="scope">
+    <title>Which scope should the specification cover?</title>
+    <options><option>Current workflow only</option></options>
+  </question>
+</questions>
+""",
+        ),
+    ],
+)
+def test_runtime_recovered_user_handoff_materializes_one_actionable_task(
+    tmp_path: Path,
+    intent: str,
+    policy_id: str,
+    input_schema: str,
+    questions: str | None,
+) -> None:
+    """An agent-error recovery exposes each declared user handoff exactly once."""
+    issue_dir = tmp_path / ".cafe" / "issues" / f"reconcile-user-{intent}"
+    _write_publication_contract(issue_dir, playbook_id="tdd-qa", persisted=False)
+    _write_baton(
+        issue_dir,
+        from_step="spec",
+        to_owner="user",
+        to_step="spec",
+        intent=intent,
+    )
+    _write_iteration_evidence(issue_dir, "spec", questions=questions)
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "current_step": "spec",
+                "playbook_id": "tdd-qa",
+                "artifacts": {},
+                "events": [
+                    {
+                        "timestamp": "2026-04-26T23:00:00+08:00",
+                        "step": "spec",
+                        "event_type": "step_interrupted",
+                        "message": "{}",
+                        "data": {"step": "spec", "reason": "agent_error"},
+                    }
+                ],
+                "decisions": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=PlaybookLoader().load("tdd-qa"),
+        executor=lambda *_args, **_kwargs: pytest.fail("reconciliation must not rerun the agent"),
+    )
+    _write_baton(
+        issue_dir,
+        from_step="spec",
+        to_owner="user",
+        to_step="user",
+        intent=intent,
+    )
+
+    first = runtime.run()
+    second = runtime.run()
+
+    assert first.completed is False
+    assert first.final_status_code == f"BATON_{intent.upper()}"
+    assert second.completed is False
+    tasks = HumanTaskRecordStore(issue_dir).tasks()
+    assert len(tasks) == 1
+    task = tasks[0]
+    assert task.status is HumanTaskStatus.PENDING
+    assert task.trigger == intent
+    assert task.policy_id == policy_id
+    assert task.expected_result["input_schema"] == input_schema
+    bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="tdd-qa")
+    assert bb.current_step == "user"
+    assert [e.event_type for e in bb.events].count("step_reconciled") == 1
+    materialized = [e for e in bb.events if e.event_type == "human_task_materialized"]
+    assert len(materialized) == 1
+    assert materialized[0].data["task_id"] == task.id
+
+
+def test_runtime_recovered_user_handoff_remains_actionable_after_reconciliation_marker_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A crash after the completion marker cannot strand a user handoff without its task."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "reconcile-user-marker-crash"
+    _write_publication_contract(issue_dir, playbook_id="tdd-qa", persisted=False)
+    _write_baton(
+        issue_dir,
+        from_step="spec",
+        to_owner="user",
+        to_step="spec",
+        intent="confirm_output",
+    )
+    _write_iteration_evidence(issue_dir, "spec")
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "current_step": "spec",
+                "playbook_id": "tdd-qa",
+                "artifacts": {},
+                "events": [
+                    {
+                        "timestamp": "2026-04-26T23:00:00+08:00",
+                        "step": "spec",
+                        "event_type": "step_interrupted",
+                        "message": "{}",
+                        "data": {"step": "spec", "reason": "agent_error"},
+                    }
+                ],
+                "decisions": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    interrupted_runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=PlaybookLoader().load("tdd-qa"),
+        executor=lambda *_args, **_kwargs: pytest.fail("reconciliation must not rerun the agent"),
+    )
+    _write_baton(
+        issue_dir,
+        from_step="spec",
+        to_owner="user",
+        to_step="user",
+        intent="confirm_output",
+    )
+    record_event = interrupted_runtime.blackboard_store.record_event
+
+    def crash_after_reconciliation_marker(*args: object, **kwargs: object) -> object:
+        result = record_event(*args, **kwargs)
+        event_type = args[1] if len(args) > 1 else kwargs.get("event_type")
+        if event_type == "step_reconciled":
+            raise RuntimeError("simulated crash after reconciliation marker")
+        return result
+
+    monkeypatch.setattr(
+        interrupted_runtime.blackboard_store,
+        "record_event",
+        crash_after_reconciliation_marker,
+    )
+
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        interrupted_runtime.run()
+
+    interrupted_tasks = HumanTaskRecordStore(issue_dir).tasks()
+    assert len(interrupted_tasks) == 1
+    assert interrupted_tasks[0].status is HumanTaskStatus.PENDING
+
+    resumed = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=PlaybookLoader().load("tdd-qa"),
+        executor=lambda *_args, **_kwargs: pytest.fail("resume must not rerun the agent"),
+    ).run()
+
+    assert resumed.completed is False
+    assert resumed.final_status_code == "BATON_CONFIRM_OUTPUT"
+    tasks = HumanTaskRecordStore(issue_dir).tasks()
+    assert len(tasks) == 1
+    assert tasks[0].id == interrupted_tasks[0].id
+    assert tasks[0].status is HumanTaskStatus.PENDING
+    assert tasks[0].policy_id == "output-review"
 
 
 def test_runtime_reconciles_after_consumed_handoff_start_step(tmp_path: Path) -> None:
@@ -2496,7 +4609,7 @@ def test_runtime_reconciles_after_consumed_handoff_start_step(tmp_path: Path) ->
             {
                 "schema_version": 1,
                 "current_step": "plan",
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "artifacts": {},
                 "events": [
                     {
@@ -2535,7 +4648,7 @@ def test_runtime_reconciles_after_consumed_handoff_start_step(tmp_path: Path) ->
 
     assert executed_steps == ["plan"]
     assert result.final_step == "plan"
-    bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="default")
+    bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="standard")
     assert [e.event_type for e in bb.events].count("step_reconciled") == 1
     reconciled_event = next(e for e in bb.events if e.event_type == "step_reconciled")
     assert reconciled_event.data["step"] == "spec"
@@ -2599,8 +4712,8 @@ def _simple_playbook(step_name: str = "spec") -> dict:
 def test_bundled_review_iteration_limits_are_defined_by_playbooks() -> None:
     loader = PlaybookLoader()
 
-    assert loader.load("default")["steps"]["review"]["max_iterations"] == 5
-    assert loader.load("tdd")["steps"]["review"]["max_iterations"] == 5
+    assert loader.load("standard")["steps"]["review"]["max_attempts_per_cycle"] == 5
+    assert loader.load("tdd")["steps"]["review"]["max_attempts_per_cycle"] == 5
 
 
 def test_pre_execution_failure_does_not_consume_agent_visit(tmp_path: Path) -> None:
@@ -2608,7 +4721,7 @@ def test_pre_execution_failure_does_not_consume_agent_visit(tmp_path: Path) -> N
 
     issue_dir = tmp_path / ".cafe" / "issues" / "pre-execution-failure"
     playbook = _simple_playbook()
-    playbook["steps"]["spec"]["max_iterations"] = 1
+    playbook["steps"]["spec"]["max_attempts_per_cycle"] = 1
     calls = 0
 
     def executor(step_name: str, step_def: dict, state: object, **kwargs) -> StepExecutionResult:
@@ -2627,11 +4740,11 @@ def test_pre_execution_failure_does_not_consume_agent_visit(tmp_path: Path) -> N
 
     interrupted = runtime.run(start_step="spec", max_transitions=5)
     assert interrupted.final_status_code == "INTERRUPTED:agent_contract"
-    assert BlackboardStore(issue_dir).load_or_create("spec").step_visit_counts == {}
+    assert BlackboardStore(issue_dir).load_or_create("spec").step_attempt_counts == {}
 
     completed = runtime.run(start_step="spec", max_transitions=5)
     assert completed.completed is True
-    assert BlackboardStore(issue_dir).load_or_create("spec").step_visit_counts == {"spec": 1}
+    assert BlackboardStore(issue_dir).load_or_create("spec").step_attempt_counts == {"spec": 1}
 
 
 def test_execute_one_iteration_forwards_extra_prompt_to_executor(tmp_path: Path) -> None:
@@ -2671,6 +4784,31 @@ def test_execute_one_iteration_no_extra_prompt_defaults_to_none(tmp_path: Path) 
     runtime.run(start_step="spec", max_transitions=5)
 
     assert received_extra_prompts[0] is None
+
+
+def test_execute_one_iteration_does_not_retry_an_internal_executor_type_error(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "internal-type-error"
+    _write_publication_contract(issue_dir, persisted=False)
+    playbook = _simple_playbook()
+    playbook["steps"]["spec"]["capability_requests"] = ["cafe.pr.publish"]
+    received_choices: list[object] = []
+
+    def executor(step_name: str, step_def: dict, state: object, **kwargs) -> StepExecutionResult:
+        received_choices.append(kwargs.get("validated_pr_auto_create"))
+        raise TypeError("executor implementation failed")
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+
+    result = runtime.run(start_step="spec", max_transitions=5)
+
+    assert result.completed is False
+    assert received_choices == [False]
 
 
 # ---------------------------------------------------------------------------
@@ -2739,7 +4877,7 @@ def _make_invalid_target_baton_text(
 def _make_missing_intent_baton_text(
     issue_dir: Path, *, from_step: str = "spec", to_step: str = "done"
 ) -> None:
-    """Write JSON baton payload missing `intent`. """
+    """Write JSON baton payload missing `intent`."""
     (issue_dir / "next_step.txt").write_text(
         json.dumps(
             {
@@ -2757,7 +4895,7 @@ def _make_missing_intent_baton_text(
 
 
 def test_runtime_retries_once_on_baton_rejected_then_succeeds(tmp_path: Path) -> None:
-    """第 1 次寫出無效 baton，第 2 次（retry 1）寫出合法 baton → workflow 正常繼續，blackboard 有 1 筆 baton_rejected 事件。"""
+    """第一次 baton 無效、第二次合法時 workflow 繼續並記錄 rejection。"""
     issue_dir = tmp_path / ".cafe" / "issues" / "retry-1"
     issue_dir.mkdir(parents=True)
     call_count = [0]
@@ -2820,7 +4958,7 @@ def test_runtime_retries_user_owner_with_step_target_then_succeeds(tmp_path: Pat
     assert len(prompts) == 2
     assert "field 'to_step'" in str(prompts[1])
     blackboard = BlackboardStore(issue_dir).load_or_create("spec")
-    assert blackboard.step_visit_counts == {"spec": 1}
+    assert blackboard.step_attempt_counts == {"spec": 1}
 
 
 def test_runtime_retries_owner_intent_mismatch_then_succeeds(tmp_path: Path) -> None:
@@ -2851,11 +4989,11 @@ def test_runtime_retries_owner_intent_mismatch_then_succeeds(tmp_path: Path) -> 
     assert result.completed is True
     assert "field 'intent'" in str(prompts[1])
     assert "workflow_complete" in str(prompts[1])
-    assert BlackboardStore(issue_dir).load_or_create("spec").step_visit_counts == {"spec": 1}
+    assert BlackboardStore(issue_dir).load_or_create("spec").step_attempt_counts == {"spec": 1}
 
 
 def test_runtime_retries_twice_on_baton_rejected_then_succeeds(tmp_path: Path) -> None:
-    """第 1、2 次無效，第 3 次（retry 2）合法 → workflow 繼續，blackboard 有 2 筆 baton_rejected 事件。"""
+    """前兩次 baton 無效、第三次合法時 workflow 繼續並記錄兩次 rejection。"""
     issue_dir = tmp_path / ".cafe" / "issues" / "retry-2"
     issue_dir.mkdir(parents=True)
     call_count = [0]
@@ -3216,835 +5354,3 @@ def test_runtime_plan_need_permission_pauses_at_user(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Long-running operation resume/reconciliation gate (issue #386)
-# ---------------------------------------------------------------------------
-
-
-def _setup_interrupted_step(
-    issue_dir: Path,
-    *,
-    step: str,
-    reason: str = "agent_idle_timeout",
-) -> None:
-    """Persist blackboard state as if ``step`` was interrupted and pinned for resume."""
-    issue_dir.mkdir(parents=True, exist_ok=True)
-    (issue_dir / "blackboard.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "current_step": step,
-                "playbook_id": "default",
-                "artifacts": {},
-                "events": [
-                    {
-                        "timestamp": "2026-04-26T23:00:00+08:00",
-                        "step": step,
-                        "event_type": "step_interrupted",
-                        "message": "{}",
-                        "data": {"step": step, "reason": reason},
-                    }
-                ],
-                "decisions": [],
-            }
-        ),
-        encoding="utf-8",
-    )
-    _write_baton(
-        issue_dir,
-        from_step=step,
-        to_owner="agent",
-        to_step=step,
-        intent="await_agent",
-        source="workflow.interrupted_step",
-    )
-
-
-def test_running_operation_without_helper_evidence_becomes_lost_without_duplicate_execution(
-    tmp_path: Path,
-) -> None:
-    """Resume rechecks helper evidence; missing helper proof is actionable lost."""
-    issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-running"
-    _setup_interrupted_step(issue_dir, step="develop")
-    iteration_dir = _write_iteration_evidence(issue_dir, "develop")
-    store = BlackboardStore(issue_dir)
-    state = store.load_or_create("develop")
-    store.write_operation_artifact(
-        state,
-        step="develop",
-        iteration_dir=iteration_dir,
-        artifact=LongRunningOperationArtifact(state=LongRunningOperationState.RUNNING),
-    )
-
-    playbook = {
-        "playbook": {"id": "default"},
-        "steps": {"develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}}},
-    }
-    calls: list[str] = []
-
-    def executor(step_name: str, step_def: dict, state_obj: object) -> StepExecutionResult:
-        calls.append(step_name)
-        return StepExecutionResult(response="done", artifacts={}, status_code="confirmed")
-
-    runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor)
-    result = runtime.run(max_transitions=5)
-
-    assert calls == []
-    assert result.completed is False
-    assert result.final_status_code == "OPERATION_LOST"
-    bb = BlackboardStore(issue_dir).load_or_create("develop")
-    assert any(e.event_type == "operation_lost" for e in bb.events)
-
-
-def test_prewritten_succeeded_operation_without_trusted_receipt_does_not_advance(
-    tmp_path: Path,
-) -> None:
-    """Agent-authored success-looking files are not trusted without a terminal receipt."""
-    issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-succeeded-no-receipt"
-    _setup_interrupted_step(issue_dir, step="develop")
-    iteration_dir = _write_iteration_evidence(issue_dir, "develop")
-    store = BlackboardStore(issue_dir)
-    state = store.load_or_create("develop")
-    store.update_handoff_contract(
-        state,
-        from_step="develop",
-        to_owner=HandoffOwner.AGENT,
-        to_step="review",
-        intent=HandoffIntent.AWAIT_AGENT,
-        source="test",
-    )
-    store.write_operation_artifact(
-        state,
-        step="develop",
-        iteration_dir=iteration_dir,
-        artifact=LongRunningOperationArtifact(state=LongRunningOperationState.SUCCEEDED),
-    )
-
-    playbook = {
-        "playbook": {"id": "default"},
-        "steps": {
-            "develop": {"skill": "develop", "role": "developer", "on": {"await_agent": "review"}},
-            "review": {"skill": "review", "role": "developer", "on": {"confirmed": "_done"}},
-        },
-    }
-    calls: list[str] = []
-
-    def executor(step_name: str, step_def: dict, state_obj: object) -> StepExecutionResult:
-        calls.append(step_name)
-        return StepExecutionResult(response="done", artifacts={}, status_code="confirmed")
-
-    runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor)
-    result = runtime.run(max_transitions=5)
-
-    assert result.final_status_code == "OPERATION_SUCCEEDED_UNVERIFIED"
-    assert calls == []
-    bb = BlackboardStore(issue_dir).load_or_create("develop")
-    assert any(
-        e.event_type == "operation_blocked" and e.data.get("outcome") == "succeeded_unverified"
-        for e in bb.events
-    )
-
-
-def test_succeeded_operation_with_trusted_receipt_and_evidence_advances(tmp_path: Path) -> None:
-    issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-succeeded-trusted"
-    _setup_interrupted_step(issue_dir, step="develop")
-    iteration_dir = _write_iteration_evidence(issue_dir, "develop")
-    store = BlackboardStore(issue_dir)
-    state = store.load_or_create("develop")
-    store.update_handoff_contract(
-        state,
-        from_step="develop",
-        to_owner=HandoffOwner.AGENT,
-        to_step="review",
-        intent=HandoffIntent.AWAIT_AGENT,
-        source="test",
-    )
-    running = store.write_operation_artifact(
-        state,
-        step="develop",
-        iteration_dir=iteration_dir,
-        artifact=LongRunningOperationArtifact(state=LongRunningOperationState.RUNNING),
-    )
-    store.write_operation_receipt(
-        state,
-        step="develop",
-        iteration_dir=iteration_dir,
-        operation_id=running.operation_id,
-        artifact=LongRunningOperationArtifact(
-            operation_id=running.operation_id,
-            state=LongRunningOperationState.SUCCEEDED,
-            reason="operation_helper_exit",
-            exit_code=0,
-        ),
-    )
-
-    playbook = {
-        "playbook": {"id": "default"},
-        "steps": {
-            "develop": {"skill": "develop", "role": "developer", "on": {"await_agent": "review"}},
-            "review": {"skill": "review", "role": "developer", "on": {"confirmed": "_done"}},
-        },
-    }
-    calls: list[str] = []
-
-    def executor(step_name: str, step_def: dict, state_obj: object) -> StepExecutionResult:
-        calls.append(step_name)
-        return StepExecutionResult(response="done", artifacts={}, status_code="confirmed")
-
-    runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor)
-    runtime.run(max_transitions=5)
-
-    assert calls == ["review"]
-    bb = BlackboardStore(issue_dir).load_or_create("develop")
-    assert any(e.event_type == "step_reconciled" for e in bb.events)
-
-
-def test_failed_receipt_promoted_during_reconciliation_records_failed_not_running(
-    tmp_path: Path,
-) -> None:
-    issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-failed-receipt"
-    _setup_interrupted_step(issue_dir, step="develop")
-    iteration_dir = _write_iteration_evidence(issue_dir, "develop")
-    store = BlackboardStore(issue_dir)
-    state = store.load_or_create("develop")
-    running = store.write_operation_artifact(
-        state,
-        step="develop",
-        iteration_dir=iteration_dir,
-        artifact=LongRunningOperationArtifact(state=LongRunningOperationState.RUNNING),
-    )
-    store.write_operation_receipt(
-        state,
-        step="develop",
-        iteration_dir=iteration_dir,
-        operation_id=running.operation_id,
-        artifact=LongRunningOperationArtifact(
-            operation_id=running.operation_id,
-            state=LongRunningOperationState.FAILED,
-            reason="operation_helper_exit",
-            exit_code=7,
-        ),
-    )
-
-    playbook = {
-        "playbook": {"id": "default"},
-        "steps": {"develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}}},
-    }
-    runtime = BlackboardWorkflowRuntime(
-        issue_dir=issue_dir,
-        playbook=playbook,
-        executor=lambda *_args, **_kwargs: StepExecutionResult(response="done", artifacts={}),
-    )
-    result = runtime.run(max_transitions=5)
-
-    assert result.final_status_code == "OPERATION_FAILED"
-    bb = BlackboardStore(issue_dir).load_or_create("develop")
-    assert any(e.event_type == "operation_failed" for e in bb.events)
-    assert not any(e.event_type == "operation_running" for e in bb.events)
-
-
-def test_trusted_succeeded_receipt_with_missing_phase_artifacts_uses_finalize_only_prompt(
-    tmp_path: Path,
-) -> None:
-    issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-finalize-prompt"
-    _setup_interrupted_step(issue_dir, step="develop")
-    iteration_dir = issue_dir / "develop" / "iteration_001"
-    iteration_dir.mkdir(parents=True)
-    (iteration_dir / "iteration.json").write_text(json.dumps({"iteration": 1}), encoding="utf-8")
-    store = BlackboardStore(issue_dir)
-    state = store.load_or_create("develop")
-    running = store.write_operation_artifact(
-        state,
-        step="develop",
-        iteration_dir=iteration_dir,
-        artifact=LongRunningOperationArtifact(state=LongRunningOperationState.RUNNING),
-    )
-    store.write_operation_receipt(
-        state,
-        step="develop",
-        iteration_dir=iteration_dir,
-        operation_id=running.operation_id,
-        artifact=LongRunningOperationArtifact(
-            operation_id=running.operation_id,
-            state=LongRunningOperationState.SUCCEEDED,
-            reason="operation_helper_exit",
-            exit_code=0,
-        ),
-    )
-
-    playbook = {
-        "playbook": {"id": "default"},
-        "steps": {
-            "develop": {"skill": "develop", "role": "developer", "on": {"await_agent": "review"}},
-            "review": {"skill": "review", "role": "developer", "on": {"confirmed": "_done"}},
-        },
-    }
-    prompts: list[str | None] = []
-    executor_calls = 0
-
-    def executor(
-        step_name: str,
-        step_def: dict,
-        state_obj: object,
-        *,
-        extra_prompt: str | None = None,
-        **_kwargs: object,
-    ) -> StepExecutionResult:
-        nonlocal executor_calls
-        executor_calls += 1
-        prompts.append(extra_prompt)
-        (iteration_dir / "output.md").write_text("# finalized\n", encoding="utf-8")
-        (iteration_dir / "checklist.md").write_text("- [x] finalized\n", encoding="utf-8")
-        _write_baton(
-            issue_dir,
-            from_step=step_name,
-            to_owner="agent",
-            to_step="review",
-            intent="await_agent",
-        )
-        return StepExecutionResult(response="finalized", artifacts={})
-
-    result = BlackboardWorkflowRuntime(
-        issue_dir=issue_dir, playbook=playbook, executor=executor
-    ).run(start_step="develop", single_step=True)
-
-    assert result.final_status_code == "BATON_AWAIT_AGENT"
-    assert executor_calls == 1
-    assert prompts and prompts[0] is not None
-    assert running.operation_id in prompts[0]
-    assert "finalize" in prompts[0].lower()
-    assert "do not relaunch" in prompts[0].lower()
-
-
-@pytest.mark.parametrize("op_state", ["failed", "lost"])
-def test_failed_or_lost_operation_blocks_without_retry(tmp_path: Path, op_state: str) -> None:
-    """Test List item 16: failed/lost operations stop clearly, no automatic retry."""
-    issue_dir = tmp_path / ".cafe" / "issues" / f"demo-op-{op_state}"
-    _setup_interrupted_step(issue_dir, step="develop")
-    iteration_dir = _write_iteration_evidence(issue_dir, "develop")
-    store = BlackboardStore(issue_dir)
-    state = store.load_or_create("develop")
-    store.write_operation_artifact(
-        state,
-        step="develop",
-        iteration_dir=iteration_dir,
-        artifact=LongRunningOperationArtifact(
-            state=LongRunningOperationState(op_state), reason="process exited"
-        ),
-    )
-
-    playbook = {
-        "playbook": {"id": "default"},
-        "steps": {"develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}}},
-    }
-    calls: list[str] = []
-
-    def executor(step_name: str, step_def: dict, state_obj: object) -> StepExecutionResult:
-        calls.append(step_name)
-        return StepExecutionResult(response="done", artifacts={}, status_code="confirmed")
-
-    runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor)
-    result = runtime.run(max_transitions=5)
-
-    assert calls == []
-    assert result.completed is False
-    assert result.final_status_code == f"OPERATION_{op_state.upper()}"
-    bb = BlackboardStore(issue_dir).load_or_create("develop")
-    assert any(
-        e.event_type == "operation_blocked" and e.data.get("outcome") == op_state
-        for e in bb.events
-    )
-
-
-def test_schema_invalid_operation_blocks_clearly(tmp_path: Path) -> None:
-    """Test List item 16: schema-invalid operation.json stops clearly, no silent success."""
-    issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-invalid"
-    _setup_interrupted_step(issue_dir, step="develop")
-    iteration_dir = _write_iteration_evidence(issue_dir, "develop")
-    (iteration_dir / "operation.json").write_text(json.dumps({"state": "pending"}), encoding="utf-8")
-
-    playbook = {
-        "playbook": {"id": "default"},
-        "steps": {"develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}}},
-    }
-    calls: list[str] = []
-
-    def executor(step_name: str, step_def: dict, state_obj: object) -> StepExecutionResult:
-        calls.append(step_name)
-        return StepExecutionResult(response="done", artifacts={}, status_code="confirmed")
-
-    runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor)
-    result = runtime.run(max_transitions=5)
-
-    assert calls == []
-    assert result.final_status_code == "OPERATION_SCHEMA_INVALID"
-    bb = BlackboardStore(issue_dir).load_or_create("develop")
-    assert any(
-        e.event_type == "operation_blocked" and e.data.get("outcome") == "schema_invalid"
-        for e in bb.events
-    )
-
-
-def test_succeeded_operation_without_evidence_blocks_as_unverified(tmp_path: Path) -> None:
-    """Succeeded alone is not enough; missing output/checklist evidence must block."""
-    issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-unverified"
-    _setup_interrupted_step(issue_dir, step="develop")
-    iteration_dir = issue_dir / "develop" / "iteration_001"
-    iteration_dir.mkdir(parents=True)
-    (iteration_dir / "iteration.json").write_text(json.dumps({"iteration": 1}), encoding="utf-8")
-    # No output.md / checklist.md written - nothing observable to verify.
-    store = BlackboardStore(issue_dir)
-    state = store.load_or_create("develop")
-    store.write_operation_artifact(
-        state,
-        step="develop",
-        iteration_dir=iteration_dir,
-        artifact=LongRunningOperationArtifact(state=LongRunningOperationState.SUCCEEDED),
-    )
-
-    playbook = {
-        "playbook": {"id": "default"},
-        "steps": {"develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}}},
-    }
-    calls: list[str] = []
-
-    def executor(step_name: str, step_def: dict, state_obj: object) -> StepExecutionResult:
-        calls.append(step_name)
-        return StepExecutionResult(response="done", artifacts={}, status_code="confirmed")
-
-    runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor)
-    result = runtime.run(max_transitions=5)
-
-    assert calls == []
-    assert result.final_status_code == "OPERATION_SUCCEEDED_UNVERIFIED"
-
-
-def test_short_running_step_without_operation_artifact_is_unaffected(tmp_path: Path) -> None:
-    """Test List item 16: ordinary quick steps create no operation.json and behave as before."""
-    issue_dir = tmp_path / ".cafe" / "issues" / "demo-short-step"
-    playbook = {
-        "playbook": {"id": "default"},
-        "steps": {
-            "spec": {
-                "skill": "spec_first",
-                "role": "developer",
-                "valid_intents": ["confirmed"],
-                "on": {"confirmed": "_done"},
-            },
-        },
-    }
-    calls: list[str] = []
-
-    def executor(step_name: str, step_def: dict, state_obj: object) -> StepExecutionResult:
-        calls.append(step_name)
-        return StepExecutionResult(response="done", artifacts={}, status_code="confirmed")
-
-    runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor)
-    result = runtime.run(start_step="spec", max_transitions=5)
-
-    assert calls == ["spec"]
-    assert result.final_status_code == "confirmed"
-    iteration_dir = issue_dir / "spec" / "iteration_001"
-    assert not (iteration_dir / "operation.json").exists()
-
-
-def test_generic_agent_error_does_not_create_operation_artifact(tmp_path: Path) -> None:
-    """A generic/noncritical agent error is not a characterized long-running signal.
-
-    An ordinary exception must retain existing ``INTERRUPTED`` behavior with
-    no operation artifact, so a normal failure never pins resume forever.
-    """
-    issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-generic-error"
-    playbook = {
-        "playbook": {"id": "default"},
-        "steps": {
-            "develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}},
-        },
-    }
-
-    call_count = [0]
-
-    def executor(step_name: str, step_def: dict, state_obj: object) -> StepExecutionResult:
-        call_count[0] += 1
-        iteration_dir = issue_dir / step_name / "iteration_001"
-        iteration_dir.mkdir(parents=True, exist_ok=True)
-        (iteration_dir / "iteration.json").write_text(json.dumps({"iteration": 1}), encoding="utf-8")
-        raise TimeoutError("simulated unrelated tool error")
-
-    runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor)
-    result = runtime.run(start_step="develop", max_transitions=5)
-
-    assert result.completed is False
-    assert result.final_status_code.startswith("INTERRUPTED")
-    iteration_dir = issue_dir / "develop" / "iteration_001"
-    assert not (iteration_dir / "operation.json").exists()
-
-    bb = BlackboardStore(issue_dir).load_or_create("develop")
-    assert not any(e.event_type == "long_running_operation" for e in bb.events)
-    assert call_count[0] == 1
-
-
-def test_agent_timeout_cannot_fabricate_an_operation_policy(tmp_path: Path) -> None:
-    """A timeout must not manufacture an operation risk decision after launch."""
-    from cafe.agents.executor import AgentExecutionError
-
-    issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-auto-record"
-    playbook = {
-        "playbook": {"id": "default"},
-        "steps": {
-            "develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}},
-        },
-    }
-
-    call_count = [0]
-
-    def executor(step_name: str, step_def: dict, state_obj: object) -> StepExecutionResult:
-        call_count[0] += 1
-        iteration_dir = issue_dir / step_name / "iteration_001"
-        iteration_dir.mkdir(parents=True, exist_ok=True)
-        (iteration_dir / "iteration.json").write_text(json.dumps({"iteration": 1}), encoding="utf-8")
-        raise AgentExecutionError(
-            "agent did not produce output before the execution timeout", error_type="timeout"
-        )
-
-    runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor)
-    result = runtime.run(start_step="develop", max_transitions=5)
-
-    assert result.completed is False
-    assert result.final_status_code.startswith("INTERRUPTED")
-    iteration_dir = issue_dir / "develop" / "iteration_001"
-    assert not (iteration_dir / "operation.json").exists()
-
-    bb = BlackboardStore(issue_dir).load_or_create("develop")
-    assert not any(e.event_type == "long_running_operation" for e in bb.events)
-    assert call_count[0] == 1
-
-
-def test_keyboard_interrupt_does_not_create_operation_artifact(tmp_path: Path) -> None:
-    """An explicit Ctrl-C is not forced into the long-running operation model."""
-    issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-keyboard-interrupt"
-    playbook = {
-        "playbook": {"id": "default"},
-        "steps": {
-            "develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}},
-        },
-    }
-
-    def executor(step_name: str, step_def: dict, state_obj: object) -> StepExecutionResult:
-        iteration_dir = issue_dir / step_name / "iteration_001"
-        iteration_dir.mkdir(parents=True, exist_ok=True)
-        raise KeyboardInterrupt()
-
-    runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor)
-    result = runtime.run(start_step="develop", max_transitions=5)
-
-    assert result.final_status_code.startswith("INTERRUPTED")
-    iteration_dir = issue_dir / "develop" / "iteration_001"
-    assert not (iteration_dir / "operation.json").exists()
-
-
-@pytest.mark.parametrize(
-    "error_type",
-    ["rate_limit", "cli_not_found", "cli_unavailable", "model_not_found"],
-)
-def test_agent_execution_critical_error_does_not_create_operation_artifact(
-    tmp_path: Path, error_type: str
-) -> None:
-    """A critical AgentExecutionError (rate_limit/cli_not_found/...) is not a long-running
-    operation: resuming must not be gated on a false ``running`` state."""
-    from cafe.agents.executor import AgentExecutionError
-
-    issue_dir = tmp_path / ".cafe" / "issues" / f"demo-critical-{error_type}"
-    playbook = {
-        "playbook": {"id": "default"},
-        "steps": {
-            "develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}},
-        },
-    }
-
-    def executor(step_name: str, step_def: dict, state_obj: object) -> StepExecutionResult:
-        iteration_dir = issue_dir / step_name / "iteration_001"
-        iteration_dir.mkdir(parents=True, exist_ok=True)
-        raise AgentExecutionError(f"{error_type} triggered", error_type=error_type)
-
-    runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor)
-    result = runtime.run(start_step="develop", max_transitions=5)
-
-    assert result.final_status_code.startswith("INTERRUPTED")
-    iteration_dir = issue_dir / "develop" / "iteration_001"
-    assert not (iteration_dir / "operation.json").exists()
-
-    resumed = BlackboardWorkflowRuntime(
-        issue_dir=issue_dir,
-        playbook=playbook,
-        executor=lambda *a, **k: StepExecutionResult(
-            response="done", artifacts={}, status_code="confirmed"
-        ),
-    ).run(start_step="develop", max_transitions=5)
-    assert resumed.final_status_code != "OPERATION_RUNNING"
-
-
-def test_critical_phase_error_does_not_create_operation_artifact(tmp_path: Path) -> None:
-    """CriticalPhaseError (raised by the phase layer for rate_limit/cli_not_found/... after
-    exhausting recovery) must not be misreported as recoverable long-running operation work."""
-    from cafe.core.types import CriticalPhaseError
-
-    issue_dir = tmp_path / ".cafe" / "issues" / "demo-critical-phase-error"
-    playbook = {
-        "playbook": {"id": "default"},
-        "steps": {
-            "develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}},
-        },
-    }
-
-    def executor(step_name: str, step_def: dict, state_obj: object) -> StepExecutionResult:
-        iteration_dir = issue_dir / step_name / "iteration_001"
-        iteration_dir.mkdir(parents=True, exist_ok=True)
-        raise CriticalPhaseError(
-            message="rate limit exceeded", error_type="rate_limit", phase_name="DevelopPhase"
-        )
-
-    runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor)
-    result = runtime.run(start_step="develop", max_transitions=5)
-
-    assert result.final_status_code.startswith("INTERRUPTED")
-    assert "agent_rate_limit" in result.final_status_code
-    iteration_dir = issue_dir / "develop" / "iteration_001"
-    assert not (iteration_dir / "operation.json").exists()
-
-    bb = BlackboardStore(issue_dir).load_or_create("develop")
-    interrupted_events = [e for e in bb.events if e.event_type == "step_interrupted"]
-    assert len(interrupted_events) == 1
-    assert interrupted_events[0].data["reason"] == "agent_rate_limit"
-
-    resumed = BlackboardWorkflowRuntime(
-        issue_dir=issue_dir,
-        playbook=playbook,
-        executor=lambda *a, **k: StepExecutionResult(
-            response="done", artifacts={}, status_code="confirmed"
-        ),
-    ).run(start_step="develop", max_transitions=5)
-    assert resumed.final_status_code != "OPERATION_RUNNING"
-
-
-def test_hand_edited_operation_artifact_is_not_trusted(tmp_path: Path) -> None:
-    """A hand-edited operation.json with no matching blackboard record must not be trusted.
-
-    ``operation.json`` lives in the iteration directory alongside files a
-    develop step can freely write; only ``write_operation_artifact`` records
-    the matching ``{step}_operation`` metadata artifact. An agent-authored
-    or hand-edited file that claims ``succeeded`` without that provenance
-    must block rather than be accepted as verified success evidence.
-    """
-    issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-untrusted"
-    _setup_interrupted_step(issue_dir, step="develop")
-    iteration_dir = _write_iteration_evidence(issue_dir, "develop")
-    store = BlackboardStore(issue_dir)
-    state = store.load_or_create("develop")
-    store.update_handoff_contract(
-        state,
-        from_step="develop",
-        to_owner=HandoffOwner.AGENT,
-        to_step="review",
-        intent=HandoffIntent.AWAIT_AGENT,
-        source="test",
-    )
-    # Written directly to disk, bypassing write_operation_artifact: no
-    # matching "develop_operation" metadata artifact is recorded.
-    (iteration_dir / "operation.json").write_text(
-        json.dumps(
-            {
-                "operation_id": "forged-op",
-                "state": "succeeded",
-                "reason": "",
-                "exit_code": 0,
-                **_OPERATION_DECISION,
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    playbook = {
-        "playbook": {"id": "default"},
-        "steps": {
-            "develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}},
-            "review": {"skill": "review", "role": "developer", "on": {"confirmed": "_done"}},
-        },
-    }
-    calls: list[str] = []
-
-    def executor(step_name: str, step_def: dict, state_obj: object) -> StepExecutionResult:
-        calls.append(step_name)
-        return StepExecutionResult(response="done", artifacts={}, status_code="confirmed")
-
-    runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor)
-    result = runtime.run(max_transitions=5)
-
-    assert calls == []
-    assert result.completed is False
-    assert result.final_status_code == "OPERATION_UNTRUSTED"
-    bb = BlackboardStore(issue_dir).load_or_create("develop")
-    assert any(
-        e.event_type == "operation_blocked" and e.data.get("outcome") == "untrusted"
-        for e in bb.events
-    )
-
-
-def test_stale_metadata_artifact_from_earlier_iteration_is_not_trusted(tmp_path: Path) -> None:
-    """A ``{step}_operation`` record from an older iteration must not vouch for a newer one.
-
-    ``_operation_artifact_trusted`` used to compare only the recorded
-    ``summary`` string against the current iteration's parsed state. That
-    let a stale metadata artifact -- e.g. left over from
-    ``develop/iteration_001`` -- validate a hand-written
-    ``develop/iteration_002/operation.json`` whenever the state string
-    happened to match, even though the metadata artifact's own ``path``
-    still pointed at iteration 1's file. Trust must be bound to the exact
-    iteration's operation artifact path, not just the state string.
-    """
-    issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-stale-iteration"
-    _setup_interrupted_step(issue_dir, step="develop")
-    old_iteration_dir = _write_iteration_evidence(issue_dir, "develop")
-    store = BlackboardStore(issue_dir)
-    state = store.load_or_create("develop")
-    # Legitimately recorded for iteration_001, then superseded by a new iteration.
-    store.write_operation_artifact(
-        state,
-        step="develop",
-        iteration_dir=old_iteration_dir,
-        artifact=LongRunningOperationArtifact(state=LongRunningOperationState.SUCCEEDED),
-    )
-
-    new_iteration_dir = issue_dir / "develop" / "iteration_002"
-    new_iteration_dir.mkdir(parents=True, exist_ok=True)
-    (new_iteration_dir / "output.md").write_text("# done\n", encoding="utf-8")
-    (new_iteration_dir / "checklist.md").write_text("- [x] done\n", encoding="utf-8")
-    # Hand-written, never passed through write_operation_artifact for this iteration.
-    (new_iteration_dir / "operation.json").write_text(
-        json.dumps(
-            {
-                "operation_id": "forged-op",
-                "state": "succeeded",
-                "reason": "",
-                "exit_code": 0,
-                **_OPERATION_DECISION,
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    playbook = {
-        "playbook": {"id": "default"},
-        "steps": {
-            "develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}},
-            "review": {"skill": "review", "role": "developer", "on": {"confirmed": "_done"}},
-        },
-    }
-    calls: list[str] = []
-
-    def executor(step_name: str, step_def: dict, state_obj: object) -> StepExecutionResult:
-        calls.append(step_name)
-        return StepExecutionResult(response="done", artifacts={}, status_code="confirmed")
-
-    store.update_handoff_contract(
-        state,
-        from_step="develop",
-        to_owner=HandoffOwner.AGENT,
-        to_step="review",
-        intent=HandoffIntent.AWAIT_AGENT,
-        source="test",
-    )
-
-    runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor)
-    result = runtime.run(max_transitions=5)
-
-    assert calls == []
-    assert result.completed is False
-    assert result.final_status_code == "OPERATION_UNTRUSTED"
-
-
-def test_recorded_operation_artifact_state_mismatch_is_not_trusted(tmp_path: Path) -> None:
-    """A file edited after the fact to a different state than recorded must not be trusted."""
-    issue_dir = tmp_path / ".cafe" / "issues" / "demo-op-mismatch"
-    _setup_interrupted_step(issue_dir, step="develop")
-    iteration_dir = _write_iteration_evidence(issue_dir, "develop")
-    store = BlackboardStore(issue_dir)
-    state = store.load_or_create("develop")
-    running_operation = store.write_operation_artifact(
-        state,
-        step="develop",
-        iteration_dir=iteration_dir,
-        artifact=LongRunningOperationArtifact(state=LongRunningOperationState.RUNNING),
-    )
-    # Tampered after the recorded write: the blackboard still says "running".
-    (iteration_dir / "operation.json").write_text(
-        json.dumps(
-            {
-                "operation_id": running_operation.operation_id,
-                "state": "succeeded",
-                "reason": "",
-                "exit_code": 0,
-                **_OPERATION_DECISION,
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    playbook = {
-        "playbook": {"id": "default"},
-        "steps": {"develop": {"skill": "develop", "role": "developer", "on": {"confirmed": "_done"}}},
-    }
-    calls: list[str] = []
-
-    def executor(step_name: str, step_def: dict, state_obj: object) -> StepExecutionResult:
-        calls.append(step_name)
-        return StepExecutionResult(response="done", artifacts={}, status_code="confirmed")
-
-    runtime = BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor)
-    result = runtime.run(max_transitions=5)
-
-    assert calls == []
-    assert result.final_status_code == "OPERATION_UNTRUSTED"
-
-
-def test_status_code_missing_does_not_create_operation_artifact(tmp_path: Path) -> None:
-    """The ordinary NO_STATUS_CODE path (no baton, no status code) is not a
-    characterized long-running signal and retains existing behavior.
-
-    A normal short step that simply omits a baton/status code must not be
-    classified as a long-running operation -- otherwise resume would be
-    pinned to that step forever waiting for a ``running`` operation that
-    will never resolve. Only an explicit, pre-launch operation decision can
-    create an operation artifact.
-    """
-    issue_dir = tmp_path / ".cafe" / "issues" / "demo-status-missing-operation"
-    playbook = {
-        "playbook": {"id": "default"},
-        "steps": {
-            "spec": {
-                "skill": "spec_first",
-                "role": "pm",
-                "valid_intents": ["need_clarification"],
-                "on": {"need_clarification": "spec"},
-            },
-        },
-    }
-
-    def executor(step_name: str, step_def: dict, state: object):
-        iteration_dir = issue_dir / step_name / "iteration_001"
-        iteration_dir.mkdir(parents=True, exist_ok=True)
-        (iteration_dir / "iteration.json").write_text(json.dumps({"iteration": 1}), encoding="utf-8")
-        return ("plain response without status token", {})
-
-    runtime = BlackboardWorkflowRuntime(
-        issue_dir=issue_dir,
-        playbook=playbook,
-        executor=executor,
-    )
-    result = runtime.run(start_step="spec")
-
-    assert result.completed is False
-    assert result.final_status_code == "NO_STATUS_CODE"
-    iteration_dir = issue_dir / "spec" / "iteration_001"
-    assert not (iteration_dir / "operation.json").exists()
-    blackboard = BlackboardStore(issue_dir).load_or_create("spec")
-    assert not any(e.event_type == "long_running_operation" for e in blackboard.events)

@@ -24,6 +24,7 @@ from cafe.core.blackboard import (
     HandoffIntent,
     HandoffOwner,
 )
+from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.core.types import AgentCLI, TokenUsage
@@ -37,6 +38,8 @@ from cafe.skills.native_bridge import NativeSkillBridge
 from cafe.ui.cli import _consume_pending_chat_handoff, app
 from cafe.ui.cli_shared import _load_issue_step_names
 from cafe.utils.phase_config import PhaseStepModelResolution
+
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
 
 @pytest.fixture(autouse=True)
@@ -75,6 +78,81 @@ def _write_pr_done_baton(issue_dir: Path) -> None:
         status_code="confirmed",
         source="test.executor",
     )
+
+
+def _use_local_terminal_pr(playbook: dict) -> dict:
+    """Keep orchestration journeys independent of the publication capability."""
+    playbook["steps"]["pr"]["capability_requests"] = []
+    playbook["steps"]["pr"]["behavior"] = {"completion": "status_code"}
+    playbook["steps"]["pr"]["on"].pop("confirm_output", None)
+    playbook["steps"]["pr"]["on"]["workflow_complete"] = "_done"
+    return playbook
+
+
+def test_host_capability_journeys_share_fail_closed_dispatch_and_receipts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import cafe.core.capabilities as cap_mod
+
+    registry = cap_mod.load_capability_registry([cap_mod._package_capabilities_dir()])
+    browser = registry[cap_mod.CAPABILITY_BROWSER_OPEN_ID]
+    calls: list[str] = []
+    monkeypatch.setattr(
+        cap_mod,
+        "HOST_CAPABILITY_ADAPTERS",
+        {
+            "open_current_pr": lambda **_kwargs: (
+                calls.append("browser") or {"opened": True, "url": "https://example.test"},
+                None,
+            )
+        },
+    )
+    request = {
+        "capability": cap_mod.CAPABILITY_BROWSER_OPEN_ID,
+        "args": {"target_ref": "current_pr"},
+        "effects": {
+            "browser_open": ["current_pr"],
+            "writes": [],
+            "network_destinations": [],
+        },
+        "credentials": [],
+        "permissions": {},
+    }
+
+    allowed = cap_mod.run_capability_request(
+        repo_root=tmp_path,
+        registry=registry,
+        capability_request=request,
+        output_file=tmp_path / "output.md",
+    )
+    tampered = cap_mod.run_capability_request(
+        repo_root=tmp_path,
+        registry=registry,
+        capability_request={**request, "url": "https://evil.test"},
+        output_file=tmp_path / "output.md",
+    )
+    approval = cap_mod.run_capability_request(
+        repo_root=tmp_path,
+        registry={browser.id: browser.model_copy(update={"approval": "required"})},
+        capability_request=request,
+        output_file=tmp_path / "output.md",
+    )
+    denied = cap_mod.run_capability_request(
+        repo_root=tmp_path,
+        registry={browser.id: browser.model_copy(update={"policy": "deny"})},
+        capability_request=request,
+        output_file=tmp_path / "output.md",
+    )
+
+    assert calls == ["browser"]
+    assert allowed.receipt["outcome"] == "success"
+    assert tampered.receipt["outcome"] == "validation_rejection"
+    assert approval.receipt["outcome"] == "approval_required"
+    assert denied.receipt["outcome"] == "policy_denied"
+    assert {approval.receipt["decision"]["outcome"], denied.receipt["decision"]["outcome"]} == {
+        "require_approval",
+        "deny",
+    }
 
 
 class _BatonWritingAgentManager:
@@ -164,7 +242,11 @@ def test_custom_publish_feedback_and_lifecycle_contracts(tmp_path: Path, monkeyp
     issue_dir = tmp_path / ".cafe" / "issues" / "release-journey"
     issue_dir.mkdir(parents=True)
     (issue_dir / "issue.yaml").write_text(
-        "playbook: release-flow\npr:\n  auto_create: true\n", encoding="utf-8"
+        "playbook: release-flow\n"
+        "pr:\n  auto_create: true\n"
+        "contract_version: 2\n"
+        "driver:\n  mode: unattended\n",
+        encoding="utf-8",
     )
     playbook_dir = tmp_path / ".cafe" / "playbooks"
     playbook_dir.mkdir(parents=True)
@@ -193,7 +275,7 @@ steps:
     hooks:
       prepare_input: [UserInputCollector]
       publish_output: [GitHubPRCreator]
-    on: {await_agent: _done}
+    on: {await_agent: repair, workflow_complete: _done}
 """.strip(),
         encoding="utf-8",
     )
@@ -258,6 +340,16 @@ steps:
         git_ops=_GitOperations(),
         role_agent_map={"developer": "David"},
     )
+    state = BlackboardStore(issue_dir).load_or_create("release")
+    BlackboardStore(issue_dir).set_current_step(state, "release")
+    BlackboardStore(issue_dir).update_handoff_contract(
+        state,
+        from_step="release",
+        to_owner=HandoffOwner.AGENT,
+        to_step="release",
+        intent=HandoffIntent.AWAIT_AGENT,
+        source="test.feedback_arrived",
+    )
     BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
         playbook=playbook,
@@ -269,7 +361,12 @@ steps:
         BlackboardStore(issue_dir)
         .load_handoff_contract(state, allowed_steps=["repair", "release"])
         .to_step
-        == "repair"
+        == "release"
+    )
+    assert any(
+        event.event_type == "workflow_blocked"
+        and event.data.get("reason") == "missing_capability_receipt"
+        for event in state.events
     )
 
     resumed_steps: list[str] = []
@@ -363,9 +460,9 @@ def test_default_requested_changes_follow_declared_loop_without_publish_authorit
     from cafe.ui.human_tasks import apply_human_task_payload
 
     issue_dir = tmp_path / ".cafe" / "issues" / "default-correction"
-    playbook = PlaybookLoader().load("default")
+    playbook = PlaybookLoader().load("standard")
     store = BlackboardStore(issue_dir)
-    state = store.load_or_create("pr", playbook_id="default")
+    state = store.load_or_create("pr", playbook_id="standard")
     store.set_current_step(state, "user")
     store.update_handoff_contract(
         state,
@@ -384,7 +481,7 @@ def test_default_requested_changes_follow_declared_loop_without_publish_authorit
         trigger="confirm_output",
         raw_payload={
             "task": "local-review",
-            "decision": "request_changes",
+            "decision": "fix_now",
             "feedback": "Exercise the declared correction route.",
         },
         source="integration",
@@ -394,6 +491,7 @@ def test_default_requested_changes_follow_declared_loop_without_publish_authorit
     assert [entry.target_step for entry in WorkflowFeedbackLedger(issue_dir).pending()] == [
         "develop"
     ]
+    _use_local_terminal_pr(playbook)
 
     executed_steps: list[str] = []
 
@@ -436,16 +534,96 @@ def test_default_requested_changes_follow_declared_loop_without_publish_authorit
     assert WorkflowFeedbackLedger(issue_dir).pending() == []
 
 
+def test_builtin_permission_notification_completes_and_reaches_reviewed_pr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test List 5: the #419 journey uses only builtin workflow declarations."""
+    from cafe.ui.human_tasks import apply_human_task_payload
+
+    import cafe.core.workflow_runtime as runtime_mod
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "permission-reviewed-pr"
+    playbook = _use_local_terminal_pr(PlaybookLoader().load("standard"))
+    notification_requests: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        runtime_mod,
+        "run_capability_request",
+        lambda **kwargs: notification_requests.append(kwargs["capability_request"])
+        or SimpleNamespace(
+            receipt={
+                "capability": "cafe.slack.human_task",
+                "success": True,
+                "outcome": "success",
+            }
+        ),
+    )
+    visits: list[str] = []
+
+    def executor(step_name: str, step_def: dict, _state: BlackboardState) -> StepExecutionResult:
+        visits.append(step_name)
+        if step_name == "develop" and visits.count("develop") == 1:
+            return StepExecutionResult(
+                response="need_permission",
+                artifacts={},
+                status_code="need_permission",
+            )
+        events = []
+        if step_name == "pr":
+            _write_pr_done_baton(issue_dir)
+            events.append({"type": "pr_synced", "url": "https://example.test/pr/419"})
+        return StepExecutionResult(
+            response="confirmed",
+            artifacts={str(step_def.get("output_artifact", step_name)): f"{step_name}/output.md"},
+            status_code="confirmed",
+            events=events,
+        )
+
+    paused = _run_until_settled(
+        issue_dir=issue_dir, playbook=playbook, executor=executor, max_transitions=20
+    )
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    resumed = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        from_step="develop",
+        trigger="need_permission",
+        raw_payload={"human_task_id": task.id, "feedback": "Permission granted."},
+        source="integration",
+    )
+    completed = _run_until_settled(
+        issue_dir=issue_dir, playbook=playbook, executor=executor, max_transitions=20
+    )
+
+    assert paused.completed is False
+    assert task.status is HumanTaskStatus.PENDING
+    assert resumed.target == "develop"
+    assert completed.completed is True
+    assert completed.final_step == "pr"
+    assert visits.count("develop") == 2
+    assert notification_requests[0]["args"] == {
+        "repository": tmp_path.name,
+        "issue": "permission-reviewed-pr",
+        "workflow_id": task.workflow_id,
+        "task_id": task.id,
+        "step": "develop",
+        "task_type": "permission-answers",
+    }
+    assert HumanTaskRecordStore(issue_dir).get_task(task.id).status is HumanTaskStatus.COMPLETED
+
+
 def test_default_parity_and_metadata_absent_lifecycle_boundary(tmp_path: Path, monkeypatch) -> None:
     """IT-003: default completion, correction, review, and publish remain observable."""
     monkeypatch.chdir(tmp_path)
 
-    default = PlaybookLoader().load("default")
+    default = PlaybookLoader().load("standard")
     assert resolve_step_behavior(default, "pr").publish_confirmation is True
     assert resolve_step_behavior(default, "review").runtime_tool_grants == [
         "web_research",
         "git_inspection",
     ]
+    _use_local_terminal_pr(default)
 
     issue_dir = tmp_path / ".cafe" / "issues" / "default-parity"
     executed_steps: list[str] = []
@@ -503,7 +681,7 @@ def test_default_parity_and_metadata_absent_lifecycle_boundary(tmp_path: Path, m
 
 def _load_default_playbook() -> dict:
     """載入真實 default playbook。"""
-    return PlaybookLoader().load("default")
+    return _use_local_terminal_pr(PlaybookLoader().load("standard"))
 
 
 def _run_until_settled(
@@ -725,7 +903,7 @@ class TestSelfLoop:
         assert result.completed is True
 
     def test_review_self_loop_then_confirms(self, tmp_path: Path) -> None:
-        """review need_clarification×2 後 confirmed，在 max_iterations=3 限制內。"""
+        """review need_clarification×2 後 confirmed，在單一 cycle 上限內。"""
         result, calls, subsequent = self._run_single_step_loop(
             tmp_path,
             start_step="review",
@@ -738,8 +916,10 @@ class TestSelfLoop:
         assert subsequent.get("pr", 0) >= 1
         assert result.completed is True
 
-    def test_review_exceeds_max_iterations_raises(self, tmp_path: Path) -> None:
-        """review 超過 max_iterations=3 應拋出 RuntimeError。"""
+    def test_review_exceeds_cycle_attempt_limit_materializes_a_human_task(
+        self, tmp_path: Path
+    ) -> None:
+        """review 超過單一 cycle 的嘗試上限時應暫停給可恢復的 HumanTask。"""
         issue_dir = tmp_path / ".cafe" / "issues" / "issue-loop-overflow"
         playbook = _load_default_playbook()
         call_counts: dict = {}
@@ -765,14 +945,91 @@ class TestSelfLoop:
             playbook=playbook,
             executor=executor,
         )
-        with pytest.raises(RuntimeError, match="exceeded max_iterations"):
-            runner.run(max_transitions=30)
+        result = runner.run(max_transitions=30)
 
-        # review 應被呼叫恰好 max_iterations（3）次後拋出（第 4 次在執行前被攔截）
+        # review 應達到單一 cycle 的嘗試上限後，在下一次執行前建立任務。
         assert call_counts.get("review", 0) >= 3
+        assert result.completed is False
+        assert result.final_status_code == "ITERATION_LIMIT_REACHED"
+        task = HumanTaskRecordStore(issue_dir).tasks()[-1]
+        assert task.status is HumanTaskStatus.PENDING
+        assert task.policy_id == "iteration-limit"
+        assert task.continuations == {"resume": "review"}
+        state = BlackboardStore(issue_dir).load_or_create("spec")
+        assert state.current_step == "user"
+        assert state.handoff_contract.intent is HandoffIntent.MANUAL_HANDOFF
+
+    def test_review_limit_restarts_after_review_advances_to_pr(self, tmp_path: Path) -> None:
+        """PR 打回 develop 後，新的 review cycle 應從 attempt 1 開始。"""
+        issue_dir = tmp_path / ".cafe" / "issues" / "issue-review-cycle-reset"
+        playbook = {
+            "playbook": {"id": "review-cycle-reset"},
+            "steps": {
+                "review": {
+                    "skill": "phase",
+                    "role": "reviewer",
+                    "max_attempts_per_cycle": 1,
+                    "on": {"await_agent": "pr", "manual_handoff": "develop"},
+                },
+                "pr": {
+                    "skill": "phase",
+                    "role": "developer",
+                    "on": {"await_agent": "_done", "manual_handoff": "develop"},
+                },
+                "develop": {
+                    "skill": "phase",
+                    "role": "developer",
+                    "on": {"await_agent": "review"},
+                },
+            },
+            "entry_point": "review",
+        }
+        calls: list[str] = []
+        pr_visits = 0
+
+        def executor(step_name: str, step_def: dict, state: BlackboardState) -> StepExecutionResult:
+            nonlocal pr_visits
+            calls.append(step_name)
+            if step_name == "pr":
+                pr_visits += 1
+                if pr_visits == 1:
+                    return StepExecutionResult(
+                        response="needs_changes",
+                        artifacts={},
+                        status_code="needs_changes",
+                        auto_continue=True,
+                    )
+            return StepExecutionResult(
+                response="confirmed",
+                artifacts={},
+                status_code="confirmed",
+            )
+
+        result = BlackboardWorkflowRuntime(
+            issue_dir=issue_dir,
+            playbook=playbook,
+            executor=executor,
+        ).run(max_transitions=10)
+
+        assert result.completed is True
+        assert calls == ["review", "pr", "develop", "review", "pr"]
+        blackboard = BlackboardStore(issue_dir).load_or_create("review")
+        review_attempts = [
+            event.data["attempt"]
+            for event in blackboard.events
+            if event.event_type == "step_started" and event.data.get("step") == "review"
+        ]
+        assert review_attempts == [1, 1]
+        review_resets = [
+            event
+            for event in blackboard.events
+            if event.event_type == "step_attempt_count_reset"
+            and event.data.get("step") == "review"
+        ]
+        assert [event.data["completed_attempts"] for event in review_resets] == [1, 1]
 
     def test_iteration_counters_recorded_in_blackboard(self, tmp_path: Path) -> None:
-        """self-loop 期間 blackboard events 應包含正確的 visit 計數。"""
+        """self-loop 期間 blackboard events 應包含正確的 attempt 計數。"""
         issue_dir = tmp_path / ".cafe" / "issues" / "issue-loop-events"
         playbook = _load_default_playbook()
         spec_calls = 0
@@ -809,8 +1066,8 @@ class TestSelfLoop:
             for e in blackboard.events
             if e.event_type == "step_started" and e.data.get("step") == "spec"
         ]
-        visits = [e.data.get("visit") for e in spec_started_events]
-        assert visits == [1, 2, 3], f"expected visits [1,2,3], got {visits}"
+        attempts = [e.data.get("attempt") for e in spec_started_events]
+        assert attempts == [1, 2, 3], f"expected attempts [1,2,3], got {attempts}"
 
 
 # ---------------------------------------------------------------------------
@@ -890,11 +1147,11 @@ class TestUserHandoff:
             executor=executor,
         ).run(max_transitions=10)
 
-        assert first.completed is False
-        assert first.final_status_code == "BATON_POSITION_REALIGNED"
-        assert executed_steps == []
+        assert first.completed is True
+        assert first.final_step == "plan"
+        assert executed_steps == ["plan"]
         blackboard = BlackboardStore(issue_dir).load_or_create("spec")
-        assert blackboard.current_step == "plan"
+        assert blackboard.current_step == "done"
         assert any(e.event_type == "runtime_position_realigned" for e in blackboard.events)
 
         second = BlackboardWorkflowRuntime(
@@ -1038,6 +1295,11 @@ class TestUserHandoff:
 
         issue_dir = tmp_path / ".cafe" / "issues" / "issue-cli-resume"
         issue_dir.mkdir(parents=True, exist_ok=True)
+        (issue_dir / "issue.yaml").write_text(
+            "playbook: standard\npr:\n  auto_create: false\n"
+            "contract_version: 2\ndriver:\n  mode: attached\n  poll_interval_seconds: 10\n",
+            encoding="utf-8",
+        )
 
         call_log: List[str] = []
         spec_calls = 0
@@ -1062,6 +1324,14 @@ class TestUserHandoff:
                             status_code="need_clarification",
                             auto_continue=False,
                         )
+                if step_name == "pr":
+                    return StepExecutionResult(
+                        response="confirm_output",
+                        artifacts={"pr_result": "pr/output.md"},
+                        status_code="confirm_output",
+                        handoff_owner=HandoffOwner.USER,
+                        handoff_intent=HandoffIntent.CONFIRM_OUTPUT,
+                    )
                 return StepExecutionResult(
                     response="confirmed",
                     artifacts={
@@ -1089,7 +1359,7 @@ class TestUserHandoff:
             git.get_current_branch.return_value = "issue-cli-resume"
             mock_git_cls.return_value = git
 
-            result = cli_runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+            result = cli_runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
         assert result.exit_code == 0, result.output
         # spec 應被呼叫兩次（第一次暫停，第二次完成）
@@ -1113,11 +1383,15 @@ class TestNextStepLifecycle:
 
         issue_dir = tmp_path / ".cafe" / "issues" / "issue-nextstep-missing"
         issue_dir.mkdir(parents=True, exist_ok=True)
+        (issue_dir / "issue.yaml").write_text(
+            "playbook: standard\ncontract_version: 2\ndriver:\n  mode: attached\n  poll_interval_seconds: 10\n",
+            encoding="utf-8",
+        )
         (issue_dir / "blackboard.json").write_text(
             json.dumps(
                 {
                     "schema_version": 1,
-                    "playbook_id": "default",
+                    "playbook_id": "standard",
                     "current_step": "spec",
                     "artifacts": {},
                     "events": [],
@@ -1158,7 +1432,7 @@ class TestNextStepLifecycle:
             git.has_uncommitted_changes.return_value = False
             mock_git_cls.return_value = git
 
-            result = cli_runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+            result = cli_runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
         assert result.exit_code == 0, result.output
         assert next_step_path.exists()

@@ -127,7 +127,7 @@ Write spec to: {output_file}
 | `version` | 否 | Skill 版本 |
 | `tags` | 否 | 標籤，用於搜尋和分類 |
 
-`allowed_tools`、`max_iterations` 等執行層面的設定放在 **Playbook** 而非 SKILL.md，因為同一個 Skill 在不同 Playbook 裡可能有不同的權限和限制。`valid_status_codes` 在 `v0.2` 後半段只視為 legacy 相容欄位；新 workflow 核心不應再依賴它作為主要 transition 依據。
+`allowed_tools`、`max_attempts_per_cycle` 等執行層面的設定放在 **Playbook** 而非 SKILL.md，因為同一個 Skill 在不同 Playbook 裡可能有不同的權限和限制。`valid_status_codes` 在 `v0.2` 後半段只視為 legacy 相容欄位；新 workflow 核心不應再依賴它作為主要 transition 依據。
 
 ### Progressive Disclosure（漸進式揭露）
 
@@ -199,8 +199,8 @@ Skill override 規則：
 ```
 
 同一個 Skill 可被不同 Playbook 複用：
-- default playbook 的 `review` step 用 `review` skill，role = reviewer，max_iterations = 5
-- hotfix playbook 的 `quick_review` step 也用 `review` skill，但 max_iterations = 1
+- default playbook 的 `review` step 用 `review` skill，role = reviewer，max_attempts_per_cycle = 5
+- hotfix playbook 的 `quick_review` step 也用 `review` skill，但 max_attempts_per_cycle = 1
 
 ### Schema（完整版）
 
@@ -275,7 +275,7 @@ steps:
     input_artifacts: [spec, plan, code]
     output_artifact: review_feedback
     allowed_tools: [Read, Grep, Glob, "Bash(git:*)"]
-    max_iterations: 5
+    max_attempts_per_cycle: 5
     allowed_goto: [spec, develop, plan]
     hooks:
       before_execute: [NewChangesGate]
@@ -313,7 +313,7 @@ entry_point: spec
 | `output_artifact` | 否 | 此 step 產出的 artifact 名稱 |
 | `allowed_tools` | 否 | Agent 工具白名單（沿用 PermissionHandler 的 pattern grammar） |
 | `valid_status_codes` | 否 | **Legacy / mock executor 限定**。intent-driven runtime 不再依賴此欄位 |
-| `max_iterations` | 否 | 最大迭代次數（預設不限） |
+| `max_attempts_per_cycle` | 否 | 每次修正循環的最大嘗試次數（成功前進後重設，預設不限） |
 | `allowed_goto` | 否 | goto baton 可跳轉的目標 step |
 | `hooks` | 否 | Lifecycle hook 掛載（見 GenericPhase 章節） |
 | `auto_snapshot` | 否 | 僅對產出 `WORKSPACE` artifact 的 step 生效。預設 `true`，設 `false` 則 dirty workspace 直接報錯 |
@@ -500,7 +500,7 @@ class HookResult:
 | Develop: tool permission | hook `PermissionRetryHandler` |
 | Develop: review feedback loop | playbook `on: manual_handoff: develop` |
 | Review: check new commits | hook `NewChangesGate`（改用 Blackboard artifact version 判斷） |
-| Review: single iteration | playbook `max_iterations: 1` |
+| Review: single iteration | playbook `max_attempts_per_cycle: 1` |
 | PR: GitHub PR creation | hook `GitHubPRCreator` |
 | PR: post todo list | hook `PRCommentPoster` |
 

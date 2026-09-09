@@ -1,4 +1,4 @@
-"""Deterministic correction-context manifests for fresh workflow sessions."""
+"""Deterministic correction-context manifests for workflow iterations."""
 
 from __future__ import annotations
 

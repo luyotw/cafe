@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Literal, Optional
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from cafe.catalogs.resolver import global_catalog_lock
 from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.skills.loader import SkillLoader
 from cafe.templates.manager import TemplateManager
@@ -254,12 +255,13 @@ def load_fields_ref(
     skill_loader: SkillLoader,
 ) -> ParsedPrepareFields:
     """Load prepare fields from a static playbook or skill asset reference."""
-    asset_path = resolve_fields_ref_path(
-        ref=ref,
-        playbook_path=playbook_path,
-        skill_loader=skill_loader,
-    )
-    raw = _load_static_document(asset_path)
+    with global_catalog_lock(skill_loader.global_root):
+        asset_path = resolve_fields_ref_path(
+            ref=ref,
+            playbook_path=playbook_path,
+            skill_loader=skill_loader,
+        )
+        raw = _load_static_document(asset_path)
     if raw is None:
         raise ValueError(f"commands.prepare.fields_ref asset is empty: {asset_path}")
     return parse_prepare_fields_document(raw)

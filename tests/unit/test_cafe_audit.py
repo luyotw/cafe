@@ -17,6 +17,8 @@ from cafe.audit.tooling_audit import (
 from cafe.core.blackboard import BlackboardState
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
 
+pytestmark = pytest.mark.usefixtures("cached_builtin_skill_frontmatter")
+
 
 def test_run_builtin_tooling_audit_all_pass() -> None:
     lines = run_builtin_tooling_audit()
@@ -41,9 +43,17 @@ def test_format_audit_markdown_includes_checkbox() -> None:
     assert "[x]" in text
 
 
-def test_build_context_uses_playbook_role_for_agent_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Editorial and research roles must map to matching agent directories."""
+def test_build_context_materializes_playbook_role_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Editorial and research roles materialize matching agent guidance."""
     recorded: list[tuple[str, str]] = []
+    source = tmp_path / "agents" / "writer" / "David.md"
+    source.parent.mkdir(parents=True)
+    source_content = (
+        "---\nname: David\ndescription: writer\n---\n\nwriter guidance\n"
+    )
+    source.write_text(source_content, encoding="utf-8")
 
     @classmethod
     def fake_get(
@@ -53,23 +63,26 @@ def test_build_context_uses_playbook_role_for_agent_path(monkeypatch: pytest.Mon
         cafe_dir: str | None = None,
     ) -> str:
         recorded.append((agent_name, role))
-        return f"agents/{role}/{agent_name}.md"
+        return str(source)
 
     monkeypatch.setattr(AgentManager, "get_agent_file_path", fake_get)
 
     executor = GenericWorkflowStepExecutor.__new__(GenericWorkflowStepExecutor)
-    executor.issue_dir = Path("/tmp/issue")
+    executor.issue_dir = tmp_path / "issue"
     executor.iteration = 1
     state = BlackboardState(current_step="draft")
+    output_file = executor.issue_dir / "draft" / "iteration_001" / "output.md"
     ctx = GenericWorkflowStepExecutor._build_context(
         executor,
         step_name="draft",
         step_def={"role": "writer", "skill": "draft", "input_artifacts": []},
         blackboard_state=state,
         agent_name="David",
-        output_file=Path("/tmp/out.md"),
+        output_file=output_file,
     )
-    assert ctx["agent_file"] == "agents/writer/David.md"
+    materialized = Path(ctx["agent_file"])
+    assert materialized == output_file.parent / "context_agent_file.md"
+    assert materialized.read_text(encoding="utf-8") == source_content
     assert recorded == [("David", "writer")]
 
 
@@ -100,6 +113,6 @@ def test_run_builtin_tooling_audit_injected_gap_fails(
 def test_builtin_agents_layout_covers_playbook_roles() -> None:
     """Sanity: every role directory used in builtin playbooks exists under data/agents."""
     data = cafe_builtin_data_dir()
-    roles = {"pm", "developer", "reviewer", "researcher", "ops", "editor", "writer"}
+    roles = {"pm", "developer", "reviewer", "qa", "researcher", "ops", "editor", "writer"}
     for role in roles:
         assert (data / "agents" / role).is_dir(), f"missing agents/{role}"

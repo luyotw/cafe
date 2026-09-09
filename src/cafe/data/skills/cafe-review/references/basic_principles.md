@@ -1,0 +1,1 @@
+- 確認 long-running script 不會造成不可接受的系統負荷或資源放大

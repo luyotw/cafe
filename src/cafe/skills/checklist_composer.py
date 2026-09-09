@@ -12,12 +12,21 @@ from cafe.skills.contracts import ChecklistVariant, SkillWorkflowContract
 from cafe.skills.loader import canonical_skill_name
 from cafe.templates.manager import TemplateManager
 from cafe.utils.checklist_utils import generate_checklist_file, resolve_checklist_placeholders
-from cafe.utils.prompt_utils import convert_to_checklist, extract_agent_guidelines_checklist
+from cafe.utils.prompt_utils import convert_to_checklist
 
 
 def _load_skill_checklist_reference(skill_name: str, ref_name: str) -> str:
     """Load checklist section content from a skill reference file."""
     return load_skill_reference(canonical_skill_name(skill_name), ref_name)
+
+
+def _load_agent_guidance(agent_name: str, role: str) -> tuple[str, str]:
+    """Read role guidance without releasing the catalog lock between path and content."""
+    agent_file, content = AgentManager.read_agent_file(agent_name, role)
+    guidelines = (
+        convert_to_checklist(content, "Agent Guidelines Checklist") if content else ""
+    )
+    return agent_file, guidelines
 
 
 def _resolve_xml_questions_instruction(
@@ -133,10 +142,11 @@ def compose_declared_checklist(
     feedback: bool = False,
     template_mode: str = "auto",
     template_file: Optional[str] = None,
+    preserve_completed_items: bool = False,
 ) -> bool:
     """Compose a skill-declared checklist without phase-name behavior branches."""
     if contract.checklist is None:
-        checklist_file_path.write_text("", encoding="utf-8")
+        generate_checklist_file(checklist_file_path, "")
         return False
 
     variant = select_checklist_variant(
@@ -172,9 +182,10 @@ def compose_declared_checklist(
         "researcher": "researcher",
         "ops": "ops",
     }
-    agent_file = AgentManager.get_agent_file_path(agent_name, role_dirs.get(role, "developer"))
+    agent_file, guidelines = _load_agent_guidance(
+        agent_name, role_dirs.get(role, "developer")
+    )
     if contract.checklist.include_role_guidance:
-        guidelines = extract_agent_guidelines_checklist(agent_file)
         if guidelines:
             if contract.checklist.compact_agent_guidance:
                 parts.append(guidelines)
@@ -206,7 +217,11 @@ def compose_declared_checklist(
         raise ValueError(
             f"Unresolved checklist placeholders for {skill_name}: {', '.join(unresolved)}"
         )
-    generate_checklist_file(checklist_file_path, content)
+    generate_checklist_file(
+        checklist_file_path,
+        content,
+        preserve_completed_items=preserve_completed_items,
+    )
     return True
 
 
@@ -217,6 +232,7 @@ def generate_custom_skill_checklist(
     checklist_file_path: Path,
     correction_mode: bool = False,
     placeholders: Optional[dict] = None,
+    preserve_completed_items: bool = False,
 ) -> bool:
     """Compose a checklist for a custom (non-builtin) phase skill from its references.
 
@@ -234,8 +250,7 @@ def generate_custom_skill_checklist(
     if not execution_steps:
         return False
 
-    agent_file = AgentManager.get_agent_file_path(agent_name, role)
-    agent_guidelines = extract_agent_guidelines_checklist(agent_file)
+    agent_file, agent_guidelines = _load_agent_guidance(agent_name, role)
     checklist_content = f"{execution_steps}\n{agent_guidelines}"
 
     resolved = {"agent_file": agent_file}
@@ -243,7 +258,11 @@ def generate_custom_skill_checklist(
         resolved.update({key: value for key, value in placeholders.items() if value})
 
     checklist_content = resolve_checklist_placeholders(checklist_content, resolved)
-    generate_checklist_file(checklist_file_path, checklist_content)
+    generate_checklist_file(
+        checklist_file_path,
+        checklist_content,
+        preserve_completed_items=preserve_completed_items,
+    )
     return True
 
 
@@ -259,7 +278,7 @@ def generate_spec_checklist(
     questions_xml_file: Optional[str] = None,
 ) -> None:
     """Generate checklist file for spec phase."""
-    agent_file = AgentManager.get_agent_file_path(agent_name, "pm")
+    agent_file, agent_guidelines = _load_agent_guidance(agent_name, "pm")
 
     if iteration == 1:
         execution_steps = _load_skill_checklist_reference(
@@ -303,8 +322,6 @@ def generate_spec_checklist(
             )
 
     dod_instruction = _load_skill_checklist_reference("spec", "dod_instruction.md")
-    agent_guidelines = extract_agent_guidelines_checklist(agent_file)
-
     basic_principles_checklist = ""
     if basic_principles:
         basic_principles_checklist = convert_to_checklist(basic_principles, "Basic Principles")
@@ -350,7 +367,7 @@ def generate_plan_checklist(
     questions_xml_file: Optional[str] = None,
 ) -> None:
     """Generate checklist file for plan phase."""
-    agent_file = AgentManager.get_agent_file_path(agent_name, "developer")
+    agent_file, agent_guidelines = _load_agent_guidance(agent_name, "developer")
 
     if iteration == 1:
         execution_steps = _load_skill_checklist_reference(
@@ -384,8 +401,6 @@ def generate_plan_checklist(
             f"[ ] Read {template_file} as reference for output format and structure\n"
             "[ ] Follow template structure when writing plan\n"
         )
-
-    agent_guidelines = extract_agent_guidelines_checklist(agent_file)
 
     basic_principles_checklist = ""
     if basic_principles:
@@ -434,7 +449,7 @@ def generate_develop_checklist(
     questions_xml_file: Optional[str] = None,
 ) -> None:
     """Generate checklist file for develop phase."""
-    agent_file = AgentManager.get_agent_file_path(agent_name, "developer")
+    agent_file, agent_guidelines = _load_agent_guidance(agent_name, "developer")
 
     if correction_mode:
         execution_steps = _load_skill_checklist_reference(
@@ -446,8 +461,6 @@ def generate_develop_checklist(
             "develop",
             "execution_steps_normal.md",
         )
-
-    agent_guidelines = extract_agent_guidelines_checklist(agent_file)
 
     basic_principles_checklist = ""
     if basic_principles:
@@ -510,7 +523,7 @@ def generate_review_checklist(
     basic_principles: Optional[str] = None,
 ) -> None:
     """Generate checklist file for review phase."""
-    agent_file = AgentManager.get_agent_file_path(agent_name, "reviewer")
+    agent_file, agent_guidelines = _load_agent_guidance(agent_name, "reviewer")
 
     execution_steps = _load_skill_checklist_reference("review", "execution_steps.md")
 
@@ -530,7 +543,6 @@ def generate_review_checklist(
             "Basic Principles",
         )
 
-    agent_guidelines = extract_agent_guidelines_checklist(agent_file)
     checklist_content = f"{execution_steps}\n"
     if basic_principles_checklist:
         checklist_content += f"{basic_principles_checklist}\n"
@@ -551,10 +563,6 @@ def generate_review_checklist(
     placeholders["feedback_instruction"] = resolve_checklist_placeholders(
         _load_skill_checklist_reference("review", "feedback_instruction.md"), placeholders
     )
-    # The legacy checklist wrapper has no develop artifact input. The generic
-    # workflow composer renders this optional instruction when develop_file is
-    # supplied by the playbook artifact mapping.
-    placeholders["verification_receipt_instruction"] = ""
     for placeholder, reference in {
         "spec_read_instruction": "spec_read_instruction.md",
         "plan_read_instruction": "plan_read_instruction.md",
@@ -580,7 +588,7 @@ def generate_pr_checklist(
     prev_pr_file: Optional[str] = None,
 ) -> None:
     """Generate checklist file for PR phase."""
-    agent_file = AgentManager.get_agent_file_path(agent_name, "developer")
+    agent_file, agent_guidelines = _load_agent_guidance(agent_name, "developer")
 
     if iteration == 1:
         execution_steps = _load_skill_checklist_reference(
@@ -592,8 +600,6 @@ def generate_pr_checklist(
             "pr",
             "execution_steps_iteration_n.md",
         )
-
-    agent_guidelines = extract_agent_guidelines_checklist(agent_file)
 
     basic_principles_checklist = ""
     if basic_principles:
@@ -610,6 +616,7 @@ def generate_pr_checklist(
         "pr_file": pr_file,
         "output_file": pr_file,
         "previous_output_file": prev_pr_file or "",
+        "review_feedback_instruction": "",
     }
 
     if iteration > 1:
@@ -637,14 +644,12 @@ def generate_pr_comments_checklist(
     basic_principles: Optional[str] = None,
 ) -> None:
     """Generate checklist file for PR comments organization."""
-    agent_file = AgentManager.get_agent_file_path(agent_name, "developer")
+    agent_file, agent_guidelines = _load_agent_guidance(agent_name, "developer")
 
     execution_steps = _load_skill_checklist_reference(
         "pr",
         "comments_organization_steps.md",
     )
-
-    agent_guidelines = extract_agent_guidelines_checklist(agent_file)
 
     basic_principles_checklist = ""
     if basic_principles:

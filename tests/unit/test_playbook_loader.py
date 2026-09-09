@@ -3,9 +3,10 @@
 from pathlib import Path
 
 import pytest
+import yaml
 
 from cafe.core.human_tasks import HumanTaskCompletion
-from cafe.core.playbook import PlaybookDefinition, resolve_playbook_skills
+from cafe.core.playbook import PlaybookDefinition, StepConfig, resolve_playbook_skills
 from cafe.playbooks.loader import PlaybookLoader, apply_issue_playbook_overrides
 from cafe.skills.loader import SkillLoader
 from cafe.ui.human_tasks import (
@@ -13,6 +14,17 @@ from cafe.ui.human_tasks import (
     resolve_step_human_task_continuation,
     validate_step_human_task_completion,
 )
+
+pytestmark = pytest.mark.usefixtures("cached_builtin_skill_frontmatter")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_global_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "cafe.utils.config.get_global_cafe_dir", lambda: tmp_path / "global"
+    )
 
 
 def _write_skill(root: Path, name: str) -> None:
@@ -24,38 +36,136 @@ def _write_skill(root: Path, name: str) -> None:
     )
 
 
-def _write_playbook(root: Path, name: str, content: str) -> None:
+def _write_playbook(
+    root: Path,
+    name: str,
+    content: str,
+    *,
+    with_applicability: bool = True,
+) -> None:
     root.mkdir(parents=True, exist_ok=True)
-    (root / f"{name}.yaml").write_text(content, encoding="utf-8")
+    data = yaml.safe_load(content)
+    if with_applicability and isinstance(data, dict):
+        playbook = data.get("playbook")
+        if isinstance(playbook, dict):
+            playbook.setdefault(
+                "applicability",
+                {
+                    "summary": "A test workflow for focused contract coverage.",
+                    "use_when": ["The test requires this workflow."],
+                    "avoid_when": ["The test requires a different workflow."],
+                },
+            )
+    (root / f"{name}.yaml").write_text(
+        yaml.safe_dump(data, sort_keys=False),
+        encoding="utf-8",
+    )
 
 
-def test_issue_can_override_only_one_step_iteration_limit(tmp_path: Path) -> None:
+def test_issue_can_override_only_one_step_attempt_limit(tmp_path: Path) -> None:
     issue_yaml = tmp_path / "issue.yaml"
     issue_yaml.write_text(
-        "playbook_overrides:\n  steps:\n    review:\n      max_iterations: 7\n",
+        "playbook_overrides:\n  steps:\n    review:\n      max_attempts_per_cycle: 7\n",
         encoding="utf-8",
     )
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
-            "develop": {"max_iterations": 3},
-            "review": {"max_iterations": 5},
+            "develop": {"max_attempts_per_cycle": 3},
+            "review": {"max_attempts_per_cycle": 5},
         },
     }
 
     resolved = apply_issue_playbook_overrides(playbook, issue_yaml)
 
-    assert resolved["steps"]["review"]["max_iterations"] == 7
-    assert resolved["steps"]["develop"]["max_iterations"] == 3
-    assert playbook["steps"]["review"]["max_iterations"] == 5
+    assert resolved["steps"]["review"]["max_attempts_per_cycle"] == 7
+    assert resolved["steps"]["develop"]["max_attempts_per_cycle"] == 3
+    assert playbook["steps"]["review"]["max_attempts_per_cycle"] == 5
+
+
+def test_legacy_max_iterations_is_migrated_to_attempt_limit(tmp_path: Path) -> None:
+    step = StepConfig.model_validate(
+        {"skill": "phase", "role": "reviewer", "max_iterations": 2, "on": {}}
+    )
+    assert step.max_attempts_per_cycle == 2
+    assert "max_iterations" not in step.model_dump(exclude_none=True)
+
+    issue_yaml = tmp_path / "issue.yaml"
+    issue_yaml.write_text(
+        "playbook_overrides:\n  steps:\n    review:\n      max_iterations: 7\n",
+        encoding="utf-8",
+    )
+    resolved = apply_issue_playbook_overrides(
+        {
+            "playbook": {"id": "default"},
+            "steps": {"review": {"max_attempts_per_cycle": 5}},
+        },
+        issue_yaml,
+    )
+    assert resolved["steps"]["review"]["max_attempts_per_cycle"] == 7
+    assert "max_iterations" not in resolved["steps"]["review"]
+
+
+def test_step_corrections_resume_sessions_by_default() -> None:
+    step = StepConfig.model_validate({"skill": "phase", "role": "reviewer", "on": {}})
+
+    assert step.correction_session == "resume"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("max_attempts_per_cycle", 0),
+        ("max_attempts_per_cycle", -1),
+        ("max_attempts_per_cycle", True),
+        ("max_attempts_per_cycle", "many"),
+        ("max_iterations", 0),
+        ("max_iterations", "many"),
+    ],
+)
+def test_step_attempt_limit_rejects_non_positive_integers(field: str, value: object) -> None:
+    with pytest.raises(ValueError, match="positive integer"):
+        StepConfig.model_validate(
+            {"skill": "phase", "role": "reviewer", field: value, "on": {}}
+        )
+
+
+@pytest.mark.parametrize("field", ["max_attempts_per_cycle", "max_iterations"])
+def test_step_attempt_limit_normalizes_positive_digit_strings(field: str) -> None:
+    step = StepConfig.model_validate(
+        {"skill": "phase", "role": "reviewer", field: "5", "on": {}}
+    )
+    assert step.max_attempts_per_cycle == 5
+
+
+def test_issue_override_preserves_trusted_playbook_source(tmp_path: Path) -> None:
+    """Runtime authority survives the supported narrow issue override path."""
+    issue_yaml = tmp_path / "issue.yaml"
+    issue_yaml.write_text(
+        "playbook_overrides:\n  steps:\n    spec:\n      max_attempts_per_cycle: 7\n",
+        encoding="utf-8",
+    )
+    loaded = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+    ).load("standard")
+
+    resolved = apply_issue_playbook_overrides(loaded, issue_yaml)
+
+    assert getattr(resolved, "source", None) == "builtin"
+    assert resolved["steps"]["spec"]["max_attempts_per_cycle"] == 7
 
 
 @pytest.mark.parametrize(
     ("override", "message"),
     [
-        ("steps:\n  missing:\n    max_iterations: 2", "unknown playbook step"),
-        ("steps:\n  review:\n    max_iterations: many", "positive integer"),
-        ("steps:\n  review:\n    skill: other", "supports only max_iterations"),
+        ("steps:\n  missing:\n    max_attempts_per_cycle: 2", "unknown playbook step"),
+        ("steps:\n  review:\n    max_attempts_per_cycle: many", "positive integer"),
+        (
+            "steps:\n  review:\n    max_attempts_per_cycle: 2\n    max_iterations: 3",
+            "cannot declare both",
+        ),
+        ("steps:\n  review:\n    skill: other", "supports only max_attempts_per_cycle"),
         ("entry_point: review", "supports only 'steps'"),
     ],
 )
@@ -70,7 +180,7 @@ def test_issue_playbook_override_rejects_unsupported_contract(
     )
     playbook = {
         "playbook": {"id": "default"},
-        "steps": {"review": {"max_iterations": 5}},
+        "steps": {"review": {"max_attempts_per_cycle": 5}},
     }
 
     with pytest.raises(ValueError, match=message):
@@ -317,7 +427,9 @@ steps:
     human_tasks:
       - trigger: confirm_output
         task_id: local-review
-        outcomes: {approve: _done, request_changes: repair}
+        outcomes:
+          {fix_now: repair, create_follow_up: _done,
+           continue_without_issue: _done}
         feedback_delivery: {artifact: workflow_feedback, source_kind: local_review}
     on: {confirm_output: fixed-review, await_agent: _done}
   target-review:
@@ -396,7 +508,7 @@ workflow:
         trigger="confirm_output",
         raw_payload={
             "task": "local-review",
-            "decision": "request_changes",
+            "decision": "fix_now",
             "feedback": "Repair the implementation.",
         },
         skill_loader=skill_loader,
@@ -445,12 +557,8 @@ def test_declared_skill_environment_resolves_layers_with_stable_deduplication() 
             "skills": {
                 "workflow": {
                     "shared": ["base", "shared"],
-                    "roles": {
-                        "developer": {"mode": "extend", "skills": ["shared", "role"]}
-                    },
-                    "steps": {
-                        "build": {"mode": "replace", "skills": ["step", "role", "step"]}
-                    },
+                    "roles": {"developer": {"mode": "extend", "skills": ["shared", "role"]}},
+                    "steps": {"build": {"mode": "replace", "skills": ["step", "role", "step"]}},
                 },
                 "chat": {"shared": []},
             },
@@ -463,9 +571,7 @@ def test_declared_skill_environment_resolves_layers_with_stable_deduplication() 
     assert resolve_playbook_skills(
         model, channel="workflow", role="developer", step_name="build"
     ) == ["step", "role"]
-    assert resolve_playbook_skills(
-        model, channel="chat", role="developer", step_name="build"
-    ) == []
+    assert resolve_playbook_skills(model, channel="chat", role="developer", step_name="build") == []
 
 
 def test_skill_environment_reports_missing_channel_and_missing_skill_before_execution(
@@ -529,7 +635,9 @@ def test_skill_environment_rejects_malformed_and_unknown_overlay_scopes(
             {
                 "playbook": {"id": "invalid"},
                 "skills": {"workflow": {}, "chat": {"shared": []}},
-                "steps": {"run": {"role": "operator", "skill": "phase", "on": {"await_agent": "_done"}}},
+                "steps": {
+                    "run": {"role": "operator", "skill": "phase", "on": {"await_agent": "_done"}}
+                },
             }
         )
     with pytest.raises(ValueError, match="skills.workflow.roles.developer.mode"):
@@ -622,22 +730,38 @@ steps:
 
 @pytest.mark.parametrize(
     "playbook_id",
-    ["default", "simple", "tdd", "hotfix", "editorial", "incident", "research"],
+    [
+        "direct",
+        "simple",
+        "standard",
+        "standard-qa",
+        "tdd",
+        "tdd-qa",
+        "hotfix",
+        "editorial",
+        "incident",
+        "research",
+    ],
 )
 def test_bundled_playbooks_preserve_declared_skill_environment_parity(
     tmp_path: Path, playbook_id: str
 ) -> None:
     """I1 — each bundled playbook declares the historic support skill order."""
     builtin_root = Path(__file__).resolve().parents[2] / "src" / "cafe" / "data"
-    model = PlaybookLoader(
-        project_root=tmp_path / "project",
-        global_root=tmp_path / "global",
-        builtin_root=builtin_root,
-    ).load_model(playbook_id, strict=True).model
+    model = (
+        PlaybookLoader(
+            project_root=tmp_path / "project",
+            global_root=tmp_path / "global",
+            builtin_root=builtin_root,
+        )
+        .load_model(playbook_id, strict=True)
+        .model
+    )
 
-    assert resolve_playbook_skills(
-        model, channel="workflow", role=None, step_name=None
-    ) == ["cafe-workflow-common", "cafe-github_sync"]
+    assert resolve_playbook_skills(model, channel="workflow", role=None, step_name=None) == [
+        "cafe-workflow-common",
+        "cafe-github_sync",
+    ]
     assert resolve_playbook_skills(model, channel="chat", role=None, step_name=None) == [
         "cafe-common-chat-handoff",
         "cafe-chat-develop-change",
@@ -1085,9 +1209,7 @@ def test_initial_input_rejects_legacy_presentation_outside_bundled_playbooks(
     project_root = tmp_path / "project"
     _write_skill(builtin_root / "skills", "intake")
     playbook_root = (
-        project_root / ".cafe" / "playbooks"
-        if source == "project"
-        else global_root / "playbooks"
+        project_root / ".cafe" / "playbooks" if source == "project" else global_root / "playbooks"
     )
     _write_playbook(
         playbook_root,
@@ -1119,17 +1241,21 @@ steps:
         loader.load_model("intake-flow")
 
 
-@pytest.mark.parametrize("playbook_name", ["default", "simple", "tdd"])
+@pytest.mark.parametrize("playbook_name", ["standard", "standard-qa", "simple", "tdd", "tdd-qa"])
 def test_builtin_entry_steps_use_declared_initial_input_resolver(
     playbook_name: str, tmp_path: Path
 ) -> None:
     """I3 — built-in development flows retain the provider contract."""
     builtin_root = Path(__file__).resolve().parents[2] / "src" / "cafe" / "data"
-    model = PlaybookLoader(
-        project_root=tmp_path,
-        global_root=tmp_path / "global",
-        builtin_root=builtin_root,
-    ).load_model(playbook_name).model
+    model = (
+        PlaybookLoader(
+            project_root=tmp_path,
+            global_root=tmp_path / "global",
+            builtin_root=builtin_root,
+        )
+        .load_model(playbook_name)
+        .model
+    )
     entry = model.steps[model.entry_point]
 
     assert entry.initial_input.providers == ["manual_text", "github_issue"]
@@ -1451,6 +1577,42 @@ steps:
         ).load_model("default")
 
 
+@pytest.mark.parametrize(
+    "hook_yaml",
+    [
+        "before_execute:\n        - capability: cafe.github.issue_comment\n          when_intents: [confirmed]",
+        "after_execute:\n        - capability: cafe.github.issue_comment",
+        "after_execute:\n        - capability: cafe.browser.open\n          when_intents: [confirmed]",
+    ],
+)
+def test_project_playbook_cannot_author_capability_hooks(tmp_path: Path, hook_yaml: str) -> None:
+    builtin_root = tmp_path / "builtin"
+    project_root = tmp_path / "project"
+    _write_skill(builtin_root / "skills", "cafe-plan")
+    _write_playbook(
+        project_root / ".cafe" / "playbooks",
+        "malicious",
+        f"""
+playbook: {{id: malicious}}
+steps:
+  plan:
+    role: developer
+    skill: cafe-plan
+    output_artifact: plan
+    hooks:
+      {hook_yaml}
+    on: {{confirm_output: _done}}
+""",
+    )
+
+    with pytest.raises(ValueError, match="capability hooks are runtime-owned"):
+        PlaybookLoader(
+            project_root=project_root,
+            global_root=tmp_path / "global",
+            builtin_root=builtin_root,
+        ).load_model("malicious")
+
+
 def test_load_rejects_unknown_alignment_config_key(tmp_path: Path) -> None:
     builtin_root = tmp_path / "builtin"
     _write_skill(builtin_root / "skills", "cafe-develop")
@@ -1528,6 +1690,7 @@ steps:
   plan:
     skill: cafe-plan
     role: developer
+    output_artifact: plan
     hooks:
       after_execute:
         - script: sync_github.sh
@@ -1806,7 +1969,8 @@ def test_builtin_catalog_includes_hotfix_and_simple() -> None:
 
     playbooks = loader.list_playbooks()
 
-    assert "default" in playbooks
+    assert "standard" in playbooks
+    assert "default" not in playbooks
     assert "hotfix" in playbooks
     assert "simple" in playbooks
     assert "editorial" in playbooks
@@ -1814,13 +1978,18 @@ def test_builtin_catalog_includes_hotfix_and_simple() -> None:
     assert "incident" in playbooks
 
 
-def test_builtin_playbooks_declare_en_us_conversation_locale() -> None:
+def test_builtin_playbooks_declare_en_us_conversation_locale(
+    cached_builtin_playbook_models,
+) -> None:
     loader = PlaybookLoader()
 
     for playbook_id in (
-        "default",
+        "direct",
         "simple",
+        "standard",
+        "standard-qa",
         "tdd",
+        "tdd-qa",
         "hotfix",
         "editorial",
         "incident",
@@ -1829,7 +1998,7 @@ def test_builtin_playbooks_declare_en_us_conversation_locale() -> None:
         assert loader.load_model(playbook_id).model.playbook.conversation_locale == "en-US"
 
 
-def test_builtin_hotfix_and_simple_playbooks_load() -> None:
+def test_builtin_hotfix_and_simple_playbooks_load(cached_builtin_playbook_models) -> None:
     loader = PlaybookLoader()
 
     hotfix = loader.load_model("hotfix").model
@@ -1838,7 +2007,7 @@ def test_builtin_hotfix_and_simple_playbooks_load() -> None:
 
     assert hotfix.entry_point == "develop"
     assert list(hotfix.steps.keys()) == ["develop", "review", "pr"]
-    assert hotfix.steps["review"].max_iterations == 1
+    assert hotfix.steps["review"].max_attempts_per_cycle == 1
     assert hotfix.steps["develop"].input_artifacts == [
         "review_feedback",
         "pr_result",
@@ -1853,8 +2022,9 @@ def test_builtin_hotfix_and_simple_playbooks_load() -> None:
     ]
 
     assert simple.entry_point == "spec"
-    assert list(simple.steps.keys()) == ["spec", "develop", "pr"]
-    assert simple.steps["develop"].on["await_agent"] == "pr"
+    assert list(simple.steps.keys()) == ["spec", "develop", "qa", "pr"]
+    assert simple.steps["develop"].on["await_agent"] == "qa"
+    assert simple.steps["qa"].on["await_agent"] == "pr"
 
 
 def test_legacy_playbook_omits_input_artifact_scope_after_loading(tmp_path: Path) -> None:
@@ -1916,7 +2086,9 @@ steps:
         loader.load("invalid-null-scope")
 
 
-def test_builtin_non_software_playbooks_define_non_default_handoff_metadata() -> None:
+def test_builtin_non_software_playbooks_define_non_default_handoff_metadata(
+    cached_builtin_playbook_models,
+) -> None:
     loader = PlaybookLoader()
 
     research = loader.load_model("research").model
@@ -1930,12 +2102,27 @@ def test_builtin_non_software_playbooks_define_non_default_handoff_metadata() ->
     assert "requirements" not in (editorial.steps["draft"].handoff_label or "").lower()
 
 
-def test_builtin_user_handoffs_resolve_nonempty_declared_policies() -> None:
+def test_builtin_user_handoffs_resolve_nonempty_declared_policies(
+    cached_builtin_playbook_models,
+) -> None:
     """Builtin user pauses must not fall back to implicit development behavior."""
     loader = PlaybookLoader()
+    skill_loader = SkillLoader()
+    skill_loader.discover()
     triggers = {"confirm_output", "need_clarification", "no_changes_needed"}
 
-    for playbook_id in ("default", "simple", "tdd", "hotfix", "editorial", "incident", "research"):
+    for playbook_id in (
+        "direct",
+        "simple",
+        "standard",
+        "standard-qa",
+        "tdd",
+        "tdd-qa",
+        "hotfix",
+        "editorial",
+        "incident",
+        "research",
+    ):
         playbook = loader.load(playbook_id)
         for step_name, step in playbook["steps"].items():
             for trigger in triggers.intersection(step.get("on", {})):
@@ -1943,7 +2130,176 @@ def test_builtin_user_handoffs_resolve_nonempty_declared_policies() -> None:
                     playbook_data=playbook,
                     step_name=step_name,
                     trigger=trigger,
+                    skill_loader=skill_loader,
                 )
 
                 assert policy.prompt
                 assert binding.task_id == policy.id
+
+
+def _applicability_definition(applicability: object) -> dict:
+    return {
+        "playbook": {"id": "applicable", "applicability": applicability},
+        "roles": {"operator": {}},
+        "steps": {
+            "run": {
+                "skill": "cafe-develop",
+                "role": "operator",
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+
+
+def _custom_applicability_yaml(applicability: object | None) -> str:
+    playbook: dict[str, object] = {"id": "custom"}
+    if applicability is not None:
+        playbook["applicability"] = applicability
+    return yaml.safe_dump(
+        {
+            "playbook": playbook,
+            "skills": {
+                "workflow": {"shared": []},
+                "chat": {"shared": []},
+            },
+            "roles": {"operator": {}},
+            "commands": {"prepare": {"prompt_for_spec_plan_config": False}},
+            "steps": {
+                "run": {
+                    "skill": "cafe-develop",
+                    "role": "operator",
+                    "on": {"await_agent": "_done"},
+                }
+            },
+        },
+        sort_keys=False,
+    )
+
+
+def test_applicability_normalizes_boundaries_and_round_trips(tmp_path: Path) -> None:
+    """U1 — normalized bounded applicability remains machine-readable."""
+    applicability = {
+        "summary": f"  {'s' * 160}  ",
+        "use_when": [f"  {'u' * 200}  ", "needs   review"],
+        "avoid_when": [f"  {'a' * 200}  "],
+    }
+    model = PlaybookDefinition.model_validate(_applicability_definition(applicability))
+
+    assert model.playbook.applicability.summary == "s" * 160
+    assert model.playbook.applicability.use_when == ["u" * 200, "needs review"]
+    assert model.playbook.applicability.avoid_when == ["a" * 200]
+
+    project_root = tmp_path / "project"
+    _write_playbook(
+        project_root / ".cafe" / "playbooks",
+        "custom",
+        _custom_applicability_yaml(applicability),
+        with_applicability=False,
+    )
+    loaded = PlaybookLoader(project_root=project_root).load_model("custom")
+
+    assert loaded.as_dict()["playbook"]["applicability"] == {
+        "summary": "s" * 160,
+        "use_when": ["u" * 200, "needs review"],
+        "avoid_when": ["a" * 200],
+    }
+    assert loaded.automatic_selection_eligible is True
+
+
+@pytest.mark.parametrize(
+    ("applicability", "field"),
+    [
+        ({"use_when": ["yes"], "avoid_when": ["no"]}, "summary"),
+        ({"summary": "ok", "use_when": ["yes"]}, "avoid_when"),
+        (
+            {"summary": ["not a string"], "use_when": ["yes"], "avoid_when": ["no"]},
+            "summary",
+        ),
+        ({"summary": "ok", "use_when": "yes", "avoid_when": ["no"]}, "use_when"),
+        ({"summary": "ok", "use_when": [], "avoid_when": ["no"]}, "use_when"),
+        ({"summary": "ok", "use_when": ["yes"], "avoid_when": ["   "]}, "avoid_when"),
+        ({"summary": "   ", "use_when": ["yes"], "avoid_when": ["no"]}, "summary"),
+        ({"summary": "s" * 161, "use_when": ["yes"], "avoid_when": ["no"]}, "summary"),
+        ({"summary": "ok", "use_when": ["u" * 201], "avoid_when": ["no"]}, "use_when"),
+        (
+            {
+                "summary": "ok",
+                "use_when": [f"condition {index}" for index in range(7)],
+                "avoid_when": ["no"],
+            },
+            "use_when",
+        ),
+        (
+            {"summary": "ok", "use_when": ["Same", " same  "], "avoid_when": ["no"]},
+            "use_when",
+        ),
+        (
+            {"summary": "ok", "use_when": ["Needs QA"], "avoid_when": [" needs  qa "]},
+            "avoid_when",
+        ),
+    ],
+)
+def test_invalid_applicability_reports_identity_field_and_repair(
+    tmp_path: Path,
+    applicability: object,
+    field: str,
+) -> None:
+    """U2/U3 — malformed or contradictory metadata gives actionable diagnostics."""
+    project_root = tmp_path / "project"
+    _write_playbook(
+        project_root / ".cafe" / "playbooks",
+        "custom",
+        _custom_applicability_yaml(applicability),
+        with_applicability=False,
+    )
+
+    with pytest.raises(ValueError) as raised:
+        PlaybookLoader(project_root=project_root).load_model("custom")
+
+    message = str(raised.value)
+    assert "custom" in message
+    assert "playbook.applicability" in message
+    assert field in message
+    assert "cafe playbook validate custom --strict" in message
+
+
+def test_legacy_applicability_migration_preserves_graph_and_restores_eligibility(
+    tmp_path: Path,
+) -> None:
+    """U4/I1 — compatibility inspection never fabricates selection metadata."""
+    project_root = tmp_path / "project"
+    playbook_root = project_root / ".cafe" / "playbooks"
+    _write_playbook(
+        playbook_root,
+        "custom",
+        _custom_applicability_yaml(None),
+        with_applicability=False,
+    )
+    loader = PlaybookLoader(project_root=project_root)
+
+    legacy = loader.load_model("custom")
+    legacy_graph = legacy.model.steps["run"].model_dump()
+
+    assert legacy.model.playbook.applicability is None
+    assert legacy.automatic_selection_eligible is False
+    assert any("playbook.applicability" in warning for warning in legacy.warnings)
+    assert any("cafe playbook validate custom --strict" in warning for warning in legacy.warnings)
+    with pytest.raises(ValueError, match="playbook.applicability"):
+        loader.load_model("custom", strict=True)
+
+    _write_playbook(
+        playbook_root,
+        "custom",
+        _custom_applicability_yaml(
+            {
+                "summary": "Use this workflow for a focused custom operation.",
+                "use_when": ["The custom operation is explicitly selected."],
+                "avoid_when": ["A different responsibility is required."],
+            }
+        ),
+        with_applicability=False,
+    )
+    migrated = loader.load_model("custom", strict=True)
+
+    assert migrated.automatic_selection_eligible is True
+    assert migrated.model.steps["run"].model_dump() == legacy_graph

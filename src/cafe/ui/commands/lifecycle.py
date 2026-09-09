@@ -12,11 +12,18 @@ import typer
 import yaml
 
 from cafe.core.active_issue import clear_marker_if_matches, write_marker
-from cafe.utils.issue_config import resolve_issue_id
+from cafe.core.blackboard import (
+    BlackboardState,
+    BlackboardStore,
+    is_genuine_cold_start,
+)
+from cafe.utils.issue_config import resolve_issue_config_path, resolve_issue_id
 
 VALID_PHASES = ["spec", "plan", "develop", "review", "pr"]
 
 console: Any = None
+
+
 prompt_text: Any = None
 prompt_list: Any = None
 prompt_confirm: Any = None
@@ -31,6 +38,31 @@ prompt_for_rigor: Any = None
 select_template: Any = None
 _ensure_default_content: Any = None
 _resolve_iteration_index: Any = None
+
+
+def _prepared_identity_is_reusable(
+    issue_dir: Path,
+    *,
+    entry_step: str,
+    playbook_id: str,
+) -> bool:
+    """Accept only the untouched identity created by a completed prepare."""
+    blackboard_path = issue_dir / "blackboard.json"
+    if not blackboard_path.exists() and not blackboard_path.is_symlink():
+        return False
+    if not blackboard_path.is_file() or blackboard_path.is_symlink():
+        raise ValueError("prepared workflow identity is not a regular file")
+    try:
+        raw = json.loads(blackboard_path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict) or not raw.get("workflow_id"):
+            raise ValueError("prepared workflow identity has no workflow ID")
+        state = BlackboardState.from_dict(raw, initial_step=entry_step)
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        raise ValueError("prepared workflow identity is invalid") from exc
+    return (
+        state.playbook_id == playbook_id
+        and is_genuine_cold_start(state, entry_point=entry_step)
+    )
 
 
 def _ensure_worktree_cafe_excluded(worktree_root: Path) -> None:
@@ -272,6 +304,11 @@ def prepare(
         None,
         help="Issue name (will create directory at .cafe/issues/{issue-name}/)",
     ),
+    playbook: Optional[str] = typer.Option(
+        None,
+        "--playbook",
+        help="Playbook for this issue (overrides any legacy repository setting)",
+    ),
     base_branch: Optional[str] = typer.Option(
         None,
         "--base",
@@ -326,7 +363,10 @@ def prepare(
     auto_create_pr: Optional[bool] = typer.Option(
         None,
         "--auto-create-pr/--no-auto-create-pr",
-        help="Automatically create PR after development (default: False, GitHub repos only)",
+        help=(
+            "Required publication choice when the playbook requests cafe.pr.publish; "
+            "enabling requires a GitHub repository"
+        ),
     ),
     sync_spec_github: Optional[bool] = typer.Option(
         None,
@@ -358,6 +398,7 @@ def prepare(
     Examples:
         cafe prepare
         cafe prepare fix-login-bug
+        cafe prepare fix-login-bug --playbook hotfix
         cafe prepare fix-bug --no-interactive --input-method=manual --rigor=medium --plan-template=default
         cafe prepare issue-123 --no-interactive --input-method=github --issue-id=123 --rigor=high --spec-template=detailed
         cafe prepare my-feature --base develop
@@ -372,40 +413,46 @@ def prepare(
             console.print("[yellow]Please run 'cafe init' first to set up CAFE.[/yellow]")
             raise typer.Exit(1)
 
-        # 1.1. Sync agents and templates at the beginning of prepare
-        from cafe.ui.init_helpers import sync_agents, sync_templates
-
-        cafe_dir = Path(".cafe")
-        agent_success, agent_failed = sync_agents(cafe_dir)
-        template_success, template_failed = sync_templates(cafe_dir)
-
-        # Display sync summary
-        if agent_success > 0 or template_success > 0:
-            console.print(
-                f"  [green]✓[/green] Updated .cafe directory with {agent_success} agent(s) and {template_success} template(s)"
-            )
-        if agent_failed > 0 or template_failed > 0:
-            console.print(
-                f"  [yellow]⚠[/yellow] Warning: Failed to copy {agent_failed + template_failed} file(s)"
-            )
-
         from cafe.core.prepare_profile import PrepareProfile, PrepareRigorError
         from cafe.playbooks.loader import PlaybookLoader
         from cafe.ui.cli_shared import _resolve_selected_playbook
         from cafe.utils.git_utils import is_github_repo
 
-        playbook_name = _resolve_selected_playbook(None)
+        playbook_name = _resolve_selected_playbook(playbook)
         try:
             loaded_playbook = PlaybookLoader().load_model(playbook_name)
         except (FileNotFoundError, ValueError) as exc:
             console.print(f"[red]Error: Failed to load playbook '{playbook_name}': {exc}[/red]")
             console.print(
-                "[yellow]Check .cafe/config.yaml playbook setting or add the playbook file.[/yellow]"
+                "[yellow]Check --playbook, the legacy .cafe/config.yaml setting, "
+                "or add the playbook file.[/yellow]"
             )
             raise typer.Exit(1)
 
         profile = PrepareProfile.from_playbook(loaded_playbook.model, is_github_repo())
         entry_step_name = str(loaded_playbook.model.entry_point)
+        from cafe.ui.prepare_field_renderer import (
+            NonInteractiveCliAnswers,
+            PrepareNonInteractiveError,
+            validate_publication_answers,
+        )
+
+        if profile.supports_pr_config() and not profile.is_github_repo and auto_create_pr is None:
+            auto_create_pr = False
+        publication_supplied = auto_create_pr is not None or post_pr_todo_list is not None
+        publication_will_be_prompted = issue_name is None and interactive
+        if publication_supplied or not publication_will_be_prompted:
+            try:
+                validate_publication_answers(
+                    profile,
+                    NonInteractiveCliAnswers(
+                        auto_create_pr=auto_create_pr,
+                        post_pr_todo_list=post_pr_todo_list,
+                    ),
+                )
+            except PrepareNonInteractiveError as exc:
+                console.print(f"[red]Error: {exc}[/red]")
+                raise typer.Exit(1)
 
         # 2. Determine interactive mode and config prompt behavior
         # should_prompt_for_config: Should we show config prompts?
@@ -426,15 +473,63 @@ def prepare(
                 console.print("[red]Error: Issue name is required in non-interactive mode.[/red]")
                 raise typer.Exit(1)
 
+        root_issue_dir = Path(".cafe") / "issues" / issue_name
+        existing_config = root_issue_dir / "issue.yaml"
+        existing_issue_dir = (
+            resolve_issue_config_path(existing_config).parent
+            if existing_config.exists()
+            else root_issue_dir
+        )
+        reusable_identity_dirs: set[Path] = set()
+        for candidate in (
+            existing_issue_dir,
+            (
+                (Path(worktree.strip()) / ".cafe" / "issues" / issue_name)
+                if worktree and worktree.strip()
+                else None
+            ),
+        ):
+            if candidate is None:
+                continue
+            blackboard_path = candidate / "blackboard.json"
+            if not blackboard_path.exists() and not blackboard_path.is_symlink():
+                continue
+            try:
+                reusable = _prepared_identity_is_reusable(
+                    candidate,
+                    entry_step=entry_step_name,
+                    playbook_id=playbook_name,
+                )
+            except ValueError as exc:
+                console.print(f"[red]Error: {exc}[/red]")
+                raise typer.Exit(1)
+            if not reusable:
+                console.print(
+                    "[red]Error: active workflow state exists; prepare would overwrite it[/red]"
+                )
+                raise typer.Exit(1)
+            reusable_identity_dirs.add(candidate.resolve())
+
+        # Templates remain materialized, but no preparation mutation occurs
+        # until an active workflow has been ruled out.
+        from cafe.ui.init_helpers import sync_templates
+
+        cafe_dir = Path(".cafe")
+        template_success, template_failed = sync_templates(cafe_dir)
+        if template_success > 0:
+            console.print(
+                f"  [green]✓[/green] Updated .cafe directory with {template_success} template(s)"
+            )
+        if template_failed > 0:
+            console.print(f"  [yellow]⚠[/yellow] Warning: Failed to copy {template_failed} file(s)")
+
         # 4. Initialize Git operations
         initialized_git_now = False
         try:
             repository_exists = GitOperations.is_repository()
             git_ops = GitOperations()
             bootstrap_needs_baseline = repository_exists and not git_ops.has_commits()
-            resume_approved_bootstrap = (
-                bootstrap_needs_baseline and git_ops.is_bootstrap_pending()
-            )
+            resume_approved_bootstrap = bootstrap_needs_baseline and git_ops.is_bootstrap_pending()
 
             if not repository_exists or bootstrap_needs_baseline:
                 should_initialize = init_git or resume_approved_bootstrap
@@ -475,9 +570,7 @@ def prepare(
                     git_ops = GitOperations.initialize_repository(initial_branch="main")
                 else:
                     if not git_ops.is_bootstrap_pending():
-                        git_ops.run_git(
-                            "config", "--local", "cafe.bootstrap-pending", "true"
-                        )
+                        git_ops.run_git("config", "--local", "cafe.bootstrap-pending", "true")
                     git_ops.complete_repository_initialization()
                 initialized_git_now = True
                 initialized_branch = git_ops.get_current_branch()
@@ -595,12 +688,24 @@ def prepare(
                 )
                 worktree_path = user_path.strip() if user_path.strip() else default_path
 
+        target_issue_dir = (
+            (Path(str(worktree_path)).resolve() / ".cafe" / "issues" / issue_name)
+            if use_worktree
+            else root_issue_dir.resolve()
+        )
+        if reusable_identity_dirs and reusable_identity_dirs != {target_issue_dir}:
+            console.print(
+                "[red]Error: a prepared workflow identity already belongs to a different "
+                "checkout; close it before changing the prepare target[/red]"
+            )
+            raise typer.Exit(1)
+
         console.print()
         console.print(f"[bold blue]🔧 Preparing issue: {issue_name}[/bold blue]")
         console.print(f"Base branch: {base_branch}")
         console.print()
 
-        # 9. Initialize default templates and agents if not exists (in repo root)
+        # 9. Initialize default templates if not present (in repo root)
         cafe_dir = Path(".cafe")
         _ensure_default_content(cafe_dir)
 
@@ -751,8 +856,8 @@ def prepare(
         if auto_create_pr is not None:
             if not profile.supports_pr_config(parsed_fields):
                 console.print(
-                    "[red]Error: --auto-create-pr/--no-auto-create-pr requires a "
-                    "playbook with PR configuration.[/red]"
+                    "[red]Error: --auto-create-pr/--no-auto-create-pr is not applicable "
+                    "because the selected playbook does not request cafe.pr.publish.[/red]"
                 )
                 raise typer.Exit(1)
             if auto_create_pr and not profile.is_github_repo:
@@ -764,8 +869,9 @@ def prepare(
         if post_pr_todo_list is not None:
             if not profile.supports_pr_config(parsed_fields):
                 console.print(
-                    "[red]Error: --post-pr-todo-list/--no-post-pr-todo-list requires a "
-                    "playbook with PR configuration.[/red]"
+                    "[red]Error: --post-pr-todo-list/--no-post-pr-todo-list is not "
+                    "applicable because the selected playbook does not request "
+                    "cafe.pr.publish.[/red]"
                 )
                 raise typer.Exit(1)
             if auto_create_pr is not False:
@@ -777,8 +883,8 @@ def prepare(
         config_data = {
             "base_branch": base_branch,
             "feature_branch": feature_branch,
+            "playbook_id": playbook_name,
         }
-
         # Add spec config if present
         if spec_config:
             config_data["spec"] = spec_config
@@ -801,6 +907,24 @@ def prepare(
         # Add worktree_path if using worktree mode
         if use_worktree:
             config_data["worktree_path"] = worktree_path
+
+        # Remote PRs are reviewed against the remote base, so do not start from
+        # a local base that is already behind or diverged. A local base that is
+        # merely ahead is safe and its extra commits will be included in the PR.
+        if pr_config.get("auto_create") is True:
+            try:
+                remote_base = git_ops.ensure_remote_base_ancestor(
+                    base_branch,
+                    base_branch,
+                )
+            except Exception as exc:
+                console.print(f"[red]Error: Cannot safely prepare an automatic PR: {exc}[/red]")
+                console.print(
+                    "[yellow]Update the local base branch explicitly, then run "
+                    "cafe prepare again.[/yellow]"
+                )
+                raise typer.Exit(1)
+            console.print(f"[dim]Verified PR base against {remote_base}.[/dim]")
 
         # 10. Perform Git operations (before writing config)
         if use_worktree:
@@ -851,7 +975,7 @@ def prepare(
             (worktree_issues_dir / entry_step_name).mkdir(exist_ok=True)
             (worktree_issues_dir / "sessions").mkdir(exist_ok=True)
 
-            # Initialize default templates and agents in worktree .cafe
+            # Initialize default templates in worktree .cafe; agents stay fallback-only.
             _ensure_default_content(worktree_cafe_dir)
             try:
                 _ensure_worktree_cafe_excluded(worktree_abs)
@@ -888,13 +1012,16 @@ def prepare(
         with open(issue_config_file, "w", encoding="utf-8") as f:
             yaml.dump(config_data, f, allow_unicode=True, default_flow_style=False)
 
-        # For worktree mode, also create issue.yaml in repo root for cafe ls to read
+        # For worktree mode, keep only a repository inventory pointer in the root checkout.
         if use_worktree:
             repo_root_issue_dir = Path(f".cafe/issues/{issue_name}")
             repo_root_issue_dir.mkdir(parents=True, exist_ok=True)
             repo_root_config_file = repo_root_issue_dir / "issue.yaml"
-            with open(repo_root_config_file, "w", encoding="utf-8") as f:
-                yaml.dump(config_data, f, allow_unicode=True, default_flow_style=False)
+            inventory = {"issue_name": issue_name, "worktree_path": str(worktree_path)}
+            repo_root_config_file.write_text(
+                yaml.safe_dump(inventory, allow_unicode=True, sort_keys=False),
+                encoding="utf-8",
+            )
 
         console.print()
         # Display relative path instead of absolute path
@@ -911,12 +1038,23 @@ def prepare(
         else:
             write_marker(cafe_dir, issue_name)
 
+        # Preparation owns workflow identity creation. This makes the confirmed
+        # Driver contract bindable before the first runtime visit without
+        # executing a phase. A repeated prepare reuses the untouched identity.
+        blackboard = BlackboardStore(issue_dir).load_or_create(
+            entry_step_name,
+            playbook_id=playbook_name,
+        )
+        if not is_genuine_cold_start(blackboard, entry_point=entry_step_name):
+            raise ValueError("workflow state became active during prepare")
+
         # 12. Display success message
         console.print()
         console.print(f"[green]✓ Successfully prepared issue: {issue_name}[/green]")
         console.print(f"  📁 Directory: .cafe/issues/{issue_name}/")
         console.print(f"  🌿 Feature branch: {feature_branch}")
         console.print(f"  ⚓ Base branch: {base_branch}")
+        console.print(f"  🆔 Workflow ID: {blackboard.workflow_id}")
         if use_worktree:
             console.print(f"  📂 Worktree: {worktree_path}")
         console.print(f"  ⚙️  Config: .cafe/issues/{issue_name}/issue.yaml")
@@ -1113,6 +1251,7 @@ def close(
 
         # 3. Check for open/draft PRs
         github_ops = None
+        pr = None
         try:
             github_ops = GitHubOps()
             pr = github_ops.get_pr_for_branch(current_branch)
@@ -1137,6 +1276,8 @@ def close(
         except GitHubError:
             # If gh CLI is not installed or not authenticated, skip PR check
             pass
+
+        merged_pr = bool(pr and pr.get("state") == "MERGED")
 
         # 4. Load issue config
         issue_config_file = Path(f".cafe/issues/{current_branch}/issue.yaml").resolve()
@@ -1224,7 +1365,7 @@ def close(
                         issue_config_file=issue_config_file,
                         github_ops=github_ops,
                     )
-                elif pr_auto_create is False:
+                elif pr_auto_create is False and not merged_pr:
                     # Local review mode: merge feature branch into base branch
                     console.print("[dim]Merging feature branch into base branch...[/dim]")
                     git_ops.merge(feature_branch)
@@ -1240,7 +1381,7 @@ def close(
                 console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
                 if squash:
                     console.print(f"  1. git merge --squash {feature_branch} && git commit")
-                elif pr_auto_create is False:
+                elif pr_auto_create is False and not merged_pr:
                     console.print(f"  1. git merge {feature_branch}")
                 else:
                     console.print("  1. git pull")
@@ -1358,7 +1499,7 @@ def close(
                         issue_config_file=issue_config_file,
                         github_ops=github_ops,
                     )
-                elif pr_auto_create is False:
+                elif pr_auto_create is False and not merged_pr:
                     # Local review mode: merge feature branch into base branch
                     console.print("[dim]Merging feature branch into base branch...[/dim]")
                     git_ops.merge(feature_branch)
@@ -1374,7 +1515,7 @@ def close(
                 console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
                 if squash:
                     console.print(f"  1. git merge --squash {feature_branch} && git commit")
-                elif pr_auto_create is False:
+                elif pr_auto_create is False and not merged_pr:
                     console.print(f"  1. git merge {feature_branch}")
                 else:
                     console.print("  1. git pull")
@@ -1908,9 +2049,11 @@ def reset(
                     "status_code": target_status_code,
                     "timestamp": target_timestamp or datetime.now().astimezone().isoformat(),
                     "iteration": target_iteration,
-                    "message": f"Phase completed with {target_status_code}"
-                    if target_status_code
-                    else "Phase reset to this iteration",
+                    "message": (
+                        f"Phase completed with {target_status_code}"
+                        if target_status_code
+                        else "Phase reset to this iteration"
+                    ),
                     "end_time": target_end_time
                     or target_timestamp
                     or datetime.now().astimezone().isoformat(),

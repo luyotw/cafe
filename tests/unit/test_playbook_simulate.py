@@ -11,6 +11,8 @@ from cafe.playbooks.loader import PlaybookLoader
 from cafe.playbooks.simulate import analyze_playbook, format_dot, format_text_report
 from cafe.ui.cli import app
 
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
+
 runner = CliRunner()
 
 
@@ -189,7 +191,7 @@ entry_point: only
 def test_simulate_builtin_default_and_dot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     repo = Path(__file__).resolve().parents[2]
     monkeypatch.chdir(repo)
-    result = runner.invoke(app, ["playbook", "simulate", "default", "--dot"])
+    result = runner.invoke(app, ["playbook", "simulate", "standard", "--dot"])
     assert result.exit_code == 0
     out = result.stdout
     assert "Transitions (intent -> next step)" in out

@@ -1,7 +1,10 @@
 """Tests for workflow CLI command."""
 
 import json
+import os
+import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -9,7 +12,12 @@ from typer.testing import CliRunner
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.git import BranchHealth
+from cafe.core.human_task_notifications import SlackNotificationError
+from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.workflow_models import PlaybookRunResult, StepExecutionResult
+from cafe.playbooks.loader import PlaybookLoader
+from cafe.services.summary_display import SummaryDisplay
+from cafe.services.summary_service import SummaryService
 from cafe.ui.cli import (
     _execute_single_step_alias,
     _find_external_resume_step,
@@ -23,10 +31,109 @@ from cafe.ui.cli_shared import (
     _resolve_issue_playbook_name,
     apply_alignment_decision_from_payload,
 )
-from cafe.ui.commands.workflow import _reset_baton_for_explicit_start_step
+from cafe.ui.human_tasks import resolve_step_human_task
 from cafe.utils.config import ConfigManager
 
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
+
 runner = CliRunner()
+
+
+def _write_local_only_publication_contract(issue_dir: Path) -> None:
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    (issue_dir / "issue.yaml").write_text(
+        "pr:\n  auto_create: false\n",
+        encoding="utf-8",
+    )
+
+
+def _configure_test_driver_policy(*_args: object, **_kwargs: object) -> None:
+    """Guard retained skipped tests whose legacy Driver policy no longer exists."""
+    raise AssertionError("retired Driver-policy test must remain skipped")
+
+
+def test_background_forwards_trusted_event_callback_to_the_fixed_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    captured: dict[str, object] = {}
+
+    class CapturingWorkerLauncher:
+        def __init__(self, _issue_dir) -> None:
+            pass
+
+        def launch(self, _record, *, extra_args=None):
+            captured["extra_args"] = extra_args
+            return 4561
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.commands.workflow.FixedWorkerLauncher", CapturingWorkerLauncher),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue456"
+        mock_git_cls.return_value = git
+        result = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "standard",
+                "--execute",
+                "--background",
+                "--on-workflow-event",
+                "builtin:use-cafe-workflow:workflow_event_callback",
+            ],
+        )
+
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    assert captured["extra_args"] == [
+        "--playbook",
+        "standard",
+        "--on-workflow-event",
+        "builtin:use-cafe-workflow:workflow_event_callback",
+    ]
+
+
+def test_background_persists_cold_start_input_before_worker_launch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    launches: list[object] = []
+
+    class CapturingWorkerLauncher:
+        def __init__(self, _issue_dir) -> None:
+            pass
+
+        def launch(self, record, *, extra_args=None):
+            launches.append(record)
+            return 4562
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.commands.workflow.FixedWorkerLauncher", CapturingWorkerLauncher),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-input"
+        mock_git_cls.return_value = git
+        result = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "standard",
+                "--execute",
+                "--background",
+                "--user-input",
+                "requirement",
+            ],
+        )
+
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    assert launches
+    assert (tmp_path / ".cafe/issues/issue-input/spec/iteration_001/user_input.md").read_text(
+        encoding="utf-8"
+    ) == "requirement"
 
 
 @pytest.fixture(autouse=True)
@@ -127,9 +234,11 @@ def _handoff_to_step(
         intent = (
             HandoffIntent.WORKFLOW_COMPLETE
             if to_owner == HandoffOwner.DONE
-            else HandoffIntent.MANUAL_HANDOFF
-            if to_owner == HandoffOwner.USER
-            else HandoffIntent.AWAIT_AGENT
+            else (
+                HandoffIntent.MANUAL_HANDOFF
+                if to_owner == HandoffOwner.USER
+                else HandoffIntent.AWAIT_AGENT
+            )
         )
     store.update_handoff_contract(
         state,
@@ -140,6 +249,51 @@ def _handoff_to_step(
         status_code=status_code,
         source="test.executor",
     )
+
+
+def _pause_with_iteration_limit_task(issue_dir: Path):
+    _write_local_only_publication_contract(issue_dir)
+    playbook = PlaybookLoader().load("standard")
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("review", playbook_id="standard")
+    store.set_current_step(blackboard, "user")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="review",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.MANUAL_HANDOFF,
+        status_code="ITERATION_LIMIT_REACHED",
+        source="test",
+    )
+    policy, binding = resolve_step_human_task(
+        playbook_data=playbook,
+        step_name="review",
+        trigger="manual_handoff",
+    )
+    contract = blackboard.handoff_contract
+    assert contract is not None
+    task = HumanTaskRecordStore(issue_dir).materialize(
+        workflow_id=blackboard.workflow_id,
+        step="review",
+        iteration=1,
+        trigger="manual_handoff",
+        policy_id=policy.id,
+        prompt=policy.prompt,
+        expected_result=policy.model_dump(mode="json"),
+        continuations=binding.outcomes,
+        assignee_type="user",
+        handoff_key=":".join(
+            (
+                "user-handoff",
+                blackboard.workflow_id,
+                contract.from_step,
+                contract.intent.value,
+                contract.created_at,
+            )
+        ),
+    )
+    return store, task
 
 
 def test_alignment_checkpoint_menu_is_chat_first_and_concise() -> None:
@@ -180,11 +334,12 @@ def test_single_step_alias_updates_workflow_pointer_to_requested_step(
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-210"
     issue_dir.mkdir(parents=True, exist_ok=True)
+    _write_local_only_publication_contract(issue_dir)
     (issue_dir / "blackboard.json").write_text(
         json.dumps(
             {
                 "schema_version": 1,
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "current_step": "pr",
                 "artifacts": {},
                 "events": [],
@@ -231,10 +386,10 @@ def test_workflow_command_runs_dry_mode(tmp_path: Path, monkeypatch) -> None:
         git.get_current_branch.return_value = "issue-100"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--dry-run"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--dry-run"])
         assert result.exit_code == 0
         assert "Workflow context" in result.stdout
-        assert "playbook=default step=spec" in result.stdout
+        assert "playbook=standard step=spec" in result.stdout
         assert "Ownership plan (read-only)" in result.stdout
         blackboard_file = tmp_path / ".cafe" / "issues" / "issue-100" / "blackboard.json"
         assert not blackboard_file.exists()
@@ -247,7 +402,7 @@ def test_workflow_rejects_invalid_issue_playbook_override_before_execution(
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-override"
     issue_dir.mkdir(parents=True)
     (issue_dir / "issue.yaml").write_text(
-        "playbook: default\n"
+        "playbook: standard\n"
         "playbook_overrides:\n"
         "  steps:\n"
         "    review:\n"
@@ -260,11 +415,11 @@ def test_workflow_rejects_invalid_issue_playbook_override_before_execution(
         git.get_current_branch.return_value = "issue-override"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--dry-run"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--dry-run"])
 
     assert result.exit_code == 1
     assert "playbook_overrides.steps.review supports only" in result.stdout
-    assert "max_iterations; unsupported field(s): skill" in result.stdout
+    assert "max_attempts_per_cycle; unsupported field(s): skill" in result.stdout
     assert not (issue_dir / "blackboard.json").exists()
 
 
@@ -288,7 +443,7 @@ steps:
       completion: baton
       publish_confirmation: true
     on:
-      await_agent: _done
+      workflow_complete: _done
 """.strip(),
         encoding="utf-8",
     )
@@ -307,6 +462,7 @@ steps:
 
 def test_workflow_command_runs_execute_mode(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
+    _write_local_only_publication_contract(tmp_path / ".cafe" / "issues" / "issue-200")
     executed_steps: list[str] = []
 
     class FakeExecutor:
@@ -335,10 +491,10 @@ def test_workflow_command_runs_execute_mode(tmp_path: Path, monkeypatch) -> None
         git.get_current_branch.return_value = "issue-200"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
         assert result.exit_code == 0
         assert "Workflow context" in result.stdout
-        assert "playbook=default step=spec" in result.stdout
+        assert "playbook=standard step=spec" in result.stdout
         assert "Executing step=spec iteration=001" in result.stdout
         assert "Executing step=plan iteration=001" in result.stdout
         assert "Executing step=develop iteration=001" in result.stdout
@@ -349,10 +505,744 @@ def test_workflow_command_runs_execute_mode(tmp_path: Path, monkeypatch) -> None
         assert executed_steps == ["spec", "plan", "develop", "review", "pr"]
 
 
+def test_single_step_uses_the_mode_neutral_core_in_the_foreground(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-v2-public"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        "contract_version: 2\n"
+        "driver:\n"
+        "  mode: unattended\n"
+        "pr:\n"
+        "  auto_create: false\n",
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    class FakeExecutor:
+        def execute_step(self, step_name, step_def, blackboard_state, **kwargs):
+            captured["validated_pr_auto_create"] = kwargs.get("validated_pr_auto_create")
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
+
+    class CapturingWorkflowHost:
+        def __init__(self, issue_dir) -> None:
+            captured["host_issue_dir"] = issue_dir
+
+        def run(self, runtime, *, hosting):
+            captured["hosting"] = hosting
+            return SimpleNamespace(result=runtime())
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+        patch(
+            "cafe.ui.commands.workflow.WorkflowHost",
+            CapturingWorkflowHost,
+            create=True,
+        ),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-v2-public"
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(
+            app,
+            ["workflow", "--playbook", "standard", "--execute", "--single-step"],
+        )
+
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    assert captured["hosting"] == "foreground"
+    assert captured["validated_pr_auto_create"] is False
+
+
+@pytest.mark.parametrize(
+    ("notifications_enabled", "credential_available", "human_task_delivery_available"),
+    [
+        (False, True, False),
+        (True, False, False),
+        (True, True, True),
+    ],
+)
+@pytest.mark.skip(reason="replaced by event-driven callback coverage")
+def test_workflow_command_refreshes_notification_guidance_for_later_inspection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    notifications_enabled: bool,
+    credential_available: bool,
+    human_task_delivery_available: bool,
+) -> None:
+    """Plan Integration 6: every start/resume publishes current delivery guidance."""
+    monkeypatch.chdir(tmp_path)
+    issues_root = tmp_path / ".cafe" / "issues"
+    issue_dir = issues_root / "issue-guidance"
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        "contract_version: 2\ndriver:\n  mode: unattended\n",
+        encoding="utf-8",
+    )
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("spec")
+    stale_events = [] if human_task_delivery_available else ["human_task"]
+    with store.driver_transaction(state) as persisted:
+        persisted.driver_state["notification_guidance"] = {
+            "proactive_events": stale_events,
+            "inspection_available": True,
+            "inspection_command": "stale command",
+        }
+
+    class FakeExecutor:
+        def execute_step(self, step_name, step_def, blackboard_state, **_kwargs):
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
+
+    repository_roots: list[Path | None] = []
+
+    def load_credential(*, repository_root: Path | None = None) -> str:
+        repository_roots.append(repository_root)
+        if not credential_available:
+            raise SlackNotificationError("validation_error", "slack_credentials_missing")
+        return "https://hooks.slack.com/services/T/B/secret"
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+        patch(
+            "cafe.core.human_task_notifications.load_human_task_notification_settings",
+            return_value=SimpleNamespace(enabled=notifications_enabled),
+        ),
+        patch(
+            "cafe.core.human_task_notifications.load_slack_webhook_url",
+            side_effect=load_credential,
+        ),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-guidance"
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(
+            app,
+            ["workflow", "--playbook", "standard", "--execute", "--single-step"],
+        )
+
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    assert repository_roots == ([tmp_path.resolve()] if notifications_enabled else [])
+    status = SummaryService(issues_root=issues_root).load_driver_status("issue-guidance")
+    guidance = status["notification_guidance"]
+    expected_events = ["human_task"] if human_task_delivery_available else []
+    assert guidance["proactive_events"] == expected_events
+    assert guidance["inspection_available"] is True
+    assert guidance["inspection_command"] == "cafe status"
+    rendered = SummaryDisplay().format_driver_status(status)
+    assert "Notifications:" in rendered
+    assert "cafe status" in rendered
+
+
+@pytest.mark.parametrize("linked_worktree", [False, True], ids=["project", "worktree"])
+@pytest.mark.skip(reason="replaced by event-driven callback coverage")
+def test_workflow_command_guidance_uses_project_only_slack_route(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    linked_worktree: bool,
+) -> None:
+    """Plan Integration 6: public start uses the HumanTask repository route."""
+    repository = tmp_path / "main-repository"
+    active_root = repository
+    repository.mkdir()
+    if linked_worktree:
+        active_root = tmp_path / "linked-checkout"
+        subprocess.run(("git", "init"), cwd=repository, check=True, capture_output=True, text=True)
+        subprocess.run(
+            ("git", "config", "user.email", "cafe-test@example.test"),
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ("git", "config", "user.name", "CAFE Test"),
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        (repository / "README.md").write_text("test\n", encoding="utf-8")
+        subprocess.run(
+            ("git", "add", "README.md"),
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ("git", "commit", "-m", "Initial"),
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ("git", "worktree", "add", "--detach", str(active_root)),
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    monkeypatch.chdir(active_root)
+    issue_name = "issue-guidance"
+    issues_root = active_root / ".cafe" / "issues"
+    issue_dir = issues_root / issue_name
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        "contract_version: 2\ndriver:\n  mode: unattended\n",
+        encoding="utf-8",
+    )
+
+    home = tmp_path / "home"
+    config = home / ".cafe" / "config.yaml"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        "\n".join(
+            (
+                "notifications:",
+                "  human_tasks:",
+                "    projects:",
+                f"      {repository.resolve()}:",
+                "        webhook_url: https://hooks.slack.com/services/T/B/project-route",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    config.chmod(0o600)
+    monkeypatch.setattr("cafe.core.human_task_notifications._trusted_user_home", lambda: home)
+
+    class FakeExecutor:
+        def execute_step(self, step_name, step_def, blackboard_state, **_kwargs):
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = issue_name
+        mock_git_cls.return_value = git
+        result = runner.invoke(
+            app,
+            ["workflow", "--playbook", "standard", "--execute", "--single-step"],
+        )
+
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    status = SummaryService(issues_root=issues_root).load_driver_status(issue_name)
+    assert status["notification_guidance"]["proactive_events"] == ["human_task"]
+
+
+@pytest.mark.skip(reason="replaced by event-driven callback coverage")
+def test_workflow_command_guidance_uses_fallback_with_malformed_sibling_route(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Plan Integration 6: an unrelated route cannot suppress this repository."""
+    monkeypatch.chdir(tmp_path)
+    issue_name = "issue-guidance"
+    issues_root = tmp_path / ".cafe" / "issues"
+    issue_dir = issues_root / issue_name
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        "contract_version: 2\ndriver:\n  mode: unattended\n",
+        encoding="utf-8",
+    )
+
+    home = tmp_path / "home"
+    config = home / ".cafe" / "config.yaml"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        "\n".join(
+            (
+                "notifications:",
+                "  human_tasks:",
+                "    projects:",
+                f"      {tmp_path / 'unrelated-repository'}:",
+                "        webhook_url: not-a-slack-webhook",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    config.chmod(0o600)
+    fallback = home / ".slack-webhook"
+    fallback.write_text(
+        "https://hooks.slack.com/services/T/B/fallback-route",
+        encoding="utf-8",
+    )
+    fallback.chmod(0o600)
+    monkeypatch.setattr("cafe.core.human_task_notifications._trusted_user_home", lambda: home)
+
+    class FakeExecutor:
+        def execute_step(self, step_name, step_def, blackboard_state, **_kwargs):
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = issue_name
+        mock_git_cls.return_value = git
+        result = runner.invoke(
+            app,
+            ["workflow", "--playbook", "standard", "--execute", "--single-step"],
+        )
+
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    status = SummaryService(issues_root=issues_root).load_driver_status(issue_name)
+    assert status["notification_guidance"]["proactive_events"] == ["human_task"]
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="requires POSIX FIFO support")
+@pytest.mark.skip(reason="replaced by event-driven callback coverage")
+def test_workflow_command_records_guidance_when_machine_config_is_fifo(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Plan Integration 6: special config input fails closed before kickoff."""
+    monkeypatch.chdir(tmp_path)
+    issue_name = "issue-guidance"
+    issues_root = tmp_path / ".cafe" / "issues"
+    issue_dir = issues_root / issue_name
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        "contract_version: 2\ndriver:\n  mode: unattended\n",
+        encoding="utf-8",
+    )
+
+    home = tmp_path / "home"
+    config = home / ".cafe" / "config.yaml"
+    config.parent.mkdir(parents=True)
+    os.mkfifo(config, mode=0o600)
+    monkeypatch.setattr("cafe.core.human_task_notifications._trusted_user_home", lambda: home)
+
+    class FakeExecutor:
+        def execute_step(self, step_name, step_def, blackboard_state, **_kwargs):
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = issue_name
+        mock_git_cls.return_value = git
+        result = runner.invoke(
+            app,
+            ["workflow", "--playbook", "standard", "--execute", "--single-step"],
+        )
+
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    status = SummaryService(issues_root=issues_root).load_driver_status(issue_name)
+    guidance = status["notification_guidance"]
+    assert guidance["proactive_events"] == []
+    assert guidance["inspection_available"] is True
+
+
+@pytest.mark.skip(reason="replaced by generic worker-launch coverage")
+def test_workflow_background_option_uses_fixed_worker_launcher(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    _configure_test_driver_policy(monkeypatch, "unattended")
+    captured: dict[str, object] = {}
+
+    class CapturingWorkerLauncher:
+        def __init__(self, issue_dir) -> None:
+            captured["issue_dir"] = issue_dir
+
+        def launch(self, record, *, extra_args=None):
+            captured["record"] = record
+            captured["extra_args"] = extra_args
+            return 4321
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch(
+            "cafe.ui.commands.workflow.FixedWorkerLauncher",
+            CapturingWorkerLauncher,
+            create=True,
+        ),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-v2-background"
+        mock_git_cls.return_value = git
+        result = runner.invoke(
+            app,
+            ["workflow", "--playbook", "standard", "--execute", "--background"],
+        )
+
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    assert captured["record"]["mode"] == "unattended"
+    assert captured["extra_args"] == ["--playbook", "standard"]
+    assert "4321" in result.stdout
+
+
+@pytest.mark.skip(reason="replaced by generic worker-launch coverage")
+def test_direct_task_resume_does_not_forward_typer_defaults_to_the_worker(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Python callers omit CLI-only options, so OptionInfo must never become true."""
+    monkeypatch.chdir(tmp_path)
+    _configure_test_driver_policy(monkeypatch, "unattended")
+    captured: dict[str, object] = {}
+    import cafe.ui.commands.workflow as command_module
+
+    class CapturingWorkerLauncher:
+        def __init__(self, _issue_dir) -> None:
+            pass
+
+        def launch(self, _record, *, extra_args=None):
+            captured["extra_args"] = extra_args
+            return 4582
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.commands.workflow.FixedWorkerLauncher", CapturingWorkerLauncher),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue458-task-resume"
+        mock_git_cls.return_value = git
+        command_module.workflow(
+            playbook="standard",
+            issue="issue458-task-resume",
+            start_step=None,
+            single_step=False,
+            background=False,
+            internal_worker_id=None,
+            internal_policy_digest=None,
+            dry_run=False,
+            user_input=None,
+            add_dir=[],
+        )
+
+    assert captured["extra_args"] == ["--playbook", "standard"]
+
+
+@pytest.mark.skip(reason="background is explicit without a driver policy")
+def test_unattended_without_explicit_controls_automatically_starts_the_worker(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _configure_test_driver_policy(monkeypatch, "unattended")
+    launches: list[dict] = []
+
+    class CapturingWorkerLauncher:
+        def __init__(self, _issue_dir) -> None:
+            pass
+
+        def launch(self, record, *, extra_args=None):
+            launches.append(record)
+            return 4580
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.commands.workflow.FixedWorkerLauncher", CapturingWorkerLauncher),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue458-auto"
+        mock_git_cls.return_value = git
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
+
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    assert [record["mode"] for record in launches] == ["unattended"]
+    assert "4580" in result.stdout
+
+
+@pytest.mark.skip(reason="background is explicit without a driver policy")
+def test_attached_rejects_explicit_background_before_a_worker_is_created(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    class UnexpectedWorkerLauncher:
+        def __init__(self, _issue_dir) -> None:
+            pytest.fail("attached mode must reject before constructing a worker")
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.commands.workflow.FixedWorkerLauncher", UnexpectedWorkerLauncher),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue458-attached"
+        mock_git_cls.return_value = git
+        result = runner.invoke(
+            app, ["workflow", "--playbook", "standard", "--execute", "--background"]
+        )
+
+    assert result.exit_code == 1
+    assert "attached mode must run in the foreground" in result.stdout
+
+
+@pytest.mark.skip(reason="replaced by generic worker-launch coverage")
+def test_workflow_background_persists_initial_user_input_before_launch(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _configure_test_driver_policy(monkeypatch, "unattended")
+    captured: dict[str, object] = {}
+
+    class CapturingWorkerLauncher:
+        def __init__(self, issue_dir) -> None:
+            captured["issue_dir"] = issue_dir
+
+        def launch(self, _record, *, extra_args=None):
+            input_file = Path(captured["issue_dir"]) / "spec" / "iteration_001" / "user_input.md"
+            captured["input_at_launch"] = input_file.read_text(encoding="utf-8")
+            return 4322
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.commands.workflow.FixedWorkerLauncher", CapturingWorkerLauncher),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-background-input"
+        mock_git_cls.return_value = git
+        result = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "standard",
+                "--execute",
+                "--background",
+                "--user-input",
+                "Build the requested background workflow.",
+            ],
+        )
+
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    assert captured["input_at_launch"] == "Build the requested background workflow."
+    assert "4322" in result.stdout
+
+
+@pytest.mark.skip(reason="replaced by generic worker-launch coverage")
+def test_workflow_background_completes_durable_task_before_launch(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _configure_test_driver_policy(monkeypatch, "unattended")
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-background-handoff"
+    store, task = _pause_with_iteration_limit_task(issue_dir)
+    captured: dict[str, object] = {}
+
+    class CapturingWorkerLauncher:
+        def __init__(self, host_issue_dir) -> None:
+            captured["issue_dir"] = host_issue_dir
+
+        def launch(self, _record, *, extra_args=None):
+            state = store.load_or_create("spec", playbook_id="standard")
+            captured["current_step_at_launch"] = state.current_step
+            return 4323
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.commands.workflow.FixedWorkerLauncher", CapturingWorkerLauncher),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-background-handoff"
+        mock_git_cls.return_value = git
+        result = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "standard",
+                "--execute",
+                "--background",
+                "--user-input",
+                json.dumps(
+                    {
+                        "task": "iteration-limit",
+                        "decision": "resume",
+                        "human_task_id": task.id,
+                    }
+                ),
+            ],
+        )
+
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    assert captured["current_step_at_launch"] == "review"
+    assert HumanTaskRecordStore(issue_dir).get_task(task.id).status is HumanTaskStatus.COMPLETED
+    assert "4323" in result.stdout
+
+
+@pytest.mark.skip(reason="replaced by generic worker-launch coverage")
+def test_workflow_background_rejects_invalid_task_without_launch(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _configure_test_driver_policy(monkeypatch, "unattended")
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-background-invalid-task"
+    _store, task = _pause_with_iteration_limit_task(issue_dir)
+
+    class UnexpectedWorkerLauncher:
+        def __init__(self, _issue_dir) -> None:
+            pytest.fail("invalid input must not construct a background worker")
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.commands.workflow.FixedWorkerLauncher", UnexpectedWorkerLauncher),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-background-invalid-task"
+        mock_git_cls.return_value = git
+        result = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "standard",
+                "--execute",
+                "--background",
+                "--user-input",
+                json.dumps(
+                    {
+                        "task": "iteration-limit",
+                        "decision": "resume",
+                        "human_task_id": "wrong-task-id",
+                    }
+                ),
+            ],
+        )
+
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    assert "Unknown durable human task" in result.stdout
+    assert HumanTaskRecordStore(issue_dir).get_task(task.id).status is HumanTaskStatus.PENDING
+
+
+@pytest.mark.skip(reason="replaced by generic worker-launch coverage")
+def test_workflow_background_rejects_input_for_started_agent_step(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _configure_test_driver_policy(monkeypatch, "unattended")
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-background-started"
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("spec", playbook_id="standard")
+    store.set_current_step(blackboard, "develop")
+
+    class UnexpectedWorkerLauncher:
+        def __init__(self, _issue_dir) -> None:
+            pytest.fail("inapplicable input must not construct a background worker")
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.commands.workflow.FixedWorkerLauncher", UnexpectedWorkerLauncher),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-background-started"
+        mock_git_cls.return_value = git
+        result = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "standard",
+                "--execute",
+                "--background",
+                "--user-input",
+                "stale input",
+            ],
+        )
+
+    assert result.exit_code == 1, (result.stdout, result.exception)
+    assert "valid only for a new workflow" in result.stdout
+    assert "background worker was not started" in result.stdout
+    assert store.load_or_create("spec", playbook_id="standard").current_step == "develop"
+    assert not (issue_dir / "spec" / "iteration_001" / "user_input.md").exists()
+
+
+@pytest.mark.skip(reason="replaced by generic worker-launch coverage")
+def test_workflow_background_handoff_startup_failure_has_safe_retry(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _configure_test_driver_policy(monkeypatch, "unattended")
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-background-retry"
+    store, task = _pause_with_iteration_limit_task(issue_dir)
+    launches: list[str] = []
+
+    class FailingThenSuccessfulWorkerLauncher:
+        def __init__(self, _issue_dir) -> None:
+            pass
+
+        def launch(self, _record, *, extra_args=None):
+            launches.append("worker")
+            if len(launches) == 1:
+                raise OSError("worker spawn failed")
+            return 4324
+
+    payload = json.dumps(
+        {
+            "task": "iteration-limit",
+            "decision": "resume",
+            "human_task_id": task.id,
+        }
+    )
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch(
+            "cafe.ui.commands.workflow.FixedWorkerLauncher",
+            FailingThenSuccessfulWorkerLauncher,
+        ),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-background-retry"
+        mock_git_cls.return_value = git
+
+        failed_launch = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "standard",
+                "--execute",
+                "--background",
+                "--user-input",
+                payload,
+            ],
+        )
+        replayed_input = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "standard",
+                "--execute",
+                "--background",
+                "--user-input",
+                payload,
+            ],
+        )
+        safe_retry = runner.invoke(
+            app,
+            ["workflow", "--playbook", "standard", "--execute", "--background"],
+        )
+
+    assert failed_launch.exit_code == 1
+    assert HumanTaskRecordStore(issue_dir).get_task(task.id).status is HumanTaskStatus.COMPLETED
+    assert store.load_or_create("spec", playbook_id="standard").current_step == "review"
+    assert replayed_input.exit_code == 1
+    assert "valid only for a new workflow" in replayed_input.stdout
+    assert "background worker was not started" in replayed_input.stdout
+    assert not (issue_dir / "spec" / "iteration_001" / "user_input.md").exists()
+    assert safe_retry.exit_code == 0, (safe_retry.stdout, safe_retry.exception)
+    assert launches == ["worker", "worker"]
+    assert "4324" in safe_retry.stdout
+
+
 def test_workflow_command_passes_initial_user_input_to_spec_step(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    _write_local_only_publication_contract(tmp_path / ".cafe" / "issues" / "issue-201")
 
     class FakeExecutor:
         def execute_step(
@@ -375,7 +1265,7 @@ def test_workflow_command_passes_initial_user_input_to_spec_step(
             [
                 "workflow",
                 "--playbook",
-                "default",
+                "standard",
                 "--execute",
                 "--user-input",
                 "As a user, I want a smoke-test workflow.",
@@ -473,6 +1363,7 @@ def test_workflow_command_resume_user_input_targets_handoff_from_step(
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume-plan"
     issue_dir.mkdir(parents=True, exist_ok=True)
+    _write_local_only_publication_contract(issue_dir)
     questions_dir = issue_dir / "plan" / "iteration_001"
     questions_dir.mkdir(parents=True)
     (questions_dir / "questions.xml").write_text(
@@ -485,7 +1376,7 @@ def test_workflow_command_resume_user_input_targets_handoff_from_step(
         json.dumps({"iteration": 1, "end_time": "done"}), encoding="utf-8"
     )
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("user", playbook_id="default")
+    blackboard = store.load_or_create("user", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -518,7 +1409,7 @@ def test_workflow_command_resume_user_input_targets_handoff_from_step(
             [
                 "workflow",
                 "--playbook",
-                "default",
+                "standard",
                 "--execute",
                 "--single-step",
                 "--user-input",
@@ -530,12 +1421,253 @@ def test_workflow_command_resume_user_input_targets_handoff_from_step(
     assert mock_builder.call_args.kwargs["step_user_inputs"] is None
     resume_input = issue_dir / "plan" / "iteration_002" / "user_input.md"
     assert resume_input.read_text(encoding="utf-8") == "scope: include CSV export in scope"
-    reloaded = store.load_or_create("spec", playbook_id="default")
+    reloaded = store.load_or_create("spec", playbook_id="standard")
     assert (
         "completed human task clarification-answers for plan"
         in (reloaded.handoff_summary or "").lower()
     )
     assert reloaded.current_step == "develop"
+
+
+def test_workflow_command_routes_manual_handoff_payload_through_durable_task(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-durable-manual"
+    store, task = _pause_with_iteration_limit_task(issue_dir)
+    executed_steps: list[str] = []
+
+    class FakeExecutor:
+        def execute_step(
+            self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
+        ) -> StepExecutionResult:
+            executed_steps.append(step_name)
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-durable-manual"
+        mock_git_cls.return_value = git
+
+        result = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "standard",
+                "--execute",
+                "--single-step",
+                "--user-input",
+                json.dumps(
+                    {
+                        "task": "iteration-limit",
+                        "decision": "resume",
+                        "human_task_id": task.id,
+                    }
+                ),
+            ],
+        )
+
+    records = HumanTaskRecordStore(issue_dir)
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    assert executed_steps == ["review"]
+    assert records.get_task(task.id).status is HumanTaskStatus.COMPLETED
+    assert records.get_wait_state(task.id).released_at is not None
+    assert len(records.results()) == 1
+    assert not (issue_dir / "review" / "iteration_001" / "user_input.md").exists()
+    assert any(
+        event.event_type == "human_task_completed"
+        for event in store.load_or_create("review", playbook_id="standard").events
+    )
+
+
+def test_workflow_command_rejects_completed_durable_task_from_later_handoff(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-durable-replay"
+    store, task = _pause_with_iteration_limit_task(issue_dir)
+    executed_steps: list[str] = []
+
+    class FakeExecutor:
+        def execute_step(
+            self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
+        ) -> StepExecutionResult:
+            executed_steps.append(step_name)
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
+
+    payload = json.dumps(
+        {
+            "task": "iteration-limit",
+            "decision": "resume",
+            "human_task_id": task.id,
+        }
+    )
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-durable-replay"
+        mock_git_cls.return_value = git
+        completed = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "standard",
+                "--execute",
+                "--single-step",
+                "--user-input",
+                payload,
+            ],
+        )
+        assert completed.exit_code == 0, (completed.stdout, completed.exception)
+        assert executed_steps == ["review"]
+
+        blackboard = store.load_or_create("plan", playbook_id="standard")
+        store.set_current_step(blackboard, "user")
+        store.update_handoff_contract(
+            blackboard,
+            from_step="plan",
+            to_owner=HandoffOwner.USER,
+            to_step="user",
+            intent=HandoffIntent.ALIGNMENT_CHECKPOINT,
+            status_code="alignment_checkpoint",
+            source="test",
+        )
+        executed_steps.clear()
+        replayed = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "standard",
+                "--execute",
+                "--single-step",
+                "--user-input",
+                payload,
+            ],
+        )
+
+    reloaded = store.load_or_create("plan", playbook_id="standard")
+    assert replayed.exit_code == 0, (replayed.stdout, replayed.exception)
+    assert executed_steps == []
+    assert reloaded.current_step == "user"
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.intent is HandoffIntent.ALIGNMENT_CHECKPOINT
+    assert reloaded.handoff_contract.from_step == "plan"
+    assert any(
+        event.event_type == "human_task_rejected" and event.data.get("task_id") == task.id
+        for event in reloaded.events
+    )
+
+
+def test_workflow_command_rejects_unknown_durable_task_without_generic_fallback(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-unknown-durable"
+    store, task = _pause_with_iteration_limit_task(issue_dir)
+
+    with patch("cafe.ui.cli.GitOperations") as mock_git_cls:
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-unknown-durable"
+        mock_git_cls.return_value = git
+        result = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "standard",
+                "--execute",
+                "--single-step",
+                "--user-input",
+                json.dumps(
+                    {
+                        "task": "iteration-limit",
+                        "decision": "resume",
+                        "human_task_id": "unknown-task-id",
+                    }
+                ),
+            ],
+        )
+
+    records = HumanTaskRecordStore(issue_dir)
+    assert result.exit_code == 0
+    assert "Unknown durable human task" in result.stdout
+    assert records.get_task(task.id).status is HumanTaskStatus.PENDING
+    assert records.get_wait_state(task.id).released_at is None
+    assert store.load_or_create("review", playbook_id="standard").current_step == "user"
+    assert not (issue_dir / "review" / "iteration_001" / "user_input.md").exists()
+
+
+def test_workflow_command_pauses_agent_retry_after_durable_task_completion(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-durable-agent-retry"
+    _store, task = _pause_with_iteration_limit_task(issue_dir)
+
+    class FlakyExecutor:
+        calls = 0
+
+        def execute_step(
+            self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
+        ) -> StepExecutionResult:
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("agent failed after task completion")
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
+
+    executor = FlakyExecutor()
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=executor),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-durable-agent-retry"
+        mock_git_cls.return_value = git
+        first = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "standard",
+                "--execute",
+                "--single-step",
+                "--user-input",
+                json.dumps(
+                    {
+                        "task": "iteration-limit",
+                        "decision": "resume",
+                        "human_task_id": task.id,
+                    }
+                ),
+            ],
+        )
+        retry = runner.invoke(
+            app,
+            ["workflow", "--playbook", "standard", "--execute", "--single-step"],
+        )
+
+    records = HumanTaskRecordStore(issue_dir)
+    assert first.exit_code == 0
+    assert "Workflow interrupted" in first.stdout
+    assert retry.exit_code == 0, (retry.stdout, retry.exception)
+    assert "Workflow is waiting for user input" in retry.stdout
+    assert executor.calls == 1
+    assert records.get_task(task.id).status is HumanTaskStatus.COMPLETED
+    assert records.get_wait_state(task.id).released_at is not None
+    assert len(records.results()) == 1
+    retry_task = next(
+        item for item in records.tasks() if item.trigger == "agent_execution_interrupted"
+    )
+    assert retry_task.status is HumanTaskStatus.PENDING
+    assert records.get_wait_state(retry_task.id).released_at is None
 
 
 def test_user_phase_alignment_checkpoint_approve_resumes_step(tmp_path: Path) -> None:
@@ -562,7 +1694,7 @@ def test_user_phase_alignment_checkpoint_approve_resumes_step(tmp_path: Path) ->
         },
     }
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("user", playbook_id="default")
+    blackboard = store.load_or_create("user", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -589,7 +1721,7 @@ def test_user_phase_alignment_checkpoint_approve_resumes_step(tmp_path: Path) ->
         )
 
     assert result == "develop"
-    reloaded = store.load_or_create("develop", playbook_id="default")
+    reloaded = store.load_or_create("develop", playbook_id="standard")
     assert reloaded.current_step == "develop"
     assert reloaded.handoff_contract is not None
     assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
@@ -637,7 +1769,7 @@ def test_user_phase_alignment_checkpoint_chat_decision_uses_host_apply(
         },
     }
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("user", playbook_id="default")
+    blackboard = store.load_or_create("user", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -699,7 +1831,7 @@ def test_user_phase_alignment_checkpoint_chat_decision_uses_host_apply(
     assert (request_dir / "user_input.md").read_text(encoding="utf-8") == (
         "Keep this issue limited to capability request UX."
     )
-    reloaded = store.load_or_create("spec", playbook_id="default")
+    reloaded = store.load_or_create("spec", playbook_id="standard")
     assert reloaded.current_step == "spec"
     assert reloaded.handoff_contract is not None
     assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
@@ -732,7 +1864,7 @@ def test_user_phase_alignment_checkpoint_rejects_chat_decision_outside_allowed_c
         },
     }
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("user", playbook_id="default")
+    blackboard = store.load_or_create("user", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -763,7 +1895,7 @@ def test_user_phase_alignment_checkpoint_rejects_chat_decision_outside_allowed_c
         )
 
     assert result is None
-    reloaded = store.load_or_create("user", playbook_id="default")
+    reloaded = store.load_or_create("user", playbook_id="standard")
     assert reloaded.current_step == "user"
     assert reloaded.handoff_contract is not None
     assert reloaded.handoff_contract.intent == HandoffIntent.ALIGNMENT_CHECKPOINT
@@ -821,7 +1953,7 @@ def test_user_phase_alignment_checkpoint_rejects_unconfirmed_chat_strategic_docs
         },
     }
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("user", playbook_id="default")
+    blackboard = store.load_or_create("user", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -857,7 +1989,7 @@ def test_user_phase_alignment_checkpoint_rejects_unconfirmed_chat_strategic_docs
         )
 
     assert result is None
-    reloaded = store.load_or_create("user", playbook_id="default")
+    reloaded = store.load_or_create("user", playbook_id="standard")
     assert reloaded.current_step == "user"
     assert reloaded.handoff_contract is not None
     assert reloaded.handoff_contract.intent == HandoffIntent.ALIGNMENT_CHECKPOINT
@@ -920,7 +2052,7 @@ def test_user_phase_alignment_checkpoint_accepts_confirmed_chat_strategic_docs(
         },
     }
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("user", playbook_id="default")
+    blackboard = store.load_or_create("user", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -958,7 +2090,7 @@ def test_user_phase_alignment_checkpoint_accepts_confirmed_chat_strategic_docs(
         )
 
     assert result == "spec"
-    reloaded = store.load_or_create("spec", playbook_id="default")
+    reloaded = store.load_or_create("spec", playbook_id="standard")
     assert reloaded.current_step == "spec"
     assert reloaded.handoff_contract is not None
     assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
@@ -1015,7 +2147,7 @@ def test_alignment_payload_rejects_unconfirmed_strategic_documents_updated(
         },
     }
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("user", playbook_id="default")
+    blackboard = store.load_or_create("user", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -1035,7 +2167,7 @@ def test_alignment_payload_rejects_unconfirmed_strategic_documents_updated(
     )
 
     assert result is None
-    reloaded = store.load_or_create("user", playbook_id="default")
+    reloaded = store.load_or_create("user", playbook_id="standard")
     assert reloaded.current_step == "user"
     assert any(
         event.event_type == "alignment_decision_blocked"
@@ -1095,7 +2227,7 @@ def test_alignment_payload_accepts_confirmed_strategic_documents_updated(
         },
     }
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("user", playbook_id="default")
+    blackboard = store.load_or_create("user", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -1119,7 +2251,7 @@ def test_alignment_payload_accepts_confirmed_strategic_documents_updated(
     )
 
     assert result == "spec"
-    reloaded = store.load_or_create("spec", playbook_id="default")
+    reloaded = store.load_or_create("spec", playbook_id="standard")
     assert reloaded.current_step == "spec"
     assert reloaded.handoff_contract is not None
     assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
@@ -1159,7 +2291,7 @@ def test_user_phase_alignment_checkpoint_accepts_updated_strategic_document(tmp_
         },
     }
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("user", playbook_id="default")
+    blackboard = store.load_or_create("user", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -1180,7 +2312,7 @@ def test_user_phase_alignment_checkpoint_accepts_updated_strategic_document(tmp_
         )
 
     assert result == "develop"
-    reloaded = store.load_or_create("develop", playbook_id="default")
+    reloaded = store.load_or_create("develop", playbook_id="standard")
     assert reloaded.current_step == "develop"
     assert reloaded.handoff_contract is not None
     assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
@@ -1237,7 +2369,7 @@ def test_user_phase_alignment_checkpoint_accepts_newly_created_missing_affected_
         },
     }
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("user", playbook_id="default")
+    blackboard = store.load_or_create("user", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -1258,7 +2390,7 @@ def test_user_phase_alignment_checkpoint_accepts_newly_created_missing_affected_
         )
 
     assert result == "spec"
-    reloaded = store.load_or_create("spec", playbook_id="default")
+    reloaded = store.load_or_create("spec", playbook_id="standard")
     assert reloaded.current_step == "spec"
     assert reloaded.handoff_contract is not None
     assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
@@ -1272,7 +2404,7 @@ def test_workflow_command_does_not_treat_generic_user_input_as_alignment_approva
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-align-resume"
     issue_dir.mkdir(parents=True, exist_ok=True)
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("user", playbook_id="default")
+    blackboard = store.load_or_create("user", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -1294,7 +2426,7 @@ def test_workflow_command_does_not_treat_generic_user_input_as_alignment_approva
             [
                 "workflow",
                 "--playbook",
-                "default",
+                "standard",
                 "--execute",
                 "--user-input",
                 "looks good",
@@ -1304,7 +2436,7 @@ def test_workflow_command_does_not_treat_generic_user_input_as_alignment_approva
     assert result.exit_code == 0, (result.stdout, result.exception)
     assert "alignment decision payload" in result.stdout
     assert not (issue_dir / "develop" / "iteration_001" / "user_input.md").exists()
-    reloaded = store.load_or_create("spec", playbook_id="default")
+    reloaded = store.load_or_create("spec", playbook_id="standard")
     assert reloaded.current_step == "user"
 
 
@@ -1315,7 +2447,7 @@ def test_workflow_command_resume_confirm_output_keeps_await_agent_intent(
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume-confirm"
     issue_dir.mkdir(parents=True, exist_ok=True)
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("user", playbook_id="default")
+    blackboard = store.load_or_create("user", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -1346,7 +2478,7 @@ def test_workflow_command_resume_confirm_output_keeps_await_agent_intent(
             [
                 "workflow",
                 "--playbook",
-                "default",
+                "standard",
                 "--execute",
                 "--user-input",
                 '{"task":"output-review","decision":"confirm"}',
@@ -1354,28 +2486,33 @@ def test_workflow_command_resume_confirm_output_keeps_await_agent_intent(
         )
 
     assert result.exit_code == 0
-    reloaded = store.load_or_create("spec", playbook_id="default")
+    reloaded = store.load_or_create("spec", playbook_id="standard")
     assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
 
 
 def test_workflow_help_describes_user_input_without_spec_only_wording() -> None:
-    result = runner.invoke(app, ["workflow", "--help"])
+    result = runner.invoke(app, ["workflow", "--help"], env={"COLUMNS": "200"})
     assert result.exit_code == 0
     help_text = result.stdout.lower()
+    normalized_help = " ".join(help_text.replace("│", " ").split())
     assert "spec step" not in help_text
-    assert "initial workflow input" in help_text
-    assert "resuming from a user" in help_text
-    assert "handoff" in help_text
+    assert (
+        "initial workflow input, or answer to write when resuming from a user handoff"
+        in normalized_help
+    )
+    assert "--mute-agent-output" in help_text
 
 
 def test_make_help_describes_user_input_without_spec_only_wording() -> None:
-    result = runner.invoke(app, ["make", "--help"])
+    result = runner.invoke(app, ["make", "--help"], env={"COLUMNS": "200"})
     assert result.exit_code == 0
     help_text = result.stdout.lower()
+    normalized_help = " ".join(help_text.replace("│", " ").split())
     assert "spec step" not in help_text
-    assert "initial workflow input" in help_text
-    assert "resuming from a user" in help_text
-    assert "handoff" in help_text
+    assert (
+        "initial workflow input, or answer to write when resuming from a user handoff"
+        in normalized_help
+    )
 
 
 def test_build_workflow_step_executor_passes_allowed_directories(
@@ -1405,17 +2542,20 @@ def test_build_workflow_step_executor_passes_allowed_directories(
             issue_name="issue-dirs",
             playbook_data={"playbook": {"id": "default"}, "roles": {}, "steps": {}},
             generic_phase=MagicMock(),
+            open_pr=True,
             extra_allowed_directories=["docs"],
         )
 
     assert executor._config_allowed_directories == ["src"]
     assert executor._extra_allowed_directories == ["docs"]
+    assert executor.open_pr is True
 
 
 def test_workflow_accepts_add_dir_and_passes_through(tmp_path: Path, monkeypatch) -> None:
     """workflow --add-dir should validate the directory and pass it to the builder."""
     monkeypatch.chdir(tmp_path)
     (tmp_path / "src").mkdir()
+    _write_local_only_publication_contract(tmp_path / ".cafe" / "issues" / "issue-add-dir")
 
     class FakeExecutor:
         def execute_step(
@@ -1435,7 +2575,15 @@ def test_workflow_accepts_add_dir_and_passes_through(tmp_path: Path, monkeypatch
 
         result = runner.invoke(
             app,
-            ["workflow", "--playbook", "default", "--execute", "--single-step", "--add-dir", "src"],
+            [
+                "workflow",
+                "--playbook",
+                "standard",
+                "--execute",
+                "--single-step",
+                "--add-dir",
+                "src",
+            ],
         )
 
     assert result.exit_code == 0, result.output
@@ -1444,6 +2592,7 @@ def test_workflow_accepts_add_dir_and_passes_through(tmp_path: Path, monkeypatch
 
 def test_workflow_command_prints_generic_event_display(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
+    _write_local_only_publication_contract(tmp_path / ".cafe" / "issues" / "issue-238")
     executed_steps: list[str] = []
 
     class FakeExecutor:
@@ -1480,7 +2629,7 @@ def test_workflow_command_prints_generic_event_display(tmp_path: Path, monkeypat
         git.get_current_branch.return_value = "issue-238"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     assert result.exit_code == 0
     assert "PR synced" in result.stdout
@@ -1492,6 +2641,7 @@ def test_workflow_command_does_not_duplicate_pr_url_without_display(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    _write_local_only_publication_contract(tmp_path / ".cafe" / "issues" / "issue-277")
 
     class FakeExecutor:
         def execute_step(self, step_name: str, step_def: dict, blackboard_state: object, **kwargs):
@@ -1531,7 +2681,7 @@ def test_workflow_command_does_not_duplicate_pr_url_without_display(
         git.get_current_branch.return_value = "issue-277"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     assert result.exit_code == 0
     assert result.stdout.count("PR synced") == 1
@@ -1547,11 +2697,12 @@ def test_workflow_command_rejects_plain_text_chat_baton_before_execution(
 
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-205"
     issue_dir.mkdir(parents=True, exist_ok=True)
+    _write_local_only_publication_contract(issue_dir)
     (issue_dir / "blackboard.json").write_text(
         json.dumps(
             {
                 "schema_version": 1,
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "current_step": "pr",
                 "artifacts": {},
                 "events": [],
@@ -1588,7 +2739,7 @@ def test_workflow_command_rejects_plain_text_chat_baton_before_execution(
         git.has_uncommitted_changes.return_value = False
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     # The plain-text baton is rejected as an invalid structured contract, not
     # silently normalized into a step-name handoff.
@@ -1611,7 +2762,7 @@ def test_workflow_command_does_not_consume_chat_baton_with_uncommitted_changes(
         json.dumps(
             {
                 "schema_version": 1,
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "current_step": "user",
                 "artifacts": {},
                 "events": [],
@@ -1641,7 +2792,7 @@ def test_workflow_command_does_not_consume_chat_baton_with_uncommitted_changes(
         git.has_uncommitted_changes.return_value = True
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     # A plain-text baton is rejected outright (never consumed), independent of
     # the uncommitted-changes guard that only applied to the legacy path. The
@@ -1658,6 +2809,7 @@ def test_workflow_command_rejects_invalid_chat_baton_step(tmp_path: Path, monkey
 
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-206"
     issue_dir.mkdir(parents=True, exist_ok=True)
+    _write_local_only_publication_contract(issue_dir)
     (issue_dir / "next_step.txt").write_text("qa\n", encoding="utf-8")
 
     with patch("cafe.ui.cli.GitOperations") as mock_git_cls:
@@ -1665,7 +2817,7 @@ def test_workflow_command_rejects_invalid_chat_baton_step(tmp_path: Path, monkey
         git.get_current_branch.return_value = "issue-206"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     assert result.exit_code == 1
     assert "Workflow baton file is not a valid handoff contract" in result.stdout
@@ -1677,6 +2829,7 @@ def test_workflow_command_rejects_malformed_baton_json(tmp_path: Path, monkeypat
 
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-206b"
     issue_dir.mkdir(parents=True, exist_ok=True)
+    _write_local_only_publication_contract(issue_dir)
     (issue_dir / "next_step.txt").write_text("{not-json", encoding="utf-8")
 
     with patch("cafe.ui.cli.GitOperations") as mock_git_cls:
@@ -1684,7 +2837,7 @@ def test_workflow_command_rejects_malformed_baton_json(tmp_path: Path, monkeypat
         git.get_current_branch.return_value = "issue-206b"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     assert result.exit_code == 1
     assert "Workflow baton file is not a valid handoff contract" in result.stdout
@@ -1696,11 +2849,12 @@ def test_workflow_command_start_step_rebuilds_stale_text_baton(tmp_path: Path, m
 
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-206c"
     issue_dir.mkdir(parents=True, exist_ok=True)
+    _write_local_only_publication_contract(issue_dir)
     (issue_dir / "blackboard.json").write_text(
         json.dumps(
             {
                 "schema_version": 1,
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "current_step": "spec",
                 "artifacts": {},
                 "events": [],
@@ -1742,7 +2896,7 @@ def test_workflow_command_start_step_rebuilds_stale_text_baton(tmp_path: Path, m
             [
                 "workflow",
                 "--playbook",
-                "default",
+                "standard",
                 "--execute",
                 "--start-step",
                 "spec",
@@ -1761,35 +2915,62 @@ def test_workflow_command_start_step_rebuilds_stale_text_baton(tmp_path: Path, m
     assert blackboard.handoff_contract.from_step == "spec"
 
 
-def test_explicit_start_step_supersedes_stale_handoff_summary(tmp_path: Path) -> None:
-    issue_dir = tmp_path / ".cafe" / "issues" / "issue-stale-summary"
+def test_explicit_start_step_preserves_user_handoff_for_runtime_supersession(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The runtime must see the original task before it replaces the baton."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-stale-task"
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("user", playbook_id="default")
+    blackboard = store.load_or_create("user", playbook_id="standard")
     store.set_current_step(blackboard, "user")
-    store.set_handoff_summary(blackboard, "Alignment checkpoint required before spec")
     store.update_handoff_contract(
         blackboard,
-        from_step="spec",
+        from_step="develop",
         to_owner=HandoffOwner.USER,
         to_step="user",
-        intent=HandoffIntent.ALIGNMENT_CHECKPOINT,
+        intent=HandoffIntent.NEED_CLARIFICATION,
         source="test",
     )
+    observed: dict[str, object] = {}
 
-    _reset_baton_for_explicit_start_step(
-        issue_dir=issue_dir,
-        blackboard=blackboard,
-        active_step="spec",
-    )
+    class CapturingRuntime:
+        def __init__(self, *, issue_dir: Path, **_kwargs: object) -> None:
+            self.issue_dir = issue_dir
 
-    reloaded = store.load_or_create("spec", playbook_id="default")
-    assert reloaded.current_step == "spec"
-    assert reloaded.handoff_contract is not None
-    assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
-    assert reloaded.handoff_contract.to_step == "spec"
-    assert reloaded.handoff_summary == (
-        "Explicit workflow start requested for spec; the prior handoff is superseded."
-    )
+        def run(self, *, start_step: str | None = None, single_step: bool = False):
+            state = BlackboardStore(self.issue_dir).load_or_create("spec", playbook_id="standard")
+            observed.update(
+                {
+                    "current_step": state.current_step,
+                    "handoff": state.handoff_contract,
+                    "start_step": start_step,
+                    "single_step": single_step,
+                }
+            )
+            return PlaybookRunResult(
+                final_step="spec", final_status_code="await_agent", completed=True
+            )
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.commands.workflow.BlackboardWorkflowRuntime", CapturingRuntime),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-stale-task"
+        mock_git_cls.return_value = git
+        result = runner.invoke(
+            app,
+            ["workflow", "--playbook", "standard", "--execute", "--start-step", "spec"],
+        )
+
+    assert result.exit_code == 0
+    assert observed["current_step"] == "user"
+    handoff = observed["handoff"]
+    assert handoff is not None
+    assert handoff.from_step == "develop"
+    assert handoff.to_owner is HandoffOwner.USER
+    assert observed["start_step"] == "spec"
 
 
 def test_workflow_command_prints_guidance_for_invalid_runtime_baton(
@@ -1834,12 +3015,12 @@ def test_workflow_command_prints_guidance_for_invalid_runtime_baton(
         git.get_current_branch.return_value = "issue-206d"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     assert result.exit_code == 1
     assert "Workflow baton file is not a valid handoff contract" in result.stdout
     assert "cafe workflow" in result.stdout
-    assert "--playbook default" in result.stdout
+    assert "--playbook standard" in result.stdout
     assert "--execute" in result.stdout
     assert "--start-step <step>" in result.stdout
     assert "Error: workflow run failed: Invalid baton contract payload" in result.stdout
@@ -1849,6 +3030,7 @@ def test_workflow_command_prints_paused_when_human_input_is_needed(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
+    _write_local_only_publication_contract(tmp_path / ".cafe" / "issues" / "issue-201")
 
     class FakeExecutor:
         def execute_step(
@@ -1869,7 +3051,7 @@ def test_workflow_command_prints_paused_when_human_input_is_needed(
         git.get_current_branch.return_value = "issue-201"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
         assert result.exit_code == 0
         assert "Workflow is waiting for user input" in result.stdout
 
@@ -1900,7 +3082,7 @@ def test_workflow_command_prints_owner_task_id_for_noninteractive_wait(
         git.get_current_branch.return_value = "issue-201"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     assert result.exit_code == 0
     assert "task-owner-123" in result.stdout
@@ -1912,11 +3094,12 @@ def test_workflow_command_prints_recovery_guidance_for_pr_baton_pause(
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-233"
     issue_dir.mkdir(parents=True, exist_ok=True)
+    _write_local_only_publication_contract(issue_dir)
     (issue_dir / "blackboard.json").write_text(
         json.dumps(
             {
                 "schema_version": 1,
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "current_step": "pr",
                 "artifacts": {},
                 "events": [],
@@ -1940,7 +3123,7 @@ def test_workflow_command_prints_recovery_guidance_for_pr_baton_pause(
         git.get_current_branch.return_value = "issue-233"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     assert result.exit_code == 1
     assert "wrote invalid baton 3 times" in result.stdout
@@ -1954,11 +3137,12 @@ def test_workflow_command_offers_recovery_menu_for_baton_pause_in_interactive_mo
     monkeypatch.setenv("CAFE_FORCE_INTERACTIVE", "1")
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-233"
     issue_dir.mkdir(parents=True, exist_ok=True)
+    _write_local_only_publication_contract(issue_dir)
     (issue_dir / "blackboard.json").write_text(
         json.dumps(
             {
                 "schema_version": 1,
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "current_step": "pr",
                 "artifacts": {},
                 "events": [],
@@ -1983,7 +3167,7 @@ def test_workflow_command_offers_recovery_menu_for_baton_pause_in_interactive_mo
         git.get_current_branch.return_value = "issue-233"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     assert result.exit_code == 1
     assert not mock_prompt_list.called
@@ -1998,11 +3182,12 @@ def test_workflow_command_user_owner_can_set_next_phase(tmp_path: Path, monkeypa
 
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-207"
     issue_dir.mkdir(parents=True, exist_ok=True)
+    _write_local_only_publication_contract(issue_dir)
     (issue_dir / "blackboard.json").write_text(
         json.dumps(
             {
                 "schema_version": 1,
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "current_step": "user",
                 "handoff_summary": "waiting for user decision",
                 "artifacts": {},
@@ -2052,7 +3237,7 @@ def test_workflow_command_user_owner_can_set_next_phase(tmp_path: Path, monkeypa
         git.get_current_branch.return_value = "issue-207"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     assert result.exit_code == 0
     assert "Workflow is waiting for user input" in result.stdout
@@ -2268,7 +3453,7 @@ def test_user_phase_no_changes_needed_resumes_develop_without_generic_menu(
         },
     }
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("user", playbook_id="default")
+    blackboard = store.load_or_create("user", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -2296,7 +3481,7 @@ def test_user_phase_no_changes_needed_resumes_develop_without_generic_menu(
 
     assert result == "review"
     mock_generic.assert_not_called()
-    reloaded = store.load_or_create("develop", playbook_id="default")
+    reloaded = store.load_or_create("develop", playbook_id="standard")
     assert reloaded.current_step == "review"
     assert reloaded.handoff_contract is not None
     assert reloaded.handoff_contract.to_owner == HandoffOwner.AGENT
@@ -2315,7 +3500,7 @@ def test_workflow_command_user_owner_can_complete_workflow(tmp_path: Path, monke
         json.dumps(
             {
                 "schema_version": 1,
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "current_step": "user",
                 "artifacts": {},
                 "events": [],
@@ -2333,7 +3518,7 @@ def test_workflow_command_user_owner_can_complete_workflow(tmp_path: Path, monke
         git.get_current_branch.return_value = "issue-208"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     assert result.exit_code == 0
     assert "Workflow completed by user" in result.stdout
@@ -2350,11 +3535,12 @@ def test_workflow_command_user_owner_can_chat_and_resume_from_baton(
 
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-209"
     issue_dir.mkdir(parents=True, exist_ok=True)
+    _write_local_only_publication_contract(issue_dir)
     (issue_dir / "blackboard.json").write_text(
         json.dumps(
             {
                 "schema_version": 1,
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "current_step": "user",
                 "artifacts": {},
                 "events": [],
@@ -2413,7 +3599,7 @@ def test_workflow_command_user_owner_can_chat_and_resume_from_baton(
         git.has_uncommitted_changes.return_value = False
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     assert result.exit_code == 0
     assert executed_steps == ["develop", "review", "pr"]
@@ -2429,11 +3615,12 @@ def test_workflow_command_enters_user_phase_immediately_after_agent_handoff(
 
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-211"
     issue_dir.mkdir(parents=True, exist_ok=True)
+    _write_local_only_publication_contract(issue_dir)
     (issue_dir / "blackboard.json").write_text(
         json.dumps(
             {
                 "schema_version": 1,
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "current_step": "pr",
                 "artifacts": {},
                 "events": [],
@@ -2469,7 +3656,7 @@ def test_workflow_command_enters_user_phase_immediately_after_agent_handoff(
         git.get_current_branch.return_value = "issue-211"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     assert result.exit_code == 0
     assert "Executing step=pr iteration=001" in result.stdout
@@ -2487,11 +3674,12 @@ def test_workflow_command_noninteractive_stops_after_agent_handoff_to_user(
 
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-211b"
     issue_dir.mkdir(parents=True, exist_ok=True)
+    _write_local_only_publication_contract(issue_dir)
     (issue_dir / "blackboard.json").write_text(
         json.dumps(
             {
                 "schema_version": 1,
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "current_step": "pr",
                 "artifacts": {},
                 "events": [],
@@ -2527,7 +3715,7 @@ def test_workflow_command_noninteractive_stops_after_agent_handoff_to_user(
         git.get_current_branch.return_value = "issue-211b"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     assert result.exit_code == 0
     assert "Executing step=pr iteration=001" in result.stdout
@@ -2582,7 +3770,7 @@ def test_user_phase_need_clarification_collects_questions_and_resumes_step(
         },
     }
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("user", playbook_id="default")
+    blackboard = store.load_or_create("user", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -2610,7 +3798,7 @@ def test_user_phase_need_clarification_collects_questions_and_resumes_step(
     assert "Completed human task clarification-answers -> spec" in output
     next_input = issue_dir / "spec" / "iteration_002" / "user_input.md"
     assert next_input.read_text(encoding="utf-8") == "1: All roles"
-    reloaded = store.load_or_create("spec", playbook_id="default")
+    reloaded = store.load_or_create("spec", playbook_id="standard")
     assert reloaded.current_step == "spec"
     assert reloaded.handoff_contract is not None
     assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
@@ -2685,11 +3873,12 @@ def test_workflow_command_done_phase_can_restart_workflow(tmp_path: Path, monkey
 
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-222"
     issue_dir.mkdir(parents=True, exist_ok=True)
+    _write_local_only_publication_contract(issue_dir)
     (issue_dir / "blackboard.json").write_text(
         json.dumps(
             {
                 "schema_version": 1,
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "current_step": "done",
                 "handoff_summary": "workflow completed",
                 "artifacts": {},
@@ -2736,7 +3925,7 @@ def test_workflow_command_done_phase_can_restart_workflow(tmp_path: Path, monkey
         git.get_current_branch.return_value = "issue-222"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     assert result.exit_code == 0
     assert "Workflow already completed" in result.stdout
@@ -2755,11 +3944,12 @@ def test_workflow_command_resumes_incomplete_iteration_when_user_handoff_is_lega
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-224"
     spec_iteration = issue_dir / "spec" / "iteration_002"
     spec_iteration.mkdir(parents=True, exist_ok=True)
+    _write_local_only_publication_contract(issue_dir)
     (issue_dir / "blackboard.json").write_text(
         json.dumps(
             {
                 "schema_version": 1,
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "current_step": "user",
                 "handoff_summary": "clarification answers confirmed",
                 "artifacts": {},
@@ -2814,7 +4004,7 @@ def test_workflow_command_resumes_incomplete_iteration_when_user_handoff_is_lega
         git.get_current_branch.return_value = "issue-224"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     assert result.exit_code == 0
     assert "Resuming unfinished iteration" in result.stdout
@@ -2835,6 +4025,7 @@ def test_workflow_user_handoff_precedes_incomplete_iteration_resume(
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-user-incomplete"
     develop_iteration = issue_dir / "develop" / "iteration_002"
     develop_iteration.mkdir(parents=True, exist_ok=True)
+    _write_local_only_publication_contract(issue_dir)
     (develop_iteration / "iteration.json").write_text(
         json.dumps(
             {
@@ -2846,7 +4037,7 @@ def test_workflow_user_handoff_precedes_incomplete_iteration_resume(
         encoding="utf-8",
     )
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("spec", playbook_id="default")
+    blackboard = store.load_or_create("spec", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -2887,7 +4078,7 @@ def test_workflow_user_handoff_precedes_incomplete_iteration_resume(
             [
                 "workflow",
                 "--playbook",
-                "default",
+                "standard",
                 "--execute",
                 "--user-input",
                 '{"task":"output-review","decision":"confirm"}',
@@ -2909,8 +4100,9 @@ def test_nonmeaningful_user_handoff_does_not_hide_incomplete_iteration(
     """Bootstrap/default baton metadata cannot outrank runnable phase state."""
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / f"issue-{source.replace('.', '-')}"
+    _write_local_only_publication_contract(issue_dir)
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("spec", playbook_id="default")
+    blackboard = store.load_or_create("spec", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -2946,7 +4138,7 @@ def test_nonmeaningful_user_handoff_does_not_hide_incomplete_iteration(
 
         result = runner.invoke(
             app,
-            ["workflow", "--playbook", "default", "--execute", "--single-step"],
+            ["workflow", "--playbook", "standard", "--execute", "--single-step"],
         )
 
     assert result.exit_code == 0
@@ -2965,6 +4157,7 @@ def test_workflow_alignment_decision_precedes_incomplete_iteration_resume(
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-align-incomplete"
     develop_iteration = issue_dir / "develop" / "iteration_002"
     develop_iteration.mkdir(parents=True, exist_ok=True)
+    _write_local_only_publication_contract(issue_dir)
     (develop_iteration / "iteration.json").write_text(
         json.dumps(
             {
@@ -2988,7 +4181,7 @@ def test_workflow_alignment_decision_precedes_incomplete_iteration_resume(
         encoding="utf-8",
     )
     store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("user", playbook_id="default")
+    blackboard = store.load_or_create("user", playbook_id="standard")
     store.set_current_step(blackboard, "user")
     store.update_handoff_contract(
         blackboard,
@@ -3025,7 +4218,7 @@ def test_workflow_alignment_decision_precedes_incomplete_iteration_resume(
             [
                 "workflow",
                 "--playbook",
-                "default",
+                "standard",
                 "--execute",
                 "--single-step",
                 "--user-input",
@@ -3057,7 +4250,11 @@ def test_find_external_resume_step_preserves_pending_ledger_feedback_for_its_tar
         "steps": {
             "pr": {
                 "hooks": {
-                    "prepare_input": ["GitHubPRCreator", "GitHubPRFeedbackSource", "UserInputCollector"],
+                    "prepare_input": [
+                        "GitHubPRCreator",
+                        "GitHubPRFeedbackSource",
+                        "UserInputCollector",
+                    ],
                 }
             },
             "develop": {},
@@ -3138,7 +4335,11 @@ def test_find_external_resume_step_returns_none_without_pending_ledger_feedback(
         "steps": {
             "pr": {
                 "hooks": {
-                    "prepare_input": ["GitHubPRCreator", "GitHubPRFeedbackSource", "UserInputCollector"],
+                    "prepare_input": [
+                        "GitHubPRCreator",
+                        "GitHubPRFeedbackSource",
+                        "UserInputCollector",
+                    ],
                 },
             },
         },
@@ -3170,7 +4371,11 @@ def test_find_external_resume_step_returns_pr_for_new_unresolved_github_feedback
         "steps": {
             "pr": {
                 "hooks": {
-                    "prepare_input": ["GitHubPRCreator", "GitHubPRFeedbackSource", "UserInputCollector"],
+                    "prepare_input": [
+                        "GitHubPRCreator",
+                        "GitHubPRFeedbackSource",
+                        "UserInputCollector",
+                    ],
                 },
             },
         },
@@ -3206,11 +4411,12 @@ def test_workflow_command_resumes_pr_when_external_feedback_arrives_while_done(
 
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-238"
     issue_dir.mkdir(parents=True, exist_ok=True)
+    _write_local_only_publication_contract(issue_dir)
     (issue_dir / "blackboard.json").write_text(
         json.dumps(
             {
                 "schema_version": 1,
-                "playbook_id": "default",
+                "playbook_id": "standard",
                 "current_step": "done",
                 "handoff_summary": "workflow completed",
                 "artifacts": {},
@@ -3240,7 +4446,7 @@ def test_workflow_command_resumes_pr_when_external_feedback_arrives_while_done(
         git.get_current_branch.return_value = "issue-238"
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     assert result.exit_code == 0
     assert "Detected external workflow feedback" in result.stdout
@@ -3369,11 +4575,15 @@ steps:
                 "--start-step",
                 "plan",
                 "--single-step",
+                "--mute-agent-output",
+                "--open-pr",
             ],
         )
         assert result.exit_code == 0
         assert executed_steps == ["plan"]
         assert mock_builder.call_args.kwargs["phase_name"] == "plan"
+        assert mock_builder.call_args.kwargs["stream_agent_output"] is False
+        assert mock_builder.call_args.kwargs["open_pr"] is True
 
 
 def test_workflow_command_rebuilds_executor_for_each_active_phase(
@@ -3444,6 +4654,7 @@ steps:
 
 def test_workflow_command_runs_hotfix_playbook(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
+    _write_local_only_publication_contract(tmp_path / ".cafe" / "issues" / "issue-203")
     executed_steps: list[str] = []
 
     with (
@@ -3527,7 +4738,7 @@ def test_workflow_resume_uses_the_issue_owned_playbook_before_global_config(
     cafe_dir = tmp_path / ".cafe"
     issue_dir = cafe_dir / "issues" / "issue-owned-flow"
     issue_dir.mkdir(parents=True)
-    (cafe_dir / "config.yaml").write_text("playbook: default\n", encoding="utf-8")
+    (cafe_dir / "config.yaml").write_text("playbook: standard\n", encoding="utf-8")
     (issue_dir / "issue.yaml").write_text("playbook: release-flow\n", encoding="utf-8")
     playbook_dir = cafe_dir / "playbooks"
     playbook_dir.mkdir()
@@ -3590,7 +4801,7 @@ def test_workflow_execute_syncs_active_issue_on_healthy_branch(tmp_path: Path, m
         mock_builder.return_value = executor
 
         result = runner.invoke(
-            app, ["workflow", "--playbook", "default", "--execute", "--single-step"]
+            app, ["workflow", "--playbook", "standard", "--execute", "--single-step"]
         )
 
     assert result.exit_code == 0
@@ -3622,7 +4833,7 @@ def test_workflow_execute_recovers_from_unhealthy_git_via_marker(
         mock_builder.return_value = executor
 
         result = runner.invoke(
-            app, ["workflow", "--playbook", "default", "--execute", "--single-step"]
+            app, ["workflow", "--playbook", "standard", "--execute", "--single-step"]
         )
 
     assert result.exit_code == 0
@@ -3640,7 +4851,7 @@ def test_workflow_execute_invalid_marker_exits_with_guidance(tmp_path: Path, mon
         git.get_branch_health.return_value = BranchHealth(is_healthy=False, reason="git_error")
         mock_git_cls.return_value = git
 
-        result = runner.invoke(app, ["workflow", "--playbook", "default", "--execute"])
+        result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
     assert result.exit_code == 1
     assert "missing-issue" in result.stdout

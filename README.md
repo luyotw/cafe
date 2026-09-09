@@ -100,9 +100,9 @@ Do not use sudo, do not modify system Python, and do not change my shell profile
 ```
 
 The repository bootstrap installs CAFE in an isolated user environment. It
-then installs the `use-cafe-workflow`, `write-cafe-phase`, and
-`write-cafe-playbook` skills for detected supported agents. It does not require
-a vendor-specific plugin.
+then installs the `use-cafe-workflow`, `write-cafe-agent`, `write-cafe-phase`,
+and `write-cafe-playbook` skills for detected supported agents. It does not
+require a vendor-specific plugin.
 
 For the exact mutation boundaries, prerequisites, manual alternatives, and
 upgrade behavior, read [INSTALL.md](INSTALL.md).
@@ -132,13 +132,12 @@ proposal includes:
 - planned human confirmation points and reactive handoffs;
 - issue size, risk, and the mandate boundary;
 - the primary and fallback CLI/model chain for each agent phase;
-- whether the driver may adjust later model choices autonomously; and
 - whether the issue should use a worktree.
 
 Confirm or revise that contract once. The driver then prepares the issue and
 executes one phase at a time. After every completed phase it inspects the
-result, reassesses later model choices within the granted authority, and follows
-the persisted handoff. It stops when a decision still belongs to you.
+result and follows the persisted handoff. It changes a future phase model only
+when you explicitly request it. It stops when a decision still belongs to you.
 
 Common follow-up requests are similarly direct:
 
@@ -151,35 +150,60 @@ Show me the current CAFE status and explain what is waiting for me.
 ```
 
 ```text
-Continue, but require my approval before changing any phase model.
+Use <model-name> for the next develop iteration, then continue.
 ```
 
 ### Built-in playbooks
 
-CAFE includes software-development, hotfix, TDD, research, editorial, incident,
-and simple workflows. To inspect what is available, ask your agent:
+CAFE includes explicit software-development paths for different levels of
+requirements and delivery rigor:
+
+| Playbook | Path | Use when |
+| --- | --- | --- |
+| `direct` | develop → review → PR | The requested change is already clear and still needs independent review. |
+| `simple` | spec → develop → QA → PR | The outcome needs confirmation and independent acceptance, but a low-risk docs, data, or config change does not need a separate plan or code review. |
+| `standard` | spec → plan → develop → review → PR | The standard development path and built-in default. |
+| `standard-qa` | spec → plan → develop → review → QA → PR | Standard development needs independent product acceptance. |
+| `tdd` | spec → plan → TDD develop → review → PR | The implementation should follow test-driven development. |
+| `tdd-qa` | spec → plan → TDD develop → review → QA → PR | TDD also needs independent product acceptance. |
+
+`standard` replaces the former built-in `default` ID. There is no alias or
+automatic migration. `hotfix` remains available for urgent production fixes,
+and the research, editorial, and incident playbooks retain their domain-specific
+flows.
+
+To inspect what is available, ask your agent:
 
 ```text
 Show me the CAFE playbooks available in this project and explain when to use
 each one.
 ```
 
-The default software playbook separates specification, planning, development,
-review, and PR publication. Other playbooks can use different roles, artifacts,
-steps, and human gates without changing the workflow engine.
+The QA variants share one declarative QA phase. It performs observable
+acceptance checks, records reproducible failures, and returns every correction
+through development and review before QA runs again.
 
 ### Create a custom workflow with skills
 
-Custom workflows have two authoring layers:
+Custom workflows have three authoring layers:
 
 | Need | Use | Project source of truth |
 | --- | --- | --- |
+| Define a role persona and its checklist guidance | `write-cafe-agent` | `.cafe/agents/<role>/<name>.md` |
 | Define how one phase behaves | `write-cafe-phase` | `.cafe/skills/<name>/` |
 | Connect phases and gates | `write-cafe-playbook` | `.cafe/playbooks/<id>.yaml` |
 | Execute or resume the workflow | `use-cafe-workflow` | Runtime state under `.cafe/issues/` |
 
-Define or update the phase skills first, then connect them with a playbook. For
-example:
+Define or update the agents and phase skills first, then connect them with a
+playbook. Agent guideline bullets become checklist items in phases that opt into
+role guidance. For example:
+
+```text
+Use write-cafe-agent to create a Traditional Chinese security reviewer whose
+guidelines apply across every review phase.
+```
+
+Then define the phase behavior:
 
 ```text
 Use write-cafe-phase to create a project skill that turns an approved research
@@ -213,7 +237,7 @@ Use CAFE with the research-publication playbook for this brief.
 ```
 
 The skills are the recommended interface because they preserve kickoff,
-one-step execution, model reassessment, and human-handoff rules. The agent
+one-step execution, user-directed phase model changes, and human-handoff rules. The agent
 operates the Engine commands on your behalf and should explain outcomes and
 decisions rather than exposing command mechanics as the normal user interface.
 
@@ -253,6 +277,57 @@ project.
 Issue worktrees can carry their own `.cafe/phases.yaml`, allowing model choices
 to differ between issues without changing repository-wide defaults.
 
+### Repository task inbox
+
+Use the task inbox when you need to find human work across every live workflow
+in the repository. Pending tasks are shown by default in deterministic order;
+completed and cancelled tasks appear only when requested.
+
+```bash
+cafe task ls
+cafe task ls --assignee alice --step review --due-state unscheduled
+cafe task ls --historical
+cafe task ls --status completed
+```
+
+Inspect a task by its stable identifier before answering it:
+
+```bash
+cafe task inspect 7fe1a9e8-66fa-4df2-88d4-cd6af87fae43
+cafe task inspect 7fe1a9e8-66fa-4df2-88d4-cd6af87fae43 --json
+```
+
+Completion is interactive when no result option is supplied. Automation may
+provide the task's declared response as JSON directly or in a file:
+
+```bash
+cafe task complete 7fe1a9e8-66fa-4df2-88d4-cd6af87fae43
+cafe task complete 7fe1a9e8-66fa-4df2-88d4-cd6af87fae43 \
+  --result '{"decision":"confirm"}' --json
+cafe task complete 7fe1a9e8-66fa-4df2-88d4-cd6af87fae43 \
+  --result-file response.json
+```
+
+Add `--json` to list, inspect, or complete to receive one result object with
+`ok`, `operation`, `data`, and `error` fields. Filters combine with AND
+semantics. Current HumanTask records have no due timestamp, so their due state
+is `unscheduled`; the inbox does not invent or manage due dates.
+
+Inbox operations fail closed when an identifier is missing or duplicated, a
+task is stale or terminal, its workflow is missing or archived, or durable
+records are corrupt. The error identifies the affected task or workflow when
+known and includes a recovery action. Repair or explicitly restore the named
+workflow, then retry the same stable identifier; the inbox never switches the
+active issue or chooses an ambiguous record automatically.
+
+To make new HumanTasks from any built-in, global, or project playbook
+discoverable in a fixed Slack channel, follow the supported
+[Slack HumanTask notification guide](docs/human-task-slack-notifications.md).
+The channel-bound credential stays in `~/.slack-webhook`; project playbooks,
+hooks, tasks, and agents cannot choose another destination or receive the
+credential. Slack delivery never replaces `cafe task inspect` or
+`cafe task complete`.
+
 ### Inspect and recover
 
 Ask the driver for the information or recovery outcome you need:
@@ -287,7 +362,7 @@ CAFE runtime before changing sources.
 
 ### Global helper skills
 
-CAFE synchronizes its three helper skills only for detected coding agents. An
+CAFE synchronizes its bundled helper skills only for detected coding agents. An
 agent is detected through its executable on `PATH` or existing vendor state;
 directories containing only old CAFE-managed copies do not count as an
 installation.
@@ -322,7 +397,7 @@ ships.
 
 - [Roadmap](docs/roadmap.md)
 - [Changelog](CHANGELOG.md)
-- [Latest release notes](docs/releases/v0.3.2.md)
+- [Latest release notes](docs/releases/v0.3.3.md)
 - [Strategic positioning](docs/positioning.md)
 
 ## Contributing

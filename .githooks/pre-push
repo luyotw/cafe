@@ -1,10 +1,11 @@
 #!/bin/bash
 
-# Pre-push hook: Run the full behavioral suite once, without coverage overhead.
+# Pre-push hook: Re-run the bounded contract smoke suite without coverage.
+# The complete unit/integration suite belongs to the release gate.
 
 set -e
 
-echo "🧪 Running full pre-push test suite..."
+echo "🧪 Running bounded pre-push contract smoke suite..."
 echo ""
 
 PROJECT_PYTHON=".venv/bin/python"
@@ -28,9 +29,23 @@ unset GIT_OBJECT_DIRECTORY
 unset GIT_ALTERNATE_OBJECT_DIRECTORIES
 
 echo "🔒 Git isolation enabled: GIT_CEILING_DIRECTORIES=$GIT_CEILING_DIRECTORIES"
-echo "Running full tests/unit and tests/integration..."
+TEST_FILES=(
+    "tests/unit/test_abstract_cli.py"
+    "tests/unit/test_delta_packet.py"
+    "tests/unit/test_initial_input_providers.py"
+    "tests/unit/test_issue_yaml_config.py"
+    "tests/unit/test_playbook_loader.py"
+    "tests/unit/test_prepare_fields_loader.py"
+    "tests/unit/test_session_continuation.py"
+    "tests/unit/test_skill_loader.py"
+    "tests/unit/test_status_codes.py"
+    "tests/unit/test_workflow_models.py"
+    "tests/unit/utils/test_checklist_validator.py"
+)
+
+echo "Running ${#TEST_FILES[@]} bounded contract smoke files..."
 ensure_test_env
-"$PROJECT_PYTHON" -m pytest tests/unit/ tests/integration/ -q --tb=short --no-cov
+"$PROJECT_PYTHON" -m pytest "${TEST_FILES[@]}" -q --tb=short --no-cov -m "not slow"
 
 echo ""
-echo "✅ Full test suite passed! Proceeding with push..."
+echo "✅ Pre-push contract smoke suite passed! Proceeding with push..."

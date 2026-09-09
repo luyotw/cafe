@@ -1,0 +1,30 @@
+id: cafe.browser.open
+version: 1
+implementation: open_current_pr
+arguments:
+  required:
+    - target_ref
+  properties:
+    target_ref:
+      type: string
+      enum:
+        - current_pr
+outputs:
+  required:
+    - opened
+  properties:
+    opened:
+      type: boolean
+    url:
+      type: string
+effects:
+  writes: []
+  network_destinations: []
+  browser_open:
+    - current_pr
+credentials: []
+permissions: {}
+idempotency: safe
+risk: low
+approval: not_required
+policy: allow

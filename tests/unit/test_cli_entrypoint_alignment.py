@@ -111,11 +111,6 @@ def test_main_returns_error_code_without_traceback_when_auto_reexec_fails(
     )
     monkeypatch.setattr(
         cli,
-        "_check_for_updates",
-        lambda: pytest.fail("update check should not run when re-exec fails"),
-    )
-    monkeypatch.setattr(
-        cli,
         "app",
         lambda: pytest.fail("app should not run when re-exec fails"),
     )

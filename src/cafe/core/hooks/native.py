@@ -2,22 +2,21 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
-import sys
-import uuid
-import webbrowser
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
 from cafe.core.blackboard import BlackboardState, HandoffContract, HandoffIntent, HandoffOwner
 from cafe.core.hooks import HookResult, NoOpHook
+from cafe.core.human_tasks import resolve_step_human_task
 from cafe.core.initial_input import (
     GITHUB_ISSUE_PROVIDER,
     MANUAL_TEXT_PROVIDER,
     InitialInputResult,
     load_initial_input_selection,
 )
+from cafe.core.playbook import resolve_step_behavior
 from cafe.core.questions_schema import parse_questions_xml, validate_questions_xml
 from cafe.core.status_codes import PhaseStatusCode, step_on_declares
 from cafe.skills.loader import SkillLoader
@@ -87,6 +86,26 @@ def _publish_confirmation_declared(
     return False
 
 
+def _uses_baton_completion(
+    *,
+    phase: Any,
+    step_name: str,
+    context: Optional[dict[str, Any]] = None,
+    step_def: Any = None,
+) -> bool:
+    """Resolve whether a publishing step uses the strict baton completion contract."""
+    playbook = getattr(phase, "playbook", None)
+    if playbook is not None:
+        try:
+            return resolve_step_behavior(playbook, step_name).completion == "baton"
+        except (AttributeError, KeyError, TypeError, ValueError):
+            pass
+    if isinstance(context, dict) and "behavior_completion" in context:
+        return context["behavior_completion"] == "baton"
+    behavior = step_def.get("behavior") if isinstance(step_def, dict) else None
+    return isinstance(behavior, dict) and behavior.get("completion") == "baton"
+
+
 def _publish_requested(
     *,
     phase: Any,
@@ -98,7 +117,16 @@ def _publish_requested(
     """Return True when a declared publishing step reaches its handoff."""
     if not _publish_confirmation_declared(context=context, step_def=step_def):
         return False
-    if _hook_status_value(status_code) == PhaseStatusCode.CONFIRMED.value:
+    baton_completion = _uses_baton_completion(
+        phase=phase,
+        step_name=step_name,
+        context=context,
+        step_def=step_def,
+    )
+    if (
+        _hook_status_value(status_code) == PhaseStatusCode.CONFIRMED.value
+        and not baton_completion
+    ):
         return True
 
     baton_file: Optional[Path] = None
@@ -122,17 +150,51 @@ def _publish_requested(
             payload,
             current_step=step_name,
         )
+        playbook = getattr(phase, "playbook", {})
+        allowed_steps = list(playbook.get("steps", {}).keys()) if isinstance(playbook, dict) else []
+        contract.validate(allowed_steps=allowed_steps or [step_name])
     except json.JSONDecodeError:
-        return raw_baton == "done"
+        return not baton_completion and raw_baton == "done"
     except Exception:
         return False
 
-    return (
+    terminal_publish = (
         contract.from_step == step_name
         and contract.to_owner == HandoffOwner.DONE
         and contract.to_step == "done"
-        and contract.intent in {HandoffIntent.AWAIT_AGENT, HandoffIntent.WORKFLOW_COMPLETE}
+        and contract.intent == HandoffIntent.WORKFLOW_COMPLETE
     )
+    review_publish = (
+        contract.from_step == step_name
+        and contract.to_owner == HandoffOwner.USER
+        and contract.to_step == "user"
+        and contract.intent == HandoffIntent.CONFIRM_OUTPUT
+    )
+    transitions = step_def.get("on") if isinstance(step_def, dict) else None
+    if not isinstance(transitions, dict):
+        return False
+    if terminal_publish:
+        return transitions.get("workflow_complete") in {"_done", "done"}
+    if not review_publish or "confirm_output" not in transitions:
+        return False
+
+    playbook = getattr(phase, "playbook", None)
+    if not isinstance(playbook, dict):
+        playbook = {"steps": {step_name: step_def}}
+    try:
+        repo_root = getattr(phase.git_ops, "repo_path", None)
+        if not isinstance(repo_root, (str, Path)):
+            repo_root = Path.cwd()
+        skill_loader = SkillLoader(project_root=Path(repo_root).resolve())
+        resolve_step_human_task(
+            playbook_data=playbook,
+            step_name=step_name,
+            trigger="confirm_output",
+            skill_loader=skill_loader,
+        )
+    except Exception:
+        return False
+    return True
 
 
 def _declared_capability_ids(step_def: Any) -> list[str]:
@@ -208,7 +270,7 @@ class UserInputCollector(NoOpHook):
     def _get_previous_output_file(phase: Any, step_name: str) -> Optional[Path]:
         if getattr(phase, "iteration", 0) <= 1:
             return None
-        return phase._get_versioned_file_path(step_name, phase.iteration - 1, phase.phase_dir)
+        return Path(phase._get_versioned_file_path(step_name, phase.iteration - 1, phase.phase_dir))
 
     @staticmethod
     def _display_previous_output(
@@ -323,7 +385,7 @@ class UserInputCollector(NoOpHook):
         if not getattr(phase, "interactive", False):
             return HookResult()
 
-        prompt_role = {"pm": "pm", "reviewer": "reviewer"}.get(role, "developer")
+        prompt_role = role
         previous_output_file = self._get_previous_output_file(phase, step_name)
         # Steps that declare confirm_output use delta view on READY_FOR_REVIEW (less noisy).
         if not (
@@ -338,11 +400,15 @@ class UserInputCollector(NoOpHook):
             prev_data = phase._load_previous_iteration_data() or {}
             # Show diff again after returning from chat/edit, but never print full output.
             if delta_displayed:
+
                 def redisplay_callback() -> None:
                     self._display_previous_iteration_delta(phase, previous_output_file)
+
             else:
+
                 def redisplay_callback() -> None:
                     self._display_previous_output(phase, step_name, previous_output_file)
+
             choice = phase._ask_user_for_review_decision(
                 self._resolve_review_item_name(step_name),
                 agent_name=agent_name,
@@ -431,6 +497,7 @@ class UserInputCollector(NoOpHook):
         except HumanTaskPolicyError:
             return None
 
+        payload: Any
         if getattr(phase, "interactive", False):
             payload = collect_human_task_payload(policy)
         else:
@@ -557,8 +624,7 @@ def _declares_no_changes_task(step_def: Any) -> bool:
     if not isinstance(tasks, (list, tuple)):
         return False
     return any(
-        isinstance(task, dict) and task.get("trigger") == "no_changes_needed"
-        for task in tasks
+        isinstance(task, dict) and task.get("trigger") == "no_changes_needed" for task in tasks
     )
 
 
@@ -639,9 +705,7 @@ class InitialInputProviderResolver(NoOpHook):
             assert output_file is not None
             output_file.parent.mkdir(parents=True, exist_ok=True)
             formatter = kwargs.get("initial_input_output_formatter") or (
-                legacy_adapter._format_initial_requirements
-                if legacy_adapter is not None
-                else None
+                legacy_adapter._format_initial_requirements if legacy_adapter is not None else None
             )
             content = formatter(result.content) if callable(formatter) else result.content
             if legacy_empty_seed:
@@ -650,9 +714,7 @@ class InitialInputProviderResolver(NoOpHook):
                 output_file.write_text(f"{content.rstrip()}\n", encoding="utf-8")
 
         context_updates = (
-            {"user_input": result.content}
-            if binding.get("prompt_context") == "user_input"
-            else {}
+            {"user_input": result.content} if binding.get("prompt_context") == "user_input" else {}
         )
         return HookResult(
             context_updates=context_updates,
@@ -679,11 +741,14 @@ class InitialInputProviderResolver(NoOpHook):
             return False
         if MANUAL_TEXT_PROVIDER not in {str(provider) for provider in providers}:
             return False
-        if self._resolve_prefilled_input(
-            phase=phase,
-            step_name=step_name,
-            context=context,
-        ) is not None:
+        if (
+            self._resolve_prefilled_input(
+                phase=phase,
+                step_name=step_name,
+                context=context,
+            )
+            is not None
+        ):
             return False
         configured_provider, _issue_id = load_initial_input_selection(
             self._load_issue_config(phase)
@@ -770,7 +835,7 @@ class InitialInputProviderResolver(NoOpHook):
         if not config_file.exists():
             return {}
         try:
-            import yaml
+            import yaml  # type: ignore[import-untyped]
 
             data = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
         except Exception:
@@ -955,7 +1020,9 @@ class GitHubIssueFetcher(NoOpHook):
         source = (
             "workflow_user_input"
             if prefilled is not None
-            else "github" if provider == GITHUB_ISSUE_PROVIDER else "manual"
+            else "github"
+            if provider == GITHUB_ISSUE_PROVIDER
+            else "manual"
         )
         return HookResult(
             continue_pipeline=result.continue_pipeline,
@@ -1107,24 +1174,48 @@ class GitHubPRCreator(NoOpHook):
         if not branch_name:
             return HookResult()
 
+        context_updates: dict[str, str] = {}
+        if not self._is_local_pr_mode(
+            phase,
+            validated_pr_auto_create=kwargs.get("validated_pr_auto_create"),
+        ):
+            base_branch = self._resolve_base_branch(phase)
+            if not base_branch:
+                base_branch = str(phase.git_ops.get_default_base_branch())
+            context = kwargs.get("context") or {}
+            remote_base = str(context.get("pr_comparison_base") or "").strip()
+            if not remote_base:
+                remote_base = phase.git_ops.ensure_remote_base_ancestor(
+                    base_branch,
+                    "HEAD",
+                )
+            context_updates.update(
+                {
+                    "commits": str(phase.git_ops.get_commits_between(remote_base, "HEAD")),
+                    "pr_comparison_base": remote_base,
+                }
+            )
+
         try:
             github_ops = GitHubOps()
             existing_pr = github_ops.get_pr_for_branch(branch_name)
         except Exception:
-            return HookResult()
+            return HookResult(context_updates=context_updates)
 
         if not existing_pr:
-            return HookResult()
+            return HookResult(context_updates=context_updates)
 
         try:
             has_unpushed_commits = phase.git_ops.has_unpushed_commits()
         except Exception:
             has_unpushed_commits = False
 
-        context_updates = {
-            "pr_number": str(existing_pr["number"]),
-            "pr_url": str(existing_pr["url"]),
-        }
+        context_updates.update(
+            {
+                "pr_number": str(existing_pr["number"]),
+                "pr_url": str(existing_pr["url"]),
+            }
+        )
         if has_unpushed_commits:
             return HookResult(context_updates=context_updates)
 
@@ -1136,13 +1227,21 @@ class GitHubPRCreator(NoOpHook):
             CAPABILITY_PR_PUBLISH_ID,
             SCRIPT_EXIT_ERROR,
             TIMEOUT_ERROR,
-            VALIDATION_ERROR,
             CapabilityRegistryError,
+            ExecutionRequest,
+            PolicyDecision,
+            PrPublishRun,
+            _normalize_legacy_pr_request,
             capability_receipt_hook_event,
             default_capability_definition_dirs,
+            evaluate_capability_request,
             load_capability_registry,
+            pr_synced_event_from_receipt,
             run_capability_request,
+            validation_rejection_receipt,
         )
+        from cafe.core.capability_approvals import CapabilityApprovalService
+        from cafe.core.workflow_runtime import HumanTaskNotificationDispatcher
 
         phase = kwargs.get("phase")
         step_name = str(kwargs.get("step_name") or "")
@@ -1160,10 +1259,11 @@ class GitHubPRCreator(NoOpHook):
         output_file = kwargs.get("output_file")
         if phase is None or not isinstance(output_file, Path) or not output_file.exists():
             return HookResult()
-        if (
-            CAPABILITY_PR_PUBLISH_ID
-            in _effective_capability_ids(step_name=step_name, step_def=step_def)
-            and self._is_local_pr_mode(phase)
+        if CAPABILITY_PR_PUBLISH_ID in _effective_capability_ids(
+            step_name=step_name, step_def=step_def
+        ) and self._is_local_pr_mode(
+            phase,
+            validated_pr_auto_create=kwargs.get("validated_pr_auto_create"),
         ):
             return HookResult()
 
@@ -1181,48 +1281,89 @@ class GitHubPRCreator(NoOpHook):
             if isinstance(blackboard_state, BlackboardState) and isinstance(issue_dir, Path):
                 BlackboardStore(issue_dir).append_capability_receipt(blackboard_state, receipt)
 
+        request_file = (
+            capability_request_file
+            if isinstance(capability_request_file, Path)
+            else publish_request_file
+            if isinstance(publish_request_file, Path)
+            else None
+        )
         try:
             request_payload = self._load_publish_request(
-                publish_request_file=(
-                    capability_request_file
-                    if isinstance(capability_request_file, Path)
-                    else publish_request_file if isinstance(publish_request_file, Path) else None
-                ),
+                publish_request_file=request_file,
                 repo_root=repo_root,
             )
             requests = self._normalize_capability_requests(request_payload)
-        except RuntimeError:
-            receipt = {
-                "capability": fallback_capability,
-                "correlation_id": uuid.uuid4().hex[:20],
-                "success": False,
-                "category": VALIDATION_ERROR,
-                "code": "request_load_error",
-                "inputs": {},
-                "outputs": {},
-                "finished_at": datetime.now().astimezone().isoformat(),
+        except RuntimeError as exc:
+            rejected_value: Any = None
+            rejection_source: dict[str, Any] = {
+                "kind": "request_artifact",
+                "path": str(request_file.resolve()) if isinstance(request_file, Path) else None,
             }
+            if isinstance(request_file, Path):
+                try:
+                    rejected_bytes = request_file.resolve().read_bytes()
+                    rejection_source["content_sha256"] = hashlib.sha256(rejected_bytes).hexdigest()
+                    rejected_value = rejected_bytes.decode("utf-8", errors="replace")
+                except OSError:
+                    pass
+            receipt = validation_rejection_receipt(
+                capability=fallback_capability,
+                code="request_load_error",
+                rejected_value=rejected_value,
+                rejection_source=rejection_source,
+                error_detail=str(exc),
+            )
             persist_receipt(receipt)
             return HookResult(events=[capability_receipt_hook_event(receipt)])
 
+        definition_dirs = default_capability_definition_dirs(repo_root)
         try:
-            registry = load_capability_registry(default_capability_definition_dirs(repo_root))
-        except CapabilityRegistryError:
-            events: list[dict[str, Any]] = []
+            registry = load_capability_registry(definition_dirs)
+        except CapabilityRegistryError as exc:
+            rejection_events: list[dict[str, Any]] = []
             for request in requests:
-                receipt = {
-                    "capability": str(request.get("capability") or fallback_capability),
-                    "correlation_id": uuid.uuid4().hex[:20],
-                    "success": False,
-                    "category": VALIDATION_ERROR,
-                    "code": "registry_load_error",
-                    "inputs": self._request_inputs_for_receipt(request),
-                    "outputs": {},
-                    "finished_at": datetime.now().astimezone().isoformat(),
-                }
+                policy_receipt: dict[str, Any] | None = None
+                if isinstance(issue_dir, Path) and isinstance(blackboard_state, BlackboardState):
+                    try:
+                        exact_request = ExecutionRequest.model_validate(
+                            _normalize_legacy_pr_request(request)
+                        )
+                    except (TypeError, ValueError):
+                        exact_request = None
+                    if exact_request is not None:
+                        service = CapabilityApprovalService(
+                            issue_dir=issue_dir,
+                            workflow_id=blackboard_state.workflow_id,
+                            step=step_name,
+                            iteration=int(getattr(phase, "iteration", 1)),
+                        )
+                        policy_receipt = service.terminalize_policy_failure(
+                            request=exact_request,
+                            reason_code="registry_load_error",
+                            evidence={
+                                "error_detail": str(exc),
+                                "registry_paths": [str(path) for path in definition_dirs],
+                            },
+                        )
+                if policy_receipt is not None:
+                    persist_receipt(policy_receipt)
+                    rejection_events.append(capability_receipt_hook_event(policy_receipt))
+                    continue
+                receipt = validation_rejection_receipt(
+                    capability=str(request.get("capability") or fallback_capability),
+                    code="registry_load_error",
+                    raw_request=request,
+                    rejected_value=request,
+                    rejection_source={
+                        "kind": "capability_registry",
+                        "paths": [str(path) for path in definition_dirs],
+                    },
+                    error_detail=str(exc),
+                )
                 persist_receipt(receipt)
-                events.append(capability_receipt_hook_event(receipt))
-            return HookResult(events=events)
+                rejection_events.append(capability_receipt_hook_event(receipt))
+            return HookResult(events=rejection_events)
 
         events: list[dict[str, Any]] = []
         context_updates: dict[str, str] = {}
@@ -1233,6 +1374,63 @@ class GitHubPRCreator(NoOpHook):
                 capability_request=request,
                 output_file=output_file,
             )
+            decision = run.receipt.get("decision")
+            requires_approval = (
+                isinstance(decision, dict)
+                and decision.get("outcome") == PolicyDecision.REQUIRE_APPROVAL.value
+            )
+            if (
+                requires_approval
+                and isinstance(issue_dir, Path)
+                and isinstance(blackboard_state, BlackboardState)
+            ):
+                normalized_request = _normalize_legacy_pr_request(request)
+                evaluation = evaluate_capability_request(registry, normalized_request)
+                service = CapabilityApprovalService(
+                    issue_dir=issue_dir,
+                    workflow_id=blackboard_state.workflow_id,
+                    step=step_name,
+                    iteration=int(getattr(phase, "iteration", 1)),
+                )
+                task = service.request_approval(
+                    request=evaluation.request,
+                    manifest=evaluation.manifest,
+                    correlation_id=str(run.receipt["correlation_id"]),
+                )
+                approval = service.inspect(task.id)
+                if approval["state"] == "pending":
+                    HumanTaskNotificationDispatcher(
+                        issue_dir=issue_dir,
+                        blackboard_store=BlackboardStore(issue_dir),
+                        blackboard=blackboard_state,
+                    ).notify(task)
+                    events.append(
+                        {
+                            "type": "capability_approval_pending",
+                            "capability": evaluation.request.capability,
+                            "task_id": task.id,
+                            "request_fingerprint": evaluation.fingerprint,
+                            "correlation_id": approval["correlation_id"],
+                        }
+                    )
+                    continue
+                receipt = service.resume(
+                    task.id,
+                    correlation_id=str(approval["correlation_id"]),
+                    request=evaluation.request,
+                    registry=registry,
+                    repo_root=repo_root,
+                    output_file=output_file,
+                )
+                execution = receipt.get("execution")
+                run_receipt = dict(execution) if isinstance(execution, dict) else receipt
+                run = PrPublishRun(
+                    receipt=run_receipt,
+                    pr_synced_event=pr_synced_event_from_receipt(run_receipt),
+                    error_message=None if run_receipt.get("success") else str(receipt["outcome"]),
+                )
+            if run.receipt.get("capability") == CAPABILITY_PR_PUBLISH_ID:
+                run.pr_synced_event = pr_synced_event_from_receipt(run.receipt)
             persist_receipt(run.receipt)
 
             if run.pr_synced_event is not None:
@@ -1267,7 +1465,13 @@ class GitHubPRCreator(NoOpHook):
         return HookResult(context_updates=context_updates, events=events)
 
     @staticmethod
-    def _is_local_pr_mode(phase: Any) -> bool:
+    def _is_local_pr_mode(
+        phase: Any,
+        *,
+        validated_pr_auto_create: Any = None,
+    ) -> bool:
+        if isinstance(validated_pr_auto_create, bool):
+            return not validated_pr_auto_create
         try:
             value = phase._get_issue_config_value(
                 phase.issue_dir / "issue.yaml",
@@ -1329,6 +1533,10 @@ class GitHubPRCreator(NoOpHook):
             raise RuntimeError(f"PR publish request not found: {request_file}")
         try:
             payload = json.loads(request_file.read_text(encoding="utf-8"))
+        except UnicodeError as exc:
+            raise RuntimeError(f"PR publish request is not valid UTF-8: {request_file}") from exc
+        except OSError as exc:
+            raise RuntimeError(f"PR publish request cannot be read: {request_file}") from exc
         except json.JSONDecodeError as exc:
             raise RuntimeError(f"PR publish request is invalid JSON: {request_file}") from exc
         if not isinstance(payload, dict):
@@ -1451,7 +1659,7 @@ class PRCommentPoster(NoOpHook):
 
 
 class PRLinkOpener(NoOpHook):
-    """Open the created/updated PR in the user's browser."""
+    """Open the created/updated PR only after an explicit workflow opt-in."""
 
     name = "PRLinkOpener"
 
@@ -1459,6 +1667,8 @@ class PRLinkOpener(NoOpHook):
         if kwargs.get("stage") != "publish_output":
             return HookResult()
         phase = kwargs.get("phase")
+        if phase is None or getattr(phase, "open_pr", False) is not True:
+            return HookResult()
         step_name = str(kwargs.get("step_name") or "")
         if not _publish_requested(
             phase=phase,
@@ -1469,18 +1679,41 @@ class PRLinkOpener(NoOpHook):
         ):
             return HookResult()
 
+        from cafe.core.blackboard import BlackboardStore
+        from cafe.core.capabilities import (
+            CAPABILITY_BROWSER_OPEN_ID,
+            CapabilityRegistryError,
+            default_capability_definition_dirs,
+            load_capability_registry,
+            run_capability_request,
+        )
+
+        repo_root = GitHubPRCreator._resolve_repo_root(phase)
         try:
-            pr_url = GitHubOps().get_current_pr_url()
-        except GitHubError:
-            return HookResult()
-        except Exception:
+            registry = load_capability_registry(default_capability_definition_dirs(repo_root))
+            run = run_capability_request(
+                repo_root=repo_root,
+                registry=registry,
+                capability_request={
+                    "capability": CAPABILITY_BROWSER_OPEN_ID,
+                    "args": {"target_ref": "current_pr"},
+                    "effects": {
+                        "browser_open": ["current_pr"],
+                        "writes": [],
+                        "network_destinations": [],
+                    },
+                    "credentials": [],
+                    "permissions": {},
+                },
+                output_file=Path(kwargs.get("output_file") or repo_root),
+            )
+        except (CapabilityRegistryError, OSError, ValueError):
             return HookResult()
 
-        if sys.stdin.isatty():
-            try:
-                webbrowser.open(pr_url)
-            except Exception:
-                return HookResult()
-            return HookResult(events=[{"type": "pr_link_opened", "url": pr_url}])
-
+        blackboard_state = kwargs.get("blackboard_state")
+        issue_dir = getattr(phase, "issue_dir", None)
+        if isinstance(blackboard_state, BlackboardState) and isinstance(issue_dir, Path):
+            BlackboardStore(issue_dir).append_capability_receipt(blackboard_state, run.receipt)
+        if run.receipt.get("success") and run.pr_synced_event is not None:
+            return HookResult(events=[run.pr_synced_event])
         return HookResult()

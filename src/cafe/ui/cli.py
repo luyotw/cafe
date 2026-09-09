@@ -17,10 +17,12 @@ from cafe.ui.commands import lifecycle as lifecycle_commands
 from cafe.ui.commands import issues as issues_commands
 from cafe.ui.commands import templates as template_commands
 from cafe.ui.commands import catalog as catalog_commands
-from cafe.ui.commands import operation as operation_commands
+from cafe.ui.commands import tasks as task_commands
 from cafe.ui.commands import workflow as workflow_commands
 from cafe.ui.commands import audit as audit_commands
 from cafe.ui.commands import verification as verification_commands
+from cafe.ui.commands import trust as trust_commands
+from cafe.ui.commands import update as update_commands
 from cafe.ui.cli_shared import (
     CONTENT_TYPE_FILE_MAP as _SHARED_CONTENT_TYPE_FILE_MAP,
     VALID_CONTENT_TYPES as _SHARED_VALID_CONTENT_TYPES,
@@ -37,6 +39,7 @@ from cafe.ui.cli_shared import (
     _resolve_issue_playbook_name,
 )
 from rich.console import Console
+from rich.markup import escape
 
 from cafe.agents.manager import AgentManager
 from cafe.core.git import GitOperations
@@ -50,7 +53,6 @@ from cafe.ui.chat import get_chat_next_step_path as _compat_get_chat_next_step_p
 from cafe.ui.display import Display
 from cafe.ui.init_helpers import (
     check_available_clis,
-    copy_agents_to_local,
     copy_templates_to_local,
     list_available_agents,
 )
@@ -76,7 +78,7 @@ def _resolve_runtime_playbook_name() -> str:
     if issue_name:
         issue_playbook = _resolve_issue_playbook_name(issue_name)
         blackboard_path = Path.cwd() / ".cafe" / "issues" / issue_name / "blackboard.json"
-        if issue_playbook != "default" or blackboard_path.exists():
+        if issue_playbook != "standard" or blackboard_path.exists():
             return issue_playbook
     return _resolve_selected_playbook(None)
 
@@ -202,11 +204,57 @@ def _check_repo_entrypoint_alignment() -> bool:
     return False
 
 
+_AUTO_INSTALL_TOP_LEVEL_COMMANDS = {
+    "chat",
+    "close",
+    "edit",
+    "init",
+    "make",
+    "prepare",
+    "reset",
+    "restore",
+    "rm",
+    "setup",
+}
+_AUTO_INSTALL_NESTED_COMMANDS = {
+    ("agent", "create"),
+    ("agent", "edit"),
+    ("agent", "rm"),
+    ("agent", "sync"),
+    ("catalog", "sync-global"),
+    ("skill", "import"),
+    ("skill", "rm"),
+    ("task", "cancel"),
+    ("task", "complete"),
+    ("template", "add"),
+    ("template", "create"),
+    ("template", "edit"),
+    ("template", "rm"),
+    ("template", "sync"),
+    ("trust", "lifecycle"),
+    ("trust", "revoke"),
+    ("update", "apply"),
+    ("verification", "reuse"),
+    ("verification", "run"),
+}
+
+
+def _should_auto_install_global_helper_skills(argv: list[str]) -> bool:
+    """Return whether a declared mutating command may install missing helpers."""
+    if not argv or any(arg in {"--help", "-h", "--version"} for arg in argv):
+        return False
+    if argv[0] == "workflow":
+        return "--execute" in argv and "--dry-run" not in argv
+    if argv[0] in _AUTO_INSTALL_TOP_LEVEL_COMMANDS:
+        return True
+    return len(argv) >= 2 and tuple(argv[:2]) in _AUTO_INSTALL_NESTED_COMMANDS
+
+
 def _auto_sync_global_helper_skills() -> None:
-    """Keep global helper skills current on each real CAFE CLI startup."""
+    """Install missing global helpers for explicitly eligible CLI commands."""
     if os.getenv("CAFE_SKIP_GLOBAL_SKILL_SYNC"):
         return
-    if sys.argv[1:3] == ["skill", "sync-global"]:
+    if not _should_auto_install_global_helper_skills(sys.argv[1:]):
         return
 
     from cafe.skills.global_installer import auto_sync_global_skills
@@ -219,16 +267,17 @@ def _auto_sync_global_helper_skills() -> None:
 
     if summary is None:
         return
+    if summary.installed_count:
+        console.print(
+            f"[dim]✓ Installed {summary.installed_skill_count} missing global helper "
+            f"skill(s) across {summary.changed_cli_count} CLI destination(s) from "
+            f"{escape(str(summary.source_root))}[/dim]"
+        )
     if summary.failed_count:
         console.print(
-            f"[yellow]⚠ Global helper skill auto-sync failed for "
-            f"{summary.failed_count} installation(s). "
+            f"[yellow]⚠ Global helper skill missing-install failed for "
+            f"{summary.failed_count} destination(s). "
             f"Run `cafe skill sync-global` for details.[/yellow]"
-        )
-    elif summary.changed_count:
-        console.print(
-            f"[dim]✓ Synchronized {summary.changed_count} global helper "
-            f"skill installation(s)[/dim]"
         )
 
 
@@ -246,6 +295,10 @@ def _build_dynamic_step_click_command(step_name: str) -> Optional[click.Command]
             issue=None,
             start_step=step_name,
             single_step=True,
+            background=False,
+            internal_worker_id=None,
+            internal_worker_token=None,
+            on_workflow_event=None,
             dry_run=False,
         )
 
@@ -470,14 +523,20 @@ def _get_valid_playbook_values() -> List[str]:
         playbooks = PlaybookLoader().list_playbooks()
     except Exception:
         playbooks = []
-    # Surface "default" first so it stays the default highlighted choice.
-    if "default" in playbooks:
-        playbooks = ["default"] + [name for name in playbooks if name != "default"]
-    return playbooks or ["default"]
+    # Surface "standard" first so it stays the default highlighted choice.
+    if "standard" in playbooks:
+        playbooks = ["standard"] + [name for name in playbooks if name != "standard"]
+    return playbooks or ["standard"]
 
 
 @app.command()
-def init() -> None:
+def init(
+    non_interactive: bool = typer.Option(
+        False,
+        "--no-interactive",
+        help="Initialize project files without prompting for repository settings.",
+    ),
+) -> None:
     """Initialize CAFE configuration for the project.
 
     Creates project-owned configuration and bundled default content.
@@ -489,6 +548,10 @@ def init() -> None:
         console.print("[yellow]⚠️  Configuration already exists.[/yellow]")
         console.print(f"[dim]Current config: {config_manager.config_file}[/dim]")
         console.print()
+
+        if non_interactive:
+            console.print("[yellow]Skipped: existing configuration was left unchanged.[/yellow]")
+            raise typer.Exit(0)
 
         overwrite = prompt_confirm(
             message="Do you want to overwrite the existing configuration?",
@@ -508,6 +571,13 @@ def init() -> None:
     # Minimal config.yaml with defaults; setup can refine later
     if not config_manager.config_file.exists():
         config_manager.save_config({"settings": {"auto_update": True}})
+
+    if non_interactive:
+        console.print("\n[bold green]Initialization complete![/bold green]")
+        console.print(
+            "[cyan]You can now use `cafe prepare` to start a new development task.[/cyan]"
+        )
+        return
 
     console.print()
     console.print("[bold cyan]Now configure project settings:[/bold cyan]")
@@ -550,7 +620,7 @@ def setup(
     playbook: Optional[str] = typer.Option(
         None,
         "--playbook",
-        help="Set the playbook (default, tdd, bugfix).",
+        help="Set the playbook (standard, standard-qa, tdd, tdd-qa, direct, simple, hotfix).",
     ),
     rigor: Optional[str] = typer.Option(
         None,
@@ -647,30 +717,28 @@ def _get_version() -> str:
 
 
 def _ensure_default_content(cafe_dir: Path) -> None:
-    """Copy agent and template files into local .cafe directory.
+    """Copy template files into the local .cafe directory.
 
-    Copies from global custom (~/.cafe/) and system default (src/cafe/data/)
-    directories. Global custom files take precedence over system defaults.
+    Agents resolve dynamically through the project/Global/builtin catalog and
+    are deliberately not materialized as project snapshots.
 
     Args:
         cafe_dir: Path to .cafe directory
     """
-    # Copy agents and templates to local .cafe
-    agent_results = copy_agents_to_local(cafe_dir)
     template_results = copy_templates_to_local(cafe_dir)
 
-    # Count results
-    agent_success = sum(1 for _, _, success in agent_results if success)
-    agent_failed = sum(1 for _, _, success in agent_results if not success)
     template_success = sum(1 for _, _, success in template_results if success)
     template_failed = sum(1 for _, _, success in template_results if not success)
 
-    # Display summary
-    if agent_success > 0 or template_success > 0:
-        console.print(f"  [green]✓[/green] Updated .cafe directory with {agent_success} agent(s) and {template_success} template(s)")
+    if template_success > 0:
+        console.print(
+            f"  [green]✓[/green] Updated .cafe directory with {template_success} template(s)"
+        )
 
-    if agent_failed > 0 or template_failed > 0:
-        console.print(f"  [yellow]⚠[/yellow] Warning: Failed to copy {agent_failed + template_failed} file(s)")
+    if template_failed > 0:
+        console.print(
+            f"  [yellow]⚠[/yellow] Warning: Failed to copy {template_failed} file(s)"
+        )
 
 
 def _sync_lifecycle_runtime() -> None:
@@ -750,7 +818,7 @@ workflow = workflow_commands.workflow
 
 # Template management commands
 app.add_typer(template_commands.template_app, name="template")
-app.add_typer(operation_commands.operation_app, name="operation")
+app.add_typer(task_commands.task_app, name="task")
 
 # Backward-compatible alias for TEMPLATE_TYPES (now defined in templates module)
 TEMPLATE_TYPES = template_commands.TEMPLATE_TYPES
@@ -764,9 +832,12 @@ app.add_typer(agent_app, name="agent")
 # Playbook and skill management commands
 app.add_typer(catalog_commands.playbook_app, name="playbook")
 app.add_typer(catalog_commands.skill_app, name="skill")
+app.add_typer(catalog_commands.catalog_app, name="catalog")
+app.add_typer(update_commands.update_app, name="update")
 
 # Workflow verification receipts
 app.add_typer(verification_commands.verification_app, name="verification")
+app.add_typer(trust_commands.trust_app, name="trust")
 
 
 def _print_agents(custom_only: bool = False) -> None:
@@ -1040,16 +1111,6 @@ def agent_edit() -> None:
         except ValueError:
             console.print(f"[green]✓[/green] Agent updated successfully: {agent_file}")
 
-        # Auto-sync agents to local .cafe directory
-        from cafe.ui.init_helpers import sync_agents
-        cafe_dir = Path(".cafe")
-        if cafe_dir.exists():
-            agent_success, agent_failed = sync_agents(cafe_dir)
-            if agent_success > 0:
-                console.print(f"  [green]✓[/green] Updated .cafe directory with {agent_success} agent(s)")
-            if agent_failed > 0:
-                console.print(f"  [yellow]⚠[/yellow] Warning: Failed to copy {agent_failed} agent file(s)")
-
     except subprocess.CalledProcessError:
         console.print("[red]Error: Failed to edit agent[/red]")
         raise typer.Exit(1)
@@ -1167,25 +1228,27 @@ def agent_sync() -> None:
 @app.command(name="chat", context_settings={"allow_extra_args": False, "ignore_unknown_options": False})
 def chat_with_agent(
     ctx: typer.Context,
-    role: str = typer.Argument(..., help="Role: pm, developer, or reviewer"),
+    role: str = typer.Argument(..., help="Playbook-declared role"),
+    prompt: Optional[str] = typer.Option(
+        None,
+        "--prompt",
+        "-p",
+        help="Send one message and exit instead of opening interactive chat",
+    ),
 ) -> None:
-    """Open interactive chat with specified role Agent
+    """Chat with a playbook-declared role Agent.
 
     This command allows you to quickly interact with an Agent of specified role,
     without manually looking up and entering session id.
     The system automatically infers the issue from current branch and loads corresponding session.
-
-    \b
-    Supported roles:
-    - pm: Product Manager Agent
-    - developer: Developer Agent
-    - reviewer: Reviewer Agent
+    Valid roles come from the active issue's playbook, including custom roles.
 
     \b
     Examples:
-        cafe chat pm
         cafe chat developer
-        cafe chat reviewer
+        cafe chat developer -p "Summarize the current implementation"
+        cafe chat qa
+        cafe chat researcher
     """
     # 1. Validate role parameter
     issue_name = _get_and_validate_branch(ctx, "chat")
@@ -1194,7 +1257,9 @@ def chat_with_agent(
         console.print(f"[red]Error: Invalid role '{role}'. Must be one of: {', '.join(valid_roles)}[/red]")
         raise typer.Exit(1)
 
-    raise typer.Exit(launch_chat_session(role, issue_name))
+    if prompt is None:
+        raise typer.Exit(launch_chat_session(role, issue_name))
+    raise typer.Exit(launch_chat_session(role, issue_name, prompt=prompt))
 
 
 def _load_issue_playbook_roles(issue_name: str) -> list[str]:
@@ -1219,8 +1284,6 @@ def main() -> Optional[int]:
     if not _check_repo_entrypoint_alignment():
         return 1
     _auto_sync_global_helper_skills()
-    # Check for updates and auto-upgrade if available
-    _check_for_updates()
     app()
     return None
 
@@ -1274,105 +1337,6 @@ def _check_dependencies() -> None:
     except Exception:
         # If check fails, continue anyway
         pass
-
-
-def _check_for_updates() -> None:
-    """Check for new versions of cafe-engine and auto-update if available.
-
-    This function:
-    1. Checks if auto-update is enabled in .cafe/config.yaml
-    2. Respects CAFE_SKIP_UPDATE_CHECK environment variable
-    3. Rate-limits checks to once per 24 hours
-    4. Queries PyPI for the latest version
-    5. Automatically upgrades if a newer version is available
-    6. Fails silently without blocking the workflow
-    """
-    import os
-    import urllib.request
-    import json
-    import importlib.metadata
-    import subprocess
-
-    # Check if update check is explicitly disabled via environment variable
-    if os.getenv("CAFE_SKIP_UPDATE_CHECK"):
-        return
-
-    # Try to load config to check if auto-update is enabled
-    try:
-        config_manager = ConfigManager()
-        if config_manager.config_file.exists():
-            config = config_manager.load_config()
-            # Check if auto_update is explicitly disabled (default is True)
-            if config.get("settings", {}).get("auto_update") is False:
-                return
-    except Exception:
-        # If config loading fails, proceed with update check
-        pass
-
-    # Import helper functions from config module
-    from cafe.utils.config import should_check_for_updates, update_last_check_timestamp
-
-    # Check if enough time has passed since last update
-    if not should_check_for_updates():
-        return
-
-    try:
-        # Get current installed version
-        try:
-            current_version = importlib.metadata.version("cafe-engine")
-        except importlib.metadata.PackageNotFoundError:
-            # If package not found, skip update check
-            return
-
-        # Query PyPI for latest version
-        pypi_url = "https://pypi.org/pypi/cafe-engine/json"
-        try:
-            with urllib.request.urlopen(pypi_url, timeout=2) as response:
-                pypi_data = json.loads(response.read().decode())
-                latest_version = pypi_data["info"]["version"]
-        except Exception:
-            # If PyPI query fails, just update timestamp and return
-            update_last_check_timestamp()
-            return
-
-        # Update the last check timestamp
-        update_last_check_timestamp()
-
-        # Compare versions (simple string comparison works for semantic versioning)
-        # Parse versions properly for comparison
-        from packaging.version import Version
-
-        current = Version(current_version)
-        latest = Version(latest_version)
-
-        if latest > current:
-            # Newer version available, attempt upgrade
-            try:
-                # Run pip upgrade non-interactively
-                result = subprocess.run(
-                    ["pip", "install", "--upgrade", "cafe-engine"],
-                    capture_output=True,
-                    timeout=30,
-                )
-
-                if result.returncode == 0:
-                    console.print(
-                        f"\n[green]✓ cafe-engine upgraded from {current_version} to {latest_version}[/green]"
-                    )
-                else:
-                    # Upgrade failed, but don't block workflow
-                    pass
-            except Exception:
-                # If upgrade fails, don't block workflow
-                pass
-
-    except Exception:
-        # Catch all exceptions to ensure we never block the main workflow
-        pass
-
-
-
-
 
 
 if __name__ == "__main__":

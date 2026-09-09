@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
+from cafe.catalogs.resolver import CatalogKind, CatalogResolver, CatalogValidationError
 from cafe.core.types import AgentCLI
 from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.skills.importer import import_skills
@@ -39,6 +40,31 @@ def test_discover_respects_project_global_builtin_precedence(tmp_path: Path) -> 
     assert len(items) == 1
     assert items[0].name == "plan"
     assert items[0].source == "project"
+
+
+def test_invalid_project_skill_fails_closed_across_resolver_and_loader(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "project"
+    invalid_project_skill = project_root / ".cafe" / "skills" / "plan"
+    invalid_project_skill.mkdir(parents=True)
+    _write_skill(tmp_path / "global" / "skills", "plan")
+    resolver = CatalogResolver(
+        project_root=project_root,
+        canonical_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+    loader = SkillLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+
+    with pytest.raises(CatalogValidationError):
+        resolver.resolve(CatalogKind.PHASE, "plan")
+    with pytest.raises(CatalogValidationError):
+        loader.discover()
 
 
 def test_discover_builtin_name_mismatch_raises(tmp_path: Path) -> None:
@@ -309,6 +335,42 @@ def test_install_skill_recovers_when_skills_root_is_broken_symlink(tmp_path: Pat
     assert bad_root.is_dir()
 
 
+@pytest.mark.parametrize("symlink_level", ["cli_root", "skills_root"])
+def test_install_skill_refuses_valid_symlink_to_external_directory(
+    tmp_path: Path,
+    symlink_level: str,
+) -> None:
+    global_root = tmp_path / "global" / "skills"
+    _write_skill(global_root, "cafe-plan")
+    project_root = tmp_path / "project"
+    external_root = tmp_path / "external-claude"
+    external_skills = external_root / "skills"
+    external_skills.mkdir(parents=True)
+    sentinel = external_skills / "sentinel.txt"
+    sentinel.write_text("protected\n", encoding="utf-8")
+    if symlink_level == "cli_root":
+        project_root.mkdir()
+        (project_root / ".claude").symlink_to(external_root)
+    else:
+        (project_root / ".claude").mkdir(parents=True)
+        (project_root / ".claude" / "skills").symlink_to(external_skills)
+
+    loader = SkillLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+    loader.discover()
+    bridge = NativeSkillBridge(loader, project_root=project_root, home_dir=tmp_path / "home")
+
+    with pytest.raises(SkillDiscoveryError, match="Refusing to traverse"):
+        bridge.synchronize_skills(["cafe-plan"], AgentCLI.CLAUDE)
+
+    assert sentinel.read_text(encoding="utf-8") == "protected\n"
+    assert not (external_skills / bridge.MANAGED_SKILLS_MANIFEST).exists()
+    assert not (external_skills / "cafe-plan").exists()
+
+
 @pytest.mark.parametrize("manifest_contents", ["{broken", "{}"])
 def test_synchronize_skills_recovers_stale_skills_from_a_corrupted_manifest(
     tmp_path: Path, manifest_contents: str
@@ -328,9 +390,7 @@ def test_synchronize_skills_recovers_stale_skills_from_a_corrupted_manifest(
 
     bridge.synchronize_skills(["cafe-stale"], AgentCLI.COPILOT)
     native_skills = project_root / ".copilot" / "skills"
-    (native_skills / bridge.MANAGED_SKILLS_MANIFEST).write_text(
-        manifest_contents, encoding="utf-8"
-    )
+    (native_skills / bridge.MANAGED_SKILLS_MANIFEST).write_text(manifest_contents, encoding="utf-8")
 
     bridge.synchronize_skills(["cafe-plan"], AgentCLI.COPILOT)
 

@@ -4,18 +4,43 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
+from cafe.core.playbook import PlaybookDefinition, validate_playbook
+from cafe.core.workflow_models import StepExecutionResult
+from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.playbooks.loader import PlaybookLoader
+from cafe.skills.loader import SkillLoader
 from cafe.ui.human_tasks import apply_human_task_payload, resolve_step_human_task
+
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
+
+DEVELOPMENT_PLAYBOOKS = (
+    "direct",
+    "hotfix",
+    "simple",
+    "standard",
+    "standard-qa",
+    "tdd",
+    "tdd-qa",
+)
+
+
+def _configure_publication(issue_dir: Path, *, playbook_id: str, enabled: bool = False) -> None:
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    (issue_dir / "issue.yaml").write_text(
+        f"playbook: {playbook_id}\npr:\n  auto_create: {str(enabled).lower()}\n",
+        encoding="utf-8",
+    )
 
 
 def _paused_default_state(issue_dir: Path, *, from_step: str, intent: HandoffIntent):
     store = BlackboardStore(issue_dir)
-    state = store.load_or_create(from_step, playbook_id="default")
+    state = store.load_or_create(from_step, playbook_id="standard")
     store.set_current_step(state, "user")
     store.update_handoff_contract(
         state,
@@ -36,7 +61,7 @@ def _materialize_default_task(
     trigger: str,
     workflow_id: str | None = None,
 ):
-    playbook = PlaybookLoader().load("default")
+    playbook = PlaybookLoader().load("standard")
     policy, binding = resolve_step_human_task(
         playbook_data=playbook, step_name=from_step, trigger=trigger
     )
@@ -53,9 +78,174 @@ def _materialize_default_task(
     )
 
 
+@pytest.mark.parametrize("playbook_id", DEVELOPMENT_PLAYBOOKS)
+def test_builtin_pr_pauses_for_local_review_before_done(tmp_path: Path, playbook_id: str) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / f"{playbook_id}-pr-review"
+    _configure_publication(issue_dir, playbook_id=playbook_id)
+    playbook = PlaybookLoader().load(playbook_id, strict=True)
+    attempts = 0
+
+    def executor(
+        step_name: str,
+        step_def: dict,
+        state: object,
+        *,
+        extra_prompt: str | None = None,
+        same_invocation_retry: bool = False,
+    ) -> StepExecutionResult:
+        nonlocal attempts
+        assert step_name == "pr"
+        attempts += 1
+        if attempts == 1:
+            BlackboardStore(issue_dir).update_handoff_contract(
+                state,
+                from_step="pr",
+                to_owner=HandoffOwner.DONE,
+                to_step="done",
+                intent=HandoffIntent.WORKFLOW_COMPLETE,
+                source="test.stale_terminal_baton",
+            )
+            return StepExecutionResult(
+                response="PR artifact ready with a stale terminal baton",
+                artifacts={"pr_result": "pr/iteration_001/output.md"},
+            )
+
+        assert same_invocation_retry is True
+        assert extra_prompt is not None and "[BATON ERROR]" in extra_prompt
+        BlackboardStore(issue_dir).update_handoff_contract(
+            state,
+            from_step="pr",
+            to_owner=HandoffOwner.USER,
+            to_step="user",
+            intent=HandoffIntent.CONFIRM_OUTPUT,
+            source="test.pr_ready_for_local_review",
+        )
+        return StepExecutionResult(
+            response="PR artifact ready",
+            artifacts={"pr_result": "pr/iteration_001/output.md"},
+        )
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    ).run(start_step="pr")
+
+    state = BlackboardStore(issue_dir).load_or_create("pr")
+    pending = [
+        task
+        for task in HumanTaskRecordStore(issue_dir).tasks()
+        if task.status is HumanTaskStatus.PENDING
+    ]
+
+    assert result.completed is False
+    assert result.final_status_code == "BATON_CONFIRM_OUTPUT"
+    assert state.current_step == "user"
+    assert attempts == 2
+    assert len(pending) == 1
+    assert pending[0].policy_id == "local-review"
+    assert any(
+        event.event_type == "baton_rejected"
+        and event.data.get("invalid_value") == "workflow_complete"
+        for event in state.events
+    )
+
+    approval = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        from_step="pr",
+        trigger="confirm_output",
+        raw_payload={
+            "task": "local-review",
+            "decision": "continue_without_issue",
+            "human_task_id": pending[0].id,
+        },
+        source="integration",
+    )
+
+    assert approval.target == "done"
+    assert BlackboardStore(issue_dir).load_or_create("pr").current_step == "done"
+
+
+def test_custom_pr_keeps_its_declared_terminal_route(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "custom-terminal-pr"
+    _configure_publication(issue_dir, playbook_id="custom-terminal")
+    playbook = {
+        "playbook": {
+            "id": "custom-terminal",
+            "name": "Custom Terminal PR",
+            "conversation_locale": "en-US",
+            "applicability": {
+                "summary": "Publish a prepared change through a custom terminal PR step.",
+                "use_when": ["A custom workflow owns its terminal PR route."],
+                "avoid_when": ["A mandatory local review is required."],
+            },
+        },
+        "roles": {
+            "developer": {
+                "description": "Developer",
+                "default_agent": "David",
+                "default_cli": "claude",
+            }
+        },
+        "skills": {"workflow": {"shared": []}, "chat": {"shared": []}},
+        "steps": {
+            "pr": {
+                "skill": "cafe-pr",
+                "role": "developer",
+                "assignee_type": "agent",
+                "input_artifacts": [],
+                "output_artifact": "pr_result",
+                "allowed_tools": ["Read", "Edit", "Write", "Grep", "Glob"],
+                "capability_requests": ["cafe.pr.publish"],
+                "behavior": {"completion": "baton", "publish_confirmation": True},
+                "hooks": {"publish_output": ["GitHubPRCreator"]},
+                "on": {"workflow_complete": "_done"},
+            }
+        },
+        "commands": {"prepare": {"prompt_for_spec_plan_config": False}},
+        "entry_point": "pr",
+    }
+    model = PlaybookDefinition.model_validate(playbook)
+    assert validate_playbook(
+        model,
+        skill_loader=SkillLoader(project_root=tmp_path),
+        source="project",
+        path=tmp_path / "custom-terminal.yaml",
+        strict=True,
+    ) == []
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        assert step_name == "pr"
+        BlackboardStore(issue_dir).update_handoff_contract(
+            state,
+            from_step="pr",
+            to_owner=HandoffOwner.DONE,
+            to_step="done",
+            intent=HandoffIntent.WORKFLOW_COMPLETE,
+            source="test.custom_terminal_route",
+        )
+        return StepExecutionResult(
+            response="Custom PR artifact ready",
+            artifacts={"pr_result": "pr/iteration_001/output.md"},
+        )
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    ).run(start_step="pr")
+
+    assert result.completed is True
+    assert result.final_status_code == "BATON_WORKFLOW_COMPLETE"
+    assert BlackboardStore(issue_dir).load_or_create("pr").current_step == "done"
+    assert HumanTaskRecordStore(issue_dir).tasks() == ()
+
+
 def test_default_human_tasks_validate_and_route_all_user_handoff_patterns(tmp_path: Path) -> None:
     """Builtin policy responses share one validator and only declared routes advance."""
-    playbook = PlaybookLoader().load("default")
+    playbook = PlaybookLoader().load("standard")
 
     confirm_dir = tmp_path / ".cafe" / "issues" / "confirm"
     confirm_store, confirm_state = _paused_default_state(
@@ -73,6 +263,7 @@ def test_default_human_tasks_validate_and_route_all_user_handoff_patterns(tmp_pa
 
     assert confirmed.target == "plan"
     assert confirm_store.load_or_create("spec").current_step == "plan"
+    assert not (confirm_dir / "plan" / "iteration_001" / "user_input.md").exists()
 
     clarification_dir = tmp_path / ".cafe" / "issues" / "clarification"
     clarification_store, clarification_state = _paused_default_state(
@@ -112,10 +303,157 @@ def test_default_human_tasks_validate_and_route_all_user_handoff_patterns(tmp_pa
     assert no_change_store.load_or_create("develop").current_step == "pr"
 
 
+def test_builtin_develop_permission_task_completes_and_resumes_develop(tmp_path: Path) -> None:
+    """Test List 3: built-in permission feedback resumes without consumer workflow glue."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "permission-resume"
+    playbook = PlaybookLoader().load("standard")
+    store, state = _paused_default_state(
+        issue_dir, from_step="develop", intent=HandoffIntent.NEED_PERMISSION
+    )
+    task = _materialize_default_task(
+        issue_dir, state, from_step="develop", trigger="need_permission"
+    )
+
+    result = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        from_step="develop",
+        trigger="need_permission",
+        raw_payload={"human_task_id": task.id, "feedback": "Permission granted."},
+        source="integration",
+    )
+
+    assert result.target == "develop"
+    assert HumanTaskRecordStore(issue_dir).get_task(task.id).status is HumanTaskStatus.COMPLETED
+    assert store.load_or_create("develop").current_step == "develop"
+
+
+def test_replacement_task_rejects_stale_completion_and_preserves_unrelated_wait(
+    tmp_path: Path,
+) -> None:
+    """Test List 4: only an explicit replacement deactivates its named predecessor."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "replacement"
+    playbook = PlaybookLoader().load("standard")
+    store, state = _paused_default_state(
+        issue_dir, from_step="develop", intent=HandoffIntent.NEED_PERMISSION
+    )
+    original = _materialize_default_task(
+        issue_dir, state, from_step="develop", trigger="need_permission"
+    )
+    records = HumanTaskRecordStore(issue_dir)
+    unrelated = records.materialize(
+        workflow_id=state.workflow_id,
+        step="review",
+        iteration=1,
+        trigger="need_clarification",
+        policy_id="clarification-feedback",
+        prompt="Clarify the review.",
+        expected_result={"input_schema": "feedback"},
+        continuations={"submit": "review"},
+        assignee_type="user",
+    )
+    policy, binding = resolve_step_human_task(
+        playbook_data=playbook, step_name="develop", trigger="need_permission", iteration=2
+    )
+    replacement = records.materialize(
+        workflow_id=state.workflow_id,
+        step="develop",
+        iteration=2,
+        trigger="need_permission",
+        policy_id=policy.id,
+        prompt=policy.prompt,
+        expected_result=policy.model_dump(mode="json"),
+        continuations=binding.outcomes,
+        assignee_type="user",
+        superseded_task_ids=(original.id,),
+    )
+
+    stale = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        from_step="develop",
+        trigger="need_permission",
+        raw_payload={"human_task_id": original.id, "feedback": "Use stale permission."},
+        source="command",
+    )
+    completed = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        from_step="develop",
+        trigger="need_permission",
+        raw_payload={"human_task_id": replacement.id, "feedback": "Permission granted."},
+        source="command",
+    )
+
+    assert stale.target is None
+    assert stale.rejection is not None
+    assert records.get_task(original.id).status is HumanTaskStatus.CANCELLED
+    assert records.get_task(original.id).superseded_by_task_id == replacement.id
+    assert records.get_task(unrelated.id).status is HumanTaskStatus.PENDING
+    assert records.get_wait_state(unrelated.id).released_at is None
+    assert completed.target == "develop"
+    assert records.get_task(replacement.id).status is HumanTaskStatus.COMPLETED
+
+
+def test_runtime_replacement_handoff_supersedes_and_notifies_only_the_new_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test List 4: a replacement handoff is a runtime-owned atomic journey."""
+    import cafe.core.workflow_runtime as runtime_mod
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "runtime-replacement"
+    _configure_publication(issue_dir, playbook_id="standard")
+    notifications: list[dict[str, object]] = []
+    monkeypatch.setattr(runtime_mod, "load_capability_registry", lambda _dirs: {"registered": True})
+    monkeypatch.setattr(runtime_mod, "default_capability_definition_dirs", lambda _root: [])
+    monkeypatch.setattr(
+        runtime_mod,
+        "run_capability_request",
+        lambda **kwargs: notifications.append(kwargs)
+        or SimpleNamespace(receipt={"capability": "cafe.slack.human_task", "success": True}),
+    )
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        return StepExecutionResult(
+            response="need permission",
+            artifacts={},
+            status_code="need_permission",
+            auto_continue=False,
+        )
+
+    first = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=PlaybookLoader().load("standard"),
+        executor=executor,
+    ).run(start_step="develop")
+    records = HumanTaskRecordStore(issue_dir)
+    original = records.tasks()[0]
+
+    replacement_runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=PlaybookLoader().load("standard"),
+        executor=executor,
+    )
+    replacement = replacement_runtime.run(start_step="develop")
+    tasks = HumanTaskRecordStore(issue_dir).tasks()
+    current = next(task for task in tasks if task.id != original.id)
+
+    assert first.completed is False
+    assert replacement.completed is False
+    assert HumanTaskRecordStore(issue_dir).get_task(original.id).status is HumanTaskStatus.CANCELLED
+    assert HumanTaskRecordStore(issue_dir).get_task(original.id).superseded_by_task_id == current.id
+    assert current.status is HumanTaskStatus.PENDING
+    assert len(notifications) == 2
+    assert notifications[-1]["capability_request"]["args"]["task_id"] == current.id
+
+
 def test_invalid_default_human_task_response_keeps_the_user_pause(tmp_path: Path) -> None:
     """Bad command or interactive data cannot mutate the paused handoff."""
     issue_dir = tmp_path / ".cafe" / "issues" / "invalid"
-    playbook = PlaybookLoader().load("default")
+    playbook = PlaybookLoader().load("standard")
     store, state = _paused_default_state(
         issue_dir, from_step="develop", intent=HandoffIntent.NO_CHANGES_NEEDED
     )
@@ -142,7 +480,7 @@ def test_matching_durable_completion_records_one_result_and_declared_continuatio
     tmp_path: Path,
 ) -> None:
     """IT-002/IT-003: interactive and command responses share durable completion guards."""
-    playbook = PlaybookLoader().load("default")
+    playbook = PlaybookLoader().load("standard")
     for source in ("interactive", "command"):
         issue_dir = tmp_path / ".cafe" / "issues" / source
         store, state = _paused_default_state(
@@ -174,12 +512,12 @@ def test_matching_durable_completion_records_one_result_and_declared_continuatio
         assert store.load_or_create("spec").handoff_contract.to_step == "plan"
 
 
-def test_default_local_review_approval_does_not_create_durable_feedback(tmp_path: Path) -> None:
+def test_default_local_review_continue_does_not_create_durable_feedback(tmp_path: Path) -> None:
     """IT-002: default local approval completes without a correction work item."""
     from cafe.core.workflow_feedback import WorkflowFeedbackLedger
 
     issue_dir = tmp_path / ".cafe" / "issues" / "local-review-approval"
-    playbook = PlaybookLoader().load("default")
+    playbook = PlaybookLoader().load("standard")
     store, state = _paused_default_state(
         issue_dir, from_step="pr", intent=HandoffIntent.CONFIRM_OUTPUT
     )
@@ -192,7 +530,7 @@ def test_default_local_review_approval_does_not_create_durable_feedback(tmp_path
         trigger="confirm_output",
         raw_payload={
             "task": "local-review",
-            "decision": "approve",
+            "decision": "continue_without_issue",
             "feedback": "Optional acknowledgement.",
         },
         source="integration",
@@ -204,12 +542,53 @@ def test_default_local_review_approval_does_not_create_durable_feedback(tmp_path
     assert store.load_or_create("pr").current_step == "done"
 
 
+@pytest.mark.parametrize("decision", ["create_follow_up", "continue_without_issue"])
+def test_local_review_follow_up_dispositions_are_durable_terminal_decisions(
+    tmp_path: Path, decision: str
+) -> None:
+    """Follow-up choices are recorded without creating correction feedback."""
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+
+    issue_dir = tmp_path / ".cafe" / "issues" / f"local-review-{decision}"
+    playbook = PlaybookLoader().load("standard")
+    store, state = _paused_default_state(
+        issue_dir, from_step="pr", intent=HandoffIntent.CONFIRM_OUTPUT
+    )
+    task = _materialize_default_task(
+        issue_dir, state, from_step="pr", trigger="confirm_output"
+    )
+    payload = {
+        "task": "local-review",
+        "decision": decision,
+        "human_task_id": task.id,
+    }
+
+    result = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        from_step="pr",
+        trigger="confirm_output",
+        raw_payload=payload,
+        source="command",
+    )
+
+    records = HumanTaskRecordStore(issue_dir)
+    durable_result = records.get_result(task.id)
+    assert result.target == "done"
+    assert durable_result is not None
+    assert durable_result.payload["decision"] == decision
+    assert durable_result.payload.get("feedback") is None
+    assert WorkflowFeedbackLedger(issue_dir).pending() == []
+    assert "workflow_feedback" not in state.artifacts
+
+
 def test_durable_local_review_delivers_feedback_and_completes_one_task(tmp_path: Path) -> None:
     """Durable task correlation and workflow-feedback delivery compose atomically."""
     from cafe.core.workflow_feedback import WorkflowFeedbackLedger
 
     issue_dir = tmp_path / ".cafe" / "issues" / "durable-local-review"
-    playbook = PlaybookLoader().load("default")
+    playbook = PlaybookLoader().load("standard")
     store, state = _paused_default_state(
         issue_dir, from_step="pr", intent=HandoffIntent.CONFIRM_OUTPUT
     )
@@ -225,7 +604,7 @@ def test_durable_local_review_delivers_feedback_and_completes_one_task(tmp_path:
         trigger="confirm_output",
         raw_payload={
             "task": "local-review",
-            "decision": "request_changes",
+            "decision": "fix_now",
             "feedback": "Preserve both durable contracts.",
             "human_task_id": task.id,
         },
@@ -247,7 +626,7 @@ def test_completed_durable_result_recovers_the_declared_continuation_after_a_res
 ) -> None:
     """IT-001/IT-003: a persisted result can finish its interrupted continuation."""
     issue_dir = tmp_path / ".cafe" / "issues" / "restart-after-result"
-    playbook = PlaybookLoader().load("default")
+    playbook = PlaybookLoader().load("standard")
     store, state = _paused_default_state(
         issue_dir, from_step="spec", intent=HandoffIntent.CONFIRM_OUTPUT
     )
@@ -277,7 +656,7 @@ def test_completed_durable_result_recovers_the_declared_continuation_after_a_res
                 source="command",
             )
 
-    restarted = store.load_or_create("spec", playbook_id="default")
+    restarted = store.load_or_create("spec", playbook_id="standard")
     records = HumanTaskRecordStore(issue_dir)
     assert restarted.current_step == "user"
     assert records.get_task(task.id).status is HumanTaskStatus.COMPLETED
@@ -297,10 +676,79 @@ def test_completed_durable_result_recovers_the_declared_continuation_after_a_res
     assert len(HumanTaskRecordStore(issue_dir).results()) == 1
 
 
+def test_durable_self_loop_decision_projection_recovers_after_an_interruption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A persisted result can recreate its continuation receipt without completing twice."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "self-loop-recovery"
+    playbook = PlaybookLoader().load("standard")
+    playbook["steps"]["spec"]["human_tasks"][0]["outcomes"] = {"confirm": "spec"}
+    store, state = _paused_default_state(
+        issue_dir, from_step="spec", intent=HandoffIntent.CONFIRM_OUTPUT
+    )
+    policy, binding = resolve_step_human_task(
+        playbook_data=playbook,
+        step_name="spec",
+        trigger="confirm_output",
+    )
+    task = HumanTaskRecordStore(issue_dir).materialize(
+        workflow_id=state.workflow_id,
+        step="spec",
+        iteration=1,
+        trigger="confirm_output",
+        policy_id=policy.id,
+        prompt=policy.prompt,
+        expected_result=policy.model_dump(mode="json"),
+        continuations=binding.outcomes,
+        assignee_type="user",
+    )
+    payload = {
+        "task": "output-review",
+        "decision": "confirm",
+        "human_task_id": task.id,
+    }
+
+    with monkeypatch.context() as interrupted:
+        interrupted.setattr(
+            "cafe.ui.human_tasks._write_next_iteration_user_input",
+            lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("interrupted")),
+        )
+        with pytest.raises(RuntimeError, match="interrupted"):
+            apply_human_task_payload(
+                issue_dir=issue_dir,
+                playbook_data=playbook,
+                blackboard=state,
+                from_step="spec",
+                trigger="confirm_output",
+                raw_payload=payload,
+                source="command",
+            )
+
+    assert store.load_or_create("spec").current_step == "user"
+    assert HumanTaskRecordStore(issue_dir).get_task(task.id).status is HumanTaskStatus.COMPLETED
+
+    recovered = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=store.load_or_create("spec"),
+        from_step="spec",
+        trigger="confirm_output",
+        raw_payload=payload,
+        source="command",
+    )
+
+    continuation_input = (issue_dir / "spec" / "iteration_001" / "user_input.md").read_text(
+        encoding="utf-8"
+    )
+    assert recovered.target == "spec"
+    assert '"decision": "confirm"' in continuation_input
+    assert len(HumanTaskRecordStore(issue_dir).results()) == 1
+
+
 def test_durable_command_requires_the_matching_task_identifier(tmp_path: Path) -> None:
     """IT-004: a command cannot bind an unlabelled response to a later task."""
     issue_dir = tmp_path / ".cafe" / "issues" / "required-command-id"
-    playbook = PlaybookLoader().load("default")
+    playbook = PlaybookLoader().load("standard")
     store, state = _paused_default_state(
         issue_dir, from_step="spec", intent=HandoffIntent.CONFIRM_OUTPUT
     )
@@ -328,7 +776,7 @@ def test_durable_invalid_stale_and_cross_workflow_results_leave_the_pause_intact
     tmp_path: Path,
 ) -> None:
     """IT-004: only the matching active task can create progress exactly once."""
-    playbook = PlaybookLoader().load("default")
+    playbook = PlaybookLoader().load("standard")
     issue_dir = tmp_path / ".cafe" / "issues" / "guarded"
     store, state = _paused_default_state(
         issue_dir, from_step="spec", intent=HandoffIntent.CONFIRM_OUTPUT
@@ -371,7 +819,11 @@ def test_durable_invalid_stale_and_cross_workflow_results_leave_the_pause_intact
         blackboard=state,
         from_step="spec",
         trigger="confirm_output",
-        raw_payload={"task": "output-review", "decision": "confirm", "human_task_id": task.id},
+        raw_payload={
+            "task": "output-review",
+            "decision": "confirm",
+            "human_task_id": task.id,
+        },
         source="interactive",
     )
 
@@ -397,7 +849,11 @@ def test_durable_invalid_stale_and_cross_workflow_results_leave_the_pause_intact
         blackboard=duplicate_state,
         from_step="spec",
         trigger="confirm_output",
-        raw_payload={"task": "output-review", "decision": "confirm", "human_task_id": duplicate_task.id},
+        raw_payload={
+            "task": "output-review",
+            "decision": "confirm",
+            "human_task_id": duplicate_task.id,
+        },
         source="command",
     )
     duplicate = apply_human_task_payload(
@@ -406,7 +862,11 @@ def test_durable_invalid_stale_and_cross_workflow_results_leave_the_pause_intact
         blackboard=duplicate_state,
         from_step="spec",
         trigger="confirm_output",
-        raw_payload={"task": "output-review", "decision": "confirm", "human_task_id": duplicate_task.id},
+        raw_payload={
+            "task": "output-review",
+            "decision": "confirm",
+            "human_task_id": duplicate_task.id,
+        },
         source="command",
     )
 
@@ -420,7 +880,7 @@ def test_taskless_legacy_handoffs_continue_through_both_existing_transports(
     tmp_path: Path,
 ) -> None:
     """IT-006: old #345 pauses have no fabricated record but remain completable."""
-    playbook = PlaybookLoader().load("default")
+    playbook = PlaybookLoader().load("standard")
     for source in ("interactive", "command"):
         issue_dir = tmp_path / ".cafe" / "issues" / f"legacy-{source}"
         store, state = _paused_default_state(
@@ -445,7 +905,7 @@ def test_taskless_legacy_handoffs_continue_through_both_existing_transports(
 def test_taskless_payload_rejects_another_workflows_durable_records(tmp_path: Path) -> None:
     """IT-004: an existing durable envelope cannot become a legacy handoff."""
     issue_dir = tmp_path / ".cafe" / "issues" / "cross-workflow-envelope"
-    playbook = PlaybookLoader().load("default")
+    playbook = PlaybookLoader().load("standard")
     store, state = _paused_default_state(
         issue_dir, from_step="spec", intent=HandoffIntent.CONFIRM_OUTPUT
     )
@@ -487,7 +947,7 @@ def test_plan_confirmation_accepts_structural_packet_source_without_legacy_contr
     output.parent.mkdir(parents=True)
     output.write_text("# Implementation Plan\n\n- [ ] Implement the fix.\n", encoding="utf-8")
     store.set_artifact(state, "plan", str(output))
-    playbook = PlaybookLoader().load("default")
+    playbook = PlaybookLoader().load("standard")
 
     result = apply_human_task_payload(
         issue_dir=issue_dir,

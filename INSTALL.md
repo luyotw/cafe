@@ -56,7 +56,8 @@ The bootstrap:
 - creates a CAFE-managed launcher in `~/.local/bin/`;
 - verifies the installed package before publishing that launcher;
 - runs `cafe skill sync-global`, which copies the bundled
-  `use-cafe-workflow`, `write-cafe-playbook`, and `write-cafe-phase` skills to
+  `use-cafe-workflow`, `write-cafe-agent`, `write-cafe-playbook`, and
+  `write-cafe-phase` skills to
   user directories for detected Claude, Codex, Copilot, Cursor, and Gemini
   installations; and
 - removes only the previous isolated environment recorded in CAFE's own install
@@ -87,3 +88,24 @@ pip install -e .
 
 Run `cafe skill sync-global` after a manual installation to install the bundled
 workflow helper skills for all supported CLI agents.
+
+## Global workflow helper behavior
+
+CAFE treats installing a missing helper and publishing a helper update as
+different operations:
+
+- Observational commands such as `status`, `show`, checks, lists, help, and a
+  default `workflow` dry run never write user-level helper directories or sync
+  metadata.
+- An explicitly supported mutating command may install a missing managed helper.
+  A released installation uses its packaged bundle; a Git linked worktree uses
+  the canonical main checkout's bundle. Existing directories and symlinks are
+  always left unchanged during startup.
+- `cafe skill sync-global` is the explicit publication command. It can install,
+  update, or confirm unchanged copies and reports the exact resolved source plus
+  every CLI destination outcome. Run it deliberately when publishing helper
+  changes from a feature worktree.
+
+Global helper publication is separate from project/catalog comparison and its
+approval token. Approval for `cafe catalog sync-global` does not authorize a
+helper update, and helper synchronization does not publish project catalogs.

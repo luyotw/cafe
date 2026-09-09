@@ -58,13 +58,10 @@ workflow:
 ## Role
 Read your agent file: {agent_file}
 
-## Available scripts
+## Confirmed artifact sync
 
-- `scripts/sync_github.sh` — Sync confirmed spec/plan output to GitHub issue comment when enabled
-
-```bash
-bash scripts/sync_github.sh --help
-```
+- Do not execute `scripts/sync_github.sh`. After confirmation, the trusted
+  runtime evaluates the fixed `cafe.github.issue_comment` capability gate.
 
 ## Instructions
 
@@ -93,7 +90,7 @@ bash scripts/sync_github.sh --help
   `Non-goals` 與 `Definition of Done`。
   若為 `split`，保留有用的目前成果與不重疊的後續項目；僅提出建議，絕不建立
   issue、更新路線圖或變更優先順序。
-- User 確認暫停、交給 `plan` 前是否執行 GitHub sync、以及 baton 順序：請依 shared skill「cafe-workflow-common」的 **Confirming spec and plan with the user**、**Where policies live**，並搭配 `cafe-github_sync` skill；本 skill 不重複敘述。
+- User 確認暫停、交給 `plan` 前的 GitHub sync 與 baton 順序：請依 shared skill「cafe-workflow-common」的 **Confirming spec and plan with the user**、**Where policies live**；phase agent 不直接執行 sync wrapper。
 - 第一次草稿需 user 確認時：把 next-step baton 寫入 `user`，不要直接交給 `plan`；blackboard 由 runtime 更新（其餘細節以 cafe-workflow-common 為準）。
 - 後續輪若仍需 user 再看一輪：同樣把 next-step baton 寫入 `user`。
 - 若資訊不足，輸出 `questions.xml` 並依 cafe-workflow-common 暫停給 `user`。

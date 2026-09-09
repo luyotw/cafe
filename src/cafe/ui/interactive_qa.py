@@ -42,7 +42,7 @@ def interactive_qa_flow(
 
     Args:
         questions: List of Question objects from parsed XML
-        role: Agent role for inline chat ("pm", "developer", "reviewer"). When provided
+        role: Step-declared agent role for inline chat, resolved by the active playbook. When provided
               together with issue_name, a "Chat with agent" option is shown in each
               question prompt and the summary confirmation prompt.
         issue_name: Current issue name for chat session resolution.
@@ -359,7 +359,7 @@ def _build_choices(
         total: Total number of questions
         previous_answer: Previous answer for this question (for default selection)
         force_no_back: If True, never include Back option (for modify flow)
-        role: Agent role for chat option ("pm", "developer", "reviewer")
+        role: Step-declared agent role for chat, resolved by the active playbook.
         issue_name: Current issue name for chat session resolution
         agent_name: Display name for the chat option label
 

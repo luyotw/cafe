@@ -9,6 +9,8 @@ from typer.testing import CliRunner
 
 from cafe.ui.cli import app
 
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
+
 runner = CliRunner()
 
 
@@ -50,7 +52,13 @@ def _write_config_with_playbook(base_dir: Path, playbook_id: str) -> None:
     config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
 
-def _write_custom_playbook(base_dir: Path, name: str, prepare_block: str) -> None:
+def _write_custom_playbook(
+    base_dir: Path,
+    name: str,
+    prepare_block: str,
+    *,
+    publish_capability_step: str | None = None,
+) -> None:
     playbooks_dir = base_dir / ".cafe" / "playbooks"
     playbooks_dir.mkdir(parents=True, exist_ok=True)
     content = f"""
@@ -61,12 +69,14 @@ steps:
     type: skill
     skill: cafe-spec
     role: pm
+    {"capability_requests: [cafe.pr.publish]" if publish_capability_step == "spec" else ""}
     "on":
       await_agent: plan
   plan:
     type: skill
     skill: cafe-plan
     role: developer
+    {"capability_requests: [cafe.pr.publish]" if publish_capability_step == "plan" else ""}
     "on":
       await_agent: _done
 {prepare_block}
@@ -110,7 +120,7 @@ class TestPreparePlaybookDriven:
         mock_phase_list.return_value = "2. GitHub issue"
         mock_cli_list.return_value = "Quick setup (use recommended defaults)"
 
-        result = runner.invoke(app, ["prepare"])
+        result = runner.invoke(app, ["prepare", "--auto-create-pr"])
 
         assert result.exit_code == 0
         config_file = temp_repo_dir / ".cafe" / "issues" / "parity-quick" / "issue.yaml"
@@ -125,7 +135,13 @@ class TestPreparePlaybookDriven:
         """Integration #2 — default playbook non-interactive parity."""
         result = runner.invoke(
             app,
-            ["prepare", "parity-ni", "--no-interactive", "--input-method=manual"],
+            [
+                "prepare",
+                "parity-ni",
+                "--no-interactive",
+                "--input-method=manual",
+                "--no-auto-create-pr",
+            ],
         )
 
         assert result.exit_code == 0
@@ -136,6 +152,54 @@ class TestPreparePlaybookDriven:
         assert config_data["spec"]["rigor"] == "medium"
         assert config_data["spec"]["template"] == "auto"
         assert config_data["plan"]["template"] == "default"
+        assert not (temp_repo_dir / ".cafe" / "agents").exists()
+
+    def test_pr_capable_positional_prepare_requires_explicit_publication_choice(
+        self, temp_repo_dir, mock_git_ops
+    ) -> None:
+        """Integration 1: every public prepare shape requires the confirmed choice."""
+        result = runner.invoke(
+            app,
+            ["prepare", "probe-missing-choice", "--playbook", "standard", "--no-check"],
+        )
+
+        assert result.exit_code == 1
+        assert "--auto-create-pr or --no-auto-create-pr is required" in result.stdout
+        assert not (
+            temp_repo_dir / ".cafe" / "issues" / "probe-missing-choice" / "issue.yaml"
+        ).exists()
+        mock_git_ops.create_branch.assert_not_called()
+
+    def test_cli_playbook_selection_is_persisted_without_repository_default(
+        self, temp_repo_dir, mock_git_ops
+    ):
+        """A confirmed issue playbook drives prepare without repository config."""
+        result = runner.invoke(
+            app,
+            [
+                "prepare",
+                "issue-owned-hotfix",
+                "--playbook",
+                "hotfix",
+                "--no-interactive",
+                "--input-method=manual",
+                "--no-auto-create-pr",
+            ],
+        )
+
+        assert result.exit_code == 0, result.stdout
+        repository_config = yaml.safe_load(
+            (temp_repo_dir / ".cafe" / "config.yaml").read_text(encoding="utf-8")
+        )
+        assert "playbook" not in repository_config
+
+        issue_dir = temp_repo_dir / ".cafe" / "issues" / "issue-owned-hotfix"
+        issue_config = yaml.safe_load(
+            (issue_dir / "issue.yaml").read_text(encoding="utf-8")
+        )
+        assert issue_config["playbook_id"] == "hotfix"
+        assert (issue_dir / "develop").is_dir()
+        assert not (issue_dir / "spec").exists()
 
     def test_no_pr_playbook_rejects_non_interactive_pr_flags(self, temp_repo_dir, mock_git_ops):
         """A playbook without a pr step must reject legacy PR config flags."""
@@ -161,9 +225,56 @@ commands:
         )
 
         assert result.exit_code == 1
-        assert "--auto-create-pr" in result.stdout
+        assert "not applicable" in result.stdout
         config_file = temp_repo_dir / ".cafe" / "issues" / "no-pr-issue" / "issue.yaml"
         assert not config_file.exists()
+
+    @pytest.mark.parametrize(
+        ("flag", "expected"),
+        [("--auto-create-pr", True), ("--no-auto-create-pr", False)],
+    )
+    def test_custom_named_capability_persists_explicit_publication_choice(
+        self,
+        temp_repo_dir,
+        mock_git_ops,
+        flag: str,
+        expected: bool,
+    ) -> None:
+        """Integration 1: supported prepare persists the confirmed Boolean unchanged."""
+        prepare_block = """
+commands:
+  prepare:
+    prompt_for_spec_plan_config: false
+"""
+        _write_custom_playbook(
+            temp_repo_dir,
+            "capable-custom",
+            prepare_block,
+            publish_capability_step="plan",
+        )
+        _write_config_with_playbook(temp_repo_dir, "capable-custom")
+
+        result = runner.invoke(
+            app,
+            [
+                "prepare",
+                f"capable-{str(expected).lower()}",
+                "--no-interactive",
+                "--input-method=manual",
+                flag,
+            ],
+        )
+
+        assert result.exit_code == 0, result.stdout
+        config_file = (
+            temp_repo_dir
+            / ".cafe"
+            / "issues"
+            / f"capable-{str(expected).lower()}"
+            / "issue.yaml"
+        )
+        config = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+        assert config["pr"]["auto_create"] is expected
 
     def test_promptless_playbook_ignores_legacy_development_flags(
         self, temp_repo_dir, mock_git_ops
@@ -203,7 +314,7 @@ commands:
         mock_prompt_text.return_value = "hotfix-issue"
         mock_prompt_confirm.return_value = False
 
-        result = runner.invoke(app, ["prepare"])
+        result = runner.invoke(app, ["prepare", "--no-auto-create-pr"])
 
         assert result.exit_code == 0
         assert "Pre-configure spec and plan phases" not in result.stdout
@@ -211,7 +322,7 @@ commands:
         config_data = yaml.safe_load(config_file.read_text(encoding="utf-8"))
         assert "spec" not in config_data
         assert "plan" not in config_data
-        assert "pr" not in config_data
+        assert config_data["pr"] == {"auto_create": False}
 
     @patch("cafe.ui.cli.prompt_confirm")
     @patch("cafe.ui.template_selector.prompt_list")
@@ -327,17 +438,23 @@ commands:
         assert result.exit_code == 1
         assert "Failed to load playbook" in result.stdout
 
-    @pytest.mark.parametrize("playbook_id", ["default", "hotfix"])
+    @pytest.mark.parametrize("playbook_id", ["standard", "hotfix"])
     def test_builtin_playbooks_non_interactive_defaults(
         self, playbook_id, temp_repo_dir, mock_git_ops
     ):
         """Integration — built-in playbooks keep non-interactive default parity."""
-        if playbook_id != "default":
+        if playbook_id != "standard":
             _write_config_with_playbook(temp_repo_dir, playbook_id)
 
         result = runner.invoke(
             app,
-            ["prepare", f"ni-{playbook_id}", "--no-interactive", "--input-method=manual"],
+            [
+                "prepare",
+                f"ni-{playbook_id}",
+                "--no-interactive",
+                "--input-method=manual",
+                "--no-auto-create-pr",
+            ],
         )
 
         assert result.exit_code == 0
@@ -347,6 +464,38 @@ commands:
         assert config_data["spec"]["rigor"] == "medium"
         assert config_data["spec"]["template"] == "auto"
         assert config_data["plan"]["template"] == "default"
+
+    def test_direct_non_interactive_prepare_records_only_entry_input(
+        self, temp_repo_dir, mock_git_ops
+    ):
+        """Direct prepare delivers GitHub input without phantom spec/plan config."""
+        _write_config_with_playbook(temp_repo_dir, "direct")
+
+        result = runner.invoke(
+            app,
+            [
+                "prepare",
+                "direct-issue",
+                "--no-interactive",
+                "--input-method=github",
+                "--issue-id=420",
+                "--no-auto-create-pr",
+            ],
+        )
+
+        assert result.exit_code == 0
+        config_file = temp_repo_dir / ".cafe" / "issues" / "direct-issue" / "issue.yaml"
+        config_data = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+        assert config_data["initial_input"] == {
+            "provider": "github_issue",
+            "issue_id": 420,
+        }
+        assert config_data["develop"] == {
+            "input_method": "github",
+            "issue_id": "420",
+        }
+        assert "spec" not in config_data
+        assert "plan" not in config_data
 
     def test_invalid_rigor_exits_before_polluted_issue_yaml(self, temp_repo_dir, mock_git_ops):
         """Integration — invalid rigor fails before writing polluted issue.yaml."""

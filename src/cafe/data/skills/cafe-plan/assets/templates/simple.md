@@ -3,6 +3,13 @@
 ## Goal
 Add a "forgot password" link to the login page
 
+## Confirmed Implementation Approach
+
+- **Recommended direction:** [The user-confirmed implementation direction]
+- **Will do:** [The required scope this Plan covers]
+- **Will not do:** [Related work intentionally excluded]
+- **Key trade-offs:** [Material scope, cost, reliability, or maintenance trade-offs; write "None" if none apply]
+
 ## Issue Decomposition Assessment
 
 - Decision: `keep` or `split`

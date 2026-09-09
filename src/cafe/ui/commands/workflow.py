@@ -12,11 +12,23 @@ from typing import Any, Dict, List, Optional
 import typer
 from rich.console import Console
 
-from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
+from cafe.core.blackboard import (
+    BlackboardStore,
+    HandoffIntent,
+    HandoffOwner,
+    is_genuine_cold_start,
+)
+from cafe.workflow_execution.worker_launch import FixedWorkerLauncher, WorkerLaunchStore
+from cafe.workflow_execution.event_callback import (
+    ResolvedWorkflowEventCallback,
+    dispatch_workflow_event_callback,
+    resolve_builtin_workflow_event_callback,
+)
 from cafe.core.issue_resolution import ActiveIssueResolutionError, resolve_active_issue
 from cafe.core.phase_state_mixin import next_runnable_iteration_number
 from cafe.core.playbook import resolve_step_behavior
 from cafe.core.types import CriticalPhaseError
+from cafe.workflow_execution.workflow_hosting import WorkflowHost
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.phases.generic_phase import GenericPhase
@@ -33,7 +45,10 @@ from cafe.ui.cli_shared import (
 from cafe.ui.cli_shared import (
     resolve_iteration_number as _resolve_iteration_number,
 )
-from cafe.ui.human_tasks import apply_human_task_payload
+from cafe.ui.human_tasks import (
+    apply_durable_human_task_payload_if_present,
+    apply_human_task_payload,
+)
 from cafe.utils.config import ConfigError, validate_directories_exist
 
 
@@ -170,6 +185,26 @@ def _resolve_initial_step_user_inputs(
     if user_input and resume_current_step in {"user", "done"}:
         return None, user_input
     return _build_initial_step_user_inputs(playbook_data, user_input), None
+
+
+def _persist_background_step_user_inputs(
+    issue_dir: Path,
+    step_user_inputs: Optional[Dict[str, str]],
+) -> None:
+    """Persist invocation input before transferring execution to a worker.
+
+    Foreground execution can carry ``step_user_inputs`` in memory until the
+    phase creates its iteration.  A detached worker cannot see that memory, so
+    materialize the same input in the iteration file it already reads on
+    startup.  Persisting before spawn also makes a startup failure retryable
+    without asking the user to submit the input again.
+    """
+    for step_name, value in (step_user_inputs or {}).items():
+        step_dir = issue_dir / step_name
+        iteration = next_runnable_iteration_number(step_dir)
+        iteration_dir = step_dir / f"iteration_{iteration:03d}"
+        iteration_dir.mkdir(parents=True, exist_ok=True)
+        (iteration_dir / "user_input.md").write_text(value, encoding="utf-8")
 
 
 def _validate_allowed_directories(config_manager: Any, add_dir: List[str]) -> None:
@@ -321,15 +356,15 @@ def show(
         git_ops = _get_GitOperations()()
         issue_name = git_ops.get_current_branch()
     except Exception as e:
-        console.print(f"[red]Error: Failed to get current branch: {e}[/red]")
+        console.print(f"Error: Failed to get current branch: {e}", style="red", markup=False)
         raise typer.Exit(1)
 
     valid_phases = _load_issue_step_names(issue_name)
 
     # Validate phase name
     if phase_name not in valid_phases:
-        console.print(f"[red]Error: Invalid phase '{phase_name}'[/red]")
-        console.print(f"[dim]Valid phases: {', '.join(valid_phases)}[/dim]")
+        console.print(f"Error: Invalid phase '{phase_name}'", style="red", markup=False)
+        console.print(f"Valid phases: {', '.join(valid_phases)}", style="dim", markup=False)
         raise typer.Exit(1)
 
     # Set default content type
@@ -338,8 +373,8 @@ def show(
 
     # Validate content type
     if content_type not in VALID_CONTENT_TYPES:
-        console.print(f"[red]Error: Invalid content type '{content_type}'[/red]")
-        console.print(f"[dim]Valid types: {', '.join(VALID_CONTENT_TYPES)}[/dim]")
+        console.print(f"Error: Invalid content type '{content_type}'", style="red", markup=False)
+        console.print(f"Valid types: {', '.join(VALID_CONTENT_TYPES)}", style="dim", markup=False)
         raise typer.Exit(1)
 
     # Build phase directory path
@@ -348,8 +383,10 @@ def show(
 
     # Check if phase directory exists
     if not phase_dir.exists():
-        console.print(f"[red]Error: Phase directory not found: {phase_dir}[/red]")
-        console.print(f"[dim]The '{phase_name}' phase has not been executed yet[/dim]")
+        console.print(f"Error: Phase directory not found: {phase_dir}", style="red", markup=False)
+        console.print(
+            f"The '{phase_name}' phase has not been executed yet", style="dim", markup=False
+        )
         raise typer.Exit(1)
 
     try:
@@ -378,10 +415,12 @@ def show(
             if content_type == "user_input":
                 console.print("[red]No user input markdown file found for this iteration.[/red]")
             else:
-                console.print(f"[red]Error: File not found: {file_path}[/red]")
+                console.print(f"Error: File not found: {file_path}", style="red", markup=False)
                 if resolved_iteration is not None:
                     console.print(
-                        f"[dim]File '{content_type}' does not exist in iteration {resolved_iteration}[/dim]"
+                        f"File '{content_type}' does not exist in iteration {resolved_iteration}",
+                        style="dim",
+                        markup=False,
                     )
             raise typer.Exit(1)
 
@@ -397,15 +436,12 @@ def show(
                     json_data = json.loads(content)
                     console.print_json(data=json_data)
                 except json.JSONDecodeError:
-                    # If JSON parsing fails, output raw content
-                    console.print(content)
-            elif content_type in ("checklist", "output"):
-                # For checklist and output, output raw content without Rich formatting
-                # Rich treats [x] as special markup and removes it
-                print(content)
+                    # Invalid JSON may still contain valuable agent diagnostics.
+                    print(content)
             else:
-                # Output other files directly
-                console.print(content)
+                # Preserve generated content verbatim. Rich treats bracketed text
+                # such as [x] and [/path] as markup, altering it or raising.
+                print(content)
 
         except UnicodeDecodeError:
             console.print("[red]Error: Failed to read file (not UTF-8 encoded)[/red]")
@@ -416,10 +452,10 @@ def show(
         if content_type == "user_input":
             console.print("[red]No user input markdown file found for this iteration.[/red]")
         else:
-            console.print(f"[red]Error: {e}[/red]")
+            console.print(f"Error: {e}", style="red", markup=False)
         raise typer.Exit(1)
     except Exception as e:
-        console.print(f"[red]Unexpected error: {e}[/red]")
+        console.print(f"Unexpected error: {e}", style="red", markup=False)
         raise typer.Exit(1)
 
 
@@ -513,32 +549,6 @@ def _print_baton_contract_recovery_guidance(
     )
 
 
-def _reset_baton_for_explicit_start_step(
-    *,
-    issue_dir: Path,
-    blackboard: object,
-    active_step: str,
-) -> None:
-    """Make an explicit --start-step runnable even when the persisted baton is stale."""
-    store = BlackboardStore(issue_dir)
-    store.set_current_step(blackboard, active_step)
-    store.set_handoff_summary(
-        blackboard,
-        (
-            f"Explicit workflow start requested for {active_step}; "
-            "the prior handoff is superseded."
-        ),
-    )
-    store.update_handoff_contract(
-        blackboard,
-        from_step=active_step,
-        to_owner=HandoffOwner.AGENT,
-        to_step=active_step,
-        intent=HandoffIntent.AWAIT_AGENT,
-        source="workflow.start_step",
-    )
-
-
 def _print_workflow_event_display(event: Any) -> None:
     """Render generic user-facing event display without coupling to event type."""
     if not isinstance(event, dict):
@@ -575,6 +585,36 @@ def workflow(
         None, "--start-step", help="Start execution from a specific step"
     ),
     single_step: bool = typer.Option(False, "--single-step", help="Run only one playbook step"),
+    background: bool = typer.Option(
+        False,
+        "--background",
+        help="Launch a workflow through the fixed background worker",
+    ),
+    internal_worker_id: Optional[str] = typer.Option(
+        None,
+        "--internal-worker-id",
+        hidden=True,
+    ),
+    internal_worker_token: Optional[str] = typer.Option(
+        None,
+        "--internal-worker-token",
+        hidden=True,
+    ),
+    on_workflow_event: Optional[str] = typer.Option(
+        None,
+        "--on-workflow-event",
+        help="Trusted builtin asynchronous callback after durable workflow events",
+    ),
+    mute_agent_output: bool = typer.Option(
+        False,
+        "--mute-agent-output",
+        help="Suppress agent response streaming while preserving workflow events and artifacts",
+    ),
+    open_pr: bool = typer.Option(
+        False,
+        "--open-pr",
+        help="Open the published pull request in a browser (explicit opt-in)",
+    ),
     dry_run: bool = typer.Option(
         True, "--dry-run/--execute", help="Preview the read-only workflow simulation"
     ),
@@ -592,6 +632,17 @@ def workflow(
 ) -> None:
     """Run playbook workflow using the new generic runner."""
     user_input = _normalize_cli_user_input(user_input)
+    single_step = single_step if isinstance(single_step, bool) else False
+    background = background if isinstance(background, bool) else False
+    mute_agent_output = mute_agent_output if isinstance(mute_agent_output, bool) else False
+    open_pr = open_pr if isinstance(open_pr, bool) else False
+    dry_run = dry_run if isinstance(dry_run, bool) else True
+    internal_worker_id = _normalize_cli_user_input(internal_worker_id)
+    internal_worker_token = _normalize_cli_user_input(internal_worker_token)
+    validated_worker_id: str | None = None
+    worker_exit_status = "stopped"
+    worker_exit_error: str | None = None
+    launch_store: WorkerLaunchStore | None = None
     try:
 
         git = _get_GitOperations()()
@@ -654,6 +705,57 @@ def workflow(
             )
             console.print(format_text_report(analyze_playbook(model)))
             return
+        launch_store = WorkerLaunchStore(issue_dir)
+        has_internal_worker_context = bool(internal_worker_id or internal_worker_token)
+        if has_internal_worker_context:
+            try:
+                valid_worker = launch_store.validate_child(
+                    worker_id=internal_worker_id,
+                    worker_token=internal_worker_token,
+                )
+            except (OSError, ValueError):
+                valid_worker = False
+            if not valid_worker:
+                console.print("[red]Error: background worker context is invalid or stale[/red]")
+                raise typer.Exit(1)
+            validated_worker_id = internal_worker_id
+            # A validated child is always the foreground execution half of the
+            # fixed worker handoff and must never launch another child.
+            background = False
+
+        callback_binding: ResolvedWorkflowEventCallback | None = None
+        if on_workflow_event is not None:
+            try:
+                callback_binding = resolve_builtin_workflow_event_callback(
+                    on_workflow_event,
+                    project_root=Path.cwd(),
+                )
+            except ValueError as exc:
+                console.print(f"[red]Error: workflow event callback is invalid: {exc}[/red]")
+                raise typer.Exit(1)
+            if not background and not has_internal_worker_context:
+                console.print("[red]Error: --on-workflow-event requires --background[/red]")
+                raise typer.Exit(1)
+
+        def launch_background_worker() -> None:
+            """Launch one generic worker with an optional trusted event callback ID."""
+            try:
+                record = launch_store.start()
+                child_args = ["--playbook", selected_playbook]
+                if callback_binding is not None:
+                    child_args.extend(["--on-workflow-event", callback_binding.callback_id])
+                if mute_agent_output:
+                    child_args.append("--mute-agent-output")
+                if open_pr:
+                    child_args.append("--open-pr")
+                pid = FixedWorkerLauncher(issue_dir).launch(record, extra_args=child_args)
+            except (OSError, ValueError) as exc:
+                console.print(
+                    f"[red]Error: workflow background worker could not start: {exc}[/red]"
+                )
+                raise typer.Exit(1)
+            console.print(f"[green]Workflow background worker started[/green] pid={pid}")
+
         tty_interactive = sys.stdin.isatty() or os.getenv("CAFE_FORCE_INTERACTIVE") == "1"
         generic_phase = GenericPhase(SkillLoader())
 
@@ -664,17 +766,41 @@ def workflow(
             entry_point,
             playbook_id=str(playbook_data["playbook"]["id"]),
         )
+        if (
+            background
+            and user_input is not None
+            and start_step is None
+            and resume_blackboard.current_step not in {"user", "done"}
+            and not is_genuine_cold_start(resume_blackboard, entry_point=entry_point)
+        ):
+            console.print(
+                "[red]Error: --user-input is valid only for a new workflow or its "
+                "current user handoff; background worker was not started[/red]"
+            )
+            raise typer.Exit(1)
         initial_step_user_inputs, user_input = _resolve_initial_step_user_inputs(
             playbook_data,
             user_input,
             start_step,
             resume_blackboard.current_step,
         )
+        if background:
+            if single_step or start_step is not None or add_dir_values:
+                console.print(
+                    "[red]Error: --background resumes the durable workflow and cannot "
+                    "be combined with --single-step, --start-step, or --add-dir[/red]"
+                )
+                raise typer.Exit(1)
+            _persist_background_step_user_inputs(issue_dir, initial_step_user_inputs)
+            initial_step_user_inputs = None
+            if user_input is None:
+                launch_background_worker()
+                return
 
         def _interactive_mode() -> bool:
             # An explicit payload is authoritative for the current user gate,
             # then normal TTY interaction resumes after that payload is consumed.
-            return tty_interactive and user_input is None
+            return not background and tty_interactive and user_input is None
 
         initial_phase_name = start_step or resume_blackboard.current_step
         if initial_phase_name not in playbook_data["steps"]:
@@ -690,7 +816,9 @@ def workflow(
                 phase_name=phase_name,
                 step_user_inputs=initial_step_user_inputs,
                 interactive=_interactive_mode(),
+                open_pr=open_pr,
                 extra_allowed_directories=add_dir_values,
+                stream_agent_output=not mute_agent_output,
             )
 
         # Mutable holder so wrapped_executor can swap executors when the active
@@ -708,6 +836,7 @@ def workflow(
             blackboard_state: object,
             extra_prompt: Optional[str] = None,
             same_invocation_retry: bool = False,
+            validated_pr_auto_create: Optional[bool] = None,
         ) -> Any:
             iteration = next_runnable_iteration_number(issue_dir / step_name)
             console.print(f"[dim]Executing[/dim] step={step_name} iteration={iteration:03d}")
@@ -736,6 +865,11 @@ def workflow(
                 for parameter in execute_signature.parameters.values()
             ):
                 execute_kwargs["same_invocation_retry"] = same_invocation_retry
+            if "validated_pr_auto_create" in execute_signature.parameters or any(
+                parameter.kind == inspect.Parameter.VAR_KEYWORD
+                for parameter in execute_signature.parameters.values()
+            ):
+                execute_kwargs["validated_pr_auto_create"] = validated_pr_auto_create
             result = step_executor.execute_step(
                 step_name,
                 step_def,
@@ -771,12 +905,8 @@ def workflow(
 
             active_step = pending_start_step or blackboard.current_step
             if has_explicit_start_step:
-                if active_step not in {"user", "done"}:
-                    _reset_baton_for_explicit_start_step(
-                        issue_dir=issue_dir,
-                        blackboard=blackboard,
-                        active_step=active_step,
-                    )
+                # The runtime owns explicit-start baton replacement so it can
+                # retain and supersede the exact pending user task atomically.
                 explicit_start_step_pending = False
             if active_step in {"user", "done"}:
                 handoff_contract = getattr(blackboard, "handoff_contract", None)
@@ -855,6 +985,25 @@ def workflow(
                             allowed_steps=step_keys,
                         )
                         from_step = getattr(contract, "from_step", None) or blackboard.current_step
+                        durable_result = apply_durable_human_task_payload_if_present(
+                            issue_dir=issue_dir,
+                            playbook_data=playbook_data,
+                            blackboard=blackboard,
+                            raw_payload=user_input,
+                            source="command",
+                        )
+                        if durable_result is not None:
+                            if durable_result.rejection is not None:
+                                console.print(
+                                    f"[yellow]{durable_result.rejection.message}[/yellow]"
+                                )
+                                console.print(
+                                    f"[dim]{durable_result.rejection.correction_guidance}[/dim]"
+                                )
+                                return
+                            user_input = None
+                            pending_start_step = durable_result.target
+                            continue
                         if contract.intent == HandoffIntent.ALIGNMENT_CHECKPOINT:
                             decision_payload = parse_alignment_decision_payload(user_input)
                             if decision_payload is None:
@@ -960,6 +1109,16 @@ def workflow(
                 pending_start_step = user_selected_step
                 continue
 
+            if background:
+                if user_input is not None:
+                    console.print(
+                        "[red]Error: --user-input could not be applied to the current "
+                        "workflow handoff; background worker was not started[/red]"
+                    )
+                    raise typer.Exit(1)
+                launch_background_worker()
+                return
+
             effective_start_step = active_step
             console.print(
                 f"[dim]Workflow context[/dim] playbook={playbook_data['playbook']['id']} step={effective_start_step}"
@@ -969,8 +1128,34 @@ def workflow(
                 issue_dir=issue_dir,
                 playbook=playbook_data,
                 executor=wrapped_executor,
+                workflow_event_callback=(
+                    (
+                        lambda event: dispatch_workflow_event_callback(
+                            callback_binding,
+                            event,
+                            cwd=Path.cwd(),
+                        )
+                    )
+                    if callback_binding is not None
+                    else None
+                ),
             )
-            result = runner.run(start_step=pending_start_step, single_step=single_step)
+
+            def run_composed_workflow():
+                return runner.run(start_step=pending_start_step, single_step=single_step)
+
+            host = WorkflowHost(issue_dir)
+            if validated_worker_id is not None:
+                result = host.run_worker(
+                    run_composed_workflow,
+                    worker_id=validated_worker_id,
+                    hosting="background",
+                ).result
+            else:
+                result = host.run(
+                    run_composed_workflow,
+                    hosting="foreground",
+                ).result
             latest_blackboard = BlackboardStore(issue_dir).load_or_create(
                 str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
                 playbook_id=str(playbook_data["playbook"]["id"]),
@@ -1054,8 +1239,14 @@ def workflow(
                         continue
             return
     except CriticalPhaseError as e:
+        worker_exit_status = "failed"
+        worker_exit_error = type(e).__name__
+        _dispatch_interruption_callback(locals().get("runner"), e)
         _handle_phase_exception(e, "workflow")
     except Exception as e:
+        worker_exit_status = "failed"
+        worker_exit_error = type(e).__name__
+        _dispatch_interruption_callback(locals().get("runner"), e)
         if _is_baton_contract_error(e):
             _print_baton_contract_recovery_guidance(
                 issue_dir=locals().get("issue_dir"),
@@ -1063,3 +1254,25 @@ def workflow(
             )
         console.print(f"[red]Error: workflow run failed: {e}[/red]")
         raise typer.Exit(1)
+    finally:
+        if validated_worker_id and launch_store is not None:
+            launch_store.mark(
+                validated_worker_id,
+                worker_exit_status,
+                error_code=worker_exit_error,
+            )
+
+
+def _dispatch_interruption_callback(runtime: Any, error: Exception) -> None:
+    """Publish a durable interruption only when a configured runtime exists."""
+    if not isinstance(runtime, BlackboardWorkflowRuntime):
+        return
+    try:
+        runtime.blackboard_store.record_event(
+            runtime.blackboard,
+            "workflow_interrupted",
+            {"error": type(error).__name__},
+        )
+        runtime._dispatch_workflow_event("workflow_interruption", {"error": type(error).__name__})
+    except Exception:
+        pass

@@ -20,6 +20,12 @@ playbook:
   id: example
   name: "Example Workflow"
   conversation_locale: zh-TW
+  applicability:
+    summary: "Plan and execute a bounded domain change with explicit user review."
+    use_when:
+      - "Requirements need a dedicated planning pass before execution."
+    avoid_when:
+      - "The requested change is already fully specified and needs no plan."
 
 roles:
   developer:
@@ -87,6 +93,32 @@ alignment checkpoints, progress/error reports, and completion messages. It does
 not translate commands, paths, playbook or step names, intents, artifact keys,
 structured payload fields, quoted source text, or the language of workflow
 artifacts.
+
+### Applicability contract
+
+`playbook.applicability` is the machine-readable selection intent for one
+playbook. It must contain all three fields shown above:
+
+- `summary`: one whitespace-normalized, non-empty string of at most 160
+  characters;
+- `use_when`: 1–6 whitespace-normalized, non-empty positive conditions, each at
+  most 200 characters;
+- `avoid_when`: 1–6 whitespace-normalized, non-empty negative conditions, each
+  at most 200 characters.
+
+Conditions are compared after whitespace normalization and case folding.
+Duplicates within either list and a condition present in both lists are invalid.
+Describe workflow suitability, not an alternate copy of steps, confirmation
+gates, QA ownership, or publication behavior. The resolved graph remains
+authoritative for those responsibilities and boundaries.
+
+Existing custom playbooks without applicability remain inspectable and usable
+when already explicitly selected in compatibility mode. They receive a missing
+contract warning and are ineligible for automatic recommendation; no metadata
+is inferred from their id, name, source, graph, or skills. To migrate, add only
+the complete contract, inspect it with `cafe playbook show <id>`, and run
+`cafe playbook validate <id> --strict`. Strict validation fails until the
+contract and every other warning are resolved.
 
 ## 3. Step Fields
 
@@ -237,10 +269,16 @@ Every declared intent must have a resolvable key. `cafe playbook simulate` repor
 
 ## 5. User Gates And Loops
 
-`on.confirm_output` is the first-class declaration of a planned kickoff
-confirmation gate. The workflow driver derives the user's stop-contract
-candidates from steps that declare this key. Use it only when the user can
-meaningfully approve the completed output before the normal path continues.
+`on.confirm_output` is the first-class declaration of a planned output
+confirmation gate. `cafe playbook confirmation-gates` reports two classes:
+
+- an ordinary confirmation binding is an assignable kickoff stop-contract candidate;
+- a matching `confirm_output` binding with `feedback_delivery` is a mandatory
+  HumanTask gate that always remains user-owned and is not assignable to the driver.
+
+Use this transition only when the user can meaningfully approve the completed
+output before the normal path continues. The workflow driver partitions only
+the assignable class and must still display every mandatory gate.
 Reactive `need_clarification`, `need_permission`, and `alignment_checkpoint`
 pauses are safety interruptions, not scheduled confirmation candidates.
 
@@ -329,22 +367,27 @@ Prefer an explicit forward skip:
   skill to declare `workflow.output_templates`; other workflow-owned settings need
   no development-stage or PR metadata.
 
-### Per-issue iteration override
+### Per-issue attempt-limit override
 
-An issue may adjust one step's visit cap without copying the full playbook. The
-override surface is intentionally limited to `steps.<name>.max_iterations`:
+An issue may adjust one step's per-cycle attempt cap without copying the full playbook. The
+override surface is intentionally limited to
+`steps.<name>.max_attempts_per_cycle`:
 
 ```yaml
 playbook_overrides:
   steps:
     review:
-      max_iterations: 7
+      max_attempts_per_cycle: 7
 ```
 
 The step must exist in the selected playbook and the value must be a positive
 integer. Unknown steps, fields, or non-integer values fail before workflow
-execution. Other graph, skill, hook, and presentation changes still require a
-project playbook under `.cafe/playbooks/`.
+execution. The count covers attempts in the current correction cycle and resets
+only when the step successfully advances through `await_agent` or
+`no_changes_needed`; backward correction routes remain in the same cycle. Other
+graph, skill, hook, and presentation changes still require a project playbook
+under `.cafe/playbooks/`. Legacy `max_iterations` declarations remain readable
+for migration, but new and updated playbooks must use `max_attempts_per_cycle`.
 
 ### Initial input for a custom entry step
 
@@ -449,12 +492,18 @@ assert steps["bridge"]["output_artifact"] == "plan"
 - [ ] Filename stem equals `playbook.id`.
 - [ ] `playbook.conversation_locale` is `auto` or a valid BCP 47 language tag
       and matches the intended driver-to-user conversation language.
+- [ ] `playbook.applicability` has a bounded summary plus 1–6 positive and 1–6
+      negative conditions, with no normalized duplicates or contradictions.
+- [ ] Applicability describes selection intent, agrees with the resolved graph,
+      and does not duplicate graph responsibilities or boundaries.
 - [ ] Every skill resolves and passes strict skill validation.
 - [ ] Every role and `chat_role` is declared.
 - [ ] Every step is reachable from `entry_point`.
 - [ ] Every declared intent has an `"on"` handler.
 - [ ] Every user-facing pause has a matching `human_tasks` binding and a policy
       in the selected skill.
+- [ ] Every `confirm_output` gate is reported as either assignable or mandatory;
+      mandatory gates cannot be assigned to the driver.
 - [ ] Every normal path reaches `_done` or an intentional user pause.
 - [ ] Plan producers output `plan`; execute consumers input `plan` and read `{plan_file}`.
 - [ ] Serial bridges distinguish incoming `{plan_file}` from next `{output_file}`.

@@ -3,7 +3,7 @@
 Use `.cafe/strategic_context.yaml` as the one project-root file for strategic
 documents and decision authority. Read it and only the relevant linked
 documents before kickoff decisions, driver-confirming outputs, answering
-workflow questions, final PR review, or merging.
+workflow questions, declared reviews, or separately authorized actions.
 
 Do not split this information into `mandate.yaml` or another parallel config.
 
@@ -26,6 +26,11 @@ then mark it `exists` or user-approved `draft`.
 - `mandate`: repository-wide default authority.
 - `issues.<name>`: optional, protected overrides created only at the user's
   explicit request.
+
+Strategic context is not playbook configuration. Do not add `playbook_id` to
+`mandate` or `issues.<name>`, and do not store a selected playbook anywhere in
+this file. A legacy playbook field is non-authoritative and must not be copied
+or refreshed; leave cleanup to an explicit user request.
 
 Levels:
 
@@ -52,7 +57,6 @@ documents:
 
 mandate:
   preset: technical-led
-  playbook_id: default
   axes:
     product_scope:
       level: escalate
@@ -71,7 +75,6 @@ mandate:
 # Optional and protected. Include only after an explicit user request.
 # issues:
 #   issue301:
-#     playbook_id: default
 #     axes:
 #       product_scope: {level: escalate}
 #       technical: {level: agent}
@@ -97,12 +100,14 @@ the named documents and latest accepted issue artifacts.
 - For questions: classify by axis and level. A contradiction or extension of
   strategy requires escalation. Missing grounds require document co-creation;
   do not invent strategy.
-- For driver-confirming spec or plan: verify completeness, mandate, and
+- For driver-confirming declared outputs: verify completeness, mandate, and
   consistency with accepted upstream artifacts.
-- For PR review: create blocking findings only for in-mandate axes backed by
+- For declared reviews: create blocking findings only for in-mandate axes backed by
   `exists` or user-approved `draft` documents.
-- Merge, close, and `cafe close` only after all such blockers are resolved.
+- Resolving blockers grants no external action authority. Follow
+  `completion_and_authority.md`; each mutation needs its own scoped authority.
 
-Write repository-wide `documents` and `mandate` updates during kickoff as
-confirmed. Leave `issues:` untouched unless the user explicitly requested an
-issue-specific strategic override.
+Write repository-wide `documents` and `mandate` updates during kickoff only as
+confirmed, and never include a playbook selection in those updates.
+Leave `issues:` untouched unless the user explicitly requested an issue-specific
+strategic override.

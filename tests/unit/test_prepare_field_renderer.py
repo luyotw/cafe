@@ -42,10 +42,12 @@ from cafe.ui.prepare_field_renderer import (
 from cafe.templates.manager import TemplateManager
 from cafe.core.prepare_profile import PrepareIssueConfig
 
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
+
 
 def _profile(*, is_github_repo: bool = True) -> PrepareProfile:
     loader = PlaybookLoader()
-    loaded = loader.load_model("default")
+    loaded = loader.load_model("standard")
     return PrepareProfile.from_playbook(loaded.model, is_github_repo=is_github_repo)
 
 
@@ -68,7 +70,7 @@ def _no_pr_profile(*, is_github_repo: bool = True) -> PrepareProfile:
 
 def _default_fields():
     loader = PlaybookLoader()
-    loaded = loader.load_model("default")
+    loaded = loader.load_model("standard")
     profile = _profile()
     return profile.resolved_prepare_fields(
         playbook_path=loaded.path,
@@ -347,6 +349,8 @@ class TestQuickDefaults:
         assert rendered.spec == legacy.spec
         assert rendered.plan == legacy.plan
         assert rendered.pr == legacy.pr
+        assert "auto_create" not in rendered.pr
+        assert rendered.pr["post_todo_list"] is True
 
     def test_manual_input_uses_manual_sync_defaults(self) -> None:
         parsed = _default_fields()
@@ -501,7 +505,7 @@ class TestNonInteractiveResolver:
         profile = _profile()
         config = resolve_non_interactive_issue_config(
             profile,
-            NonInteractiveCliAnswers(input_method="manual"),
+            NonInteractiveCliAnswers(input_method="manual", auto_create_pr=False),
             parsed_fields=parsed,
             deps=_resolver_deps(),
         )
@@ -511,7 +515,7 @@ class TestNonInteractiveResolver:
             "template": "auto",
         }
         assert config.plan == {"template": "default"}
-        assert config.pr == {}
+        assert config.pr == {"auto_create": False}
 
     def test_cli_override_precedence(self) -> None:
         parsed = _default_fields()
@@ -523,6 +527,7 @@ class TestNonInteractiveResolver:
                 rigor="low",
                 spec_template="detailed",
                 plan_template="bug",
+                auto_create_pr=False,
             ),
             parsed_fields=parsed,
             deps=_resolver_deps(),
@@ -537,7 +542,7 @@ class TestNonInteractiveResolver:
         profile = PrepareProfile.from_playbook(loaded.model, is_github_repo=True)
         config = resolve_non_interactive_issue_config(
             profile,
-            NonInteractiveCliAnswers(input_method="manual"),
+            NonInteractiveCliAnswers(input_method="manual", auto_create_pr=False),
             parsed_fields=None,
             deps=_resolver_deps(),
         )
@@ -600,7 +605,9 @@ class TestNonInteractiveResolver:
         profile = _profile()
         config = resolve_non_interactive_issue_config(
             profile,
-            NonInteractiveCliAnswers(input_method="github", issue_id=336),
+            NonInteractiveCliAnswers(
+                input_method="github", issue_id=336, auto_create_pr=False
+            ),
             parsed_fields=parsed,
             deps=_resolver_deps(),
         )
@@ -650,20 +657,21 @@ commands:
                 NonInteractiveCliAnswers(
                     input_method="manual",
                     plan_template="does-not-exist",
+                    auto_create_pr=False,
                 ),
                 parsed_fields=_default_fields(),
                 deps=_resolver_deps(),
             )
 
-    def test_pr_flags_only_when_explicit(self) -> None:
+    def test_pr_capable_prepare_requires_and_persists_explicit_choice(self) -> None:
         profile = _profile()
-        without_pr = resolve_non_interactive_issue_config(
-            profile,
-            NonInteractiveCliAnswers(input_method="manual"),
-            parsed_fields=_default_fields(),
-            deps=_resolver_deps(),
-        )
-        assert without_pr.pr == {}
+        with pytest.raises(PrepareNonInteractiveError, match="required"):
+            resolve_non_interactive_issue_config(
+                profile,
+                NonInteractiveCliAnswers(input_method="manual"),
+                parsed_fields=_default_fields(),
+                deps=_resolver_deps(),
+            )
 
         with_pr = resolve_non_interactive_issue_config(
             profile,
@@ -691,7 +699,7 @@ commands:
     def test_pr_flags_rejected_when_playbook_has_no_pr_config(self) -> None:
         profile = _no_pr_profile()
 
-        with pytest.raises(PrepareNonInteractiveError, match="require a playbook"):
+        with pytest.raises(PrepareNonInteractiveError, match="not applicable"):
             resolve_non_interactive_issue_config(
                 profile,
                 NonInteractiveCliAnswers(
@@ -703,7 +711,7 @@ commands:
                 deps=_resolver_deps(),
             )
 
-    def test_pr_flags_allowed_when_no_pr_step_declares_pr_fields(self) -> None:
+    def test_pr_fields_do_not_make_publication_applicable(self) -> None:
         profile = _no_pr_profile()
         parsed = ParsedPrepareFields(
             fields=parse_prepare_fields(
@@ -724,18 +732,16 @@ commands:
             )
         )
 
-        config = resolve_non_interactive_issue_config(
-            profile,
-            NonInteractiveCliAnswers(
-                input_method="manual",
-                auto_create_pr=True,
-                post_pr_todo_list=False,
-            ),
-            parsed_fields=parsed,
-            deps=_resolver_deps(),
-        )
-
-        assert config.pr == {"auto_create": True, "post_todo_list": False}
+        with pytest.raises(PrepareNonInteractiveError, match="not applicable"):
+            resolve_non_interactive_issue_config(
+                profile,
+                NonInteractiveCliAnswers(
+                    input_method="manual",
+                    auto_create_pr=False,
+                ),
+                parsed_fields=parsed,
+                deps=_resolver_deps(),
+            )
 
 
 class TestPromptCustomFields:

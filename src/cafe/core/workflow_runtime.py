@@ -6,12 +6,16 @@ primary source of truth for step transitions.
 
 from __future__ import annotations
 
+import inspect
 import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Mapping, Optional
+from uuid import uuid4
+
+import yaml
 
 from cafe.core.active_issue import clear_marker_if_matches
 from cafe.core.automatic_steps import (
@@ -20,19 +24,40 @@ from cafe.core.automatic_steps import (
     default_automatic_executor_registry,
 )
 from cafe.core.blackboard import (
+    BlackboardState,
     BlackboardStore,
     HandoffContract,
     HandoffIntent,
     HandoffOwner,
-    LongRunningOperationArtifact,
-    LongRunningOperationState,
-    operation_artifact_path,
-    operation_receipt_path,
 )
-from cafe.core.capabilities import CAPABILITY_PR_PUBLISH_ID
-from cafe.core.human_task_records import HumanTaskRecordStore
-from cafe.core.human_tasks import resolve_step_human_task
-from cafe.core.playbook import resolve_step_behavior
+from cafe.core.capabilities import (
+    CAPABILITY_PR_PUBLISH_ID,
+    CAPABILITY_SLACK_HUMAN_TASK_ID,
+    default_capability_definition_dirs,
+    load_capability_registry,
+    run_capability_request,
+    validation_rejection_receipt,
+)
+from cafe.core.human_task_notifications import (
+    load_human_task_notification_settings,
+    sanitize_human_task_metadata,
+)
+from cafe.core.human_task_records import (
+    HumanTask,
+    HumanTaskRecordError,
+    HumanTaskRecordStore,
+    HumanTaskStatus,
+)
+from cafe.core.human_tasks import (
+    AGENT_EXECUTION_INTERRUPTED_TRIGGER,
+    agent_execution_interrupted_human_task,
+    resolve_step_human_task,
+)
+from cafe.core.playbook import (
+    playbook_requests_capability,
+    resolve_step_attempt_limit,
+    resolve_step_behavior,
+)
 from cafe.core.questions_schema import validate_questions_xml
 from cafe.core.status_codes import (
     PhaseStatusCode,
@@ -60,6 +85,86 @@ PAUSE_STATUS_CODES = {
     PhaseStatusCode.NEED_CLARIFICATION.value,
     PhaseStatusCode.NEED_PERMISSION.value,
 }
+SLACK_HUMAN_TASK_TIMEOUT_SEC = 5.0
+MAX_GIT_METADATA_BYTES = 8192
+MAX_ISSUE_CONFIG_BYTES = 131072
+
+
+def _read_git_metadata(path: Path) -> str | None:
+    """Read a bounded ordinary Git metadata file without executing Git."""
+    try:
+        if path.is_symlink() or not path.is_file():
+            return None
+        contents = path.read_bytes()
+    except OSError:
+        return None
+    if len(contents) > MAX_GIT_METADATA_BYTES:
+        return None
+    try:
+        return contents.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def _resolve_git_metadata_path(value: str, *, relative_to: Path) -> Path | None:
+    """Resolve one bounded Git metadata path without accepting extra content."""
+    if not value or "\x00" in value or "\n" in value or "\r" in value:
+        return None
+    try:
+        candidate = Path(value)
+        if not candidate.is_absolute():
+            candidate = relative_to / candidate
+        return candidate.resolve(strict=False)
+    except (OSError, RuntimeError):
+        return None
+
+
+def _linked_worktree_canonical_root(active_root: Path) -> Path:
+    """Return a linked worktree's primary checkout after cross-checking metadata."""
+    git_file = active_root / ".git"
+    git_file_contents = _read_git_metadata(git_file)
+    if git_file_contents is None:
+        return active_root
+    git_file_lines = git_file_contents.splitlines()
+    if len(git_file_lines) != 1 or not git_file_lines[0].startswith("gitdir: "):
+        return active_root
+    git_dir = _resolve_git_metadata_path(
+        git_file_lines[0].removeprefix("gitdir: "), relative_to=active_root
+    )
+    if git_dir is None or not git_dir.is_dir():
+        return active_root
+    common_dir_contents = _read_git_metadata(git_dir / "commondir")
+    worktree_gitfile_contents = _read_git_metadata(git_dir / "gitdir")
+    if common_dir_contents is None or worktree_gitfile_contents is None:
+        return active_root
+    common_dir_lines = common_dir_contents.splitlines()
+    worktree_gitfile_lines = worktree_gitfile_contents.splitlines()
+    if len(common_dir_lines) != 1 or len(worktree_gitfile_lines) != 1:
+        return active_root
+    common_dir = _resolve_git_metadata_path(common_dir_lines[0], relative_to=git_dir)
+    recorded_gitfile = _resolve_git_metadata_path(worktree_gitfile_lines[0], relative_to=git_dir)
+    if (
+        common_dir is None
+        or recorded_gitfile is None
+        or common_dir.name != ".git"
+        or git_dir.parent.name != "worktrees"
+        or git_dir.parent.parent != common_dir
+        or recorded_gitfile != git_file.resolve(strict=False)
+    ):
+        return active_root
+    return common_dir.parent
+
+
+def resolve_human_task_notification_repository_root(issue_dir: Path) -> Path:
+    """Return the canonical repository identity used for HumanTask delivery."""
+    resolved_issue_dir = Path(issue_dir).resolve()
+    if (
+        resolved_issue_dir.parent.name == "issues"
+        and resolved_issue_dir.parent.parent.name == ".cafe"
+    ):
+        active_root = resolved_issue_dir.parent.parent.parent
+        return _linked_worktree_canonical_root(active_root)
+    return resolved_issue_dir.parent
 
 
 @dataclass
@@ -86,9 +191,6 @@ class HandoffReconciliationResult:
     iteration_dir: Optional[Path] = None
     missing_evidence: list[str] = field(default_factory=list)
     validated_evidence: list[str] = field(default_factory=list)
-    operation: Optional[LongRunningOperationArtifact] = None
-    operation_schema_invalid: bool = False
-    operation_untrusted: bool = False
 
 
 @dataclass
@@ -97,47 +199,191 @@ class RuntimePositionResolution:
     realignment_result: Optional[PlaybookRunResult] = None
 
 
-def operation_artifact_is_trusted(
-    *,
-    blackboard_store: BlackboardStore,
-    blackboard: Any,
-    current_step: str,
-    iteration_dir: Path,
-    artifact: LongRunningOperationArtifact,
-) -> bool:
-    """Return whether operation state has matching runtime-owned evidence."""
-    entry = blackboard_store.get_artifact(blackboard, f"{current_step}_operation")
-    if entry is None:
-        return False
-    expected_summary = f"long_running_operation:{artifact.operation_id}:{artifact.state.value}"
-    if entry.summary != expected_summary:
-        return False
-    return Path(entry.path) == operation_artifact_path(iteration_dir)
+class IterationLimitReachedError(RuntimeError):
+    """Stop execution after a declared iteration-limit HumanTask is materialized."""
+
+    def __init__(self, message: str, result: PlaybookRunResult) -> None:
+        super().__init__(message)
+        self.result = result
 
 
-def operation_receipt_is_trusted(
-    *,
-    blackboard_store: BlackboardStore,
-    blackboard: Any,
-    current_step: str,
-    iteration_dir: Path,
-    operation: LongRunningOperationArtifact,
-    receipt: LongRunningOperationArtifact,
-) -> bool:
-    """Return whether terminal receipt state has matching runtime-owned evidence."""
-    if receipt.state == LongRunningOperationState.RUNNING:
-        return False
-    if receipt.operation_id != operation.operation_id:
-        return False
-    entry = blackboard_store.get_artifact(blackboard, f"{current_step}_operation_receipt")
-    if entry is None:
-        return False
-    expected_summary = (
-        f"long_running_operation_receipt:{operation.operation_id}:{receipt.state.value}"
-    )
-    if entry.summary != expected_summary:
-        return False
-    return Path(entry.path) == operation_receipt_path(iteration_dir)
+class HumanTaskNotificationDispatcher:
+    """Dispatch the one supported trusted notification for a pending HumanTask."""
+
+    def __init__(
+        self,
+        *,
+        issue_dir: Path,
+        blackboard_store: BlackboardStore,
+        blackboard: BlackboardState,
+    ) -> None:
+        self.issue_dir = issue_dir
+        self.blackboard_store = blackboard_store
+        self.blackboard = blackboard
+
+    def _repository_root(self) -> Path:
+        return resolve_human_task_notification_repository_root(self.issue_dir)
+
+    def notify(self, task: HumanTask) -> None:
+        """Record one source-independent, machine-controlled delivery decision."""
+        attempt_id = f"slack-human-task:{task.id}"
+        try:
+            with self.blackboard_store.capability_receipt_transaction(self.blackboard):
+                try:
+                    current_task = HumanTaskRecordStore(self.issue_dir).get_task(task.id)
+                except Exception:
+                    return
+                if current_task.status is not HumanTaskStatus.PENDING:
+                    self._record_notification_outcome(
+                        current_task,
+                        attempt_id=attempt_id,
+                        code="human_task_notification_not_actionable",
+                        outcome="skipped",
+                    )
+                    return
+                self._dispatch(task, attempt_id=attempt_id)
+        except Exception:
+            # Lock and persistence failures must not make Slack authoritative over human work.
+            return
+
+    def _notification_inputs(self, task: HumanTask) -> dict[str, str]:
+        """Return the closed safe payload shared by receipts and capability requests."""
+        return {
+            "repository": sanitize_human_task_metadata(self._repository_root().resolve().name),
+            "issue": sanitize_human_task_metadata(self.issue_dir.name),
+            "workflow_id": sanitize_human_task_metadata(task.workflow_id),
+            "task_id": sanitize_human_task_metadata(task.id),
+            "step": sanitize_human_task_metadata(task.step),
+            "task_type": sanitize_human_task_metadata(task.policy_id),
+        }
+
+    def _record_notification_outcome(
+        self,
+        task: HumanTask,
+        *,
+        attempt_id: str,
+        code: str,
+        outcome: str,
+    ) -> None:
+        """Persist a non-dispatch notification decision without task prompt data."""
+        self.blackboard_store.upsert_capability_receipt(
+            self.blackboard,
+            {
+                "notification_attempt_id": attempt_id,
+                "correlation_id": attempt_id,
+                "capability": CAPABILITY_SLACK_HUMAN_TASK_ID,
+                "success": False,
+                "category": "notification_policy",
+                "code": code,
+                "decision": "skip",
+                "outcome": outcome,
+                "inputs": self._notification_inputs(task),
+                "outputs": {},
+                "workflow_id": task.workflow_id,
+                "task_id": task.id,
+            },
+        )
+
+    def _dispatch(self, task: HumanTask, *, attempt_id: str) -> None:
+        existing_receipt = next(
+            (
+                receipt
+                for receipt in self.blackboard.capability_receipts
+                if receipt.get("notification_attempt_id") == attempt_id
+            ),
+            None,
+        )
+        if existing_receipt is not None:
+            if existing_receipt.get("code") == "slack_notification_attempting":
+                interrupted_receipt = dict(existing_receipt)
+                interrupted_receipt.update(
+                    {
+                        "success": False,
+                        "category": "adapter_error",
+                        "code": "slack_notification_interrupted",
+                        "decision": "allow",
+                        "outcome": "execution_interrupted",
+                    }
+                )
+                self.blackboard_store.upsert_capability_receipt(
+                    self.blackboard, interrupted_receipt
+                )
+            else:
+                dedup_attempt_id = f"{attempt_id}:deduplicated"
+                if not any(
+                    receipt.get("notification_attempt_id") == dedup_attempt_id
+                    for receipt in self.blackboard.capability_receipts
+                ):
+                    self._record_notification_outcome(
+                        task,
+                        attempt_id=dedup_attempt_id,
+                        code="human_task_notification_deduplicated",
+                        outcome="deduplicated",
+                    )
+            return
+        settings = load_human_task_notification_settings()
+        if not settings.enabled:
+            self._record_notification_outcome(
+                task,
+                attempt_id=attempt_id,
+                code=settings.code,
+                outcome=settings.outcome,
+            )
+            return
+        repo_root = self._repository_root()
+        notification_inputs = self._notification_inputs(task)
+        capability_request = {
+            "capability": CAPABILITY_SLACK_HUMAN_TASK_ID,
+            "args": notification_inputs,
+            "effects": {
+                "writes": [],
+                "network_destinations": ["hooks.slack.com"],
+                "browser_open": [],
+            },
+            "credentials": ["slack_human_task_webhook"],
+            "permissions": {"network": ["hooks.slack.com"]},
+        }
+        attempting_receipt = {
+            "notification_attempt_id": attempt_id,
+            "correlation_id": attempt_id,
+            "capability": CAPABILITY_SLACK_HUMAN_TASK_ID,
+            "success": False,
+            "category": "pending",
+            "code": "slack_notification_attempting",
+            "decision": "pending",
+            "outcome": "attempting",
+            "inputs": notification_inputs,
+            "outputs": {},
+            "workflow_id": task.workflow_id,
+            "task_id": task.id,
+        }
+        self.blackboard_store.upsert_capability_receipt(self.blackboard, attempting_receipt)
+        try:
+            registry = load_capability_registry(default_capability_definition_dirs(repo_root))
+            run = run_capability_request(
+                repo_root=repo_root,
+                registry=registry,
+                capability_request=capability_request,
+                output_file=self.issue_dir / "blackboard.json",
+                timeout_sec=SLACK_HUMAN_TASK_TIMEOUT_SEC,
+                trusted_human_task_notification=True,
+            )
+            receipt = dict(run.receipt)
+        except Exception:  # The durable HumanTask remains authoritative on host failure.
+            receipt = validation_rejection_receipt(
+                capability=CAPABILITY_SLACK_HUMAN_TASK_ID,
+                code="slack_notification_internal_error",
+                raw_request=capability_request,
+                error_detail="slack_notification_internal_error",
+            )
+        receipt.update(
+            {
+                "notification_attempt_id": attempt_id,
+                "workflow_id": task.workflow_id,
+                "task_id": task.id,
+            }
+        )
+        self.blackboard_store.upsert_capability_receipt(self.blackboard, receipt)
 
 
 class BlackboardWorkflowRuntime:
@@ -150,6 +396,7 @@ class BlackboardWorkflowRuntime:
         playbook: Dict,
         executor: Any,
         automatic_registry: Optional[AutomaticExecutorRegistry] = None,
+        workflow_event_callback: Callable[[Mapping[str, Any]], None] | None = None,
     ) -> None:
         self.issue_dir = issue_dir
         self.playbook = playbook
@@ -158,6 +405,7 @@ class BlackboardWorkflowRuntime:
 
         playbook_meta = playbook["playbook"]
         self.playbook_id = str(playbook_meta["id"])
+        self.playbook_source = str(getattr(playbook, "source", "unknown"))
         self.steps: Dict = playbook["steps"]
         self.start_step = str(playbook.get("entry_point") or next(iter(self.steps.keys())))
         self._validate_automatic_executor_declarations()
@@ -168,7 +416,11 @@ class BlackboardWorkflowRuntime:
             playbook_id=self.playbook_id,
             tolerate_invalid_baton=True,
         )
-        self._operation_finalize_extra_prompt: Optional[str] = None
+        self._replaced_user_handoff: HandoffContract | None = None
+        self._workflow_event_callback = workflow_event_callback
+        self._pending_phase_terminal: Dict[str, Any] | None = None
+        self._observed_result_keys: set[tuple[str, str]] = set()
+        self._validated_pr_auto_create: bool | None = None
 
     def _validate_automatic_executor_declarations(self) -> None:
         """Reject unavailable automatic authority before recording a workflow visit."""
@@ -190,6 +442,77 @@ class BlackboardWorkflowRuntime:
                 )
             self.automatic_registry.validate_inputs(executor_id, inputs)
 
+    def _publication_contract_error(self) -> tuple[str, str] | None:
+        """Validate the generic publication setting for this run."""
+        self._validated_pr_auto_create = None
+        issue_yaml = self.issue_dir / "issue.yaml"
+        config: Mapping[str, Any] = {}
+        if issue_yaml.exists():
+            try:
+                if issue_yaml.stat().st_size > MAX_ISSUE_CONFIG_BYTES:
+                    return (
+                        "invalid_issue_config",
+                        "issue.yaml exceeds the bounded workflow configuration size",
+                    )
+                loaded = yaml.safe_load(issue_yaml.read_text(encoding="utf-8")) or {}
+            except (OSError, UnicodeError, yaml.YAMLError):
+                return ("invalid_issue_config", "issue.yaml could not be read as YAML")
+            if not isinstance(loaded, Mapping):
+                return ("invalid_issue_config", "issue.yaml must contain a mapping")
+            config = loaded
+
+        pr_config = config.get("pr")
+        pr_mapping = pr_config if isinstance(pr_config, Mapping) else {}
+        persisted_present = "auto_create" in pr_mapping
+        has_publication_config = persisted_present or "post_todo_list" in pr_mapping
+        capable = playbook_requests_capability(self.playbook, CAPABILITY_PR_PUBLISH_ID)
+
+        if not capable:
+            if has_publication_config:
+                return (
+                    "inapplicable_publication_config",
+                    "the effective playbook does not request cafe.pr.publish",
+                )
+            return None
+        if not persisted_present:
+            return ("missing_persisted_choice", "pr.auto_create is required")
+        persisted = pr_mapping["auto_create"]
+        if not isinstance(persisted, bool):
+            return ("invalid_persisted_choice", "pr.auto_create must be Boolean")
+        self._validated_pr_auto_create = persisted
+        return None
+
+    def _reject_invalid_publication_contract(
+        self,
+        *,
+        start_step: str | None,
+        error: tuple[str, str],
+    ) -> PlaybookRunResult:
+        reason, detail = error
+        current_step = start_step if start_step in self.steps else self.blackboard.current_step
+        if current_step not in self.steps:
+            current_step = self.start_step
+        self.blackboard_store.record_event(
+            self.blackboard,
+            "workflow_configuration_invalid",
+            {"step": current_step, "reason": reason, "detail": detail},
+        )
+        return self._finalize_observed_result(
+            PlaybookRunResult(
+                final_step=current_step,
+                final_status_code="INVALID_WORKFLOW_CONFIG",
+                completed=False,
+                detail=f"{reason}: {detail}",
+            )
+        )
+
+    def _notify_new_human_task(self, task: HumanTask) -> None:
+        HumanTaskNotificationDispatcher(
+            issue_dir=self.issue_dir,
+            blackboard_store=self.blackboard_store,
+            blackboard=self.blackboard,
+        ).notify(task)
+
     @staticmethod
     def _extract_goto_target(response: str) -> Optional[str]:
         match = GOTO_PATTERN.search(response)
@@ -201,7 +524,7 @@ class BlackboardWorkflowRuntime:
     def _has_event(execution_result: Any, event_type: str) -> bool:
         events = getattr(execution_result, "events", None)
         if not isinstance(events, list):
-            return False
+            return None
         return any(isinstance(event, dict) and event.get("type") == event_type for event in events)
 
     @staticmethod
@@ -210,10 +533,8 @@ class BlackboardWorkflowRuntime:
 
         ``pr_synced`` remains a legacy success marker for ``cafe.pr.publish``.
         """
-        if capability_id == CAPABILITY_PR_PUBLISH_ID and BlackboardWorkflowRuntime._has_event(
-            execution_result, "pr_synced"
-        ):
-            return True
+        if capability_id == CAPABILITY_PR_PUBLISH_ID:
+            return BlackboardWorkflowRuntime._current_pr_url(execution_result) is not None
         events = getattr(execution_result, "events", None)
         if not isinstance(events, list):
             return False
@@ -227,6 +548,36 @@ class BlackboardWorkflowRuntime:
             if event.get("success") is True:
                 return True
         return False
+
+    @staticmethod
+    def _current_pr_url(execution_result: Any) -> str | None:
+        """Return only a non-empty URL emitted by the current execution result."""
+        events = getattr(execution_result, "events", None)
+        if not isinstance(events, list):
+            return None
+        for event in events:
+            if not isinstance(event, dict) or event.get("type") != "pr_synced":
+                continue
+            url = event.get("url")
+            if isinstance(url, str) and url.strip():
+                return url.strip()
+        return None
+
+    @staticmethod
+    def _pending_capability_approval(execution_result: Any) -> Optional[dict[str, Any]]:
+        events = getattr(execution_result, "events", None)
+        if not isinstance(events, list):
+            return None
+        return next(
+            (
+                event
+                for event in events
+                if isinstance(event, dict)
+                and event.get("type") == "capability_approval_pending"
+                and isinstance(event.get("task_id"), str)
+            ),
+            None,
+        )
 
     @staticmethod
     def _step_declared_capability_ids(step_def: Dict) -> list[str]:
@@ -273,7 +624,8 @@ class BlackboardWorkflowRuntime:
             f"[BATON ERROR] Your baton was rejected because field '{br.field}' has {value_msg}. "
             f"Valid values are: {br.valid_values}. "
             "Please rewrite next_step.txt with a correct structured baton. "
-            "Retry in baton-only mode: do not rewrite output.md, checklist.md, or questions.xml unless strictly required. "
+            "Retry in baton-only mode: do not rewrite output.md, checklist.md, or "
+            "questions.xml unless strictly required. "
             "If you are asking the user a question, use to_owner='user', "
             "to_step='user', and intent='need_clarification'. "
             "If your step omits safe defaults, you may keep status_code and source empty; "
@@ -300,11 +652,13 @@ class BlackboardWorkflowRuntime:
         )
         if contract.to_owner != HandoffOwner.AGENT:
             raise RuntimeError(
-                f"Baton owner mismatch before step '{current_step}': expected agent, got {contract.to_owner.value}"
+                f"Baton owner mismatch before step '{current_step}': expected agent, "
+                f"got {contract.to_owner.value}"
             )
         if contract.to_step != current_step:
             raise RuntimeError(
-                f"Baton target mismatch before step '{current_step}': baton points to '{contract.to_step}'"
+                f"Baton target mismatch before step '{current_step}': baton points to "
+                f"'{contract.to_step}'"
             )
 
     def _resolve_runtime_position_from_handoff(self) -> RuntimePositionResolution:
@@ -344,15 +698,180 @@ class BlackboardWorkflowRuntime:
             )
             self.blackboard_store.set_current_step(self.blackboard, resolved)
             if contract.to_owner == HandoffOwner.AGENT:
+                transition_id = self._latest_transition_id(
+                    from_step=contract.from_step,
+                    to_step=resolved,
+                )
                 return RuntimePositionResolution(
                     current_step=resolved,
                     realignment_result=PlaybookRunResult(
-                        final_step=previous,
-                        final_status_code="BATON_POSITION_REALIGNED",
+                        final_step=contract.from_step or previous,
+                        final_status_code=contract.status_code or "BATON_POSITION_REALIGNED",
                         completed=False,
+                        detail=transition_id,
                     ),
                 )
         return RuntimePositionResolution(current_step=resolved)
+
+    def _latest_transition_id(self, *, from_step: str, to_step: str) -> Optional[str]:
+        """Return the durable identity of a transition being replayed."""
+        for event in reversed(self.blackboard.events):
+            if event.event_type != "transition":
+                continue
+            if (
+                str(event.data.get("from", "")) == from_step
+                and str(event.data.get("to", "")) == to_step
+            ):
+                value = event.data.get("transition_id")
+                return str(value) if isinstance(value, str) and value else None
+        return None
+
+    @staticmethod
+    def _contract_postdates_event(contract: HandoffContract, event: Any) -> bool:
+        """Whether a baton proves that a lifecycle event has already advanced.
+
+        A transition record is intentionally written before its pointer and
+        baton.  It is recoverable only until a later baton has been published;
+        otherwise replaying an old record could overwrite a user handoff from
+        its target step.
+        """
+        try:
+            return datetime.fromisoformat(contract.created_at) > datetime.fromisoformat(
+                str(event.timestamp)
+            )
+        except (TypeError, ValueError):
+            return False
+
+    def _recover_unpublished_lifecycle_position(self) -> Optional[PlaybookRunResult]:
+        """Publish one durable transition whose event survived a crash window.
+
+        Transition events are written before the current-step pointer and baton.
+        If the process disappears in that interval, replay must publish that
+        already completed transition rather than execute its phase again.
+        """
+        current = str(self.blackboard.current_step)
+        event = next(
+            (
+                candidate
+                for candidate in reversed(self.blackboard.events)
+                if candidate.event_type in {"transition", "workflow_completed"}
+            ),
+            None,
+        )
+        if event is None:
+            return None
+
+        if event.event_type == "transition":
+            source = str(event.data.get("from", ""))
+            target = str(event.data.get("to", ""))
+            if current not in {source, target} or target not in self.steps or target == source:
+                return None
+            try:
+                contract = self.blackboard_store.load_handoff_contract(
+                    self.blackboard,
+                    allowed_steps=list(self.steps.keys()),
+                )
+            except BatonRejected:
+                contract = None
+            if contract is not None:
+                if (
+                    contract.from_step == source
+                    and contract.to_owner == HandoffOwner.AGENT
+                    and contract.to_step == target
+                    and contract.intent == HandoffIntent.AWAIT_AGENT
+                ):
+                    return None
+                if self._contract_postdates_event(contract, event) or (
+                    current == target and contract.from_step == target
+                ):
+                    return None
+            status = str(event.data.get("status_code", ""))
+            transition_id = event.data.get("transition_id")
+            self._reset_step_attempts_after_successful_advance(
+                current_step=source,
+                next_step=target,
+                status_code=status,
+                transition_intent=event.data.get("transition_intent"),
+                transition_source=str(event.data.get("source", "")),
+            )
+            self.blackboard_store.update_handoff_contract(
+                self.blackboard,
+                from_step=source,
+                to_owner=HandoffOwner.AGENT,
+                to_step=target,
+                intent=HandoffIntent.AWAIT_AGENT,
+                status_code=status,
+                source="workflow.lifecycle_recovery",
+            )
+            if current == source:
+                self.blackboard_store.set_current_step(self.blackboard, target)
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "transition_recovered",
+                {
+                    "transition_id": transition_id,
+                    "from": source,
+                    "to": target,
+                    "status_code": status,
+                },
+            )
+            return PlaybookRunResult(
+                final_step=source,
+                final_status_code=status or "TRANSITION_RECOVERED",
+                completed=False,
+                detail=str(transition_id) if isinstance(transition_id, str) else None,
+            )
+
+        source = str(event.data.get("step", ""))
+        target = str(event.data.get("next_step", ""))
+        if current not in {source, "done"} or target not in {"done", "_done"}:
+            return None
+        try:
+            contract = self.blackboard_store.load_handoff_contract(
+                self.blackboard,
+                allowed_steps=list(self.steps.keys()),
+            )
+        except BatonRejected:
+            contract = None
+        if contract is not None:
+            if (
+                contract.from_step == source
+                and contract.to_owner == HandoffOwner.DONE
+                and contract.to_step == "done"
+                and contract.intent == HandoffIntent.WORKFLOW_COMPLETE
+            ):
+                return None
+            if self._contract_postdates_event(contract, event):
+                return None
+        status = str(event.data.get("status_code", ""))
+        transition_id = event.data.get("transition_id")
+        self.blackboard_store.update_handoff_contract(
+            self.blackboard,
+            from_step=source,
+            to_owner=HandoffOwner.DONE,
+            to_step="done",
+            intent=HandoffIntent.WORKFLOW_COMPLETE,
+            status_code=status,
+            source="workflow.lifecycle_recovery",
+        )
+        if current == source:
+            self.blackboard_store.set_current_step(self.blackboard, "done")
+        self.blackboard_store.record_event(
+            self.blackboard,
+            "completion_recovered",
+            {
+                "transition_id": transition_id,
+                "from": source,
+                "to": "done",
+                "status_code": status,
+            },
+        )
+        return PlaybookRunResult(
+            final_step=source,
+            final_status_code=status or "WORKFLOW_COMPLETE",
+            completed=True,
+            detail=str(transition_id) if isinstance(transition_id, str) else None,
+        )
 
     def _result_from_terminal_position(self, current_step: str) -> Optional[PlaybookRunResult]:
         if current_step not in {"user", "done"}:
@@ -462,134 +981,6 @@ class BlackboardWorkflowRuntime:
             return str(to_step)
         return None
 
-    def record_long_running_operation_receipt(
-        self,
-        *,
-        step: str,
-        iteration_dir: Path,
-        operation_id: str,
-        state: LongRunningOperationState,
-        reason: Optional[str] = None,
-        exit_code: Optional[int] = None,
-    ) -> LongRunningOperationArtifact:
-        """Record a controlled terminal receipt for a pending long-running operation.
-
-        This is the production runtime surface for controlled helpers that can
-        observe an out-of-band operation outcome after the original agent tool
-        window was interrupted. The receipt remains separate from
-        ``operation.json``; normal resume reconciliation decides whether and
-        when that receipt is trusted enough to promote the operation.
-        """
-        if step not in self.steps:
-            raise ValueError(f"unknown workflow step: {step}")
-        self.blackboard = self.blackboard_store.load_or_create(step)
-        current_operation = self.blackboard_store.read_operation_artifact(iteration_dir)
-        if current_operation is None:
-            raise ValueError("operation artifact is missing")
-        if current_operation.operation_id != operation_id:
-            raise ValueError("operation_id mismatch")
-        if not self._operation_artifact_trusted(
-            current_step=step, iteration_dir=iteration_dir, artifact=current_operation
-        ):
-            raise ValueError("operation artifact is not trusted")
-        receipt = LongRunningOperationArtifact(
-            operation_id=operation_id,
-            state=state,
-            reason=reason,
-            exit_code=exit_code,
-            created_at=current_operation.created_at,
-            risk=current_operation.risk,
-            monitoring=current_operation.monitoring,
-            log_policy=current_operation.log_policy,
-            stop_condition=current_operation.stop_condition,
-            recovery=current_operation.recovery,
-        )
-        return self.blackboard_store.write_operation_receipt(
-            self.blackboard,
-            step=step,
-            iteration_dir=iteration_dir,
-            operation_id=operation_id,
-            artifact=receipt,
-        )
-
-    def _reconcile_running_operation(
-        self,
-        *,
-        current_step: str,
-        iteration_dir: Path,
-        operation: LongRunningOperationArtifact,
-        other_missing: list[str],
-    ) -> tuple[LongRunningOperationArtifact, bool, bool]:
-        """The only production path that promotes ``running`` to a terminal state.
-
-        Promotion never trusts agent-authored content directly:
-
-        - ``failed`` and ``lost`` come only from a controlled terminal
-          receipt for this exact ``operation_id``.
-        - ``succeeded`` also requires that controlled receipt plus the same
-          output/checklist/baton/capability-receipt evidence already required
-          for an ordinary handoff.
-        - No elapsed-time guess promotes ``running`` to any terminal state.
-
-        All three are written through
-        ``BlackboardStore.write_operation_artifact`` -- the same trusted
-        runtime path ``_operation_artifact_trusted`` already requires -- so an
-        agent cannot forge any transition by editing ``operation.json`` or
-        the blackboard directly.
-        """
-        receipt, receipt_schema_invalid, receipt_untrusted = self._read_trusted_operation_receipt(
-            current_step=current_step,
-            iteration_dir=iteration_dir,
-            operation=operation,
-        )
-        if receipt_schema_invalid or receipt_untrusted:
-            return operation, receipt_schema_invalid, receipt_untrusted
-        if receipt is None:
-            try:
-                from cafe.core.long_running_operation_helper import get_operation_status
-
-                refreshed = get_operation_status(
-                    issue_dir=self.issue_dir,
-                    step=current_step,
-                    iteration_dir=iteration_dir,
-                    playbook=self.playbook,
-                )
-            except (ValueError, json.JSONDecodeError, OSError):
-                return operation, False, False
-            if refreshed.state == LongRunningOperationState.RUNNING:
-                return operation, False, False
-            self.blackboard = self.blackboard_store.load_or_create(current_step)
-            receipt, receipt_schema_invalid, receipt_untrusted = (
-                self._read_trusted_operation_receipt(
-                    current_step=current_step,
-                    iteration_dir=iteration_dir,
-                    operation=operation,
-                )
-            )
-            if receipt_schema_invalid or receipt_untrusted:
-                return operation, receipt_schema_invalid, receipt_untrusted
-            if receipt is None:
-                receipt = refreshed
-        promoted = LongRunningOperationArtifact(
-            operation_id=operation.operation_id,
-            state=receipt.state,
-            reason=receipt.reason,
-            exit_code=receipt.exit_code,
-            created_at=operation.created_at,
-            risk=operation.risk,
-            monitoring=operation.monitoring,
-            log_policy=operation.log_policy,
-            stop_condition=operation.stop_condition,
-            recovery=operation.recovery,
-        )
-        self.blackboard_store.write_operation_artifact(
-            self.blackboard,
-            step=current_step,
-            iteration_dir=iteration_dir,
-            artifact=promoted,
-        )
-        return promoted, False, False
-
     def _restore_interrupted_step_handoff(self, *, current_step: str, reason: str) -> None:
         """Keep the baton pinned to the interrupted step when recovery fails."""
         self.blackboard_store.set_current_step(self.blackboard, current_step)
@@ -610,6 +1001,181 @@ class BlackboardWorkflowRuntime:
             },
         )
 
+    @staticmethod
+    def _is_agent_execution_interruption(reason: str) -> bool:
+        """Whether an agent process ended without a trusted completion result."""
+        return reason == "agent_error" or reason.startswith("agent_")
+
+    def _pause_for_agent_execution_interruption(
+        self,
+        *,
+        current_step: str,
+        reason: str,
+        runtime: str,
+    ) -> PlaybookRunResult:
+        """Create one notified HumanTask instead of inferring completion from partial output."""
+        records = HumanTaskRecordStore(self.issue_dir)
+        iteration = self._human_task_iteration(current_step)
+        policy, binding = agent_execution_interrupted_human_task(step_name=current_step)
+        self.blackboard_store.update_handoff_contract(
+            self.blackboard,
+            from_step=current_step,
+            to_owner=HandoffOwner.USER,
+            to_step="user",
+            intent=HandoffIntent.MANUAL_HANDOFF,
+            status_code="INTERRUPTED",
+            source="workflow.agent_execution_interrupted",
+        )
+        contract = self.blackboard.handoff_contract
+        if contract is None:
+            raise RuntimeError("agent interruption did not create a handoff contract")
+        materialization = records.materialize_with_status(
+            workflow_id=self.blackboard.workflow_id,
+            step=current_step,
+            iteration=iteration,
+            trigger=AGENT_EXECUTION_INTERRUPTED_TRIGGER,
+            policy_id=policy.id,
+            prompt=policy.prompt,
+            expected_result=policy.model_dump(mode="json"),
+            continuations=binding.outcomes,
+            assignee_type="user",
+            handoff_key=self._human_task_handoff_key(contract),
+        )
+        task = materialization.task
+        self._notify_new_human_task(task)
+        self.blackboard_store.set_current_step(self.blackboard, "user")
+        if materialization.created:
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "agent_execution_task_materialized",
+                {
+                    "step": current_step,
+                    "reason": reason,
+                    "task_id": task.id,
+                    "trigger": AGENT_EXECUTION_INTERRUPTED_TRIGGER,
+                },
+            )
+        self.blackboard_store.record_event(
+            self.blackboard,
+            "workflow_paused",
+            {
+                "step": current_step,
+                "status_code": "INTERRUPTED",
+                "reason": reason,
+                "runtime": runtime,
+                "task_id": task.id,
+            },
+        )
+        self._dispatch_workflow_event(
+            "human_task",
+            {
+                "step": current_step,
+                "status_code": f"INTERRUPTED:{reason}",
+                "reason": reason,
+                "task_id": task.id,
+            },
+        )
+        return PlaybookRunResult(
+            final_step=current_step,
+            final_status_code=f"INTERRUPTED:{reason}",
+            completed=False,
+            detail=task.id,
+        )
+
+    def _has_agent_execution_interruption_task(self, *, current_step: str) -> bool:
+        """Keep a system-created retry task authoritative over legacy reconciliation."""
+        iteration = self._human_task_iteration(current_step)
+        try:
+            if any(
+                task.workflow_id == self.blackboard.workflow_id
+                and task.step == current_step
+                and task.iteration == iteration
+                and task.trigger == AGENT_EXECUTION_INTERRUPTED_TRIGGER
+                and task.status in {HumanTaskStatus.PENDING, HumanTaskStatus.COMPLETED}
+                for task in HumanTaskRecordStore(self.issue_dir).tasks()
+            ):
+                return True
+        except Exception:
+            # The event is still sufficient to keep a newly-created task authoritative
+            # if its durable record is temporarily unreadable.
+            pass
+        return any(
+            event.event_type == "agent_execution_task_materialized" and event.step == current_step
+            for event in self.blackboard.events
+        )
+
+    def _has_confirmed_self_loop_continuation(self, *, current_step: str) -> bool:
+        """Return whether this iteration consumes one validated output confirmation.
+
+        A confirmation task may intentionally continue to its owning step so
+        the phase can finalize the approved output before advancing.  The
+        continuation receipt is only authoritative when it names the durable
+        task result for the immediately preceding iteration; plain phase input
+        must never bypass a confirmation gate.
+        """
+        iteration_dir = self._latest_iteration_dir(current_step)
+        if iteration_dir is None:
+            return False
+        try:
+            iteration = int(iteration_dir.name.removeprefix("iteration_"))
+            lines = (iteration_dir / "user_input.md").read_text(encoding="utf-8").splitlines()
+            if (
+                len(lines) < 2
+                or lines[0] != "CAFE validated this HumanTask response for the continuation phase:"
+            ):
+                return False
+            receipt = json.loads(lines[1])
+        except (OSError, ValueError, json.JSONDecodeError):
+            return False
+        if not isinstance(receipt, dict):
+            return False
+
+        task_id = receipt.get("human_task_id")
+        task_name = receipt.get("task")
+        decision = receipt.get("decision")
+        if (
+            receipt.get("schema_version") != 1
+            or receipt.get("type") != "human_task_completion"
+            or receipt.get("continuation") != current_step
+            or not all(isinstance(value, str) and value for value in (task_id, task_name, decision))
+        ):
+            return False
+
+        try:
+            records = HumanTaskRecordStore(self.issue_dir)
+            task = records.get_task(task_id)
+            result = records.get_result(task_id)
+        except HumanTaskRecordError:
+            return False
+        decisions = task.expected_result.get("decisions")
+        selected_decision = (
+            next(
+                (
+                    item
+                    for item in decisions
+                    if isinstance(item, dict) and item.get("id") == decision
+                ),
+                None,
+            )
+            if isinstance(decisions, list)
+            else None
+        )
+        return (
+            task.workflow_id == self.blackboard.workflow_id
+            and task.step == current_step
+            and task.iteration + 1 == iteration
+            and task.trigger == HandoffIntent.CONFIRM_OUTPUT.value
+            and task.policy_id == task_name
+            and task.status is HumanTaskStatus.COMPLETED
+            and task.continuations.get(decision) == current_step
+            and isinstance(selected_decision, dict)
+            and selected_decision.get("correction") is False
+            and result is not None
+            and result.payload.get("task") == task_name
+            and result.payload.get("decision") == decision
+            and result.payload.get("continuation") == current_step
+        )
+
     def _load_agent_written_handoff_contract(self, *, current_step: str) -> HandoffContract:
         """Load and normalize a baton written by a just-finished agent step.
 
@@ -624,7 +1190,67 @@ class BlackboardWorkflowRuntime:
         if contract.source == "unknown":
             contract.source = "baton"
         self.blackboard_store.write_handoff_contract(self.blackboard, contract)
+        if (
+            step_on_declares(self.steps.get(current_step, {}), "confirm_output")
+            and not resolve_step_behavior(self.playbook, current_step).publish_confirmation
+            and contract.to_owner is not HandoffOwner.USER
+            and not self._is_declared_manual_handoff(
+                current_step=current_step,
+                contract=contract,
+            )
+            and not self._has_confirmed_self_loop_continuation(current_step=current_step)
+            and not (contract.to_owner is HandoffOwner.AGENT and contract.to_step == current_step)
+        ):
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "confirmation_gate_enforced",
+                {
+                    "step": current_step,
+                    "original_owner": contract.to_owner.value,
+                    "original_step": contract.to_step,
+                    "original_intent": contract.intent.value,
+                },
+            )
+            self.blackboard_store.update_handoff_contract(
+                self.blackboard,
+                from_step=current_step,
+                to_owner=HandoffOwner.USER,
+                to_step="user",
+                intent=HandoffIntent.CONFIRM_OUTPUT,
+                source="workflow.confirmation_gate",
+            )
+            contract = self.blackboard_store.load_handoff_contract(
+                self.blackboard,
+                allowed_steps=list(self.steps.keys()),
+            )
         return contract
+
+    def _is_declared_manual_handoff(
+        self,
+        *,
+        current_step: str,
+        contract: HandoffContract,
+    ) -> bool:
+        """Allow an explicit correction route to bypass an output-confirmation gate.
+
+        A confirmation gate protects the successful output from being advanced
+        without a human decision.  It must not turn a phase's declared
+        correction route into a user pause: a review finding needs to return
+        to its responsible agent step before there is an output to approve.
+        The target must exactly match the playbook's ``manual_handoff`` route,
+        so an arbitrary agent-authored baton cannot use this exception to skip
+        confirmation.
+        """
+        if (
+            contract.to_owner is not HandoffOwner.AGENT
+            or contract.intent is not HandoffIntent.MANUAL_HANDOFF
+        ):
+            return False
+        step_def = self.steps.get(current_step, {})
+        transitions = step_def.get("on") if isinstance(step_def, dict) else None
+        return (
+            isinstance(transitions, dict) and transitions.get("manual_handoff") == contract.to_step
+        )
 
     def _step_requires_publish_receipt(self, current_step: str) -> bool:
         if not resolve_step_behavior(self.playbook, current_step).publish_confirmation:
@@ -668,17 +1294,6 @@ class BlackboardWorkflowRuntime:
                     valid_values=valid_intents,
                 )
         return contract
-
-    @staticmethod
-    def _resolve_step_iteration_limit(step_def: Dict) -> Optional[int]:
-        raw_limit = step_def.get("max_iterations")
-        if raw_limit is None:
-            return None
-        if isinstance(raw_limit, int):
-            return raw_limit
-        if isinstance(raw_limit, str) and raw_limit.isdigit():
-            return int(raw_limit)
-        return None
 
     @staticmethod
     def _extract_status_like_tokens(
@@ -762,7 +1377,8 @@ class BlackboardWorkflowRuntime:
         assignee_type = str(step_def.get("assignee_type", "agent"))
         if assignee_type != "agent":
             raise RuntimeError(
-                f"Step '{step_name}' has assignee_type={assignee_type}, which is not supported in v0.2. "
+                f"Step '{step_name}' has assignee_type={assignee_type}, which is not "
+                "supported in v0.2. "
                 "Use v0.3+ or change to assignee_type=agent."
             )
 
@@ -773,49 +1389,116 @@ class BlackboardWorkflowRuntime:
             raise RuntimeError(f"Step has unsupported assignee_type={owner!r}")
         return owner
 
-    def _ensure_step_visit_within_limit(
+    def _ensure_step_attempt_within_limit(
         self, *, current_step: str, step_def: Dict, runtime: str
     ) -> int:
-        """Return the next visit number or fail before an owner performs work."""
-        visits = self.blackboard.step_visit_counts
-        visit_count = visits.get(current_step, 0) + 1
-        max_iterations = self._resolve_step_iteration_limit(step_def)
-        if max_iterations is not None and visit_count > max_iterations:
+        """Return the next cycle attempt or fail before an owner performs work."""
+        attempts = self.blackboard.step_attempt_counts
+        attempt_count = attempts.get(current_step, 0) + 1
+        max_attempts_per_cycle = resolve_step_attempt_limit(step_def)
+        if max_attempts_per_cycle is not None and attempt_count > max_attempts_per_cycle:
             self.blackboard_store.record_event(
                 self.blackboard,
                 "loop_detected",
                 {
                     "step": current_step,
-                    "visits": visit_count,
-                    "max_iterations": max_iterations,
+                    "attempts": attempt_count,
+                    "max_attempts_per_cycle": max_attempts_per_cycle,
                     "runtime": runtime,
                 },
             )
-            raise RuntimeError(f"Step '{current_step}' exceeded max_iterations={max_iterations}")
-        return visit_count
+            message = (
+                f"Step '{current_step}' exceeded max_attempts_per_cycle={max_attempts_per_cycle}"
+            )
+            if self._declares_iteration_limit_task(step_def):
+                result = self._emit_pause(
+                    current_step=current_step,
+                    status_code="ITERATION_LIMIT_REACHED",
+                    runtime=runtime,
+                    reason="iteration_limit_reached",
+                    pause_intent=HandoffIntent.MANUAL_HANDOFF,
+                    contract_source="workflow.iteration_limit",
+                )
+                raise IterationLimitReachedError(message, result)
+            raise RuntimeError(message)
+        return attempt_count
 
-    def _record_step_visit(self, *, current_step: str, step_def: Dict, runtime: str) -> int:
-        """Persist the top-level visit before any owner-specific side effect."""
-        visit_count = self._ensure_step_visit_within_limit(
+    @staticmethod
+    def _declares_iteration_limit_task(step_def: Dict) -> bool:
+        """Whether a step opted into the policy-backed iteration-limit pause."""
+        raw_bindings = step_def.get("human_tasks")
+        if not isinstance(raw_bindings, (list, tuple)):
+            return False
+        return any(
+            isinstance(binding, dict)
+            and binding.get("trigger") == HandoffIntent.MANUAL_HANDOFF.value
+            and binding.get("task_id") == "iteration-limit"
+            for binding in raw_bindings
+        )
+
+    def _record_step_attempt(self, *, current_step: str, step_def: Dict, runtime: str) -> int:
+        """Persist the cycle attempt before any owner-specific side effect."""
+        attempt_count = self._ensure_step_attempt_within_limit(
             current_step=current_step,
             step_def=step_def,
             runtime=runtime,
         )
-        visits = self.blackboard.step_visit_counts
-        visits[current_step] = visit_count
+        attempts = self.blackboard.step_attempt_counts
+        attempts[current_step] = attempt_count
         self.blackboard_store.save(self.blackboard)
-        return visit_count
+        return attempt_count
 
-    def _rollback_step_visit(self, *, current_step: str, visit_count: int) -> None:
-        """Undo a provisional agent visit when execution never yields a result."""
-        visits = self.blackboard.step_visit_counts
-        if visits.get(current_step) != visit_count:
+    def _rollback_step_attempt(self, *, current_step: str, attempt_count: int) -> None:
+        """Undo a provisional attempt when execution never yields a result."""
+        attempts = self.blackboard.step_attempt_counts
+        if attempts.get(current_step) != attempt_count:
             return
-        if visit_count > 1:
-            visits[current_step] = visit_count - 1
+        if attempt_count > 1:
+            attempts[current_step] = attempt_count - 1
         else:
-            visits.pop(current_step, None)
+            attempts.pop(current_step, None)
         self.blackboard_store.save(self.blackboard)
+
+    def _reset_step_attempts_after_successful_advance(
+        self,
+        *,
+        current_step: str,
+        next_step: str,
+        status_code: str,
+        transition_intent: HandoffIntent | str | None,
+        transition_source: str,
+    ) -> None:
+        """Start a fresh bounded-iteration cycle after a successful advance."""
+        if current_step == next_step:
+            return
+        if resolve_step_attempt_limit(self.steps.get(current_step, {})) is None:
+            return
+        if transition_intent is None and transition_source == "goto":
+            return
+
+        raw_intent = (
+            transition_intent.value
+            if isinstance(transition_intent, HandoffIntent)
+            else transition_intent
+        )
+        if raw_intent is None:
+            try:
+                raw_intent = transition_map_key(PhaseStatusCode(status_code))
+            except ValueError:
+                raw_intent = status_code
+        if raw_intent not in {
+            HandoffIntent.AWAIT_AGENT.value,
+            HandoffIntent.NO_CHANGES_NEEDED.value,
+        }:
+            return
+
+        self.blackboard_store.reset_step_attempt_count(
+            self.blackboard,
+            step=current_step,
+            next_step=next_step,
+            transition_intent=raw_intent,
+            transition_source=transition_source,
+        )
 
     def _materialize_owned_human_task(
         self,
@@ -855,27 +1538,7 @@ class BlackboardWorkflowRuntime:
                 completed=False,
             )
 
-        existing_wait = records.active_wait_state(
-            self.blackboard.workflow_id,
-            step=current_step,
-            trigger=trigger,
-            policy_id=policy.id,
-        )
-        task = records.materialize(
-            workflow_id=self.blackboard.workflow_id,
-            step=current_step,
-            iteration=iteration,
-            trigger=trigger,
-            policy_id=policy.id,
-            prompt=policy.prompt,
-            expected_result=policy.model_dump(mode="json"),
-            continuations=binding.outcomes,
-            assignee_type="human",
-        )
-        if cursor is not None:
-            cursor["task_id"] = task.id
-            self.blackboard.ownership_cursor = cursor
-            self.blackboard_store.save(self.blackboard)
+        replaced_handoff = self._replaced_user_handoff
         self.blackboard_store.update_handoff_contract(
             self.blackboard,
             from_step=current_step,
@@ -885,8 +1548,56 @@ class BlackboardWorkflowRuntime:
             status_code=status_code,
             source="workflow.owner_human",
         )
+        contract = self.blackboard.handoff_contract
+        if contract is None:
+            raise RuntimeError("human-owned task did not create a handoff contract")
+        handoff_key = self._human_task_handoff_key(contract)
+        if replaced_handoff is None:
+            existing_task = next(
+                (
+                    task
+                    for task in records.tasks()
+                    if task.workflow_id == self.blackboard.workflow_id
+                    and task.status is HumanTaskStatus.PENDING
+                    and task.step == current_step
+                    and task.iteration == iteration
+                    and task.trigger == trigger
+                    and task.policy_id == policy.id
+                ),
+                None,
+            )
+            if existing_task is not None:
+                handoff_key = existing_task.handoff_key
+
+        materialization = records.materialize_with_status(
+            workflow_id=self.blackboard.workflow_id,
+            step=current_step,
+            iteration=iteration,
+            trigger=trigger,
+            policy_id=policy.id,
+            prompt=policy.prompt,
+            expected_result=policy.model_dump(mode="json"),
+            continuations=binding.outcomes,
+            assignee_type="human",
+            handoff_key=handoff_key,
+            superseded_task_ids=self._superseded_human_task_ids(
+                records,
+                step=current_step,
+                iteration=iteration,
+                trigger=trigger,
+                policy_id=policy.id,
+                replaced_handoff=replaced_handoff,
+            ),
+        )
+        task = materialization.task
+        self._notify_new_human_task(task)
+        self._replaced_user_handoff = None
+        if cursor is not None:
+            cursor["task_id"] = task.id
+            self.blackboard.ownership_cursor = cursor
+            self.blackboard_store.save(self.blackboard)
         self.blackboard_store.set_current_step(self.blackboard, "user")
-        if existing_wait is None:
+        if materialization.created:
             self.blackboard_store.record_event(
                 self.blackboard,
                 "human_task_materialized",
@@ -902,6 +1613,14 @@ class BlackboardWorkflowRuntime:
                 "runtime": runtime,
             },
         )
+        self._dispatch_workflow_event(
+            "human_task",
+            {
+                "step": current_step,
+                "status_code": status_code,
+                "task_id": task.id,
+            },
+        )
         return PlaybookRunResult(
             final_step=current_step,
             final_status_code=status_code,
@@ -910,7 +1629,7 @@ class BlackboardWorkflowRuntime:
         )
 
     def _run_human_owned_step(
-        self, *, current_step: str, step_def: Dict, visit_count: int, runtime: str
+        self, *, current_step: str, step_def: Dict, attempt_count: int, runtime: str
     ) -> PlaybookRunResult:
         return self._materialize_owned_human_task(
             current_step=current_step,
@@ -1013,7 +1732,7 @@ class BlackboardWorkflowRuntime:
         *,
         current_step: str,
         step_def: Dict,
-        visit_count: int,
+        attempt_count: int,
         runtime: str,
         result: AutomaticExecutionResult,
     ) -> PlaybookRunResult:
@@ -1083,7 +1802,7 @@ class BlackboardWorkflowRuntime:
         *,
         current_step: str,
         step_def: Dict,
-        visit_count: int,
+        attempt_count: int,
         runtime: str,
         portions_remaining: int = 30,
     ) -> PlaybookRunResult:
@@ -1106,12 +1825,12 @@ class BlackboardWorkflowRuntime:
                 "step": current_step,
                 "portion": declaration.get("entry_portion"),
                 "human_boundary_crossed": False,
-                "visit_count": visit_count,
+                "attempt_count": attempt_count,
             }
             self.blackboard.ownership_cursor = cursor
             self.blackboard_store.save(self.blackboard)
-        elif not isinstance(cursor.get("visit_count"), int):
-            cursor["visit_count"] = visit_count
+        elif not isinstance(cursor.get("attempt_count"), int):
+            cursor["attempt_count"] = attempt_count
             self.blackboard.ownership_cursor = cursor
             self.blackboard_store.save(self.blackboard)
         portion_id = cursor.get("portion")
@@ -1158,7 +1877,7 @@ class BlackboardWorkflowRuntime:
                         return self._run_hybrid_owned_step(
                             current_step=current_step,
                             step_def=step_def,
-                            visit_count=visit_count,
+                            attempt_count=attempt_count,
                             runtime=runtime,
                             portions_remaining=portions_remaining - 1,
                         )
@@ -1187,12 +1906,18 @@ class BlackboardWorkflowRuntime:
             "id": portion_id,
             "instruction": portion.get("instruction", ""),
         }
+        publication_error = self._publication_contract_error()
+        if publication_error is not None:
+            return self._reject_invalid_publication_contract(
+                start_step=current_step,
+                error=publication_error,
+            )
         frame = self._execute_one_iteration(
             current_step=current_step,
             step_def=framed_step,
             runtime="hybrid_portion",
             hop_count=1,
-            visit_count=visit_count,
+            attempt_count=attempt_count,
             extra_prompt=(
                 f"[HYBRID PORTION] Execute only declared portion {portion_id!r}. "
                 "Return only a declared completion status; do not route the top-level workflow. "
@@ -1283,7 +2008,7 @@ class BlackboardWorkflowRuntime:
             return self._run_hybrid_owned_step(
                 current_step=current_step,
                 step_def=step_def,
-                visit_count=visit_count,
+                attempt_count=attempt_count,
                 runtime=runtime,
                 portions_remaining=portions_remaining - 1,
             )
@@ -1323,6 +2048,7 @@ class BlackboardWorkflowRuntime:
             runtime=runtime,
             update_contract=True,
             contract_source="workflow.hybrid_transition",
+            transition_intent=HandoffIntent.AWAIT_AGENT,
         )
         return PlaybookRunResult(
             final_step=current_step, final_status_code="HYBRID_COMPLETED", completed=False
@@ -1336,11 +2062,14 @@ class BlackboardWorkflowRuntime:
             return None
         automatic_result: AutomaticExecutionResult | None = None
         if owner == "auto":
-            self._ensure_step_visit_within_limit(
-                current_step=current_step,
-                step_def=step_def,
-                runtime=runtime,
-            )
+            try:
+                self._ensure_step_attempt_within_limit(
+                    current_step=current_step,
+                    step_def=step_def,
+                    runtime=runtime,
+                )
+            except IterationLimitReachedError as exc:
+                return exc.result
             prepared = self._prepare_auto_owned_step(
                 current_step=current_step,
                 step_def=step_def,
@@ -1353,18 +2082,21 @@ class BlackboardWorkflowRuntime:
             owner == "hybrid"
             and isinstance(cursor, dict)
             and cursor.get("step") == current_step
-            and isinstance(cursor.get("visit_count"), int)
+            and isinstance(cursor.get("attempt_count"), int)
         ):
-            visit_count = cursor["visit_count"]
+            attempt_count = cursor["attempt_count"]
         else:
-            visit_count = self._record_step_visit(
-                current_step=current_step, step_def=step_def, runtime=runtime
-            )
+            try:
+                attempt_count = self._record_step_attempt(
+                    current_step=current_step, step_def=step_def, runtime=runtime
+                )
+            except IterationLimitReachedError as exc:
+                return exc.result
         if owner == "human":
             return self._run_human_owned_step(
                 current_step=current_step,
                 step_def=step_def,
-                visit_count=visit_count,
+                attempt_count=attempt_count,
                 runtime=runtime,
             )
         if owner == "auto":
@@ -1372,12 +2104,15 @@ class BlackboardWorkflowRuntime:
             return self._run_auto_owned_step(
                 current_step=current_step,
                 step_def=step_def,
-                visit_count=visit_count,
+                attempt_count=attempt_count,
                 runtime=runtime,
                 result=automatic_result,
             )
         return self._run_hybrid_owned_step(
-            current_step=current_step, step_def=step_def, visit_count=visit_count, runtime=runtime
+            current_step=current_step,
+            step_def=step_def,
+            attempt_count=attempt_count,
+            runtime=runtime,
         )
 
     def _execute_one_iteration(
@@ -1387,7 +2122,7 @@ class BlackboardWorkflowRuntime:
         step_def: Dict,
         runtime: str,
         hop_count: int,
-        visit_count: int,
+        attempt_count: int,
         validate_assignee_type: bool = False,
         extra_prompt: Optional[str] = None,
         same_invocation_retry: bool = False,
@@ -1397,7 +2132,7 @@ class BlackboardWorkflowRuntime:
             "step_started",
             {
                 "step": current_step,
-                "visit": visit_count,
+                "attempt": attempt_count,
                 "hop": hop_count,
                 "runtime": runtime,
             },
@@ -1406,24 +2141,30 @@ class BlackboardWorkflowRuntime:
         pending_feedback = feedback_ledger.pending(target_step=current_step)
 
         try:
+            execute_kwargs = {
+                "extra_prompt": extra_prompt,
+                "same_invocation_retry": same_invocation_retry,
+                "validated_pr_auto_create": self._validated_pr_auto_create,
+            }
             try:
-                execution_result = self.executor(
-                    current_step,
-                    step_def,
-                    self.blackboard,
-                    extra_prompt=extra_prompt,
-                    same_invocation_retry=same_invocation_retry,
-                )
-            except TypeError:
-                try:
-                    execution_result = self.executor(
-                        current_step,
-                        step_def,
-                        self.blackboard,
-                        extra_prompt=extra_prompt,
-                    )
-                except TypeError:
-                    execution_result = self.executor(current_step, step_def, self.blackboard)
+                execute_parameters = inspect.signature(self.executor).parameters
+            except (TypeError, ValueError):
+                execute_parameters = None
+            if execute_parameters is not None and not any(
+                parameter.kind == inspect.Parameter.VAR_KEYWORD
+                for parameter in execute_parameters.values()
+            ):
+                execute_kwargs = {
+                    name: value
+                    for name, value in execute_kwargs.items()
+                    if name in execute_parameters
+                }
+            execution_result = self.executor(
+                current_step,
+                step_def,
+                self.blackboard,
+                **execute_kwargs,
+            )
             delivered_feedback = []
             if getattr(execution_result, "agent_invoked", False):
                 delivered_feedback = feedback_ledger.consume_delivered(
@@ -1446,7 +2187,7 @@ class BlackboardWorkflowRuntime:
                 "step_interrupted",
                 {
                     "step": current_step,
-                    "visit": visit_count,
+                    "attempt": attempt_count,
                     "hop": hop_count,
                     "runtime": runtime,
                     "reason": "keyboard_interrupt",
@@ -1479,7 +2220,7 @@ class BlackboardWorkflowRuntime:
                 "step_interrupted",
                 {
                     "step": current_step,
-                    "visit": visit_count,
+                    "attempt": attempt_count,
                     "hop": hop_count,
                     "runtime": runtime,
                     "reason": reason,
@@ -1512,7 +2253,7 @@ class BlackboardWorkflowRuntime:
         current_step: str,
         status_code: str,
         runtime: str,
-        visit_count: Optional[int] = None,
+        attempt_count: Optional[int] = None,
         hop_count: Optional[int] = None,
     ) -> None:
         payload: Dict[str, Any] = {
@@ -1520,8 +2261,8 @@ class BlackboardWorkflowRuntime:
             "status_code": status_code,
             "runtime": runtime,
         }
-        if visit_count is not None:
-            payload["visit"] = visit_count
+        if attempt_count is not None:
+            payload["attempt"] = attempt_count
         if hop_count is not None:
             payload["hop"] = hop_count
         self.blackboard_store.record_event(
@@ -1529,6 +2270,97 @@ class BlackboardWorkflowRuntime:
             event_type,
             payload,
         )
+        if self._pending_phase_terminal is not None:
+            self._flush_phase_terminal()
+        self._pending_phase_terminal = payload
+
+    def _dispatch_workflow_event(self, event_type: str, payload: Mapping[str, Any]) -> None:
+        """Dispatch a bounded callback envelope after its state is durable.
+
+        This runs after the individual blackboard mutation has committed.  The
+        callback is a one-way execution boundary: it receives no workflow
+        control result and must re-read durable state before taking any action.
+        """
+        step = payload.get("step")
+        status_code = payload.get("status_code")
+        if isinstance(step, str) and isinstance(status_code, str):
+            self._observed_result_keys.add((step, status_code))
+        if self._workflow_event_callback is None:
+            return
+        event: Dict[str, Any] = {
+            "workflow_id": self.blackboard.workflow_id,
+            "issue": self.issue_dir.name,
+            "event_type": event_type,
+        }
+        for event_field in (
+            "step",
+            "status_code",
+            "runtime",
+            "attempt",
+            "hop",
+            "reason",
+            "task_id",
+        ):
+            value = payload.get(event_field)
+            if isinstance(value, (str, int)):
+                event[event_field] = value
+        for event_field in ("event_id", "occurred_at"):
+            value = payload.get(event_field)
+            if isinstance(value, str):
+                event[event_field] = value
+        sequence = payload.get("sequence")
+        if isinstance(sequence, int) and not isinstance(sequence, bool):
+            event["sequence"] = sequence
+        try:
+            event = self.blackboard_store.prepare_workflow_callback_event(self.blackboard, event)
+            self._workflow_event_callback(event)
+        except Exception as exc:
+            try:
+                self.blackboard_store.record_event(
+                    self.blackboard,
+                    "workflow_event_callback_dispatch_failed",
+                    {"event_type": event_type, "error": type(exc).__name__},
+                )
+            except Exception:
+                pass
+
+    def _flush_phase_terminal(
+        self,
+        *,
+        event_type: str = "phase_terminal",
+        extra: Mapping[str, Any] | None = None,
+    ) -> bool:
+        payload = self._pending_phase_terminal
+        if payload is None:
+            return False
+        self._pending_phase_terminal = None
+        merged = dict(payload)
+        if extra:
+            merged.update(extra)
+        self._dispatch_workflow_event(event_type, merged)
+        return True
+
+    def _finalize_observed_result(self, result: PlaybookRunResult) -> PlaybookRunResult:
+        """Flush a durable phase boundary on every public runtime return path."""
+        pending = self._pending_phase_terminal
+        if (
+            pending is not None
+            and pending.get("step") == result.final_step
+            and pending.get("status_code") != result.final_status_code
+        ):
+            self._flush_phase_terminal(
+                event_type="workflow_completed" if result.completed else "workflow_interruption",
+                extra={"status_code": result.final_status_code},
+            )
+        else:
+            self._flush_phase_terminal()
+        result_key = (result.final_step, result.final_status_code)
+        if result_key not in self._observed_result_keys:
+            self._dispatch_workflow_event(
+                "workflow_completed" if result.completed else "workflow_interruption",
+                {"step": result.final_step, "status_code": result.final_status_code},
+            )
+        return result
 
     def _emit_pause(
         self,
@@ -1541,7 +2373,20 @@ class BlackboardWorkflowRuntime:
         update_contract: bool = True,
         contract_source: str = "workflow.pause",
         record_event: bool = True,
+        execution_result: Any = None,
+        materialized_task_id: Optional[str] = None,
+        materialize_user_task: bool = True,
     ) -> PlaybookRunResult:
+        replaced_handoff = self._replaced_user_handoff
+        if (
+            replaced_handoff is None
+            and update_contract
+            and self.blackboard.current_step == "user"
+            and self.blackboard.handoff_contract is not None
+            and self.blackboard.handoff_contract.to_owner is HandoffOwner.USER
+            and self.blackboard.handoff_contract.to_step == "user"
+        ):
+            replaced_handoff = self.blackboard.handoff_contract
         if update_contract:
             self.blackboard_store.update_handoff_contract(
                 self.blackboard,
@@ -1552,7 +2397,14 @@ class BlackboardWorkflowRuntime:
                 status_code=status_code,
                 source=contract_source,
             )
-        self._materialize_user_handoff_task(current_step=current_step)
+        if materialize_user_task:
+            materialized_task_id = self._materialize_user_handoff_task(
+                current_step=current_step,
+                replaced_handoff=replaced_handoff,
+                execution_result=execution_result,
+            )
+        if materialized_task_id:
+            self._replaced_user_handoff = None
         if record_event:
             self.blackboard_store.record_event(
                 self.blackboard,
@@ -1565,20 +2417,49 @@ class BlackboardWorkflowRuntime:
                 },
             )
         self.blackboard_store.set_current_step(self.blackboard, "user")
+        if materialized_task_id:
+            flushed = self._flush_phase_terminal(
+                event_type="human_task",
+                extra={"task_id": materialized_task_id, "status_code": status_code},
+            )
+        else:
+            flushed = self._flush_phase_terminal(
+                event_type="workflow_interruption",
+                extra={"reason": reason, "status_code": status_code},
+            )
+        if not flushed:
+            self._dispatch_workflow_event(
+                "human_task" if materialized_task_id else "workflow_interruption",
+                {
+                    "step": current_step,
+                    "status_code": status_code,
+                    **(
+                        {"task_id": materialized_task_id}
+                        if materialized_task_id
+                        else {"reason": reason}
+                    ),
+                },
+            )
         return PlaybookRunResult(
             final_step=current_step,
             final_status_code=status_code,
             completed=False,
         )
 
-    def _materialize_user_handoff_task(self, *, current_step: str) -> None:
+    def _materialize_user_handoff_task(
+        self,
+        *,
+        current_step: str,
+        replaced_handoff: HandoffContract | None = None,
+        execution_result: Any = None,
+    ) -> str | None:
         """Create or recover a declared task before exposing the user pause."""
         step_def = self.steps.get(current_step)
         if not isinstance(step_def, dict):
-            return
+            return None
         raw_bindings = step_def.get("human_tasks")
         if not isinstance(raw_bindings, (list, tuple)):
-            return
+            return None
         contract = self.blackboard.handoff_contract
         if (
             contract is None
@@ -1586,10 +2467,12 @@ class BlackboardWorkflowRuntime:
             or contract.to_step != "user"
             or contract.from_step != current_step
         ):
-            return
+            return None
         trigger = contract.intent.value
         iteration = self._human_task_iteration(current_step)
         records = HumanTaskRecordStore(self.issue_dir)
+        handoff_key = self._human_task_handoff_key(contract)
+        existing_task = None
         try:
             policy, binding = resolve_step_human_task(
                 playbook_data=self.playbook,
@@ -1610,31 +2493,87 @@ class BlackboardWorkflowRuntime:
                 "human_task_configuration_error",
                 {"step": current_step, "trigger": trigger, "reason": str(exc)},
             )
-            return
+            return None
 
-        existing_wait = records.active_wait_state(
-            self.blackboard.workflow_id,
-            step=current_step,
-            trigger=trigger,
-            policy_id=policy.id,
+        if replaced_handoff is None:
+            existing_task = next(
+                (
+                    task
+                    for task in records.tasks()
+                    if task.workflow_id == self.blackboard.workflow_id
+                    and task.status is HumanTaskStatus.PENDING
+                    and task.step == current_step
+                    and task.iteration == iteration
+                    and task.trigger == trigger
+                    and task.policy_id == policy.id
+                ),
+                None,
+            )
+            if existing_task is not None:
+                handoff_key = existing_task.handoff_key
+
+        prompt = (
+            existing_task.prompt
+            if existing_task is not None
+            else self._publication_review_prompt(
+                current_step=current_step,
+                policy_id=policy.id,
+                prompt=policy.prompt,
+                execution_result=execution_result,
+            )
         )
-        task = records.materialize(
+
+        materialization = records.materialize_with_status(
             workflow_id=self.blackboard.workflow_id,
             step=current_step,
             iteration=iteration,
             trigger=trigger,
             policy_id=policy.id,
-            prompt=policy.prompt,
+            prompt=prompt,
             expected_result=policy.model_dump(mode="json"),
             continuations=binding.outcomes,
             assignee_type="user",
+            handoff_key=handoff_key,
+            superseded_task_ids=self._superseded_human_task_ids(
+                records,
+                step=current_step,
+                iteration=iteration,
+                trigger=trigger,
+                policy_id=policy.id,
+                replaced_handoff=replaced_handoff,
+            ),
         )
-        if existing_wait is None:
+        task = materialization.task
+        self._notify_new_human_task(task)
+        if materialization.created:
             self.blackboard_store.record_event(
                 self.blackboard,
                 "human_task_materialized",
                 {"step": current_step, "trigger": trigger, "task_id": task.id},
             )
+        return task.id
+
+    def _publication_review_prompt(
+        self,
+        *,
+        current_step: str,
+        policy_id: str,
+        prompt: str,
+        execution_result: Any,
+    ) -> str:
+        """Attach the verified published or explicit local-only review outcome."""
+        step_def = self.steps.get(current_step, {})
+        if (
+            policy_id != "local-review"
+            or CAPABILITY_PR_PUBLISH_ID not in self._step_declared_capability_ids(step_def)
+        ):
+            return prompt
+        if self._validated_pr_auto_create is False:
+            return f"{prompt}\n\nPublication mode: local-only. No PR URL exists."
+        pr_url = self._current_pr_url(execution_result)
+        if pr_url is None:
+            return prompt
+        return f"{prompt}\n\nPublication mode: published. Verified PR URL: {pr_url}"
 
     def _human_task_iteration(self, current_step: str) -> int:
         iteration_dir = self._latest_iteration_dir(current_step)
@@ -1644,6 +2583,132 @@ class BlackboardWorkflowRuntime:
             return int(iteration_dir.name.removeprefix("iteration_"))
         except ValueError:
             return 1
+
+    def _superseded_human_task_ids(
+        self,
+        records: HumanTaskRecordStore,
+        *,
+        step: str,
+        iteration: int,
+        trigger: str,
+        policy_id: str,
+        replaced_handoff: HandoffContract | None = None,
+    ) -> tuple[str, ...]:
+        """Identify only named pending tasks replaced by this handoff.
+
+        A different handoff key or another pending task is never enough to
+        trigger cancellation. A newer iteration replaces its matching lineage;
+        an in-iteration replacement names its predecessor through the prior
+        durable user handoff identity.
+        """
+        superseded_task_ids = [
+            task.id
+            for task in records.tasks()
+            if task.workflow_id == self.blackboard.workflow_id
+            and task.status is HumanTaskStatus.PENDING
+            and task.step == step
+            and task.trigger == trigger
+            and task.policy_id == policy_id
+            and task.iteration < iteration
+        ]
+        if replaced_handoff is not None:
+            superseded_task_ids.extend(self._replaced_human_task_ids(records, replaced_handoff))
+        return tuple(dict.fromkeys(superseded_task_ids))
+
+    def _replaced_human_task_ids(
+        self, records: HumanTaskRecordStore, handoff: HandoffContract
+    ) -> tuple[str, ...]:
+        """Return only the pending task exactly correlated to one replaced baton."""
+        replaced_handoff_key = self._human_task_handoff_key(handoff)
+        legacy_predecessor_id = self._legacy_handoff_predecessor_id(records, handoff)
+        return tuple(
+            task.id
+            for task in records.tasks()
+            if task.workflow_id == self.blackboard.workflow_id
+            and task.status is HumanTaskStatus.PENDING
+            and (task.handoff_key == replaced_handoff_key or task.id == legacy_predecessor_id)
+        )
+
+    def _legacy_handoff_predecessor_id(
+        self, records: HumanTaskRecordStore, handoff: HandoffContract
+    ) -> str | None:
+        """Recover one predecessor from pre-handoff-key task records.
+
+        Legacy keys describe a task binding, not a handoff instance. The
+        materialization event therefore supplies the exact task identity and
+        prevents an unrelated task on the same step from being superseded.
+        """
+        legacy_task_ids = {
+            task.id
+            for task in records.tasks()
+            if task.workflow_id == self.blackboard.workflow_id
+            and task.status is HumanTaskStatus.PENDING
+            and task.step == handoff.from_step
+            and task.handoff_key
+            == "\x1f".join(
+                (
+                    task.workflow_id,
+                    task.step,
+                    str(task.iteration),
+                    task.trigger,
+                    task.policy_id,
+                )
+            )
+        }
+        for event in self.blackboard.events:
+            if (
+                event.event_type == "human_task_materialized"
+                and event.timestamp >= handoff.created_at
+                and event.step == handoff.from_step
+            ):
+                task_id = event.data.get("task_id")
+                if isinstance(task_id, str) and task_id in legacy_task_ids:
+                    return task_id
+        return None
+
+    def _human_task_handoff_key(self, contract: HandoffContract) -> str:
+        """Return the stable identity of one user-facing handoff instance."""
+        return ":".join(
+            (
+                "user-handoff",
+                self.blackboard.workflow_id,
+                contract.from_step,
+                contract.intent.value,
+                contract.created_at,
+            )
+        )
+
+    def _remember_replaced_user_handoff(self) -> None:
+        """Retain the exact pending task identity across a start-step replacement."""
+        contract = self.blackboard.handoff_contract
+        if (
+            self.blackboard.current_step == "user"
+            and contract is not None
+            and contract.to_owner is HandoffOwner.USER
+            and contract.to_step == "user"
+        ):
+            self._replaced_user_handoff = contract
+
+    def _cancel_unresolved_replaced_user_handoff(self) -> None:
+        """Release only the predecessor named by an explicit start-step override."""
+        handoff = self._replaced_user_handoff
+        if handoff is None:
+            return
+        records = HumanTaskRecordStore(self.issue_dir)
+        task_ids = self._replaced_human_task_ids(records, handoff)
+        for task_id in task_ids:
+            records.cancel(
+                workflow_id=self.blackboard.workflow_id,
+                task_id=task_id,
+                reason="superseded by explicit workflow start without a replacement task",
+            )
+        if task_ids:
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "human_task_superseded",
+                {"task_ids": list(task_ids), "source": "workflow.start_step_override"},
+            )
+        self._replaced_user_handoff = None
 
     def _emit_complete(
         self,
@@ -1660,6 +2725,7 @@ class BlackboardWorkflowRuntime:
             self.blackboard,
             "workflow_completed",
             {
+                "transition_id": str(uuid4()),
                 "step": current_step,
                 "status_code": status_code,
                 "next_step": next_step,
@@ -1667,7 +2733,6 @@ class BlackboardWorkflowRuntime:
                 "runtime": runtime,
             },
         )
-        self.blackboard_store.set_current_step(self.blackboard, "done")
         if update_contract:
             self.blackboard_store.update_handoff_contract(
                 self.blackboard,
@@ -1678,8 +2743,14 @@ class BlackboardWorkflowRuntime:
                 status_code=status_code,
                 source=contract_source,
             )
+        self.blackboard_store.set_current_step(self.blackboard, "done")
         cafe_dir = self.issue_dir.parent.parent
         clear_marker_if_matches(cafe_dir, self.issue_dir.name)
+        if not self._flush_phase_terminal(event_type="workflow_completed"):
+            self._dispatch_workflow_event(
+                "workflow_completed",
+                {"step": current_step, "status_code": status_code},
+            )
         return PlaybookRunResult(
             final_step=current_step,
             final_status_code=status_code,
@@ -1696,21 +2767,37 @@ class BlackboardWorkflowRuntime:
         runtime: str,
         update_contract: bool = True,
         contract_source: str = "workflow.transition",
+        transition_intent: HandoffIntent | str | None = None,
     ) -> None:
         self.blackboard_store.record_decision(
             self.blackboard,
             {"from": current_step, "to": next_step, "status_code": status_code},
         )
+        transition_id = str(uuid4())
+        raw_transition_intent = (
+            transition_intent.value
+            if isinstance(transition_intent, HandoffIntent)
+            else transition_intent
+        )
         self.blackboard_store.record_event(
             self.blackboard,
             "transition",
             {
+                "transition_id": transition_id,
                 "from": current_step,
                 "to": next_step,
                 "status_code": status_code,
                 "source": source,
                 "runtime": runtime,
+                "transition_intent": raw_transition_intent,
             },
+        )
+        self._reset_step_attempts_after_successful_advance(
+            current_step=current_step,
+            next_step=next_step,
+            status_code=status_code,
+            transition_intent=transition_intent,
+            transition_source=source,
         )
         self.blackboard_store.set_current_step(self.blackboard, next_step)
         if update_contract:
@@ -1723,6 +2810,7 @@ class BlackboardWorkflowRuntime:
                 status_code=status_code,
                 source=contract_source,
             )
+        self._flush_phase_terminal()
 
     def _handle_post_contract(
         self,
@@ -1772,6 +2860,7 @@ class BlackboardWorkflowRuntime:
             source="baton",
             runtime=runtime,
             update_contract=update_contract_on_transition,
+            transition_intent=post_contract.intent,
         )
         return PostContractResult(status_code=resolved_status_code, next_step=next_step)
 
@@ -1793,71 +2882,6 @@ class BlackboardWorkflowRuntime:
             or contract.status_code == PhaseStatusCode.NEED_CLARIFICATION.value
             or status_code == PhaseStatusCode.NEED_CLARIFICATION.value
         )
-
-    def _operation_artifact_trusted(
-        self, *, current_step: str, iteration_dir: Path, artifact: LongRunningOperationArtifact
-    ) -> bool:
-        """Only trust operation state that is also recorded as runtime-owned evidence.
-
-        ``operation.json`` lives in the iteration directory alongside files a
-        develop step can freely write, so its raw content alone is not
-        sufficient evidence. ``BlackboardStore.write_operation_artifact`` is
-        the only supported writer and always records a matching
-        ``{step}_operation`` metadata artifact on the blackboard in the same
-        call; requiring that record to bind this artifact's operation ID and
-        state, and point at *this* iteration's ``operation.json`` path keeps
-        an agent-authored or hand-edited file, or a stale metadata record left
-        over from an earlier iteration, from being accepted as trusted
-        operation truth.
-        """
-        return operation_artifact_is_trusted(
-            blackboard_store=self.blackboard_store,
-            blackboard=self.blackboard,
-            current_step=current_step,
-            iteration_dir=iteration_dir,
-            artifact=artifact,
-        )
-
-    def _operation_receipt_trusted(
-        self,
-        *,
-        current_step: str,
-        iteration_dir: Path,
-        operation: LongRunningOperationArtifact,
-        receipt: LongRunningOperationArtifact,
-    ) -> bool:
-        """Trust only terminal receipts written through the blackboard store."""
-        return operation_receipt_is_trusted(
-            blackboard_store=self.blackboard_store,
-            blackboard=self.blackboard,
-            current_step=current_step,
-            iteration_dir=iteration_dir,
-            operation=operation,
-            receipt=receipt,
-        )
-
-    def _read_trusted_operation_receipt(
-        self,
-        *,
-        current_step: str,
-        iteration_dir: Path,
-        operation: LongRunningOperationArtifact,
-    ) -> tuple[Optional[LongRunningOperationArtifact], bool, bool]:
-        """Read terminal receipt evidence and classify schema/trust failures."""
-        try:
-            receipt = self.blackboard_store.read_operation_receipt(iteration_dir)
-        except (ValueError, json.JSONDecodeError, OSError):
-            return None, True, False
-        if receipt is None:
-            return None, False, False
-        if not self._operation_receipt_trusted(
-            current_step=current_step,
-            iteration_dir=iteration_dir,
-            operation=operation,
-            receipt=receipt,
-        ):
-            return receipt, False, True
-        return receipt, False, False
 
     def _capability_receipt_recorded(self, capability_id: str) -> bool:
         for receipt in getattr(self.blackboard, "capability_receipts", []):
@@ -1892,6 +2916,9 @@ class BlackboardWorkflowRuntime:
         missing: list[str] = []
         for capability_id in self._required_capability_ids(current_step):
             if self._capability_receipt_satisfied(execution_result, capability_id):
+                continue
+            if capability_id == CAPABILITY_PR_PUBLISH_ID:
+                missing.append(capability_id)
                 continue
             if self._capability_receipt_recorded(capability_id):
                 continue
@@ -1969,75 +2996,6 @@ class BlackboardWorkflowRuntime:
                 else:
                     missing.append("questions_valid")
 
-        operation: Optional[LongRunningOperationArtifact] = None
-        operation_schema_invalid = False
-        operation_untrusted = False
-        if iteration_dir is not None:
-            try:
-                operation = self.blackboard_store.read_operation_artifact(iteration_dir)
-            except (ValueError, json.JSONDecodeError, OSError):
-                operation_schema_invalid = True
-                missing.append("operation_schema_invalid")
-
-        if operation is not None:
-            if not self._operation_artifact_trusted(
-                current_step=current_step, iteration_dir=iteration_dir, artifact=operation
-            ):
-                operation_untrusted = True
-                missing.append("operation_untrusted")
-            elif operation.state == LongRunningOperationState.RUNNING:
-                assert iteration_dir is not None
-                (
-                    operation,
-                    receipt_schema_invalid,
-                    receipt_untrusted,
-                ) = self._reconcile_running_operation(
-                    current_step=current_step,
-                    iteration_dir=iteration_dir,
-                    operation=operation,
-                    other_missing=list(missing),
-                )
-                if receipt_schema_invalid:
-                    operation_schema_invalid = True
-                    missing.append("operation_schema_invalid")
-                elif receipt_untrusted:
-                    operation_untrusted = True
-                    missing.append("operation_untrusted")
-                elif operation.state == LongRunningOperationState.SUCCEEDED:
-                    validated.append("operation_succeeded")
-                elif operation.state == LongRunningOperationState.FAILED:
-                    missing.append("operation_failed")
-                elif operation.state == LongRunningOperationState.LOST:
-                    missing.append("operation_lost")
-                else:
-                    missing.append("operation_running")
-            elif operation.state == LongRunningOperationState.FAILED:
-                missing.append("operation_failed")
-            elif operation.state == LongRunningOperationState.LOST:
-                missing.append("operation_lost")
-            else:
-                assert iteration_dir is not None
-                receipt, receipt_schema_invalid, receipt_untrusted = (
-                    self._read_trusted_operation_receipt(
-                        current_step=current_step,
-                        iteration_dir=iteration_dir,
-                        operation=operation,
-                    )
-                )
-                trusted_succeeded_receipt = (
-                    receipt is not None and receipt.state == LongRunningOperationState.SUCCEEDED
-                )
-                if receipt_schema_invalid:
-                    operation_schema_invalid = True
-                    missing.append("operation_schema_invalid")
-                elif receipt_untrusted:
-                    operation_untrusted = True
-                    missing.append("operation_untrusted")
-                elif trusted_succeeded_receipt:
-                    validated.append("operation_succeeded")
-                else:
-                    missing.append("operation_succeeded_receipt")
-
         return HandoffReconciliationResult(
             reconciled=not missing,
             status_code=status_code,
@@ -2045,9 +3003,6 @@ class BlackboardWorkflowRuntime:
             iteration_dir=iteration_dir,
             missing_evidence=missing,
             validated_evidence=validated,
-            operation=operation,
-            operation_schema_invalid=operation_schema_invalid,
-            operation_untrusted=operation_untrusted,
         )
 
     def _reconciliation_event_exists(
@@ -2124,6 +3079,20 @@ class BlackboardWorkflowRuntime:
         status_code = result.status_code
         self._patch_reconciled_iteration_metadata(result)
 
+        # Reconciliation validates the baton directly from disk.  Publish that
+        # recovered contract to the in-memory state before following the normal
+        # pause path, whose HumanTask materializer reads the blackboard contract.
+        self.blackboard.handoff_contract = contract
+        self.blackboard_store.save(self.blackboard)
+
+        materialized_task_id: Optional[str] = None
+        if contract.to_owner == HandoffOwner.USER:
+            # A reconciliation marker suppresses future retries, so make the
+            # actionable task durable before publishing that completion point.
+            materialized_task_id = self._materialize_user_handoff_task(
+                current_step=current_step,
+            )
+
         if not self._reconciliation_event_exists(
             current_step=current_step,
             status_code=status_code,
@@ -2150,6 +3119,8 @@ class BlackboardWorkflowRuntime:
                 runtime=runtime,
                 reason="reconciled_handoff",
                 update_contract=False,
+                materialized_task_id=materialized_task_id,
+                materialize_user_task=False,
             )
 
         if contract.to_owner == HandoffOwner.DONE:
@@ -2169,213 +3140,13 @@ class BlackboardWorkflowRuntime:
             source="reconciled_baton",
             runtime=runtime,
             update_contract=False,
+            transition_intent=contract.intent,
         )
         return PlaybookRunResult(
             final_step=current_step,
             final_status_code=status_code,
             completed=False,
         )
-
-    def _pause_operation_running(
-        self,
-        *,
-        current_step: str,
-        runtime: str,
-        result: HandoffReconciliationResult,
-    ) -> PlaybookRunResult:
-        """Stay recoverable while an operation is still running; no duplicate launch."""
-        self.blackboard_store.record_event(
-            self.blackboard,
-            "operation_running",
-            {
-                "step": current_step,
-                "runtime": runtime,
-            },
-        )
-        self._restore_interrupted_step_handoff(
-            current_step=current_step, reason="operation_running"
-        )
-        return PlaybookRunResult(
-            final_step=current_step,
-            final_status_code="OPERATION_RUNNING",
-            completed=False,
-        )
-
-    def _block_operation_outcome(
-        self,
-        *,
-        current_step: str,
-        runtime: str,
-        result: HandoffReconciliationResult,
-        outcome: str,
-    ) -> PlaybookRunResult:
-        """Stop clearly and actionably for failed/lost/invalid/unverifiable operations.
-
-        Never advances as if the work succeeded and never retries automatically.
-        """
-        if outcome in {"failed", "lost"}:
-            self.blackboard_store.record_event(
-                self.blackboard,
-                f"operation_{outcome}",
-                {
-                    "step": current_step,
-                    "runtime": runtime,
-                    "missing_evidence": list(result.missing_evidence),
-                },
-            )
-        self.blackboard_store.record_event(
-            self.blackboard,
-            "operation_blocked",
-            {
-                "step": current_step,
-                "runtime": runtime,
-                "outcome": outcome,
-                "missing_evidence": list(result.missing_evidence),
-            },
-        )
-        self._restore_interrupted_step_handoff(
-            current_step=current_step,
-            reason=f"operation_{outcome}",
-        )
-        return PlaybookRunResult(
-            final_step=current_step,
-            final_status_code=f"OPERATION_{outcome.upper()}",
-            completed=False,
-        )
-
-    def _handle_operation_gate(
-        self,
-        *,
-        current_step: str,
-        runtime: str,
-        result: HandoffReconciliationResult,
-    ) -> Optional[PlaybookRunResult]:
-        """Resolve running/failed/lost/schema-invalid/unverifiable operation states.
-
-        Returns a definitive ``PlaybookRunResult`` when the workflow must stop
-        here instead of falling through to a duplicate step execution. Returns
-        ``None`` when there is no operation artifact (ordinary short-running
-        step, unaffected) or when the operation is ``succeeded`` and fully
-        verified by existing reconciliation evidence.
-        """
-        if (
-            result.operation is None
-            and not result.operation_schema_invalid
-            and not result.operation_untrusted
-        ):
-            return None
-
-        if result.operation_schema_invalid:
-            return self._block_operation_outcome(
-                current_step=current_step,
-                runtime=runtime,
-                result=result,
-                outcome="schema_invalid",
-            )
-
-        if result.operation_untrusted:
-            return self._block_operation_outcome(
-                current_step=current_step,
-                runtime=runtime,
-                result=result,
-                outcome="untrusted",
-            )
-
-        operation = result.operation
-        assert operation is not None
-        if operation.state == LongRunningOperationState.RUNNING:
-            return self._pause_operation_running(
-                current_step=current_step, runtime=runtime, result=result
-            )
-
-        if operation.state in {
-            LongRunningOperationState.FAILED,
-            LongRunningOperationState.LOST,
-        }:
-            return self._block_operation_outcome(
-                current_step=current_step,
-                runtime=runtime,
-                result=result,
-                outcome=operation.state.value,
-            )
-
-        trusted_succeeded_receipt = False
-        if result.iteration_dir is not None:
-            try:
-                receipt = self.blackboard_store.read_operation_receipt(result.iteration_dir)
-            except (ValueError, json.JSONDecodeError, OSError):
-                receipt = None
-            trusted_succeeded_receipt = (
-                receipt is not None
-                and receipt.state == LongRunningOperationState.SUCCEEDED
-                and self._operation_receipt_trusted(
-                    current_step=current_step,
-                    iteration_dir=result.iteration_dir,
-                    operation=operation,
-                    receipt=receipt,
-                )
-            )
-        if not trusted_succeeded_receipt:
-            return self._block_operation_outcome(
-                current_step=current_step,
-                runtime=runtime,
-                result=result,
-                outcome="succeeded_unverified",
-            )
-
-        # operation.state == SUCCEEDED with a trusted receipt: only execute
-        # again to finalize phase artifacts/baton, never to relaunch command
-        # work.
-        if not result.reconciled:
-            self._operation_finalize_extra_prompt = self._build_operation_finalize_prompt(
-                current_step=current_step,
-                result=result,
-                operation=operation,
-            )
-            self.blackboard_store.record_event(
-                self.blackboard,
-                "operation_finalize_required",
-                {
-                    "step": current_step,
-                    "runtime": runtime,
-                    "missing_evidence": list(result.missing_evidence),
-                },
-            )
-            return None
-        return None
-
-    @staticmethod
-    def _merge_extra_prompts(*parts: Optional[str]) -> Optional[str]:
-        present = [part.strip() for part in parts if part and part.strip()]
-        if not present:
-            return None
-        return "\n\n".join(present)
-
-    def _build_operation_finalize_prompt(
-        self,
-        *,
-        current_step: str,
-        result: HandoffReconciliationResult,
-        operation: LongRunningOperationArtifact,
-    ) -> str:
-        receipt_path: object = "operation_receipt.json"
-        if result.iteration_dir is not None:
-            receipt_path = operation_receipt_path(result.iteration_dir)
-        missing = ", ".join(result.missing_evidence) or "phase finalization"
-        return (
-            "[LONG-RUNNING OPERATION FINALIZE ONLY]\n"
-            f"Step `{current_step}` already has a trusted succeeded receipt for "
-            f"operation `{operation.operation_id}` at `{receipt_path}`.\n"
-            "Finalize the phase from the existing operation/result evidence. "
-            "Do not relaunch the command, do not start a replacement command, "
-            "and do not call `cafe operation run` again.\n"
-            f"Complete only the missing workflow evidence: {missing}."
-        )
-
-    def _consume_operation_finalize_extra_prompt(self) -> Optional[str]:
-        prompt = self._operation_finalize_extra_prompt
-        self._operation_finalize_extra_prompt = None
-        return prompt
 
     def _try_reconcile_interrupted_step(
         self,
@@ -2386,14 +3157,12 @@ class BlackboardWorkflowRuntime:
     ) -> Optional[PlaybookRunResult]:
         if reason in {"interrupted", "keyboard_interrupt", "publish_error"}:
             return None
+        if self._is_agent_execution_interruption(reason) and (
+            self._has_agent_execution_interruption_task(current_step=current_step)
+        ):
+            return None
 
         result = self._validate_reconciled_handoff(current_step=current_step)
-
-        gated = self._handle_operation_gate(
-            current_step=current_step, runtime=runtime, result=result
-        )
-        if gated is not None:
-            return gated
 
         if not result.reconciled:
             self._record_reconciliation_failed(
@@ -2407,19 +3176,6 @@ class BlackboardWorkflowRuntime:
             current_step=current_step,
             runtime=runtime,
             result=result,
-        )
-
-    def _try_reconcile_operation_after_executor_return(
-        self,
-        *,
-        current_step: str,
-        runtime: str,
-    ) -> Optional[PlaybookRunResult]:
-        """Re-check operations created by a production helper during this invocation."""
-        self.blackboard = self.blackboard_store.load_or_create(current_step)
-        result = self._validate_reconciled_handoff(current_step=current_step)
-        return self._handle_operation_gate(
-            current_step=current_step, runtime=runtime, result=result
         )
 
     def _latest_unreconciled_interrupted_step(self) -> Optional[tuple[str, str]]:
@@ -2501,24 +3257,40 @@ class BlackboardWorkflowRuntime:
                     },
                 )
                 _baton_retry_extra_prompt = self._baton_rejected_prompt(br)
-            visit_count = self._record_step_visit(
-                current_step=current_step, step_def=step_def, runtime=runtime_label
-            )
+            try:
+                attempt_count = self._record_step_attempt(
+                    current_step=current_step, step_def=step_def, runtime=runtime_label
+                )
+            except IterationLimitReachedError as exc:
+                return exc.result
             for _baton_attempt in range(3):
+                publication_error = self._publication_contract_error()
+                if publication_error is not None:
+                    return self._reject_invalid_publication_contract(
+                        start_step=current_step,
+                        error=publication_error,
+                    )
                 try:
                     frame = self._execute_one_iteration(
                         current_step=current_step,
                         step_def=step_def,
                         runtime=runtime_label,
                         hop_count=hop_count,
-                        visit_count=visit_count,
-                        extra_prompt=self._merge_extra_prompts(
-                            self._consume_operation_finalize_extra_prompt(),
-                            _baton_retry_extra_prompt,
-                        ),
+                        attempt_count=attempt_count,
+                        extra_prompt=_baton_retry_extra_prompt,
                         same_invocation_retry=_baton_attempt > 0,
                     )
                 except StepInterrupted as si:
+                    if self._is_agent_execution_interruption(si.reason):
+                        self._rollback_step_attempt(
+                            current_step=current_step,
+                            attempt_count=attempt_count,
+                        )
+                        return self._pause_for_agent_execution_interruption(
+                            current_step=current_step,
+                            reason=si.reason,
+                            runtime=runtime_label,
+                        )
                     reconciled = self._try_reconcile_interrupted_step(
                         current_step=current_step,
                         runtime=runtime_label,
@@ -2526,9 +3298,9 @@ class BlackboardWorkflowRuntime:
                     )
                     if reconciled is not None:
                         return reconciled
-                    self._rollback_step_visit(
+                    self._rollback_step_attempt(
                         current_step=current_step,
-                        visit_count=visit_count,
+                        attempt_count=attempt_count,
                     )
                     self._restore_interrupted_step_handoff(
                         current_step=current_step,
@@ -2544,6 +3316,10 @@ class BlackboardWorkflowRuntime:
                             "runtime": runtime_label,
                         },
                     )
+                    self._dispatch_workflow_event(
+                        "workflow_interruption",
+                        {"step": current_step, "reason": si.reason},
+                    )
                     return PlaybookRunResult(
                         final_step=current_step,
                         final_status_code=f"INTERRUPTED:{si.reason}",
@@ -2552,7 +3328,18 @@ class BlackboardWorkflowRuntime:
                     )
                 self._store_artifacts(frame.artifacts)
                 try:
-                    contract = self._load_agent_written_handoff_contract(current_step=current_step)
+                    if self._is_baton_driven_step(current_step):
+                        contract = self._load_step_handoff_contract(current_step=current_step)
+                        if contract is None:
+                            raise BatonRejected(
+                                field="from_step",
+                                invalid_value="",
+                                valid_values=[current_step],
+                            )
+                    else:
+                        contract = self._load_agent_written_handoff_contract(
+                            current_step=current_step
+                        )
                     if contract.to_owner == HandoffOwner.AGENT and contract.to_step == current_step:
                         explicit_status_code = getattr(frame.execution_result, "status_code", None)
                         if not explicit_status_code:
@@ -2592,7 +3379,7 @@ class BlackboardWorkflowRuntime:
                 current_step=current_step,
                 status_code=status_code,
                 runtime=runtime_label,
-                visit_count=visit_count,
+                attempt_count=attempt_count,
                 hop_count=hop_count,
             )
             next_step = contract.to_step
@@ -2612,12 +3399,11 @@ class BlackboardWorkflowRuntime:
                     completed=False,
                 )
 
-            require_capability_receipts = next_step != "user"
-            if (
-                resolve_step_behavior(self.playbook, current_step).publish_confirmation
-                and next_step != "done"
-            ):
-                require_capability_receipts = False
+            behavior = resolve_step_behavior(self.playbook, current_step)
+            require_capability_receipts = next_step != "user" or (
+                behavior.publish_confirmation
+                and self._validated_pr_auto_create is True
+            )
 
             if require_capability_receipts:
                 missing_capabilities = self._missing_capability_receipts(
@@ -2625,6 +3411,41 @@ class BlackboardWorkflowRuntime:
                     execution_result=frame.execution_result,
                 )
                 if missing_capabilities:
+                    pending_approval = self._pending_capability_approval(frame.execution_result)
+                    if pending_approval is not None:
+                        self.blackboard_store.update_handoff_contract(
+                            self.blackboard,
+                            from_step=current_step,
+                            to_owner=HandoffOwner.USER,
+                            to_step="user",
+                            intent=HandoffIntent.MANUAL_HANDOFF,
+                            status_code="CAPABILITY_APPROVAL_PENDING",
+                            source="workflow.capability_approval",
+                        )
+                        self.blackboard_store.record_event(
+                            self.blackboard,
+                            "capability_approval_requested",
+                            {
+                                "step": current_step,
+                                "capability": pending_approval.get("capability"),
+                                "task_id": pending_approval["task_id"],
+                                "request_fingerprint": pending_approval.get("request_fingerprint"),
+                            },
+                        )
+                        self.blackboard_store.set_current_step(self.blackboard, "user")
+                        self._flush_phase_terminal(
+                            event_type="human_task",
+                            extra={
+                                "task_id": pending_approval["task_id"],
+                                "status_code": "CAPABILITY_APPROVAL_PENDING",
+                            },
+                        )
+                        return PlaybookRunResult(
+                            final_step=current_step,
+                            final_status_code="CAPABILITY_APPROVAL_PENDING",
+                            completed=False,
+                            detail=str(pending_approval["task_id"]),
+                        )
                     self.blackboard_store.update_handoff_contract(
                         self.blackboard,
                         from_step=current_step,
@@ -2673,6 +3494,7 @@ class BlackboardWorkflowRuntime:
                     runtime=runtime_label,
                     reason="awaiting_user_input",
                     update_contract=False,
+                    execution_result=frame.execution_result,
                 )
 
             if next_step not in self.steps:
@@ -2686,6 +3508,7 @@ class BlackboardWorkflowRuntime:
                 runtime=effective_transition_runtime,
                 update_contract=True,
                 contract_source=transition_contract_source,
+                transition_intent=contract.intent,
             )
             if single_step_mode:
                 return PlaybookRunResult(
@@ -2749,26 +3572,42 @@ class BlackboardWorkflowRuntime:
                     },
                 )
                 _baton_retry_extra_prompt = self._baton_rejected_prompt(br)
-            visit_count = self._record_step_visit(
-                current_step=current_step, step_def=step_def, runtime=runtime_label
-            )
+            try:
+                attempt_count = self._record_step_attempt(
+                    current_step=current_step, step_def=step_def, runtime=runtime_label
+                )
+            except IterationLimitReachedError as exc:
+                return exc.result
 
             for _baton_attempt in range(3):
+                publication_error = self._publication_contract_error()
+                if publication_error is not None:
+                    return self._reject_invalid_publication_contract(
+                        start_step=current_step,
+                        error=publication_error,
+                    )
                 try:
                     frame = self._execute_one_iteration(
                         current_step=current_step,
                         step_def=step_def,
                         runtime=runtime_label,
                         hop_count=hop_count,
-                        visit_count=visit_count,
+                        attempt_count=attempt_count,
                         validate_assignee_type=True,
-                        extra_prompt=self._merge_extra_prompts(
-                            self._consume_operation_finalize_extra_prompt(),
-                            _baton_retry_extra_prompt,
-                        ),
+                        extra_prompt=_baton_retry_extra_prompt,
                         same_invocation_retry=_baton_attempt > 0,
                     )
                 except StepInterrupted as si:
+                    if self._is_agent_execution_interruption(si.reason):
+                        self._rollback_step_attempt(
+                            current_step=current_step,
+                            attempt_count=attempt_count,
+                        )
+                        return self._pause_for_agent_execution_interruption(
+                            current_step=current_step,
+                            reason=si.reason,
+                            runtime=runtime_label,
+                        )
                     reconciled = self._try_reconcile_interrupted_step(
                         current_step=current_step,
                         runtime=runtime_label,
@@ -2776,9 +3615,9 @@ class BlackboardWorkflowRuntime:
                     )
                     if reconciled is not None:
                         return reconciled
-                    self._rollback_step_visit(
+                    self._rollback_step_attempt(
                         current_step=current_step,
-                        visit_count=visit_count,
+                        attempt_count=attempt_count,
                     )
                     self._restore_interrupted_step_handoff(
                         current_step=current_step,
@@ -2795,6 +3634,10 @@ class BlackboardWorkflowRuntime:
                                 "runtime": runtime_label,
                             },
                         )
+                    self._dispatch_workflow_event(
+                        "workflow_interruption",
+                        {"step": current_step, "reason": si.reason},
+                    )
                     return PlaybookRunResult(
                         final_step=current_step,
                         final_status_code=f"INTERRUPTED:{si.reason}",
@@ -2862,12 +3705,6 @@ class BlackboardWorkflowRuntime:
                 post_contract.to_owner == HandoffOwner.AGENT
                 and post_contract.to_step == current_step
             ):
-                operation_result = self._try_reconcile_operation_after_executor_return(
-                    current_step=current_step,
-                    runtime=runtime_label,
-                )
-                if operation_result is not None:
-                    return operation_result
                 status_code = (
                     post_contract.status_code or f"BATON_{post_contract.intent.value.upper()}"
                 )
@@ -2877,7 +3714,7 @@ class BlackboardWorkflowRuntime:
                     current_step=current_step,
                     status_code=status_code,
                     runtime=runtime_label,
-                    visit_count=visit_count,
+                    attempt_count=attempt_count,
                     hop_count=hop_count,
                 )
                 post_contract_result = self._handle_post_contract(
@@ -2971,12 +3808,6 @@ class BlackboardWorkflowRuntime:
                             status_code = "NO_STATUS_CODE"
                             last_status_code = status_code
                         else:
-                            operation_result = self._try_reconcile_operation_after_executor_return(
-                                current_step=current_step,
-                                runtime=runtime_label,
-                            )
-                            if operation_result is not None:
-                                return operation_result
                             self.blackboard_store.record_event(
                                 self.blackboard,
                                 "status_code_missing",
@@ -2987,10 +3818,7 @@ class BlackboardWorkflowRuntime:
                                 },
                             )
                             # The agent returned with neither a status code
-                            # nor a baton. This is ordinary NO_STATUS_CODE
-                            # behavior, not a long-running operation signal.
-                            # The runtime never fabricates an agent-owned
-                            # operation policy after an interruption.
+                            # nor a baton, so stop at this workflow boundary.
                             return PlaybookRunResult(
                                 final_step=current_step,
                                 final_status_code="NO_STATUS_CODE",
@@ -3007,7 +3835,7 @@ class BlackboardWorkflowRuntime:
                 current_step=current_step,
                 status_code=status_code,
                 runtime=runtime_label,
-                visit_count=visit_count,
+                attempt_count=attempt_count,
                 hop_count=hop_count,
             )
 
@@ -3152,45 +3980,7 @@ class BlackboardWorkflowRuntime:
         raise RuntimeError(f"Playbook run reached max transition limit ({max_transitions})")
 
     def _try_reconcile_current_step(self, *, current_step: str) -> Optional[PlaybookRunResult]:
-        """Re-check an existing operation for ``current_step`` before (re-)executing it.
-
-        Called from every ``run()`` path -- single-step, multi-transition,
-        and explicit ``start_step`` overrides alike -- immediately after the
-        current step is resolved and before the executor can be invoked
-        again. Without this, an explicit re-run (e.g. ``run(start_step="X")``
-        called again while step "X" still has a ``running`` operation) would
-        skip reconciliation and relaunch the agent instead of learning the
-        operation's real outcome by rechecking it. If the latest
-        unreconciled interruption belongs to this same step, reuse the same
-        reconciliation/operation-gate path the multi-transition runner uses
-        instead of re-invoking the executor unconditionally.
-        """
-        operation_iteration_dir = self._pending_operation_iteration_dir(current_step)
-        if operation_iteration_dir is not None:
-            result = self._validate_reconciled_handoff(
-                current_step=current_step,
-                iteration_dir_override=operation_iteration_dir,
-            )
-            gated = self._handle_operation_gate(
-                current_step=current_step,
-                runtime="single_step_resume",
-                result=result,
-            )
-            if gated is not None:
-                return gated
-            if not result.reconciled:
-                self._record_reconciliation_failed(
-                    current_step=current_step,
-                    runtime="single_step_resume",
-                    missing_evidence=result.missing_evidence,
-                )
-                return None
-            return self._apply_reconciled_handoff(
-                current_step=current_step,
-                runtime="single_step_resume",
-                result=result,
-            )
-
+        """Reconcile an interrupted handoff before re-executing the same step."""
         interrupted = self._latest_unreconciled_interrupted_step()
         if interrupted is None:
             return None
@@ -3202,52 +3992,6 @@ class BlackboardWorkflowRuntime:
             runtime="single_step_resume",
             reason=reason,
         )
-
-    def _pending_operation_iteration_dir(self, current_step: str) -> Optional[Path]:
-        """Return a registered operation still awaiting phase completion.
-
-        The CLI can reserve the next iteration directory before ``run()`` gets
-        a chance to reconcile a helper receipt. In that case, using only the
-        numerically latest directory hides the trusted operation from the
-        previous iteration and the finalize agent may relaunch completed work.
-
-        A later completion/reconciliation event for this step closes the
-        operation lifecycle, so old successful operations are not reused when
-        a downstream review sends the step back for unrelated corrections.
-        """
-        operation_id: Optional[str] = None
-        for event in reversed(self.blackboard.events):
-            if event.step != current_step:
-                continue
-            if event.event_type in {
-                "step_completed",
-                "single_step_completed",
-                "step_reconciled",
-            }:
-                return None
-            if event.event_type == "long_running_operation_receipt":
-                operation_id = str(event.data.get("operation_id", "")).strip() or None
-                break
-            if event.event_type == "operation_running":
-                break
-        else:
-            return None
-
-        entry = self.blackboard_store.get_artifact(self.blackboard, f"{current_step}_operation")
-        if entry is None:
-            return None
-        path = Path(entry.path)
-        if path.name != "operation.json":
-            return None
-        try:
-            operation = self.blackboard_store.read_operation_artifact(path.parent)
-        except (ValueError, json.JSONDecodeError, OSError):
-            return path.parent
-        if operation is None:
-            return None
-        if operation_id is not None and operation.operation_id != operation_id:
-            return None
-        return path.parent
 
     def _run_single_step(self, *, current_step: str) -> PlaybookRunResult:
         owned_result = self._run_non_agent_owner(
@@ -3285,6 +4029,17 @@ class BlackboardWorkflowRuntime:
         start_step: Optional[str] = None,
         single_step: bool = False,
     ) -> PlaybookRunResult:
+        publication_error = self._publication_contract_error()
+        if publication_error is not None:
+            return self._reject_invalid_publication_contract(
+                start_step=start_step,
+                error=publication_error,
+            )
+        recovered_transition = (
+            self._recover_unpublished_lifecycle_position() if start_step is None else None
+        )
+        if recovered_transition is not None and single_step:
+            return self._finalize_observed_result(recovered_transition)
         if single_step:
             resolution = (
                 RuntimePositionResolution(current_step=start_step)
@@ -3292,23 +4047,20 @@ class BlackboardWorkflowRuntime:
                 else self._resolve_runtime_position_from_handoff()
             )
             if resolution.realignment_result is not None:
-                return resolution.realignment_result
+                return self._finalize_observed_result(resolution.realignment_result)
             current_step = resolution.current_step
             terminal_result = self._result_from_terminal_position(current_step)
             if terminal_result is not None:
-                return terminal_result
+                return self._finalize_observed_result(terminal_result)
             if current_step not in self.steps:
                 raise ValueError(f"Unknown playbook step '{current_step}'")
-            # Re-check any existing operation for this step *before* writing
-            # the self-loop override baton below: the override write
-            # replaces next_step.txt, and a backgrounded agent may have
-            # already written its own real completion baton there before
-            # being interrupted. Checking first preserves that evidence for
-            # reconciliation instead of clobbering it unconditionally.
+            # Preserve a completed handoff from an interrupted executor before
+            # an explicit start-step override replaces the baton.
             reconciled = self._try_reconcile_current_step(current_step=current_step)
             if reconciled is not None:
-                return reconciled
+                return self._finalize_observed_result(reconciled)
             if start_step is not None:
+                self._remember_replaced_user_handoff()
                 self.blackboard_store.set_current_step(self.blackboard, current_step)
                 self.blackboard_store.update_handoff_contract(
                     self.blackboard,
@@ -3318,7 +4070,13 @@ class BlackboardWorkflowRuntime:
                     intent=HandoffIntent.AWAIT_AGENT,
                     source="workflow.start_step_override",
                 )
-            return self._run_single_step(current_step=current_step)
+                try:
+                    return self._finalize_observed_result(
+                        self._run_single_step(current_step=current_step)
+                    )
+                finally:
+                    self._cancel_unresolved_replaced_user_handoff()
+            return self._finalize_observed_result(self._run_single_step(current_step=current_step))
 
         if self._should_attempt_resume_reconciliation(start_step=start_step):
             interrupted = self._latest_unreconciled_interrupted_step()
@@ -3333,36 +4091,30 @@ class BlackboardWorkflowRuntime:
                     self.blackboard.current_step == interrupted_step
                     or self.blackboard.current_step not in self.steps
                 ):
-                    return reconciled
+                    return self._finalize_observed_result(reconciled)
 
         resolution = (
             RuntimePositionResolution(current_step=start_step)
             if start_step is not None
             else self._resolve_runtime_position_from_handoff()
         )
-        if resolution.realignment_result is not None:
-            return resolution.realignment_result
+        if resolution.realignment_result is not None and single_step:
+            return self._finalize_observed_result(resolution.realignment_result)
         current_step = resolution.current_step
         terminal_result = self._result_from_terminal_position(current_step)
         if terminal_result is not None:
-            return terminal_result
+            return self._finalize_observed_result(terminal_result)
         if current_step not in self.steps:
             raise ValueError(f"Unknown playbook step '{current_step}'")
 
-        # Re-check any existing operation for the resolved step before
-        # (re-)running it, exactly like the single-step path above. This is
-        # what closes the explicit-override duplicate-launch gap: an
-        # explicit ``start_step`` override never satisfies
-        # ``_should_attempt_resume_reconciliation`` above (it only fires for
-        # ``workflow.consume_handoff``-sourced resumes), so without this
-        # call a second ``run(start_step=...)`` on a step that still has a
-        # ``running`` operation would relaunch the executor instead of
-        # learning the operation's real outcome.
+        # Preserve a completed handoff from an interrupted executor before
+        # an explicit start-step override replaces the baton.
         reconciled = self._try_reconcile_current_step(current_step=current_step)
         if reconciled is not None:
-            return reconciled
+            return self._finalize_observed_result(reconciled)
 
         if start_step is not None:
+            self._remember_replaced_user_handoff()
             self.blackboard_store.set_current_step(self.blackboard, current_step)
             self.blackboard_store.update_handoff_contract(
                 self.blackboard,
@@ -3372,7 +4124,22 @@ class BlackboardWorkflowRuntime:
                 intent=HandoffIntent.AWAIT_AGENT,
                 source="workflow.start_step_override",
             )
+            try:
+                return self._finalize_observed_result(
+                    self._run_from_current_step(
+                        current_step=current_step, max_transitions=max_transitions
+                    )
+                )
+            finally:
+                self._cancel_unresolved_replaced_user_handoff()
 
+        return self._finalize_observed_result(
+            self._run_from_current_step(current_step=current_step, max_transitions=max_transitions)
+        )
+
+    def _run_from_current_step(
+        self, *, current_step: str, max_transitions: int
+    ) -> PlaybookRunResult:
         owned_result = self._run_non_agent_owner(
             current_step=current_step,
             step_def=self.steps[current_step],

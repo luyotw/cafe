@@ -2,13 +2,18 @@
 
 from typing import Any, List, Mapping, Optional
 
-from cafe.services.timeline_builder import TimelineEntry
-from cafe.services.time_formatter import format_timestamp_local, format_timestamp_utc, format_duration, calculate_elapsed_time
-from cafe.core.types import PhaseStatus
 from cafe.core.context_packet import (
     format_context_packet_diagnostic,
     validate_context_packet_diagnostic,
 )
+from cafe.core.types import PhaseStatus
+from cafe.services.time_formatter import (
+    calculate_elapsed_time,
+    format_duration,
+    format_timestamp_local,
+    format_timestamp_utc,
+)
+from cafe.services.timeline_builder import TimelineEntry
 
 try:
     from rich.console import Console

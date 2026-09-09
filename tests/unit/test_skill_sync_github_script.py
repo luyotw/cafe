@@ -69,23 +69,23 @@ def test_sync_script_skips_when_sync_disabled_without_gh(
     assert payload["reason"] == "sync_disabled"
 
 
-def test_default_playbook_migrates_plan_sync_to_script_hook() -> None:
+def test_standard_playbooks_leave_confirmed_sync_to_trusted_runtime() -> None:
     project_root = Path(__file__).resolve().parents[2]
-    playbook_path = project_root / "src/cafe/data/playbooks/default.yaml"
-    data = yaml.safe_load(playbook_path.read_text(encoding="utf-8"))
+    for playbook_name in ("standard", "standard-qa", "tdd", "tdd-qa"):
+        playbook_path = project_root / f"src/cafe/data/playbooks/{playbook_name}.yaml"
+        data = yaml.safe_load(playbook_path.read_text(encoding="utf-8"))
+        for phase in ("spec", "plan"):
+            hooks = data["steps"][phase]["hooks"]
+            assert not any(
+                isinstance(entry, dict) and "capability" in entry
+                for entries in hooks.values()
+                for entry in entries
+            )
 
-    plan_hooks = data["steps"]["plan"]["hooks"]["after_execute"]
-    assert isinstance(plan_hooks, list) and plan_hooks
-    script_hook = plan_hooks[0]
-    assert script_hook["script"] == "sync_github.sh"
-    assert script_hook["args"]["phase"] == "plan"
-    assert script_hook["args"]["output"] == "{output_file}"
-    assert script_hook["when_intents"] == ["confirmed"]
 
-
-def test_default_playbook_no_changes_needed_routes_to_review() -> None:
+def test_standard_playbook_no_changes_needed_routes_to_review() -> None:
     project_root = Path(__file__).resolve().parents[2]
-    playbook_path = project_root / "src/cafe/data/playbooks/default.yaml"
+    playbook_path = project_root / "src/cafe/data/playbooks/standard.yaml"
     data = yaml.safe_load(playbook_path.read_text(encoding="utf-8"))
 
     develop_on = data["steps"]["develop"]["on"]

@@ -27,9 +27,10 @@ quality_gate:
   clis:
     - cli: codex
       model: <confirmed-exact-model>
-    - cli: claude
-      model: <confirmed-exact-fallback-model>
 ```
+
+Add further `clis` entries only for fallbacks confirmed in the kickoff. A
+single-entry list is a valid primary-only chain.
 
 Do not copy this example as a default, infer missing steps, or read legacy
 configuration. For validation questions, inspect `src/cafe/utils/phase_config.py`.

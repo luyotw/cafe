@@ -3,21 +3,34 @@
 from __future__ import annotations
 
 import json
+import sqlite3
+import threading
 import uuid
+from collections import Counter
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import IO, Any, Callable, Dict, Iterator, List, Optional
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - unavailable on Windows.
+    fcntl = None  # type: ignore[assignment]
+
+try:
+    import msvcrt
+except ImportError:  # pragma: no cover - available only on Windows.
+    msvcrt = None  # type: ignore[assignment]
+
+from cafe.core.packet_io import atomic_write_bytes
 from cafe.core.workflow_models import BatonRejected
 
 BLACKBOARD_FILENAME = "blackboard.json"
-BLACKBOARD_SCHEMA_VERSION = 3
+BLACKBOARD_SCHEMA_VERSION = 4
 NEXT_STEP_FILENAME = "next_step.txt"
 HANDOFF_CONTRACT_VERSION = 1
-OPERATION_ARTIFACT_FILENAME = "operation.json"
-OPERATION_RECEIPT_FILENAME = "operation_receipt.json"
 
 
 def _now_iso() -> str:
@@ -28,10 +41,158 @@ def _legacy_workflow_id(data: Dict[str, Any], initial_step: str) -> str:
     """Provide a deterministic in-memory id before the store persists a legacy state."""
     identity = {
         "current_step": str(data.get("current_step", initial_step)),
-        "playbook_id": str(data.get("playbook_id", "default")),
+        "playbook_id": str(data.get("playbook_id", "standard")),
         "updated_at": str(data.get("updated_at", "")),
     }
     return str(uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(identity, sort_keys=True)))
+
+
+def _acquire_process_file_lock(lock_file: IO[str]) -> Callable[[], None]:
+    """Acquire the platform lock and return its matching release operation."""
+    if fcntl is not None:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+
+        def release_fcntl() -> None:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+        return release_fcntl
+    if msvcrt is None:
+        raise RuntimeError("cross-process file locking is unavailable")
+    lock_file.seek(0)
+    msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+
+    def release_msvcrt() -> None:
+        lock_file.seek(0)
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+
+    return release_msvcrt
+
+
+@contextmanager
+def _process_file_lock(lock_file: IO[str]) -> Iterator[None]:
+    """Hold a required exclusive kernel file lock for the current process."""
+    release = _acquire_process_file_lock(lock_file)
+    try:
+        yield
+    finally:
+        release()
+
+
+@contextmanager
+def _portable_process_file_lock(lock_file: IO[str]) -> Iterator[None]:
+    """Hold the portable outer lock shared by whole-blackboard writers."""
+    portable_lock_path = Path(f"{lock_file.name}.sqlite3")
+    connection = sqlite3.connect(portable_lock_path, isolation_level=None, timeout=30.0)
+    try:
+        connection.execute("BEGIN EXCLUSIVE")
+        yield
+    finally:
+        if connection.in_transaction:
+            connection.rollback()
+        connection.close()
+
+
+@contextmanager
+def _optional_process_file_lock(lock_file: IO[str]) -> Iterator[None]:
+    """Serialize generic persistence with optional platform-native locking."""
+    with _portable_process_file_lock(lock_file):
+        try:
+            release = _acquire_process_file_lock(lock_file)
+        except (OSError, RuntimeError):
+            release = None
+        try:
+            yield
+        finally:
+            if release is not None:
+                try:
+                    release()
+                except OSError:
+                    pass
+
+
+def _serialized_identity(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+
+
+def _merge_changed_mapping(
+    latest: Dict[str, Any], baseline: Dict[str, Any], desired: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Apply only this writer's key changes to the latest durable mapping."""
+    merged = dict(latest)
+    for key in baseline.keys() | desired.keys():
+        if baseline.get(key) == desired.get(key) and (key in baseline) == (key in desired):
+            continue
+        if key in desired:
+            merged[key] = desired[key]
+        else:
+            merged.pop(key, None)
+    return merged
+
+
+def _merge_changed_sequence(
+    latest: List[Any], baseline: List[Any], desired: List[Any]
+) -> List[Any]:
+    """Apply this writer's additions/removals without dropping concurrent entries."""
+    baseline_counts = Counter(_serialized_identity(value) for value in baseline)
+    desired_counts = Counter(_serialized_identity(value) for value in desired)
+    removals = baseline_counts - desired_counts
+    additions = desired_counts - baseline_counts
+    merged: List[Any] = []
+    for value in latest:
+        identity = _serialized_identity(value)
+        if removals[identity]:
+            removals[identity] -= 1
+        else:
+            merged.append(value)
+    for value in desired:
+        identity = _serialized_identity(value)
+        if additions[identity]:
+            merged.append(value)
+            additions[identity] -= 1
+    return merged
+
+
+def _merge_generic_state(
+    *,
+    persisted: "BlackboardState",
+    desired: "BlackboardState",
+    baseline: Dict[str, Any],
+    capability_receipts_authoritative: bool,
+) -> "BlackboardState":
+    """Three-way merge one generic writer over the latest serialized state."""
+    latest_raw = persisted.to_dict()
+    desired_raw = desired.to_dict()
+    merged_raw = dict(latest_raw)
+    for field_name in (
+        "schema_version",
+        "current_step",
+        "playbook_id",
+        "workflow_id",
+        "handoff_summary",
+        "handoff_contract",
+        "ownership_cursor",
+    ):
+        if desired_raw[field_name] != baseline.get(field_name):
+            merged_raw[field_name] = desired_raw[field_name]
+    for field_name in ("artifacts", "step_attempt_counts"):
+        merged_raw[field_name] = _merge_changed_mapping(
+            latest_raw[field_name],
+            baseline.get(field_name, {}),
+            desired_raw[field_name],
+        )
+    for field_name in ("events", "decisions"):
+        merged_raw[field_name] = _merge_changed_sequence(
+            latest_raw[field_name],
+            baseline.get(field_name, []),
+            desired_raw[field_name],
+        )
+    if capability_receipts_authoritative:
+        merged_raw["capability_receipts"] = _merge_changed_sequence(
+            latest_raw["capability_receipts"],
+            baseline.get("capability_receipts", []),
+            desired_raw["capability_receipts"],
+        )
+    return BlackboardState.from_dict(merged_raw, initial_step=desired.current_step)
 
 
 class ArtifactKind(str, Enum):
@@ -61,188 +222,6 @@ class HandoffIntent(str, Enum):
     NO_CHANGES_NEEDED = "no_changes_needed"
     MANUAL_HANDOFF = "manual_handoff"
     WORKFLOW_COMPLETE = "workflow_complete"
-
-
-class LongRunningOperationState(str, Enum):
-    """Strict four-state model for a long-running phase operation.
-
-    Exactly these four values are accepted. Unknown values are schema
-    errors; there are no aliases or fallback names.
-    """
-
-    RUNNING = "running"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
-    LOST = "lost"
-
-
-class OperationRisk(str, Enum):
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-
-
-class OperationMonitoring(str, Enum):
-    FINAL_ONLY = "final-only"
-    PERIODIC = "periodic"
-    ACTIVE = "active"
-
-
-class OperationLogPolicy(str, Enum):
-    SUMMARY_ONLY = "summary-only"
-    INCREMENTAL_TAIL = "incremental-tail"
-    FILTERED_STREAM = "filtered-stream"
-
-
-def operation_artifact_path(iteration_dir: Path) -> Path:
-    """Fixed one-per-iteration path: ``iteration_dir/operation.json``."""
-    return Path(iteration_dir) / OPERATION_ARTIFACT_FILENAME
-
-
-def operation_receipt_path(iteration_dir: Path) -> Path:
-    """Fixed terminal receipt path for one long-running operation."""
-    return Path(iteration_dir) / OPERATION_RECEIPT_FILENAME
-
-
-@dataclass
-class LongRunningOperationArtifact:
-    """Durable record of one long-running phase operation.
-
-    ``reason`` and ``exit_code`` are explanatory only; they never change
-    which of the four states is in effect.
-    """
-
-    state: LongRunningOperationState
-    risk: OperationRisk
-    monitoring: OperationMonitoring
-    log_policy: OperationLogPolicy
-    stop_condition: str
-    recovery: str
-    reason: str = ""
-    exit_code: Optional[int] = None
-    operation_id: str = field(default_factory=lambda: uuid.uuid4().hex)
-    created_at: str = field(default_factory=_now_iso)
-    updated_at: str = field(default_factory=_now_iso)
-
-    def __post_init__(self) -> None:
-        validate_operation_decision(
-            risk=self.risk,
-            monitoring=self.monitoring,
-            log_policy=self.log_policy,
-            stop_condition=self.stop_condition,
-            recovery=self.recovery,
-        )
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "operation_id": self.operation_id,
-            "state": self.state.value,
-            "reason": self.reason,
-            "exit_code": self.exit_code,
-            "created_at": self.created_at,
-            "updated_at": self.updated_at,
-            "risk": self.risk.value,
-            "monitoring": self.monitoring.value,
-            "log_policy": self.log_policy.value,
-            "stop_condition": self.stop_condition,
-            "recovery": self.recovery,
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "LongRunningOperationArtifact":
-        if not isinstance(data, dict):
-            raise ValueError("operation.json must be a JSON object")
-        if "state" not in data:
-            raise ValueError("operation.json is missing required field 'state'")
-        if "operation_id" not in data:
-            raise ValueError("operation.json is missing required field 'operation_id'")
-        operation_id = str(data["operation_id"]).strip()
-        if not operation_id:
-            raise ValueError("operation.json operation_id must be non-empty")
-
-        # Direct enum construction only: no alias map, no migration fallback.
-        try:
-            state = LongRunningOperationState(str(data["state"]))
-        except ValueError as exc:
-            raise ValueError(
-                f"operation.json state has unsupported value {data['state']!r}"
-            ) from exc
-
-        raw_exit_code = data.get("exit_code")
-        exit_code: Optional[int]
-        if raw_exit_code is None:
-            exit_code = None
-        elif isinstance(raw_exit_code, bool):
-            raise ValueError(f"operation.json exit_code must be an integer, got {raw_exit_code!r}")
-        elif isinstance(raw_exit_code, int):
-            exit_code = raw_exit_code
-        else:
-            raise ValueError(f"operation.json exit_code must be an integer, got {raw_exit_code!r}")
-
-        artifact = cls(
-            state=state,
-            reason=str(data.get("reason", "")),
-            exit_code=exit_code,
-            operation_id=operation_id,
-            created_at=str(data.get("created_at", _now_iso())),
-            updated_at=str(data.get("updated_at", _now_iso())),
-            risk=_strict_operation_value(data, "risk", OperationRisk),
-            monitoring=_strict_operation_value(data, "monitoring", OperationMonitoring),
-            log_policy=_strict_operation_value(data, "log_policy", OperationLogPolicy),
-            stop_condition=_required_operation_text(data.get("stop_condition"), "stop_condition"),
-            recovery=_required_operation_text(data.get("recovery"), "recovery"),
-        )
-        validate_operation_decision(
-            risk=artifact.risk,
-            monitoring=artifact.monitoring,
-            log_policy=artifact.log_policy,
-            stop_condition=artifact.stop_condition,
-            recovery=artifact.recovery,
-        )
-        return artifact
-
-
-def _strict_operation_value(data: Dict[str, Any], field_name: str, enum: Any) -> Any:
-    if field_name not in data:
-        raise ValueError(f"operation.json is missing required field {field_name!r}")
-    value = data[field_name]
-    try:
-        return enum(str(value))
-    except ValueError as exc:
-        raise ValueError(f"operation.json {field_name} has unsupported value {value!r}") from exc
-
-
-def _bounded_operation_text(value: Any, field_name: str) -> str:
-    if not isinstance(value, str) or len(value) > 240:
-        raise ValueError(f"operation.json {field_name} must be bounded text")
-    return value
-
-
-def _required_operation_text(value: Any, field_name: str) -> str:
-    text = _bounded_operation_text(value, field_name)
-    if not text.strip():
-        raise ValueError(f"operation.json {field_name} must be non-empty")
-    return text
-
-
-def validate_operation_decision(
-    *,
-    risk: OperationRisk,
-    monitoring: OperationMonitoring,
-    log_policy: OperationLogPolicy,
-    stop_condition: str,
-    recovery: str,
-) -> None:
-    """Validate an agent-owned risk decision before an operation is claimed."""
-    expected = {
-        OperationRisk.LOW: (OperationMonitoring.FINAL_ONLY, OperationLogPolicy.SUMMARY_ONLY),
-        OperationRisk.MEDIUM: (OperationMonitoring.PERIODIC, OperationLogPolicy.INCREMENTAL_TAIL),
-        OperationRisk.HIGH: (OperationMonitoring.ACTIVE, OperationLogPolicy.FILTERED_STREAM),
-    }[risk]
-    if (monitoring, log_policy) != expected:
-        raise ValueError(f"operation decision monitoring/log_policy must match risk={risk.value}")
-    _required_operation_text(stop_condition, "stop_condition")
-    _required_operation_text(recovery, "recovery")
 
 
 @dataclass
@@ -293,7 +272,12 @@ class EventEntry:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "EventEntry":
+    def from_dict(
+        cls,
+        data: Dict[str, Any],
+        *,
+        migrate_legacy_attempt_fields: bool = False,
+    ) -> "EventEntry":
         payload = dict(data)
         if "event_type" not in payload and "type" in payload:
             payload["event_type"] = payload.pop("type")
@@ -303,12 +287,48 @@ class EventEntry:
             payload["message"] = str(payload.get("payload", {}))
         if "data" not in payload:
             payload["data"] = payload.pop("payload", {})
+        event_type = str(payload.get("event_type", "event"))
+        event_data = dict(payload.get("data", {}))
+        message = str(payload.get("message", ""))
+        if migrate_legacy_attempt_fields:
+            changed = False
+            if (
+                event_type
+                in {
+                    "step_started",
+                    "step_interrupted",
+                    "step_completed",
+                    "single_step_completed",
+                }
+                and "visit" in event_data
+            ):
+                event_data.setdefault("attempt", event_data["visit"])
+                event_data.pop("visit")
+                changed = True
+            elif event_type == "loop_detected":
+                for legacy_key, current_key in (
+                    ("visits", "attempts"),
+                    ("max_iterations", "max_attempts_per_cycle"),
+                ):
+                    if legacy_key not in event_data:
+                        continue
+                    event_data.setdefault(current_key, event_data[legacy_key])
+                    event_data.pop(legacy_key)
+                    changed = True
+            elif event_type == "step_visit_count_reset":
+                event_type = "step_attempt_count_reset"
+                changed = True
+                if "completed_visits" in event_data:
+                    event_data.setdefault("completed_attempts", event_data["completed_visits"])
+                    event_data.pop("completed_visits")
+            if changed:
+                message = json.dumps(event_data, ensure_ascii=False)
         return cls(
             timestamp=str(payload.get("timestamp", _now_iso())),
             step=str(payload.get("step", "system")),
-            event_type=str(payload.get("event_type", "event")),
-            message=str(payload.get("message", "")),
-            data=dict(payload.get("data", {})),
+            event_type=event_type,
+            message=message,
+            data=event_data,
         )
 
 
@@ -531,7 +551,7 @@ class BlackboardState:
     """Shared state across workflow steps."""
 
     current_step: str
-    playbook_id: str = "default"
+    playbook_id: str = "standard"
     workflow_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     schema_version: int = BLACKBOARD_SCHEMA_VERSION
     artifacts: Dict[str, ArtifactEntry] = field(default_factory=dict)
@@ -541,8 +561,11 @@ class BlackboardState:
     handoff_summary: str = ""
     handoff_contract: Optional[HandoffContract] = None
     ownership_cursor: Optional[Dict[str, Any]] = None
-    step_visit_counts: Dict[str, int] = field(default_factory=dict)
+    step_attempt_counts: Dict[str, int] = field(default_factory=dict)
     updated_at: str = field(default_factory=_now_iso)
+    _persisted_snapshot: Optional[Dict[str, Any]] = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -559,7 +582,7 @@ class BlackboardState:
                 self.handoff_contract.to_dict() if self.handoff_contract is not None else None
             ),
             "ownership_cursor": dict(self.ownership_cursor) if self.ownership_cursor else None,
-            "step_visit_counts": dict(self.step_visit_counts),
+            "step_attempt_counts": dict(self.step_attempt_counts),
             "updated_at": self.updated_at,
         }
 
@@ -598,24 +621,37 @@ class BlackboardState:
         raw_cursor = data.get("ownership_cursor")
         if raw_cursor is not None and not isinstance(raw_cursor, dict):
             raise ValueError("blackboard ownership_cursor must be an object or null")
-        raw_visits = data.get("step_visit_counts", {})
-        if not isinstance(raw_visits, dict):
-            raise ValueError("blackboard step_visit_counts must be an object")
-        visits: Dict[str, int] = {}
-        for step, count in raw_visits.items():
+        cursor = dict(raw_cursor) if raw_cursor is not None else None
+        if cursor is not None and "attempt_count" not in cursor and "visit_count" in cursor:
+            cursor["attempt_count"] = cursor.pop("visit_count")
+
+        raw_attempts = data.get(
+            "step_attempt_counts",
+            data.get("step_visit_counts", {}),
+        )
+        if not isinstance(raw_attempts, dict):
+            raise ValueError("blackboard step_attempt_counts must be an object")
+        attempts: Dict[str, int] = {}
+        for step, count in raw_attempts.items():
             if not isinstance(count, int) or count < 0:
                 raise ValueError(
-                    "blackboard step_visit_counts values must be non-negative integers"
+                    "blackboard step_attempt_counts values must be non-negative integers"
                 )
-            visits[str(step)] = count
+            attempts[str(step)] = count
 
-        return cls(
+        state = cls(
             current_step=str(data.get("current_step", initial_step)),
-            playbook_id=str(data.get("playbook_id", "default")),
+            playbook_id=str(data.get("playbook_id", "standard")),
             workflow_id=str(data.get("workflow_id") or _legacy_workflow_id(data, initial_step)),
             schema_version=BLACKBOARD_SCHEMA_VERSION,
             artifacts=artifacts,
-            events=[EventEntry.from_dict(entry) for entry in data.get("events", [])],
+            events=[
+                EventEntry.from_dict(
+                    entry,
+                    migrate_legacy_attempt_fields=raw_version < 4,
+                )
+                for entry in data.get("events", [])
+            ],
             decisions=[DecisionEntry.from_dict(entry) for entry in data.get("decisions", [])],
             capability_receipts=receipts,
             handoff_summary=str(data.get("handoff_summary", "")),
@@ -627,26 +663,70 @@ class BlackboardState:
                 if isinstance(data.get("handoff_contract"), dict)
                 else None
             ),
-            ownership_cursor=dict(raw_cursor) if raw_cursor is not None else None,
-            step_visit_counts=visits,
+            ownership_cursor=cursor,
+            step_attempt_counts=attempts,
             updated_at=str(data.get("updated_at", _now_iso())),
         )
+        state._persisted_snapshot = state.to_dict()
+        return state
+
+
+def is_genuine_cold_start(state: BlackboardState, *, entry_point: str) -> bool:
+    """Return whether no workflow execution or user handoff has started yet."""
+    contract = state.handoff_contract
+    bootstrap_handoff = contract is None or (
+        contract.from_step == entry_point
+        and contract.to_owner is HandoffOwner.AGENT
+        and contract.to_step == entry_point
+        and contract.intent is HandoffIntent.AWAIT_AGENT
+        and contract.source == "bootstrap"
+    )
+    return (
+        state.current_step == entry_point
+        and not state.events
+        and not state.decisions
+        and not state.artifacts
+        and not state.capability_receipts
+        and not state.step_attempt_counts
+        and state.ownership_cursor is None
+        and not state.handoff_summary
+        and bootstrap_handoff
+    )
 
 
 class BlackboardStore:
     """Persist blackboard data in issue directory."""
 
+    _thread_locks: Dict[Path, threading.RLock] = {}
+    _thread_locks_guard = threading.Lock()
+
     def __init__(self, issue_dir: Path) -> None:
         self.issue_dir = issue_dir
         self.file_path = issue_dir / BLACKBOARD_FILENAME
+        self.state_lock_path = issue_dir / f".{BLACKBOARD_FILENAME}.state.lock"
+        self.receipt_lock_path = issue_dir / f".{BLACKBOARD_FILENAME}.receipt.lock"
         self.next_step_path = issue_dir / NEXT_STEP_FILENAME
 
     def load_or_create(
         self,
         initial_step: str,
-        playbook_id: str = "default",
+        playbook_id: str = "standard",
         *,
         tolerate_invalid_baton: bool = False,
+    ) -> BlackboardState:
+        with self._thread_lock_for(self.file_path):
+            return self._load_or_create_unlocked(
+                initial_step,
+                playbook_id,
+                tolerate_invalid_baton=tolerate_invalid_baton,
+            )
+
+    def _load_or_create_unlocked(
+        self,
+        initial_step: str,
+        playbook_id: str,
+        *,
+        tolerate_invalid_baton: bool,
     ) -> BlackboardState:
         if self.file_path.exists():
             raw = json.loads(self.file_path.read_text(encoding="utf-8"))
@@ -673,13 +753,46 @@ class BlackboardStore:
                 raise
         return state
 
-    def save(self, state: BlackboardState) -> None:
+    def save(
+        self,
+        state: BlackboardState,
+        *,
+        capability_receipts_authoritative: bool = False,
+    ) -> None:
+        """Persist generic workflow fields without overwriting driver-owned state."""
+        with self._thread_lock_for(self.file_path):
+            self.issue_dir.mkdir(parents=True, exist_ok=True)
+            with self.state_lock_path.open("a+", encoding="utf-8") as lock_file:
+                with _optional_process_file_lock(lock_file):
+                    if self.file_path.exists():
+                        raw = json.loads(self.file_path.read_text(encoding="utf-8"))
+                        persisted = BlackboardState.from_dict(raw, initial_step=state.current_step)
+                        if state._persisted_snapshot is not None:
+                            merged = _merge_generic_state(
+                                persisted=persisted,
+                                desired=state,
+                                baseline=state._persisted_snapshot,
+                                capability_receipts_authoritative=(
+                                    capability_receipts_authoritative
+                                ),
+                            )
+                            state.__dict__.clear()
+                            state.__dict__.update(merged.__dict__)
+                        else:
+                            if not capability_receipts_authoritative:
+                                state.capability_receipts = list(persisted.capability_receipts)
+                    self._save_unlocked(state)
+
+    def _save_unlocked(self, state: BlackboardState) -> None:
+        """Persist a state whose caller already owns the state-file lock."""
         self.issue_dir.mkdir(parents=True, exist_ok=True)
         state.updated_at = _now_iso()
-        self.file_path.write_text(
-            json.dumps(state.to_dict(), ensure_ascii=False, indent=2),
-            encoding="utf-8",
+        payload = json.dumps(state.to_dict(), ensure_ascii=False, indent=2).encode("utf-8")
+        atomic_write_bytes(
+            self.file_path,
+            payload,
         )
+        state._persisted_snapshot = json.loads(payload)
 
     def ensure_baton(
         self,
@@ -700,6 +813,11 @@ class BlackboardStore:
                 state.handoff_contract = None
                 self.save(state)
                 return None
+            if (
+                state.handoff_contract is not None
+                and state.handoff_contract.to_next_step_dict() == contract.to_next_step_dict()
+            ):
+                return state.handoff_contract
             state.handoff_contract = contract
             self.save(state)
             return contract
@@ -807,6 +925,7 @@ class BlackboardStore:
         )
 
         if prior_contract is not None and same_blackboard_handoff:
+            contract.created_at = prior_contract.created_at
             if contract.source == "unknown":
                 prior_source = str(prior_contract.source)
                 if prior_source:
@@ -867,140 +986,73 @@ class BlackboardStore:
         state.artifacts[entry.name] = entry
         self.save(state)
 
-    def read_operation_artifact(
-        self, iteration_dir: Path
-    ) -> Optional[LongRunningOperationArtifact]:
-        """Read the fixed one-per-iteration operation artifact, if any.
-
-        Raises ``ValueError``/``json.JSONDecodeError`` when the artifact
-        exists but fails schema validation; callers must treat that as a
-        schema error rather than silently defaulting to a state.
-        """
-        path = operation_artifact_path(iteration_dir)
-        if not path.exists():
-            return None
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        return LongRunningOperationArtifact.from_dict(raw)
-
-    def write_operation_artifact(
-        self,
-        state: BlackboardState,
-        *,
-        step: str,
-        iteration_dir: Path,
-        artifact: LongRunningOperationArtifact,
-    ) -> LongRunningOperationArtifact:
-        """Persist the operation artifact and publish it as blackboard metadata.
-
-        Reuses existing metadata-artifact and event helpers; this does not
-        introduce a new ``BlackboardState`` collection or job queue.
-        """
-        path = operation_artifact_path(iteration_dir)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(artifact.to_dict(), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-
-        artifact_name = f"{step}_operation"
-        previous = state.artifacts.get(artifact_name)
-        version = previous.version + 1 if previous else 1
-        self.put_artifact(
-            state,
-            ArtifactEntry(
-                name=artifact_name,
-                kind=ArtifactKind.METADATA,
-                version=version,
-                updated_by=step,
-                path=str(path),
-                summary=(f"long_running_operation:{artifact.operation_id}:{artifact.state.value}"),
-            ),
-        )
-        self.record_event(
-            state,
-            "long_running_operation",
-            {
-                "step": step,
-                "state": artifact.state.value,
-                "operation_id": artifact.operation_id,
-                "reason": artifact.reason,
-                "exit_code": artifact.exit_code,
-                "path": str(path),
-            },
-        )
-        return artifact
-
-    def read_operation_receipt(self, iteration_dir: Path) -> Optional[LongRunningOperationArtifact]:
-        path = operation_receipt_path(iteration_dir)
-        if not path.exists():
-            return None
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-            return LongRunningOperationArtifact.from_dict(raw)
-        except (json.JSONDecodeError, ValueError) as exc:
-            raise ValueError(f"{path.name} schema invalid: {exc}") from exc
-
-    def write_operation_receipt(
-        self,
-        state: BlackboardState,
-        *,
-        step: str,
-        iteration_dir: Path,
-        operation_id: str,
-        artifact: LongRunningOperationArtifact,
-    ) -> LongRunningOperationArtifact:
-        """Persist a controlled terminal receipt for an existing operation."""
-        if artifact.state == LongRunningOperationState.RUNNING:
-            raise ValueError("operation receipt must be terminal")
-        if artifact.operation_id != operation_id:
-            raise ValueError("operation receipt operation_id mismatch")
-
-        path = operation_receipt_path(iteration_dir)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(artifact.to_dict(), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-
-        artifact_name = f"{step}_operation_receipt"
-        previous = state.artifacts.get(artifact_name)
-        version = previous.version + 1 if previous else 1
-        self.put_artifact(
-            state,
-            ArtifactEntry(
-                name=artifact_name,
-                kind=ArtifactKind.METADATA,
-                version=version,
-                updated_by=step,
-                path=str(path),
-                summary=(
-                    f"long_running_operation_receipt:{artifact.operation_id}:"
-                    f"{artifact.state.value}"
-                ),
-            ),
-        )
-        self.record_event(
-            state,
-            "long_running_operation_receipt",
-            {
-                "step": step,
-                "state": artifact.state.value,
-                "operation_id": artifact.operation_id,
-                "reason": artifact.reason,
-                "exit_code": artifact.exit_code,
-                "path": str(path),
-            },
-        )
-        return artifact
-
     def append_capability_receipt(self, state: BlackboardState, receipt: Dict[str, Any]) -> None:
         """Append one structured host capability receipt and persist the blackboard."""
         state.capability_receipts.append(dict(receipt))
-        self.save(state)
+        self.save(state, capability_receipts_authoritative=True)
+
+    def upsert_capability_receipt(self, state: BlackboardState, receipt: Dict[str, Any]) -> None:
+        """Persist one evolving attempt receipt without duplicating its audit identity."""
+        attempt_id = str(receipt.get("notification_attempt_id") or "")
+        if not attempt_id:
+            raise ValueError("notification_attempt_id is required for receipt upsert")
+        for index, existing in enumerate(state.capability_receipts):
+            if str(existing.get("notification_attempt_id") or "") == attempt_id:
+                state.capability_receipts[index] = dict(receipt)
+                self.save(state, capability_receipts_authoritative=True)
+                return
+        state.capability_receipts.append(dict(receipt))
+        self.save(state, capability_receipts_authoritative=True)
+
+    @contextmanager
+    def capability_receipt_transaction(self, state: BlackboardState) -> Iterator[BlackboardState]:
+        """Serialize one receipt-backed dispatch across runtimes and processes."""
+        with self._thread_lock_for(self.file_path):
+            self.issue_dir.mkdir(parents=True, exist_ok=True)
+            with self.receipt_lock_path.open("a+", encoding="utf-8") as lock_file:
+                with _process_file_lock(lock_file):
+                    if self.file_path.exists():
+                        raw = json.loads(self.file_path.read_text(encoding="utf-8"))
+                        persisted = BlackboardState.from_dict(raw, initial_step=state.current_step)
+                        state.__dict__.clear()
+                        state.__dict__.update(persisted.__dict__)
+                    yield state
+
+    @classmethod
+    def _thread_lock_for(cls, file_path: Path) -> threading.RLock:
+        resolved = file_path.resolve()
+        with cls._thread_locks_guard:
+            return cls._thread_locks.setdefault(resolved, threading.RLock())
 
     def set_current_step(self, state: BlackboardState, step: str) -> None:
         state.current_step = step
         self.save(state)
+
+    def reset_step_attempt_count(
+        self,
+        state: BlackboardState,
+        *,
+        step: str,
+        next_step: str,
+        transition_intent: str,
+        transition_source: str,
+    ) -> Optional[int]:
+        """Clear one completed attempt cycle and retain auditable evidence."""
+        completed_attempts = state.step_attempt_counts.pop(step, None)
+        if completed_attempts is None:
+            return None
+        self.record_event(
+            state,
+            "step_attempt_count_reset",
+            {
+                "step": step,
+                "next_step": next_step,
+                "completed_attempts": completed_attempts,
+                "transition_intent": transition_intent,
+                "transition_source": transition_source,
+            },
+        )
+        return completed_attempts
 
     def set_handoff_summary(self, state: BlackboardState, summary: str) -> None:
         state.handoff_summary = summary
@@ -1046,6 +1098,90 @@ class BlackboardStore:
     ) -> None:
         step = str(payload.get("step", state.current_step))
         self.log_event(state, step, event_type, json.dumps(payload, ensure_ascii=False), payload)
+
+    def prepare_workflow_callback_event(
+        self,
+        state: BlackboardState,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Persist a callback envelope or restore its durable replay identity."""
+        supplied_identity = {
+            key: payload.get(key) for key in ("event_id", "sequence", "occurred_at")
+        }
+        if any(value is not None for value in supplied_identity.values()):
+            if not (
+                isinstance(supplied_identity["event_id"], str)
+                and supplied_identity["event_id"]
+                and isinstance(supplied_identity["sequence"], int)
+                and not isinstance(supplied_identity["sequence"], bool)
+                and supplied_identity["sequence"] > 0
+                and isinstance(supplied_identity["occurred_at"], str)
+                and supplied_identity["occurred_at"]
+            ):
+                raise ValueError("workflow callback replay identity is incomplete")
+
+        with self._thread_lock_for(self.file_path):
+            self.issue_dir.mkdir(parents=True, exist_ok=True)
+            with self.state_lock_path.open("a+", encoding="utf-8") as lock_file:
+                with _optional_process_file_lock(lock_file):
+                    if self.file_path.exists():
+                        raw = json.loads(self.file_path.read_text(encoding="utf-8"))
+                        persisted = BlackboardState.from_dict(raw, initial_step=state.current_step)
+                        if state._persisted_snapshot is not None:
+                            latest = _merge_generic_state(
+                                persisted=persisted,
+                                desired=state,
+                                baseline=state._persisted_snapshot,
+                                capability_receipts_authoritative=False,
+                            )
+                            state.__dict__.clear()
+                            state.__dict__.update(latest.__dict__)
+
+                    if supplied_identity["event_id"] is not None:
+                        for entry in reversed(state.events):
+                            if (
+                                entry.event_type == "workflow_event_callback_enqueued"
+                                and entry.data.get("event_id")
+                                == supplied_identity["event_id"]
+                            ):
+                                if all(
+                                    entry.data.get(key) == value
+                                    for key, value in supplied_identity.items()
+                                ):
+                                    return dict(entry.data)
+                                raise ValueError(
+                                    "workflow callback replay identity conflicts with durable state"
+                                )
+                        raise ValueError("workflow callback replay identity is not durable")
+
+                    sequence = 1 + max(
+                        (
+                            entry.data["sequence"]
+                            for entry in state.events
+                            if entry.event_type == "workflow_event_callback_enqueued"
+                            and isinstance(entry.data.get("sequence"), int)
+                            and not isinstance(entry.data["sequence"], bool)
+                        ),
+                        default=0,
+                    )
+                    occurred_at = _now_iso()
+                    durable_payload = {
+                        **payload,
+                        "event_id": str(uuid.uuid4()),
+                        "sequence": sequence,
+                        "occurred_at": occurred_at,
+                    }
+                    state.events.append(
+                        EventEntry(
+                            timestamp=occurred_at,
+                            step=str(payload.get("step", state.current_step)),
+                            event_type="workflow_event_callback_enqueued",
+                            message=json.dumps(durable_payload, ensure_ascii=False),
+                            data=durable_payload,
+                        )
+                    )
+                    self._save_unlocked(state)
+                    return durable_payload
 
     def get_events_since(self, state: BlackboardState, timestamp: str) -> List[EventEntry]:
         return [entry for entry in state.events if entry.timestamp >= timestamp]

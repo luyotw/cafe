@@ -79,14 +79,13 @@ class TestCursorCLIBuildCommand:
 class TestCursorCLITranslateAllowedTools:
     """測試 translate_allowed_tools() 方法."""
 
-    def test_translate_returns_empty_list(self, cursor_config):
-        """測試轉換工具名稱回傳空列表（Cursor 不支援工具限制）."""
+    def test_translate_preserves_scope_marker(self, cursor_config):
+        """測試保留工具範圍，供命令建構區分空權限與一般執行。"""
         cli = CursorCLI(cursor_config)
         tools = ["read", "write", "bash"]
         result = cli.translate_allowed_tools(tools)
 
-        # Cursor 不支援工具限制，應該回傳空列表
-        assert result == []
+        assert result == tools
 
 
 class TestCursorCLIAddDirectories:
@@ -184,12 +183,15 @@ class TestCursorCLIParseResponse:
 class TestCursorCLIExtractSessionId:
     """測試 extract_session_id() 方法."""
 
-    def test_extract_session_id_not_supported(self, cursor_config):
-        """測試 Cursor 不支援從輸出提取 session ID."""
+    def test_extract_session_id_from_init_event(self, cursor_config):
+        """測試從 Cursor stream-json init event 提取 session ID."""
         cli = CursorCLI(cursor_config)
-        output_lines = [json.dumps({"response": "test"})]
+        output_lines = [
+            "not-json",
+            json.dumps({"type": "system", "subtype": "init", "session_id": "cursor-session"}),
+            json.dumps({"response": "test"}),
+        ]
 
         session_id = cli.extract_session_id(output_lines)
 
-        # Cursor 自動管理 session，不從輸出提取
-        assert session_id is None
+        assert session_id == "cursor-session"

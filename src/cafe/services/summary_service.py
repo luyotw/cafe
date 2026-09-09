@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 from cafe.core.blackboard import BlackboardState, HandoffContract, HandoffOwner
 from cafe.core.git import GitOperations
 from cafe.core.types import PhaseStatus
+from cafe.utils.issue_config import read_authoritative_issue_config, resolve_issue_config_path
 
 _RUNTIME_PHASE_NAME = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 _RUNTIME_ITERATION_DIR = re.compile(r"^iteration_(0*[1-9][0-9]{0,5})$")

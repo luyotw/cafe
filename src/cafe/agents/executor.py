@@ -3,7 +3,10 @@
 import json
 import re
 import subprocess
-from typing import Callable, List, Optional
+from dataclasses import dataclass
+from pathlib import Path
+from threading import Event, Timer
+from typing import Any, Callable, List, Optional
 
 from cafe.agents.cli import AbstractCLI, ClaudeCLI, CodexCLI, CopilotCLI, CursorCLI, GeminiCLI
 from cafe.agents.diagnostics import sanitize_error_excerpt
@@ -22,6 +25,44 @@ class AgentExecutionError(Exception):
         super().__init__(message)
         self.error_type = error_type
         self.display_message = display_message
+
+
+@dataclass(frozen=True)
+class AgentExecutionControl:
+    """Optional process boundary for one agent attempt."""
+
+    working_directory: Path | None = None
+    max_duration_seconds: float | None = None
+    max_output_bytes: int | None = None
+    max_output_lines: int | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("max_duration_seconds", "max_output_bytes", "max_output_lines"):
+            value = getattr(self, name)
+            if value is not None and value <= 0:
+                raise ValueError(f"{name} must be positive when configured")
+
+
+@dataclass(frozen=True)
+class EventDriverExecutionResult:
+    """Bounded provider evidence for one callback-only process."""
+
+    session_id: str | None
+    accepted: bool
+    event_id: str | None
+    records: tuple[dict[str, Any], ...]
+
+
+def _structured_record_limit(
+    execution_control: AgentExecutionControl | None,
+) -> int:
+    """Keep observer evidence aligned with the process output boundary."""
+    if (
+        execution_control is not None
+        and execution_control.max_output_lines is not None
+    ):
+        return execution_control.max_output_lines
+    return 64
 
 
 class AgentExecutor:
@@ -85,13 +126,15 @@ class AgentExecutor:
         AgentCLI.CODEX: {},
     }
 
-    def __init__(self, config: AgentConfig) -> None:
+    def __init__(self, config: AgentConfig, *, stream_output: bool = True) -> None:
         """Initialize agent executor.
 
         Args:
             config: Agent configuration
+            stream_output: Whether to print agent response text while preserving parsing and logs
         """
         self.config = config
+        self.stream_output = stream_output
         self._total_token_usage = TokenUsage()
 
     def _get_cli_strategy(self) -> AbstractCLI:
@@ -116,6 +159,10 @@ class AgentExecutor:
         else:
             raise AgentExecutionError(f"Unsupported agent CLI: {self.config.cli}")
 
+    def supports_event_driver(self) -> bool:
+        """Return the adapter's explicit event-driver contract opt-in."""
+        return self._get_cli_strategy().event_driver_conforming
+
     def _translate_tool_names(self, tools: Optional[List[str]]) -> Optional[List[str]]:
         """Translate tool names from Claude convention to current CLI convention.
 
@@ -125,7 +172,7 @@ class AgentExecutor:
         Returns:
             List of tool names translated for current CLI, or None if no tools
         """
-        if not tools:
+        if tools is None:
             return None
 
         tool_map = self.TOOL_NAME_MAP.get(self.config.cli, {})
@@ -153,6 +200,9 @@ class AgentExecutor:
         allowed_tools: Optional[List[str]] = None,
         allowed_directories: Optional[List[str]] = None,
         streaming_output_file: Optional[str] = None,
+        execution_control: AgentExecutionControl | None = None,
+        exact_session: bool = False,
+        environment_overrides: Optional[dict[str, str]] = None,
     ) -> AgentResponse:
         """Execute the agent with given prompt.
 
@@ -161,6 +211,7 @@ class AgentExecutor:
             allowed_tools: List of allowed tools (using Claude naming convention)
             allowed_directories: List of allowed directories (e.g., [".cafe", "src"])
             streaming_output_file: Optional file path to write streaming output line-by-line
+            environment_overrides: Environment values to add to the provider process
 
         Returns:
             AgentResponse with response text, token usage, and permission denials
@@ -174,22 +225,34 @@ class AgentExecutor:
         try:
             # Get CLI strategy
             cli_strategy = self._get_cli_strategy()
-            # For Gemini, ensure .geminiignore file exists
-            if self.config.cli == AgentCLI.GEMINI:
+            # Normal Gemini agents keep the repository-owned ignore file.
+            # Decision-only execution creates it only inside its isolated cwd.
+            decision_only = allowed_tools == [] and allowed_directories == []
+            if self.config.cli == AgentCLI.GEMINI and not decision_only:
                 cli_strategy.ensure_geminiignore()
-
-            # For Copilot, record existing sessions before execution
             if self.config.cli == AgentCLI.COPILOT:
                 cli_strategy.record_existing_sessions()
 
             # Translate allowed tools using CLI-specific logic
             cli_translated_tools = (
-                cli_strategy.translate_allowed_tools(translated_tools) if translated_tools else None
+                cli_strategy.translate_allowed_tools(translated_tools)
+                if translated_tools is not None
+                else None
             )
 
             # Build command using strategy
-            cmd = cli_strategy.build_command(prompt, cli_translated_tools, allowed_directories)
+            cmd, process_cwd = self._build_controlled_command(
+                cli_strategy,
+                prompt,
+                cli_translated_tools,
+                allowed_directories,
+                execution_control,
+            )
             env = cli_strategy.build_environment()
+            if environment_overrides:
+                env.update(
+                    {str(key): str(value) for key, value in environment_overrides.items()}
+                )
 
             # Execute with streaming
             if self.config.cli == AgentCLI.COPILOT:
@@ -258,6 +321,9 @@ class AgentExecutor:
                     json_content_extractor=json_content_extractor,
                     streaming_output_file=streaming_output_file,
                     env=env,
+                    process_cwd=process_cwd,
+                    execution_control=execution_control,
+                    allow_session_recovery=not exact_session,
                 )
             else:
                 # Only use response parser for stream-json formats
@@ -287,6 +353,8 @@ class AgentExecutor:
                     json_content_extractor=json_content_extractor,
                     streaming_output_file=streaming_output_file,
                     env=env,
+                    process_cwd=process_cwd,
+                    execution_control=execution_control,
                 )
 
             # Extract session ID if needed
@@ -325,11 +393,103 @@ class AgentExecutor:
         except Exception as e:
             raise AgentExecutionError(f"Agent execution failed: {e}") from e
 
+    def execute_event_driver(
+        self,
+        prompt: str,
+        *,
+        expected_session_id: str | None = None,
+        event_id: str | None = None,
+        on_acceptance: Callable[[], None] | None = None,
+        allowed_tools: Optional[List[str]] = None,
+        allowed_directories: Optional[List[str]] = None,
+        execution_control: AgentExecutionControl | None = None,
+    ) -> EventDriverExecutionResult:
+        """Run one callback process without ordinary session recovery semantics."""
+        strategy = self._get_cli_strategy()
+        if not strategy.event_driver_conforming:
+            raise AgentExecutionError(
+                f"{self.config.cli.value} lacks the event-driven callback contract",
+                error_type="event_driver_nonconforming",
+            )
+        if expected_session_id is not None:
+            if not expected_session_id.strip():
+                raise ValueError("event-driver exact session must be non-empty")
+            if not isinstance(event_id, str) or not event_id.strip():
+                raise ValueError("event-driver delivery requires an event identity")
+            if event_id not in prompt:
+                raise ValueError("event-driver prompt does not contain its event identity")
+            self.config.session_id = expected_session_id
+
+        translated_tools = self._translate_tool_names(allowed_tools)
+        provider_tools = (
+            strategy.translate_allowed_tools(translated_tools)
+            if translated_tools is not None
+            else None
+        )
+        command, process_cwd = self._build_controlled_command(
+            strategy,
+            prompt,
+            provider_tools,
+            allowed_directories,
+            execution_control,
+            event_driver=True,
+        )
+
+        records: list[dict[str, Any]] = []
+        structured_record_limit = _structured_record_limit(execution_control)
+        acceptance_observed = False
+
+        def observe_record(_record: dict[str, Any]) -> None:
+            nonlocal acceptance_observed
+            if (
+                expected_session_id is not None
+                and not acceptance_observed
+                and strategy.accepts_event_driver_callback(
+                    tuple(records),
+                    session_id=expected_session_id,
+                    event_id=event_id,
+                )
+            ):
+                if on_acceptance is not None:
+                    on_acceptance()
+                acceptance_observed = True
+
+        self._execute_with_streaming(
+            cmd=command,
+            cli_name=self.config.cli.value.capitalize(),
+            parse_stream_json=True,
+            json_content_extractor=lambda _record: None,
+            env=strategy.build_environment(),
+            process_cwd=process_cwd,
+            execution_control=execution_control,
+            structured_records=records,
+            structured_record_observer=observe_record,
+            require_terminal_stream_event=True,
+        )
+        bounded_records = tuple(records[:structured_record_limit])
+        if expected_session_id is None:
+            session_id = strategy.extract_event_driver_session(bounded_records)
+            accepted = False
+        else:
+            session_id = expected_session_id
+            accepted = acceptance_observed or strategy.accepts_event_driver_callback(
+                bounded_records,
+                session_id=expected_session_id,
+                event_id=event_id,
+            )
+        return EventDriverExecutionResult(
+            session_id=session_id,
+            accepted=accepted,
+            event_id=event_id,
+            records=bounded_records,
+        )
+
     def preview_cli_command_args(
         self,
         prompt: str,
         allowed_tools: Optional[List[str]] = None,
         allowed_directories: Optional[List[str]] = None,
+        execution_control: AgentExecutionControl | None = None,
     ) -> List[str]:
         """Build the CLI arguments that would be used for execution.
 
@@ -339,10 +499,104 @@ class AgentExecutor:
         cli_strategy = self._get_cli_strategy()
         translated_tools = self._translate_tool_names(allowed_tools)
         cli_translated_tools = (
-            cli_strategy.translate_allowed_tools(translated_tools) if translated_tools else None
+            cli_strategy.translate_allowed_tools(translated_tools)
+            if translated_tools is not None
+            else None
         )
-        cmd = cli_strategy.build_command(prompt, cli_translated_tools, allowed_directories)
+        cmd, _ = self._build_controlled_command(
+            cli_strategy,
+            prompt,
+            cli_translated_tools,
+            allowed_directories,
+            execution_control,
+        )
         return cmd[1:]
+
+    def _build_controlled_command(
+        self,
+        cli_strategy: AbstractCLI,
+        prompt: str,
+        allowed_tools: Optional[List[str]],
+        allowed_directories: Optional[List[str]],
+        execution_control: AgentExecutionControl | None,
+        *,
+        event_driver: bool = False,
+    ) -> tuple[List[str], Path | None]:
+        """Build a command and preserve an explicit empty capability scope."""
+        builder = (
+            cli_strategy.build_event_driver_command
+            if event_driver
+            else cli_strategy.build_command
+        )
+        cmd = builder(prompt, allowed_tools, allowed_directories)
+        process_cwd = None
+        if execution_control is not None and execution_control.working_directory is not None:
+            process_cwd = execution_control.working_directory.expanduser().resolve()
+            process_cwd.mkdir(parents=True, exist_ok=True)
+
+        decision_only = allowed_tools == [] and allowed_directories == []
+        if not decision_only:
+            return cmd, process_cwd
+        if process_cwd is None:
+            raise ValueError("an explicit empty capability scope requires an isolated directory")
+
+        if self.config.cli == AgentCLI.CLAUDE:
+            cmd.extend(
+                [
+                    "--tools",
+                    "",
+                    "--strict-mcp-config",
+                    "--mcp-config",
+                    "{}",
+                    "--disable-slash-commands",
+                ]
+            )
+        elif self.config.cli == AgentCLI.CODEX:
+            cwd_index = cmd.index("-C") + 1
+            cmd[cwd_index] = str(process_cwd)
+            exec_index = cmd.index("exec")
+            cmd[exec_index:exec_index] = [
+                "--sandbox",
+                "read-only",
+                "--disable",
+                "shell_tool",
+                "--disable",
+                "unified_exec",
+                "--disable",
+                "apps",
+                "--disable",
+                "plugins",
+                "--disable",
+                "multi_agent",
+                "--disable",
+                "browser_use",
+                "--disable",
+                "view_image",
+                "--disable",
+                "image_generation",
+            ]
+            exec_index = cmd.index("exec")
+            scoped_options = [
+                "--ignore-user-config",
+                "--ignore-rules",
+                "--skip-git-repo-check",
+                "--strict-config",
+            ]
+            if "resume" in cmd[exec_index + 1 :]:
+                resume_index = cmd.index("resume", exec_index + 1)
+                cmd[resume_index + 1 : resume_index + 1] = scoped_options
+            else:
+                cmd[exec_index + 1 : exec_index + 1] = scoped_options
+        elif self.config.cli == AgentCLI.GEMINI:
+            (process_cwd / ".geminiignore").touch(exist_ok=True)
+            policy_path = process_cwd / "gemini-decision-only.toml"
+            policy_path.write_text(
+                '[[rule]]\ntoolName = "*"\ndecision = "deny"\npriority = 999\n',
+                encoding="utf-8",
+            )
+            policy_path.chmod(0o600)
+            cmd.extend(["--policy", str(policy_path)])
+        return cmd, process_cwd
 
     def preview_cli_environment(self) -> dict[str, str]:
         """Build the CLI environment that would be used for execution."""
@@ -386,6 +640,7 @@ class AgentExecutor:
         update_cmd_with_session_fn: Callable[[List[str], str], List[str]],
         max_retries: int = 3,
         _retry_count: int = 0,
+        allow_session_recovery: bool = True,
         **streaming_kwargs,
     ) -> AgentResponse:
         """Generic session recovery wrapper for all CLIs with session support.
@@ -431,6 +686,11 @@ class AgentExecutor:
             is_session_error = any(phrase in error_msg for phrase in session_error_phrases)
 
             if is_session_error or is_prompt_too_long:
+                if not allow_session_recovery:
+                    # An exact continuation names a caller-owned conversation.
+                    # Retrying cold could create a different thread and deliver
+                    # a callback to the wrong user-facing session.
+                    raise
                 # Check if we've exceeded max retries
                 if _retry_count >= max_retries:
                     print(f"\n❌ Could not recover from error after {max_retries} attempts\n")
@@ -480,6 +740,7 @@ class AgentExecutor:
                     update_cmd_with_session_fn=update_cmd_with_session_fn,
                     max_retries=max_retries,
                     _retry_count=_retry_count + 1,
+                    allow_session_recovery=allow_session_recovery,
                     **streaming_kwargs,
                 )
             else:
@@ -506,6 +767,7 @@ class AgentExecutor:
             "rate limit",
             "status 429",
             "quota exceeded",
+            "exceeded your monthly quota",
             "you have no quota",
             "capierror: 402",
         ],
@@ -521,6 +783,14 @@ class AgentExecutor:
             "quota exceeded",
             "you've hit your usage limit",
             "chatgpt.com/codex/settings/usage",
+        ],
+    }
+
+    PROVIDER_OVERLOADED_PATTERNS = {
+        "codex": [
+            "server_overloaded",
+            "selected model is at capacity",
+            "model is at capacity",
         ],
     }
 
@@ -582,6 +852,8 @@ class AgentExecutor:
         self, cli_name: str, error_text: str
     ) -> tuple[Optional[str], Optional[str]]:
         """Classify CLI execution errors into workflow-level retry categories."""
+        if self._is_provider_overloaded_error(error_text):
+            return "provider_overloaded", self._format_provider_overloaded_display_message(cli_name)
         if self._is_rate_limit_error(error_text):
             return "rate_limit", self._format_rate_limit_display_message(cli_name, error_text)
         if self._is_cli_unavailable_error(error_text):
@@ -593,6 +865,17 @@ class AgentExecutor:
                 cli_name, error_text
             )
         return None, None
+
+    def _is_provider_overloaded_error(self, error_text: str) -> bool:
+        """Check whether the selected provider is temporarily at capacity."""
+        error_lower = error_text.lower()
+        cli_patterns = self.PROVIDER_OVERLOADED_PATTERNS.get(self.config.cli.value, [])
+        return any(pattern in error_lower for pattern in cli_patterns)
+
+    @staticmethod
+    def _format_provider_overloaded_display_message(cli_name: str) -> str:
+        """Return an accurate durable summary for temporary provider capacity."""
+        return f"{cli_name} provider is temporarily at capacity."
 
     def _is_model_not_found_error(self, error_text: str) -> bool:
         """Check if error message indicates the configured model is invalid or unavailable."""
@@ -631,14 +914,23 @@ class AgentExecutor:
         """Extract known error text from a stream-json event."""
         parts: List[str] = []
 
-        error = data.get("error")
-        if isinstance(error, str):
-            parts.append(error)
-        elif isinstance(error, dict):
-            for key in ("message", "type", "code"):
-                value = error.get(key)
-                if isinstance(value, str):
-                    parts.append(value)
+        def append_error(error: object) -> None:
+            if isinstance(error, str):
+                parts.append(error)
+            elif isinstance(error, dict):
+                for key in ("message", "type", "code", "codex_error_info"):
+                    value = error.get(key)
+                    if isinstance(value, str):
+                        parts.append(value)
+
+        append_error(data.get("error"))
+
+        # Codex's event stream wraps terminal errors in the event payload.
+        # Inspect that authoritative nested value before a non-zero process
+        # exit reduces it to an ambiguous generic failure.
+        payload = data.get("payload")
+        if isinstance(payload, dict):
+            append_error(payload.get("error"))
 
         message = data.get("message")
         if isinstance(message, str):
@@ -806,6 +1098,11 @@ class AgentExecutor:
         parse_stream_json: bool = False,
         json_content_extractor: Optional[Callable[[dict], Optional[str]]] = None,
         streaming_output_file: Optional[str] = None,
+        process_cwd: Path | None = None,
+        execution_control: AgentExecutionControl | None = None,
+        structured_records: list[dict[str, Any]] | None = None,
+        structured_record_observer: Callable[[dict[str, Any]], None] | None = None,
+        require_terminal_stream_event: bool = False,
     ) -> AgentResponse:
         """Execute command with streaming output.
 
@@ -833,6 +1130,7 @@ class AgentExecutor:
                 text=True,
                 bufsize=1,  # Line buffered
                 env=env,
+                cwd=str(process_cwd) if process_cwd is not None else None,
             )
         except FileNotFoundError as e:
             # CLI command not found - provide user-friendly error
@@ -886,10 +1184,12 @@ class AgentExecutor:
                     err.cli_command_args = cmd[1:]
                     raise err
 
-        # Print header
-        print(f"\n{'=' * 80}")
-        print(f"{cli_name} Response (streaming):")
-        print(f"{'=' * 80}")
+        # Agent narration may be muted for a supervising driver. Parsing, durable
+        # streaming logs, lifecycle events, and error output remain unaffected.
+        if self.stream_output:
+            print(f"\n{'=' * 80}")
+            print(f"{cli_name} Response (streaming):")
+            print(f"{'=' * 80}")
 
         output_lines = []
         response_text = ""
@@ -898,6 +1198,28 @@ class AgentExecutor:
         session_id = None
         model: Optional[str] = None
         permission_denials: List[PermissionDenial] = []
+        retained_output_bytes = 0
+        retained_output_lines = 0
+        structured_record_limit = _structured_record_limit(execution_control)
+        execution_limit_reached = Event()
+
+        def trigger_execution_limit() -> None:
+            if execution_limit_reached.is_set():
+                return
+            execution_limit_reached.set()
+            try:
+                process.terminate()
+            except OSError:
+                pass
+
+        execution_timer = None
+        if execution_control is not None and execution_control.max_duration_seconds is not None:
+            execution_timer = Timer(
+                execution_control.max_duration_seconds,
+                trigger_execution_limit,
+            )
+            execution_timer.daemon = True
+            execution_timer.start()
 
         # Add idle timeout to prevent hanging when process stops outputting
         import select
@@ -911,11 +1233,20 @@ class AgentExecutor:
         )  # seconds - timeout if no new output
         last_output_time = time.time() if use_idle_timeout else None
         idle_timeout_triggered = False  # Track if we exited due to idle timeout
-        # Track whether the CLI ever emitted a structured "the run is done"
-        # signal (stream-json's terminal `type: "result"` message). This is
-        # what lets us tell "finished, just slow to exit" apart from "still
-        # actively working when we had to kill it" below.
-        received_result_message = False
+        # A workflow-backed structured stream must end in an explicit completion
+        # event. A zero subprocess exit alone is not enough evidence: a provider
+        # can stop while it is mid-turn and leave the workflow with only partial
+        # output. Direct executor consumers without a durable iteration log keep
+        # their existing compatibility behavior.
+        # ``result`` is the completion event used by the stream-json CLIs;
+        # Codex uses ``turn.completed``. Treat both as part of CAFE's generic
+        # stream contract so the phase layer can durably record an interrupted
+        # iteration rather than mistaking partial work for a completed handoff.
+        terminal_stream_event_types = {"result", "turn.completed"}
+        received_terminal_stream_event = False
+        requires_terminal_stream_event = parse_stream_json and (
+            streaming_output_file is not None or require_terminal_stream_event
+        )
 
         # Open streaming output file if provided
         streaming_file_handle = None
@@ -950,6 +1281,8 @@ class AgentExecutor:
         try:
             if process.stdout:
                 while True:
+                    if execution_limit_reached.is_set():
+                        break
                     # Check if stdout has data available (with timeout)
                     if use_idle_timeout:
                         # Unix-like systems: use select with timeout to prevent indefinite blocking
@@ -958,6 +1291,8 @@ class AgentExecutor:
                         )  # 1 second timeout per check
 
                         if not ready:
+                            if execution_limit_reached.is_set():
+                                break
                             # No data available, check if idle timeout exceeded
                             if time.time() - last_output_time > idle_timeout:
                                 print(
@@ -970,6 +1305,22 @@ class AgentExecutor:
                     # Read the line
                     line = process.stdout.readline()
                     if not line:
+                        break
+
+                    line_bytes = len(line.encode("utf-8", errors="replace"))
+                    retained_output_lines += 1
+                    retained_output_bytes += line_bytes
+                    if execution_control is not None and (
+                        (
+                            execution_control.max_output_lines is not None
+                            and retained_output_lines > execution_control.max_output_lines
+                        )
+                        or (
+                            execution_control.max_output_bytes is not None
+                            and retained_output_bytes > execution_control.max_output_bytes
+                        )
+                    ):
+                        trigger_execution_limit()
                         break
 
                     # Update last output time (if tracking)
@@ -1004,6 +1355,12 @@ class AgentExecutor:
                         try:
                             data = json.loads(line.strip())
 
+                            if isinstance(data, dict) and structured_records is not None:
+                                if len(structured_records) < structured_record_limit:
+                                    structured_records.append(dict(data))
+                                    if structured_record_observer is not None:
+                                        structured_record_observer(dict(data))
+
                             # Always collect the line for response_parser (e.g., Gemini needs last line)
                             output_lines.append(line)
 
@@ -1028,8 +1385,13 @@ class AgentExecutor:
                             if "error" in data and data.get("error") == "invalid_request":
                                 # Extract error message from response text
                                 error_text = response_text or ""
-                                if "message" in data and "content" in data["message"]:
-                                    for content_block in data["message"]["content"]:
+                                message = data.get("message")
+                                if isinstance(message, dict) and isinstance(
+                                    message.get("content"), list
+                                ):
+                                    for content_block in message["content"]:
+                                        if not isinstance(content_block, dict):
+                                            continue
                                         if content_block.get("type") == "text":
                                             error_text = content_block.get("text", "")
 
@@ -1094,35 +1456,45 @@ class AgentExecutor:
                             if "model" in data and data["model"]:
                                 model = data["model"]
 
-                            # Check for result message (indicates completion for Gemini/Claude)
-                            # When type is "result", the CLI has completed and we should stop reading
-                            if data.get("type") == "result":
-                                received_result_message = True
+                            # A terminal event is the only durable confirmation
+                            # that a structured agent stream finished. Do not
+                            # infer completion from an otherwise-successful
+                            # process exit: that loses mid-turn failures.
+                            if data.get("type") in terminal_stream_event_types:
+                                received_terminal_stream_event = True
                                 break
 
                             # Extract content using custom extractor or default Claude extractor
                             # FIXME: Should implement extractors seperately for each CLI
                             if json_content_extractor:
                                 content = json_content_extractor(data)
-                                if content:
+                                if content and self.stream_output:
                                     print(content, end="\n\n", flush=True)
+                                if content:
                                     streaming_log.append(content)
                                     response_text = content  # Only save the last fragment
                             else:
                                 # Default Claude format extractor
                                 # Extract content from message.content[] (new Claude format)
-                                if "message" in data and "content" in data["message"]:
-                                    for content_block in data["message"]["content"]:
+                                message = data.get("message")
+                                if isinstance(message, dict) and isinstance(
+                                    message.get("content"), list
+                                ):
+                                    for content_block in message["content"]:
+                                        if not isinstance(content_block, dict):
+                                            continue
                                         if content_block.get("type") == "text":
                                             text = content_block.get("text", "")
-                                            print(text, end="\n\n", flush=True)
+                                            if self.stream_output:
+                                                print(text, end="\n\n", flush=True)
                                             streaming_log.append(text)
                                             response_text = text  # Only save the last fragment
 
                                 # Old format: direct content field
                                 elif "content" in data:
                                     content = data["content"]
-                                    print(content, end="\n\n", flush=True)
+                                    if self.stream_output:
+                                        print(content, end="\n\n", flush=True)
                                     streaming_log.append(content)
                                     response_text = content  # Only save the last fragment
 
@@ -1151,15 +1523,23 @@ class AgentExecutor:
                                 persist_safe_stream_error(err)
                                 raise err
 
-                            # Non-JSON line, just print it
-                            print(line, end="")
+                            # Preserve non-JSON output even when console narration is muted.
+                            if self.stream_output:
+                                print(line, end="")
                             output_lines.append(line)
                     else:
                         # Simple line-by-line streaming (Copilot style)
-                        print(line, end="")
+                        if self.stream_output:
+                            print(line, end="")
                         output_lines.append(line)
                         streaming_log.append(line)  # Record each line to streaming_log
+        except AgentExecutionError:
+            if execution_timer is not None:
+                execution_timer.cancel()
+            raise
         except KeyboardInterrupt:
+            if execution_timer is not None:
+                execution_timer.cancel()
             print(f"\n\n⚠️  Interrupted by user, terminating {cli_name} process...")
             process.terminate()
             try:
@@ -1172,8 +1552,40 @@ class AgentExecutor:
             if streaming_file_handle:
                 streaming_file_handle.close()
             raise
+        except BaseException:
+            if execution_timer is not None:
+                execution_timer.cancel()
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=2)
+            raise
 
-        print(f"\n{'=' * 80}\n")
+        if execution_timer is not None:
+            execution_timer.cancel()
+
+        if execution_limit_reached.is_set():
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=2)
+            err = AgentExecutionError(
+                f"{cli_name} execution exceeded its bounded decision budget",
+                error_type="execution_limit",
+                display_message=(
+                    f"{cli_name} exceeded the configured response time or output limit."
+                ),
+            )
+            err.cli_command_args = cmd[1:]
+            persist_safe_stream_error(err)
+            raise err
+
+        if self.stream_output:
+            print(f"\n{'=' * 80}\n")
 
         post_output_timeout_triggered = False
 
@@ -1199,12 +1611,12 @@ class AgentExecutor:
             # Treat as success only if we can actually tell the run finished:
             # either the CLI has no structured completion signal at all (e.g.
             # Copilot's raw line streaming, where this ambiguity has always
-            # existed), or it does and we saw that signal (`received_result_message`)
+            # existed), or it does and we saw that signal (`received_terminal_stream_event`)
             # before going idle. Otherwise the idle timeout fired while the
             # CLI was still actively working (e.g. stuck on an inner tool
             # call) -- that's a genuine timeout, not a success, and must be
             # left as a non-zero returncode so it can be classified below.
-            if output_lines and (not parse_stream_json or received_result_message):
+            if output_lines and (not parse_stream_json or received_terminal_stream_event):
                 print(f"✓ Got output from {cli_name}, treating as success despite idle timeout")
                 returncode = 0
         else:
@@ -1231,7 +1643,7 @@ class AgentExecutor:
                 # Same reasoning as the idle-timeout branch above: only treat
                 # this as "finished but slow to exit" when we have a way to
                 # know the run actually finished.
-                if output_lines and (not parse_stream_json or received_result_message):
+                if output_lines and (not parse_stream_json or received_terminal_stream_event):
                     print(f"✓ Got output from {cli_name}, treating as success despite timeout")
                     returncode = 0
 
@@ -1253,9 +1665,7 @@ class AgentExecutor:
                     combined_output,
                 )
 
-                # Preserve the executor-local timeout classification for
-                # reporting. A durable operation can only originate from an
-                # explicit, pre-launch operation decision.
+                # Preserve the executor-local timeout classification for reporting.
                 if error_type is None and (idle_timeout_triggered or post_output_timeout_triggered):
                     error_type = "timeout"
                     display_message = (
@@ -1271,6 +1681,18 @@ class AgentExecutor:
                 err.cli_command_args = cmd[1:]
                 persist_safe_stream_error(err)
                 raise err
+
+        if requires_terminal_stream_event and not received_terminal_stream_event:
+            err = AgentExecutionError(
+                f"{cli_name} execution ended without a terminal stream event",
+                error_type="incomplete_stream",
+                display_message=(
+                    f"{cli_name} ended before reporting completion; retry the workflow step."
+                ),
+            )
+            err.cli_command_args = cmd[1:]
+            persist_safe_stream_error(err)
+            raise err
 
         # Append stderr to streaming output file (for debugging token usage parsing)
         if streaming_file_handle and stderr_output:

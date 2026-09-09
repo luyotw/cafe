@@ -12,6 +12,13 @@
 - [File/component 1]
 - [File/component 2]
 
+## Confirmed Implementation Approach
+
+- **Recommended direction:** [The user-confirmed implementation direction]
+- **Will do:** [The required scope this Plan covers]
+- **Will not do:** [Related work intentionally excluded]
+- **Key trade-offs:** [Material scope, cost, reliability, or maintenance trade-offs; write "None" if none apply]
+
 ## Issue Decomposition Assessment
 
 - Decision: `keep` or `split`
@@ -71,7 +78,7 @@ _(If N or M is 0, one sentence explains why.)_
 
 ### Phase 4: Verification
 - [ ] Verify the bug-reproducing test now passes
-- [ ] Run all existing tests to check for regressions
+- [ ] Let the repository's configured Git hooks or CI run its regression gate; do not duplicate that gate inside develop
 - [ ] Test edge cases manually
 - [ ] Add additional test cases if needed
 

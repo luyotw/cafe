@@ -8,6 +8,8 @@ from typer.testing import CliRunner
 
 from cafe.ui.cli import app
 
+pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
+
 
 @pytest.fixture
 def runner():
@@ -29,7 +31,7 @@ class TestPrepareAutoSync:
         runner: CliRunner,
         tmp_path: Path,
     ) -> None:
-        """Test that prepare triggers both agent and template sync at the beginning."""
+        """Prepare refreshes templates without materializing agent snapshots."""
         # Setup .cafe/config.yaml
         cafe_dir = tmp_path / ".cafe"
         cafe_dir.mkdir(parents=True)
@@ -55,10 +57,14 @@ class TestPrepareAutoSync:
                 # Mock other prepare dependencies to avoid full execution
                 with patch("cafe.ui.cli._ensure_default_content"):
                     with patch("cafe.ui.cli.console"):
-                        result = runner.invoke(app, ["prepare"], input="test-issue\n")
+                        result = runner.invoke(
+                            app,
+                            ["prepare", "--no-auto-create-pr"],
+                            input="test-issue\n",
+                        )
 
-        # Verify both sync functions were called
-        assert mock_sync_agents.called, "sync_agents should be called during prepare"
+        assert result.exit_code in {0, 1}
+        mock_sync_agents.assert_not_called()
         assert mock_sync_templates.called, "sync_templates should be called during prepare"
 
     @patch("cafe.ui.cli.console")
@@ -74,7 +80,7 @@ class TestPrepareAutoSync:
         runner: CliRunner,
         tmp_path: Path,
     ) -> None:
-        """Test that prepare displays sync summary message."""
+        """Prepare reports template refresh without an agent-copy summary."""
         # Setup .cafe/config.yaml
         cafe_dir = tmp_path / ".cafe"
         cafe_dir.mkdir(parents=True)
@@ -97,11 +103,14 @@ class TestPrepareAutoSync:
                 mock_git_ops.return_value.branch_exists.return_value = False
 
                 with patch("cafe.ui.cli._ensure_default_content"):
-                    result = runner.invoke(app, ["prepare"], input="test-issue\n")
+                    result = runner.invoke(
+                        app,
+                        ["prepare", "--no-auto-create-pr"],
+                        input="test-issue\n",
+                    )
 
-        # Verify summary message was displayed
         assert mock_console.print.called
-        # Check for the combined summary message format
         call_args = str(mock_console.print.call_args_list)
-        assert ("2 agent(s)" in call_args and "3 template(s)" in call_args) or \
-               ("agent" in call_args.lower() and "template" in call_args.lower())
+        assert "3 template(s)" in call_args
+        assert "agent(s)" not in call_args
+        mock_sync_agents.assert_not_called()

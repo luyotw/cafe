@@ -87,6 +87,36 @@ class TestCloseCommandPRMode:
         # Verify git merge was not called
         assert not hasattr(mock_git_ops, "merge") or not mock_git_ops.merge.called
 
+    def test_close_with_merged_pr_pulls_even_when_auto_create_is_false(
+        self, temp_repo_dir, mock_git_ops
+    ):
+        """A merged remote PR is authoritative even when local PR mode is stale."""
+        issue_dir = temp_repo_dir / ".cafe" / "issues" / "test-issue"
+        issue_dir.mkdir(parents=True)
+        config_file = issue_dir / "issue.yaml"
+        config_data = {
+            "base_branch": "main",
+            "feature_branch": "test-issue",
+            "pr": {"auto_create": False},
+        }
+        with open(config_file, "w", encoding="utf-8") as f:
+            yaml.dump(config_data, f)
+
+        with patch("cafe.ui.cli.GitHubOps") as MockGitHubOps:
+            mock_github = MagicMock()
+            MockGitHubOps.return_value = mock_github
+            mock_github.get_pr_for_branch.return_value = {
+                "number": 123,
+                "state": "MERGED",
+                "isDraft": False,
+            }
+
+            result = runner.invoke(app, ["close"])
+
+        assert result.exit_code == 0
+        mock_git_ops.pull.assert_called_once()
+        mock_git_ops.merge.assert_not_called()
+
     def test_close_with_pr_auto_create_false_uses_git_merge(
         self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr
     ):

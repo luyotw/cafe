@@ -2,17 +2,35 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
-import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from cafe.core.blackboard import HandoffIntent
+import yaml
+
+from cafe.catalogs.resolver import global_catalog_lock
+from cafe.core.blackboard import BlackboardState, BlackboardStore, HandoffIntent
+from cafe.core.capabilities import (
+    CAPABILITY_ISSUE_COMMENT_ID,
+    default_capability_definition_dirs,
+    load_capability_registry,
+    run_capability_request,
+)
+from cafe.core.execution_boundary import (
+    EffectiveBoundary,
+    ExecutionClass,
+    ScriptLaunchRequest,
+    TrustSource,
+    snapshot_script_tree,
+)
 from cafe.core.hooks import BUILTIN_HOOKS, HookResult
 from cafe.core.hooks.script_schema import validate_script_args_schema
 from cafe.core.questions_schema import validate_questions_xml
+from cafe.core.sandbox_execution import MIGRATION_GUIDANCE, SandboxExecutor
 from cafe.core.status_codes import (
     PhaseStatusCode,
     StatusCodeParser,
@@ -45,6 +63,7 @@ class GenericPhase:
     GOTO_PATTERN = re.compile(r"GOTO\s*:\s*([a-zA-Z0-9_-]+)")
     PLACEHOLDER_PATTERN = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
     SCRIPT_HOOK_STAGES = {"before_execute", "after_execute"}
+    _CONFIRMED_ARTIFACT_SYNC_HOOK = object()
 
     def __init__(
         self,
@@ -166,14 +185,12 @@ class GenericPhase:
             lines.extend(runtime_files)
             lines.append("")
 
-        baton_intents = (
-            context.get("valid_baton_intents", "")
-            if context
-            else ""
-        ) or ", ".join(intent.value for intent in HandoffIntent)
+        baton_intents = (context.get("valid_baton_intents", "") if context else "") or ", ".join(
+            intent.value for intent in HandoffIntent
+        )
         runtime_context.append("Baton contract (single source of truth):")
         runtime_context.append(
-            '- write next_step_file as JSON with exactly these required fields: '
+            "- write next_step_file as JSON with exactly these required fields: "
             '{"version":1,"to_owner":"<agent|user|done>",'
             '"to_step":"<target>","intent":"<intent>"}'
         )
@@ -193,30 +210,21 @@ class GenericPhase:
             runtime_context.append(
                 f"- this step's defined transitions (intent→to_step): {context['step_transitions']}"
             )
+        if "confirm_output" in {
+            intent.strip() for intent in baton_intents.split(",") if intent.strip()
+        }:
+            runtime_context.append(
+                "- when requesting user output confirmation, handoff must be "
+                "to_owner='user', to_step='user', intent='confirm_output'; "
+                "the confirm_output transition names the continuation after the "
+                "human task is completed, not the baton target"
+            )
         runtime_context.append(
             "- when asking user questions, handoff must be to_owner='user', to_step='user', intent='need_clarification'"
         )
         runtime_context.append(
             "- stay within this prompt's listed shared skills + phase skill; do not invoke external workflow-driving skills (e.g. use-cafe-workflow)"
         )
-        issue_dir = str(context.get("issue_dir", "")) if context else ""
-        step = str(context.get("current_step") or context.get("step") or "") if context else ""
-        iteration_dir = str(context.get("iteration_dir", "")) if context else ""
-        playbook_id = str(context.get("playbook_id", "")) if context else ""
-        operation_run = (
-            f"cafe operation run --issue-dir {issue_dir} --step {step} "
-            f"--iteration-dir {iteration_dir} --playbook {playbook_id} -- <command>"
-        )
-        operation_status = (
-            f"cafe operation status --issue-dir {issue_dir} --step {step} "
-            f"--iteration-dir {iteration_dir} --playbook {playbook_id}"
-        )
-        runtime_context.append(
-            "- for legitimate long-running subprocess work that may exceed the agent tool window, "
-            f"use `{operation_run}` and recheck that same operation with `{operation_status}`; "
-            "do not relaunch the phase executor or command while it reports running"
-        )
-
         if context and context.get("blackboard_digest"):
             runtime_context.extend(
                 [
@@ -240,11 +248,29 @@ class GenericPhase:
             if canonical_skill_name(skill_name) == "cafe-pr":
                 runtime_context.extend(
                     [
-                        "For the PR phase, completion is local-only: finish the PR artifact and checklist, then update the workflow baton.",
+                        "For the PR agent phase, completion is local-first: finish the PR artifact and checklist, then update the workflow baton.",
                         "Do not wait for, verify, or require a remote GitHub branch/PR before updating the workflow baton.",
-                        "Remote PR publish happens later in the host-side publish_output hook.",
+                        "Remote PR publication, when enabled, happens later in the host-side publish_output hook.",
                     ]
                 )
+                publication_mode = str(context.get("pr_auto_create") or "").lower()
+                if publication_mode == "true":
+                    runtime_context.append(
+                        "The host must publish successfully after local completion; the "
+                        "published review handoff contains its verified PR URL."
+                    )
+                elif publication_mode == "false":
+                    runtime_context.append(
+                        "Workflow publication mode is local-only; the host-side hook will "
+                        "not publish, and No PR URL will exist."
+                    )
+        if context and context.get("session_recovery"):
+            runtime_context.extend(
+                [
+                    "Fresh-session recovery:",
+                    context["session_recovery"],
+                ]
+            )
         if context and context.get("resume_input_artifacts"):
             runtime_context.extend(
                 [
@@ -335,6 +361,7 @@ class GenericPhase:
         events: List[Dict[str, Any]] = []
         artifact_ready = True
         hook_kwargs = dict(hook_context or {})
+        hook_kwargs["shared_skill_invocations"] = list(shared_skill_invocations or [])
 
         before = self._run_hook_stage(
             "before_execute",
@@ -480,12 +507,35 @@ class GenericPhase:
         defaults = [
             name for name in self.DEFAULT_STAGE_HOOKS.get(stage, ()) if name not in declared
         ]
-        hook_entries = [*defaults, *declared]
+        trusted_hooks: list[object] = []
+        trusted_artifact = {
+            "cafe-spec": "spec",
+            "cafe-plan": "plan",
+        }.get(str(kwargs.get("skill_name") or ""))
+        if (
+            stage == "after_execute"
+            and trusted_artifact is not None
+            and kwargs["step_def"].get("output_artifact") == trusted_artifact
+            and self.skill_loader.get_skill_entry(str(kwargs["skill_name"])).source == "builtin"
+            and isinstance(kwargs.get("blackboard_state"), BlackboardState)
+            and isinstance(getattr(kwargs.get("phase"), "issue_dir", None), Path)
+        ):
+            trusted_hooks.append(self._CONFIRMED_ARTIFACT_SYNC_HOOK)
+        hook_entries = [*trusted_hooks, *defaults, *declared]
         aggregate = HookResult()
 
         for hook_entry in hook_entries:
             result: HookResult
-            if isinstance(hook_entry, str):
+            if hook_entry is self._CONFIRMED_ARTIFACT_SYNC_HOOK:
+                result = self._run_confirmed_artifact_sync_hook(
+                    stage=stage,
+                    step_def=kwargs["step_def"],
+                    skill_name=str(kwargs.get("skill_name", "")),
+                    context=kwargs.get("context"),
+                    response=kwargs.get("response"),
+                    hook_kwargs=kwargs,
+                )
+            elif isinstance(hook_entry, str):
                 hook_cls = self.hook_registry.get(str(hook_entry))
                 if hook_cls is None:
                     raise ValueError(f"Unknown hook '{hook_entry}' in stage '{stage}'")
@@ -532,6 +582,8 @@ class GenericPhase:
         response: Optional[str],
         hook_kwargs: Dict[str, Any],
     ) -> HookResult:
+        if "capability" in declaration:
+            raise ValueError("Capability hooks are runtime-owned")
         if stage not in self.SCRIPT_HOOK_STAGES:
             raise ValueError(
                 f"Script hooks are only supported in {sorted(self.SCRIPT_HOOK_STAGES)}"
@@ -565,112 +617,277 @@ class GenericPhase:
                     ]
                 )
 
-        script_path = self._resolve_script_path(skill_name=skill_name, script=script)
-        resolved_args = self._resolve_script_args(
-            args_template=args_template,
-            context=context or {},
-            hook_kwargs=hook_kwargs,
-        )
+        with global_catalog_lock(self.skill_loader.global_root):
+            script_path = self._resolve_script_path(skill_name=skill_name, script=script)
+            resolved_args = self._resolve_script_args(
+                args_template=args_template,
+                context=context or {},
+                hook_kwargs=hook_kwargs,
+            )
 
-        validation_errors: list[str] = []
-        if schema is not None:
-            validation_errors = validate_script_args_schema(args=resolved_args, schema=schema)
-            if validation_errors:
-                return HookResult(
-                    continue_pipeline=False,
-                    override_status_code=PhaseStatusCode.NEED_PERMISSION,
-                    events=[
-                        {
-                            "type": "script_hook",
-                            "step": str(hook_kwargs.get("step_name") or ""),
-                            "skill": skill_name,
-                            "stage": stage,
-                            "script": script,
-                            "status": "validation_failed",
-                            "exit_code": None,
-                            "stdout": "",
-                            "stderr": "",
-                            "validation_errors": validation_errors,
-                        }
-                    ],
+            validation_errors: list[str] = []
+            if schema is not None:
+                validation_errors = validate_script_args_schema(args=resolved_args, schema=schema)
+                if validation_errors:
+                    return HookResult(
+                        continue_pipeline=False,
+                        override_status_code=PhaseStatusCode.NEED_PERMISSION,
+                        events=[
+                            {
+                                "type": "script_hook",
+                                "step": str(hook_kwargs.get("step_name") or ""),
+                                "skill": skill_name,
+                                "stage": stage,
+                                "script": script,
+                                "status": "validation_failed",
+                                "exit_code": None,
+                                "stdout": "",
+                                "stderr": "",
+                                "validation_errors": validation_errors,
+                            }
+                        ],
+                    )
+
+            cwd = Path.cwd().resolve()
+
+            def request_for(
+                candidate: Path, *, runtime_root: Optional[Path] = None
+            ) -> ScriptLaunchRequest:
+                command = self._build_script_command(
+                    script_path=candidate, args=resolved_args
+                )
+                readable_roots = (cwd, runtime_root) if runtime_root is not None else (cwd,)
+                return ScriptLaunchRequest(
+                    execution_class=ExecutionClass.SANDBOX,
+                    trust_source=TrustSource.WORKFLOW,
+                    script=candidate,
+                    args=tuple(command[2:]),
+                    boundary=EffectiveBoundary(
+                        cwd=cwd,
+                        readable_roots=readable_roots,
+                        writable_roots=(cwd,),
+                        network_destinations=(),
+                        environment=os.environ,
+                    ),
+                    timeout_seconds=timeout_seconds or 60.0,
                 )
 
-        cmd = self._build_script_command(script_path=script_path, args=resolved_args)
-        try:
-            result = subprocess.run(
-                cmd,
-                cwd=str(Path.cwd().resolve()),
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=timeout_seconds,
+            try:
+                phase_skill_dir = self.skill_loader.get_skill_dir(skill_name)
+                runtime_entries = {phase_skill_dir.name: phase_skill_dir}
+                for invocation in hook_kwargs.get("shared_skill_invocations", []):
+                    declared_name = str(invocation).removeprefix("$").removeprefix("/")
+                    shared_skill_dir = self.skill_loader.get_skill_dir(declared_name)
+                    runtime_entries[shared_skill_dir.name] = shared_skill_dir
+                script_snapshot = snapshot_script_tree(
+                    script_path,
+                    allowed_root=phase_skill_dir.parent,
+                    runtime_entries=runtime_entries,
+                )
+            except (LookupError, OSError, ValueError) as exc:
+                script_snapshot = None
+                result = SandboxExecutor().deny(
+                    request_for(script_path), "script_identity_invalid", str(exc)
+                )
+
+        if script_snapshot is not None:
+            try:
+                result = SandboxExecutor().run(
+                    request_for(script_snapshot.path, runtime_root=script_snapshot.root),
+                    prepared_snapshot=script_snapshot,
+                )
+            finally:
+                script_snapshot.cleanup()
+        receipt = result.receipt.model_dump(mode="json")
+        event = {
+            "type": "script_hook",
+            "step": str(hook_kwargs.get("step_name") or ""),
+            "skill": skill_name,
+            "stage": stage,
+            "script": script,
+            "status": result.receipt.outcome,
+            "exit_code": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "validation_errors": [],
+            "execution_class": result.receipt.execution_class.value,
+            "trust_source": result.receipt.trust_source.value,
+            "canonical_identity": result.receipt.canonical_identity,
+            "correlation_id": result.receipt.correlation_id,
+            "effective_boundary": receipt["boundary"],
+            "receipt": receipt,
+        }
+        if result.receipt.outcome != "success":
+            event["migration"] = MIGRATION_GUIDANCE
+            return HookResult(
+                continue_pipeline=False,
+                override_status_code=PhaseStatusCode.NEED_PERMISSION,
+                events=[event],
             )
-        except subprocess.TimeoutExpired as exc:
-            stdout = self._normalize_process_output(exc.stdout)
-            stderr = self._normalize_process_output(exc.stderr)
+        return HookResult(events=[event])
+
+    def _run_confirmed_artifact_sync_hook(
+        self,
+        *,
+        stage: str,
+        step_def: Dict[str, Any],
+        skill_name: str,
+        context: Optional[Dict[str, str]],
+        response: Optional[str],
+        hook_kwargs: Dict[str, Any],
+    ) -> HookResult:
+        if stage != "after_execute":
+            raise ValueError("Confirmed artifact sync is restricted to after_execute")
+        phase_name = "spec" if skill_name == "cafe-spec" else "plan"
+        detected = self._detect_status_code(
+            response=response or "",
+            step_def=step_def,
+            context=context,
+            step_name=hook_kwargs.get("step_name"),
+        )
+        if detected != PhaseStatusCode.CONFIRMED.value:
+            return HookResult(
+                events=[
+                    {
+                        "type": "capability_hook",
+                        "capability": CAPABILITY_ISSUE_COMMENT_ID,
+                        "status": "skipped",
+                        "reason": "intent_mismatch",
+                    }
+                ]
+            )
+
+        phase = hook_kwargs.get("phase")
+        issue_dir = getattr(phase, "issue_dir", None)
+        output_file = hook_kwargs.get("output_file")
+        if not isinstance(issue_dir, Path) or not isinstance(output_file, Path):
             return HookResult(
                 continue_pipeline=False,
                 override_status_code=PhaseStatusCode.NEED_PERMISSION,
                 events=[
                     {
-                        "type": "script_hook",
-                        "step": str(hook_kwargs.get("step_name") or ""),
-                        "skill": skill_name,
-                        "stage": stage,
-                        "script": script,
-                        "status": "timeout",
-                        "exit_code": None,
-                        "stdout": stdout,
-                        "stderr": stderr,
-                        "validation_errors": [],
+                        "type": "capability_hook",
+                        "capability": CAPABILITY_ISSUE_COMMENT_ID,
+                        "status": "validation_failed",
+                        "reason": "trusted_context_missing",
                     }
                 ],
             )
-        if result.returncode != 0:
+        try:
+            issue_config = (
+                yaml.safe_load((issue_dir / "issue.yaml").read_text(encoding="utf-8")) or {}
+            )
+            phase_config = issue_config.get(phase_name) or {}
+            issue_id = str((issue_config.get("spec") or {}).get("issue_id") or "").strip()
+        except (OSError, yaml.YAMLError, AttributeError):
             return HookResult(
                 continue_pipeline=False,
                 override_status_code=PhaseStatusCode.NEED_PERMISSION,
                 events=[
                     {
-                        "type": "script_hook",
-                        "step": str(hook_kwargs.get("step_name") or ""),
-                        "skill": skill_name,
-                        "stage": stage,
-                        "script": script,
-                        "status": "failed",
-                        "exit_code": result.returncode,
-                        "stdout": result.stdout or "",
-                        "stderr": result.stderr or "",
-                        "validation_errors": [],
+                        "type": "capability_hook",
+                        "capability": CAPABILITY_ISSUE_COMMENT_ID,
+                        "status": "validation_failed",
+                        "reason": "issue_context_invalid",
+                    }
+                ],
+            )
+        if not phase_config.get("sync_github"):
+            return HookResult(
+                events=[
+                    {
+                        "type": "capability_hook",
+                        "capability": CAPABILITY_ISSUE_COMMENT_ID,
+                        "status": "skipped",
+                        "reason": "sync_disabled",
+                    }
+                ]
+            )
+        if not issue_id or not output_file.is_file():
+            return HookResult(
+                continue_pipeline=False,
+                override_status_code=PhaseStatusCode.NEED_PERMISSION,
+                events=[
+                    {
+                        "type": "capability_hook",
+                        "capability": CAPABILITY_ISSUE_COMMENT_ID,
+                        "status": "validation_failed",
+                        "reason": "confirmed_artifact_context_invalid",
                     }
                 ],
             )
 
+        repo_root = Path.cwd().resolve()
+        try:
+            output_arg = str(output_file.resolve().relative_to(repo_root))
+        except ValueError:
+            output_arg = str(output_file.resolve())
+        artifact_sha256 = hashlib.sha256(output_file.read_bytes()).hexdigest()
+        issue_write = f"github_issue_comment:{issue_id}"
+        registry = load_capability_registry(default_capability_definition_dirs(repo_root))
+        manifest = registry[CAPABILITY_ISSUE_COMMENT_ID]
+        args = {
+            "phase": phase_name,
+            "output": output_arg,
+            "issue_id": issue_id,
+            "artifact_sha256": artifact_sha256,
+        }
+        request = {
+            "capability": CAPABILITY_ISSUE_COMMENT_ID,
+            "args": args,
+            "effects": {
+                "writes": [issue_write],
+                "network_destinations": list(manifest.effects.network_destinations),
+                "browser_open": [],
+            },
+            "credentials": list(manifest.credentials),
+            "permissions": {
+                "network": list(manifest.permissions["network"]),
+                "writes": [issue_write],
+            },
+        }
+        run = run_capability_request(
+            repo_root=repo_root,
+            registry=registry,
+            capability_request=request,
+            output_file=output_file,
+        )
+        blackboard_state = hook_kwargs.get("blackboard_state")
+        if isinstance(blackboard_state, BlackboardState):
+            BlackboardStore(issue_dir).append_capability_receipt(blackboard_state, run.receipt)
+        event = {
+            "type": "capability_hook",
+            "capability": CAPABILITY_ISSUE_COMMENT_ID,
+            "status": "success" if run.receipt.get("success") else "denied",
+            "correlation_id": run.receipt.get("correlation_id"),
+        }
         return HookResult(
-            events=[
-                {
-                    "type": "script_hook",
-                    "step": str(hook_kwargs.get("step_name") or ""),
-                    "skill": skill_name,
-                    "stage": stage,
-                    "script": script,
-                    "status": "success",
-                    "exit_code": result.returncode,
-                    "stdout": result.stdout or "",
-                    "stderr": result.stderr or "",
-                    "validation_errors": [],
-                }
-            ]
+            continue_pipeline=bool(run.receipt.get("success")),
+            override_status_code=None
+            if run.receipt.get("success")
+            else PhaseStatusCode.NEED_PERMISSION,
+            events=[event],
         )
 
     @staticmethod
     def _parse_script_hook_declaration(
         declaration: Dict[str, Any],
     ) -> tuple[str, Dict[str, Any], Optional[Dict[str, Any]], list[str], Optional[float]]:
-        allowed_fields = {"script", "args", "schema", "when_intents", "timeout_seconds"}
+        allowed_fields = {
+            "script",
+            "args",
+            "schema",
+            "when_intents",
+            "timeout_seconds",
+            "execution_class",
+        }
         unknown = sorted(set(declaration.keys()) - allowed_fields)
         if unknown:
             raise ValueError(f"Script hook contains unsupported fields: {unknown}")
+
+        execution_class = declaration.get("execution_class", ExecutionClass.SANDBOX.value)
+        if execution_class != ExecutionClass.SANDBOX.value:
+            raise ValueError("Script hooks may only declare sandbox execution")
 
         script = declaration.get("script")
         if not isinstance(script, str) or not script.strip():
@@ -714,14 +931,6 @@ class GenericPhase:
             timeout_seconds,
         )
 
-    @staticmethod
-    def _normalize_process_output(value: Any) -> str:
-        if isinstance(value, str):
-            return value
-        if isinstance(value, bytes):
-            return value.decode("utf-8", errors="replace")
-        return ""
-
     def _resolve_script_path(self, *, skill_name: str, script: str) -> Path:
         script_path = Path(script)
         if script_path.is_absolute():
@@ -738,7 +947,7 @@ class GenericPhase:
 
         skill_dir = self.skill_loader.get_skill_dir(skill_name)
         scripts_dir = (skill_dir / "scripts").resolve()
-        candidate = (scripts_dir / Path(*script_parts)).resolve()
+        candidate = (scripts_dir / Path(*script_parts)).absolute()
 
         try:
             candidate.relative_to(scripts_dir)

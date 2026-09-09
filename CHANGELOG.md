@@ -2,6 +2,63 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.3] - 2026-09-10
+
+### Breaking changes
+
+- Replaced the built-in `default` playbook ID with `standard` without an alias.
+  Existing issue or project configuration that names `default` must be updated
+  before it can run on this release.
+- Removed the `cafe operation` background-job abstraction. Repository Git hooks
+  and CI now own default quality gates; verification receipts remain available
+  to workflows that explicitly declare them.
+
+### Added
+
+- Added `standard-qa` and `tdd-qa` development paths, a shared `qa` role,
+  the `cafe-qa` acceptance skill, `qa_feedback` contracts, and bounded
+  develop-review-QA correction loops.
+- Added a durable task inbox for inspecting, completing, and cancelling human
+  tasks, including correlated capability approvals and execution receipts.
+- Added registered host capabilities, strict execution boundaries, sandboxed
+  lifecycle scripts, and explicit policy checks for delegated Driver actions.
+- Added event-driven workflow hosting with durable Driver identity, callbacks,
+  status visibility, one-shot `cafe chat` prompts, and playbook-aware delivery
+  contracts.
+- Added transactional project and global catalog synchronization with bounded,
+  crash-safe recovery and explicit update approval.
+- Added project-scoped Slack notification routes for HumanTasks and callback
+  delivery failures.
+- Added fresh-session retry for interrupted workflow steps while preserving the
+  current phase, iteration, model, authority, and prior session evidence.
+
+### Changed
+
+- Made `pr.auto_create` the canonical publication setting and bound publication
+  choices and receipts through prepare, workflow execution, review, and closeout.
+- Made global helper publication explicit, transactional, and safe across
+  concurrent or interrupted installs, including Windows replacement behavior.
+- Moved review composition and fallback guidance into modular phase-skill
+  resources and added convergence checks for correction loops.
+- Strengthened playbook applicability, semantic plan confirmation, phase model
+  continuity, and user-owned Driver model-chain decisions.
+
+### Fixed
+
+- Prevented replay after durable transitions or terminal completion and
+  serialized concurrent blackboard, HumanTask, notification, and capability
+  updates.
+- Preserved interrupted, correction, and callback sessions across resume paths,
+  including incomplete provider streams and Codex host-thread delivery.
+- Hardened PR publication, base-branch drift detection, reconciled user tasks,
+  stale task supersession, and prepare workflow identity recovery.
+- Improved timeout, provider overload, Claude permission, Codex/Copilot quota,
+  and missing terminal-event classification without inferring successful phase
+  completion.
+
+See [the v0.3.3 release notes](docs/releases/v0.3.3.md) for upgrade guidance and
+details.
+
 ## [0.3.2] - 2026-08-18
 
 ### Changed
@@ -145,7 +202,7 @@ Major milestone release: deep refactor of CAFE's workflow engine from hardcoded 
 ### Added
 
 **Workflow Engine**
-- Playbook-driven workflows with config-selectable playbooks (built-in `default`, `hotfix`, `simple`, `editorial`, `research`, `incident`) and schema validation
+- Playbook-driven workflows with config-selectable playbooks (built-in `standard`, `hotfix`, `simple`, `editorial`, `research`, `incident`) and schema validation
 - `playbook simulate` command with static graph diagnostics
 - `BlackboardWorkflowRuntime` replaces `PlaybookRunner` with persistent artifacts and events
 - Baton-first handoffs with validated contracts persisted on issue root; reject-and-retry loop with `BatonRejected`

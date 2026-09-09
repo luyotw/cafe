@@ -21,7 +21,7 @@ import yaml
 from rich.console import Console
 
 from cafe.agents.manager import AgentManager
-from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
+from cafe.core.blackboard import BlackboardStore, HandoffContract, HandoffIntent, HandoffOwner
 from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.types import AgentCLI, AgentConfig, CliEntry
 from cafe.core.workflow_models import BatonRejected
@@ -176,6 +176,7 @@ def setup_agents(
     issue_name: Optional[str] = None,
     phase_name: Optional[str] = None,
     cafe_dir: Optional[Path] = None,
+    stream_agent_output: bool = True,
 ) -> AgentManager:
     """Build the active workflow agent from its complete phase chain."""
     if not issue_name or not phase_name:
@@ -204,7 +205,7 @@ def setup_agents(
     )
     chain = [CliEntry(cli=AgentCLI(cli), model=model) for cli, model in resolved.clis]
     primary = chain[0]
-    agent_manager = AgentManager(issue_name=issue_name)
+    agent_manager = AgentManager(issue_name=issue_name, stream_agent_output=stream_agent_output)
     agent_manager.register_agent(
         AgentConfig(
             name=resolved.name,
@@ -401,7 +402,7 @@ def _resolve_issue_playbook_name(issue_name: str) -> str:
         configured_playbook = config.get("playbook_id") or config.get("playbook")
         if configured_playbook:
             return str(configured_playbook)
-    return "default"
+    return "standard"
 
 
 def _load_playbook_step_names(playbook_name: str) -> List[str]:
@@ -463,14 +464,14 @@ def _resolve_selected_playbook(playbook_name: Optional[str]) -> str:
         except ConfigError:
             config_manager._config = config_manager.get_default_config()
     except ConfigError:
-        return "default"
+        return "standard"
 
     # playbook 設定存在 settings.playbook 之下（cafe config 寫入處），
-    # 舊版讀頂層 "playbook" 永遠取不到、退回 default，使 config 選 playbook 失效。
+    # 舊版讀頂層 "playbook" 永遠取不到、退回 standard，使 config 選 playbook 失效。
     selected = config_manager.get("settings.playbook", None)
     if not selected:
-        selected = config_manager.get("playbook", "default")
-    return str(selected) if selected else "default"
+        selected = config_manager.get("playbook", "standard")
+    return str(selected) if selected else "standard"
 
 
 def _build_workflow_role_agent_map(
@@ -501,7 +502,9 @@ def _build_workflow_step_executor(
     role_agent_map_override: Optional[Dict[str, str]] = None,
     step_user_inputs: Optional[Dict[str, str]] = None,
     interactive: bool = False,
+    open_pr: bool = False,
     extra_allowed_directories: Optional[List[str]] = None,
+    stream_agent_output: bool = True,
 ) -> GenericWorkflowStepExecutor:
     """Create the GenericPhase-backed executor for workflow steps."""
     role_agent_map = _build_workflow_role_agent_map(config_manager, playbook_data)
@@ -512,12 +515,18 @@ def _build_workflow_step_executor(
         issue_name=issue_name,
         playbook=playbook_data,
         generic_phase=generic_phase,
-        agent_manager=setup_agents(config_manager, issue_name=issue_name, phase_name=phase_name),
+        agent_manager=setup_agents(
+            config_manager,
+            issue_name=issue_name,
+            phase_name=phase_name,
+            stream_agent_output=stream_agent_output,
+        ),
         git_ops=_get_git_operations_cls()(),
         role_agent_map=role_agent_map,
         role_configs={},
         step_user_inputs=step_user_inputs,
         interactive=interactive,
+        open_pr=open_pr,
         config_allowed_directories=config_manager.get_allowed_directories(),
         extra_allowed_directories=extra_allowed_directories,
     )
@@ -584,14 +593,18 @@ def _consume_pending_chat_handoff(
             source="workflow.consume_handoff",
         )
     elif target_step == "user":
-        store.update_handoff_contract(
+        store.write_handoff_contract(
             blackboard,
-            from_step=contract.from_step,
-            to_owner=HandoffOwner.USER,
-            to_step="user",
-            intent=contract.intent,
-            status_code=contract.status_code,
-            source="workflow.consume_handoff",
+            HandoffContract(
+                version=contract.version,
+                from_step=contract.from_step,
+                to_owner=HandoffOwner.USER,
+                to_step="user",
+                intent=contract.intent,
+                status_code=contract.status_code,
+                created_at=contract.created_at,
+                source="workflow.consume_handoff",
+            ),
         )
     else:
         store.update_handoff_contract(
