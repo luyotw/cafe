@@ -555,6 +555,51 @@ class HumanTaskRecordStore:
             self._save(envelope)
             return updated
 
+    def refresh_pending_contract(
+        self,
+        *,
+        workflow_id: str,
+        task_id: str,
+        prompt: str,
+        expected_result: Mapping[str, Any],
+        continuations: Mapping[str, str],
+    ) -> HumanTask:
+        """Atomically apply one compatible runtime-policy update to an active task."""
+        with self.transaction():
+            envelope = self._load_for_workflow(workflow_id, create=False)
+            task = self._task(envelope, task_id)
+            if task.status is not HumanTaskStatus.PENDING:
+                raise HumanTaskCorrelationError(f"task {task.id} is not pending")
+            wait_state = envelope.wait_states[task.id]
+            if wait_state.released_at is not None or task.id in envelope.results:
+                raise HumanTaskCorrelationError(f"task {task.id} has no active wait state")
+            if task.capability_approval is not None:
+                raise HumanTaskCorrelationError(
+                    f"task {task.id} is a capability approval, not a runtime policy task"
+                )
+
+            refreshed = replace(
+                task,
+                prompt=_text(prompt, "prompt"),
+                expected_result=dict(expected_result),
+                continuations=_string_mapping_value(continuations, "continuations"),
+            )
+            if refreshed == task:
+                return task
+
+            envelope.tasks[task.id] = refreshed
+            self._append_event(
+                envelope,
+                "contract_refreshed",
+                task_id=task.id,
+                context={
+                    "policy_id": task.policy_id,
+                    "continuations": sorted(refreshed.continuations),
+                },
+            )
+            self._save(envelope)
+            return refreshed
+
     def transition_capability_approval_if_state(
         self,
         *,

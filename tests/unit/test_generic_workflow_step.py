@@ -18,6 +18,8 @@ from cafe.core.blackboard import (
     HandoffOwner,
 )
 from cafe.core.hooks import HookResult
+from cafe.core.human_task_records import HumanTaskRecordStore
+from cafe.core.human_tasks import agent_execution_interrupted_human_task
 from cafe.core.resume_user_input import CONTINUE_USER_INPUT
 from cafe.core.session_continuation import (
     SessionContinuation,
@@ -4396,6 +4398,44 @@ def test_execute_step_interrupted_fresh_session_surfaces_declared_current_scope(
     state.handoff_summary = "Continue the old batch."
     store.set_artifact(state, "batch_scope", str(replacement))
     store.set_artifact(state, "historical_output", str(historical))
+    policy, binding = agent_execution_interrupted_human_task(step_name="develop")
+    task_records = HumanTaskRecordStore(issue_dir)
+    recovery_task = task_records.materialize(
+        workflow_id=state.workflow_id,
+        step="develop",
+        iteration=1,
+        trigger="agent_execution_interrupted",
+        policy_id=policy.id,
+        prompt=policy.prompt,
+        expected_result=policy.model_dump(mode="json"),
+        continuations=binding.outcomes,
+        assignee_type="user",
+    )
+    task_records.complete(
+        workflow_id=state.workflow_id,
+        task_id=recovery_task.id,
+        payload={
+            "task": policy.id,
+            "decision": "retry_fresh_session",
+            "continuation": "develop",
+            "session_continuation": {
+                "schema_version": 1,
+                "policy": "new",
+                "reason": "user_selected_fresh_session",
+                "next_action": "resume_same_step_same_iteration",
+                "workflow_id": state.workflow_id,
+                "human_task_id": recovery_task.id,
+                "step": "develop",
+                "iteration": 1,
+                "previous": {
+                    "cli": "codex",
+                    "model": "gpt-5-test",
+                    "session_id": "interrupted-session",
+                },
+            },
+        },
+        source="command",
+    )
 
     playbook = {
         "playbook": {"id": "default"},
@@ -4430,11 +4470,17 @@ def test_execute_step_interrupted_fresh_session_surfaces_declared_current_scope(
 
     assert manager.prompts
     prompt = manager.prompts[0]
+    assert "Fresh-session recovery:" in prompt
+    assert "same phase, iteration, model, and authority" in prompt
     assert "Current resume scope (declared step inputs):" in prompt
     scope = prompt.split("Current resume scope (declared step inputs):", maxsplit=1)[1]
     scope = scope.split("Current user input for this iteration:", maxsplit=1)[0]
     assert str(replacement) in scope
     assert str(historical) not in scope
+    iteration_data = json.loads((current_iter / "iteration.json").read_text(encoding="utf-8"))
+    assert iteration_data["session_continuation"]["policy"] == "new"
+    assert iteration_data["session_recovery"]["previous"]["session_id"] == "interrupted-session"
+    assert iteration_data["model"] == "gpt-5-test"
 
 
 def _make_alignment_executor(tmp_path: Path, issue_name: str, step_def: dict, user_input: str):

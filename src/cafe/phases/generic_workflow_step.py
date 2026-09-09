@@ -33,6 +33,16 @@ from cafe.core.delta_packet import (
     persist_delta_packet,
 )
 from cafe.core.git import GitOperations
+from cafe.core.human_task_records import (
+    HumanTaskRecordError,
+    HumanTaskRecordStore,
+    HumanTaskStatus,
+)
+from cafe.core.human_tasks import (
+    AGENT_EXECUTION_FRESH_SESSION_DECISION,
+    AGENT_EXECUTION_INTERRUPTED_TASK_ID,
+    AGENT_EXECUTION_INTERRUPTED_TRIGGER,
+)
 from cafe.core.phase import Phase
 from cafe.core.playbook import resolve_playbook_skills, resolve_step_behavior
 from cafe.core.resume_user_input import (
@@ -162,6 +172,7 @@ class GenericWorkflowStepExecutor(Phase):
         # execute_step() replaces this with an explicit invocation-scoped
         # decision; AUTO only preserves legacy behavior for direct helper use.
         self._session_continuation = SessionContinuation.auto()
+        self._session_recovery: Optional[Dict[str, Any]] = None
         self._delta_packet_metadata: Optional[Dict[str, Any]] = None
         self._config_allowed_directories: List[str] = list(config_allowed_directories or [])
         self._extra_allowed_directories: List[str] = list(extra_allowed_directories or [])
@@ -285,6 +296,7 @@ class GenericWorkflowStepExecutor(Phase):
 
         self.iteration = self._get_next_iteration_number(step_name, self.phase_dir)
         self._resolved_iteration_user_input = None
+        self._session_recovery = None
         self._delta_packet_metadata = None
         iteration_dir = self._get_iteration_dir(self.iteration)
         iteration_dir.mkdir(parents=True, exist_ok=True)
@@ -330,6 +342,7 @@ class GenericWorkflowStepExecutor(Phase):
             agent_name=agent_name,
             step_def=step_def,
             same_invocation_retry=same_invocation_retry,
+            workflow_id=blackboard_state.workflow_id,
         )
         self._apply_step_agent_model(step_name=step_name, step_def=step_def, agent_name=agent_name)
         effective_agent_config = self._resolve_execution_config_for_iteration(
@@ -421,6 +434,8 @@ class GenericWorkflowStepExecutor(Phase):
             "skill_name": skill_name,
             "playbook_id": self.playbook.get("playbook", {}).get("id"),
         }
+        if self._session_recovery is not None:
+            phase_specific_data["session_recovery"] = dict(self._session_recovery)
         require_status_code = self._step_requires_status_code(step_name)
 
         def run_agent(prompt: str) -> str:
@@ -957,6 +972,7 @@ class GenericWorkflowStepExecutor(Phase):
         agent_name: str,
         step_def: Dict[str, Any],
         same_invocation_retry: bool = False,
+        workflow_id: Optional[str] = None,
     ) -> SessionContinuation:
         """Choose once per step invocation; retries update it after success."""
         previous_data = self._load_previous_iteration_data()
@@ -968,6 +984,13 @@ class GenericWorkflowStepExecutor(Phase):
             previous_iteration_data=previous_data,
             current_iteration_data=current_data,
         ):
+            recovery = self._selected_fresh_session_recovery(
+                workflow_id=workflow_id,
+                current_data=current_data,
+            )
+            if recovery is not None:
+                self._session_recovery = recovery
+                return SessionContinuation.new()
             exact = exact_continuation_from_context(
                 current_data,
                 configured_clis=configured_clis,
@@ -989,6 +1012,99 @@ class GenericWorkflowStepExecutor(Phase):
             return exact or SessionContinuation.new()
 
         return SessionContinuation.new()
+
+    def _selected_fresh_session_recovery(
+        self,
+        *,
+        workflow_id: Optional[str],
+        current_data: Optional[dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        """Return the latest applicable user-authorized session rotation."""
+        store = HumanTaskRecordStore(self.issue_dir)
+        if not workflow_id or not store.exists or not isinstance(current_data, dict):
+            return None
+
+        try:
+            matching = [
+                task
+                for task in store.tasks()
+                if task.workflow_id == workflow_id
+                and task.step == self.phase_name
+                and task.iteration == self.iteration
+                and task.trigger == AGENT_EXECUTION_INTERRUPTED_TRIGGER
+                and task.policy_id == AGENT_EXECUTION_INTERRUPTED_TASK_ID
+                and task.status is HumanTaskStatus.COMPLETED
+            ]
+        except HumanTaskRecordError as exc:
+            raise RuntimeError("Cannot validate fresh-session recovery evidence") from exc
+        if not matching:
+            return None
+
+        latest = max(matching, key=lambda task: (task.completed_at or "", task.id))
+        try:
+            result = store.get_result(latest.id)
+        except HumanTaskRecordError as exc:
+            raise RuntimeError("Cannot validate fresh-session recovery result") from exc
+        if result is None:
+            return None
+        if result.payload.get("decision") != AGENT_EXECUTION_FRESH_SESSION_DECISION:
+            return None
+
+        declared_decisions = latest.expected_result.get("decisions")
+        if not isinstance(declared_decisions, list) or not any(
+            isinstance(decision, Mapping)
+            and decision.get("id") == AGENT_EXECUTION_FRESH_SESSION_DECISION
+            for decision in declared_decisions
+        ):
+            raise RuntimeError("Fresh-session recovery was not declared by the completed task")
+        if latest.continuations.get(AGENT_EXECUTION_FRESH_SESSION_DECISION) != self.phase_name:
+            raise RuntimeError("Fresh-session recovery does not target the current step")
+
+        recovery = result.payload.get("session_continuation")
+        if not isinstance(recovery, Mapping):
+            raise RuntimeError("Fresh-session recovery result has no durable session evidence")
+        expected_binding = {
+            "policy": "new",
+            "workflow_id": workflow_id,
+            "human_task_id": latest.id,
+            "step": self.phase_name,
+            "iteration": self.iteration,
+        }
+        if any(recovery.get(key) != value for key, value in expected_binding.items()):
+            raise RuntimeError("Fresh-session recovery result does not match this workflow run")
+
+        previous = recovery.get("previous")
+        if not isinstance(previous, Mapping):
+            raise RuntimeError("Fresh-session recovery result has no prior-session identity")
+        previous_cli = previous.get("cli")
+        previous_session = previous.get("session_id")
+        if not isinstance(previous_cli, str) or not previous_cli.strip():
+            raise RuntimeError("Fresh-session recovery prior CLI is invalid")
+        if not isinstance(previous_session, str) or not previous_session.strip():
+            raise RuntimeError("Fresh-session recovery prior session is invalid")
+
+        persisted_recovery = current_data.get("session_recovery")
+        if persisted_recovery == dict(recovery):
+            current_session = current_data.get("session_id")
+            if isinstance(current_session, str) and current_session != previous_session:
+                return None
+            return dict(recovery)
+
+        if current_data.get("cli") != previous_cli:
+            return None
+        if current_data.get("session_id") != previous_session:
+            return None
+        previous_model = previous.get("model")
+        current_model = current_data.get("model")
+        if (
+            isinstance(previous_model, str)
+            and previous_model
+            and isinstance(current_model, str)
+            and current_model
+            and current_model != previous_model
+        ):
+            return None
+        return dict(recovery)
 
     def _git_snapshot(self) -> Dict[str, str]:
         snapshot: Dict[str, str] = {}
@@ -1287,6 +1403,13 @@ class GenericWorkflowStepExecutor(Phase):
             "behavior_completion": behavior.completion,
             "publish_confirmation": behavior.publish_confirmation,
         }
+        if self._session_recovery is not None:
+            context["session_recovery"] = (
+                "The user explicitly selected a fresh provider session after an interruption. "
+                "Continue the same phase, iteration, model, and authority. Reconstruct the "
+                "current state only from the bounded runtime files and declared inputs in this "
+                "prompt; do not assume memory from the previous provider session."
+            )
         publication_choice = validated_pr_auto_create
         if publication_choice is None:
             publication_choice = self._get_issue_config_value(

@@ -153,6 +153,69 @@ def test_materialization_reports_creation_atomically_across_restart(tmp_path: Pa
     assert recovered.task == first.task
 
 
+def test_pending_task_contract_refresh_is_atomic_and_idempotent(tmp_path: Path) -> None:
+    """A runtime upgrade may safely add a recovery outcome to one active task."""
+    store = HumanTaskRecordStore(tmp_path / "issue")
+    task = _materialize(store)
+    expected_result = {
+        "input_schema": "decision",
+        "decisions": [
+            {"id": "retry", "label": "Retry"},
+            {"id": "retry_fresh_session", "label": "Retry in a fresh session"},
+        ],
+    }
+    continuations = {
+        "retry": "develop",
+        "retry_fresh_session": "develop",
+    }
+
+    first = store.refresh_pending_contract(
+        workflow_id="workflow-one",
+        task_id=task.id,
+        prompt="Choose how to retry.",
+        expected_result=expected_result,
+        continuations=continuations,
+    )
+    second = store.refresh_pending_contract(
+        workflow_id="workflow-one",
+        task_id=task.id,
+        prompt="Choose how to retry.",
+        expected_result=expected_result,
+        continuations=continuations,
+    )
+
+    assert first == second
+    assert second.prompt == "Choose how to retry."
+    assert second.expected_result == expected_result
+    assert second.continuations == continuations
+    refreshed = [
+        event for event in store.lifecycle_events() if event.event_type == "contract_refreshed"
+    ]
+    assert len(refreshed) == 1
+    assert refreshed[0].task_id == task.id
+
+
+def test_pending_task_contract_refresh_rejects_completed_task(tmp_path: Path) -> None:
+    """A completed response contract remains immutable audit evidence."""
+    store = HumanTaskRecordStore(tmp_path / "issue")
+    task = _materialize(store)
+    store.complete(
+        workflow_id="workflow-one",
+        task_id=task.id,
+        payload={"feedback": "done"},
+        source="command",
+    )
+
+    with pytest.raises(HumanTaskCorrelationError, match="not pending"):
+        store.refresh_pending_contract(
+            workflow_id="workflow-one",
+            task_id=task.id,
+            prompt="Changed",
+            expected_result={"input_schema": "decision"},
+            continuations={"retry": "develop"},
+        )
+
+
 def test_replacement_materialization_cancels_only_explicit_obsolete_pending_tasks(
     tmp_path: Path,
 ) -> None:

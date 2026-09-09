@@ -25,6 +25,8 @@ HumanTaskInputSchema = Literal["decision", "answers", "feedback", "target"]
 
 AGENT_EXECUTION_INTERRUPTED_TRIGGER = "agent_execution_interrupted"
 AGENT_EXECUTION_INTERRUPTED_TASK_ID = "agent-execution-interrupted"
+AGENT_EXECUTION_RETRY_DECISION = "retry"
+AGENT_EXECUTION_FRESH_SESSION_DECISION = "retry_fresh_session"
 
 _SCHEMA_BY_PATTERN: dict[str, str] = {
     "confirm_output": "decision",
@@ -235,8 +237,9 @@ def agent_execution_interrupted_human_task(
 
     This is intentionally a runtime policy rather than a playbook binding:
     every agent-owned step must pause safely when its provider process ends
-    without a trustworthy handoff. The only continuation is a deliberate
-    retry of that same step.
+    without a trustworthy handoff. Both declared continuations retry the same
+    step under the unchanged workflow contract; the user may additionally ask
+    the runtime to replace only the provider session.
     """
     normalized_step = _non_empty(step_name, field_name="step_name")
     return (
@@ -244,21 +247,29 @@ def agent_execution_interrupted_human_task(
             id=AGENT_EXECUTION_INTERRUPTED_TASK_ID,
             pattern=AGENT_EXECUTION_INTERRUPTED_TRIGGER,
             prompt=(
-                "Agent execution was interrupted. Review the saved diagnostics, then retry "
-                "the same workflow step when ready."
+                "Agent execution was interrupted. Review the saved diagnostics, then choose "
+                "whether to retry the same workflow step in the existing session or a fresh "
+                "session. A fresh session preserves the step, iteration, model, and authority."
             ),
             input_schema="decision",
             decisions=(
                 HumanTaskDecision(
-                    id="retry",
+                    id=AGENT_EXECUTION_RETRY_DECISION,
                     label="Retry the interrupted workflow step",
+                ),
+                HumanTaskDecision(
+                    id=AGENT_EXECUTION_FRESH_SESSION_DECISION,
+                    label="Retry the interrupted workflow step in a fresh session",
                 ),
             ),
         ),
         HumanTaskBinding(
             trigger=AGENT_EXECUTION_INTERRUPTED_TRIGGER,
             task_id=AGENT_EXECUTION_INTERRUPTED_TASK_ID,
-            outcomes={"retry": normalized_step},
+            outcomes={
+                AGENT_EXECUTION_RETRY_DECISION: normalized_step,
+                AGENT_EXECUTION_FRESH_SESSION_DECISION: normalized_step,
+            },
         ),
     )
 

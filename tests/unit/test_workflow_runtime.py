@@ -4204,7 +4204,10 @@ def test_runtime_handles_agent_execution_error(
     assert task.step == "spec"
     assert task.trigger == "agent_execution_interrupted"
     assert task.policy_id == "agent-execution-interrupted"
-    assert task.continuations == {"retry": "spec"}
+    assert task.continuations == {
+        "retry": "spec",
+        "retry_fresh_session": "spec",
+    }
     assert notifications == [task]
     assert len(callback_events) == 1
     assert callback_events[0].items() >= {
@@ -4291,7 +4294,10 @@ def test_runtime_does_not_reconcile_agent_error_after_valid_handoff(
     assert bb.current_step == "user"
     assert not any(e.event_type == "step_reconciled" for e in bb.events)
     task = HumanTaskRecordStore(issue_dir).tasks()[0]
-    assert task.continuations == {"retry": "spec"}
+    assert task.continuations == {
+        "retry": "spec",
+        "retry_fresh_session": "spec",
+    }
     assert notifications == [task]
 
 
@@ -4335,7 +4341,10 @@ def test_runtime_preserves_interrupted_when_reconciliation_evidence_incomplete(
 
     bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="standard")
     assert bb.current_step == "user"
-    assert HumanTaskRecordStore(issue_dir).tasks()[0].continuations == {"retry": "spec"}
+    assert HumanTaskRecordStore(issue_dir).tasks()[0].continuations == {
+        "retry": "spec",
+        "retry_fresh_session": "spec",
+    }
     assert not any(e.event_type == "step_reconciliation_failed" for e in bb.events)
     assert any(
         e.event_type == "workflow_paused" and e.data.get("status_code") == "INTERRUPTED"

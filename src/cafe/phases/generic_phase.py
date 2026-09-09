@@ -264,6 +264,13 @@ class GenericPhase:
                         "Workflow publication mode is local-only; the host-side hook will "
                         "not publish, and No PR URL will exist."
                     )
+        if context and context.get("session_recovery"):
+            runtime_context.extend(
+                [
+                    "Fresh-session recovery:",
+                    context["session_recovery"],
+                ]
+            )
         if context and context.get("resume_input_artifacts"):
             runtime_context.extend(
                 [

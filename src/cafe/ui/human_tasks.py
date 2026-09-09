@@ -24,6 +24,7 @@ from cafe.core.human_task_records import (
     TaskResult,
 )
 from cafe.core.human_tasks import (
+    AGENT_EXECUTION_FRESH_SESSION_DECISION,
     AGENT_EXECUTION_INTERRUPTED_TRIGGER,
     HumanTaskBinding,
     HumanTaskCompletion,
@@ -720,13 +721,28 @@ def _apply_human_task_payload(
         if durable_result is None:
             assert validated_completion is not None
             try:
+                completion_payload = _validated_completion_payload(
+                    validated_completion,
+                    continuation,
+                )
+                if (
+                    trigger == AGENT_EXECUTION_INTERRUPTED_TRIGGER
+                    and validated_completion.decision == AGENT_EXECUTION_FRESH_SESSION_DECISION
+                ):
+                    completion_payload["session_continuation"] = _fresh_session_recovery_payload(
+                        issue_dir=issue_dir,
+                        workflow_id=blackboard.workflow_id,
+                        task_id=durable_task.id,
+                        step_name=from_step,
+                        iteration=iteration,
+                    )
                 record_store.complete(
                     workflow_id=blackboard.workflow_id,
                     task_id=durable_task.id,
-                    payload=_validated_completion_payload(validated_completion, continuation),
+                    payload=completion_payload,
                     source=source,
                 )
-            except HumanTaskCorrelationError as exc:
+            except (HumanTaskCorrelationError, OSError, ValueError) as exc:
                 rejection = HumanTaskRejection(
                     message=str(exc), correction_guidance=policy.correction_guidance
                 )
@@ -997,6 +1013,66 @@ def _validated_completion_payload(
     if completion.target is not None:
         payload["target"] = completion.target
     return payload
+
+
+def _fresh_session_recovery_payload(
+    *,
+    issue_dir: Path,
+    workflow_id: str,
+    task_id: str,
+    step_name: str,
+    iteration: int,
+) -> dict[str, Any]:
+    """Bind a user-owned fresh-session choice to the interrupted session evidence."""
+    iteration_dir = issue_dir / step_name / f"iteration_{iteration:03d}"
+    iteration_data = _load_recovery_json(iteration_dir / "iteration.json")
+    prior_cli = iteration_data.get("cli")
+    prior_session_id = iteration_data.get("session_id")
+    if not isinstance(prior_cli, str) or not prior_cli.strip():
+        raise ValueError("Fresh-session recovery requires the interrupted CLI identity.")
+    if not isinstance(prior_session_id, str) or not prior_session_id.strip():
+        raise ValueError("Fresh-session recovery requires the interrupted session identity.")
+
+    previous: dict[str, str] = {
+        "cli": prior_cli.strip(),
+        "session_id": prior_session_id.strip(),
+    }
+    prior_model = iteration_data.get("model")
+    if isinstance(prior_model, str) and prior_model.strip():
+        previous["model"] = prior_model.strip()
+
+    recovery: dict[str, Any] = {
+        "schema_version": 1,
+        "policy": "new",
+        "reason": "user_selected_fresh_session",
+        "next_action": "resume_same_step_same_iteration",
+        "workflow_id": workflow_id,
+        "human_task_id": task_id,
+        "step": step_name,
+        "iteration": iteration,
+        "previous": previous,
+    }
+    error_path = iteration_dir / "error.json"
+    if error_path.exists():
+        error_type = _load_recovery_json(error_path).get("error_type")
+        if isinstance(error_type, str) and error_type.strip():
+            recovery["last_error_type"] = error_type.strip()
+    return recovery
+
+
+def _load_recovery_json(path: Path) -> dict[str, Any]:
+    """Read bounded, ordinary JSON evidence used to authorize session rotation."""
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"Fresh-session recovery evidence is missing: {path.name}")
+    if path.stat().st_size > 1_048_576:
+        raise ValueError(f"Fresh-session recovery evidence is too large: {path.name}")
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Fresh-session recovery evidence is invalid: {path.name}") from exc
+    if not isinstance(raw, dict):
+        raise ValueError(f"Fresh-session recovery evidence is invalid: {path.name}")
+    return raw
 
 
 def _durable_decision_continuation_input(
