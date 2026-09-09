@@ -158,7 +158,7 @@ candidate must be presented again; an earlier confirmation is not
 lifetime approval. A no-blocking Driver review is quality evidence only, never
 user confirmation and never a substitute for `driver_confirmable` evidence.
 Re-review changed durable output through the same process; keep built-in review
-and final PR review obligations separate.
+and graph-declared review obligations separate.
 
 ## Present a self-contained user decision
 
@@ -250,8 +250,8 @@ Evaluate alignment:
 3. when a correction changes requirements, product scope, positioning,
    principles, mandate, or trusted capability boundaries.
 
-Do not re-evaluate unchanged scope merely because the workflow moved to
-develop, review, or PR. Implementation-only corrections inherit the latest
+Do not re-evaluate unchanged scope merely because the workflow advanced
+to another declared step. Implementation-only corrections inherit the latest
 accepted alignment result.
 
 ### Evidence tuple
@@ -319,8 +319,8 @@ it is a mechanical copy of already confirmed material.
 Driver takeover does not transfer conversation or provider-session authority.
 The replacement Driver reads the same validated issue contract, refreshes
 skill-owned evidence, and preserves every user confirmation, HumanTask,
-permission, mandate, phase-model, proactive-review, and generic PR
-publication boundary. If that proof is material, ambiguous, stale, malformed,
+permission, mandate, phase-model, proactive-review, and declared capability
+boundary. If that proof is material, ambiguous, stale, malformed,
 or belongs to another workflow, stop for the documented reconfirmation path.
 
 ### Legacy or custom core checkpoints

@@ -61,7 +61,7 @@ For attached or unattended Driver-managed work, invoke the same validator,
 then start generic CAFE through its ordinary command. The supplied fresh facts are
 the current bounded semantic policy rebuilt by the skill's loaders and the
 current material assumptions; they are not a caller-selected subset. The
-validator does not inspect `issue.yaml`, phase chains, or PR choices. Generic
+validator does not inspect `issue.yaml`, phase chains, or capability choices. Generic
 CAFE validates and consumes those ordinary inputs under the existing #467
 contract, with identical behavior whether a Driver exists or not.
 
@@ -290,7 +290,7 @@ self-contained user handoff when correction needs user-owned authority,
 permission, capability, scope selection, or an answer. A no-blocking result is
 quality evidence only: it does not replace `driver_confirmable` evidence,
 mandatory HumanTasks, or user approval, and it does not replace built-in review
-or final PR review.
+or any other graph-declared review.
 
 On resume, a prior clean result may be reused only when existing artifacts and
 handoffs prove that the exact current durable artifact completed a full
@@ -335,5 +335,5 @@ A clean comparison only permits a confirmed `driver_confirmable` output.
 Mandatory/user-required confirmations and reactive decisions retain their
 owners in attached, unattended and event-driven modes. Callbacks remain
 asynchronous and non-gating; they cannot collect or infer a user's answer.
-Delivery comparison supplements proactive review, built-in review and final
-convergent review; all existing obligations still apply.
+Delivery comparison supplements confirmed proactive review and graph-declared
+reviews; it adds no final review or completion gate.

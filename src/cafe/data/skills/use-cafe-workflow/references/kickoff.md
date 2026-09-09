@@ -107,20 +107,22 @@ obtain explicit user confirmation of:
   confirmed field of the sole Driver contract, never `driver/config.yaml`;
 - worktree choice and path when using a worktree.
 
-The same kickoff presentation also contains the generic PR choice when any
-effective playbook step requests `cafe.pr.publish`. It is persisted only in
-`issue.yaml` as the sole authoritative generic setting `pr.auto_create`.
-`true` means the feature branch is pushed and the PR is created or
-  updated only after local material and authorization succeed, and the review
-  handoff receives a verified PR URL. `false` means `Publication mode:
-  local-only. No PR URL exists.`
+Resolve effective `steps.*.capability_requests` against the package-owned
+capability registry. Render each manifest's `setup_questions`: its prompt,
+setting, typed choices, observable outcomes, and selected `prepare_args`.
+Pass each explicit answer as `--capability-choice SETTING=JSON`. Require every
+declared answer and reject unknown settings, duplicate answers, and values
+outside the declared typed choices; never infer applicability from step names.
+A workflow whose capabilities declare no questions gets no capability questions.
+Also inspect the selected playbook's declared prepare fields and gates; do not
+invent domain questions or steps. Re-resolve and reconfirm affected choices
+when declarations change.
 
-Derive this choice only from effective `steps.*.capability_requests`. A
-custom-named step requesting `cafe.pr.publish` is applicable; a step named `pr`
-without that request is not. A PR-capable contract must reject a missing or
-non-Boolean value. A non-PR-capable contract omits the choice and rejects any
-supplied value, including `false`. Re-resolve applicability and obtain a new
-confirmation whenever the effective playbook changes.
+These settings belong only in generic `issue.yaml`, through the existing
+prepare arguments declared by their owner. They do not belong in the Driver
+contract. Configuration confirmation covers only the displayed action and
+target; it never implies authority for another external action. Follow
+`completion_and_authority.md` for ambiguous terminal wording or follow-up work.
 
 Attached polling applies to proactive `cafe status`, `cafe show`, blackboard,
 artifact, or similar liveness checks. Start the timer when a workflow process
@@ -312,7 +314,7 @@ python3 <skill-dir>/scripts/format_kickoff_contract.py <playbook-id> \
   --effective-locale <locale> \
   --locale-source "<playbook or direct-user-override source>" \
   --repository-content-locale <locale> \
-  [--pr-auto-create <true|false> when cafe.pr.publish is requested] \
+  [--capability-choice <SETTING=JSON> for each declared setup question] \
   --user-required <steps...> \
   --driver-confirmable <steps...> \
   --worktree .cafe/worktrees/<issue-name>
@@ -395,9 +397,8 @@ for confirmation rather than asking again.
 
   ```bash
   cafe prepare <issue-name> --playbook <playbook-id> --no-interactive \
-    --input-method=manual \
-    --rigor=medium --spec-template=auto --plan-template=default \
-    <--auto-create-pr|--no-auto-create-pr when cafe.pr.publish is requested> \
+    <confirmed playbook-owned prepare arguments> \
+    <confirmed capability-owned prepare arguments, if any> \
     --worktree .cafe/worktrees/<issue-name>
   ```
 
@@ -406,8 +407,8 @@ for confirmation rather than asking again.
 
   ```bash
   cafe prepare <issue-name> --playbook <playbook-id> --no-interactive \
-    --init-git --input-method=manual --rigor=medium \
-    --spec-template=auto --plan-template=default
+    --init-git <confirmed playbook-owned prepare arguments> \
+    <confirmed capability-owned prepare arguments, if any>
   ```
 
   For a GitHub issue:
@@ -456,18 +457,14 @@ for confirmation rather than asking again.
     driver_confirmable: []
     confirmed_by: user
     confirmed_at: 2026-07-16
-  pr:
-    auto_create: false
   ```
 
-  For a playbook requesting `cafe.pr.publish`, verify that the prepare flag
-  persisted the exact confirmed Boolean at `pr.auto_create`. For a playbook
-  without that capability, pass neither flag and verify that `pr.auto_create`
-  does not exist. A missing, changed, or stale value requires a freshly
-  rendered and confirmed kickoff contract; do not infer local-only from
-  omission. The former `confirmation_contract.pr_auto_create` field is
-  obsolete and inert: remove it when updating an existing configuration, and
-  never use it to authorize, reject, or override `pr.auto_create`.
+  For every resolved capability setup question, pass only the selected
+  choice's declared prepare arguments and verify the exact typed answer at its
+  declared setting in `issue.yaml`. Do not pass arguments for absent questions.
+  Missing, changed, or stale answers require a freshly rendered and confirmed
+  affected choice; never replace missing answers with defaults. Leave legacy
+  configuration interpretation and migration to its owning capability/runtime.
 
   When the confirmed mode is event-driven, launch the trusted callback after
   this contract is written. It loads the current issue contract immediately
@@ -518,23 +515,22 @@ versioned contract at `.cafe/issues/<issue>/driver/contract.json` before the
 first Driver entry. The activation command must bind the prepared workflow ID,
 timezone-aware confirmation time, confirmer, and the same semantic proposal
 that was rendered for confirmation. Rendering alone never writes authority.
-That contract contains Driver-owned policy only; generic workflow and PR
+That contract contains Driver-owned policy only; generic workflow and capability
 configuration remain in `issue.yaml`.
 
 `proactive_review.phase_decisions` is an ordered policy field in that contract,
 covering every agent or hybrid phase with `required` or `not_required` and an
 issue-specific rationale. It is not a `proactive_review.yaml` sidecar and does
-not schedule review work. `pr.auto_create`, when the effective playbook requests
-`cafe.pr.publish`, remains a matching confirmed Boolean only in the existing
-generic `issue.yaml` contract. It is never copied, projected, or validated by
-the Driver contract.
+not schedule review work. Capability-owned settings remain only in the generic
+`issue.yaml` contract. They are never copied, projected, or validated by the
+Driver contract.
 
 On resume, Primary and Backup Drivers must first refresh skill-owned preflight
 evidence and validate only the Driver contract before Driver-owned work.
 Generic workflow independently validates its own views when it runs.
 Metadata-only cache churn may rebuild runtime views; material or unknown Driver
 semantic evidence stops for reconfirmation. Session, dispatch, callback
-delivery, active CLI, and PR URL remain runtime state rather than contract
+delivery, active CLI, and capability result locations remain runtime state rather than contract
 fields.
 
 Delivery facts participate in normalized semantic facts and the proposal digest.

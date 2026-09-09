@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
-metadata: {version: 1.37.0}
+metadata: {version: 1.38.0}
 ---
 
 # Use CAFE Workflow
@@ -25,7 +25,7 @@ Read this file completely, then load only the references required by the current
 | Handle `to_owner=user`, confirmation, clarification, permission, or alignment | `references/handoffs_and_alignment.md`; also read `references/strategic_context.md` |
 | Start or resume linked work; confirm a spec or plan with an issue-decomposition assessment | `references/issue_decomposition.md`; also read `references/strategic_context.md` and `references/handoffs_and_alignment.md` |
 | Diagnose incorrect workflow behavior or choose a repair layer | `references/diagnosis_and_repair.md`; also read the relevant runtime reference above |
-| Review or ship after the PR phase | `references/convergent_pr_review.md`; also read `references/strategic_context.md` |
+| Reach a terminal state or receive a request for follow-up actions | `references/completion_and_authority.md` |
 | Measure fresh-versus-resumed correction efficiency | `references/correction_ab_experiment.md` |
 
 If more than one situation applies, read every listed reference before acting; do not preload unrelated references.
@@ -60,7 +60,7 @@ If more than one situation applies, read every listed reference before acting; d
   coordinate any authorized split through existing authority boundaries and
   reconstruct linked-work position from durable records.
 - Resolve exactly one workflow operating mode in the confirmed kickoff: attached with positive polling, unattended background execution, or event-driven background execution with a non-empty ordered chain of distinct conforming CLIs. In event-driven mode, the primary entry uses the current user session and therefore stores no model; every fallback entry requires one explicit exact model. Default new workflows to event-driven unless the user explicitly chooses another mode or an existing issue contract already fixes the mode. Keep the selected mode visible in the kickoff confirmation. Store it only in `.cafe/issues/<issue>/driver/contract.json`; CAFE core and `issue.yaml` do not contain Driver-mode policy.
-- For a Driver-managed launch, validate Driver-owned entry authority after bounded preflight, then invoke generic CAFE through its existing command. The validation does not read, project, bind, or authorize `issue.yaml`, playbook, phase, or PR configuration; those remain under their generic contracts. Event callback dispatch derives its primary CLI and fallback CLI/model order from the Driver contract; it never passes a model override when waking the primary session. Mutable dispatch state stores only digest and delivery progress. Session acquisition and actual callback durable acceptance are separate boundaries: every unbound entry bootstraps with a request exactly equivalent to `say "HI"`, persists the provider-created session ID before actual delivery, and never counts bootstrap as event delivery or acceptance. Bind the provider acknowledgement to the exact callback event identity; an ambiguous outcome stops forward routing.
+- For a Driver-managed launch, validate Driver-owned entry authority after bounded preflight, then invoke generic CAFE through its existing command. The validation does not read, project, bind, or authorize `issue.yaml`, playbook, phase, or capability configuration; those remain under their generic contracts. Event callback dispatch derives its primary CLI and fallback CLI/model order from the Driver contract; it never passes a model override when waking the primary session. Mutable dispatch state stores only digest and delivery progress. Session acquisition and actual callback durable acceptance are separate boundaries: every unbound entry bootstraps with a request exactly equivalent to `say "HI"`, persists the provider-created session ID before actual delivery, and never counts bootstrap as event delivery or acceptance. Bind the provider acknowledgement to the exact callback event identity; an ambiguous outcome stops forward routing.
 - Use `cafe workflow --execute --mute-agent-output` when the invocation needs
   direct workflow controls such as `--start-step` or a manual diagnostic
   `--single-step`. After `cafe prepare`, `cafe make` is also a valid launcher;
@@ -73,8 +73,7 @@ If more than one situation applies, read every listed reference before acting; d
 - Modify source-of-truth playbooks and phase skills, never generated artifacts
   or installed global copies. Driver and CAFE core defects require escalation
   unless the user explicitly authorizes that source change.
-- A phase or PR reporting success is evidence, not final proof. Ship only after
-  the independent driver review has no unresolved in-mandate blockers.
+- Follow only the effective graph, declared capabilities, confirmed gates, and explicit user authority. “Finish”, “complete the rest”, or “continue to the end” covers only already-scoped steps; it never grants merge, deploy, close, delete, publish, or other external mutation authority. Each action needs its own authority; completion adds none.
 
 ## Driver and phase-agent responsibility boundary
 
@@ -85,15 +84,14 @@ If more than one situation applies, read every listed reference before acting; d
   the current phase and iteration, command liveness, baton and task state,
   execution evidence, repeated failures, unnecessary phase restarts, and
   unexpected full-suite reruns through `cafe status`, `cafe show`, and bounded
-  process output. Reading spec, plan, review, and PR artifacts remains part of
-  the driver's confirmation and handoff duties.
+  process output. Reading declared artifacts at the actual confirmation and handoff
+  boundaries remains part of the driver's duties.
 - Do not inspect implementation code or diffs merely to watch progress. Enter
   bounded code-level diagnosis only when the same failure repeats without new
   evidence, the workflow is stuck, an agent crosses the confirmed scope or
   authority boundary, or reported success conflicts with durable evidence.
-- After the PR phase, perform the independent convergent review once, in a
-  batch. That final review deliberately inspects the implementation and is not
-  replaced by process-only monitoring.
+- At declared review and confirmation boundaries, inspect the relevant evidence
+  under their contracts. Do not add an extra phase or final review gate.
 
 ## Driver checklist
 ### Start or resume
@@ -130,10 +128,10 @@ If more than one situation applies, read every listed reference before acting; d
   diagnosis reference.
 
 ### Complete
-- [ ] Confirm the terminal state is `Workflow completed ... next=done`.
-- [ ] Read the convergent PR review reference and finish its full review matrix.
-- [ ] Merge only after all blockers are resolved, close the linked issue, run
-  `cafe close`, and confirm the issue is absent from `cafe ls`.
+- [ ] Follow `references/completion_and_authority.md`: verify the declared terminal
+  state and its required evidence, then stop workflow execution.
+- [ ] Keep separately authorized follow-up actions outside workflow completion.
+  Do not infer publication, integration, issue closure, or local teardown.
 - [ ] Report the relevant test evidence and final state in the effective locale.
 
 ## Reference index
@@ -145,6 +143,6 @@ If more than one situation applies, read every listed reference before acting; d
 - `references/phases_yaml.md` — confirmed-chain writer contract and non-authoritative field guidance.
 - `references/handoffs_and_alignment.md` — user pauses and driver decisions.
 - `references/diagnosis_and_repair.md` — bounded classification and disposition.
-- `references/convergent_pr_review.md` — batched final review, merge, close, teardown.
+- `references/completion_and_authority.md` — terminal evidence and separate action authority.
 - `references/correction_ab_experiment.md` — controlled efficiency experiment.
 - `references/issue_decomposition.md` — validation, authority, and project position.

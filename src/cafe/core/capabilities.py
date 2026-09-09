@@ -103,6 +103,43 @@ class CapabilityEffects(StrictCapabilityModel):
         return tuple(value) if isinstance(value, list) else value
 
 
+class CapabilitySetupChoice(StrictCapabilityModel):
+    """One capability-owned configuration choice and its existing prepare arguments."""
+
+    value: Any
+    outcome: str = Field(min_length=1)
+    prepare_args: Tuple[str, ...]
+
+    @field_validator("prepare_args", mode="before")
+    @classmethod
+    def freeze_prepare_args(cls, value: Any) -> Any:
+        return tuple(value) if isinstance(value, list) else value
+
+
+class CapabilitySetupQuestion(StrictCapabilityModel):
+    """Presentation metadata, not an execution approval or Driver policy."""
+
+    setting: str = Field(pattern=r"^[a-z][a-z0-9_-]*\.[a-z][a-z0-9_-]*$")
+    prompt: str = Field(min_length=1)
+    choices: Tuple[CapabilitySetupChoice, ...] = Field(min_length=1)
+
+    @field_validator("choices", mode="before")
+    @classmethod
+    def freeze_choices(cls, value: Any) -> Any:
+        return tuple(value) if isinstance(value, list) else value
+
+    @model_validator(mode="after")
+    def validate_choices(self) -> "CapabilitySetupQuestion":
+        keys = []
+        for choice in self.choices:
+            if type(choice.value) not in {str, bool, int}:
+                raise ValueError("setup choice must be a string, Boolean, or integer")
+            keys.append((type(choice.value), choice.value))
+        if len(set(keys)) != len(keys):
+            raise ValueError("setup choices must be unique")
+        return self
+
+
 class CapabilityManifest(StrictCapabilityModel):
     id: str = Field(min_length=1)
     version: int = Field(ge=1)
@@ -121,6 +158,12 @@ class CapabilityManifest(StrictCapabilityModel):
     risk: Literal["low", "medium", "high"]
     approval: Literal["not_required", "required"]
     policy: Literal["allow", "deny"]
+    setup_questions: Tuple[CapabilitySetupQuestion, ...] = ()
+
+    @field_validator("setup_questions", mode="before")
+    @classmethod
+    def freeze_setup_questions(cls, value: Any) -> Any:
+        return tuple(value) if isinstance(value, list) else value
 
     @field_validator("credentials", mode="before")
     @classmethod
