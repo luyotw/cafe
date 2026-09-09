@@ -135,6 +135,12 @@ consensus; it never permits confirmation or another user-owned decision. A
 event-driven callback, after it verifies the confirmed contract and evidence.
 Both cases use the same durable task flow:
 
+On every later user-facing turn, inspect current durable state first. If a
+user-owned HumanTask is still pending and no adequate handoff has been given in
+the current conversation, answer the user's immediate question briefly and
+append the compact summary required by `handoffs_and_alignment.md`. Do not
+repeat it when the user already has the same task and options unless they ask.
+
 1. Inspect the exact pending task with `cafe task inspect <task-id>` and read
    its declared input schema. Never reuse a stale task ID.
 2. Classify the task before serializing its result. For an active declared

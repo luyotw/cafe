@@ -120,7 +120,7 @@ Do not treat passing structural checks as proof that a source means what the
 assessment claims. `accept` permits only the existing Driver-owned completion
 route after all other reviews; recheck the active task and artifact identity
 immediately before submission. `no_gate` adds no pause. `user_handoff` uses the
-self-contained eight-element packet below, showing the unmet requirement or
+self-contained compact decision summary below, showing the unmet requirement or
 material delta and the exact pending options. Preserve the contract unchanged;
 only a real user reconfirmation may replace it through the existing CAS API.
 Do not auto-complete any task from this helper or infer user responses in callbacks.
@@ -168,25 +168,21 @@ evidence. Assume the user has no terminal, repository checkout, or artifact
 viewer.
 
 Every user-owned advancing confirmation and other user-owned decision must
-first provide all eight decision-packet elements, concisely enough for the
-decision and without assuming artifact access:
+first provide these four items, concisely and without assuming artifact access:
 
-1. current phase and completed work;
-2. concrete proposed behavior/change and why it is needed;
-3. material authority or contract changes;
-4. included and excluded scope;
-5. validation evidence and Driver review disposition;
-6. remaining risks, limitations, and trade-offs, including whether enforcement
-   is policy-only or runtime-enforced;
-7. exact next phase/model and external-side-effect boundary; and
-8. every declared option, consequence, required feedback or target, and valid
-   reply example.
+1. where the workflow paused and what completed;
+2. why it needs the user and the exact decision needed;
+3. every declared option and its practical consequence; and
+4. the required reply format with one valid plain-language example.
 
-Bare confirmation requests, artifact-link-only handoffs, and raw artifact dumps
-are invalid. Artifact links may support, but never replace, this packet.
+Include scope or authority changes, validation evidence, risks, the next phase
+or model, and external side effects only when they materially affect the active
+decision. Bare confirmation requests, artifact-link-only handoffs, and raw
+artifact dumps are invalid. Artifact links may support, but never replace, the
+decision summary.
 
-- State the workflow phase, what completed, why it paused, and what will happen
-  after the answer.
+- State what will happen after the answer when that consequence is not already
+  clear from the options.
 - Render every current question in the conversation, including its human-readable
   title, identifier when one exists, whether it is single-select, multi-select,
   free text, or a confirmation, and every available option.
@@ -209,6 +205,12 @@ are invalid. Artifact links may support, but never replace, this packet.
 If an artifact is unusually long, summarize its relevant effects and still
 render every decision option. Ask a follow-up only when the task schema itself
 requires information not available in the current handoff.
+
+On each later user-facing Driver turn, inspect current durable state before
+acting. If a user-owned task remains pending and the current conversation has
+not yet received an adequate summary, answer the user's immediate question
+briefly and append the four items above. Do not repeat an adequate summary
+unless the task or its options changed or the user asks for it again.
 
 Driver-confirmable means the driver verifies and resumes; it does not let a
 phase agent approve itself. If the declared outcome continues to an agent

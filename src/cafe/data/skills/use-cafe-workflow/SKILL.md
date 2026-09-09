@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
-metadata: {version: 1.36.0}
+metadata: {version: 1.37.0}
 ---
 
 # Use CAFE Workflow
@@ -50,11 +50,12 @@ If more than one situation applies, read every listed reference before acting; d
 - Use `.cafe/strategic_context.yaml` as the single source for strategic
   documents and authority. Do not invent strategy or silently create issue
   overrides.
-- Confirm a complete versioned Delivery Contract in the same kickoff before `cafe prepare`: outcome, full scope, acceptance/evidence, implementation direction, constraints, permitted variations and deviation triggers. Store it only in `driver/contract.json`. At existing eligible output gates, follow the evidence comparison in `references/handoffs_and_alignment.md`; a smaller implementation must preserve all requirements. Never add a gate or assume particular step/artifact names.
+- Confirm a complete versioned Delivery Contract in the same kickoff before `cafe prepare`: outcome, full scope, acceptance/evidence, implementation direction, constraints, permitted variations and deviation triggers. Keep hard invariants limited to explicit user requirements and externally meaningful behavior. Put unresolved internal mechanisms and reasonable technical choices in `allowed_variations` so ordinary implementation decisions do not reopen the contract. Store it only in `driver/contract.json`. At existing eligible output gates, follow the evidence comparison in `references/handoffs_and_alignment.md`; a smaller implementation must preserve all requirements. Never add a gate or assume particular step/artifact names.
 - Treat planned output confirmation, reactive user handoffs, and semantic
   alignment as separate decisions. The driver owns alignment; phase agents do
   not approve themselves.
-- Make every user-owned handoff self-contained in conversation: assume no terminal, repository, or artifact access; render the mandatory eight-element decision packet, phase, purpose, questions, options, and plain-language reply format (paths/links are optional support only). Bare confirmation, link-only, and raw-artifact-dump handoffs are invalid.
+- Make every user-owned handoff self-contained in conversation: assume no terminal, repository, or artifact access; state where the workflow paused, why it needs the user, every option with its practical consequence, and a plain-language reply example. Add evidence, scope, risk, next-phase, model, or external-effect details only when they materially affect the decision. Bare confirmation, link-only, and raw-artifact-dump handoffs are invalid.
+- On a later user-facing turn, inspect durable state first. If a user-owned task is still pending and no adequate handoff has appeared in the current conversation, answer the user's immediate question briefly and append the same compact task summary. Do not repeat an adequate handoff unless the task or options changed or the user asks.
 - Validate issue-decomposition assessments before confirming spec or plan;
   coordinate any authorized split through existing authority boundaries and
   reconstruct linked-work position from durable records.

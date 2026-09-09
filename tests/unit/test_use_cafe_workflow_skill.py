@@ -2002,31 +2002,42 @@ def test_proactive_review_consensus_uses_formal_correction_and_user_owned_confir
         "one final user confirmation for each user-owned clean advancement candidate",
         "later clean candidate must be presented again",
         "clarification, permission, capability, scope, strategic, and unknown decisions remain user-owned",
-        "all eight decision-packet elements",
+        "first provide these four items",
         "bare confirmation requests, artifact-link-only handoffs, and raw artifact dumps are invalid",
-        "policy-only",
-        "exact next phase/model",
-        "external-side-effect boundary",
+        "only when they materially affect the active decision",
     ):
         assert required.lower() in contract.lower()
 
 
-def test_proactive_review_decision_packet_names_each_required_element() -> None:
+def test_proactive_review_handoff_keeps_the_required_summary_compact() -> None:
     handoffs = _read_skill_resource("references/handoffs_and_alignment.md")
     normalized = " ".join(handoffs.split())
 
     for element in (
-        "current phase and completed work",
-        "concrete proposed behavior/change and why it is needed",
-        "material authority or contract changes",
-        "included and excluded scope",
-        "validation evidence and Driver review disposition",
-        "remaining risks, limitations, and trade-offs",
-        "enforcement is policy-only or runtime-enforced",
-        "exact next phase/model and external-side-effect boundary",
-        "every declared option, consequence, required feedback or target, and valid reply example",
+        "where the workflow paused and what completed",
+        "why it needs the user and the exact decision needed",
+        "every declared option and its practical consequence",
+        "the required reply format with one valid plain-language example",
+        "only when they materially affect the active decision",
     ):
         assert element in normalized
+
+
+def test_delivery_contract_allows_bounded_technical_flexibility() -> None:
+    skill = _read_skill_resource("SKILL.md")
+    kickoff = _read_skill_resource("references/kickoff.md")
+    running = _read_skill_resource("references/running_workflow.md")
+    contract = " ".join((skill + kickoff + running).split())
+
+    for required in (
+        "reasonable technical choices in `allowed_variations`",
+        "working assumption or bounded variation",
+        "does not replace the Driver contract",
+        "archiving, deleting, or rebuilding callback dispatch state",
+        "no adequate handoff has been given in the current conversation",
+        "append the compact summary",
+    ):
+        assert required in contract
 
 
 def test_proactive_review_consensus_has_one_authority_path_and_a_bounded_input() -> None:

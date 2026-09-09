@@ -255,6 +255,22 @@ permission or an external-effect approval from product scope. Always preserve:
 > behavior, feature scope, acceptance coverage, edge-case coverage, or required
 > integrations.
 
+Keep this contract specific about the result and flexible about how agents
+reach it. Treat only explicit user requirements, safety or permission
+boundaries, external side effects, compatibility promises, and user-visible
+behavior as hard invariants. Put anticipated internal choices such as data
+shape, thresholds, retry details, helper structure, and equivalent technical
+mechanisms in `allowed_variations` unless the user explicitly fixes one. Record
+an uncertain technical detail as a working assumption or bounded variation
+rather than turning it into a blocker.
+
+A later technical clarification that stays inside `allowed_variations` updates
+ordinary phase feedback or artifacts only. It does not replace the Driver
+contract, require kickoff reconfirmation, or justify archiving, deleting, or
+rebuilding callback dispatch state. Reconfirm only when the user-visible
+outcome or scope, authority, external side effects, or an explicitly fixed
+invariant materially changes.
+
 Render these facts with the complete kickoff, resolve material ambiguity, and
 interpret the user's response semantically in any language. Acknowledgement of
 one part does not confirm unreviewed facts. Retain existing explicit decisions;
