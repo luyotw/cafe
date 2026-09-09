@@ -72,6 +72,8 @@ class DriverEntryResult:
     event: Mapping[str, Any] | None
     proactive_review: tuple[Mapping[str, str], ...]
     phase_model_authority: Mapping[str, tuple[Mapping[str, str], ...]]
+    delivery_contract: Mapping[str, Any]
+    confirmation_contract: Mapping[str, Any]
 
 
 @dataclass(frozen=True)
@@ -162,6 +164,8 @@ def evaluate_driver_entry(command: DriverEntryRequest) -> DriverEntryResult:
         event=_freeze(event) if event is not None else None,
         proactive_review=_freeze(contract["proactive_review"]["phase_decisions"]),
         phase_model_authority=_freeze(phase_model_authority),
+        delivery_contract=_freeze(contract["delivery_contract"]),
+        confirmation_contract=_freeze(contract["confirmation_contract"]),
     )
 
 

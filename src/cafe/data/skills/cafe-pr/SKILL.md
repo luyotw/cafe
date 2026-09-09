@@ -1,7 +1,7 @@
 ---
 name: cafe-pr
 description: "整理提交內容並產出 pull request 標題與描述"
-version: 1.4.0
+version: 1.4.1
 workflow:
   execution_profile:
     workload: publication
@@ -131,6 +131,11 @@ the review task can expose a verified PR URL.
 6. 當 `pr.auto_create: true` 時，CAFE host-side hook 會在有效 handoff 進入人工 review 或完成前執行 `scripts/sync_pr.sh --output {output_file}`，依 `issue.yaml` 的 `base_branch` 自動加上 `--base`；只有本次成功且通過 output contract 的結果可產生 `pr_synced` evidence 與 review task 的 verified PR URL
 7. 當 `pr.auto_create: false` 時，workflow 是 `local-only`：hook 不發布、不沿用舊 URL，review task 明示 `Publication mode: local-only. No PR URL exists.`
 8. 當 `{step_transitions}` 宣告 `confirm_output` 時，只有綁定 HumanTask 的核准結果可以完成 workflow；PR agent 不得改寫成 `done` 或 `workflow_complete`
+
+### Publication authority
+- PR 內容與發布只依本 phase 和 `cafe.pr.publish` capability 契約處理；kickoff 問題、選項和 prepare 參數由 capability manifest 的 `setup_questions` 宣告。
+- 建立或更新 PR、審查通過、workflow 完成，都不代表獲准 merge 或關閉 issue；本 phase 不執行這些操作。
+- Merge 必須是另有明確授權的 integration 工作；不要因使用者說「剩下的做完」就自行執行。
 
 ### Gotchas
 - Script 的 progress/error 輸出在 stderr，JSON result 在 stdout

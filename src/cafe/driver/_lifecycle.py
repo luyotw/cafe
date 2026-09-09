@@ -99,10 +99,18 @@ def event_callback_policy(
 
     Callback delivery has no caller-authored preflight payload.  It therefore
     deliberately projects only the already-confirmed event transport policy,
-    bound to the exact contract digest read immediately before use.  All other
-    entry paths continue through :func:`evaluate` and its freshness check.
+    bound to the exact contract digest read immediately before use.  A fully
+    validated v3 predecessor is safe to read for this narrow, read-only
+    transport projection: it neither activates product policy nor upgrades the
+    contract.  All other entry paths continue through :func:`evaluate` and its
+    freshness check, which require the current contract schema.
     """
-    contract, digest = load_contract(issue_dir, issue_name=issue_name, workflow_id=workflow_id)
+    contract, digest = load_contract(
+        issue_dir,
+        issue_name=issue_name,
+        workflow_id=workflow_id,
+        allow_legacy_upgrade=True,
+    )
     if contract["driver"]["mode"] != "event-driven":
         return None, digest
     return {"clis": deepcopy(contract["driver"]["clis"])}, digest
@@ -124,7 +132,7 @@ def replace(
         raise ValueError("replacement requires user reconfirmation")
     with contract_lock(issue_dir):
         current, current_sha = load_contract(
-            issue_dir, issue_name=issue_name, workflow_id=workflow_id
+            issue_dir, issue_name=issue_name, workflow_id=workflow_id, allow_legacy_upgrade=True
         )
         if current_sha != expected_predecessor_sha256:
             raise ValueError("Driver contract predecessor is stale")
@@ -275,6 +283,7 @@ def _driver_only_legacy_proposal(value: Mapping[str, Any]) -> dict[str, Any] | N
                 return None
         proposal["phases"] = normalized_phases
     policy_fields = (
+        "delivery_contract",
         "locales",
         "confirmation_contract",
         "reactive_user_handoffs",

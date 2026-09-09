@@ -81,6 +81,7 @@ resuming and whenever the playbook changes.
 Before `cafe prepare`, any repository mutation, or the first workflow execution,
 obtain explicit user confirmation of:
 
+- the versioned `delivery_contract` described below;
 - `playbook_id`;
 - `playbook_selection_rationale`, including the independent-QA decision and the
   closest rejected alternative;
@@ -106,20 +107,22 @@ obtain explicit user confirmation of:
   confirmed field of the sole Driver contract, never `driver/config.yaml`;
 - worktree choice and path when using a worktree.
 
-The same kickoff presentation also contains the generic PR choice when any
-effective playbook step requests `cafe.pr.publish`. It is persisted only in
-`issue.yaml` as the sole authoritative generic setting `pr.auto_create`.
-`true` means the feature branch is pushed and the PR is created or
-  updated only after local material and authorization succeed, and the review
-  handoff receives a verified PR URL. `false` means `Publication mode:
-  local-only. No PR URL exists.`
+Resolve effective `steps.*.capability_requests` against the package-owned
+capability registry. Render each manifest's `setup_questions`: its prompt,
+setting, typed choices, observable outcomes, and selected `prepare_args`.
+Pass each explicit answer as `--capability-choice SETTING=JSON`. Require every
+declared answer and reject unknown settings, duplicate answers, and values
+outside the declared typed choices; never infer applicability from step names.
+A workflow whose capabilities declare no questions gets no capability questions.
+Also inspect the selected playbook's declared prepare fields and gates; do not
+invent domain questions or steps. Re-resolve and reconfirm affected choices
+when declarations change.
 
-Derive this choice only from effective `steps.*.capability_requests`. A
-custom-named step requesting `cafe.pr.publish` is applicable; a step named `pr`
-without that request is not. A PR-capable contract must reject a missing or
-non-Boolean value. A non-PR-capable contract omits the choice and rejects any
-supplied value, including `false`. Re-resolve applicability and obtain a new
-confirmation whenever the effective playbook changes.
+These settings belong only in generic `issue.yaml`, through the existing
+prepare arguments declared by their owner. They do not belong in the Driver
+contract. Configuration confirmation covers only the displayed action and
+target; it never implies authority for another external action. Follow
+`completion_and_authority.md` for ambiguous terminal wording or follow-up work.
 
 Attached polling applies to proactive `cafe status`, `cafe show`, blackboard,
 artifact, or similar liveness checks. Start the timer when a workflow process
@@ -227,6 +230,68 @@ reactive policy in the kickoff:
 Any other runtime `to_owner=user` baton or `Workflow is waiting for user input`
 output is a hard stop.
 
+### Delivery facts to confirm
+
+Before rendering, read the request and relevant existing evidence, then propose
+one complete `delivery_contract` object. Use the user's language. The required
+version-1 fields are:
+
+| Field | Content |
+| --- | --- |
+| `schema_version` | `1` |
+| `outcome`, `motivation` | User-visible result and why it matters |
+| `in_scope`, `out_of_scope` | Explicit lists; include required edge cases and integrations |
+| `acceptance_invariants`, `required_evidence` | Complete conditions and proof needed for acceptance |
+| `implementation_direction` | Recommended approach and relevant tradeoffs |
+| `constraints` | Explicit lists under `architecture`, `dependencies`, `compatibility`, `quality`, `permissions`, `external_side_effects`, and `cost` |
+| `allowed_variations` | Internal substitutions that preserve every requirement |
+| `deviation_triggers` | Material changes that require a user-owned handoff |
+
+Use explicit empty lists for categories with no applicable constraint or allowed
+variation; never omit a required field. Outcome, motivation, scope, invariants,
+evidence, direction and deviation triggers must not be empty. Do not infer
+permission or an external-effect approval from product scope. Always preserve:
+
+> The Driver may accept a requirement-equivalent implementation with a smaller
+> or simpler implementation footprint. It must not accept reduced user-visible
+> behavior, feature scope, acceptance coverage, edge-case coverage, or required
+> integrations.
+
+Keep this contract specific about the result and flexible about how agents
+reach it. Treat only explicit user requirements, safety or permission
+boundaries, external side effects, compatibility promises, and user-visible
+behavior as hard invariants. Put anticipated internal choices such as data
+shape, thresholds, retry details, helper structure, and equivalent technical
+mechanisms in `allowed_variations` unless the user explicitly fixes one. Record
+an uncertain technical detail as a working assumption or bounded variation
+rather than turning it into a blocker.
+
+A later technical clarification that stays inside `allowed_variations` updates
+ordinary phase feedback or artifacts only. It does not replace the Driver
+contract, require kickoff reconfirmation, or justify archiving, deleting, or
+rebuilding callback dispatch state. Reconfirm only when the user-visible
+outcome or scope, authority, external side effects, or an explicitly fixed
+invariant materially changes.
+
+Render these facts with the complete kickoff, resolve material ambiguity, and
+interpret the user's response semantically in any language. Acknowledgement of
+one part does not confirm unreviewed facts. Retain existing explicit decisions;
+do not repeatedly ask for unchanged choices. Only the confirmed facts become
+`delivery_contract` in the single version-4 durable Driver contract. The nested
+Delivery Contract has its own version; no feature-specific sidecar is authority.
+
+Inspect the selected effective entry point, transitions, `initial_input`,
+`input_artifacts`, and `output_artifact` declarations. Supply the confirmed
+product facts through the entry step's existing initial-input provider/binding
+and ordinary input interfaces where needed. Pass outcome/scope/acceptance and
+implementation facts, not Driver authority instructions or the policy JSON.
+Preserve the original issue input as well. When no such input is declared, use
+only an existing supported input boundary; do not synthesize a phase, artifact,
+or gate. If required facts cannot be conveyed, raise the existing clarification
+handoff. Specification/planning outputs, when present, may refine these facts
+but cannot silently reduce or extend them. The same rule applies to diagnosis,
+development, drafting, research, or any other entry step.
+
 ### Render the proposal
 
 Use the bundled formatter instead of a prose-only summary:
@@ -234,6 +299,7 @@ Use the bundled formatter instead of a prose-only summary:
 ```bash
 python3 <skill-dir>/scripts/format_kickoff_contract.py <playbook-id> \
   --issue-name <issue-name> \
+  --delivery-contract '<complete version-1 delivery JSON>' \
   --playbook-rationale "<source/evidence, QA decision, and rejected alternative>" \
   --issue-nature <nature> --issue-scale <small|medium|large> \
   --update-preflight '<bounded runtime-update JSON>' \
@@ -248,7 +314,7 @@ python3 <skill-dir>/scripts/format_kickoff_contract.py <playbook-id> \
   --effective-locale <locale> \
   --locale-source "<playbook or direct-user-override source>" \
   --repository-content-locale <locale> \
-  [--pr-auto-create <true|false> when cafe.pr.publish is requested] \
+  [--capability-choice <SETTING=JSON> for each declared setup question] \
   --user-required <steps...> \
   --driver-confirmable <steps...> \
   --worktree .cafe/worktrees/<issue-name>
@@ -331,9 +397,8 @@ for confirmation rather than asking again.
 
   ```bash
   cafe prepare <issue-name> --playbook <playbook-id> --no-interactive \
-    --input-method=manual \
-    --rigor=medium --spec-template=auto --plan-template=default \
-    <--auto-create-pr|--no-auto-create-pr when cafe.pr.publish is requested> \
+    <confirmed playbook-owned prepare arguments> \
+    <confirmed capability-owned prepare arguments, if any> \
     --worktree .cafe/worktrees/<issue-name>
   ```
 
@@ -342,8 +407,8 @@ for confirmation rather than asking again.
 
   ```bash
   cafe prepare <issue-name> --playbook <playbook-id> --no-interactive \
-    --init-git --input-method=manual --rigor=medium \
-    --spec-template=auto --plan-template=default
+    --init-git <confirmed playbook-owned prepare arguments> \
+    <confirmed capability-owned prepare arguments, if any>
   ```
 
   For a GitHub issue:
@@ -392,18 +457,14 @@ for confirmation rather than asking again.
     driver_confirmable: []
     confirmed_by: user
     confirmed_at: 2026-07-16
-  pr:
-    auto_create: false
   ```
 
-  For a playbook requesting `cafe.pr.publish`, verify that the prepare flag
-  persisted the exact confirmed Boolean at `pr.auto_create`. For a playbook
-  without that capability, pass neither flag and verify that `pr.auto_create`
-  does not exist. A missing, changed, or stale value requires a freshly
-  rendered and confirmed kickoff contract; do not infer local-only from
-  omission. The former `confirmation_contract.pr_auto_create` field is
-  obsolete and inert: remove it when updating an existing configuration, and
-  never use it to authorize, reject, or override `pr.auto_create`.
+  For every resolved capability setup question, pass only the selected
+  choice's declared prepare arguments and verify the exact typed answer at its
+  declared setting in `issue.yaml`. Do not pass arguments for absent questions.
+  Missing, changed, or stale answers require a freshly rendered and confirmed
+  affected choice; never replace missing answers with defaults. Leave legacy
+  configuration interpretation and migration to its owning capability/runtime.
 
   When the confirmed mode is event-driven, launch the trusted callback after
   this contract is written. It loads the current issue contract immediately
@@ -454,21 +515,34 @@ versioned contract at `.cafe/issues/<issue>/driver/contract.json` before the
 first Driver entry. The activation command must bind the prepared workflow ID,
 timezone-aware confirmation time, confirmer, and the same semantic proposal
 that was rendered for confirmation. Rendering alone never writes authority.
-That contract contains Driver-owned policy only; generic workflow and PR
+That contract contains Driver-owned policy only; generic workflow and capability
 configuration remain in `issue.yaml`.
 
 `proactive_review.phase_decisions` is an ordered policy field in that contract,
 covering every agent or hybrid phase with `required` or `not_required` and an
 issue-specific rationale. It is not a `proactive_review.yaml` sidecar and does
-not schedule review work. `pr.auto_create`, when the effective playbook requests
-`cafe.pr.publish`, remains a matching confirmed Boolean only in the existing
-generic `issue.yaml` contract. It is never copied, projected, or validated by
-the Driver contract.
+not schedule review work. Capability-owned settings remain only in the generic
+`issue.yaml` contract. They are never copied, projected, or validated by the
+Driver contract.
 
 On resume, Primary and Backup Drivers must first refresh skill-owned preflight
 evidence and validate only the Driver contract before Driver-owned work.
 Generic workflow independently validates its own views when it runs.
 Metadata-only cache churn may rebuild runtime views; material or unknown Driver
 semantic evidence stops for reconfirmation. Session, dispatch, callback
-delivery, active CLI, and PR URL remain runtime state rather than contract
+delivery, active CLI, and capability result locations remain runtime state rather than contract
 fields.
+
+Delivery facts participate in normalized semantic facts and the proposal digest.
+Resume and cross-provider takeover reconstruct them from the same validated
+contract through `validate_driver_entry.py`; provider session memory is not
+confirmation evidence. Missing Delivery Contract fields, old contract versions,
+malformed values, stale identity or a mismatched digest require the existing
+reconfirmation path, never defaults or silent migration of product scope.
+Generic CAFE workflows without a Driver contract remain usable unchanged.
+
+After explicit reconfirmation, `replace_confirmed_contract` may upgrade a valid
+version-3 predecessor using its exact file SHA-256 as the CAS predecessor. It
+validates the old identity and digest, adds the confirmed Delivery Contract and
+advances the revision atomically. Old contracts are never accepted for entry or
+callback authority, and malformed predecessors are never silently overwritten.

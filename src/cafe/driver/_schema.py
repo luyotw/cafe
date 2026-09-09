@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
+import hashlib
 from copy import deepcopy
 from datetime import datetime
-import hashlib
 from typing import Any, Mapping
 
 from cafe.core.packet_io import canonical_json
 from cafe.core.types import AgentCLI
 
+from .delivery import normalize_delivery_contract
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 _RUNTIME_KEYS = {
     "session",
     "sessions",
@@ -28,6 +29,7 @@ _RUNTIME_KEYS = {
 }
 _PROPOSAL_KEYS = {
     "locales",
+    "delivery_contract",
     "confirmation_contract",
     "reactive_user_handoffs",
     "mandate",
@@ -48,6 +50,7 @@ _CONTRACT_KEYS = _PROPOSAL_KEYS - {"semantic_facts", "material_assumptions"} | {
 }
 _POLICY_SEMANTIC_FIELDS = (
     "locales",
+    "delivery_contract",
     "confirmation_contract",
     "reactive_user_handoffs",
     "mandate",
@@ -258,13 +261,16 @@ def _validate_checkout(value: Any) -> dict[str, Any]:
     raise ValueError("checkout must be current_checkout or a named worktree")
 
 
-def _validate_policy(proposal: Mapping[str, Any]) -> dict[str, Any]:
+def _validate_policy(
+    proposal: Mapping[str, Any], *, require_delivery: bool = True
+) -> dict[str, Any]:
     raw = _mapping(proposal, "confirmed proposal", keys=set(proposal))
     if _RUNTIME_KEYS & set(raw):
         raise ValueError("mutable runtime state does not belong in the confirmed contract")
     if set(raw) - _PROPOSAL_KEYS:
         raise ValueError("confirmed proposal has unknown authority fields")
-    if set(raw) != _PROPOSAL_KEYS:
+    required = _PROPOSAL_KEYS if require_delivery else _PROPOSAL_KEYS - {"delivery_contract"}
+    if set(raw) != required:
         raise ValueError("confirmed proposal is incomplete")
     phases = _validate_phases(raw["phases"])
     result: dict[str, Any] = {
@@ -286,6 +292,8 @@ def _validate_policy(proposal: Mapping[str, Any]) -> dict[str, Any]:
         "driver": _validate_driver(raw["driver"]),
         "checkout": _validate_checkout(raw["checkout"]),
     }
+    if require_delivery:
+        result["delivery_contract"] = normalize_delivery_contract(raw["delivery_contract"])
     for field in ("need_clarification", "need_permission", "alignment_checkpoint"):
         result["reactive_user_handoffs"][field] = _string(
             result["reactive_user_handoffs"][field], f"reactive_user_handoffs.{field}"
@@ -315,6 +323,7 @@ def _semantic_projection_from_validated(contract: Mapping[str, Any]) -> dict[str
     fields = (
         "identity",
         "locales",
+        "delivery_contract",
         "confirmation_contract",
         "reactive_user_handoffs",
         "mandate",
@@ -375,16 +384,25 @@ def build_initial_contract(
 
 
 def validate_contract(
-    document: Mapping[str, Any], *, issue_name: str | None = None, workflow_id: str | None = None
+    document: Mapping[str, Any],
+    *,
+    issue_name: str | None = None,
+    workflow_id: str | None = None,
+    allow_legacy_upgrade: bool = False,
 ) -> dict[str, Any]:
     raw = _mapping(document, "contract")
-    if set(raw) != _CONTRACT_KEYS:
+    # A valid v3 predecessor may be read only for explicit user reconfirmation
+    # or the callback's narrow, read-only event-transport projection.  Entry
+    # and ordinary activation never gain legacy authority.
+    legacy = allow_legacy_upgrade and raw.get("schema_version") == 3
+    keys = _CONTRACT_KEYS - {"delivery_contract"} if legacy else _CONTRACT_KEYS
+    if set(raw) != keys:
         raise ValueError("contract has unsupported or missing fields")
     schema_version = raw["schema_version"]
     if (
         not isinstance(schema_version, int)
         or isinstance(schema_version, bool)
-        or schema_version != SCHEMA_VERSION
+        or schema_version != (3 if legacy else SCHEMA_VERSION)
     ):
         raise ValueError("contract schema version is unsupported")
     identity = _mapping(raw["identity"], "identity", keys={"issue_name", "workflow_id"})
@@ -433,9 +451,9 @@ def validate_contract(
         if isinstance(raw["preflight"], Mapping)
         else None
     )
-    policy = _validate_policy(proposal)
+    policy = _validate_policy(proposal, require_delivery=not legacy)
     normalized: dict[str, Any] = {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": schema_version,
         "identity": identity,
         "revision": revision,
         "provenance": provenance,

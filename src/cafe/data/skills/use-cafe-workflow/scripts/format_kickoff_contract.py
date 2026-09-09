@@ -44,13 +44,15 @@ try:
     import yaml  # type: ignore[import-untyped]
 
     from cafe.agents.executor import AgentExecutor
+    from cafe.core.capabilities import default_capability_definition_dirs, load_capability_registry
+    from cafe.core.capability_setup import resolve_setup_choices
     from cafe.core.playbook import (
         confirmation_gate_steps,
         mandatory_confirmation_gate_steps,
-        playbook_requests_capability,
     )
     from cafe.core.types import AgentCLI, AgentConfig
     from cafe.driver import ActivateConfirmedContract, activate_confirmed_contract
+    from cafe.driver.delivery import normalize_delivery_contract
     from cafe.playbooks.loader import PlaybookLoader
     from cafe.skills.execution_profile import resolve_execution_profile
     from cafe.skills.loader import SkillLoader
@@ -88,17 +90,14 @@ def _positive_seconds(value: str) -> int:
     return seconds
 
 
-def _strict_bool(value: str) -> bool:
-    if value == "true":
-        return True
-    if value == "false":
-        return False
-    raise argparse.ArgumentTypeError("must be exactly 'true' or 'false'")
+def _capability_choices(args: argparse.Namespace, model: Any) -> list[Any]:
+    registry = load_capability_registry(default_capability_definition_dirs(args.project_root))
+    return resolve_setup_choices(model, registry, args.capability_choice)
 
 
 def _driver_policy_rows(args: argparse.Namespace) -> list[list[Any]]:
     rows: list[list[Any]] = [
-        ["schema_version", 3],
+        ["schema_version", 4],
         ["driver.mode", args.driver_mode],
     ]
     if args.driver_mode == "attached":
@@ -151,7 +150,8 @@ def _driver_policy_rows(args: argparse.Namespace) -> list[list[Any]]:
                 ],
                 [
                     "driver.authority",
-                    "callback scope only; does not grant HumanTask, permission, or capability authority",
+                    "callback scope only; does not grant HumanTask, permission, "
+                    "or capability authority",
                 ],
             ]
         )
@@ -389,6 +389,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--playbook-rationale", required=True)
     parser.add_argument("--issue-nature", required=True)
     parser.add_argument(
+        "--delivery-contract",
+        type=_json_mapping,
+        required=True,
+        help="Complete versioned delivery facts to confirm at kickoff.",
+    )
+    parser.add_argument(
         "--issue-scale",
         choices=("small", "medium", "large"),
         required=True,
@@ -427,10 +433,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--locale-source")
     parser.add_argument("--repository-content-locale", required=True)
     parser.add_argument(
-        "--pr-auto-create",
-        type=_strict_bool,
-        metavar="true|false",
-        help="Explicit PR publication choice for playbooks requesting cafe.pr.publish.",
+        "--capability-choice",
+        action="append",
+        default=[],
+        metavar="SETTING=JSON",
+        help="Explicit answer to a setup question declared by an effective capability.",
     )
     parser.add_argument("--user-required", nargs="*", default=None)
     parser.add_argument("--driver-confirmable", nargs="*", default=None)
@@ -497,7 +504,6 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
     """Build the same normalized policy rendered at kickoff, with no persistence."""
     project_root = args.project_root.resolve()
     model = PlaybookLoader(project_root=project_root).load_model(args.playbook_id).model
-    publication_applicable = playbook_requests_capability(model, "cafe.pr.publish")
     candidates = confirmation_gate_steps(model)
     mandatory_human_tasks = mandatory_confirmation_gate_steps(model)
     user_required, driver_confirmable = _resolve_partition(
@@ -572,15 +578,7 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
         )
     if set(rationales) - set(agent_phases):
         raise ValueError("phase rationale targets a non-agent phase")
-    if publication_applicable and args.pr_auto_create is None:
-        raise ValueError(
-            "--pr-auto-create is required when an effective step requests cafe.pr.publish"
-        )
-    if not publication_applicable and args.pr_auto_create is not None:
-        raise ValueError(
-            "--pr-auto-create is not applicable because no effective step requests "
-            "cafe.pr.publish"
-        )
+    _capability_choices(args, model)
     locale_source = args.locale_source or f"playbook:{args.playbook_id}"
     checkout = (
         {"kind": "worktree", "path": args.worktree}
@@ -588,6 +586,7 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
         else {"kind": "current_checkout"}
     )
     proposal: dict[str, Any] = {
+        "delivery_contract": normalize_delivery_contract(args.delivery_contract),
         "locales": {
             "conversation": {"value": effective_locale, "source": locale_source},
         },
@@ -640,6 +639,7 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
             for cli, model_name in _parse_event_driver_entries(args.event_driver)
         ]
     policy_fields = (
+        "delivery_contract",
         "locales",
         "confirmation_contract",
         "reactive_user_handoffs",
@@ -708,7 +708,7 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
     playbook_loader = PlaybookLoader(project_root=project_root)
     loaded = playbook_loader.load_model(args.playbook_id)
     model = loaded.model
-    publication_applicable = playbook_requests_capability(model, "cafe.pr.publish")
+    capability_choices = _capability_choices(args, model)
     skill_loader = SkillLoader(project_root=project_root)
     candidates = confirmation_gate_steps(model)
     mandatory_human_tasks = mandatory_confirmation_gate_steps(model)
@@ -827,32 +827,26 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
         ["worktree", worktree],
         ["mandate_source", mandate_source],
     ]
-    publication_contract = ""
-    if publication_applicable:
-        choice = str(args.pr_auto_create).lower()
-        summary_rows.extend(
-            [
-                ["pr.auto_create", choice],
-            ]
-        )
-        publication_contract = "\n\n".join(
-            [
-                "### PR publication choice",
-                _table(
-                    ["Value", "Observable outcome"],
-                    [
+    capability_contracts = []
+    for question, selected in capability_choices:
+        summary_rows.append([question.setting, json.dumps(selected.value, ensure_ascii=False)])
+        capability_contracts.append(
+            "\n\n".join(
+                [
+                    f"### {question.prompt}",
+                    _table(
+                        ["Value", "Observable outcome"],
                         [
-                            "true",
-                            "Push the feature branch and create or update the PR after local "
-                            "material and authorization succeed; review receives a verified PR URL.",
+                            [json.dumps(choice.value, ensure_ascii=False), choice.outcome]
+                            for choice in question.choices
                         ],
-                        [
-                            "false",
-                            "Publication mode: local-only. No PR URL exists.",
-                        ],
-                    ],
-                ),
-            ]
+                    ),
+                    _table(
+                        ["Prepare arguments (after confirmation)", "Verify in issue.yaml"],
+                        [[shlex.join(selected.prepare_args), question.setting]],
+                    ),
+                ]
+            )
         )
     summary = _table(summary_headers, summary_rows)
     preflight = _table(
@@ -942,15 +936,6 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
         raise ValueError(
             "phase rationale targets non-agent step: " + ", ".join(sorted(unused_rationales))
         )
-    if publication_applicable and args.pr_auto_create is None:
-        raise ValueError(
-            "--pr-auto-create is required when an effective step requests cafe.pr.publish"
-        )
-    if not publication_applicable and args.pr_auto_create is not None:
-        raise ValueError(
-            "--pr-auto-create is not applicable because no effective step requests "
-            "cafe.pr.publish"
-        )
 
     reactive = _table(
         reactive_headers,
@@ -987,7 +972,26 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
         [
             title,
             summary,
-            *([publication_contract] if publication_contract else []),
+            "### Delivery Contract",
+            _table(
+                summary_headers,
+                [
+                    [
+                        key,
+                        (
+                            json.dumps(value, ensure_ascii=False)
+                            if isinstance(value, (dict, list))
+                            else value
+                        ),
+                    ]
+                    for key, value in normalize_delivery_contract(args.delivery_contract).items()
+                ],
+            ),
+            "The Driver may accept a requirement-equivalent implementation with a smaller "
+            "or simpler implementation footprint. It must not accept reduced user-visible "
+            "behavior, feature scope, acceptance coverage, edge-case coverage, or required "
+            "integrations.",
+            *capability_contracts,
             "### Preflight evidence",
             preflight,
             "### Phases",
@@ -1018,10 +1022,11 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
             *(
                 [
                     "### Confirmed durable policy",
-                    "The following Driver-owned policy must be confirmed unchanged before activation.",
+                    "The following Driver-owned policy must be confirmed unchanged "
+                    "before activation.",
                     "```json",
                     json.dumps(
-                        {"schema_version": 3, "policy": confirmed_proposal},
+                        {"schema_version": 4, "policy": confirmed_proposal},
                         ensure_ascii=False,
                         indent=2,
                         sort_keys=True,

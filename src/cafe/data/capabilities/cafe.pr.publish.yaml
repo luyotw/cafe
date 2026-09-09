@@ -43,3 +43,13 @@ idempotency: update_in_place
 risk: medium
 approval: not_required
 policy: allow
+setup_questions:
+  - setting: pr.auto_create
+    prompt: PR publication choice (publication does not authorize merge or issue closure)
+    choices:
+      - value: true
+        outcome: Push the feature branch and create or update the PR after local material and authorization succeed; review receives a verified PR URL.
+        prepare_args: [--auto-create-pr]
+      - value: false
+        outcome: "Publication mode: local-only. No PR URL exists."
+        prepare_args: [--no-auto-create-pr]
