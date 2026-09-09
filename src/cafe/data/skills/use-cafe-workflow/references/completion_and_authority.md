@@ -9,16 +9,51 @@
 2. Inspect only artifacts, receipts, and review results required by that graph
    and the confirmed Delivery Contract. Do not synthesize specification,
    planning, development, review, or publication steps or artifact names.
-3. Report the outcome, evidence, and any unresolved user-owned work in the
-   effective locale. Stop workflow execution at its declared terminal state.
-   Completion does not require an external service call or local teardown.
+3. End workflow execution at its declared terminal state, then proactively
+   assist with closeout below. Workflow completion does not end the Driver's
+   assistance or require an external service call or local teardown.
 
 A `brief → draft → done` graph ends with its declared draft evidence. A graph
 with a publication step delegates publication to that step's skill and declared
 capability, including its own confirmation and verified-result contract.
-Neither graph acquires additional work when it reaches `done`.
+Neither graph acquires additional steps when it reaches `done`. Closeout
+assistance remains separate from its terminal state.
 
-## Classify a follow-up request
+## Proactively assist with closeout
+
+Do this whenever the playbook completes; do not wait for the user to ask what
+comes next. Derive closeout from the actual deliverables, confirmed user goal,
+existing artifacts/receipts, and current instructions. Use bounded read-only
+checks where needed; do not query unrelated services or apply a fixed shipping
+checklist to every playbook.
+
+1. Present a concise, self-contained handoff: what was achieved, where the usable
+   result is, the evidence supporting completion, and any relevant remaining
+   action. Distinguish required user follow-through from optional suggestions;
+   do not describe either as a missing workflow phase.
+2. Recommend the smallest useful next action, explaining its purpose and target.
+   A research workflow may end with findings and unresolved questions; a drafting
+   workflow with an editable document and guidance for its intended use. A
+   software workflow may leave local changes or a published change for the user
+   to integrate. None of these outcomes implies a standard publication, merge,
+   issue-closure, or cleanup sequence.
+3. Complete useful read-only or reversible preparation already within scope.
+   For an applicable follow-up action with existing explicit authority, check
+   that authority below and continue through its existing execution contract
+   without asking again. Reuse valid evidence; do not add another full review,
+   recreate outputs, or open a new workflow just to provide closeout assistance.
+4. If the useful next action needs a user decision or missing authority, present
+   the concrete action, target, effect, and recommendation through the existing
+   self-contained conversational handoff. Ask only about that relevant decision;
+   do not offer a menu of unrelated operations. A pending or declined follow-up
+   leaves the completed workflow complete and must not become a new gate or an
+   invented runtime HumanTask.
+5. Verify any action actually performed and report its result separately from
+   workflow completion. On resume, check existing evidence before repeating it;
+   never infer success from an earlier attempt. When no useful follow-up remains,
+   deliver the result and say so without manufacturing another question.
+
+## Check authority for a suggested or requested action
 
 - “Finish”, “complete the rest”, and “continue to the end” authorize only
   already-scoped workflow steps. They never authorize a new external mutation.

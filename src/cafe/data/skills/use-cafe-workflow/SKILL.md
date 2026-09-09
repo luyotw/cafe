@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
-metadata: {version: 1.38.0}
+metadata: {version: 1.39.0}
 ---
 
 # Use CAFE Workflow
@@ -129,10 +129,11 @@ If more than one situation applies, read every listed reference before acting; d
 
 ### Complete
 - [ ] Follow `references/completion_and_authority.md`: verify the declared terminal
-  state and its required evidence, then stop workflow execution.
-- [ ] Keep separately authorized follow-up actions outside workflow completion.
-  Do not infer publication, integration, issue closure, or local teardown.
-- [ ] Report the relevant test evidence and final state in the effective locale.
+  state and its required evidence, then proactively help the user close out.
+- [ ] Present the deliverables and only relevant remaining actions, grounded in
+  the actual playbook and user goal. Continue authorized assistance; ask only
+  for missing action-specific authority. Do not invent an extra workflow gate.
+- [ ] Report verified results and any user-owned next step in the effective locale.
 
 ## Reference index
 - `references/kickoff.md` — locale, confirmation contract, formatter, prepare.
@@ -143,6 +144,6 @@ If more than one situation applies, read every listed reference before acting; d
 - `references/phases_yaml.md` — confirmed-chain writer contract and non-authoritative field guidance.
 - `references/handoffs_and_alignment.md` — user pauses and driver decisions.
 - `references/diagnosis_and_repair.md` — bounded classification and disposition.
-- `references/completion_and_authority.md` — terminal evidence and separate action authority.
+- `references/completion_and_authority.md` — proactive closeout and separate action authority.
 - `references/correction_ab_experiment.md` — controlled efficiency experiment.
 - `references/issue_decomposition.md` — validation, authority, and project position.
