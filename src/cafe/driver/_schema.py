@@ -391,8 +391,9 @@ def validate_contract(
     allow_legacy_upgrade: bool = False,
 ) -> dict[str, Any]:
     raw = _mapping(document, "contract")
-    # A valid v3 predecessor may only be read for explicit user reconfirmation.
-    # Entry, callbacks and ordinary activation never gain legacy authority.
+    # A valid v3 predecessor may be read only for explicit user reconfirmation
+    # or the callback's narrow, read-only event-transport projection.  Entry
+    # and ordinary activation never gain legacy authority.
     legacy = allow_legacy_upgrade and raw.get("schema_version") == 3
     keys = _CONTRACT_KEYS - {"delivery_contract"} if legacy else _CONTRACT_KEYS
     if set(raw) != keys:

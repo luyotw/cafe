@@ -99,10 +99,18 @@ def event_callback_policy(
 
     Callback delivery has no caller-authored preflight payload.  It therefore
     deliberately projects only the already-confirmed event transport policy,
-    bound to the exact contract digest read immediately before use.  All other
-    entry paths continue through :func:`evaluate` and its freshness check.
+    bound to the exact contract digest read immediately before use.  A fully
+    validated v3 predecessor is safe to read for this narrow, read-only
+    transport projection: it neither activates product policy nor upgrades the
+    contract.  All other entry paths continue through :func:`evaluate` and its
+    freshness check, which require the current contract schema.
     """
-    contract, digest = load_contract(issue_dir, issue_name=issue_name, workflow_id=workflow_id)
+    contract, digest = load_contract(
+        issue_dir,
+        issue_name=issue_name,
+        workflow_id=workflow_id,
+        allow_legacy_upgrade=True,
+    )
     if contract["driver"]["mode"] != "event-driven":
         return None, digest
     return {"clis": deepcopy(contract["driver"]["clis"])}, digest

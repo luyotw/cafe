@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
 import importlib.util
 import json
 import subprocess
@@ -13,6 +14,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
+from cafe.core.packet_io import canonical_json
 from cafe.core.types import AgentCLI, AgentResponse, TokenUsage
 from tests.fixtures.delivery_contract import delivery_contract
 
@@ -492,6 +494,54 @@ def _contract_event_context(
     )
     state = callback._ensure_dispatch_event(driver_dir, state, event)
     return driver_dir, state, event
+
+
+def _downgrade_contract_to_v3(contract_path: Path) -> bytes:
+    """Create the exact validated v3 predecessor shape without migrating it."""
+    document = json.loads(contract_path.read_text(encoding="utf-8"))
+    del document["delivery_contract"]
+    document["schema_version"] = 3
+    policy = document["preflight"]["semantic_facts"]["effective_policy"]
+    del policy["delivery_contract"]
+    projection = {
+        **policy,
+        "identity": document["identity"],
+        "material_assumptions": document["preflight"]["material_assumptions"],
+    }
+    document["provenance"]["proposal_digest"] = hashlib.sha256(
+        canonical_json(projection)
+    ).hexdigest()
+    predecessor = canonical_json(document)
+    contract_path.write_bytes(predecessor)
+    return predecessor
+
+
+def test_contract_callback_reads_verified_v3_transport_without_upgrading(tmp_path: Path) -> None:
+    """A delivery-schema upgrade must not break an already-confirmed callback."""
+    callback = _callback_module()
+    issue_dir = tmp_path / ".cafe" / "issues" / "v3-event-contract"
+    blackboard = _prepare_issue(issue_dir)
+    _activate_event_contract(
+        issue_dir,
+        workflow_id=blackboard.workflow_id,
+        clis=[("codex", "primary"), ("claude", "fallback")],
+    )
+    contract_path = issue_dir / "driver" / "contract.json"
+    predecessor = _downgrade_contract_to_v3(contract_path)
+
+    config = callback._contract_callback_config(
+        issue_dir=issue_dir,
+        issue_name=issue_dir.name,
+        workflow_id=blackboard.workflow_id,
+    )
+
+    assert config == {
+        "schema_version": callback._CONTRACT_CALLBACK_CONFIG_SCHEMA,
+        "mode": "event-driven",
+        "contract_sha256": hashlib.sha256(predecessor).hexdigest(),
+        "clis": [{"cli": "codex"}, {"cli": "claude", "model": "fallback"}],
+    }
+    assert contract_path.read_bytes() == predecessor
 
 
 @pytest.mark.parametrize("cli", list(AgentCLI))
