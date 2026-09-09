@@ -15,7 +15,12 @@ pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
 
 def _load_default_playbook() -> dict:
-    return PlaybookLoader().load("standard")
+    playbook = PlaybookLoader().load("standard")
+    playbook["steps"]["pr"]["capability_requests"] = []
+    playbook["steps"]["pr"]["behavior"] = {"completion": "status_code"}
+    playbook["steps"]["pr"]["on"].pop("confirm_output", None)
+    playbook["steps"]["pr"]["on"]["workflow_complete"] = "_done"
+    return playbook
 
 
 def _run_until_settled(

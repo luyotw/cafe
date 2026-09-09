@@ -57,7 +57,11 @@ class TestPrepareAutoSync:
                 # Mock other prepare dependencies to avoid full execution
                 with patch("cafe.ui.cli._ensure_default_content"):
                     with patch("cafe.ui.cli.console"):
-                        result = runner.invoke(app, ["prepare"], input="test-issue\n")
+                        result = runner.invoke(
+                            app,
+                            ["prepare", "--no-auto-create-pr"],
+                            input="test-issue\n",
+                        )
 
         assert result.exit_code in {0, 1}
         mock_sync_agents.assert_not_called()
@@ -99,7 +103,11 @@ class TestPrepareAutoSync:
                 mock_git_ops.return_value.branch_exists.return_value = False
 
                 with patch("cafe.ui.cli._ensure_default_content"):
-                    result = runner.invoke(app, ["prepare"], input="test-issue\n")
+                    result = runner.invoke(
+                        app,
+                        ["prepare", "--no-auto-create-pr"],
+                        input="test-issue\n",
+                    )
 
         assert mock_console.print.called
         call_args = str(mock_console.print.call_args_list)

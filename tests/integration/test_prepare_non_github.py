@@ -139,9 +139,9 @@ class TestPrepareNonGitHubRepo:
         with open(config_file) as f:
             config_data = yaml.safe_load(f)
 
-        # Should not have spec or pr config in non-interactive mode
+        # The publication choice remains explicit even when GitHub is unavailable.
         assert "spec" not in config_data
-        assert "pr" not in config_data
+        assert config_data["pr"]["auto_create"] is False
 
     def test_prepare_non_github_repo_explicit_no_interactive_writes_spec(
         self, temp_repo_dir, mock_git_ops_non_github
@@ -160,7 +160,7 @@ class TestPrepareNonGitHubRepo:
         assert config_data["spec"]["input_method"] == "manual"
         assert config_data["spec"]["rigor"] == "medium"
         assert config_data["plan"]["template"] == "default"
-        assert "pr" not in config_data
+        assert config_data["pr"]["auto_create"] is False
 
 
 @pytest.fixture

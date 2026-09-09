@@ -30,6 +30,14 @@ DEVELOPMENT_PLAYBOOKS = (
 )
 
 
+def _configure_publication(issue_dir: Path, *, playbook_id: str, enabled: bool = False) -> None:
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    (issue_dir / "issue.yaml").write_text(
+        f"playbook: {playbook_id}\npr:\n  auto_create: {str(enabled).lower()}\n",
+        encoding="utf-8",
+    )
+
+
 def _paused_default_state(issue_dir: Path, *, from_step: str, intent: HandoffIntent):
     store = BlackboardStore(issue_dir)
     state = store.load_or_create(from_step, playbook_id="standard")
@@ -73,6 +81,7 @@ def _materialize_default_task(
 @pytest.mark.parametrize("playbook_id", DEVELOPMENT_PLAYBOOKS)
 def test_builtin_pr_pauses_for_local_review_before_done(tmp_path: Path, playbook_id: str) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / f"{playbook_id}-pr-review"
+    _configure_publication(issue_dir, playbook_id=playbook_id)
     playbook = PlaybookLoader().load(playbook_id, strict=True)
     attempts = 0
 
@@ -161,6 +170,7 @@ def test_builtin_pr_pauses_for_local_review_before_done(tmp_path: Path, playbook
 
 def test_custom_pr_keeps_its_declared_terminal_route(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "custom-terminal-pr"
+    _configure_publication(issue_dir, playbook_id="custom-terminal")
     playbook = {
         "playbook": {
             "id": "custom-terminal",
@@ -395,6 +405,7 @@ def test_runtime_replacement_handoff_supersedes_and_notifies_only_the_new_task(
     import cafe.core.workflow_runtime as runtime_mod
 
     issue_dir = tmp_path / ".cafe" / "issues" / "runtime-replacement"
+    _configure_publication(issue_dir, playbook_id="standard")
     notifications: list[dict[str, object]] = []
     monkeypatch.setattr(runtime_mod, "load_capability_registry", lambda _dirs: {"registered": True})
     monkeypatch.setattr(runtime_mod, "default_capability_definition_dirs", lambda _root: [])

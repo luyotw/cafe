@@ -31,10 +31,13 @@ This inventory is executable documentation: the unit contract discovers every `s
 | `src/cafe/workflow_execution/worker_launch.py::launch` | Internal fixed CAFE worker bootstrap |
 | `src/cafe/workflow_execution/event_callback.py::dispatch_workflow_event_callback` | Trusted builtin asynchronous workflow event callback |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/format_kickoff_contract.py::_reexec_with_cafe_python` | Internal fixed Python re-exec |
+| `src/cafe/data/skills/use-cafe-workflow/scripts/catalog_version_check.py::run_catalog_check` | Internal fixed CAFE catalog inspection |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/preflight_cache.py::_cli_fingerprint` | Internal version probe |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/preflight_cache.py::candidate_probe` | User-requested model availability probe |
+| `src/cafe/data/skills/use-cafe-workflow/scripts/workflow_event_callback.py::_queue_host_callback` | Trusted builtin callback queue transport |
 | `src/cafe/catalogs/resolver.py::_run_git` | Internal fixed Git root discovery query |
 | `src/cafe/install/bootstrap.py::_run` | Internal installer command family |
+| `src/cafe/skills/global_installer.py::_discover_git_roots` | Internal fixed Git root discovery query |
 | `src/cafe/skills/native_bridge.py::_ensure_cli_dir_git_excluded` | Internal fixed Git command |
 | `src/cafe/ui/chat.py::launch_chat_session` | Internal agent CLI transport |
 | `src/cafe/updates/service.py::_run_pip` | Explicit approved package installation |

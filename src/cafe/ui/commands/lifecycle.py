@@ -437,17 +437,22 @@ def prepare(
             validate_publication_answers,
         )
 
-        try:
-            validate_publication_answers(
-                profile,
-                NonInteractiveCliAnswers(
-                    auto_create_pr=auto_create_pr,
-                    post_pr_todo_list=post_pr_todo_list,
-                ),
-            )
-        except PrepareNonInteractiveError as exc:
-            console.print(f"[red]Error: {exc}[/red]")
-            raise typer.Exit(1)
+        if profile.supports_pr_config() and not profile.is_github_repo and auto_create_pr is None:
+            auto_create_pr = False
+        publication_supplied = auto_create_pr is not None or post_pr_todo_list is not None
+        publication_will_be_prompted = issue_name is None and interactive
+        if publication_supplied or not publication_will_be_prompted:
+            try:
+                validate_publication_answers(
+                    profile,
+                    NonInteractiveCliAnswers(
+                        auto_create_pr=auto_create_pr,
+                        post_pr_todo_list=post_pr_todo_list,
+                    ),
+                )
+            except PrepareNonInteractiveError as exc:
+                console.print(f"[red]Error: {exc}[/red]")
+                raise typer.Exit(1)
 
         # 2. Determine interactive mode and config prompt behavior
         # should_prompt_for_config: Should we show config prompts?

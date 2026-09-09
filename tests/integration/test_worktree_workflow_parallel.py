@@ -143,6 +143,9 @@ def test_worktree_workflow_spec_pause_resume_reaches_plan(
     monkeypatch.chdir(worktree_path)
     issue_dir = worktree_path / ".cafe" / "issues" / issue_name
     issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text(
+        "playbook: standard\npr:\n  auto_create: false\n", encoding="utf-8"
+    )
 
     runner = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,

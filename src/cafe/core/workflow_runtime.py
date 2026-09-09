@@ -2472,6 +2472,7 @@ class BlackboardWorkflowRuntime:
         iteration = self._human_task_iteration(current_step)
         records = HumanTaskRecordStore(self.issue_dir)
         handoff_key = self._human_task_handoff_key(contract)
+        existing_task = None
         try:
             policy, binding = resolve_step_human_task(
                 playbook_data=self.playbook,

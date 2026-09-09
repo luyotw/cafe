@@ -156,6 +156,7 @@ def test_approve_restart_and_duplicate_resume_execute_exact_request_once(
             "capability": "cafe.slack.human_task",
             "args": {
                 "repository": tmp_path.name,
+                "issue": "approval",
                 "workflow_id": task.workflow_id,
                 "task_id": task.id,
                 "step": "develop",

@@ -1403,7 +1403,7 @@ class GenericWorkflowStepExecutor(Phase):
             "behavior_completion": behavior.completion,
             "publish_confirmation": behavior.publish_confirmation,
         }
-        if self._session_recovery is not None:
+        if getattr(self, "_session_recovery", None) is not None:
             context["session_recovery"] = (
                 "The user explicitly selected a fresh provider session after an interruption. "
                 "Continue the same phase, iteration, model, and authority. Reconstruct the "

@@ -16,6 +16,8 @@ from cafe.core.human_task_notifications import SlackNotificationError
 from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.workflow_models import PlaybookRunResult, StepExecutionResult
 from cafe.playbooks.loader import PlaybookLoader
+from cafe.services.summary_display import SummaryDisplay
+from cafe.services.summary_service import SummaryService
 from cafe.ui.cli import (
     _execute_single_step_alias,
     _find_external_resume_step,
@@ -43,6 +45,11 @@ def _write_local_only_publication_contract(issue_dir: Path) -> None:
         "pr:\n  auto_create: false\n",
         encoding="utf-8",
     )
+
+
+def _configure_test_driver_policy(*_args: object, **_kwargs: object) -> None:
+    """Guard retained skipped tests whose legacy Driver policy no longer exists."""
+    raise AssertionError("retired Driver-policy test must remain skipped")
 
 
 def test_background_forwards_trusted_event_callback_to_the_fixed_worker(
@@ -550,71 +557,6 @@ def test_single_step_uses_the_mode_neutral_core_in_the_foreground(
     assert captured["validated_pr_auto_create"] is False
 
 
-@pytest.mark.skip(reason="replaced by event-driven callback coverage")
-def test_delegated_single_step_never_bypasses_an_existing_gate_with_start_step(
-    tmp_path: Path, monkeypatch
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    _configure_test_driver_policy(monkeypatch, "delegated")
-    issue_dir = tmp_path / ".cafe" / "issues" / "issue458-gate"
-    store = BlackboardStore(issue_dir)
-    state = store.load_or_create("spec", playbook_id="standard")
-    policy = DriverPolicyContract.model_validate(
-        {
-            "contract_version": 2,
-            "driver": {"mode": "delegated", "cli": "codex", "model": "test-delegated-model"},
-        }
-    )
-    DriverCoordinator(store, state).open_boundary(
-        completed_phase="spec",
-        requested_action="plan",
-        boundary_id="transition:already-open:plan",
-        policy=policy,
-    )
-    executed: list[str] = []
-
-    class UnexpectedExecutor:
-        def execute_step(self, step_name, *_args, **_kwargs):
-            executed.append(step_name)
-            pytest.fail("single-step must not execute past an unresolved delegated gate")
-
-    class CapturingWorkflowHost:
-        def __init__(self, _issue_dir) -> None:
-            pass
-
-        def run(self, runtime, *, hosting):
-            assert hosting == "foreground"
-            return SimpleNamespace(result=runtime())
-
-    with (
-        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
-        patch("cafe.ui.cli._build_workflow_step_executor", return_value=UnexpectedExecutor()),
-        patch("cafe.ui.commands.workflow.WorkflowHost", CapturingWorkflowHost),
-    ):
-        git = MagicMock()
-        git.get_current_branch.return_value = "issue458-gate"
-        mock_git_cls.return_value = git
-        result = runner.invoke(
-            app,
-            [
-                "workflow",
-                "--playbook",
-                "standard",
-                "--execute",
-                "--single-step",
-                "--start-step",
-                "develop",
-            ],
-        )
-
-    assert result.exit_code == 0, (result.stdout, result.exception)
-    assert "DELEGATED_DRIVER_PAUSED" in result.stdout
-    assert executed == []
-    reloaded = store.load_or_create("spec", playbook_id="standard")
-    assert reloaded.driver_state["packets"] == state.driver_state["packets"]
-    assert reloaded.driver_state["decisions"] == {}
-
-
 @pytest.mark.parametrize(
     ("notifications_enabled", "credential_available", "human_task_delivery_available"),
     [
@@ -1011,88 +953,6 @@ def test_unattended_without_explicit_controls_automatically_starts_the_worker(
     assert result.exit_code == 0, (result.stdout, result.exception)
     assert [record["mode"] for record in launches] == ["unattended"]
     assert "4580" in result.stdout
-
-
-@pytest.mark.skip(reason="replaced by generic worker-launch coverage")
-def test_validated_internal_worker_context_never_starts_a_second_worker(
-    tmp_path: Path, monkeypatch
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    _configure_test_driver_policy(monkeypatch, "unattended")
-    issue_dir = tmp_path / ".cafe" / "issues" / "issue458-child"
-    issue_dir.mkdir(parents=True)
-    import cafe.ui.commands.workflow as command_module
-
-    playbook_dir = tmp_path / ".cafe" / "playbooks"
-    playbook_dir.mkdir(parents=True)
-    (playbook_dir / "one-step.yaml").write_text(
-        """
-playbook:
-  id: one-step
-steps:
-  spec:
-    skill: cafe-spec
-    role: pm
-    on: {await_agent: _done}
-""".strip(),
-        encoding="utf-8",
-    )
-    policy = DriverPolicyContract.model_validate(
-        {"contract_version": 2, "driver": {"mode": "unattended"}}
-    )
-    worker_record = command_module.WorkerLaunchStore(issue_dir).start(
-        mode="unattended", policy=policy
-    )
-    command_module.WorkerLaunchStore(issue_dir).mark(worker_record["worker_id"], "started")
-
-    class UnexpectedWorkerLauncher:
-        def __init__(self, _issue_dir) -> None:
-            pytest.fail("a validated child must never start another worker")
-
-    class FakeExecutor:
-        def execute_step(self, step_name, step_def, _state, **_kwargs):
-            return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
-
-    class CapturingWorkflowHost:
-        def __init__(self, _issue_dir) -> None:
-            pass
-
-        def run(self, *_args, **_kwargs):
-            pytest.fail("validated worker must use run_worker with its handshake identity")
-
-        def run_worker(self, runtime, *, worker_id, hosting):
-            assert hosting == "background"
-            assert worker_id == worker_record["worker_id"]
-            return SimpleNamespace(result=runtime())
-
-    with (
-        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
-        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
-        patch("cafe.ui.commands.workflow.FixedWorkerLauncher", UnexpectedWorkerLauncher),
-        patch("cafe.ui.commands.workflow.WorkflowHost", CapturingWorkflowHost),
-    ):
-        git = MagicMock()
-        git.get_current_branch.return_value = "issue458-child"
-        mock_git_cls.return_value = git
-        result = runner.invoke(
-            app,
-            [
-                "workflow",
-                "--playbook",
-                "one-step",
-                "--execute",
-                "--internal-worker-id",
-                worker_record["worker_id"],
-                "--internal-policy-digest",
-                worker_record["policy_digest"],
-            ],
-        )
-
-    assert result.exit_code == 0, (result.stdout, result.exception)
-    assert (
-        command_module.WorkerLaunchStore(issue_dir).get(worker_record["worker_id"])["status"]
-        == "stopped"
-    )
 
 
 @pytest.mark.skip(reason="background is explicit without a driver policy")

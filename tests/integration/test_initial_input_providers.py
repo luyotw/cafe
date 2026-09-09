@@ -265,7 +265,13 @@ def _prepare_builtin_issue(
     ):
         result = runner.invoke(
             app,
-            ["prepare", issue_name, "--no-interactive", "--input-method=manual"],
+            [
+                "prepare",
+                issue_name,
+                "--no-interactive",
+                "--input-method=manual",
+                "--no-auto-create-pr",
+            ],
         )
     assert result.exit_code == 0, result.stdout
 

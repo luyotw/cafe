@@ -80,6 +80,15 @@ def _write_pr_done_baton(issue_dir: Path) -> None:
     )
 
 
+def _use_local_terminal_pr(playbook: dict) -> dict:
+    """Keep orchestration journeys independent of the publication capability."""
+    playbook["steps"]["pr"]["capability_requests"] = []
+    playbook["steps"]["pr"]["behavior"] = {"completion": "status_code"}
+    playbook["steps"]["pr"]["on"].pop("confirm_output", None)
+    playbook["steps"]["pr"]["on"]["workflow_complete"] = "_done"
+    return playbook
+
+
 def test_host_capability_journeys_share_fail_closed_dispatch_and_receipts(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -266,7 +275,7 @@ steps:
     hooks:
       prepare_input: [UserInputCollector]
       publish_output: [GitHubPRCreator]
-    on: {workflow_complete: _done}
+    on: {await_agent: repair, workflow_complete: _done}
 """.strip(),
         encoding="utf-8",
     )
@@ -331,6 +340,16 @@ steps:
         git_ops=_GitOperations(),
         role_agent_map={"developer": "David"},
     )
+    state = BlackboardStore(issue_dir).load_or_create("release")
+    BlackboardStore(issue_dir).set_current_step(state, "release")
+    BlackboardStore(issue_dir).update_handoff_contract(
+        state,
+        from_step="release",
+        to_owner=HandoffOwner.AGENT,
+        to_step="release",
+        intent=HandoffIntent.AWAIT_AGENT,
+        source="test.feedback_arrived",
+    )
     BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
         playbook=playbook,
@@ -342,7 +361,12 @@ steps:
         BlackboardStore(issue_dir)
         .load_handoff_contract(state, allowed_steps=["repair", "release"])
         .to_step
-        == "repair"
+        == "release"
+    )
+    assert any(
+        event.event_type == "workflow_blocked"
+        and event.data.get("reason") == "missing_capability_receipt"
+        for event in state.events
     )
 
     resumed_steps: list[str] = []
@@ -467,6 +491,7 @@ def test_default_requested_changes_follow_declared_loop_without_publish_authorit
     assert [entry.target_step for entry in WorkflowFeedbackLedger(issue_dir).pending()] == [
         "develop"
     ]
+    _use_local_terminal_pr(playbook)
 
     executed_steps: list[str] = []
 
@@ -518,7 +543,7 @@ def test_builtin_permission_notification_completes_and_reaches_reviewed_pr(
     import cafe.core.workflow_runtime as runtime_mod
 
     issue_dir = tmp_path / ".cafe" / "issues" / "permission-reviewed-pr"
-    playbook = PlaybookLoader().load("standard")
+    playbook = _use_local_terminal_pr(PlaybookLoader().load("standard"))
     notification_requests: list[dict[str, object]] = []
     monkeypatch.setattr(
         runtime_mod,
@@ -579,6 +604,7 @@ def test_builtin_permission_notification_completes_and_reaches_reviewed_pr(
     assert visits.count("develop") == 2
     assert notification_requests[0]["args"] == {
         "repository": tmp_path.name,
+        "issue": "permission-reviewed-pr",
         "workflow_id": task.workflow_id,
         "task_id": task.id,
         "step": "develop",
@@ -597,6 +623,7 @@ def test_default_parity_and_metadata_absent_lifecycle_boundary(tmp_path: Path, m
         "web_research",
         "git_inspection",
     ]
+    _use_local_terminal_pr(default)
 
     issue_dir = tmp_path / ".cafe" / "issues" / "default-parity"
     executed_steps: list[str] = []
@@ -654,7 +681,7 @@ def test_default_parity_and_metadata_absent_lifecycle_boundary(tmp_path: Path, m
 
 def _load_default_playbook() -> dict:
     """載入真實 default playbook。"""
-    return PlaybookLoader().load("standard")
+    return _use_local_terminal_pr(PlaybookLoader().load("standard"))
 
 
 def _run_until_settled(
@@ -1120,11 +1147,11 @@ class TestUserHandoff:
             executor=executor,
         ).run(max_transitions=10)
 
-        assert first.completed is False
-        assert first.final_status_code == "BATON_POSITION_REALIGNED"
-        assert executed_steps == []
+        assert first.completed is True
+        assert first.final_step == "plan"
+        assert executed_steps == ["plan"]
         blackboard = BlackboardStore(issue_dir).load_or_create("spec")
-        assert blackboard.current_step == "plan"
+        assert blackboard.current_step == "done"
         assert any(e.event_type == "runtime_position_realigned" for e in blackboard.events)
 
         second = BlackboardWorkflowRuntime(
@@ -1269,7 +1296,8 @@ class TestUserHandoff:
         issue_dir = tmp_path / ".cafe" / "issues" / "issue-cli-resume"
         issue_dir.mkdir(parents=True, exist_ok=True)
         (issue_dir / "issue.yaml").write_text(
-            "playbook: standard\ncontract_version: 2\ndriver:\n  mode: attached\n  poll_interval_seconds: 10\n",
+            "playbook: standard\npr:\n  auto_create: false\n"
+            "contract_version: 2\ndriver:\n  mode: attached\n  poll_interval_seconds: 10\n",
             encoding="utf-8",
         )
 
@@ -1296,6 +1324,14 @@ class TestUserHandoff:
                             status_code="need_clarification",
                             auto_continue=False,
                         )
+                if step_name == "pr":
+                    return StepExecutionResult(
+                        response="confirm_output",
+                        artifacts={"pr_result": "pr/output.md"},
+                        status_code="confirm_output",
+                        handoff_owner=HandoffOwner.USER,
+                        handoff_intent=HandoffIntent.CONFIRM_OUTPUT,
+                    )
                 return StepExecutionResult(
                     response="confirmed",
                     artifacts={
