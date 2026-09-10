@@ -2037,10 +2037,10 @@ def test_proactive_review_consensus_uses_formal_correction_and_user_owned_confir
         "Chat must not edit the current phase output",
         "chat response is discussion evidence, not workflow authority",
         "findings, chat attempts, disagreements, and rebuttals do not create an iteration",
-        "formal correction iteration only through the active declared `revise` outcome",
+        "formal correction iteration only through the unique active declared correction outcome",
         "requires feedback",
         "`correction: true`",
-        "correction rather than downstream advancement",
+        "non-advancing correction continuation",
         "consolidated findings, reached consensus, and acceptance conditions",
         "--no-resume --json",
         "verify the durable task result and correction continuation",
@@ -2056,7 +2056,7 @@ def test_proactive_review_consensus_uses_formal_correction_and_user_owned_confir
         assert required.lower() in contract.lower()
 
     for required in (
-        "Driver may submit only a declared non-advancing `revise`",
+        "Driver may submit only that derived outcome",
         "user_required and mandatory confirmation gates keep advancing `confirm` user-owned",
         "driver_confirmable clean confirm remains driver-permitted",
         "No user prompt occurs during an autonomous correction loop",
@@ -2068,6 +2068,26 @@ def test_proactive_review_consensus_uses_formal_correction_and_user_owned_confir
         "only when they materially affect the active decision",
     ):
         assert required.lower() in contract.lower()
+
+
+def test_proactive_review_derives_correction_routing_from_the_active_human_task() -> None:
+    resources = (
+        _read_skill_resource("SKILL.md")
+        + _read_skill_resource("references/running_workflow.md")
+        + _read_skill_resource("references/handoffs_and_alignment.md")
+    )
+    normalized = " ".join(resources.split()).lower()
+
+    for required in (
+        "unique active declared correction outcome",
+        "requires feedback",
+        "`correction: true`",
+        "non-advancing correction continuation",
+        "zero or multiple eligible correction outcomes",
+        "fail closed for user/playbook clarification",
+        "regardless of outcome, phase, or target names",
+    ):
+        assert required in normalized
 
 
 def test_proactive_review_handoff_keeps_the_required_summary_compact() -> None:
@@ -2109,7 +2129,7 @@ def test_proactive_review_consensus_has_one_authority_path_and_a_bounded_input()
     for required in (
         "chat before any correction routing",
         "only user-owned clean advancement candidates receive a user confirmation",
-        "exception for an active declared non-advancing correction revise",
+        "except for the unique active declared correction outcome",
         "at most 20 findings",
         "at most 12,000 utf-8 bytes",
         "each evidence item is limited to at most 500 utf-8 bytes",
@@ -2150,11 +2170,11 @@ def test_proactive_review_authority_precedence_has_no_blanket_callback_or_route_
         task_policy = task_policy.lower()
         routing = routing.lower()
         task_level_rule = re.search(
-            r"(?:(except for) )?an active declared non-advancing correction revise, a mandatory, `user_required`, clarification, permission, or capability task requires a \*\*user-facing driver turn\*\*",
+                r"(?:(except for) )?the unique active declared correction outcome, a mandatory, `user_required`, clarification, permission, or capability task requires a \*\*user-facing driver turn\*\*",
             task_policy,
         )
         callback_blanket = re.search(
-            r"callback.{0,100}(?:must never|cannot).{0,100}correction revise",
+                r"callback.{0,100}(?:must never|cannot).{0,100}eligible correction outcome",
             task_policy,
         )
         route_before_chat = re.search(
@@ -2163,16 +2183,16 @@ def test_proactive_review_authority_precedence_has_no_blanket_callback_or_route_
         )
         return (
             "choose a user answer" in task_policy
-            and "correction revise is not a user answer" in task_policy
-            and "only this declared correction outcome is excepted" in task_policy
-            and "except for an active declared non-advancing correction revise" in task_policy
-            and "permits the current driver, including an event-driven callback, to submit only that revise"
+            and "unique active declared correction outcome is not a user answer" in task_policy
+            and "zero or multiple eligible outcomes fail closed for user/playbook clarification" in task_policy
+            and "except for the unique active declared correction outcome" in task_policy
+            and "including an event-driven callback, to submit only that eligible outcome"
             in task_policy
             and task_level_rule is not None
             and task_level_rule.group(1) == "except for"
             and not callback_blanket
             and "chat before any correction routing" in routing
-            and "after due review/chat consensus" in routing
+            and "unique active declared correction outcome" in routing
             and "advancing `confirm`" in routing
             and not route_before_chat
         )
@@ -2180,13 +2200,13 @@ def test_proactive_review_authority_precedence_has_no_blanket_callback_or_route_
     assert is_consistent(task_authority, correction_flow)
     assert not is_consistent(
         task_authority.replace(
-            "Except for an active declared non-advancing correction revise, a mandatory,",
-            "An active declared non-advancing correction revise, a mandatory,",
+            "Except for the unique active declared correction outcome, a mandatory,",
+            "The unique active declared correction outcome, a mandatory,",
         ),
         correction_flow,
     )
     assert not is_consistent(
-        task_authority + " The callback must never submit a correction revise.",
+        task_authority + " The callback must never submit an eligible correction outcome.",
         correction_flow,
     )
     assert not is_consistent(
@@ -2220,9 +2240,7 @@ def test_proactive_review_initial_routing_task_flow_and_matrix_share_correction_
         .split()
     ).lower()
 
-    correction_outcome = (
-        "active declared non-advancing `revise` requiring feedback and marked `correction: true`"
-    )
+    correction_outcome = "unique active declared correction outcome"
     prior_initial_routing_rules = (
         "`confirm_output` from a mandatory humantask step: always stop for the real user.",
         "`confirm_output` from a `user_required` step: stop for user approval or correction.",
@@ -2238,11 +2256,11 @@ def test_proactive_review_initial_routing_task_flow_and_matrix_share_correction_
     def is_consistent(initial: str, task: str, matrix: str) -> bool:
         return (
             correction_outcome in initial
-            and "after complete driver review and `cafe chat` consensus" in initial
+                and "after complete driver review and one `cafe chat` consensus exchange" in initial
             and "mandatory or `user_required` advancing `confirm`" in initial
             and not any(rule in initial for rule in prior_initial_routing_rules)
             and correction_outcome in task
-            and "driver may serialize the correction result" in task
+            and "driver may serialize a correction result" in task
             and prior_task_flow not in task
             and correction_outcome in matrix
             and "mandatory confirmation gates keep advancing `confirm` user-owned" in matrix
@@ -2290,8 +2308,8 @@ def test_proactive_review_snapshot_includes_the_resolved_chat_identity() -> None
     for required in (
         "phase configuration identity, resolved cli/model identity, persisted session identity",
         "playbook chat-skills identity, and prepared chat-environment identity",
-        "the correction revise is not a user answer",
-        "only this declared correction outcome is excepted from the callback prohibition",
+        "unique active declared correction outcome is not a user answer",
+        "zero or multiple eligible outcomes fail closed for user/playbook clarification",
     ):
         assert required in normalized
 

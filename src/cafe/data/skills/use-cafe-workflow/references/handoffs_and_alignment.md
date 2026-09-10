@@ -35,10 +35,13 @@ input`:
 
 Then route by intent:
 
-- An active declared non-advancing `revise` requiring feedback and marked
-  `correction: true` is the sole Driver correction exception: after complete
-  Driver review and `cafe chat` consensus, submit only that declared revise
-  through the existing correction route.
+- The unique active declared correction outcome is the sole Driver correction
+  exception only when it requires feedback, is marked `correction: true`, and
+  routes to a non-advancing correction continuation. Derive it from the active
+  HumanTask declaration regardless of outcome, phase, or target names. After
+  complete Driver review and one `cafe chat` consensus exchange, submit only
+  that outcome through the existing correction route. If zero or multiple
+  outcomes qualify, fail closed for user/playbook clarification.
 - `confirm_output` from a mandatory or `user_required` advancing `confirm`
   stops for the real user. Other user-owned decisions also stop for the user.
 - `confirm_output` from a `driver_confirmable` step: verify the output and
@@ -143,12 +146,12 @@ Use this outcome-sensitive authority matrix after due review/chat consensus:
 
 | Active outcome | Driver authority |
 | --- | --- |
-| Active declared non-advancing `revise` requiring feedback and marked `correction: true` | Driver may submit only a declared non-advancing `revise`, with consolidated findings, consensus, and acceptance conditions, to create the formal correction iteration. |
+| Unique active declared correction outcome requiring feedback, marked `correction: true`, and routing to a non-advancing correction continuation | Driver may submit only that derived outcome, with consolidated findings, consensus, and acceptance conditions, to create the formal correction iteration. Zero or multiple eligible outcomes fail closed for user/playbook clarification. |
 | `user_required` or mandatory confirmation gate advancing `confirm` | user_required and mandatory confirmation gates keep advancing `confirm` user-owned. |
 | Clean `driver_confirmable` confirmation | driver_confirmable clean confirm remains driver-permitted after independent review. |
 | Clarification, permission, capability, scope, strategic, or unknown decision | clarification, permission, capability, scope, strategic, and unknown decisions remain user-owned. |
 
-Driver-triggered revise is correction, never approval. No user prompt occurs
+Driver-triggered correction is correction, never approval. No user prompt occurs
 during an autonomous correction loop. Only user-owned clean advancement
 candidates receive a user confirmation; a clean `driver_confirmable` candidate
 is completed by the Driver after its independent review. Present one final user
