@@ -2532,6 +2532,33 @@ def test_driver_keeps_completion_separate_from_external_authority() -> None:
         assert "gh issue close" not in text
 
 
+def test_driver_can_propose_a_user_approved_bounded_direct_closeout() -> None:
+    skill = _read_skill_resource("SKILL.md")
+    reference = _read_skill_resource("references/completion_and_authority.md")
+    running = _read_skill_resource("references/running_workflow.md")
+    normalized = " ".join(reference.split())
+
+    assert "user-approved bounded closeout route" in skill
+    assert "## Offer a bounded direct closeout instead of rerunning" in reference
+    assert "the workflow is paused" in normalized
+    assert "no phase agent, background worker, or callback is running" in normalized
+    assert "uncertain liveness disqualifies this route" in normalized
+    assert "no pending HumanTask or unresolved declared gate" in normalized
+    assert "explicitly says not to rerun the workflow" in normalized
+    assert "lists every remaining edit or task" in normalized
+    assert "Ask for explicit approval" in reference
+    assert "local, reversible, within the confirmed Delivery Contract" in normalized
+    assert "make only the listed local edits" in normalized
+    assert "do not perform an external action under this approval" in normalized
+    assert "or confidence drops, stop direct work" in normalized
+    assert "continue process-only monitoring" in normalized
+    assert "a nonterminal workflow will remain nonterminal" in normalized
+    assert "never describe a still-nonterminal workflow as completed" in normalized
+    assert "Direct-closeout approval is session-local authority" in reference
+    assert "a later Driver must not automatically resume" in normalized
+    assert "user-approved bounded" in running
+
+
 class TestPollingContract:
     def test_first_poll_waits_for_the_full_confirmed_interval(self) -> None:
         skill = " ".join(_read_skill_resource("SKILL.md").split())

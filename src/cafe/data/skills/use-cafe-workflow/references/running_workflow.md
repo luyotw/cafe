@@ -312,7 +312,8 @@ non-gating for workflow advancement.
 
 Do not edit workflow artifacts, blackboard, or `next_step.txt` by hand except
 when repairing confirmed broken workflow state. Do not bypass CAFE by directly
-asking an agent to implement the issue.
+implementing the issue, except through the explicit, user-approved bounded
+closeout route in `completion_and_authority.md`.
 
 ## Delivery evidence during execution and takeover
 

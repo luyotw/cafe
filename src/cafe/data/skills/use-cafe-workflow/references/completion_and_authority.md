@@ -19,6 +19,57 @@ capability, including its own confirmation and verified-result contract.
 Neither graph acquires additional steps when it reaches `done`. Closeout
 assistance remains separate from its terminal state.
 
+## Offer a bounded direct closeout instead of rerunning
+
+Before restarting or resuming workflow execution late in the work, check whether
+the deliverable is already substantially complete and the only remaining work is
+a small, exact, high-confidence correction or cleanup. Recommend that the user
+stop running the workflow and let the current Driver finish directly only when
+all of these conditions hold:
+
+- current durable status proves the workflow is paused, and bounded process
+  inspection proves no phase agent, background worker, or callback is running
+  or can still mutate the target; uncertain liveness disqualifies this route;
+- every remaining edit and its target can be enumerated before work starts;
+- the edits are local, reversible, within the confirmed Delivery Contract, and
+  require no new design choice, broad investigation, or phase-agent expertise;
+- current evidence makes the implementation and a proportionate targeted
+  validation clear, with no unresolved failure or material regression risk;
+- no pending HumanTask or unresolved declared gate, scope or strategic decision,
+  permission, external side effect, destructive action, or manual
+  workflow-state/artifact edit is involved;
+  and
+- the cost of another workflow run is materially greater than the risk and work
+  of the direct patch.
+
+This is a proposal, not implicit Driver authority. Give the user a
+self-contained recommendation that explicitly says not to rerun the workflow,
+lists every remaining edit or task, explains why each is high confidence, names
+the validation to run, and states the durable consequence: a nonterminal
+workflow will remain nonterminal and its phase artifacts will not be regenerated.
+Ask for explicit approval to use the direct-closeout route. If the user declines,
+resume the workflow normally. Do not attempt to manufacture a safe stop: if any
+worker or agent is live, continue process-only monitoring or use an already
+authorized reliable control and reassess only after verified quiescence.
+
+After approval, the current Driver may inspect the affected implementation,
+make only the listed local edits, and run only the stated proportionate checks.
+Do not edit CAFE workflow artifacts, blackboard state, baton state, or
+`next_step.txt`; do not perform an external action under this approval. If the
+work expands, a listed assumption fails, validation exposes a non-obvious defect,
+or confidence drops, stop direct work and recommend returning to the workflow.
+Report verified direct-closeout results separately from workflow status, and
+never describe a still-nonterminal workflow as completed.
+
+Direct-closeout approval is session-local authority for the exact listed work,
+not durable workflow authority. Do not encode it by changing workflow or Driver
+state. If direct work is interrupted or another Driver takes over before it is
+verified complete, fail closed and ask the user whether to reauthorize the same
+remaining list or return to the workflow. After a verified direct closeout, a
+later Driver must not automatically resume the nonterminal workflow; it must
+inspect the reported patch and checks and obtain a direct user instruction before
+resuming.
+
 ## Proactively assist with closeout
 
 Do this whenever the playbook completes; do not wait for the user to ask what

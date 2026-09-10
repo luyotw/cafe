@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
-metadata: {version: 1.39.0}
+metadata: {version: 1.40.0}
 ---
 
 # Use CAFE Workflow
@@ -25,7 +25,7 @@ Read this file completely, then load only the references required by the current
 | Handle `to_owner=user`, confirmation, clarification, permission, or alignment | `references/handoffs_and_alignment.md`; also read `references/strategic_context.md` |
 | Start or resume linked work; confirm a spec or plan with an issue-decomposition assessment | `references/issue_decomposition.md`; also read `references/strategic_context.md` and `references/handoffs_and_alignment.md` |
 | Diagnose incorrect workflow behavior or choose a repair layer | `references/diagnosis_and_repair.md`; also read the relevant runtime reference above |
-| Reach a terminal state or receive a request for follow-up actions | `references/completion_and_authority.md` |
+| Assess a direct closeout instead of rerunning, reach a terminal state, or receive a follow-up request | `references/completion_and_authority.md` |
 | Measure fresh-versus-resumed correction efficiency | `references/correction_ab_experiment.md` |
 
 If more than one situation applies, read every listed reference before acting; do not preload unrelated references.
@@ -69,7 +69,8 @@ If more than one situation applies, read every listed reference before acting; d
 - Configure all phase chains before execution as initial values. The Driver cannot change a chain on its own. When the user explicitly requests a different phase model chain, apply that exact phase-only update for the next phase start or iteration through `model_selection.md`; let any running iteration finish, and do not alter the event-driven callback chain or reopen the full kickoff contract.
 - Do not manually edit workflow artifacts, blackboard state, or
   `next_step.txt` except when repairing confirmed broken workflow state.
-- Do not bypass CAFE by directly asking an agent to implement the issue.
+- Do not bypass CAFE by directly implementing the issue, except for the explicit,
+  user-approved bounded closeout route in `completion_and_authority.md`.
 - Modify source-of-truth playbooks and phase skills, never generated artifacts
   or installed global copies. Driver and CAFE core defects require escalation
   unless the user explicitly authorizes that source change.
@@ -128,8 +129,8 @@ If more than one situation applies, read every listed reference before acting; d
   diagnosis reference.
 
 ### Complete
-- [ ] Follow `references/completion_and_authority.md`: verify the declared terminal
-  state and its required evidence, then proactively help the user close out.
+- [ ] Follow `references/completion_and_authority.md`: assess any cheaper bounded
+  direct closeout, or verify the declared terminal state and proactively help close out.
 - [ ] Present the deliverables and only relevant remaining actions, grounded in
   the actual playbook and user goal. Continue authorized assistance; ask only
   for missing action-specific authority. Do not invent an extra workflow gate.
