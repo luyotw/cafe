@@ -796,6 +796,28 @@ def test_develop_correction_checklist_uses_feedback_file_path(tmp_path: Path) ->
     assert "{pr_feedback_file_path}" not in content
 
 
+def test_develop_checklist_requires_plan_completion_before_release_check(
+    tmp_path: Path,
+) -> None:
+    checklist_path = tmp_path / "checklist.md"
+
+    generate_develop_checklist(
+        agent_name="David",
+        spec_file_path=".cafe/issues/test/spec/iteration_001/output.md",
+        plan_file_path=".cafe/issues/test/plan/iteration_001/output.md",
+        develop_file=None,
+        checklist_file_path=checklist_path,
+    )
+
+    content = checklist_path.read_text(encoding="utf-8")
+    completion_check = content.index("Immediately before starting `release-check`")
+    release_check = content.index("treat it as the final tracked-file validation")
+
+    assert completion_check < release_check
+    assert "do not run its repository-wide test command separately" in content
+    assert "previous release-check result is stale" in content
+
+
 def test_spec_checklist_includes_dod_instruction(tmp_path: Path) -> None:
     checklist_path = tmp_path / "checklist.md"
     generate_spec_checklist(
