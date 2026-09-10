@@ -26,7 +26,7 @@ def test_packaged_develop_skill_uses_repository_quality_gate_guidance() -> None:
     builtin_root = PROJECT_ROOT / "src" / "cafe" / "data" / "skills"
     text = _skill_text(builtin_root, "cafe-develop")
 
-    assert "version: 1.9.0" in text
+    assert "version: 1.10.0" in text
     assert "與變更直接相關的 targeted checks" in text
     assert "Repository-owned quality gates" in text
     assert "max_read_only_commands" not in text
@@ -45,15 +45,16 @@ def test_behaviorally_changed_skills_have_minor_version_bumps() -> None:
     builtin_root = PROJECT_ROOT / "src" / "cafe" / "data" / "skills"
 
     expected_versions = {
-        "cafe-spec": "1.4.0",
-        "cafe-plan": "1.8.1",
-        "cafe-review": "1.13.0",
-        "cafe-pr": "1.4.1",
-        "cafe-workflow-common": "1.8.0",
-        "use-cafe-workflow": "1.39.0",
+        "cafe-spec": "version: 1.4.0",
+        "cafe-plan": "version: 1.8.1",
+        "cafe-develop": "version: 1.10.0",
+        "cafe-review": "version: 1.13.0",
+        "cafe-pr": "version: 1.4.1",
+        "cafe-workflow-common": "version: 1.8.0",
+        "use-cafe-workflow": "metadata: {version: 1.41.0}",
     }
     for name, version in expected_versions.items():
-        assert f"version: {version}" in _skill_text(builtin_root, name)
+        assert version in _skill_text(builtin_root, name)
 
 
 def test_spec_and_plan_skills_describe_runtime_owned_context_packets() -> None:
