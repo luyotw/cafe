@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Fixed
+
+- Made runtime update checks and approved installs use the canonical GitHub
+  release instead of the stale PyPI package, keeping the reported version,
+  approval token, and exact installation source on one release identity.
+
 ## [0.3.3] - 2026-09-10
 
 ### Breaking changes

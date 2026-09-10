@@ -20,6 +20,16 @@ class UpdateApplyError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class LatestRelease:
+    """One stable CAFE release and its exact source installation target."""
+
+    version: str
+    tag: str
+    release_url: str
+    install_url: str
+
+
+@dataclass(frozen=True)
 class UpdateCheckResult:
     """Bounded result returned by the trusted update service."""
 
@@ -38,16 +48,41 @@ def _installed_cafe_version() -> str:
     return importlib.metadata.version("cafe-engine")
 
 
-def _latest_pypi_release() -> tuple[str, str]:
-    with urllib.request.urlopen(
-        "https://pypi.org/pypi/cafe-engine/json", timeout=2
-    ) as response:
+def _latest_github_release() -> LatestRelease:
+    request = urllib.request.Request(
+        "https://api.github.com/repos/luyotw/cafe/releases/latest",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "cafe-engine-update-check",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=2) as response:
         payload = json.loads(response.read().decode("utf-8"))
-    version = str(payload["info"]["version"])
-    return version, f"https://pypi.org/project/cafe-engine/{version}/"
+    if not isinstance(payload, dict):
+        raise ValueError("GitHub latest release response must be an object")
+    if payload.get("draft") is not False or payload.get("prerelease") is not False:
+        raise ValueError("GitHub latest release is not a stable published release")
+
+    tag = payload.get("tag_name")
+    release_url = payload.get("html_url")
+    if not isinstance(tag, str) or not tag.startswith("v"):
+        raise ValueError("GitHub latest release has an invalid tag")
+    version = tag[1:]
+    Version(version)
+
+    expected_release_url = f"https://github.com/luyotw/cafe/releases/tag/{tag}"
+    if release_url != expected_release_url:
+        raise ValueError("GitHub latest release URL does not match its tag")
+
+    return LatestRelease(
+        version=version,
+        tag=tag,
+        release_url=release_url,
+        install_url=f"https://github.com/luyotw/cafe/archive/refs/tags/{tag}.tar.gz",
+    )
 
 
-def _run_pip(command: Sequence[str]):
+def _run_pip(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         list(command),
         capture_output=True,
@@ -57,15 +92,15 @@ def _run_pip(command: Sequence[str]):
 
 
 class UpdateService:
-    """Compare and apply one exact cafe-engine release after explicit approval."""
+    """Compare and apply one exact GitHub release after explicit approval."""
 
-    TOKEN_SCHEMA = 1
+    TOKEN_SCHEMA = 2
 
     def __init__(
         self,
         *,
         installed_version: Callable[[], str] = _installed_cafe_version,
-        latest_release: Callable[[], tuple[str, str]] = _latest_pypi_release,
+        latest_release: Callable[[], LatestRelease] = _latest_github_release,
         runner: Callable[[Sequence[str]], object] = _run_pip,
         python_executable: str = sys.executable,
     ) -> None:
@@ -75,70 +110,82 @@ class UpdateService:
         self._python_executable = python_executable
 
     @classmethod
-    def _token(cls, installed: str, latest: str, release_url: str) -> str:
+    def _token(cls, installed: str, release: LatestRelease) -> str:
         payload = json.dumps(
             {
                 "schema": cls.TOKEN_SCHEMA,
-                "package": "cafe-engine",
+                "package": "github:luyotw/cafe",
                 "installed": installed,
-                "latest": latest,
-                "release_url": release_url,
+                "latest": release.version,
+                "tag": release.tag,
+                "release_url": release.release_url,
+                "install_url": release.install_url,
             },
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
         return hashlib.sha256(payload).hexdigest()
 
-    def check(self) -> UpdateCheckResult:
-        """Read installed/PyPI state without invoking an installer."""
+    def _read_check(self) -> tuple[UpdateCheckResult, Optional[LatestRelease]]:
         installed: Optional[str] = None
         try:
             installed = self._installed_version()
-            latest, release_url = self._latest_release()
+            release = self._latest_release()
             installed_parsed = Version(installed)
-            latest_parsed = Version(latest)
+            latest_parsed = Version(release.version)
         except (Exception, InvalidVersion) as exc:
-            return UpdateCheckResult(
-                status="unavailable",
-                installed_version=installed,
-                latest_version=None,
-                release_url=None,
-                token=None,
-                error=str(exc) or exc.__class__.__name__,
+            return (
+                UpdateCheckResult(
+                    status="unavailable",
+                    installed_version=installed,
+                    latest_version=None,
+                    release_url=None,
+                    token=None,
+                    error=str(exc) or exc.__class__.__name__,
+                ),
+                None,
             )
 
         status = "update_available" if latest_parsed > installed_parsed else "current"
-        return UpdateCheckResult(
-            status=status,
-            installed_version=installed,
-            latest_version=latest,
-            release_url=release_url,
-            token=self._token(installed, latest, release_url),
+        return (
+            UpdateCheckResult(
+                status=status,
+                installed_version=installed,
+                latest_version=release.version,
+                release_url=release.release_url,
+                token=self._token(installed, release),
+            ),
+            release,
         )
+
+    def check(self) -> UpdateCheckResult:
+        """Read installed/GitHub release state without invoking an installer."""
+        result, _release = self._read_check()
+        return result
 
     def apply(self, approval_token: str) -> UpdateCheckResult:
         """Install the exact freshly compared release and return a post-check."""
         if not approval_token:
             raise UpdateApplyError("An update approval token is required")
 
-        fresh = self.check()
+        fresh, release = self._read_check()
         if (
             fresh.status != "update_available"
             or fresh.token is None
             or not hmac.compare_digest(approval_token, fresh.token)
             or fresh.latest_version is None
+            or release is None
         ):
-            raise UpdateApplyError(
-                "Update approval is stale or no approved update is available"
-            )
+            raise UpdateApplyError("Update approval is stale or no approved update is available")
 
-        approved_version = fresh.latest_version
+        approved_version = release.version
         command = [
             self._python_executable,
             "-m",
             "pip",
             "install",
-            f"cafe-engine=={approved_version}",
+            "--upgrade",
+            release.install_url,
         ]
         try:
             result = self._runner(command)
