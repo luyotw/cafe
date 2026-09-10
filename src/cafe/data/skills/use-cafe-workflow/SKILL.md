@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
-metadata: {version: 1.40.0}
+metadata: {version: 1.41.0}
 ---
 
 # Use CAFE Workflow
@@ -56,6 +56,7 @@ If more than one situation applies, read every listed reference before acting; d
   not approve themselves.
 - Make every user-owned handoff self-contained in conversation: assume no terminal, repository, or artifact access; state where the workflow paused, why it needs the user, every option with its practical consequence, and a plain-language reply example. Add evidence, scope, risk, next-phase, model, or external-effect details only when they materially affect the decision. Bare confirmation, link-only, and raw-artifact-dump handoffs are invalid.
 - On a later user-facing turn, inspect durable state first. If a user-owned task is still pending and no adequate handoff has appeared in the current conversation, answer the user's immediate question briefly and append the same compact task summary. Do not repeat an adequate handoff unless the task or options changed or the user asks.
+- Historical callback attempts retain their recorded session IDs but do not pin future callbacks to that session. When repairing a confirmed misrouted callback, preserve the event history and update only the current primary session binding.
 - Validate issue-decomposition assessments before confirming spec or plan;
   coordinate any authorized split through existing authority boundaries and
   reconstruct linked-work position from durable records.

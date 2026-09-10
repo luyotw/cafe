@@ -548,14 +548,6 @@ def _validate_dispatch_attempt(
     if not valid_transition:
         raise ValueError("event-driven dispatch attempt transition is invalid")
 
-    if status in {"acquired", "accepted", "failed", "ambiguous"} and stage == "delivery":
-        session = entries[index].get("session")
-        if not isinstance(session, dict) or session.get("id") != session_id:
-            raise ValueError("event-driven delivery session provenance is invalid")
-    if status == "acquired":
-        session = entries[index].get("session")
-        if not isinstance(session, dict) or session.get("id") != session_id:
-            raise ValueError("event-driven bootstrap session provenance is invalid")
     return index, stage, status
 
 

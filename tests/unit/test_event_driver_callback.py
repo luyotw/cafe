@@ -362,6 +362,36 @@ def test_version_three_state_rejects_accepted_event_without_accepted_attempt(
         )
 
 
+def test_historical_attempt_session_does_not_pin_current_callback_session() -> None:
+    callback = _callback_module()
+    attempt = {
+        "index": 0,
+        "stage": "delivery",
+        "status": "accepted",
+        "outcome": "durable_acceptance",
+        "reason": "provider_acknowledgement",
+        "session_id": "historical-session",
+        "started_at": "2026-09-09T00:00:00+00:00",
+        "finished_at": "2026-09-09T00:00:01+00:00",
+    }
+    entries = [
+        {
+            "index": 0,
+            "session": {
+                "id": "current-session",
+                "source": "host_session",
+                "acquired_at": "2026-09-10T00:00:00+00:00",
+            },
+        }
+    ]
+
+    assert callback._validate_dispatch_attempt(attempt, entries=entries) == (
+        0,
+        "delivery",
+        "accepted",
+    )
+
+
 @pytest.mark.parametrize(
     "corruption",
     ["status", "accepted_index", "attempt_history", "takeover", "recovery"],
