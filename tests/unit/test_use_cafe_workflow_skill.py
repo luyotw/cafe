@@ -80,7 +80,8 @@ def _proactive_review_args(playbook_id: str, *, project_root: Path = PROJECT_ROO
 
 def _preflight_args() -> list[str]:
     return [
-        "--delivery-contract", json.dumps(delivery_contract()),
+        "--delivery-contract",
+        json.dumps(delivery_contract()),
         "--update-preflight",
         json.dumps(
             {
@@ -566,16 +567,19 @@ def test_catalog_version_check_ignores_missing_global() -> None:
         SKILL_ROOT / "scripts" / "catalog_version_check.py", "catalog_version_check"
     )
 
-    assert module.content_mismatch_entry_ids(
-        {
-            "entries": [
-                {
-                    "entry_id": "agent:developer/project-only",
-                    "reason": "missing_global",
-                }
-            ]
-        }
-    ) == []
+    assert (
+        module.content_mismatch_entry_ids(
+            {
+                "entries": [
+                    {
+                        "entry_id": "agent:developer/project-only",
+                        "reason": "missing_global",
+                    }
+                ]
+            }
+        )
+        == []
+    )
 
 
 def test_catalog_version_check_forwards_catalog_command_failure(tmp_path: Path) -> None:
@@ -2170,11 +2174,11 @@ def test_proactive_review_authority_precedence_has_no_blanket_callback_or_route_
         task_policy = task_policy.lower()
         routing = routing.lower()
         task_level_rule = re.search(
-                r"(?:(except for) )?the unique active declared correction outcome, a mandatory, `user_required`, clarification, permission, or capability task requires a \*\*user-facing driver turn\*\*",
+            r"(?:(except for) )?the unique active declared correction outcome, a mandatory, `user_required`, clarification, permission, or capability task requires a \*\*user-facing driver turn\*\*",
             task_policy,
         )
         callback_blanket = re.search(
-                r"callback.{0,100}(?:must never|cannot).{0,100}eligible correction outcome",
+            r"callback.{0,100}(?:must never|cannot).{0,100}eligible correction outcome",
             task_policy,
         )
         route_before_chat = re.search(
@@ -2184,7 +2188,8 @@ def test_proactive_review_authority_precedence_has_no_blanket_callback_or_route_
         return (
             "choose a user answer" in task_policy
             and "unique active declared correction outcome is not a user answer" in task_policy
-            and "zero or multiple eligible outcomes fail closed for user/playbook clarification" in task_policy
+            and "zero or multiple eligible outcomes fail closed for user/playbook clarification"
+            in task_policy
             and "except for the unique active declared correction outcome" in task_policy
             and "including an event-driven callback, to submit only that eligible outcome"
             in task_policy
@@ -2245,18 +2250,16 @@ def test_proactive_review_initial_routing_task_flow_and_matrix_share_correction_
         "`confirm_output` from a mandatory humantask step: always stop for the real user.",
         "`confirm_output` from a `user_required` step: stop for user approval or correction.",
     )
-    prior_task_flow = " ".join(
-        """
+    prior_task_flow = " ".join("""
         2. For user-owned tasks, serialize only the user's supplied answer into that schema.
         The driver may add the task ID required by the schema, but must not infer a decision,
         approval, permission, or missing answer.
-        """.split()
-    ).lower()
+        """.split()).lower()
 
     def is_consistent(initial: str, task: str, matrix: str) -> bool:
         return (
             correction_outcome in initial
-                and "after complete driver review and one `cafe chat` consensus exchange" in initial
+            and "after complete driver review and one `cafe chat` consensus exchange" in initial
             and "mandatory or `user_required` advancing `confirm`" in initial
             and not any(rule in initial for rule in prior_initial_routing_rules)
             and correction_outcome in task
@@ -2647,7 +2650,7 @@ def test_kickoff_rejects_incomplete_delivery_before_activation(tmp_path, damage)
     command = _kickoff_formatter_command(strategic_context)
     index = command.index("--delivery-contract")
     if damage == "missing":
-        del command[index:index + 2]
+        del command[index : index + 2]
     else:
         command[index + 1] = json.dumps({"schema_version": 1, "outcome": "Incomplete."})
     result = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True)
