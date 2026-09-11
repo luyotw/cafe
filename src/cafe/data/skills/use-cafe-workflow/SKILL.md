@@ -41,7 +41,7 @@ If more than one situation applies, read every listed reference before acting; d
   playbook skills, classify the remaining work into a capability band, and
   record a phase-specific selection rationale; no provider or model is built
   into this driver skill.
-- During that assessment, decide `required` or `not_required` proactive review for every agent-executed phase. Only a phase followed by an existing scheduled confirmation pause before workflow advancement is eligible for `required`; use `not_required` when the workflow would advance immediately. Prefer the smallest useful eligible set, give each an issue-specific rationale, and obtain complete user confirmation before preparation, execution, or persistence.
+- Default every assignable scheduled confirmation gate to `driver_confirmable` with proactive review `required`; default every mandatory scheduled confirmation gate to proactive review `required` while keeping its decision user-owned. Phases without such a pause are ineligible, need no kickoff choice, and are normalized internally to `not_required`. Render the effective eligible policy and obtain complete user confirmation before preparation, execution, or persistence; a direct user override takes precedence.
 - Resolve the effective conversation locale from a direct user override first,
   then a reliably inferred user preference from the current thread, and finally
   the active playbook. Use that locale for every driver-to-user message.
@@ -105,7 +105,7 @@ If more than one situation applies, read every listed reference before acting; d
 - [ ] Assess issue nature, scale, and risk; resolve every phase's execution profile,
   capability band, exact primary and any fallbacks, rationale, cached or tested
   primary evidence, and configured fallback smoke evidence.
-- [ ] Assess every agent-executed phase for proactive review and render one `required` or `not_required` decision and rationale for each.
+- [ ] Render the effective proactive-review decision for every eligible scheduled pause; normalize ineligible agent phases to `not_required` without asking the user to configure them.
 - [ ] Include the complete Delivery Contract in the deterministic kickoff table and obtain semantic user confirmation once; no exact approval-string matching.
 - [ ] Record the confirmed operating mode. For event-driven, create its exact
   per-issue callback binding with the bundled callback script before launch.

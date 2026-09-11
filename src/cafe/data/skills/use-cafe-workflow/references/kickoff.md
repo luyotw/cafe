@@ -92,10 +92,12 @@ obtain explicit user confirmation of:
 - `reactive_user_handoffs`;
 - mandate preset, axes, levels, and out-of-mandate list;
 - issue nature, scale, and risk factors;
-- one `required` or `not_required` proactive-review decision with an
-  issue-specific rationale for every agent or hybrid phase; only phases followed
-  by an existing scheduled confirmation pause before workflow advancement are
-  eligible for `required`, and the smallest useful eligible set is preferred;
+- the effective proactive-review decision for every agent or hybrid phase with
+  an existing scheduled confirmation pause: assignable gates default to
+  `required` with `driver_confirmable`, mandatory gates default to `required`
+  while remaining user-owned, and direct user overrides take precedence;
+  ineligible phases are normalized internally to `not_required` and require no
+  kickoff choice;
 - the exact ordered CLI/model chain for every phase, containing one primary and
   zero or more explicitly confirmed fallbacks;
 - exactly one operating mode: attached with a positive `poll_interval_seconds`,
@@ -213,17 +215,21 @@ confirmation before preparation or workflow execution.
 2. Treat only the reported assignable steps as candidates. Mandatory HumanTask
    steps remain user-owned and never enter the kickoff partition. Both classes
    come from `steps.<step>."on".confirm_output`.
-3. Present each candidate by step and purpose. Recommend that all candidates
-   stop for the user, then ask the user to assign every candidate to exactly
-   one of:
+3. Present each candidate by step and purpose. Default every candidate to
+   `driver_confirmable` with proactive review `required`, then allow the user to
+   override any candidate into exactly one of:
    - `user_required`: stop for the real user;
    - `driver_confirmable`: the driver may verify and continue.
 4. Require the two lists to be disjoint and their union to equal the candidates.
    Reject unknown steps, missing candidates, overlaps, role names, and steps
    that do not declare `on.confirm_output`.
 5. Present every mandatory HumanTask step as an informational, non-configurable
-   user stop. If no assignable candidates exist, explicitly say so without
-   implying that mandatory stops are absent.
+   user stop with proactive review `required` by default. A clean review never
+   replaces its user decision. If no assignable candidates exist, explicitly
+   say so without implying that mandatory stops are absent.
+6. Do not ask for proactive-review decisions on agent phases without a
+   scheduled confirmation pause. The formatter normalizes those phases to
+   `not_required` so durable coverage remains complete.
 
 If the playbook, effective conversation locale, repository content locale,
 operating mode, or candidate set changes, reconfirm the kickoff contract before
@@ -328,7 +334,7 @@ python3 <skill-dir>/scripts/format_kickoff_contract.py <playbook-id> \
   --risk-factor "<risk factor; repeat as needed>" \
   --assessment-rationale "<repository evidence for nature and scale>" \
   --phase-rationale "<step>=<capability band, profile/risk evidence, and optional fallback justification>" \
-  --proactive-review-decision "<agent-or-hybrid-step>=<required|not_required>:<confirmed rationale>" \
+  [--proactive-review-decision "<eligible-step>=<required|not_required>:<override rationale>"] \
   --effective-locale <locale> \
   --locale-source "<playbook or direct-user-override source>" \
   --repository-content-locale <locale> \
@@ -538,10 +544,12 @@ that was rendered for confirmation. Rendering alone never writes authority.
 That contract contains Driver-owned policy only; generic workflow and capability
 configuration remain in `issue.yaml`.
 
-`proactive_review.phase_decisions` is an ordered policy field in that contract,
-covering every agent or hybrid phase with `required` or `not_required` and an
-issue-specific rationale. It is not a `proactive_review.yaml` sidecar and does
-not schedule review work. Capability-owned settings remain only in the generic
+`proactive_review.phase_decisions` is an ordered normalized policy field in that
+contract. Eligible scheduled pauses use the confirmed default or explicit
+override; ineligible agent or hybrid phases are recorded as derived
+`not_required` entries without becoming kickoff choices. It is not a
+`proactive_review.yaml` sidecar and does not schedule review work.
+Capability-owned settings remain only in the generic
 `issue.yaml` contract. They are never copied, projected, or validated by the
 Driver contract.
 

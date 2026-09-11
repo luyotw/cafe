@@ -131,15 +131,16 @@ def _kickoff_formatter_command(
     phase_chains: dict[str, str] | None = None,
     phase_rationales: dict[str, str] | None = None,
     driver_confirmable: tuple[str, ...] = ("spec", "plan"),
+    include_proactive_review_args: bool = True,
 ) -> list[str]:
     pr_args = (
         []
         if pr_auto_create is None
         else ["--capability-choice", "pr.auto_create=" + json.dumps(pr_auto_create)]
     )
-    proactive_args = (
-        [] if "--proactive-review-decision" in extra_args else _proactive_review_args(playbook_id)
-    )
+    proactive_args = []
+    if include_proactive_review_args and "--proactive-review-decision" not in extra_args:
+        proactive_args = _proactive_review_args(playbook_id)
     return [
         sys.executable,
         str(SKILL_ROOT / "scripts" / "format_kickoff_contract.py"),
@@ -2056,13 +2057,257 @@ def test_use_cafe_workflow_defines_phase_scoped_proactive_driver_review() -> Non
     handoffs = _read_skill_resource("references/handoffs_and_alignment.md")
     normalized = " ".join((skill + kickoff + running + handoffs).split())
 
-    assert "smallest useful eligible set" in normalized
+    assert "Default every assignable scheduled confirmation gate" in normalized
+    assert "Phases without such a pause are ineligible" in normalized
     assert "`proactive_review.phase_decisions` projection" in running
     assert "existing scheduled confirmation pause" in normalized
     assert "current Driver performs the review directly" in normalized
     assert "missing necessary scope and excessive or unnecessary scope" in normalized
     assert "code and non-code phase output" in normalized
     assert "must not launch a separate reviewer" in normalized
+
+
+def test_kickoff_defaults_assignable_gates_to_driver_confirmation() -> None:
+    module = _load_script_module(
+        SKILL_ROOT / "scripts" / "format_kickoff_contract.py",
+        "kickoff_default_confirmation_partition",
+    )
+
+    user_required, driver_confirmable = module._resolve_partition(
+        candidates=("spec", "plan"),
+        user_values=None,
+        driver_values=None,
+    )
+
+    assert user_required == []
+    assert driver_confirmable == ["spec", "plan"]
+
+
+def test_proactive_review_overrides_are_sparse_ordered_and_fail_closed() -> None:
+    module = _load_script_module(
+        SKILL_ROOT / "scripts" / "format_kickoff_contract.py",
+        "proactive_review_override_defaults",
+    )
+    kwargs = {
+        "agent_phases": ["define", "build", "publish"],
+        "eligible_phases": {"define", "publish"},
+    }
+
+    decisions = module._proactive_review_decisions(
+        ["define=not_required:User explicitly disabled this review."],
+        **kwargs,
+    )
+    assert [item["phase"] for item in decisions] == ["define", "build", "publish"]
+    assert [item["decision"] for item in decisions] == [
+        "not_required",
+        "not_required",
+        "required",
+    ]
+
+    with pytest.raises(ValueError, match="duplicate proactive review decision"):
+        module._proactive_review_decisions(
+            ["define=required:First.", "define=not_required:Second."],
+            **kwargs,
+        )
+    with pytest.raises(ValueError, match="unknown or non-agent phase: missing"):
+        module._proactive_review_decisions(
+            ["missing=required:Unknown phase."],
+            **kwargs,
+        )
+    with pytest.raises(ValueError, match="must follow agent phase order"):
+        module._proactive_review_decisions(
+            [
+                "publish=required:Later phase first.",
+                "define=required:Earlier phase second.",
+            ],
+            **kwargs,
+        )
+
+
+def test_kickoff_derives_proactive_defaults_only_at_scheduled_pauses(
+    tmp_path: Path,
+) -> None:
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text(
+        "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        _kickoff_formatter_command(
+            strategic_context,
+            include_proactive_review_args=False,
+        ),
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    rendered = result.stdout.split("```json\n", 1)[1].split("\n```", 1)[0]
+    policy = json.loads(rendered)["policy"]
+    decisions = {
+        item["phase"]: item["decision"]
+        for item in policy["proactive_review"]["phase_decisions"]
+    }
+    assert decisions == {
+        "spec": "required",
+        "plan": "required",
+        "develop": "not_required",
+        "review": "not_required",
+        "pr": "required",
+    }
+    section = result.stdout.split("### Proactive review at scheduled pauses", 1)[1]
+    section = section.split("### Reactive user handoffs", 1)[0]
+    assert "| spec | required |" in section
+    assert "| plan | required |" in section
+    assert "| pr | required |" in section
+    assert "| develop |" not in section
+    assert "| review |" not in section
+    assert section.count("Driver may confirm and advance after clean review") == 2
+    assert section.count("user confirmation remains required") == 1
+
+
+def test_kickoff_defaults_apply_to_custom_assignable_and_mandatory_gates(
+    tmp_path: Path,
+) -> None:
+    playbooks_root = tmp_path / ".cafe" / "playbooks"
+    playbooks_root.mkdir(parents=True)
+    (playbooks_root / "custom-gates.yaml").write_text(
+        """\
+playbook:
+  id: custom-gates
+  conversation_locale: en-US
+roles:
+  author: {default_agent: Ada}
+steps:
+  define:
+    type: skill
+    skill: cafe-spec
+    role: author
+    assignee_type: agent
+    input_artifacts: []
+    output_artifact: requirements
+    human_tasks:
+      - trigger: confirm_output
+        task_id: output-review
+        outcomes: {confirm: publish, revise: define}
+    'on': {confirm_output: define}
+  publish:
+    type: skill
+    skill: cafe-pr
+    role: author
+    assignee_type: agent
+    input_artifacts: [requirements, workflow_feedback]
+    output_artifact: publication
+    human_tasks:
+      - trigger: confirm_output
+        task_id: local-review
+        outcomes: {fix_now: publish, create_follow_up: _done, continue_without_issue: _done}
+        feedback_delivery:
+          artifact: workflow_feedback
+          source_kind: local_review
+    'on': {confirm_output: publish}
+entry_point: define
+""",
+        encoding="utf-8",
+    )
+    strategic_context = tmp_path / ".cafe" / "strategic_context.yaml"
+    strategic_context.write_text(
+        "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SKILL_ROOT / "scripts" / "format_kickoff_contract.py"),
+            "custom-gates",
+            "--project-root",
+            str(tmp_path),
+            "--issue-name",
+            "custom-1",
+            "--playbook-rationale",
+            "Custom graph verifies semantic defaults without conventional phase names.",
+            "--issue-nature",
+            "workflow",
+            "--issue-scale",
+            "small",
+            "--driver-mode",
+            "unattended",
+            *_preflight_args(),
+            "--risk-factor",
+            "custom graph",
+            "--assessment-rationale",
+            "Two bounded custom confirmation gates.",
+            "--phase-chain",
+            "define=codex:define-model",
+            "--phase-chain",
+            "publish=codex:publish-model",
+            "--phase-rationale",
+            "define=balanced custom requirements work.",
+            "--phase-rationale",
+            "publish=efficiency custom publication work.",
+            "--repository-content-locale",
+            "en-US",
+            "--current-checkout",
+            "--strategic-context",
+            str(strategic_context),
+        ],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    rendered = result.stdout.split("```json\n", 1)[1].split("\n```", 1)[0]
+    policy = json.loads(rendered)["policy"]
+    assert policy["confirmation_contract"] == {
+        "user_required": [],
+        "driver_confirmable": ["define"],
+        "mandatory_human_stops": ["publish"],
+    }
+    decisions = policy["proactive_review"]["phase_decisions"]
+    assert [(item["phase"], item["decision"]) for item in decisions] == [
+        ("define", "required"),
+        ("publish", "required"),
+    ]
+    section = result.stdout.split("### Proactive review at scheduled pauses", 1)[1]
+    section = section.split("### Reactive user handoffs", 1)[0]
+    assert "| define | required |" in section
+    assert "Driver may confirm and advance after clean review" in section
+    assert "| publish | required |" in section
+    assert "user confirmation remains required" in section
+
+
+def test_kickoff_renders_not_required_override_without_claiming_a_review(
+    tmp_path: Path,
+) -> None:
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text(
+        "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        _kickoff_formatter_command(
+            strategic_context,
+            "--proactive-review-decision",
+            "spec=not_required:User explicitly disabled proactive specification review.",
+        ),
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    section = result.stdout.split("### Proactive review at scheduled pauses", 1)[1]
+    section = section.split("### Reactive user handoffs", 1)[0]
+    spec_row = next(line for line in section.splitlines() if line.startswith("| spec |"))
+    assert "| not_required |" in spec_row
+    assert "ordinary evidence verification" in spec_row
+    assert "after clean review" not in spec_row
 
 
 def test_proactive_review_consensus_uses_formal_correction_and_user_owned_confirmation() -> None:
@@ -2356,6 +2601,8 @@ def test_proactive_review_snapshot_includes_the_resolved_chat_identity() -> None
         "playbook chat-skills identity, and prepared chat-environment identity",
         "unique active declared correction outcome is not a user answer",
         "zero or multiple eligible outcomes fail closed for user/playbook clarification",
+        "it may also complete a confirmed `driver_confirmable` clean advancement",
+        "may not choose an advancing mandatory or `user_required` confirmation",
     ):
         assert required in normalized
 

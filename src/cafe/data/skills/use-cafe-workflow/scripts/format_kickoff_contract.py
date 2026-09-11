@@ -257,7 +257,7 @@ def _resolve_partition(
     driver_values: list[str] | None,
 ) -> tuple[list[str], list[str]]:
     if user_values is None and driver_values is None:
-        return list(candidates), []
+        return [], list(candidates)
 
     user_required = _items(user_values)
     driver_confirmable = _items(driver_values)
@@ -460,7 +460,7 @@ def _parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         metavar="PHASE=required|not_required:RATIONALE",
-        help="Confirmed proactive-review decision for one agent or hybrid phase.",
+        help="Override the default proactive-review decision for an eligible phase.",
     )
     parser.add_argument(
         "--activate-confirmed",
@@ -477,7 +477,7 @@ def _parser() -> argparse.ArgumentParser:
 def _proactive_review_decisions(
     values: Iterable[str], *, agent_phases: list[str], eligible_phases: set[str]
 ) -> list[dict[str, str]]:
-    """Parse the complete, ordered confirmed review policy without a sidecar."""
+    """Resolve overrides into one complete ordered policy without a sidecar."""
     decisions: dict[str, dict[str, str]] = {}
     for raw in values:
         phase, separator, remainder = raw.partition("=")
@@ -489,14 +489,38 @@ def _proactive_review_decisions(
             raise ValueError(f"proactive review decision for '{phase}' requires a rationale")
         if phase in decisions:
             raise ValueError(f"duplicate proactive review decision: {phase}")
+        if phase not in agent_phases:
+            raise ValueError(f"proactive review targets unknown or non-agent phase: {phase}")
         if state == "required" and phase not in eligible_phases:
             raise ValueError(
                 f"proactive review phase '{phase}' cannot be required because it has no "
                 "scheduled confirmation pause before workflow advancement"
             )
         decisions[phase] = {"phase": phase, "decision": state, "rationale": rationale}
-    if list(decisions) != agent_phases:
-        raise ValueError("proactive review decisions must cover agent phases in playbook order")
+    supplied_order = [phase for phase in agent_phases if phase in decisions]
+    if list(decisions) != supplied_order:
+        raise ValueError("proactive review overrides must follow agent phase order")
+    for phase in agent_phases:
+        if phase in decisions:
+            continue
+        if phase in eligible_phases:
+            decisions[phase] = {
+                "phase": phase,
+                "decision": "required",
+                "rationale": (
+                    "Default: the scheduled confirmation pause permits Driver review "
+                    "before workflow advancement."
+                ),
+            }
+        else:
+            decisions[phase] = {
+                "phase": phase,
+                "decision": "not_required",
+                "rationale": (
+                    "Derived: no scheduled confirmation pause exists before workflow "
+                    "advancement."
+                ),
+            }
     return [decisions[phase] for phase in agent_phases]
 
 
@@ -937,6 +961,32 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
             "phase rationale targets non-agent step: " + ", ".join(sorted(unused_rationales))
         )
 
+    agent_phases = [
+        name for name, step in model.steps.items() if step.assignee_type in {"agent", "hybrid"}
+    ]
+    eligible_phases = set(candidates) | set(mandatory_human_tasks)
+    proactive_decisions = _proactive_review_decisions(
+        args.proactive_review_decision,
+        agent_phases=agent_phases,
+        eligible_phases=eligible_phases,
+    )
+    proactive_rows: list[list[Any]] = []
+    for decision in proactive_decisions:
+        phase = decision["phase"]
+        if phase not in eligible_phases:
+            continue
+        if decision["decision"] == "not_required" and phase in driver_confirmable:
+            clean_action = "Driver may confirm after ordinary evidence verification"
+        elif decision["decision"] == "not_required":
+            clean_action = "user confirmation remains required; no proactive review"
+        elif phase in driver_confirmable:
+            clean_action = "Driver may confirm and advance after clean review"
+        else:
+            clean_action = "user confirmation remains required"
+        proactive_rows.append(
+            [phase, decision["decision"], decision["rationale"], clean_action]
+        )
+
     reactive = _table(
         reactive_headers,
         [
@@ -1013,6 +1063,11 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
             _table(
                 ["Phase", "Primary", "Fallbacks", "Source", "Selection rationale"],
                 model_rows,
+            ),
+            "### Proactive review at scheduled pauses",
+            _table(
+                ["Phase", "Decision", "Rationale", "Clean result"],
+                proactive_rows,
             ),
             reactive_title,
             reactive,
