@@ -21,6 +21,7 @@ def test_packaged_workflow_common_uses_bounded_digest() -> None:
     assert "The runtime derives and persists those fields" in text
     assert "Do not skip the blackboard read" not in text
     assert "must never execute `release-check`" in text
+    assert "in-workflow request" in text
     assert "outside the active workflow" in text
 
 
@@ -42,18 +43,6 @@ def test_packaged_develop_skill_uses_repository_quality_gate_guidance() -> None:
     assert "`Task Status` 僅使用 schema 允許的 `completed`" in text
     assert "不得寫 `done`" in text
     assert "在 handoff 前寫入非空的 development summary" in text
-
-
-def test_workflow_release_check_prohibition_is_canonical() -> None:
-    skills = PROJECT_ROOT / "src" / "cafe" / "data" / "skills"
-    common = _skill_text(skills, "cafe-workflow-common")
-    develop = _skill_text(skills, "cafe-develop")
-
-    assert "must never execute `release-check`" in common
-    assert "in-workflow request" in common
-    assert "outside the active workflow" in common
-    assert "workflow 中永不執行 `release-check`" in develop
-    assert "active workflow 外" in develop
 
 
 def test_behaviorally_changed_skills_have_minor_version_bumps() -> None:

@@ -2576,7 +2576,7 @@ def test_driver_can_propose_a_user_approved_bounded_direct_closeout() -> None:
     assert "a nonterminal workflow will remain nonterminal" in normalized
     assert "never describe a still-nonterminal workflow as completed" in normalized
     assert "Direct-closeout approval is session-local authority" in reference
-    assert "stop direct work and return control to the user" in normalized
+    assert "reauthorize the same remaining list or return to the workflow" in normalized
     assert "a later Driver must not automatically resume" in normalized
     assert "user-approved bounded" in running
 

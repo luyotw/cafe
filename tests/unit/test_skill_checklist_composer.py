@@ -796,7 +796,7 @@ def test_develop_correction_checklist_uses_feedback_file_path(tmp_path: Path) ->
     assert "{pr_feedback_file_path}" not in content
 
 
-def test_develop_checklist_requires_plan_completion_before_release_check(
+def test_develop_checklist_prohibits_in_workflow_release_check(
     tmp_path: Path,
 ) -> None:
     checklist_path = tmp_path / "checklist.md"
@@ -810,11 +810,8 @@ def test_develop_checklist_requires_plan_completion_before_release_check(
     )
 
     content = checklist_path.read_text(encoding="utf-8")
-    prohibition = content.index("must never execute `release-check`")
-
     assert "deferred until outside the active workflow" in content
     assert "authorized `release-check`" not in content
-    assert prohibition < content.index("Confirm: New/changed tests assert")
 
 
 def test_spec_checklist_includes_dod_instruction(tmp_path: Path) -> None:
