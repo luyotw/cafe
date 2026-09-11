@@ -529,7 +529,7 @@ mandate:
         "| review | cafe-review | review | high | correctness, security | "
         "equivalent_or_stronger | declared |" in result.stdout
     )
-    assert "| need_clarification | user_required | 否 |" in result.stdout
+    assert "| need_clarification | driver_confirmable | 否 |" in result.stdout
     assert "| product_scope | escalate | roadmap, positioning |" in result.stdout
     assert result.stdout.count("| playbook_id |") == 1
 
@@ -1035,6 +1035,22 @@ def test_kickoff_defaults_verified_github_issues_to_pr_publication() -> None:
     assert "A direct user choice or an existing valid confirmed choice" in normalized
     assert "does not authorize publication before" in normalized
     assert "never authorizes merge or issue closure" in normalized
+
+
+def test_need_clarification_defaults_to_bounded_driver_confirmation() -> None:
+    skill = _read_skill_resource("SKILL.md")
+    kickoff = _read_skill_resource("references/kickoff.md")
+    running = _read_skill_resource("references/running_workflow.md")
+    handoffs = _read_skill_resource("references/handoffs_and_alignment.md")
+    normalized = " ".join((skill + kickoff + running + handoffs).split()).lower()
+
+    assert "default `need_clarification` to bounded `driver_confirmable`" in normalized
+    assert "existing authority or `allowed_variations`" in normalized
+    assert "triggers no deviation" in normalized
+    assert "reserved product or strategy decisions" in normalized
+    assert "uncertainty about whether authority already exists remain user-owned" in normalized
+    assert "normal engineering uncertainty is not itself a user handoff" in normalized
+    assert "new permission or external-effect authority" in normalized
 
 
 def test_kickoff_contract_formatter_accepts_event_driven_binding(
@@ -2354,7 +2370,8 @@ def test_proactive_review_consensus_uses_formal_correction_and_user_owned_confir
         "No user prompt occurs during an autonomous correction loop",
         "one final user confirmation for each user-owned clean advancement candidate",
         "later clean candidate must be presented again",
-        "clarification, permission, capability, scope, strategic, and unknown decisions remain user-owned",
+        "`driver_confirmable` clarification within the confirmed contract and existing authority",
+        "clarification that changes the contract, needs new authority, is reserved to the user, or has uncertain authority",
         "first provide these four items",
         "bare confirmation requests, artifact-link-only handoffs, and raw artifact dumps are invalid",
         "only when they materially affect the active decision",
@@ -2421,7 +2438,7 @@ def test_proactive_review_consensus_has_one_authority_path_and_a_bounded_input()
     for required in (
         "chat before any correction routing",
         "only user-owned clean advancement candidates receive a user confirmation",
-        "except for the unique active declared correction outcome",
+        "the unique active declared correction outcome exception permits",
         "at most 20 findings",
         "at most 12,000 utf-8 bytes",
         "each evidence item is limited to at most 500 utf-8 bytes",
@@ -2461,10 +2478,6 @@ def test_proactive_review_authority_precedence_has_no_blanket_callback_or_route_
     def is_consistent(task_policy: str, routing: str) -> bool:
         task_policy = task_policy.lower()
         routing = routing.lower()
-        task_level_rule = re.search(
-            r"(?:(except for) )?the unique active declared correction outcome, a mandatory, `user_required`, clarification, permission, or capability task requires a \*\*user-facing driver turn\*\*",
-            task_policy,
-        )
         callback_blanket = re.search(
             r"callback.{0,100}(?:must never|cannot).{0,100}eligible correction outcome",
             task_policy,
@@ -2478,11 +2491,12 @@ def test_proactive_review_authority_precedence_has_no_blanket_callback_or_route_
             and "unique active declared correction outcome is not a user answer" in task_policy
             and "zero or multiple eligible outcomes fail closed for user/playbook clarification"
             in task_policy
-            and "except for the unique active declared correction outcome" in task_policy
+            and "a mandatory, `user_required`, permission, or capability task requires a **user-facing driver turn**"
+            in task_policy
+            and "a `need_clarification` task whose confirmed reactive policy is `driver_confirmable`"
+            in task_policy
             and "including an event-driven callback, to submit only that eligible outcome"
             in task_policy
-            and task_level_rule is not None
-            and task_level_rule.group(1) == "except for"
             and not callback_blanket
             and "chat before any correction routing" in routing
             and "unique active declared correction outcome" in routing
@@ -2493,8 +2507,8 @@ def test_proactive_review_authority_precedence_has_no_blanket_callback_or_route_
     assert is_consistent(task_authority, correction_flow)
     assert not is_consistent(
         task_authority.replace(
-            "Except for the unique active declared correction outcome, a mandatory,",
-            "The unique active declared correction outcome, a mandatory,",
+            "A `need_clarification` task whose confirmed reactive policy is `driver_confirmable`",
+            "A `need_clarification` task",
         ),
         correction_flow,
     )
@@ -2793,7 +2807,7 @@ def test_use_cafe_workflow_keeps_human_task_completion_in_the_interactive_driver
         "cannot wait for, collect, infer, or choose a user answer for a mandatory"
         in normalized_running
     )
-    assert "may instead be completed by any driver" in normalized_running.lower()
+    assert "whose confirmed reactive policy is `driver_confirmable` may be completed by any driver" in normalized_running.lower()
     assert "cafe task complete <active-human-task-id>" in handoffs
     assert '--user-input \'{"task":"output-review"' not in handoffs
 

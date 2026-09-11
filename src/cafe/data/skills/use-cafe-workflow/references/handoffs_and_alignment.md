@@ -47,8 +47,14 @@ Then route by intent:
 - `confirm_output` from a `driver_confirmable` step: verify the output and
   required input artifacts are complete, in-mandate, and consistent with
   accepted upstream artifacts before confirming. Apply the Delivery comparison below.
-- `need_clarification`: stop unless the exact answer already exists in the
-  current thread. Strategic documents are not a substitute for the answer.
+- `need_clarification` with confirmed policy `driver_confirmable`: the Driver
+  may answer when the complete response stays within the confirmed Delivery
+  Contract, existing authority or `allowed_variations`, and triggers no
+  deviation. Multiple authorized reversible technical choices may be resolved
+  using repository precedent, smaller footprint, and reversibility. Contract
+  changes, new permission or external-effect authority, mandatory gates,
+  reserved product or strategy decisions, and uncertainty about whether
+  authority already exists remain user-owned.
 - `need_permission`: stop unless the exact permission already exists in the
   current thread. Never grant production access, destructive actions, or
   external side effects for the user.
@@ -149,7 +155,8 @@ Use this outcome-sensitive authority matrix after due review/chat consensus:
 | Unique active declared correction outcome requiring feedback, marked `correction: true`, and routing to a non-advancing correction continuation | Driver may submit only that derived outcome, with consolidated findings, consensus, and acceptance conditions, to create the formal correction iteration. Zero or multiple eligible outcomes fail closed for user/playbook clarification. |
 | `user_required` or mandatory confirmation gate advancing `confirm` | user_required and mandatory confirmation gates keep advancing `confirm` user-owned. |
 | Clean `driver_confirmable` confirmation | driver_confirmable clean confirm remains driver-permitted after independent review. |
-| Clarification, permission, capability, scope, strategic, or unknown decision | clarification, permission, capability, scope, strategic, and unknown decisions remain user-owned. |
+| `driver_confirmable` clarification within the confirmed contract and existing authority | Driver may submit the schema-valid answer with a concise contract basis; multiple authorized technical choices may use repository precedent, smaller footprint, and reversibility. |
+| Clarification that changes the contract, needs new authority, is reserved to the user, or has uncertain authority; permission, capability, scope, strategic, or unknown decision | These decisions remain user-owned. |
 
 Driver-triggered correction is correction, never approval. No user prompt occurs
 during an autonomous correction loop. Only user-owned clean advancement

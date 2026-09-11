@@ -116,8 +116,16 @@ user handoffs, and mandate. It cannot change confirmed models.
 The callback receives only an asynchronous durable-event notice. It must
 re-check `cafe status`/`cafe show`; a notice can be stale. It may diagnose and
 perform actions already authorized by the kickoff. It cannot wait for, collect,
-infer, or choose a user answer for a mandatory, `user_required`, clarification,
-permission, or capability task, nor grant permissions or capabilities. A
+infer, or choose a user answer for a mandatory, `user_required`, permission, or
+capability task, nor grant permissions or capabilities. A `need_clarification`
+task whose confirmed reactive policy is `driver_confirmable` may be answered
+only when the complete answer stays within the confirmed Delivery Contract,
+its existing authority or `allowed_variations`, and triggers no deviation.
+Contract changes, new permission or external-effect authority, mandatory
+gates, reserved product or strategy decisions, and uncertainty about whether
+authority already exists remain user-owned. Authorized reversible technical
+choices may use repository precedent, smaller footprint, and reversibility as
+tie-breakers; normal engineering uncertainty is not itself a user handoff. A
 unique active declared correction outcome is not a user answer only when it
 requires feedback, is marked `correction: true`, and routes to a
 non-advancing correction continuation. Derive it solely from the active
@@ -132,16 +140,18 @@ recovery protocol, or stop guarantee.
 
 ## Completing a HumanTask
 
-The callback is not an interaction channel. Except for the unique active
-declared correction outcome, a mandatory, `user_required`, clarification,
+The callback is not an interaction channel. A mandatory, `user_required`,
 permission, or capability task requires a **user-facing driver turn** to
-receive the user's explicit answer. The exception permits the current Driver,
-including an event-driven callback, to submit only that eligible outcome after
-complete review and one `cafe chat` consensus exchange; it never permits
-confirmation or another user-owned decision. A
-`driver_confirmable` task may instead be completed by any Driver, including an
-event-driven callback, after it verifies the confirmed contract and evidence.
-Both cases use the same durable task flow:
+receive the user's explicit answer. The unique active declared correction
+outcome exception permits the current Driver, including an event-driven
+callback, to submit only that eligible outcome after complete review and one
+`cafe chat` consensus exchange; it never permits confirmation or another
+user-owned decision. A `need_clarification` task whose confirmed reactive
+policy is `driver_confirmable` may be completed by any Driver, including an
+event-driven callback, only within the confirmed Delivery Contract and existing
+authority. Any other `driver_confirmable` task may likewise be completed after
+the Driver verifies its confirmed contract and task-specific evidence. These
+Driver-owned cases use the same durable task flow:
 
 On every later user-facing turn, inspect current durable state first. If a
 user-owned HumanTask is still pending and no adequate handoff has been given in
@@ -161,7 +171,10 @@ repeat it when the user already has the same task and options unless they ask.
    supplied answer into that schema; the Driver may add the task ID required by
    the schema, but must not infer a decision, approval, permission, or missing
    answer. For a `driver_confirmable` task, use only its declared response after
-   the required contract and evidence verification.
+   the required contract and evidence verification. For `need_clarification`,
+   record a concise contract basis and do not submit when the answer changes
+   the contract, triggers a deviation, needs new authority, is reserved to the
+   user, or its authority is uncertain.
 3. Run `cafe task complete <task-id> --result '<json>' --no-resume --json`.
    Treat an uncertain command result as unconfirmed: inspect durable task and
    handoff state before retrying. If the task is already complete, do not submit

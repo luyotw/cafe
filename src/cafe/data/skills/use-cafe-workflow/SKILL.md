@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
-metadata: {version: 1.46.0}
+metadata: {version: 1.47.0}
 ---
 
 # Use CAFE Workflow
@@ -53,8 +53,8 @@ If more than one situation applies, read every listed reference before acting; d
   overrides.
 - Confirm a complete versioned Delivery Contract in the same kickoff before `cafe prepare`: outcome, full scope, acceptance/evidence, implementation direction, constraints, permitted variations and deviation triggers. Keep hard invariants limited to explicit user requirements and externally meaningful behavior. Put unresolved internal mechanisms and reasonable technical choices in `allowed_variations` so ordinary implementation decisions do not reopen the contract. Store it only in `driver/contract.json`. At existing eligible output gates, follow the evidence comparison in `references/handoffs_and_alignment.md`; a smaller implementation must preserve all requirements. Never add a gate or assume particular step/artifact names.
 - Treat planned output confirmation, reactive user handoffs, and semantic
-  alignment as separate decisions. The driver owns alignment; phase agents do
-  not approve themselves.
+  alignment as separate decisions; default `need_clarification` to bounded
+  `driver_confirmable` handling under `handoffs_and_alignment.md`.
 - Make every user-owned handoff self-contained in conversation: assume no terminal, repository, or artifact access; state where the workflow paused, why it needs the user, every option with its practical consequence, and a plain-language reply example. Add evidence, scope, risk, next-phase, model, or external-effect details only when they materially affect the decision. Bare confirmation, link-only, and raw-artifact-dump handoffs are invalid.
 - On a later user-facing turn, inspect durable state first. If a user-owned task is still pending and no adequate handoff has appeared in the current conversation, answer the user's immediate question briefly and append the same compact task summary. Do not repeat an adequate handoff unless the task or options changed or the user asks.
 - Historical callback attempts retain their recorded session IDs but do not pin future callbacks to that session. When repairing a confirmed misrouted callback, preserve the event history and update only the current primary session binding.
@@ -120,7 +120,7 @@ If more than one situation applies, read every listed reference before acting; d
   unattended with the trusted callback. A callback is an asynchronous,
   best-effort notification:
   it never gates the next phase and must not use `--single-step`.
-- [ ] In a user-facing driver turn, relay only an explicit mandatory/user-required HumanTask answer with `cafe task complete --no-resume --json`, verify it durably, then resume using the confirmed mode. After complete review and one `cafe chat` consensus exchange, a Driver may submit only the unique active declared correction outcome that requires feedback, is marked `correction: true`, and routes to a non-advancing correction continuation. Derive it from the active HumanTask declaration regardless of outcome, phase, or target names; if zero or multiple eligible correction outcomes exist, fail closed for user/playbook clarification. Advancing mandatory/user-required confirmation and every other user-owned decision remain with the user. A confirmed `driver_confirmable` gate may be verified and completed by a Driver, but detached callbacks cannot collect or infer user answers.
+- [ ] In a user-facing driver turn, relay only an explicit mandatory/user-required HumanTask answer with `cafe task complete --no-resume --json`, verify it durably, then resume using the confirmed mode. After complete review and one `cafe chat` consensus exchange, a Driver may submit only the unique active declared correction outcome that requires feedback, is marked `correction: true`, and routes to a non-advancing correction continuation. Derive it from the active HumanTask declaration regardless of outcome, phase, or target names; if zero or multiple eligible correction outcomes exist, fail closed for user/playbook clarification. Advancing mandatory/user-required confirmation and every other user-owned decision remain with the user. A confirmed `driver_confirmable` output gate or a `need_clarification` task whose confirmed reactive policy is `driver_confirmable` may be verified and completed by a Driver, including an event-driven callback, under its task-specific evidence rules.
 - [ ] Timestamp proactive polls and user updates; handle substantive output, completion, errors, and HumanTasks immediately.
 - [ ] At each contract-defined pause or completion, inspect new phase evidence. Keep phase model chains unchanged unless the user explicitly requests an exact phase-only update for subsequent execution.
 - [ ] At the existing scheduled confirmation pause after each executed required phase, the current Driver completes its review before one `cafe chat <role> -p` consensus exchange, uses only the unique eligible correction outcome derived from the active HumanTask declaration for agreed durable changes, re-reviews every formal correction iteration, and does not launch a separate reviewer or recursively review the result.

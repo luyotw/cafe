@@ -244,8 +244,10 @@ scheduled candidates. `manual_handoff` is routing, not a planned confirmation
 gate. Alignment is a proactive driver decision governed by mandate. Record the
 reactive policy in the kickoff:
 
-- `need_clarification`: user required unless the exact answer already exists in
-  the current thread;
+- `need_clarification`: `driver_confirmable` by default. The Driver may answer
+  only when the complete answer stays within the confirmed Delivery Contract,
+  its existing authority or `allowed_variations`, and triggers no deviation;
+  otherwise it remains user-owned;
 - `need_permission`: user required unless the exact permission already exists
   in the current thread;
 - `alignment_checkpoint`: driver-resolvable only when the proposal is clearly

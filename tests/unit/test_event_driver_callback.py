@@ -122,6 +122,23 @@ def _clear_host_session_binding(monkeypatch) -> None:
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
 
 
+def test_callback_prompt_allows_only_bounded_driver_confirmable_clarification(
+    tmp_path: Path,
+) -> None:
+    callback = _callback_module()
+    prompt = callback._callback_prompt(
+        {"event_id": "event-1", "event_type": "human_task"},
+        repository_root=tmp_path,
+    )
+
+    assert "including need_clarification" in prompt
+    assert "existing authority or allowed_variations" in prompt
+    assert "trigger no contract deviation" in prompt
+    assert "otherwise leave it for the user" in prompt
+    assert "Do not answer mandatory, user-required, permission, or capability tasks" in prompt
+    assert "user-required, clarification" not in prompt
+
+
 def test_event_driver_config_is_per_issue_and_cannot_replace_session(tmp_path: Path) -> None:
     callback = _callback_module()
     issue_dir = tmp_path / ".cafe" / "issues" / "issue456"
