@@ -13,28 +13,14 @@ def test_packaged_workflow_common_uses_bounded_digest() -> None:
     builtin_root = PROJECT_ROOT / "src" / "cafe" / "data" / "skills"
     text = _skill_text(builtin_root, "cafe-workflow-common")
 
-    assert "version: 1.8.1" in text
+    assert "version: 1.8.2" in text
     assert "Bounded blackboard digest" in text
     assert "Do **not** read or print the whole file" in text
     assert '"from_step": "<current step name>"' not in text
     assert '"created_at": "<ISO 8601 timestamp>"' not in text
     assert "The runtime derives and persists those fields" in text
     assert "Do not skip the blackboard read" not in text
-    assert "effective playbook explicitly assigns it to the current develop step" in text
-    assert "user explicitly requests it" in text
-    assert "does not authorize develop" in text
-    assert "same authorized work/scope" in text
-    assert "authority is withdrawn or the work/scope identity materially changes" in text
-    for forbidden_authority in (
-        "Risk",
-        "scale",
-        "insurance",
-        "PR preparation",
-        "review",
-        "proactive review",
-        "agent judgment",
-    ):
-        assert forbidden_authority in text
+    assert "Release-check authority decision matrix" in text
 
 
 def test_packaged_develop_skill_uses_repository_quality_gate_guidance() -> None:
@@ -44,20 +30,9 @@ def test_packaged_develop_skill_uses_repository_quality_gate_guidance() -> None:
     assert "version: 1.10.0" in text
     assert "與變更直接相關的 targeted checks" in text
     assert "Repository-owned quality gates" in text
-    assert "effective playbook 明確將 `release-check` 指派給目前 `develop` step" in text
-    assert "使用者明確要求" in text
-    assert "不授權 develop" in text
-    assert "同一已授權 work/scope" in text
-    assert "authority 被撤回或 work/scope identity 有重大變更" in text
-    for forbidden_authority in (
-        "風險",
-        "規模",
-        "保險",
-        "PR preparation",
-        "review/proactive review",
-        "agent judgment",
-    ):
-        assert forbidden_authority in text
+    assert "shared skill `cafe-workflow-common`" in text
+    assert "allow、deny 與 reauthorize 分支" in text
+    assert "release_authority_contract" not in text
     assert "max_read_only_commands" not in text
     assert "20 次" not in text
     assert "failing test" not in text
@@ -70,30 +45,39 @@ def test_packaged_develop_skill_uses_repository_quality_gate_guidance() -> None:
 
 
 def test_release_authority_contract_enforces_assignment_and_stale_rerun_outcomes() -> None:
-    contract_path = (
-        PROJECT_ROOT
-        / "src"
-        / "cafe"
-        / "data"
-        / "skills"
-        / "cafe-develop"
-        / "references"
-        / "release_authority_contract.md"
+    contract_text = (
+        _skill_text(
+            PROJECT_ROOT / "src" / "cafe" / "data" / "skills",
+            "cafe-workflow-common",
+        )
+        .split("### Release-check authority decision matrix", maxsplit=1)[1]
+        .split("## What Not To Do", maxsplit=1)[0]
     )
     rows = [
         tuple(cell.strip() for cell in line.strip("|").split("|"))
-        for line in contract_path.read_text(encoding="utf-8").splitlines()
+        for line in contract_text.splitlines()
         if line.startswith("|") and not line.startswith("| ---")
     ][1:]
 
     decisions = {scenario: decision for scenario, *_, decision in rows}
 
-    assert decisions["current-develop-step-assignment"] == "allow"
-    assert decisions["separate-verify-step-assignment"] == "deny"
-    assert decisions["separate-verification-step-assignment"] == "deny"
-    assert decisions["same-work-scope-user-stale-rerun"] == "allow"
-    assert decisions["authority-withdrawn"] == "reauthorize"
-    assert decisions["material-work-scope-change"] == "reauthorize"
+    assert decisions == {
+        "current-develop-step-assignment": "allow",
+        "explicit-user-request": "allow",
+        "separate-verify-step-assignment": "deny",
+        "separate-verification-step-assignment": "deny",
+        "risk": "deny",
+        "scale": "deny",
+        "precaution": "deny",
+        "insurance": "deny",
+        "pr-preparation": "deny",
+        "review": "deny",
+        "proactive-review": "deny",
+        "agent-judgment": "deny",
+        "same-authorized-work-scope-stale-rerun": "allow",
+        "authority-withdrawn": "reauthorize",
+        "material-work-scope-change": "reauthorize",
+    }
 
 
 def test_behaviorally_changed_skills_have_minor_version_bumps() -> None:
@@ -106,7 +90,7 @@ def test_behaviorally_changed_skills_have_minor_version_bumps() -> None:
         "cafe-develop": "version: 1.10.0",
         "cafe-review": "version: 1.13.0",
         "cafe-pr": "version: 1.4.1",
-        "cafe-workflow-common": "version: 1.8.1",
+        "cafe-workflow-common": "version: 1.8.2",
         "use-cafe-workflow": "metadata: {version: 1.42.0}",
     }
     for name, version in expected_versions.items():

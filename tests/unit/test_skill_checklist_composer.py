@@ -810,26 +810,12 @@ def test_develop_checklist_requires_plan_completion_before_release_check(
     )
 
     content = checklist_path.read_text(encoding="utf-8")
-    authority_check = content.index(
-        "effective playbook explicitly assigns `release-check` to the current `develop` step"
-    )
+    authority_check = content.index("Repository-owned quality gates** decision matrix")
     completion_check = content.index("Immediately before an authorized `release-check`")
     release_check = content.index("treat it as the final tracked-file validation")
 
     assert authority_check < completion_check < release_check
-    assert "user explicitly requests it" in content
-    assert "does not authorize this `develop` step" in content
-    assert "same authorized work/scope" in content and "original explicit user request" in content
-    assert "authority is withdrawn or the work/scope identity materially changes" in content
-    for forbidden_authority in (
-        "risk",
-        "scale",
-        "precaution",
-        "PR preparation",
-        "review/proactive review",
-        "agent judgment",
-    ):
-        assert forbidden_authority in content
+    assert "start only when it returns allow" in content
     assert "do not run its repository-wide test command separately" in content
     assert "previous release-check result is stale" in content
 
