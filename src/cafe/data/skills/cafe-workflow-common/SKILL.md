@@ -170,6 +170,7 @@ If you write an invalid `to_owner` or `intent` value, the runtime will **reject*
 | develop ↔ review disagreements and user arbitration | This skill (**Develop and review disagreement protocol**) |
 | Bounded code/search output and generated-log exclusions | This skill (**Bounded repository inspection**) |
 | Repository hooks/CI versus phase-local targeted checks | This skill (**Repository-owned quality gates**) |
+| Current-develop-step release-check authority and same-work/scope stale-rerun inheritance | This skill (**Repository-owned quality gates**, **Release-check authority decision matrix**) |
 | Issue decomposition assessment contract and phase-agent boundary | `references/issue_decomposition.md` |
 
 ## Confirming spec and plan with the user

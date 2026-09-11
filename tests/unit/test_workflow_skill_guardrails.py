@@ -21,6 +21,10 @@ def test_packaged_workflow_common_uses_bounded_digest() -> None:
     assert "The runtime derives and persists those fields" in text
     assert "Do not skip the blackboard read" not in text
     assert "Release-check authority decision matrix" in text
+    assert (
+        "Current-develop-step release-check authority and same-work/scope stale-rerun inheritance"
+        in text
+    )
 
 
 def test_packaged_develop_skill_uses_repository_quality_gate_guidance() -> None:
