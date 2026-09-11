@@ -14,6 +14,7 @@ from typer.testing import CliRunner
 
 from cafe.ui.cli import app
 from cafe.ui.commands.lifecycle import _ensure_worktree_cafe_excluded
+from cafe.updates.service import UpdateApplyError, UpdateCheckResult
 from tests.fixtures.delivery_contract import delivery_contract
 
 runner = CliRunner()
@@ -124,6 +125,17 @@ def change_test_dir(tmp_path, monkeypatch, standard_playbook_for_prepare_tests):
     monkeypatch.setattr(
         "cafe.utils.config.get_global_cafe_dir", lambda: tmp_path / "global"
     )
+    update_service = MagicMock()
+    update_service.check.return_value = UpdateCheckResult(
+        status="current",
+        installed_version="1.0.0",
+        latest_version="1.0.0",
+        release_url=None,
+        token=None,
+    )
+    monkeypatch.setattr(
+        "cafe.ui.commands.lifecycle._build_update_service", lambda: update_service
+    )
     monkeypatch.chdir(tmp_path)
 
 
@@ -154,6 +166,182 @@ def mock_git_ops():
 
 class TestPrepareCommand:
     """Test prepare command."""
+
+    def test_prepare_offers_and_applies_available_cli_update_after_confirmation(
+        self, monkeypatch, temp_repo_dir, mock_git_ops
+    ):
+        update_service = MagicMock()
+        update_service.check.return_value = UpdateCheckResult(
+            status="update_available",
+            installed_version="1.0.0",
+            latest_version="1.1.0",
+            release_url="https://example.test/releases/v1.1.0",
+            token="approved-update",
+        )
+        monkeypatch.setattr(
+            "cafe.ui.commands.lifecycle._build_update_service", lambda: update_service
+        )
+        monkeypatch.setattr("cafe.ui.cli.prompt_confirm", lambda *_args, **_kwargs: True)
+
+        result = runner.invoke(app, ["prepare", "test-issue", "--no-auto-create-pr"])
+
+        assert result.exit_code == 0
+        assert "installed=1.0.0, available=1.1.0" in result.stdout
+        update_service.apply.assert_called_once_with("approved-update")
+
+    def test_prepare_continues_without_applying_when_update_is_declined(
+        self, monkeypatch, temp_repo_dir, mock_git_ops
+    ):
+        update_service = MagicMock()
+        update_service.check.return_value = UpdateCheckResult(
+            status="update_available",
+            installed_version="1.0.0",
+            latest_version="1.1.0",
+            release_url="https://example.test/releases/v1.1.0",
+            token="approved-update",
+        )
+        monkeypatch.setattr(
+            "cafe.ui.commands.lifecycle._build_update_service", lambda: update_service
+        )
+        monkeypatch.setattr("cafe.ui.cli.prompt_confirm", lambda *_args, **_kwargs: False)
+
+        result = runner.invoke(app, ["prepare", "test-issue", "--no-auto-create-pr"])
+
+        assert result.exit_code == 0
+        update_service.apply.assert_not_called()
+
+    def test_prepare_non_interactive_checks_without_prompting_or_applying(
+        self, monkeypatch, temp_repo_dir, mock_git_ops
+    ):
+        update_service = MagicMock()
+        update_service.check.return_value = UpdateCheckResult(
+            status="update_available",
+            installed_version="1.0.0",
+            latest_version="1.1.0",
+            release_url="https://example.test/releases/v1.1.0",
+            token="approved-update",
+        )
+        prompt = MagicMock()
+        monkeypatch.setattr(
+            "cafe.ui.commands.lifecycle._build_update_service", lambda: update_service
+        )
+        monkeypatch.setattr("cafe.ui.cli.prompt_confirm", prompt)
+
+        result = runner.invoke(
+            app,
+            [
+                "prepare", "test-issue", "--no-interactive", "--input-method=manual",
+                "--rigor=medium", "--spec-template=auto", "--plan-template=default",
+                "--no-auto-create-pr",
+            ],
+        )
+
+        assert result.exit_code == 0
+        update_service.check.assert_called_once()
+        prompt.assert_not_called()
+        update_service.apply.assert_not_called()
+
+    def test_prepare_continues_when_update_check_is_unavailable(
+        self, monkeypatch, temp_repo_dir, mock_git_ops
+    ):
+        update_service = MagicMock()
+        update_service.check.return_value = UpdateCheckResult(
+            status="unavailable",
+            installed_version="1.0.0",
+            latest_version=None,
+            release_url=None,
+            token=None,
+            error="offline",
+        )
+        monkeypatch.setattr(
+            "cafe.ui.commands.lifecycle._build_update_service", lambda: update_service
+        )
+
+        result = runner.invoke(app, ["prepare", "test-issue", "--no-auto-create-pr"])
+
+        assert result.exit_code == 0
+        assert "CAFE CLI update status is unavailable" in result.stdout
+        update_service.apply.assert_not_called()
+
+    def test_prepare_continues_when_cli_is_current(
+        self, monkeypatch, temp_repo_dir, mock_git_ops
+    ):
+        update_service = MagicMock()
+        update_service.check.return_value = UpdateCheckResult(
+            status="current",
+            installed_version="1.1.0",
+            latest_version="1.1.0",
+            release_url=None,
+            token=None,
+        )
+        monkeypatch.setattr(
+            "cafe.ui.commands.lifecycle._build_update_service", lambda: update_service
+        )
+
+        result = runner.invoke(app, ["prepare", "test-issue", "--no-auto-create-pr"])
+
+        assert result.exit_code == 0
+        update_service.check.assert_called_once()
+        update_service.apply.assert_not_called()
+
+    def test_prepare_reports_and_continues_when_update_check_raises(
+        self, monkeypatch, temp_repo_dir, mock_git_ops
+    ):
+        update_service = MagicMock()
+        update_service.check.side_effect = OSError("offline")
+        monkeypatch.setattr(
+            "cafe.ui.commands.lifecycle._build_update_service", lambda: update_service
+        )
+
+        result = runner.invoke(app, ["prepare", "test-issue", "--no-auto-create-pr"])
+
+        assert result.exit_code == 0
+        assert "Unable to check for CAFE CLI updates" in result.stdout
+        update_service.apply.assert_not_called()
+
+    def test_prepare_continues_when_approved_update_fails(
+        self, monkeypatch, temp_repo_dir, mock_git_ops
+    ):
+        update_service = MagicMock()
+        update_service.check.return_value = UpdateCheckResult(
+            status="update_available",
+            installed_version="1.0.0",
+            latest_version="1.1.0",
+            release_url="https://example.test/releases/v1.1.0",
+            token="approved-update",
+        )
+        update_service.apply.side_effect = UpdateApplyError("installer failed")
+        monkeypatch.setattr(
+            "cafe.ui.commands.lifecycle._build_update_service", lambda: update_service
+        )
+        monkeypatch.setattr("cafe.ui.cli.prompt_confirm", lambda *_args, **_kwargs: True)
+
+        result = runner.invoke(app, ["prepare", "test-issue", "--no-auto-create-pr"])
+
+        assert result.exit_code == 0
+        assert "CAFE CLI update was not installed" in result.stdout
+        update_service.apply.assert_called_once_with("approved-update")
+
+    def test_prepare_checks_for_update_before_initialization_guard(
+        self, monkeypatch, temp_repo_dir
+    ):
+        update_service = MagicMock()
+        update_service.check.return_value = UpdateCheckResult(
+            status="current",
+            installed_version="1.1.0",
+            latest_version="1.1.0",
+            release_url=None,
+            token=None,
+        )
+        monkeypatch.setattr(
+            "cafe.ui.commands.lifecycle._build_update_service", lambda: update_service
+        )
+        (temp_repo_dir / ".cafe" / "config.yaml").unlink()
+
+        result = runner.invoke(app, ["prepare", "test-issue", "--no-auto-create-pr"])
+
+        assert result.exit_code == 1
+        update_service.check.assert_called_once()
 
     def test_prepare_with_issue_name_argument(self, temp_repo_dir, mock_git_ops):
         """測試使用 CLI 參數指定 issue name"""
