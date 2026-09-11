@@ -5,25 +5,6 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
-def _release_authority_decision(
-    *,
-    assigned_step: str | None,
-    user_requested: bool,
-    stale_rerun: bool = False,
-    original_authority: str | None = None,
-    authority_withdrawn: bool = False,
-    materially_changed_scope: bool = False,
-) -> str:
-    """Model the declarative develop release-authority contract."""
-    if stale_rerun and (authority_withdrawn or materially_changed_scope):
-        return "reauthorize"
-    if stale_rerun and original_authority in {"current-develop-step", "user"}:
-        return "allow"
-    if user_requested or assigned_step == "develop":
-        return "allow"
-    return "deny"
-
-
 def _skill_text(root: Path, name: str) -> str:
     return (root / name / "SKILL.md").read_text(encoding="utf-8")
 
@@ -89,48 +70,30 @@ def test_packaged_develop_skill_uses_repository_quality_gate_guidance() -> None:
 
 
 def test_release_authority_contract_enforces_assignment_and_stale_rerun_outcomes() -> None:
-    cases = (
-        {
-            "name": "current develop-step assignment authorizes release-check",
-            "kwargs": {"assigned_step": "develop", "user_requested": False},
-            "expected": "allow",
-        },
-        {
-            "name": "separate verify-step assignment does not authorize develop",
-            "kwargs": {"assigned_step": "verify", "user_requested": False},
-            "expected": "deny",
-        },
-        {
-            "name": "separate verification-step assignment does not authorize develop",
-            "kwargs": {"assigned_step": "verification", "user_requested": False},
-            "expected": "deny",
-        },
-        {
-            "name": "same-work user authority survives a stale rerun",
-            "kwargs": {
-                "assigned_step": None,
-                "user_requested": False,
-                "stale_rerun": True,
-                "original_authority": "user",
-            },
-            "expected": "allow",
-        },
+    contract_path = (
+        PROJECT_ROOT
+        / "src"
+        / "cafe"
+        / "data"
+        / "skills"
+        / "cafe-develop"
+        / "references"
+        / "release_authority_contract.md"
     )
+    rows = [
+        tuple(cell.strip() for cell in line.strip("|").split("|"))
+        for line in contract_path.read_text(encoding="utf-8").splitlines()
+        if line.startswith("|") and not line.startswith("| ---")
+    ][1:]
 
-    for case in cases:
-        assert _release_authority_decision(**case["kwargs"]) == case["expected"], case["name"]
+    decisions = {scenario: decision for scenario, *_, decision in rows}
 
-    for changed_condition in ("authority_withdrawn", "materially_changed_scope"):
-        assert (
-            _release_authority_decision(
-                assigned_step=None,
-                user_requested=False,
-                stale_rerun=True,
-                original_authority="user",
-                **{changed_condition: True},
-            )
-            == "reauthorize"
-        )
+    assert decisions["current-develop-step-assignment"] == "allow"
+    assert decisions["separate-verify-step-assignment"] == "deny"
+    assert decisions["separate-verification-step-assignment"] == "deny"
+    assert decisions["same-work-scope-user-stale-rerun"] == "allow"
+    assert decisions["authority-withdrawn"] == "reauthorize"
+    assert decisions["material-work-scope-change"] == "reauthorize"
 
 
 def test_behaviorally_changed_skills_have_minor_version_bumps() -> None:
