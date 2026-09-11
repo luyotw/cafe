@@ -17,6 +17,7 @@ from cafe.core.blackboard import (
     BlackboardStore,
     is_genuine_cold_start,
 )
+from cafe.updates.service import UpdateApplyError, UpdateService
 from cafe.utils.issue_config import resolve_issue_config_path, resolve_issue_id
 
 VALID_PHASES = ["spec", "plan", "develop", "review", "pr"]
@@ -38,6 +39,42 @@ prompt_for_rigor: Any = None
 select_template: Any = None
 _ensure_default_content: Any = None
 _resolve_iteration_index: Any = None
+
+
+def _build_update_service() -> UpdateService:
+    """Create the trusted service used for the optional CLI update check."""
+    return UpdateService()
+
+
+def _offer_cli_update(*, interactive: bool) -> None:
+    """Check for a CLI update and apply it only after an interactive approval."""
+    try:
+        update_service = _build_update_service()
+        result = update_service.check()
+    except Exception:
+        # An update check must never prevent preparation from continuing.
+        return
+
+    if result.status != "update_available" or not interactive:
+        return
+
+    console.print(
+        "[yellow]A newer CAFE CLI version is available: "
+        f"installed={result.installed_version}, available={result.latest_version}.[/yellow]"
+    )
+    if not prompt_confirm("Install the CAFE CLI update now?", default=False):
+        return
+
+    try:
+        update_service.apply(result.token or "")
+    except UpdateApplyError as exc:
+        console.print(f"[yellow]CAFE CLI update was not installed: {exc}[/yellow]")
+        return
+    except Exception:
+        console.print("[yellow]CAFE CLI update was not installed; continuing preparation.[/yellow]")
+        return
+
+    console.print("[green]✓ CAFE CLI update installed.[/green]")
 
 
 def _prepared_identity_is_reusable(
@@ -412,6 +449,8 @@ def prepare(
             console.print("[red]Error: CAFE is not initialized in this repository.[/red]")
             console.print("[yellow]Please run 'cafe init' first to set up CAFE.[/yellow]")
             raise typer.Exit(1)
+
+        _offer_cli_update(interactive=interactive)
 
         from cafe.core.prepare_profile import PrepareProfile, PrepareRigorError
         from cafe.playbooks.loader import PlaybookLoader
