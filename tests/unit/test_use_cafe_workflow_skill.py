@@ -116,6 +116,13 @@ def _read_skill_resource(path: str) -> str:
     return (SKILL_ROOT / path).read_text(encoding="utf-8")
 
 
+def test_driver_defers_release_check_until_workflow_completion() -> None:
+    text = _read_skill_resource("SKILL.md")
+
+    assert "Driver must never execute `release-check` while a workflow is active" in text
+    assert "Defer any in-workflow request until the workflow is complete" in text
+
+
 def _kickoff_formatter_command(
     strategic_context: Path,
     *extra_args: str,

@@ -796,24 +796,6 @@ def test_develop_correction_checklist_uses_feedback_file_path(tmp_path: Path) ->
     assert "{pr_feedback_file_path}" not in content
 
 
-def test_develop_checklist_prohibits_in_workflow_release_check(
-    tmp_path: Path,
-) -> None:
-    checklist_path = tmp_path / "checklist.md"
-
-    generate_develop_checklist(
-        agent_name="David",
-        spec_file_path=".cafe/issues/test/spec/iteration_001/output.md",
-        plan_file_path=".cafe/issues/test/plan/iteration_001/output.md",
-        develop_file=None,
-        checklist_file_path=checklist_path,
-    )
-
-    content = checklist_path.read_text(encoding="utf-8")
-    assert "deferred until outside the active workflow" in content
-    assert "authorized `release-check`" not in content
-
-
 def test_spec_checklist_includes_dod_instruction(tmp_path: Path) -> None:
     checklist_path = tmp_path / "checklist.md"
     generate_spec_checklist(

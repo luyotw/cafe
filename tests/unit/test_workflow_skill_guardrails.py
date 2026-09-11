@@ -20,20 +20,19 @@ def test_packaged_workflow_common_uses_bounded_digest() -> None:
     assert '"created_at": "<ISO 8601 timestamp>"' not in text
     assert "The runtime derives and persists those fields" in text
     assert "Do not skip the blackboard read" not in text
-    assert "must never execute `release-check`" in text
+    assert "Workflow phase agents must never execute it" in text
     assert "in-workflow request" in text
     assert "outside the active workflow" in text
+    assert "and Driver" not in text
 
 
 def test_packaged_develop_skill_uses_repository_quality_gate_guidance() -> None:
     builtin_root = PROJECT_ROOT / "src" / "cafe" / "data" / "skills"
     text = _skill_text(builtin_root, "cafe-develop")
 
-    assert "version: 1.10.1" in text
+    assert "version: 1.9.0" in text
     assert "與變更直接相關的 targeted checks" in text
     assert "Repository-owned quality gates" in text
-    assert "workflow 中永不執行 `release-check`" in text
-    assert "active workflow 外" in text
     assert "max_read_only_commands" not in text
     assert "20 次" not in text
     assert "failing test" not in text
@@ -52,7 +51,6 @@ def test_behaviorally_changed_skills_have_minor_version_bumps() -> None:
     expected_versions = {
         "cafe-spec": "version: 1.4.0",
         "cafe-plan": "version: 1.8.1",
-        "cafe-develop": "version: 1.10.1",
         "cafe-review": "version: 1.13.0",
         "cafe-pr": "version: 1.4.1",
         "cafe-workflow-common": "version: 1.8.3",

@@ -11,7 +11,6 @@
 [ ] Confirm: Commit messages strictly match existing format, language, and structure
 [ ] Confirm: All tasks in .cafe/issues/test/plan/iteration_001/output.md are marked [x]
 [ ] Read the plan **Test List** (`## Test List` in .cafe/issues/test/plan/iteration_001/output.md); every new or changed test maps to a listed item (update the plan first if scope changed)
-[ ] CAFE workflow phase agents and Driver must never execute `release-check`; an in-workflow request is not executed and must be deferred until outside the active workflow, where the user may run it before release
 [ ] Confirm: New/changed tests assert **invariants** (business rules, journey outcomes)—not UI copy, CSS classes, DOM structure, or internal state shape unless the spec explicitly requires it
 [ ] Confirm: Unit tests target extractable pure business logic in shared library modules when applicable; integration tests are named by **user journey** and **invariant outcome**, not by UI component
 [ ] Read `src/cafe/data/skills/cafe-plan/references/test_invariants_policy.md` before adding user-visible UI assertions (allowed: a11y roles/labels, test ids, spec-mandated copy)
