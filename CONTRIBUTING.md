@@ -89,13 +89,18 @@ Engineering checks have distinct owners:
 
 Do not trigger `release-check` merely because work is risky, large, or would
 benefit from extra assurance. It may run only when the **effective playbook
-explicitly declares verification** or the **user explicitly requests it**.
-When either authority applies, first reconcile the confirmed plan/checklist and
-Test List with all code, documentation, and tests. The resulting receipt covers
-that exact tracked state; any later tracked-file change makes the prior result
-stale and requires reconciliation plus another authorized run. Also avoid
-separately rerunning a full suite already included by `release-check` unless
-the confirmed plan explains why both are needed.
+explicitly assigns `release-check` to the current develop step** or the **user
+explicitly requests it**. A declaration that assigns the gate to a separate
+verify or verification step does not authorize develop. When either authority
+applies, first reconcile the confirmed plan/checklist and Test List with all
+code, documentation, and tests. The resulting receipt covers that exact
+tracked state; any later tracked-file change makes the prior result stale and
+requires reconciliation plus another authorized run. For the same authorized
+work/scope, that stale rerun retains the current-step playbook authority or
+original explicit user request; obtain authority again only when it is
+withdrawn or the work/scope identity materially changes. Also avoid separately
+rerunning a full suite already included by `release-check` unless the confirmed
+plan explains why both are needed.
 
 For an authorized release verification, run the builtin tooling audit:
 

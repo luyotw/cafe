@@ -20,8 +20,11 @@ def test_packaged_workflow_common_uses_bounded_digest() -> None:
     assert '"created_at": "<ISO 8601 timestamp>"' not in text
     assert "The runtime derives and persists those fields" in text
     assert "Do not skip the blackboard read" not in text
-    assert "effective playbook explicitly declares verification" in text
+    assert "effective playbook explicitly assigns it to the current develop step" in text
     assert "user explicitly requests it" in text
+    assert "does not authorize develop" in text
+    assert "same authorized work/scope" in text
+    assert "authority is withdrawn or the work/scope identity materially changes" in text
     for forbidden_authority in (
         "Risk",
         "scale",
@@ -41,8 +44,11 @@ def test_packaged_develop_skill_uses_repository_quality_gate_guidance() -> None:
     assert "version: 1.10.0" in text
     assert "與變更直接相關的 targeted checks" in text
     assert "Repository-owned quality gates" in text
-    assert "effective playbook 的明確 verification declaration" in text
+    assert "effective playbook 明確將 `release-check` 指派給目前 `develop` step" in text
     assert "使用者明確要求" in text
+    assert "不授權 develop" in text
+    assert "同一已授權 work/scope" in text
+    assert "authority 被撤回或 work/scope identity 有重大變更" in text
     for forbidden_authority in (
         "風險",
         "規模",
