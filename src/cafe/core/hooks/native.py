@@ -123,10 +123,7 @@ def _publish_requested(
         context=context,
         step_def=step_def,
     )
-    if (
-        _hook_status_value(status_code) == PhaseStatusCode.CONFIRMED.value
-        and not baton_completion
-    ):
+    if _hook_status_value(status_code) == PhaseStatusCode.CONFIRMED.value and not baton_completion:
         return True
 
     baton_file: Optional[Path] = None
@@ -1026,9 +1023,7 @@ class GitHubIssueFetcher(NoOpHook):
         source = (
             "workflow_user_input"
             if prefilled is not None
-            else "github"
-            if provider == GITHUB_ISSUE_PROVIDER
-            else "manual"
+            else "github" if provider == GITHUB_ISSUE_PROVIDER else "manual"
         )
         return HookResult(
             continue_pipeline=result.continue_pipeline,
@@ -1290,9 +1285,7 @@ class GitHubPRCreator(NoOpHook):
         request_file = (
             capability_request_file
             if isinstance(capability_request_file, Path)
-            else publish_request_file
-            if isinstance(publish_request_file, Path)
-            else None
+            else publish_request_file if isinstance(publish_request_file, Path) else None
         )
         try:
             request_payload = self._load_publish_request(

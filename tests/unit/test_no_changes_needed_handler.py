@@ -122,9 +122,7 @@ def test_direct_initial_input_does_not_count_as_no_change_reasoning(
         context={"output_file": str(output_file)},
     )
 
-    assert initial.context_updates == {
-        "user_input": "Implement the reviewed direct workflow."
-    }
+    assert initial.context_updates == {"user_input": "Implement the reviewed direct workflow."}
     assert not output_file.exists()
     assert no_change.retry_requested is True
 
