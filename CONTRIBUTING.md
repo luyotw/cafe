@@ -78,7 +78,26 @@ Plan, develop, and review skills enforce a **test invariants** policy: tests sho
 
 ## Pre-release Verification
 
-Before cutting a release or merging large changes to builtin skills, playbooks, or agents, run the builtin tooling audit:
+Engineering checks have distinct owners:
+
+- **Develop uses targeted checks** for the changed behavior.
+- **PRs, hooks, and CI own correctness gates**, including their configured
+  smoke, test, lint, and review checks.
+- **Release-only artifact verification** is the responsibility of the release
+  gate, not an extra precaution for ordinary develop, review, PR, or
+  proactive-review work.
+
+Do not trigger `release-check` merely because work is risky, large, or would
+benefit from extra assurance. It may run only when the **effective playbook
+explicitly declares verification** or the **user explicitly requests it**.
+When either authority applies, first reconcile the confirmed plan/checklist and
+Test List with all code, documentation, and tests. The resulting receipt covers
+that exact tracked state; any later tracked-file change makes the prior result
+stale and requires reconciliation plus another authorized run. Also avoid
+separately rerunning a full suite already included by `release-check` unless
+the confirmed plan explains why both are needed.
+
+For an authorized release verification, run the builtin tooling audit:
 
 ```bash
 ./scripts/release-check.sh
