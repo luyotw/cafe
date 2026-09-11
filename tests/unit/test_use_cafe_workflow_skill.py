@@ -1000,6 +1000,20 @@ def test_kickoff_contract_documents_persisted_preflight_and_reconfirmation() -> 
     assert "freshly rendered kickoff contract" in normalized
 
 
+def test_kickoff_defaults_verified_github_issues_to_pr_publication() -> None:
+    kickoff = _read_skill_resource("references/kickoff.md")
+    normalized = " ".join(kickoff.split())
+
+    assert "verified corresponding GitHub issue" in normalized
+    assert "default the publication setup question" in normalized
+    assert "enable automatic PR creation" in normalized
+    assert "Without a corresponding issue" in normalized
+    assert "manifest's local-only choice" in normalized
+    assert "A direct user choice or an existing valid confirmed choice" in normalized
+    assert "does not authorize publication before" in normalized
+    assert "never authorizes merge or issue closure" in normalized
+
+
 def test_kickoff_contract_formatter_accepts_event_driven_binding(
     tmp_path: Path,
 ) -> None:
