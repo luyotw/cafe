@@ -174,6 +174,12 @@ A catalog `over_budget` result with complete discovery retains its bounded IDs
 and effective digests without triggering a publication question; incomplete
 discovery still fails closed.
 
+Before `cafe prepare --no-interactive`, complete the Driver-managed runtime
+update decision in `project_global_skill_sync.md`. Present an available update
+to the user and obtain its explicit answer before installation; the command
+itself must never prompt. Record the decision and fresh post-apply check before
+continuing preparation.
+
 Runtime installation and project-to-Global catalog publication are separate
 approval scopes. Missing Global entries are ordinary project-only definitions
 and produce no reminder. Only when `content_mismatch_entry_ids` is non-empty,

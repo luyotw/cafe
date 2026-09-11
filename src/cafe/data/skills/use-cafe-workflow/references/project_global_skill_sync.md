@@ -43,6 +43,22 @@ result through the existing catalog preflight handling, including the
   Never infer publication approval from the kickoff confirmation, its catalog
   reminder, a generic `continue`, or approval of the runtime-update scope.
 
+## Driver-managed runtime-update decision
+
+Before a user-facing Driver invokes `cafe prepare --no-interactive`, run `cafe
+update check --json`. The non-interactive prepare command must never prompt.
+When status is `update_available`, show the installed and latest versions and
+explicitly ask the user whether to update. Only explicit acceptance may apply
+the exact comparison token from that check with `cafe update apply --token
+<token-from-update-check> --json`; then re-run `cafe update check --json`
+before `cafe prepare` and record the post-change evidence.
+
+A decline records `declined` and continues `cafe prepare` without installation.
+`current` may be silent or briefly reported. `unavailable` warns clearly and
+continues. Detached and event callbacks must not answer, infer, or apply this
+user decision. Persist the selected decision and the bounded check evidence in
+the active issue's `preflight.runtime_update` mapping.
+
 Persist each check's timestamp, status, installed/latest versions when
 applicable, comparison token, effective catalog digests, decision, and any
 post-change evidence in the active issue's `preflight` mapping. The reminder

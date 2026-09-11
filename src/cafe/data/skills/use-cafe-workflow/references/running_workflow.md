@@ -16,6 +16,10 @@ contract. Reconfirm kickoff only for a material difference found by the semantic
 comparison. Verified metadata-only churn may continue, while uncertain
 differences fail closed.
 
+For Driver-managed preparation, resolve the user-facing runtime-update decision
+from `project_global_skill_sync.md` before invoking `cafe prepare
+--no-interactive`; callbacks never supply this answer.
+
 ## Operating modes
 
 The kickoff records one mode; it is a skill operating contract, not a CAFE-core

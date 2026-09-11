@@ -282,6 +282,28 @@ def test_use_cafe_workflow_preflights_runtime_and_all_catalogs_before_execution(
     assert "reminder script runs only while rendering" in normalized_running
 
 
+def test_driver_update_preflight_requires_a_user_decision_before_prepare() -> None:
+    skill = _read_skill_resource("SKILL.md")
+    reference = _read_skill_resource("references/project_global_skill_sync.md")
+    kickoff = _read_skill_resource("references/kickoff.md")
+    running = _read_skill_resource("references/running_workflow.md")
+    normalized_reference = " ".join(reference.split())
+    normalized_kickoff = " ".join(kickoff.split())
+    normalized_running = " ".join(running.split())
+
+    assert "user-owned runtime-update decision before invoking non-interactive `cafe prepare`" in skill
+    assert "## Driver-managed runtime-update decision" in reference
+    assert "show the installed and latest versions" in normalized_reference
+    assert "explicitly ask the user whether to update" in normalized_reference
+    assert "Only explicit acceptance may apply the exact comparison token" in normalized_reference
+    assert "re-run `cafe update check --json` before `cafe prepare`" in normalized_reference
+    assert "A decline records `declined`" in normalized_reference
+    assert "Detached and event callbacks must not answer" in normalized_reference
+    assert "before `cafe prepare --no-interactive`" in normalized_kickoff.lower()
+    assert "must never prompt" in normalized_kickoff
+    assert "Driver-managed preparation" in normalized_running
+
+
 def test_skill_local_catalog_sync_path_has_no_write_authority() -> None:
     script = SKILL_ROOT / "scripts" / "catalog_version_check.py"
     source = script.read_text(encoding="utf-8")
