@@ -13,13 +13,25 @@ def test_packaged_workflow_common_uses_bounded_digest() -> None:
     builtin_root = PROJECT_ROOT / "src" / "cafe" / "data" / "skills"
     text = _skill_text(builtin_root, "cafe-workflow-common")
 
-    assert "version: 1.8.0" in text
+    assert "version: 1.8.1" in text
     assert "Bounded blackboard digest" in text
     assert "Do **not** read or print the whole file" in text
     assert '"from_step": "<current step name>"' not in text
     assert '"created_at": "<ISO 8601 timestamp>"' not in text
     assert "The runtime derives and persists those fields" in text
     assert "Do not skip the blackboard read" not in text
+    assert "effective playbook explicitly declares verification" in text
+    assert "user explicitly requests it" in text
+    for forbidden_authority in (
+        "Risk",
+        "scale",
+        "insurance",
+        "PR preparation",
+        "review",
+        "proactive review",
+        "agent judgment",
+    ):
+        assert forbidden_authority in text
 
 
 def test_packaged_develop_skill_uses_repository_quality_gate_guidance() -> None:
@@ -30,7 +42,16 @@ def test_packaged_develop_skill_uses_repository_quality_gate_guidance() -> None:
     assert "與變更直接相關的 targeted checks" in text
     assert "Repository-owned quality gates" in text
     assert "effective playbook 的明確 verification declaration" in text
-    assert "agent judgment 均非 authority" in text
+    assert "使用者明確要求" in text
+    for forbidden_authority in (
+        "風險",
+        "規模",
+        "保險",
+        "PR preparation",
+        "review/proactive review",
+        "agent judgment",
+    ):
+        assert forbidden_authority in text
     assert "max_read_only_commands" not in text
     assert "20 次" not in text
     assert "failing test" not in text
@@ -52,7 +73,7 @@ def test_behaviorally_changed_skills_have_minor_version_bumps() -> None:
         "cafe-develop": "version: 1.10.0",
         "cafe-review": "version: 1.13.0",
         "cafe-pr": "version: 1.4.1",
-        "cafe-workflow-common": "version: 1.8.0",
+        "cafe-workflow-common": "version: 1.8.1",
         "use-cafe-workflow": "metadata: {version: 1.42.0}",
     }
     for name, version in expected_versions.items():
