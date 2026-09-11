@@ -311,8 +311,10 @@ its paused handoff resumes, unattended mode reviews when the user returns while
 that pause is still pending, and an event-driven callback may begin after the
 durable pause notification. A callback acting as the current Driver may submit
 the same unique eligible correction outcome after complete review and one
-`cafe chat` consensus exchange, but may not choose advancing confirmation or a
-user-owned decision.
+`cafe chat` consensus exchange. It may also complete a confirmed
+`driver_confirmable` clean advancement after the required review and evidence
+verification, but may not choose an advancing mandatory or `user_required`
+confirmation or any other user-owned decision.
 A phase-terminal callback that did not pause cannot make the review gating and
 must not be treated as a valid review opportunity. Callback failure must fail
 closed at the existing pause; callbacks remain asynchronous, best-effort, and
