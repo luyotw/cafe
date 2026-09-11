@@ -3,6 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
+from cafe.core.artifact_revisions import ArtifactRevisionStore, StaleArtifactRevision
 from cafe.core.human_tasks import HumanTaskBinding, HumanTaskCorrection
 from cafe.core.playbook import PlaybookDefinition
 
@@ -58,3 +59,17 @@ def test_playbook_rejects_undeclared_correction_artifact() -> None:
     payload["steps"]["review"]["human_tasks"][0]["correction"]["artifacts"] = ["unknown"]
     with pytest.raises(ValidationError):
         PlaybookDefinition.model_validate(payload)
+
+
+def test_artifact_revision_is_immutable_and_replays_one_operation(tmp_path) -> None:
+    store = ArtifactRevisionStore(tmp_path)
+    first = store.replace("brief", base_hash=None, content="first", operation_id="op-1")
+    replay = store.replace("brief", base_hash=None, content="first", operation_id="op-1")
+    assert replay == first
+    assert store.read(first.path) == "first"
+
+    second = store.replace("brief", base_hash=first.sha256, content="second", operation_id="op-2")
+    assert store.read(first.path) == "first"
+    assert store.read(second.path) == "second"
+    with pytest.raises(StaleArtifactRevision):
+        store.replace("brief", base_hash=first.sha256, content="third", operation_id="op-3")
