@@ -53,6 +53,15 @@ def _offer_cli_update(*, interactive: bool) -> None:
         result = update_service.check()
     except Exception:
         # An update check must never prevent preparation from continuing.
+        console.print(
+            "[yellow]Unable to check for CAFE CLI updates; continuing preparation.[/yellow]"
+        )
+        return
+
+    if result.status == "unavailable":
+        console.print(
+            "[yellow]CAFE CLI update status is unavailable; continuing preparation.[/yellow]"
+        )
         return
 
     if result.status != "update_available" or not interactive:
@@ -443,14 +452,14 @@ def prepare(
     """
 
     try:
+        _offer_cli_update(interactive=interactive)
+
         # 1. Check if .cafe/config.yaml exists
         config_file_path = Path(".cafe/config.yaml")
         if not config_file_path.exists():
             console.print("[red]Error: CAFE is not initialized in this repository.[/red]")
             console.print("[yellow]Please run 'cafe init' first to set up CAFE.[/yellow]")
             raise typer.Exit(1)
-
-        _offer_cli_update(interactive=interactive)
 
         from cafe.core.prepare_profile import PrepareProfile, PrepareRigorError
         from cafe.playbooks.loader import PlaybookLoader
