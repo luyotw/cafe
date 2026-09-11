@@ -118,6 +118,18 @@ Also inspect the selected playbook's declared prepare fields and gates; do not
 invent domain questions or steps. Re-resolve and reconfirm affected choices
 when declarations change.
 
+For a new or stale kickoff with a verified corresponding GitHub issue, default
+the publication setup question to the manifest choice whose `prepare_args`
+enable automatic PR creation. A corresponding issue may come from the current
+GitHub initial-input binding or an already persisted and verified issue binding;
+a bare issue-like name is insufficient. Without a corresponding issue, default
+that question to the manifest's local-only choice. A direct user choice or an
+existing valid confirmed choice takes precedence over either default. Always
+render the selected value, all declared outcomes, and the exact prepare
+arguments for confirmation; the default does not authorize publication before
+the complete kickoff is confirmed, and it never authorizes merge or issue
+closure.
+
 These settings belong only in generic `issue.yaml`, through the existing
 prepare arguments declared by their owner. They do not belong in the Driver
 contract. Configuration confirmation covers only the displayed action and
@@ -423,6 +435,8 @@ for confirmation rather than asking again.
   cafe prepare <issue-name> --playbook <playbook-id> --no-interactive \
     --input-method=github --issue-id=<number> --rigor=medium \
     --spec-template=auto --plan-template=default \
+    <confirmed capability-owned prepare arguments, including the default \
+    automatic-PR argument when the selected playbook declares it> \
     --worktree .cafe/worktrees/<issue-name>
   ```
 
