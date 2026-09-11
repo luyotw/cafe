@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from cafe.core.artifact_revisions import ArtifactRevisionStore, StaleArtifactRevision
+from cafe.driver.proxy import assess_correction_takeover
 from cafe.core.human_tasks import HumanTaskBinding, HumanTaskCorrection
 from cafe.core.playbook import PlaybookDefinition
 
@@ -73,3 +74,12 @@ def test_artifact_revision_is_immutable_and_replays_one_operation(tmp_path) -> N
     assert store.read(second.path) == "second"
     with pytest.raises(StaleArtifactRevision):
         store.replace("brief", base_hash=first.sha256, content="third", operation_id="op-3")
+
+
+@pytest.mark.parametrize("field", ["bounded", "clear", "reversible", "within_scope", "no_new_authority"])
+def test_proxy_takeover_requires_every_suitability_predicate(field: str) -> None:
+    evidence = {name: True for name in ("bounded", "clear", "reversible", "within_scope", "no_new_authority")}
+    evidence[field] = False
+    result = assess_correction_takeover(**evidence)
+    assert result.suitable is False
+    assert result.reason == field
