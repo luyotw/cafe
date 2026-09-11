@@ -113,10 +113,14 @@ The callback receives only an asynchronous durable-event notice. It must
 re-check `cafe status`/`cafe show`; a notice can be stale. It may diagnose and
 perform actions already authorized by the kickoff. It cannot wait for, collect,
 infer, or choose a user answer for a mandatory, `user_required`, clarification,
-permission, or capability task, nor grant permissions or capabilities. The
-correction revise is not a user answer: only this declared correction outcome
-is excepted from the callback prohibition, and only after due review/chat
-consensus. It may complete a declared `driver_confirmable` task only after
+permission, or capability task, nor grant permissions or capabilities. A
+unique active declared correction outcome is not a user answer only when it
+requires feedback, is marked `correction: true`, and routes to a
+non-advancing correction continuation. Derive it solely from the active
+HumanTask declaration regardless of outcome, phase, or target names; zero or
+multiple eligible outcomes fail closed for user/playbook clarification. The
+exception applies only after complete review and one `cafe chat` consensus
+exchange. It may complete a declared `driver_confirmable` task only after
 verifying the current confirmation contract and evidence. It does not own the background worker or
 gain a safe stop channel. An existing reliable, authorized control may be used
 only after verification; this feature creates no PID registry, cancellation API,
@@ -124,13 +128,13 @@ recovery protocol, or stop guarantee.
 
 ## Completing a HumanTask
 
-The callback is not an interaction channel. Except for an active declared
-non-advancing correction revise, a mandatory, `user_required`, clarification,
+The callback is not an interaction channel. Except for the unique active
+declared correction outcome, a mandatory, `user_required`, clarification,
 permission, or capability task requires a **user-facing driver turn** to
-receive the user's explicit answer. The exception for an active declared
-non-advancing correction revise permits the current Driver, including an
-event-driven callback, to submit only that revise after due review/chat
-consensus; it never permits confirmation or another user-owned decision. A
+receive the user's explicit answer. The exception permits the current Driver,
+including an event-driven callback, to submit only that eligible outcome after
+complete review and one `cafe chat` consensus exchange; it never permits
+confirmation or another user-owned decision. A
 `driver_confirmable` task may instead be completed by any Driver, including an
 event-driven callback, after it verifies the confirmed contract and evidence.
 Both cases use the same durable task flow:
@@ -143,11 +147,13 @@ repeat it when the user already has the same task and options unless they ask.
 
 1. Inspect the exact pending task with `cafe task inspect <task-id>` and read
    its declared input schema. Never reuse a stale task ID.
-2. Classify the task before serializing its result. For an active declared
-   non-advancing `revise` requiring feedback and marked `correction: true`, the
-   Driver may serialize the correction result only after complete review and
-   `cafe chat` consensus, including the consolidated findings, consensus, and
-   acceptance conditions. For a user-owned task, serialize only the user's
+2. Classify the task before serializing its result. The Driver may serialize a
+   correction result only for the unique active declared correction outcome that
+   requires feedback, is marked `correction: true`, and routes to a
+   non-advancing correction continuation, and only after complete review and one
+   `cafe chat` consensus exchange, including the consolidated findings,
+   consensus, and acceptance conditions. If zero or multiple outcomes qualify,
+   fail closed for user/playbook clarification. For a user-owned task, serialize only the user's
    supplied answer into that schema; the Driver may add the task ID required by
    the schema, but must not infer a decision, approval, permission, or missing
    answer. For a `driver_confirmable` task, use only its declared response after
@@ -271,9 +277,10 @@ iteration. Independently verify a rebuttal against the same unchanged artifact.
 An accepted finding without a durable correction remains blocking. If the
 Driver and phase agent agree that an artifact correction is necessary, the
 Driver may intentionally create one formal correction iteration only through
-the active declared `revise` outcome. First verify that the decision requires
-feedback, declares `correction: true`, and routes to correction rather than
-downstream advancement. Submit `cafe task complete ... --no-resume --json` with
+the unique active declared correction outcome. First verify that it requires
+feedback, declares `correction: true`, and routes to a non-advancing correction
+continuation. If zero or multiple outcomes qualify, fail closed for
+user/playbook clarification. Submit `cafe task complete ... --no-resume --json` with
 consolidated findings, reached consensus, and acceptance conditions; then verify
 the durable task result and correction continuation before resuming in the
 configured mode. Only the resumed runtime materializes and executes the next
@@ -303,8 +310,9 @@ modes, but only at the existing scheduled pause. Attached mode reviews before
 its paused handoff resumes, unattended mode reviews when the user returns while
 that pause is still pending, and an event-driven callback may begin after the
 durable pause notification. A callback acting as the current Driver may submit
-the same pre-authorized declared correction revise after due review/chat
-consensus, but may not choose advancing confirmation or a user-owned decision.
+the same unique eligible correction outcome after complete review and one
+`cafe chat` consensus exchange, but may not choose advancing confirmation or a
+user-owned decision.
 A phase-terminal callback that did not pause cannot make the review gating and
 must not be treated as a valid review opportunity. Callback failure must fail
 closed at the existing pause; callbacks remain asynchronous, best-effort, and

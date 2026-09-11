@@ -1,7 +1,7 @@
 ---
 name: cafe-workflow-common
 description: Use this skill at the start of any CAFE workflow phase to load the bounded workflow digest, identify the current baton state, and ground the phase in shared context before reading phase-specific artifacts.
-version: 1.8.0
+version: 1.8.3
 ---
 
 # Workflow Common
@@ -128,7 +128,7 @@ If you write an invalid `to_owner` or `intent` value, the runtime will **reject*
 - The repository owns its default quality gates through versioned Git hooks and CI configuration. Workflow phases must not invent, duplicate, or strengthen the repository's full-suite, coverage, release, or push gates.
 - Develop runs only the targeted checks needed for fast implementation feedback. When a plan is supplied, map them to its Test List; otherwise select them from the changed behavior. Normal commits and pushes must allow the repository's configured hooks to run; use `--no-verify` only with explicit user authorization and record that bypass in the development summary.
 - Review evaluates the changed tests, targeted evidence, and any supplied hook or CI result. A missing CAFE verification receipt is not a finding, and review does not rerun repository-wide commands.
-- A custom playbook may explicitly declare a separate verification contract. That opt-in contract belongs to the custom workflow and does not make verification a default responsibility of develop or review.
+- `release-check` is a user-run operation outside an active workflow, before release. Workflow phase agents must never execute it; an in-workflow request is deferred until outside the active workflow.
 
 ## What Not To Do
 - Do not re-explain the shared workflow model in every phase artifact.
@@ -149,6 +149,7 @@ If you write an invalid `to_owner` or `intent` value, the runtime will **reject*
 | develop ↔ review disagreements and user arbitration | This skill (**Develop and review disagreement protocol**) |
 | Bounded code/search output and generated-log exclusions | This skill (**Bounded repository inspection**) |
 | Repository hooks/CI versus phase-local targeted checks | This skill (**Repository-owned quality gates**) |
+| Phase-agent release-check prohibition and user-run outside-workflow operation | This skill (**Repository-owned quality gates**) |
 | Issue decomposition assessment contract and phase-agent boundary | `references/issue_decomposition.md` |
 
 ## Confirming spec and plan with the user
