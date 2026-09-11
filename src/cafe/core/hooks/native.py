@@ -340,14 +340,20 @@ class UserInputCollector(NoOpHook):
 
         previous_status = _get_previous_iteration_status(phase)
         if previous_status == "no_changes_needed":
-            result = self._collect_declared_human_task(
-                phase=phase,
-                step_name=step_name,
-                step_def=step_def,
-                trigger="no_changes_needed",
+            from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+
+            pending_feedback = WorkflowFeedbackLedger(phase.issue_dir).pending(
+                target_step=step_name
             )
-            if result is not None:
-                return result
+            if not pending_feedback:
+                result = self._collect_declared_human_task(
+                    phase=phase,
+                    step_name=step_name,
+                    step_def=step_def,
+                    trigger="no_changes_needed",
+                )
+                if result is not None:
+                    return result
 
         if previous_status not in {"need_clarification", "ready_for_review"}:
             return HookResult()

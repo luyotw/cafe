@@ -278,3 +278,36 @@ def test_user_input_collector_non_interactive_pauses_when_no_user_input_file_pre
 
     assert result.continue_pipeline is False
     assert any(e.get("type") == "human_task_rejected" for e in result.events)
+
+
+def test_user_input_collector_allows_new_feedback_after_no_changes_needed(
+    tmp_path: Path,
+) -> None:
+    """New durable correction feedback must not reopen the previous no-change gate."""
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    phase_dir = issue_dir / "develop"
+    previous_iteration = phase_dir / "iteration_001"
+    previous_iteration.mkdir(parents=True, exist_ok=True)
+    (previous_iteration / "output.md").write_text("reasoning", encoding="utf-8")
+    _record_no_changes_event(issue_dir)
+    WorkflowFeedbackLedger(issue_dir).record(
+        source_identity="local-review:pr:local-review:2",
+        source_kind="local_review",
+        target_step="develop",
+        content="Apply the newly approved correction.",
+    )
+
+    phase = _FakeDevelopStep(issue_dir, iteration=2, interactive=False)
+    result = UserInputCollector().run(
+        stage="prepare_input",
+        phase=phase,
+        step_name="develop",
+        step_def=_no_change_step_def(),
+        agent_name="David",
+    )
+
+    assert result.continue_pipeline is True
+    assert result.override_status_code is None
+    assert result.events == []
