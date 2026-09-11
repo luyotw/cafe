@@ -81,6 +81,7 @@ from cafe.skills.contracts import (
 from cafe.skills.loader import SkillLoader, canonical_skill_name
 from cafe.templates.manager import TemplateManager
 from cafe.utils.checklist_utils import generate_checklist_file
+from cafe.utils.checklist_validator import completion_requires_checklist
 from cafe.utils.git_utils import get_git_toplevel, get_repo_root, to_cwd_relative_path
 from cafe.utils.phase_config import load_phase_step_model
 
@@ -440,6 +441,10 @@ class GenericWorkflowStepExecutor(Phase):
 
         def run_agent(prompt: str) -> str:
             last_prompt[:] = [prompt]
+            self._persist_agent_invocation_marker(
+                iteration_dir=iteration_dir,
+                agent_invoked=True,
+            )
             if self._delta_packet_metadata is not None:
                 phase_specific_data["delta_packet"] = dict(self._delta_packet_metadata)
             resolved_user_input = self._get_resolved_iteration_user_input(step_name)
@@ -488,6 +493,10 @@ class GenericWorkflowStepExecutor(Phase):
                 extra_prompt,
             )
 
+        self._persist_agent_invocation_marker(
+            iteration_dir=iteration_dir,
+            agent_invoked=False,
+        )
         execution = self.generic_phase.execute(
             skill_name=skill_name,
             step_def=step_def,
@@ -525,12 +534,19 @@ class GenericWorkflowStepExecutor(Phase):
                 status_code = StatusCodeParser.extract(response, valid_intents)
 
         agent_was_invoked = execution.agent_invoked
+        self._persist_agent_invocation_marker(
+            iteration_dir=iteration_dir,
+            agent_invoked=agent_was_invoked,
+        )
+        checklist_validation_failed = False
         if (
-            require_status_code
-            and agent_was_invoked
-            and execution.status_code is not None
-            and status_code is not None
-            and self._should_validate_checklist(status_code)
+            agent_was_invoked
+            and self._output_requires_contract_validation(
+                step_name=step_name,
+                status_code=status_code,
+                baton_path=portion_baton_path or baton_path,
+                hybrid_portion=is_hybrid_portion,
+            )
         ):
             resolved_user_input = self._get_resolved_iteration_user_input(step_name)
 
@@ -555,10 +571,11 @@ class GenericWorkflowStepExecutor(Phase):
             )
             if validation_passed and validated_status is not None:
                 status_code = validated_status
+            checklist_validation_failed = not validation_passed
 
         output_key = str(step_def.get("output_artifact", step_name))
         artifacts: Dict[str, str] = {}
-        if execution.artifact_ready and output_file.exists():
+        if execution.artifact_ready and not checklist_validation_failed and output_file.exists():
             # Context packets are an optional runtime view.  Their structural
             # eligibility is resolved at the consuming edge, where any failure
             # safely selects the complete authoritative artifact.
@@ -586,6 +603,14 @@ class GenericWorkflowStepExecutor(Phase):
         effective_status = status_code
 
         events = [event for event in execution.events if isinstance(event, dict)]
+        if checklist_validation_failed:
+            events.append(
+                {
+                    "type": "checklist_validation_failed",
+                    "step": step_name,
+                    "iteration": self.iteration,
+                }
+            )
         store = BlackboardStore(self.issue_dir)
         for event in events:
             if event.get("type") != "script_hook":
@@ -649,8 +674,32 @@ class GenericWorkflowStepExecutor(Phase):
             artifacts=artifacts,
             status_code=effective_status.value if effective_status is not None else None,
             auto_continue=auto_continue,
+            artifact_ready=execution.artifact_ready and not checklist_validation_failed,
             agent_invoked=agent_was_invoked,
             events=events,
+        )
+
+    def _persist_agent_invocation_marker(
+        self,
+        *,
+        iteration_dir: Path,
+        agent_invoked: bool,
+    ) -> None:
+        """Persist whether this iteration crossed the agent execution boundary."""
+        context_file = self._resolve_iteration_context_file(iteration_dir)
+        context_data: object = {}
+        if context_file.exists():
+            try:
+                context_data = json.loads(context_file.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError):
+                return
+        if not isinstance(context_data, dict):
+            return
+        iteration_dir.mkdir(parents=True, exist_ok=True)
+        context_data["agent_invoked"] = agent_invoked
+        context_file.write_text(
+            json.dumps(context_data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
         )
 
     def _build_backup_takeover_context(
@@ -1761,36 +1810,32 @@ class GenericWorkflowStepExecutor(Phase):
             encoding="utf-8",
         )
 
-    @staticmethod
-    def _should_validate_checklist(status_code: PhaseStatusCode) -> bool:
-        return status_code in {
-            PhaseStatusCode.CONFIRMED,
-            PhaseStatusCode.AWAIT_AGENT,
-            PhaseStatusCode.READY_FOR_REVIEW,
-            PhaseStatusCode.CONFIRM_OUTPUT,
-        }
-
     def _output_requires_contract_validation(
-        self, *, step_name: str, status_code: Optional[PhaseStatusCode]
+        self,
+        *,
+        step_name: str,
+        status_code: Optional[PhaseStatusCode],
+        baton_path: Path,
+        hybrid_portion: bool,
     ) -> bool:
-        if status_code is not None:
-            return self._should_validate_checklist(status_code)
         try:
-            contract = BlackboardStore(self.issue_dir).load_handoff_contract(
-                BlackboardStore(self.issue_dir).load_or_create(step_name),
-                allowed_steps=list(self.playbook.get("steps", {})),
+            payload = json.loads(baton_path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("baton payload must be an object")
+            contract = HandoffContract.from_dict_with_current_step(
+                payload,
+                current_step=step_name,
             )
-        except (OSError, ValueError, BatonRejected):
-            return False
-        return (
-            contract.from_step == step_name
-            and contract.to_step != step_name
-            and contract.intent
-            in {
-                HandoffIntent.AWAIT_AGENT,
-                HandoffIntent.CONFIRM_OUTPUT,
-                HandoffIntent.WORKFLOW_COMPLETE,
-            }
+            contract.validate(allowed_steps=list(self.playbook.get("steps", {})))
+            valid_completion_baton = contract.from_step == step_name and (
+                hybrid_portion or contract.to_step != step_name
+            )
+            if valid_completion_baton:
+                return completion_requires_checklist(baton_intent=contract.intent.value)
+        except (OSError, json.JSONDecodeError, ValueError, BatonRejected):
+            pass
+        return completion_requires_checklist(
+            status_code=status_code.value if status_code is not None else None
         )
 
     def _validate_produced_packet_contracts(

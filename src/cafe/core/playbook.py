@@ -1235,6 +1235,14 @@ def validate_playbook(
 
     if warnings and strict:
         raise ValueError("\n".join(warnings))
+
+    for step_name, step in steps.items():
+        if step.assignee_type == "hybrid":
+            warnings.append(
+                f"Step '{step_name}' uses deprecated assignee_type='hybrid'. "
+                "Model agent and human portions as ordinary top-level steps; hybrid support "
+                "is retained only for compatibility until the next breaking release."
+            )
     return warnings
 
 

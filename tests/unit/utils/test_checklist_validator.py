@@ -1,8 +1,24 @@
 """Unit tests for checklist_validator module."""
 
+
 import pytest
-from pathlib import Path
-from cafe.utils.checklist_validator import ChecklistValidationResult, validate_checklist
+
+from cafe.utils.checklist_validator import completion_requires_checklist, validate_checklist
+
+
+@pytest.mark.parametrize("intent", ["await_agent", "confirm_output", "workflow_complete"])
+def test_completion_baton_requires_checklist(intent):
+    assert completion_requires_checklist(baton_intent=intent, status_code="need_clarification")
+
+
+@pytest.mark.parametrize("intent", ["need_clarification", "need_permission", "manual_handoff"])
+def test_pause_baton_does_not_require_checklist(intent):
+    assert not completion_requires_checklist(baton_intent=intent, status_code="confirmed")
+
+
+def test_legacy_status_is_used_only_without_baton():
+    assert completion_requires_checklist(status_code="ready_for_review")
+    assert not completion_requires_checklist(status_code="need_clarification")
 
 
 def test_validate_checklist_all_complete(tmp_path):

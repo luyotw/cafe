@@ -172,6 +172,8 @@ class _BatonWritingAgentManager:
     def execute(self, _name: str, _prompt: str, **_kwargs):
         self.prompts.append(_prompt)
         self.allowed_tools_calls.append(_kwargs.get("allowed_tools"))
+        checklist = Path(_kwargs["streaming_output_file"]).parent / "checklist.md"
+        checklist.write_text("[x] completed by test agent\n", encoding="utf-8")
         state = BlackboardStore(self.issue_dir).load_or_create("release")
         BlackboardStore(self.issue_dir).update_handoff_contract(
             state,
@@ -189,6 +191,8 @@ class _FeedbackAgentManager(_BatonWritingAgentManager):
     """Test-double agent that reports publish feedback through the normal executor."""
 
     def execute(self, _name: str, _prompt: str, **_kwargs):
+        checklist = Path(_kwargs["streaming_output_file"]).parent / "checklist.md"
+        checklist.write_text("[x] completed by test agent\n", encoding="utf-8")
         store = BlackboardStore(self.issue_dir)
         state = store.load_or_create("release")
         store.update_handoff_contract(
@@ -497,6 +501,12 @@ def test_default_requested_changes_follow_declared_loop_without_publish_authorit
 
     def executor(step_name: str, step_def: dict, _state: BlackboardState) -> StepExecutionResult:
         executed_steps.append(step_name)
+        iteration_dir = issue_dir / step_name / "iteration_001"
+        iteration_dir.mkdir(parents=True, exist_ok=True)
+        (iteration_dir / "checklist.md").write_text(
+            "[x] completed by test agent\n",
+            encoding="utf-8",
+        )
         if step_name == "pr":
             _write_pr_done_baton(issue_dir)
             return StepExecutionResult(
@@ -1122,6 +1132,12 @@ class TestUserHandoff:
         }
         store = BlackboardStore(issue_dir)
         blackboard = store.load_or_create("spec")
+        iteration_dir = issue_dir / "spec" / "iteration_001"
+        iteration_dir.mkdir(parents=True)
+        (iteration_dir / "checklist.md").write_text(
+            "[x] completed by test agent\n",
+            encoding="utf-8",
+        )
         store.update_handoff_contract(
             blackboard,
             from_step="spec",
@@ -1218,6 +1234,12 @@ class TestUserHandoff:
         done_issue_dir = tmp_path / ".cafe" / "issues" / "issue-contract-done"
         done_store = BlackboardStore(done_issue_dir)
         done_blackboard = done_store.load_or_create("review")
+        iteration_dir = done_issue_dir / "review" / "iteration_001"
+        iteration_dir.mkdir(parents=True)
+        (iteration_dir / "checklist.md").write_text(
+            "[x] completed by test agent\n",
+            encoding="utf-8",
+        )
         done_store.update_handoff_contract(
             done_blackboard,
             from_step="review",

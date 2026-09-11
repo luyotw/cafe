@@ -136,6 +136,14 @@ class FakeGitOperations:
         return "abc123 test commit"
 
 
+def _complete_current_checklist(*, streaming_output_file=None, **_kwargs) -> None:
+    assert streaming_output_file is not None
+    (Path(streaming_output_file).parent / "checklist.md").write_text(
+        "[x] completed by test agent\n",
+        encoding="utf-8",
+    )
+
+
 def _build_loader(tmp_path: Path) -> GenericPhase:
     skill_root = tmp_path / "builtin" / "skills"
     for name, body in {
@@ -282,7 +290,7 @@ def test_generic_workflow_step_executor_writes_iteration_files(tmp_path: Path, m
         issue_name="issue-1",
         playbook=playbook,
         generic_phase=_build_loader(tmp_path),
-        agent_manager=FakeAgentManager("confirmed"),
+        agent_manager=FakeAgentManager("confirmed", on_execute=_complete_current_checklist),
         git_ops=FakeGitOperations(),
         role_agent_map={"pm": "Roger"},
     )
@@ -390,7 +398,7 @@ def test_generic_step_passes_declared_read_only_guard_to_agent_manager(
         },
     }
     state = BlackboardStore(issue_dir).load_or_create("build")
-    agent_manager = FakeAgentManager("confirmed")
+    agent_manager = FakeAgentManager("confirmed", on_execute=_complete_current_checklist)
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name="issue-declared-guard",
@@ -571,6 +579,206 @@ def test_generic_workflow_step_agent_written_baton_preserved(tmp_path: Path, mon
     assert reloaded.handoff_contract.to_step == "plan"
     assert reloaded.handoff_contract.to_owner == HandoffOwner.AGENT
     assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
+
+
+@pytest.mark.parametrize("repair_succeeds", [True, False])
+def test_baton_only_completion_cannot_bypass_checklist_retry(
+    tmp_path: Path,
+    monkeypatch,
+    repair_succeeds: bool,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "baton-checklist"
+    playbook = {
+        "playbook": {"id": "baton-checklist"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "develop": {
+                "skill": "develop",
+                "role": "developer",
+                "output_artifact": "code",
+                "allowed_tools": ["Read", "Write"],
+                "on": {"await_agent": "review"},
+            },
+            "review": {"skill": "develop", "role": "developer", "on": {}},
+        },
+    }
+    checklist = issue_dir / "develop" / "iteration_001" / "checklist.md"
+
+    def on_retry(**_kwargs: object) -> None:
+        if repair_succeeds:
+            checklist.write_text("[x] complete work\n", encoding="utf-8")
+
+    manager = FakeAgentManager(["", "", ""], on_execute=on_retry)
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="baton-checklist",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+
+    def fake_execute(**kwargs):
+        kwargs["output_file"].write_text("partial work\n", encoding="utf-8")
+        kwargs["checklist_file"].write_text("[ ] complete work\n", encoding="utf-8")
+        (issue_dir / "next_step.txt").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "to_owner": "agent",
+                    "to_step": "review",
+                    "intent": "await_agent",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return GenericPhaseExecution(
+            response="",
+            status_code=None,
+            goto_target=None,
+            context_updates={},
+            events=[],
+            artifact_ready=True,
+            agent_invoked=True,
+        )
+
+    executor.generic_phase.execute = fake_execute
+    state = BlackboardStore(issue_dir).load_or_create("develop")
+
+    result = executor.execute_step("develop", playbook["steps"]["develop"], state)
+
+    if repair_succeeds:
+        assert manager.execute_call_count == 1
+        assert result.artifact_ready is True
+        assert not any(event["type"] == "checklist_validation_failed" for event in result.events)
+    else:
+        assert manager.execute_call_count == 3
+        assert result.artifact_ready is False
+        assert any(event["type"] == "checklist_validation_failed" for event in result.events)
+
+
+def test_unreadable_completion_checklist_returns_typed_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "unreadable-checklist"
+    playbook = {
+        "playbook": {"id": "unreadable-checklist"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "develop": {
+                "skill": "develop",
+                "role": "developer",
+                "output_artifact": "code",
+                "on": {"await_agent": "review"},
+            },
+            "review": {"skill": "develop", "role": "developer", "on": {}},
+        },
+    }
+    manager = FakeAgentManager(["", "", ""])
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="unreadable-checklist",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+
+    def fake_execute(**kwargs):
+        kwargs["output_file"].write_text("partial work\n", encoding="utf-8")
+        kwargs["checklist_file"].unlink()
+        kwargs["checklist_file"].mkdir()
+        (issue_dir / "next_step.txt").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "to_owner": "agent",
+                    "to_step": "review",
+                    "intent": "await_agent",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return GenericPhaseExecution(
+            response="",
+            status_code=None,
+            goto_target=None,
+            context_updates={},
+            events=[],
+            artifact_ready=True,
+            agent_invoked=True,
+        )
+
+    executor.generic_phase.execute = fake_execute
+    state = BlackboardStore(issue_dir).load_or_create("develop")
+
+    result = executor.execute_step("develop", playbook["steps"]["develop"], state)
+
+    assert manager.execute_call_count == 3
+    assert result.artifact_ready is False
+    assert any(event["type"] == "checklist_validation_failed" for event in result.events)
+
+
+def test_pre_agent_hook_completion_persists_agent_invocation_marker(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager(""))
+
+    def fake_execute(**_kwargs):
+        return GenericPhaseExecution(
+            response="",
+            status_code=PhaseStatusCode.AWAIT_AGENT,
+            goto_target=None,
+            context_updates={},
+            events=[],
+            artifact_ready=False,
+            agent_invoked=False,
+        )
+
+    executor.generic_phase.execute = fake_execute
+    state = BlackboardStore(executor.issue_dir).load_or_create("spec")
+
+    result = executor.execute_step("spec", executor.playbook["steps"]["spec"], state)
+
+    context = json.loads(
+        (executor.issue_dir / "spec" / "iteration_001" / "iteration.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert result.agent_invoked is False
+    assert context["agent_invoked"] is False
+
+
+def test_agent_invocation_marker_is_true_before_agent_control_returns(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager(""))
+
+    def fake_execute(**kwargs):
+        kwargs["agent_executor"]("test prompt")
+        raise KeyboardInterrupt
+
+    executor.generic_phase.execute = fake_execute
+    state = BlackboardStore(executor.issue_dir).load_or_create("spec")
+
+    with pytest.raises(KeyboardInterrupt):
+        executor.execute_step("spec", executor.playbook["steps"]["spec"], state)
+
+    context = json.loads(
+        (executor.issue_dir / "spec" / "iteration_001" / "iteration.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert context["agent_invoked"] is True
 
 
 def test_generic_workflow_step_status_transition_writes_strict_baton_payload(
@@ -1264,7 +1472,7 @@ def test_review_step_installs_phase_skill_for_effective_cli_chain(
                 backup_clis=[AgentCLI.CODEX],
             )
 
-    agent_manager = StickyProviderManager("confirmed")
+    agent_manager = StickyProviderManager("confirmed", on_execute=_complete_current_checklist)
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name="issue-review-skill",
@@ -1371,7 +1579,7 @@ def test_generic_workflow_step_prompt_includes_latest_blackboard_handoff(
         "Plan confirmed; continue to development.",
         {"full_prompt": hidden_payload},
     )
-    agent_manager = FakeAgentManager("confirmed")
+    agent_manager = FakeAgentManager("confirmed", on_execute=_complete_current_checklist)
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name="issue-handoff",
@@ -1493,7 +1701,7 @@ def test_generic_workflow_step_pr_prompt_overrides_external_state_guardrail(
     store.set_artifact(state, "spec", str(spec_file))
     store.set_artifact(state, "plan", str(plan_file))
     store.set_handoff_summary(state, "原本的 pr script 有問題，我把 pr 砍掉了麻煩重發一次")
-    agent_manager = FakeAgentManager("confirmed")
+    agent_manager = FakeAgentManager("confirmed", on_execute=_complete_current_checklist)
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name="issue-pr-guardrail",
@@ -4993,7 +5201,11 @@ def test_same_invocation_baton_retry_resumes_actual_session(
 
         def execute(self, *args, continuation=None, phase_name=None, **kwargs):
             self.continuations.append(continuation)
-            return super().execute(*args, **kwargs)
+            result = super().execute(*args, **kwargs)
+            _complete_current_checklist(
+                streaming_output_file=kwargs.get("streaming_output_file")
+            )
+            return result
 
         def get_last_cli(self):
             return AgentCLI.CODEX

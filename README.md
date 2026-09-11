@@ -258,6 +258,10 @@ operations from CAFE.
 | Phase chain | Ordered primary and fallback CLI/model entries for one agent step |
 | Worktree | An isolated Git checkout for one issue's code and workflow state |
 
+Custom playbooks should express ownership boundaries as top-level steps.
+`assignee_type: hybrid` is deprecated; see
+[Migrating hybrid workflow steps](docs/hybrid-workflow-migration.md).
+
 The repository is the definition layer; chat history is not the source of
 truth. Runtime state currently lives under `.cafe/issues/`, while project
 playbooks, skills, strategy, and settings remain versionable alongside the

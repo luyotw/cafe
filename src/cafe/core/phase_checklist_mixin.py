@@ -52,7 +52,7 @@ class PhaseChecklistMixin:
         Raises:
             AttributeError: If phase lacks required attributes
         """
-        from cafe.utils.checklist_validator import validate_checklist
+        from cafe.utils.checklist_validator import ChecklistValidationResult, validate_checklist
 
         # Check required attributes
         if not hasattr(self, "phase_dir"):
@@ -71,26 +71,19 @@ class PhaseChecklistMixin:
                 self._rebuild_checklist_for_iteration(self.iteration)
             except Exception as e:
                 print(f"⚠️  Failed to rebuild checklist: {e}")
-                # Continue without checklist validation if rebuild fails
+                # Validation below fails closed if the checklist remains unavailable.
 
         # Validate checklist
         try:
             result = validate_checklist(checklist_path)
-        except FileNotFoundError:
-            # If still not found after rebuild attempt, skip validation
-            print(f"⚠️  Checklist file still not found after rebuild, skipping validation")
-            # Get current response from context
-            context_file = self._resolve_iteration_context_file(iteration_dir)
-            if context_file.exists():
-                with open(context_file, "r", encoding="utf-8") as f:
-                    context_data = json.load(f)
-                    response = context_data.get("response", "")
-                    status_code = self._extract_status_code_from_response(
-                        response,
-                        valid_codes=valid_intents,
-                    )
-                    return response, status_code, True
-            return "", None, True
+        except (OSError, UnicodeError):
+            # A missing checklist cannot prove completion.
+            print("⚠️  Checklist file is unavailable after rebuild")
+            result = ChecklistValidationResult(
+                is_complete=False,
+                unchecked_count=0,
+                checklist_path=checklist_path,
+            )
 
         if result.is_complete:
             print(f"✅ Checklist validation passed - all items completed")
@@ -178,7 +171,7 @@ Do NOT return a status code until ALL checklist items are marked as complete [x]
                 # Validate checklist again
                 retry_result = validate_checklist(checklist_path)
 
-                if retry_result.is_complete and retry_status_code is not None:
+                if retry_result.is_complete:
                     print(f"✅ Checklist validation passed after retry {retry_count}")
 
                     # Merge streaming logs
@@ -226,12 +219,6 @@ Do NOT return a status code until ALL checklist items are marked as complete [x]
                     print(
                         f"⚠️  Checklist still has {retry_result.unchecked_count} unchecked items after retry {retry_count}"
                     )
-                else:
-                    # Checklist is complete but no valid status code extracted
-                    print(
-                        f"⚠️  Checklist complete but failed to extract valid status code from retry response (attempt {retry_count}/{max_retries})"
-                    )
-
             except Exception as e:
                 print(f"⚠️  Failed to retry checklist completion: {e}")
                 # Continue to next retry

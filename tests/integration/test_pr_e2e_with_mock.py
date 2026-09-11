@@ -344,6 +344,8 @@ def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(
 
         def execute(self, _name: str, prompt: str, **_kwargs):
             self.prompts.append(prompt)
+            checklist = Path(_kwargs["streaming_output_file"]).parent / "checklist.md"
+            checklist.write_text("[x] completed by test agent\n", encoding="utf-8")
             return "await_agent", TokenUsage(), [], [], [], None
 
     class GitOperations:

@@ -9,10 +9,17 @@ from types import SimpleNamespace
 import pytest
 
 from cafe.core.automatic_steps import AutomaticExecutionResult, AutomaticExecutorRegistry
-from cafe.core.blackboard import BLACKBOARD_SCHEMA_VERSION, BlackboardState, BlackboardStore
+from cafe.core.blackboard import (
+    BLACKBOARD_SCHEMA_VERSION,
+    BlackboardState,
+    BlackboardStore,
+    HandoffIntent,
+    HandoffOwner,
+)
 from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.human_tasks import HumanTaskBinding, HumanTaskDecision, HumanTaskPolicy
 from cafe.core.playbook import PlaybookDefinition, StepConfig, validate_playbook
+from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime, StepIterationFrame
 from cafe.playbooks.simulate import analyze_playbook, format_dot, format_text_report
 from cafe.ui.human_tasks import apply_human_task_payload
@@ -179,13 +186,252 @@ def test_strict_validation_accepts_declared_non_agent_owners(tmp_path: Path) -> 
         def get_workflow_contract(self, _skill_name: str) -> SimpleNamespace:
             return contract
 
-    assert validate_playbook(
+    warnings = validate_playbook(
         model,
         skill_loader=SkillLoaderStub(),
         source="test",
         path=tmp_path / "mixed-owner.yml",
         strict=True,
-    ) == []
+    )
+
+    assert len(warnings) == 1
+    assert "assignee_type='hybrid'" in warnings[0]
+    assert "next breaking release" in warnings[0]
+
+
+def test_agent_completion_with_unchecked_checklist_is_not_published(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "checklist-gate"
+    playbook = {
+        "playbook": {"id": "checklist-gate"},
+        "steps": {
+            "build": {
+                "skill": "phase",
+                "role": "operator",
+                "on": {"await_agent": "review"},
+            },
+            "review": {"skill": "phase", "role": "operator", "on": {}},
+        },
+    }
+
+    def executor(step_name: str, _step_def: dict, state: BlackboardState, **_kwargs: object):
+        iteration_dir = issue_dir / step_name / "iteration_001"
+        iteration_dir.mkdir(parents=True)
+        output = iteration_dir / "output.md"
+        output.write_text("partial work\n", encoding="utf-8")
+        (iteration_dir / "checklist.md").write_text("[ ] finish work\n", encoding="utf-8")
+        BlackboardStore(issue_dir).update_handoff_contract(
+            state,
+            from_step=step_name,
+            to_owner=HandoffOwner.AGENT,
+            to_step="review",
+            intent=HandoffIntent.AWAIT_AGENT,
+            source="baton",
+        )
+        return StepExecutionResult(
+            response="",
+            artifacts={"code": str(output)},
+            status_code=None,
+            artifact_ready=True,
+            agent_invoked=True,
+        )
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    ).run(start_step="build")
+    state = BlackboardStore(issue_dir).load_or_create("build")
+
+    assert result.final_status_code == "CHECKLIST_VALIDATION_FAILED"
+    assert state.current_step == "build"
+    assert state.handoff_contract is not None
+    assert state.handoff_contract.to_step == "build"
+    assert "code" not in state.artifacts
+
+
+@pytest.mark.parametrize(
+    ("source", "checklist_state"),
+    [
+        ("baton", "unchecked"),
+        ("unknown", "unchecked"),
+        ("workflow.confirmation_gate", "unchecked"),
+        ("baton", "unreadable"),
+    ],
+)
+def test_resume_rejects_persisted_outbound_baton_with_unchecked_checklist(
+    tmp_path: Path,
+    source: str,
+    checklist_state: str,
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "resume-checklist-gate"
+    playbook = {
+        "playbook": {"id": "resume-checklist-gate"},
+        "steps": {
+            "build": {
+                "skill": "phase",
+                "role": "operator",
+                "on": {"await_agent": "review"},
+            },
+            "review": {"skill": "phase", "role": "operator", "on": {}},
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("build", playbook_id="resume-checklist-gate")
+    iteration_dir = issue_dir / "build" / "iteration_001"
+    iteration_dir.mkdir(parents=True)
+    (iteration_dir / "output.md").write_text("partial work\n", encoding="utf-8")
+    checklist_path = iteration_dir / "checklist.md"
+    if checklist_state == "unreadable":
+        checklist_path.mkdir()
+    else:
+        checklist_path.write_text("[ ] finish work\n", encoding="utf-8")
+    store.update_handoff_contract(
+        state,
+        from_step="build",
+        to_owner=HandoffOwner.AGENT,
+        to_step="review",
+        intent=HandoffIntent.AWAIT_AGENT,
+        source=source,
+    )
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=lambda *_args, **_kwargs: pytest.fail("resume must not execute downstream"),
+    )
+    result = runtime.run()
+    reloaded = store.load_or_create("build")
+
+    assert result.final_status_code == "CHECKLIST_VALIDATION_FAILED"
+    assert reloaded.current_step == "build"
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.to_step == "build"
+
+
+def test_clarification_handoff_allows_unchecked_checklist(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "clarification-checklist"
+    playbook = {
+        "playbook": {"id": "clarification-checklist"},
+        "steps": {
+            "build": {
+                "skill": "phase",
+                "role": "operator",
+                "on": {"need_clarification": "build"},
+            }
+        },
+    }
+
+    def executor(step_name: str, _step_def: dict, state: BlackboardState, **_kwargs: object):
+        iteration_dir = issue_dir / step_name / "iteration_001"
+        iteration_dir.mkdir(parents=True)
+        (iteration_dir / "output.md").write_text("Need an answer\n", encoding="utf-8")
+        (iteration_dir / "checklist.md").write_text("[ ] blocked item\n", encoding="utf-8")
+        BlackboardStore(issue_dir).update_handoff_contract(
+            state,
+            from_step=step_name,
+            to_owner=HandoffOwner.USER,
+            to_step="user",
+            intent=HandoffIntent.NEED_CLARIFICATION,
+            source="baton",
+        )
+        return StepExecutionResult(response="", artifacts={}, agent_invoked=True)
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    ).run(start_step="build")
+
+    assert result.final_status_code == "BATON_NEED_CLARIFICATION"
+    assert BlackboardStore(issue_dir).load_or_create("build").current_step == "user"
+
+
+def test_hook_only_completion_is_not_forced_to_own_agent_checklist(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "hook-only-checklist"
+    playbook = {
+        "playbook": {"id": "hook-only-checklist"},
+        "steps": {
+            "build": {
+                "skill": "phase",
+                "role": "operator",
+                "on": {"await_agent": "review"},
+            },
+            "review": {"skill": "phase", "role": "operator", "on": {}},
+        },
+    }
+
+    def executor(step_name: str, _step_def: dict, state: BlackboardState, **_kwargs: object):
+        BlackboardStore(issue_dir).update_handoff_contract(
+            state,
+            from_step=step_name,
+            to_owner=HandoffOwner.AGENT,
+            to_step="review",
+            intent=HandoffIntent.AWAIT_AGENT,
+            source="hook",
+        )
+        return StepExecutionResult(response="", artifacts={}, agent_invoked=False)
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    ).run(start_step="build", single_step=True)
+
+    assert result.final_status_code == "BATON_AWAIT_AGENT"
+    assert BlackboardStore(issue_dir).load_or_create("build").current_step == "review"
+
+
+def test_resume_preserves_durable_hook_only_checklist_exception(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "resume-hook-only-checklist"
+    playbook = {
+        "playbook": {"id": "resume-hook-only-checklist"},
+        "steps": {
+            "build": {
+                "skill": "phase",
+                "role": "operator",
+                "on": {"await_agent": "review"},
+            },
+            "review": {"skill": "phase", "role": "operator", "on": {}},
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("build", playbook_id="resume-hook-only-checklist")
+    iteration_dir = issue_dir / "build" / "iteration_001"
+    iteration_dir.mkdir(parents=True)
+    (iteration_dir / "iteration.json").write_text(
+        json.dumps({"agent_invoked": False}),
+        encoding="utf-8",
+    )
+    store.update_handoff_contract(
+        state,
+        from_step="build",
+        to_owner=HandoffOwner.AGENT,
+        to_step="review",
+        intent=HandoffIntent.AWAIT_AGENT,
+        source="workflow.status_transition_adapter",
+    )
+    executed_steps: list[str] = []
+
+    def executor(step_name: str, _step_def: dict, state: BlackboardState, **_kwargs: object):
+        executed_steps.append(step_name)
+        store.update_handoff_contract(
+            state,
+            from_step=step_name,
+            to_owner=HandoffOwner.DONE,
+            to_step="done",
+            intent=HandoffIntent.WORKFLOW_COMPLETE,
+            source="hook",
+        )
+        return StepExecutionResult(response="", artifacts={}, agent_invoked=False)
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    ).run()
+
+    assert result.completed is True
+    assert executed_steps == ["review"]
 
 
 def test_automatic_registry_is_closed_and_returns_declared_intent() -> None:
@@ -455,6 +701,65 @@ def test_hybrid_owner_resumes_only_its_declared_portion_after_matching_task(
     assert completed.completed is True
     assert calls == ["draft", "finalize"]
     assert BlackboardStore(issue_dir).load_or_create("mixed").step_attempt_counts == {"mixed": 1}
+
+
+def test_hybrid_agent_portion_cannot_advance_with_unchecked_checklist(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "hybrid-checklist-gate"
+    binding = HumanTaskBinding(trigger="approve", task_id="approval", outcomes={"accept": "mixed"})
+    playbook = {
+        "playbook": {"id": "hybrid-checklist-gate"},
+        "steps": {
+            "mixed": {
+                "skill": "phase",
+                "role": "operator",
+                "assignee_type": "hybrid",
+                "human_tasks": [binding.model_dump()],
+                "hybrid": {
+                    "entry_portion": "draft",
+                    "portions": [
+                        {
+                            "id": "draft",
+                            "owner": "agent",
+                            "on": {"await_agent": {"portion": "approve"}},
+                        },
+                        {
+                            "id": "approve",
+                            "owner": "human",
+                            "on": {"accept": {"step": "_done"}},
+                        },
+                    ],
+                },
+                "on": {},
+            }
+        },
+    }
+
+    def executor(step_name: str, _step_def: dict, _state: object, **_kwargs: object):
+        iteration_dir = issue_dir / step_name / "iteration_001"
+        iteration_dir.mkdir(parents=True)
+        output = iteration_dir / "output.md"
+        output.write_text("partial draft\n", encoding="utf-8")
+        (iteration_dir / "checklist.md").write_text("[ ] finish draft\n", encoding="utf-8")
+        return StepExecutionResult(
+            response="confirmed",
+            artifacts={"code": str(output)},
+            status_code="confirmed",
+            artifact_ready=True,
+            agent_invoked=True,
+        )
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    ).run(start_step="mixed")
+    state = BlackboardStore(issue_dir).load_or_create("mixed")
+
+    assert result.final_status_code == "CHECKLIST_VALIDATION_FAILED"
+    assert state.current_step == "mixed"
+    assert state.ownership_cursor is not None
+    assert state.ownership_cursor["portion"] == "draft"
+    assert "code" not in state.artifacts
 
 
 @pytest.mark.parametrize(
