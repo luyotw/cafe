@@ -810,10 +810,11 @@ def test_develop_checklist_requires_plan_completion_before_release_check(
     )
 
     content = checklist_path.read_text(encoding="utf-8")
-    completion_check = content.index("Immediately before starting `release-check`")
+    authority_check = content.index("effective playbook explicitly declares verification")
+    completion_check = content.index("Immediately before an authorized `release-check`")
     release_check = content.index("treat it as the final tracked-file validation")
 
-    assert completion_check < release_check
+    assert authority_check < completion_check < release_check
     assert "do not run its repository-wide test command separately" in content
     assert "previous release-check result is stale" in content
 

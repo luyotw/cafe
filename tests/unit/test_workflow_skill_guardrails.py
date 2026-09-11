@@ -29,6 +29,8 @@ def test_packaged_develop_skill_uses_repository_quality_gate_guidance() -> None:
     assert "version: 1.10.0" in text
     assert "與變更直接相關的 targeted checks" in text
     assert "Repository-owned quality gates" in text
+    assert "effective playbook 的明確 verification declaration" in text
+    assert "agent judgment 均非 authority" in text
     assert "max_read_only_commands" not in text
     assert "20 次" not in text
     assert "failing test" not in text

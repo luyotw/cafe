@@ -99,7 +99,7 @@ Read your agent file: {agent_file}
 - 第一次探索只做一輪：讀一次已提供的 spec、plan 與 feedback，再針對可用 Test List 與預計修改點搜尋程式碼；未出現新證據時不得重讀同一檔案或重跑相同的搜尋、`git status`、`git diff`
 - 實作中只執行與變更直接相關的 targeted checks，並保持輸出有界；若 workflow 提供 plan，將 checks 對應其 Test List；不要在本 phase 重複 repository 的 full-suite、coverage、release 或 pre-push gate
 - 若 workflow 提供 plan，新增或修改的測試必須對應其 **Test List** 項目（範圍變更時先更新計畫）
-- 若本次工作需要執行 `release-check`，開始前必須以已確認的 plan、checklist 與 Test List 對照完成的程式、文件和測試；先完成及記錄所有缺漏的計畫工作。`release-check` 通過後不得修改 tracked files，只能寫 verification receipt、phase output、checklist status 與 workflow handoff；若之後仍修改 tracked files，必須在 development summary 記錄先前結果已 stale 的原因，重新完成對照後才可重跑。若 `release-check` 已涵蓋相同 repository-wide test command，不得重複執行，除非 plan 明確說明兩者皆需要的理由。
+- `release-check` 僅可由 effective playbook 的明確 verification declaration 或使用者明確要求觸發；風險、規模、保險、PR preparation、review/proactive review 與 agent judgment 均非 authority。只有合法觸發後，開始前才必須以已確認的 plan、checklist 與 Test List 對照完成的程式、文件和測試；通過後 receipt 僅涵蓋 exact tracked state，後續 tracked files 變更會使其 stale，必須再次取得合法 authority、完成對照後重跑。若 gate 已涵蓋相同 repository-wide test command，不得重複執行，除非 plan 明確說明兩者皆需要的理由。
 - 斷言以 invariant 為主：避免綁定 UI copy、CSS class、DOM 結構、內部 state shape；允許 a11y role/label、`data-testid`、以及規格明訂的文案（見 `cafe-plan/references/test_invariants_policy.md`）
 - 每輪完成後更新 checklist
 - 更新 plan 的完成狀態時，authoritative body checkbox 使用 `[x]`，`## Downstream Contract` 的 `Task Status` 僅使用 schema 允許的 `completed`；不得寫 `done`

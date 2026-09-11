@@ -129,6 +129,7 @@ If you write an invalid `to_owner` or `intent` value, the runtime will **reject*
 - Develop runs only the targeted checks needed for fast implementation feedback. When a plan is supplied, map them to its Test List; otherwise select them from the changed behavior. Normal commits and pushes must allow the repository's configured hooks to run; use `--no-verify` only with explicit user authorization and record that bypass in the development summary.
 - Review evaluates the changed tests, targeted evidence, and any supplied hook or CI result. A missing CAFE verification receipt is not a finding, and review does not rerun repository-wide commands.
 - A custom playbook may explicitly declare a separate verification contract. That opt-in contract belongs to the custom workflow and does not make verification a default responsibility of develop or review.
+- `release-check` may run only when the effective playbook explicitly declares verification or the user explicitly requests it. Risk, scale, insurance, PR preparation, review, proactive review, and agent judgment are not authority. After an authorized run, its receipt covers the exact tracked state; later tracked changes make it stale, require another authorized run, and must not cause a separately duplicated full suite already included by the gate.
 
 ## What Not To Do
 - Do not re-explain the shared workflow model in every phase artifact.
