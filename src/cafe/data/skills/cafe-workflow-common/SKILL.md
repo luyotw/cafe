@@ -1,7 +1,7 @@
 ---
 name: cafe-workflow-common
 description: Use this skill at the start of any CAFE workflow phase to load the bounded workflow digest, identify the current baton state, and ground the phase in shared context before reading phase-specific artifacts.
-version: 1.8.2
+version: 1.8.3
 ---
 
 # Workflow Common
@@ -128,28 +128,7 @@ If you write an invalid `to_owner` or `intent` value, the runtime will **reject*
 - The repository owns its default quality gates through versioned Git hooks and CI configuration. Workflow phases must not invent, duplicate, or strengthen the repository's full-suite, coverage, release, or push gates.
 - Develop runs only the targeted checks needed for fast implementation feedback. When a plan is supplied, map them to its Test List; otherwise select them from the changed behavior. Normal commits and pushes must allow the repository's configured hooks to run; use `--no-verify` only with explicit user authorization and record that bypass in the development summary.
 - Review evaluates the changed tests, targeted evidence, and any supplied hook or CI result. A missing CAFE verification receipt is not a finding, and review does not rerun repository-wide commands.
-- A custom playbook may explicitly declare a separate verification contract. That opt-in contract belongs to the custom workflow and does not make verification a default responsibility of develop or review.
-- Determine `release-check` authority only with the following canonical matrix. After an authorized run, its receipt covers the exact tracked state; later tracked changes make it stale. Do not separately duplicate a full suite already included by the gate.
-
-### Release-check authority decision matrix
-
-| Scenario | Authority input | Work/scope state | Decision |
-| --- | --- | --- | --- |
-| current-develop-step-assignment | Effective playbook assigns `release-check` to the current `develop` step | Initial run | allow |
-| explicit-user-request | User explicitly requests `release-check` | Initial run | allow |
-| separate-verify-step-assignment | Effective playbook assigns `release-check` to a separate `verify` step | Initial run | deny |
-| separate-verification-step-assignment | Effective playbook assigns `release-check` to a separate `verification` step | Initial run | deny |
-| risk | Work is risky | Initial run | deny |
-| scale | Work is large | Initial run | deny |
-| precaution | Extra precaution is desired | Initial run | deny |
-| insurance | Extra insurance is desired | Initial run | deny |
-| pr-preparation | PR preparation is desired | Initial run | deny |
-| review | Review is desired | Initial run | deny |
-| proactive-review | Proactive review is desired | Initial run | deny |
-| agent-judgment | Agent judgment favors release-check | Initial run | deny |
-| same-authorized-work-scope-stale-rerun | Original current-develop-step assignment or explicit user request remains in effect | Stale rerun for the same authorized work/scope | allow |
-| authority-withdrawn | Original authority has been withdrawn | Stale rerun | reauthorize |
-| material-work-scope-change | Original authority remains, but work/scope identity materially changed | Stale rerun | reauthorize |
+- `release-check` is a user-run operation outside an active workflow, before release. CAFE workflow phase agents and Driver must never execute `release-check`. An in-workflow request to run it is not executed and must be deferred until outside the active workflow.
 
 ## What Not To Do
 - Do not re-explain the shared workflow model in every phase artifact.
@@ -170,7 +149,7 @@ If you write an invalid `to_owner` or `intent` value, the runtime will **reject*
 | develop ↔ review disagreements and user arbitration | This skill (**Develop and review disagreement protocol**) |
 | Bounded code/search output and generated-log exclusions | This skill (**Bounded repository inspection**) |
 | Repository hooks/CI versus phase-local targeted checks | This skill (**Repository-owned quality gates**) |
-| Current-develop-step release-check authority and same-work/scope stale-rerun inheritance | This skill (**Repository-owned quality gates**, **Release-check authority decision matrix**) |
+| In-workflow release-check prohibition and user-run outside-workflow operation | This skill (**Repository-owned quality gates**) |
 | Issue decomposition assessment contract and phase-agent boundary | `references/issue_decomposition.md` |
 
 ## Confirming spec and plan with the user

@@ -13,30 +13,26 @@ def test_packaged_workflow_common_uses_bounded_digest() -> None:
     builtin_root = PROJECT_ROOT / "src" / "cafe" / "data" / "skills"
     text = _skill_text(builtin_root, "cafe-workflow-common")
 
-    assert "version: 1.8.2" in text
+    assert "version: 1.8.3" in text
     assert "Bounded blackboard digest" in text
     assert "Do **not** read or print the whole file" in text
     assert '"from_step": "<current step name>"' not in text
     assert '"created_at": "<ISO 8601 timestamp>"' not in text
     assert "The runtime derives and persists those fields" in text
     assert "Do not skip the blackboard read" not in text
-    assert "Release-check authority decision matrix" in text
-    assert (
-        "Current-develop-step release-check authority and same-work/scope stale-rerun inheritance"
-        in text
-    )
+    assert "must never execute `release-check`" in text
+    assert "outside the active workflow" in text
 
 
 def test_packaged_develop_skill_uses_repository_quality_gate_guidance() -> None:
     builtin_root = PROJECT_ROOT / "src" / "cafe" / "data" / "skills"
     text = _skill_text(builtin_root, "cafe-develop")
 
-    assert "version: 1.10.0" in text
+    assert "version: 1.10.1" in text
     assert "與變更直接相關的 targeted checks" in text
     assert "Repository-owned quality gates" in text
-    assert "shared skill `cafe-workflow-common`" in text
-    assert "allow、deny 與 reauthorize 分支" in text
-    assert "release_authority_contract" not in text
+    assert "workflow 中永不執行 `release-check`" in text
+    assert "active workflow 外" in text
     assert "max_read_only_commands" not in text
     assert "20 次" not in text
     assert "failing test" not in text
@@ -48,40 +44,16 @@ def test_packaged_develop_skill_uses_repository_quality_gate_guidance() -> None:
     assert "在 handoff 前寫入非空的 development summary" in text
 
 
-def test_release_authority_contract_enforces_assignment_and_stale_rerun_outcomes() -> None:
-    contract_text = (
-        _skill_text(
-            PROJECT_ROOT / "src" / "cafe" / "data" / "skills",
-            "cafe-workflow-common",
-        )
-        .split("### Release-check authority decision matrix", maxsplit=1)[1]
-        .split("## What Not To Do", maxsplit=1)[0]
-    )
-    rows = [
-        tuple(cell.strip() for cell in line.strip("|").split("|"))
-        for line in contract_text.splitlines()
-        if line.startswith("|") and not line.startswith("| ---")
-    ][1:]
+def test_workflow_release_check_prohibition_is_canonical() -> None:
+    skills = PROJECT_ROOT / "src" / "cafe" / "data" / "skills"
+    common = _skill_text(skills, "cafe-workflow-common")
+    develop = _skill_text(skills, "cafe-develop")
 
-    decisions = {scenario: decision for scenario, *_, decision in rows}
-
-    assert decisions == {
-        "current-develop-step-assignment": "allow",
-        "explicit-user-request": "allow",
-        "separate-verify-step-assignment": "deny",
-        "separate-verification-step-assignment": "deny",
-        "risk": "deny",
-        "scale": "deny",
-        "precaution": "deny",
-        "insurance": "deny",
-        "pr-preparation": "deny",
-        "review": "deny",
-        "proactive-review": "deny",
-        "agent-judgment": "deny",
-        "same-authorized-work-scope-stale-rerun": "allow",
-        "authority-withdrawn": "reauthorize",
-        "material-work-scope-change": "reauthorize",
-    }
+    assert "must never execute `release-check`" in common
+    assert "in-workflow request" in common
+    assert "outside the active workflow" in common
+    assert "workflow 中永不執行 `release-check`" in develop
+    assert "active workflow 外" in develop
 
 
 def test_behaviorally_changed_skills_have_minor_version_bumps() -> None:
@@ -91,11 +63,11 @@ def test_behaviorally_changed_skills_have_minor_version_bumps() -> None:
     expected_versions = {
         "cafe-spec": "version: 1.4.0",
         "cafe-plan": "version: 1.8.1",
-        "cafe-develop": "version: 1.10.0",
+        "cafe-develop": "version: 1.10.1",
         "cafe-review": "version: 1.13.0",
         "cafe-pr": "version: 1.4.1",
-        "cafe-workflow-common": "version: 1.8.2",
-        "use-cafe-workflow": "metadata: {version: 1.42.0}",
+        "cafe-workflow-common": "version: 1.8.3",
+        "use-cafe-workflow": "metadata: {version: 1.43.0}",
     }
     for name, version in expected_versions.items():
         assert version in _skill_text(builtin_root, name)

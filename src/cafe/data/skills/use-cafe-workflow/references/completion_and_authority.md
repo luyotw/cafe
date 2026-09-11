@@ -64,11 +64,10 @@ never describe a still-nonterminal workflow as completed.
 Direct-closeout approval is session-local authority for the exact listed work,
 not durable workflow authority. Do not encode it by changing workflow or Driver
 state. If direct work is interrupted or another Driver takes over before it is
-verified complete, fail closed and ask the user whether to reauthorize the same
-remaining list or return to the workflow. After a verified direct closeout, a
-later Driver must not automatically resume the nonterminal workflow; it must
-inspect the reported patch and checks and obtain a direct user instruction before
-resuming.
+verified complete, stop direct work and return control to the user. After a
+verified direct closeout, a later Driver must not automatically resume the
+nonterminal workflow; it must inspect the reported patch and checks and obtain a
+direct user instruction before resuming.
 
 ## Proactively assist with closeout
 
