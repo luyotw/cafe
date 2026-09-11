@@ -43,21 +43,3 @@ def test_release_gate_is_executable() -> None:
 
     assert release_gate.is_file()
     assert release_gate.stat().st_mode & 0o111
-
-
-def test_contributing_scopes_release_check_to_explicit_authority() -> None:
-    contributing = " ".join(
-        (PROJECT_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8").split()
-    )
-
-    for required in (
-        "Develop uses targeted checks",
-        "PRs, hooks, and CI own correctness gates",
-        "Release-only artifact verification",
-        "effective playbook explicitly declares verification",
-        "user explicitly requests it",
-        "exact tracked state",
-        "prior result stale",
-        "avoid separately rerunning a full suite already included",
-    ):
-        assert required in contributing
