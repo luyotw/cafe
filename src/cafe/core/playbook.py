@@ -6,6 +6,7 @@ import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from collections import deque
 from typing import Any, Dict, List, Literal, Mapping, Optional, Union
 
 import yaml
@@ -935,6 +936,18 @@ class PlaybookDefinition(BaseModel):
                     "workflow_feedback in input_artifacts"
                 )
             for binding in step.human_tasks:
+                if binding.correction is not None:
+                    declared_artifacts = {
+                        candidate.output_artifact
+                        for candidate in self.steps.values()
+                        if candidate.output_artifact is not None
+                    }
+                    unknown = set(binding.correction.artifacts) - declared_artifacts
+                    if unknown:
+                        raise ValueError(
+                            f"steps.{step_name}.human_tasks correction references "
+                            f"undeclared artifact {sorted(unknown)[0]!r}"
+                        )
                 if binding.feedback_delivery is None:
                     continue
                 for delivery_target in [
@@ -969,6 +982,72 @@ class PlaybookDefinition(BaseModel):
                     )
             _validate_ownership_contract(step_name, step, self.steps)
         return self
+
+    def correction_targets(self, step_name: str, trigger: str) -> tuple[str, ...]:
+        """Return the explicitly correction-enabled targets for one task binding."""
+        step = self.steps[step_name]
+        matches = [
+            binding.correction.artifacts
+            for binding in step.human_tasks
+            if binding.trigger == trigger and binding.correction is not None
+        ]
+        if len(matches) != 1:
+            return ()
+        return matches[0]
+
+    def downstream_steps(self, artifact: str) -> tuple[str, ...]:
+        """Find the transitive consumers of an artifact without name-specific rules.
+
+        A legacy step without an explicit input list is treated conservatively
+        as a consumer because its historical runtime contract receives all
+        available artifacts.
+        """
+        affected: list[str] = []
+        pending = deque([artifact])
+        seen_artifacts = {artifact}
+        seen_steps: set[str] = set()
+        positions = {name: index for index, name in enumerate(self.steps)}
+        producers = {
+            step.output_artifact: name
+            for name, step in self.steps.items()
+            if step.output_artifact is not None
+        }
+        while pending:
+            current = pending.popleft()
+            for name, step in self.steps.items():
+                consumes = (
+                    step.output_artifact != current
+                    and (
+                        current in step.input_artifacts
+                        if step.input_artifacts is not None
+                        else positions[name] > positions[producers[current]]
+                    )
+                )
+                if not consumes or name in seen_steps:
+                    continue
+                seen_steps.add(name)
+                affected.append(name)
+                if step.output_artifact and step.output_artifact not in seen_artifacts:
+                    seen_artifacts.add(step.output_artifact)
+                    pending.append(step.output_artifact)
+        return tuple(affected)
+
+    def next_human_gate(self, step_name: str) -> Optional[str]:
+        """Return the first reachable declared human-owned step, if any."""
+        pending = deque(
+            target for target in self.steps[step_name].on.values() if target in self.steps
+        )
+        visited: set[str] = set()
+        while pending:
+            candidate = pending.popleft()
+            if candidate in visited:
+                continue
+            visited.add(candidate)
+            step = self.steps[candidate]
+            if step.assignee_type in {"human", "hybrid"} or step.human_tasks:
+                return candidate
+            pending.extend(target for target in step.on.values() if target in self.steps)
+        return None
 
 
 def resolve_step_behavior(

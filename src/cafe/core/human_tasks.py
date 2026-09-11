@@ -143,6 +143,30 @@ class HumanTaskPolicy(BaseModel):
         return self
 
 
+class HumanTaskCorrection(BaseModel):
+    """Explicit, transport-neutral permission to replace declared artifacts.
+
+    The declaration intentionally carries no actor identity.  Callers derive
+    that identity at the trusted user or Driver boundary, rather than trusting
+    an unvalidated completion payload.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    artifacts: tuple[str, ...]
+    allow_driver_proxy: bool = False
+
+    @field_validator("artifacts")
+    @classmethod
+    def _validate_artifacts(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        cleaned = tuple(_non_empty(item, field_name="correction artifact") for item in value)
+        if not cleaned:
+            raise ValueError("correction artifacts must not be empty")
+        if len(set(cleaned)) != len(cleaned):
+            raise ValueError("correction artifacts must be unique")
+        return cleaned
+
+
 class HumanTaskBinding(BaseModel):
     """Step-level binding of a skill policy to declared continuation targets."""
 
@@ -154,6 +178,7 @@ class HumanTaskBinding(BaseModel):
     allowed_targets: tuple[str, ...] = ()
     prompt: Optional[str] = None
     correction_guidance: Optional[str] = None
+    correction: Optional[HumanTaskCorrection] = None
     feedback_delivery: Optional["HumanTaskFeedbackDelivery"] = None
 
     @field_validator("trigger", "task_id")
