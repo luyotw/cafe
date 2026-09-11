@@ -3,6 +3,21 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+CHECKLIST_COMPLETION_INTENTS = frozenset(
+    {
+        "await_agent",
+        "confirm_output",
+        "workflow_complete",
+    }
+)
+CHECKLIST_COMPLETION_STATUS_CODES = frozenset(
+    {
+        "confirmed",
+        "ready_for_review",
+        *CHECKLIST_COMPLETION_INTENTS,
+    }
+)
+
 
 @dataclass
 class ChecklistValidationResult:
@@ -16,6 +31,21 @@ class ChecklistValidationResult:
     is_complete: bool
     unchecked_count: int
     checklist_path: Path
+
+
+def completion_requires_checklist(
+    *,
+    baton_intent: str | None = None,
+    status_code: str | None = None,
+) -> bool:
+    """Return whether an agent result represents checklist-gated completion.
+
+    A valid outbound baton is the canonical completion signal. Status codes are
+    retained only as the legacy fallback when no baton intent is available.
+    """
+    if baton_intent is not None:
+        return baton_intent in CHECKLIST_COMPLETION_INTENTS
+    return status_code in CHECKLIST_COMPLETION_STATUS_CODES
 
 
 def validate_checklist(checklist_path: Path) -> ChecklistValidationResult:

@@ -74,7 +74,7 @@ from cafe.core.workflow_models import (
     StepExecutionResult,
     StepInterrupted,
 )
-from cafe.utils.checklist_validator import validate_checklist
+from cafe.utils.checklist_validator import completion_requires_checklist, validate_checklist
 
 STATUS_TOKEN_PATTERN = re.compile(r"\bCAFE_[A-Z0-9_]+\b")
 GOTO_PATTERN = re.compile(r"GOTO\s*:\s*([a-zA-Z0-9_-]+)")
@@ -676,6 +676,15 @@ class BlackboardWorkflowRuntime:
         except BatonRejected:
             return RuntimePositionResolution(current_step=self.blackboard.current_step)
         previous = self.blackboard.current_step
+        persisted_rejection = self._reject_persisted_incomplete_completion(
+            previous_step=previous,
+            contract=contract,
+        )
+        if persisted_rejection is not None:
+            return RuntimePositionResolution(
+                current_step=previous,
+                realignment_result=persisted_rejection,
+            )
         if contract.to_owner == HandoffOwner.AGENT:
             resolved = contract.to_step
         elif contract.to_owner == HandoffOwner.USER:
@@ -999,6 +1008,144 @@ class BlackboardWorkflowRuntime:
                 "step": current_step,
                 "reason": reason,
             },
+        )
+
+    @staticmethod
+    def _execution_reported_checklist_failure(frame: StepIterationFrame) -> bool:
+        events = getattr(frame.execution_result, "events", None)
+        return isinstance(events, list) and any(
+            isinstance(event, dict) and event.get("type") == "checklist_validation_failed"
+            for event in events
+        )
+
+    @staticmethod
+    def _outbound_completion_intent(
+        *, current_step: str, contract: HandoffContract | None
+    ) -> str | None:
+        if contract is None or contract.from_step != current_step:
+            return None
+        if contract.to_owner == HandoffOwner.AGENT and contract.to_step == current_step:
+            return None
+        return contract.intent.value
+
+    def _checklist_rejection_result(
+        self,
+        *,
+        current_step: str,
+        runtime: str,
+        unchecked_count: int | None,
+    ) -> PlaybookRunResult:
+        self.blackboard_store.set_current_step(self.blackboard, current_step)
+        self.blackboard_store.update_handoff_contract(
+            self.blackboard,
+            from_step=current_step,
+            to_owner=HandoffOwner.AGENT,
+            to_step=current_step,
+            intent=HandoffIntent.AWAIT_AGENT,
+            status_code="CHECKLIST_VALIDATION_FAILED",
+            source="workflow.checklist_validation",
+        )
+        self.blackboard_store.record_event(
+            self.blackboard,
+            "checklist_validation_failed",
+            {
+                "step": current_step,
+                "runtime": runtime,
+                "unchecked_count": unchecked_count,
+            },
+        )
+        return PlaybookRunResult(
+            final_step=current_step,
+            final_status_code="CHECKLIST_VALIDATION_FAILED",
+            completed=False,
+            detail=(
+                f"{unchecked_count} checklist items remain unchecked"
+                if unchecked_count is not None
+                else "completion checklist is missing or unreadable"
+            ),
+        )
+
+    def _reject_persisted_incomplete_completion(
+        self,
+        *,
+        previous_step: str,
+        contract: HandoffContract,
+    ) -> PlaybookRunResult | None:
+        """Reject an unconsumed agent completion recovered after a process exit."""
+        if previous_step != contract.from_step or previous_step not in self.steps:
+            return None
+        if contract.to_owner == HandoffOwner.AGENT and contract.to_step == previous_step:
+            return None
+        if self.steps[previous_step].get("assignee_type", "agent") not in {"agent", "hybrid"}:
+            return None
+        iteration_dir = self._latest_iteration_dir(previous_step)
+        if iteration_dir is not None:
+            for filename in ("iteration.json", "context.json"):
+                context_file = iteration_dir / filename
+                if not context_file.exists():
+                    continue
+                try:
+                    context = json.loads(context_file.read_text(encoding="utf-8"))
+                except (OSError, UnicodeError, json.JSONDecodeError):
+                    break
+                if isinstance(context, dict) and context.get("agent_invoked") is False:
+                    return None
+                break
+        if not completion_requires_checklist(baton_intent=contract.intent.value):
+            return None
+
+        unchecked_count: int | None = None
+        if iteration_dir is not None:
+            try:
+                result = validate_checklist(iteration_dir / "checklist.md")
+                if result.is_complete:
+                    return None
+                unchecked_count = result.unchecked_count
+            except (OSError, UnicodeError):
+                pass
+        return self._checklist_rejection_result(
+            current_step=previous_step,
+            runtime="resume",
+            unchecked_count=unchecked_count,
+        )
+
+    def _reject_incomplete_agent_completion(
+        self,
+        *,
+        current_step: str,
+        frame: StepIterationFrame,
+        runtime: str,
+        baton_intent: str | None = None,
+        status_code: str | None = None,
+    ) -> PlaybookRunResult | None:
+        """Fail closed before publishing an incomplete agent completion."""
+        agent_invoked = bool(getattr(frame.execution_result, "agent_invoked", False))
+        executor_rejected = self._execution_reported_checklist_failure(frame)
+        if not agent_invoked and not executor_rejected:
+            return None
+        if not executor_rejected and not completion_requires_checklist(
+            baton_intent=baton_intent,
+            status_code=status_code,
+        ):
+            return None
+
+        iteration_dir = self._latest_iteration_dir(current_step)
+        unchecked_count: int | None = None
+        checklist_complete = False
+        if iteration_dir is not None:
+            try:
+                result = validate_checklist(iteration_dir / "checklist.md")
+                checklist_complete = result.is_complete
+                unchecked_count = result.unchecked_count
+            except (OSError, UnicodeError):
+                pass
+        if checklist_complete and not executor_rejected:
+            return None
+
+        return self._checklist_rejection_result(
+            current_step=current_step,
+            runtime=runtime,
+            unchecked_count=unchecked_count,
         )
 
     @staticmethod
@@ -1926,7 +2073,6 @@ class BlackboardWorkflowRuntime:
                 f"and source='hybrid_portion:{current_step}:{portion_id}'."
             ),
         )
-        self._store_artifacts(frame.artifacts)
         completion_key = (
             self._normalize_hybrid_completion_key(frame.explicit_status_code)
             if frame.explicit_status_code is not None
@@ -2001,6 +2147,15 @@ class BlackboardWorkflowRuntime:
             return PlaybookRunResult(
                 final_step=current_step, final_status_code="HYBRID_RESULT_REJECTED", completed=False
             )
+        checklist_rejection = self._reject_incomplete_agent_completion(
+            current_step=current_step,
+            frame=frame,
+            runtime="hybrid_portion",
+            baton_intent=completion_key,
+        )
+        if checklist_rejection is not None:
+            return checklist_rejection
+        self._store_artifacts(frame.artifacts)
         if "portion" in target:
             cursor["portion"] = target["portion"]
             self.blackboard.ownership_cursor = cursor
@@ -3326,7 +3481,6 @@ class BlackboardWorkflowRuntime:
                         completed=False,
                         detail=si.detail,
                     )
-                self._store_artifacts(frame.artifacts)
                 try:
                     if self._is_baton_driven_step(current_step):
                         contract = self._load_step_handoff_contract(current_step=current_step)
@@ -3349,6 +3503,18 @@ class BlackboardWorkflowRuntime:
                         status_code = (
                             contract.status_code or f"BATON_{contract.intent.value.upper()}"
                         )
+                    checklist_rejection = self._reject_incomplete_agent_completion(
+                        current_step=current_step,
+                        frame=frame,
+                        runtime=runtime_label,
+                        baton_intent=self._outbound_completion_intent(
+                            current_step=current_step,
+                            contract=contract,
+                        ),
+                        status_code=status_code,
+                    )
+                    if checklist_rejection is not None:
+                        return checklist_rejection
                     break
                 except BatonRejected as br:
                     retry_num = _baton_attempt + 1
@@ -3373,6 +3539,7 @@ class BlackboardWorkflowRuntime:
                     _baton_retry_extra_prompt = self._baton_rejected_prompt(br)
             else:
                 raise RuntimeError(f"Step '{current_step}' did not produce a valid baton")
+            self._store_artifacts(frame.artifacts)
             last_status_code = status_code
             self._record_step_completion(
                 event_type=completion_event_type,
@@ -3644,6 +3811,24 @@ class BlackboardWorkflowRuntime:
                         completed=False,
                         detail=si.detail,
                     )
+                try:
+                    completion_contract = self._load_step_handoff_contract(
+                        current_step=current_step
+                    )
+                except BatonRejected:
+                    completion_contract = None
+                checklist_rejection = self._reject_incomplete_agent_completion(
+                    current_step=current_step,
+                    frame=frame,
+                    runtime=runtime_label,
+                    baton_intent=self._outbound_completion_intent(
+                        current_step=current_step,
+                        contract=completion_contract,
+                    ),
+                    status_code=frame.explicit_status_code,
+                )
+                if checklist_rejection is not None:
+                    return checklist_rejection
                 self._store_artifacts(frame.artifacts)
                 try:
                     post_contract = self._load_step_handoff_contract(current_step=current_step)
@@ -4098,7 +4283,10 @@ class BlackboardWorkflowRuntime:
             if start_step is not None
             else self._resolve_runtime_position_from_handoff()
         )
-        if resolution.realignment_result is not None and single_step:
+        if (
+            resolution.realignment_result is not None
+            and resolution.realignment_result.final_status_code == "CHECKLIST_VALIDATION_FAILED"
+        ):
             return self._finalize_observed_result(resolution.realignment_result)
         current_step = resolution.current_step
         terminal_result = self._result_from_terminal_position(current_step)

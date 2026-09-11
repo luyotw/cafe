@@ -2052,6 +2052,7 @@ def test_continuous_runtime_executes_after_realigning_stale_current_step(
         ),
         encoding="utf-8",
     )
+    _write_iteration_evidence(issue_dir, "spec")
     _write_baton(
         issue_dir,
         from_step="spec",
@@ -2108,6 +2109,7 @@ def test_single_step_reports_a_stale_handoff_realign_without_executing_it(tmp_pa
     }
     store = BlackboardStore(issue_dir)
     state = store.load_or_create("spec")
+    _write_iteration_evidence(issue_dir, "spec")
     store.update_handoff_contract(
         state,
         from_step="spec",
@@ -2313,6 +2315,7 @@ def test_runtime_resumes_to_done_from_handoff_contract(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
+    _write_iteration_evidence(issue_dir, "pr")
     _write_baton(
         issue_dir,
         from_step="pr",
