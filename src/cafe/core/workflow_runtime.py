@@ -51,6 +51,7 @@ from cafe.core.human_task_records import (
 from cafe.core.human_tasks import (
     AGENT_EXECUTION_INTERRUPTED_TRIGGER,
     agent_execution_interrupted_human_task,
+    durable_human_task_contract,
     resolve_step_human_task,
 )
 from cafe.core.packet_io import atomic_write_bytes
@@ -1184,7 +1185,7 @@ class BlackboardWorkflowRuntime:
             trigger=AGENT_EXECUTION_INTERRUPTED_TRIGGER,
             policy_id=policy.id,
             prompt=policy.prompt,
-            expected_result=policy.model_dump(mode="json"),
+            expected_result=durable_human_task_contract(policy, binding),
             continuations=binding.outcomes,
             assignee_type="user",
             handoff_key=self._human_task_handoff_key(contract),
@@ -1725,7 +1726,7 @@ class BlackboardWorkflowRuntime:
             trigger=trigger,
             policy_id=policy.id,
             prompt=policy.prompt,
-            expected_result=policy.model_dump(mode="json"),
+            expected_result=durable_human_task_contract(policy, binding),
             continuations=binding.outcomes,
             assignee_type="human",
             handoff_key=handoff_key,
@@ -2687,7 +2688,7 @@ class BlackboardWorkflowRuntime:
             trigger=trigger,
             policy_id=policy.id,
             prompt=prompt,
-            expected_result=policy.model_dump(mode="json"),
+            expected_result=durable_human_task_contract(policy, binding),
             continuations=binding.outcomes,
             assignee_type="user",
             handoff_key=handoff_key,

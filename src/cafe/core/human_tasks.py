@@ -321,6 +321,22 @@ def resolve_human_task_policy(
     return HumanTaskPolicy.model_validate({**policy.model_dump(), **changes})
 
 
+def durable_human_task_contract(
+    policy: HumanTaskPolicy, binding: HumanTaskBinding
+) -> dict[str, Any]:
+    """Return the task contract persisted at materialization time.
+
+    A correction declaration is step-owned policy, not a value supplied by a
+    completion caller.  Persisting its small, validated shape with the task
+    lets later command and recovery paths validate against the exact pending
+    task even when the playbook has subsequently changed.
+    """
+    contract = policy.model_dump(mode="json")
+    if binding.correction is not None:
+        contract["correction"] = binding.correction.model_dump(mode="json")
+    return contract
+
+
 def resolve_step_human_task(
     *,
     playbook_data: Mapping[str, Any],

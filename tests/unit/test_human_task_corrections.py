@@ -4,6 +4,8 @@ import pytest
 from pydantic import ValidationError
 
 from cafe.core.artifact_revisions import ArtifactRevisionStore, StaleArtifactRevision
+from cafe.core.human_task_corrections import CorrectionRequest, HumanTaskCorrectionService
+from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.driver.proxy import assess_correction_takeover
 from cafe.core.human_tasks import HumanTaskBinding, HumanTaskCorrection
 from cafe.core.playbook import PlaybookDefinition
@@ -83,6 +85,56 @@ def test_correction_journal_reuses_the_recorded_manifest(tmp_path) -> None:
     assert store.receipt("op-1", {"kind": "artifact", "id": "review"})["id"] == "review"
     assert store.commit("op-1")["state"] == "committed"
     assert store.prepare("op-1", [{"kind": "different", "id": "new"}])["state"] == "committed"
+
+
+def test_correction_service_uses_the_pending_task_contract_not_caller_authority(tmp_path) -> None:
+    records = HumanTaskRecordStore(tmp_path)
+    task = records.materialize(
+        workflow_id="workflow",
+        step="review",
+        iteration=1,
+        trigger="confirm_output",
+        policy_id="output-review",
+        prompt="Review",
+        expected_result={
+            "input_schema": "decision",
+            "correction": {"artifacts": ["brief"], "allow_driver_proxy": False},
+        },
+        continuations={"revise": "draft"},
+        assignee_type="user",
+    )
+    service = HumanTaskCorrectionService(tmp_path)
+    request = CorrectionRequest(
+        workflow_id="workflow",
+        task_id=task.id,
+        artifact="brief",
+        base_hash=None,
+        content="replacement",
+        operation_id="correction-1",
+        actor="user",
+        manifest=({"kind": "artifact", "id": "review"},),
+    )
+    assert service.apply(request).revision.artifact == "brief"
+
+    other = records.materialize(
+        workflow_id="workflow",
+        step="review",
+        iteration=2,
+        trigger="confirm_output",
+        policy_id="output-review",
+        prompt="Review",
+        expected_result={"input_schema": "decision"},
+        continuations={"revise": "draft"},
+        assignee_type="user",
+    )
+    with pytest.raises(ValueError, match="does not permit"):
+        service.apply(
+            CorrectionRequest(
+                workflow_id="workflow", task_id=other.id, artifact="brief", base_hash=None,
+                content="forged", operation_id="correction-2", actor="user",
+                manifest=({"kind": "artifact", "id": "review"},),
+            )
+        )
 
 
 @pytest.mark.parametrize("field", ["bounded", "clear", "reversible", "within_scope", "no_new_authority"])

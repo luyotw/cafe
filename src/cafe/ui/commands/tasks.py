@@ -12,10 +12,12 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from cafe.core.blackboard import BlackboardStore
+from cafe.core.blackboard import ArtifactEntry, BlackboardStore
 from cafe.core.capability_approvals import CapabilityApprovalError
+from cafe.core.human_task_corrections import CorrectionRequest, HumanTaskCorrectionService
 from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.human_tasks import HumanTaskPolicy
+from cafe.core.playbook import PlaybookDefinition
 from cafe.core.task_inbox import TaskInboxError, TaskInboxService
 from cafe.playbooks.loader import PlaybookLoader, apply_issue_playbook_overrides
 from cafe.ui.commands import workflow as workflow_commands
@@ -133,6 +135,52 @@ def _load_result(
             recovery="Inspect the task and submit its declared response shape.",
         )
     return payload
+
+
+def _apply_declared_correction(
+    *, preflight: Any, playbook_data: dict[str, Any], raw_payload: dict[str, Any]
+) -> None:
+    """Apply a direct user amendment through the pending task's frozen contract."""
+    correction = raw_payload.get("correction")
+    if not isinstance(correction, dict):
+        return
+    required = {"artifact", "base_hash", "content", "operation_id"}
+    if set(correction) != required:
+        raise TaskInboxError(
+            "invalid_response", "Correction must contain exactly artifact, base_hash, content, and operation_id.",
+            recovery="Inspect the pending task contract and submit an exact correction object.",
+            task_id=preflight.task.id, issue=preflight.issue, workflow_id=preflight.workflow_id,
+        )
+    artifact, base_hash, content, operation_id = (
+        correction["artifact"], correction["base_hash"], correction["content"], correction["operation_id"]
+    )
+    if not isinstance(artifact, str) or not isinstance(content, str) or not isinstance(operation_id, str):
+        raise TaskInboxError("invalid_response", "Correction fields have invalid types.", recovery="Submit text artifact, content, and operation_id values.", task_id=preflight.task.id, issue=preflight.issue, workflow_id=preflight.workflow_id)
+    if base_hash is not None and not isinstance(base_hash, str):
+        raise TaskInboxError("invalid_response", "Correction base_hash must be text or null.", recovery="Use the exact current revision hash or null.", task_id=preflight.task.id, issue=preflight.issue, workflow_id=preflight.workflow_id)
+    playbook = PlaybookDefinition.model_validate(playbook_data)
+    blackboard_store = BlackboardStore(preflight.issue_dir)
+    blackboard = blackboard_store.load_or_create(
+        preflight.task.step, playbook_id=preflight.playbook_id
+    )
+    prior = blackboard.artifacts.get(artifact)
+    if prior is None:
+        raise TaskInboxError("invalid_response", "Correction target is absent from the workflow artifact registry.", recovery="Refresh the workflow task before retrying.", task_id=preflight.task.id, issue=preflight.issue, workflow_id=preflight.workflow_id)
+    manifest = tuple(
+        {"kind": "artifact", "id": name}
+        for name in (artifact, *playbook.downstream_steps(artifact))
+    )
+    try:
+        result = HumanTaskCorrectionService(preflight.issue_dir).apply(
+            CorrectionRequest(
+                workflow_id=preflight.workflow_id, task_id=preflight.task.id, artifact=artifact,
+                base_hash=base_hash, content=content, operation_id=operation_id, actor="user",
+                manifest=manifest, completion_payload=raw_payload,
+            )
+        )
+    except (OSError, ValueError) as exc:
+        raise TaskInboxError("invalid_response", str(exc), recovery="Refresh the task and submit a declared correction based on the current revision.", task_id=preflight.task.id, issue=preflight.issue, workflow_id=preflight.workflow_id) from exc
+    blackboard_store.put_artifact(blackboard, ArtifactEntry(name=artifact, kind=prior.kind, version=prior.version + 1, updated_by="human_task_correction", path=result.revision.path))
 
 
 @task_app.command("ls")
@@ -307,6 +355,10 @@ def complete_task(
             blackboard = BlackboardStore(preflight.issue_dir).load_or_create(
                 preflight.task.step, playbook_id=preflight.playbook_id
             )
+            if isinstance(raw_payload, dict):
+                _apply_declared_correction(
+                    preflight=preflight, playbook_data=playbook_data, raw_payload=raw_payload
+                )
             applied = apply_human_task_payload(
                 issue_dir=preflight.issue_dir,
                 playbook_data=playbook_data,
