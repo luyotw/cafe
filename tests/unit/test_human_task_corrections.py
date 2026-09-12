@@ -260,6 +260,32 @@ def test_correction_invalidates_queued_worker_before_receipting(tmp_path) -> Non
     assert journal["receipts"] == [{"kind": "worker", "id": worker["worker_id"]}]
 
 
+def test_correction_rejects_an_unimplemented_executable_invalidator_before_mutation(tmp_path) -> None:
+    source = tmp_path / "brief.md"
+    source.write_text("base", encoding="utf-8")
+    board_store = BlackboardStore(tmp_path)
+    board = board_store.load_or_create("review")
+    board_store.put_artifact(board, ArtifactEntry(
+        name="brief", kind=ArtifactKind.DOCUMENT, version=1, updated_by="writer", path="brief.md"
+    ))
+    task = HumanTaskRecordStore(tmp_path).materialize(
+        workflow_id="workflow", step="review", iteration=1, trigger="confirm_output",
+        policy_id="output-review", prompt="Review",
+        expected_result={"input_schema": "decision", "correction": {"artifacts": ["brief"]}},
+        continuations={"revise": "draft"}, assignee_type="user",
+    )
+
+    with pytest.raises(ValueError):
+        HumanTaskCorrectionService(tmp_path).apply(CorrectionRequest(
+            workflow_id="workflow", task_id=task.id, artifact="brief", base_hash=sha256_bytes(b"base"),
+            content="replacement", operation_id="dispatch-fence", actor="user",
+            manifest=({"kind": "dispatch", "id": "event-1"},),
+        ))
+
+    assert HumanTaskRecordStore(tmp_path).get_task(task.id).status.value == "pending"
+    assert BlackboardStore(tmp_path).load_or_create("review").artifacts["brief"].path == "brief.md"
+
+
 def test_correction_removes_a_stale_downstream_artifact_pointer_before_receipting(tmp_path) -> None:
     source = tmp_path / "brief.md"
     downstream = tmp_path / "summary.md"

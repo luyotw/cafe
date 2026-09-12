@@ -91,7 +91,7 @@ class HumanTaskCorrectionService:
         if any(
             not isinstance(entry, dict)
             or set(entry) != {"kind", "id"}
-            or entry.get("kind") not in {"artifact", "human_task", "approval", "worker", "dispatch", "continuation"}
+            or entry.get("kind") not in {"artifact", "human_task", "approval", "worker"}
             or not all(isinstance(entry[key], str) and entry[key] for key in ("kind", "id"))
             for entry in request.manifest
         ):
@@ -262,3 +262,5 @@ class HumanTaskCorrectionService:
             )
             if invalidated is None:
                 raise ValueError("correction approval invalidation target is absent")
+        else:  # pragma: no cover - request validation keeps this fail-closed.
+            raise ValueError("correction invalidation kind is unsupported")
