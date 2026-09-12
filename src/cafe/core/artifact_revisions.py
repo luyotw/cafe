@@ -99,6 +99,12 @@ class ArtifactRevisionStore:
                 return self._revision(name, digest, operation_id)
         return self.replace(name, base_hash=None, content=content, operation_id=operation_id)
 
+    @staticmethod
+    def validate_operation_id(operation_id: str) -> None:
+        """Reject an unsafe correction operation before any store mutation."""
+        if not isinstance(operation_id, str) or not _OPERATION_ID.fullmatch(operation_id):
+            raise ArtifactRevisionError("operation identifier is invalid")
+
     def read(self, path: str) -> str:
         candidate = (self.issue_dir / path).resolve()
         if self.issue_dir.resolve() not in candidate.parents:
@@ -113,7 +119,8 @@ class ArtifactRevisionStore:
         context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Durably freeze one typed invalidation manifest before mutation."""
-        if not _OPERATION_ID.fullmatch(operation_id) or not manifest:
+        self.validate_operation_id(operation_id)
+        if not manifest:
             raise ArtifactRevisionError("operation and manifest are required")
         journal_path = self.root / "journals" / f"{operation_id}.json"
         with self._exclusive_lock():
@@ -152,8 +159,7 @@ class ArtifactRevisionStore:
 
     def journal(self, operation_id: str) -> dict[str, Any]:
         """Read one bounded correction journal for recovery or inspection."""
-        if not _OPERATION_ID.fullmatch(operation_id):
-            raise ArtifactRevisionError("operation identifier is invalid")
+        self.validate_operation_id(operation_id)
         with self._exclusive_lock():
             return self._load_journal(self.root / "journals" / f"{operation_id}.json")
 

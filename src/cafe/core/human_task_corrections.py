@@ -47,6 +47,7 @@ class HumanTaskCorrectionService:
             return self._apply_locked(request)
 
     def _apply_locked(self, request: CorrectionRequest) -> CorrectionResult:
+        self.revisions.validate_operation_id(request.operation_id)
         task = self.tasks.get_task(request.task_id)
         if task.workflow_id == request.workflow_id and task.status.value == "completed":
             result = self.tasks.get_result(task.id)
