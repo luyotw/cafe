@@ -13,6 +13,7 @@ pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
 DEVELOPMENT_PLAYBOOKS = {
     "direct",
+    "direct-qa",
     "simple",
     "standard",
     "standard-qa",
@@ -146,6 +147,8 @@ def test_cafe_review_convergence_contract_preserves_critical_blockers() -> None:
         ("standard", "review"),
         ("standard-qa", "review"),
         ("standard-qa", "qa"),
+        ("direct-qa", "review"),
+        ("direct-qa", "qa"),
         ("tdd", "review"),
         ("tdd-qa", "review"),
         ("tdd-qa", "qa"),
@@ -248,6 +251,20 @@ def test_simple_owns_the_spec_develop_qa_pr_graph() -> None:
         task for task in develop.human_tasks if task.trigger == "no_changes_needed"
     )
     assert no_change_task.outcomes == {"agree": "qa", "disagree": "develop"}
+
+
+def test_direct_qa_owns_the_planless_reviewed_qa_graph() -> None:
+    playbook = PlaybookLoader().load_model("direct-qa", strict=True).model
+
+    assert list(playbook.steps) == ["spec", "develop", "review", "qa", "pr"]
+    assert playbook.steps["spec"].on["await_agent"] == "develop"
+    assert playbook.steps["develop"].on["await_agent"] == "review"
+    assert playbook.steps["review"].on["await_agent"] == "qa"
+    assert playbook.steps["qa"].on["await_agent"] == "pr"
+    assert playbook.steps["review"].on["manual_handoff"] == "develop"
+    assert playbook.steps["qa"].on["manual_handoff"] == "develop"
+    assert "qa_feedback" in playbook.steps["develop"].input_artifacts
+    assert "qa_feedback" in playbook.steps["pr"].input_artifacts
 
 
 def test_existing_hotfix_and_tdd_paths_remain_unchanged() -> None:

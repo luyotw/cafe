@@ -117,6 +117,7 @@ def test_builtin_playbooks_publish_pr_through_sync_hook() -> None:
     project_root = Path(__file__).resolve().parents[2]
     for rel_path in [
         "src/cafe/data/playbooks/direct.yaml",
+        "src/cafe/data/playbooks/direct-qa.yaml",
         "src/cafe/data/playbooks/simple.yaml",
         "src/cafe/data/playbooks/standard.yaml",
         "src/cafe/data/playbooks/standard-qa.yaml",

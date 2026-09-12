@@ -161,6 +161,7 @@ requirements and delivery rigor:
 | Playbook | Path | Use when |
 | --- | --- | --- |
 | `direct` | develop → review → PR | The requested change is already clear and still needs independent review. |
+| `direct-qa` | spec → develop → review → QA → PR | Requirements need confirmation and acceptance needs both independent review and QA, but implementation does not need a separate plan. |
 | `simple` | spec → develop → QA → PR | The outcome needs confirmation and independent acceptance, but a low-risk docs, data, or config change does not need a separate plan or code review. |
 | `standard` | spec → plan → develop → review → PR | The standard development path and built-in default. |
 | `standard-qa` | spec → plan → develop → review → QA → PR | Standard development needs independent product acceptance. |

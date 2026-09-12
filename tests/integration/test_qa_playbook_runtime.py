@@ -37,7 +37,7 @@ def _runtime_playbook(name: str) -> dict:
     return playbook
 
 
-@pytest.mark.parametrize("name", ["standard-qa", "tdd-qa"])
+@pytest.mark.parametrize("name", ["direct-qa", "standard-qa", "tdd-qa"])
 def test_qa_happy_path_reaches_pr(tmp_path: Path, name: str) -> None:
     issue_dir = tmp_path / name
     calls: list[str] = []

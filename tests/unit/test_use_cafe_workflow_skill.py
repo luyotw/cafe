@@ -1931,6 +1931,7 @@ def test_builtin_confirmation_gate_candidates_come_from_playbook_declarations() 
         playbook_id: confirmation_gate_steps(loader.load_model(playbook_id).model)
         for playbook_id in (
             "direct",
+            "direct-qa",
             "simple",
             "standard",
             "standard-qa",
@@ -1945,6 +1946,7 @@ def test_builtin_confirmation_gate_candidates_come_from_playbook_declarations() 
 
     assert actual == {
         "direct": (),
+        "direct-qa": ("spec",),
         "simple": ("spec",),
         "standard": ("spec", "plan"),
         "standard-qa": ("spec", "plan"),
@@ -1962,6 +1964,7 @@ def test_builtin_confirmation_gate_candidates_come_from_playbook_declarations() 
     }
     assert mandatory == {
         "direct": ("pr",),
+        "direct-qa": ("pr",),
         "simple": ("pr",),
         "standard": ("pr",),
         "standard-qa": ("pr",),
@@ -1979,6 +1982,7 @@ def test_bundled_playbooks_do_not_delegate_alignment_judgment_to_core() -> None:
 
     for playbook_id in (
         "direct",
+        "direct-qa",
         "simple",
         "standard",
         "standard-qa",

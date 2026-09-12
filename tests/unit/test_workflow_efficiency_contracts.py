@@ -66,6 +66,7 @@ def test_develop_and_review_defer_repository_wide_gates_to_hooks_and_ci() -> Non
 
     for playbook_name in (
         "direct",
+        "direct-qa",
         "hotfix",
         "standard",
         "standard-qa",

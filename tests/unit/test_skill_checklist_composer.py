@@ -681,6 +681,16 @@ def test_review_composed_checklists_stay_within_budget_and_keep_role_guidance(
             },
         ),
         (
+            "direct-qa",
+            "pr",
+            {
+                "spec": "spec.md",
+                "code": "code.md",
+                "review_feedback": "review.md",
+                "qa_feedback": "qa.md",
+            },
+        ),
+        (
             "standard-qa",
             "pr",
             {

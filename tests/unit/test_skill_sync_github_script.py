@@ -71,10 +71,17 @@ def test_sync_script_skips_when_sync_disabled_without_gh(
 
 def test_standard_playbooks_leave_confirmed_sync_to_trusted_runtime() -> None:
     project_root = Path(__file__).resolve().parents[2]
-    for playbook_name in ("standard", "standard-qa", "tdd", "tdd-qa"):
+    phases_by_playbook = {
+        "direct-qa": ("spec",),
+        "standard": ("spec", "plan"),
+        "standard-qa": ("spec", "plan"),
+        "tdd": ("spec", "plan"),
+        "tdd-qa": ("spec", "plan"),
+    }
+    for playbook_name, phases in phases_by_playbook.items():
         playbook_path = project_root / f"src/cafe/data/playbooks/{playbook_name}.yaml"
         data = yaml.safe_load(playbook_path.read_text(encoding="utf-8"))
-        for phase in ("spec", "plan"):
+        for phase in phases:
             hooks = data["steps"][phase]["hooks"]
             assert not any(
                 isinstance(entry, dict) and "capability" in entry
