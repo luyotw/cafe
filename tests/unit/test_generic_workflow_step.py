@@ -4591,7 +4591,14 @@ def test_execute_step_interrupted_fresh_session_surfaces_declared_current_scope(
     current_iter = develop_dir / "iteration_001"
     current_iter.mkdir(parents=True)
     (current_iter / "iteration.json").write_text(
-        json.dumps({"cli": "codex", "session_id": "interrupted-session"}),
+        json.dumps(
+            {
+                "cli": "codex",
+                "session_id": "interrupted-session",
+                "end_time": "2026-09-12T09:26:54+08:00",
+                "workflow_completion_trusted": False,
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -4689,6 +4696,7 @@ def test_execute_step_interrupted_fresh_session_surfaces_declared_current_scope(
     assert iteration_data["session_continuation"]["policy"] == "new"
     assert iteration_data["session_recovery"]["previous"]["session_id"] == "interrupted-session"
     assert iteration_data["model"] == "gpt-5-test"
+    assert "workflow_completion_trusted" not in iteration_data
 
 
 def _make_alignment_executor(tmp_path: Path, issue_name: str, step_def: dict, user_input: str):

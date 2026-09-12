@@ -51,7 +51,10 @@ def is_interrupted_iteration(
 ) -> bool:
     """True only when the current iteration was started but did not complete."""
     if current_iteration_data and current_iteration_data.get("cli"):
-        if not current_iteration_data.get("end_time"):
+        if (
+            not current_iteration_data.get("end_time")
+            or current_iteration_data.get("workflow_completion_trusted") is False
+        ):
             return True
     return False
 
@@ -91,9 +94,12 @@ def load_prior_run_context(
     current_iteration_data: Optional[Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
     """Load iteration metadata from the prior run being resumed."""
-    if current_iteration_data and current_iteration_data.get("cli"):
-        if not current_iteration_data.get("end_time"):
-            return current_iteration_data
+    if is_interrupted_iteration(
+        iteration=iteration,
+        previous_iteration_data=previous_iteration_data,
+        current_iteration_data=current_iteration_data,
+    ):
+        return current_iteration_data
     return None
 
 

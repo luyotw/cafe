@@ -1697,8 +1697,12 @@ def test_runtime_legacy_step_stays_on_same_step_when_status_missing(tmp_path: Pa
 
     assert result.completed is False
     assert result.final_step == "spec"
-    assert result.final_status_code == "NO_STATUS_CODE"
+    assert result.final_status_code == "INTERRUPTED:agent_status_code_missing"
     assert calls == ["spec"]
+    assert HumanTaskRecordStore(issue_dir).tasks()[0].continuations == {
+        "retry": "spec",
+        "retry_fresh_session": "spec",
+    }
 
 
 def test_runtime_ignores_stale_baton_when_status_missing(tmp_path: Path) -> None:
@@ -2916,7 +2920,7 @@ def test_runtime_preserves_declared_manual_handoff_from_confirmation_gate(
 
 
 def test_runtime_status_code_missing_no_handoff_contract(tmp_path: Path) -> None:
-    """When status and handoff are absent, the runtime still pauses."""
+    """A missing status and baton creates an explicit session recovery task."""
     issue_dir = tmp_path / ".cafe" / "issues" / "missing-no-handoff"
     playbook = {
         "playbook": {"id": "default"},
@@ -2932,23 +2936,60 @@ def test_runtime_status_code_missing_no_handoff_contract(tmp_path: Path) -> None
 
     def executor(step_name: str, step_def: dict, state: object):
         # No handoff contract written — agent produced nothing useful.
+        iteration_dir = issue_dir / "spec" / "iteration_001"
+        iteration_dir.mkdir(parents=True, exist_ok=True)
+        (iteration_dir / "iteration.json").write_text(
+            json.dumps(
+                {
+                    "iteration": 1,
+                    "cli": "codex",
+                    "session_id": "session-without-handoff",
+                    "end_time": "2026-09-12T09:26:54+08:00",
+                }
+            ),
+            encoding="utf-8",
+        )
         return ("plain response without status token", {})
 
+    callback_events: list[dict[str, object]] = []
     runtime = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
         playbook=playbook,
         executor=executor,
+        workflow_event_callback=callback_events.append,
     )
     result = runtime.run(start_step="spec")
 
-    # No handoff contract → baton fallback not possible → still pauses
     assert result.completed is False
-    assert result.final_status_code == "NO_STATUS_CODE"
+    assert result.final_status_code == "INTERRUPTED:agent_status_code_missing"
     blackboard = BlackboardStore(issue_dir).load_or_create("spec")
     missing_events = [e for e in blackboard.events if e.event_type == "status_code_missing"]
     assert missing_events
-    # No baton_fallback key when fallback was not possible
     assert "baton_fallback" not in missing_events[-1].data
+    iteration_data = json.loads(
+        (issue_dir / "spec" / "iteration_001" / "iteration.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert iteration_data["end_time"]
+    assert iteration_data["workflow_completion_trusted"] is False
+    assert blackboard.current_step == "user"
+    assert blackboard.handoff_contract is not None
+    assert blackboard.handoff_contract.source == "workflow.agent_execution_interrupted"
+
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    assert task.trigger == "agent_execution_interrupted"
+    assert task.continuations == {
+        "retry": "spec",
+        "retry_fresh_session": "spec",
+    }
+    assert callback_events[0].items() >= {
+        "event_type": "human_task",
+        "step": "spec",
+        "status_code": "INTERRUPTED:agent_status_code_missing",
+        "reason": "agent_status_code_missing",
+        "task_id": task.id,
+    }.items()
 
 
 def test_runtime_pauses_ready_for_review_with_confirm_output_intent(tmp_path: Path) -> None:
