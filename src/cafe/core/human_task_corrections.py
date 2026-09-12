@@ -102,6 +102,16 @@ class HumanTaskCorrectionService:
             raise ValueError("correction invalidation manifest is invalid")
         if len(str(request.manifest).encode("utf-8")) > 256_000:
             raise ValueError("correction invalidation manifest exceeds the task limit")
+        # Direct callers already derive their graph closure at the trusted CLI
+        # boundary. Driver requests are public API input, so their manifest is
+        # never authority; derive it again from durable workflow state.
+        manifest = (
+            self._canonical_manifest(task, request.artifact)
+            if request.actor == "driver_on_behalf_of_user"
+            or (self.revisions.issue_dir / "issue.yaml").is_file()
+            else request.manifest
+        )
+        self._validate_manifest_revocability(manifest)
         # All untrusted request structure is validated before bootstrap creates
         # an immutable pointer.  Rejected requests therefore leave no state.
         published = BlackboardStore(self.revisions.issue_dir).load_or_create(task.step)
@@ -123,16 +133,6 @@ class HumanTaskCorrectionService:
         )
         if request.base_hash != base_revision.sha256:
             raise ValueError("correction base hash is not current")
-        # Direct callers already derive their graph closure at the trusted CLI
-        # boundary.  Driver requests are public API input, so their manifest is
-        # never authority; derive it again from the durable workflow instead.
-        manifest = (
-            self._canonical_manifest(task, request.artifact)
-            if request.actor == "driver_on_behalf_of_user"
-            or (self.revisions.issue_dir / "issue.yaml").is_file()
-            else request.manifest
-        )
-        self._validate_manifest_revocability(manifest)
         journal = self.revisions.prepare(
             request.operation_id,
             list(manifest),
