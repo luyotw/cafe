@@ -2,7 +2,7 @@
 
 import pytest
 
-from cafe.core.todo import TodoContractError, parse_todo_list
+from cafe.core.todo import TodoContractError, parse_todo_list, resolve_todo_source
 
 
 def _item(work: str = "add parser") -> str:
@@ -35,3 +35,17 @@ def test_todo_fingerprint_changes_when_any_closure_requirement_changes() -> None
     first = parse_todo_list("## Todo List\n" + _item())[0]
     changed = parse_todo_list("## Todo List\n" + _item("implement parser"))[0]
     assert first.fingerprint != changed.fingerprint
+
+
+def test_correction_source_requires_explicit_causal_artifact(tmp_path) -> None:
+    review = tmp_path / "review.md"
+    qa = tmp_path / "qa.md"
+    review.write_text("## Todo List\n", encoding="utf-8")
+    qa.write_text("## Todo List\n", encoding="utf-8")
+    selected = resolve_todo_source(
+        correction_artifact="qa_feedback",
+        artifacts={"review_feedback": review, "qa_feedback": qa},
+    )
+    assert selected.artifact == "qa_feedback"
+    with pytest.raises(TodoContractError, match="missing causal"):
+        resolve_todo_source(correction_artifact="pr_result", artifacts={"qa_feedback": qa})

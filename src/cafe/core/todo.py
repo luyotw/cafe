@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from hashlib import sha256
 import re
-from typing import Literal
+from pathlib import Path
+from typing import Literal, Mapping
 
 TodoSource = Literal["plan", "review", "qa", "pr_comment", "workflow_feedback"]
 TODO_SOURCES = frozenset({"plan", "review", "qa", "pr_comment", "workflow_feedback"})
@@ -41,6 +42,41 @@ class TodoItem:
 
     def checklist_row(self) -> str:
         return f"[ ] `{self.item_id}` — {self.work} (source fingerprint: {self.fingerprint})"
+
+
+@dataclass(frozen=True)
+class TodoSourceArtifact:
+    """The one artifact causally selected for a Todo projection."""
+
+    artifact: str
+    source: TodoSource
+    path: Path
+
+
+def resolve_todo_source(
+    *,
+    correction_artifact: str | None,
+    artifacts: Mapping[str, object],
+) -> TodoSourceArtifact:
+    """Resolve an explicit causal artifact; never prioritize historical feedback."""
+    source_by_artifact: dict[str, TodoSource] = {
+        "plan": "plan",
+        "review_feedback": "review",
+        "qa_feedback": "qa",
+        "pr_result": "pr_comment",
+        "workflow_feedback": "workflow_feedback",
+    }
+    artifact = correction_artifact or "plan"
+    source = source_by_artifact.get(artifact)
+    if source is None:
+        raise TodoContractError(f"unsupported causal Todo artifact: {artifact}")
+    value = artifacts.get(artifact)
+    if value is None:
+        raise TodoContractError(f"missing causal Todo artifact: {artifact}")
+    path = Path(str(getattr(value, "path", value)))
+    if not path.is_file():
+        raise TodoContractError(f"unreadable causal Todo artifact: {artifact}")
+    return TodoSourceArtifact(artifact=artifact, source=source, path=path)
 
 
 def parse_todo_list(content: str, *, expected_source: TodoSource | None = None) -> tuple[TodoItem, ...]:
