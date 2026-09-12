@@ -234,3 +234,30 @@ def test_correction_invalidates_queued_worker_before_receipting(tmp_path) -> Non
     assert WorkerLaunchStore(tmp_path).get(worker["worker_id"])["status"] == "stale"
     journal = ArtifactRevisionStore(tmp_path).journal(result.operation_id)
     assert journal["receipts"] == [{"kind": "worker", "id": worker["worker_id"]}]
+
+
+def test_recovery_replays_a_durable_prepared_correction_once(tmp_path) -> None:
+    source = tmp_path / "brief.md"
+    source.write_text("base", encoding="utf-8")
+    board_store = BlackboardStore(tmp_path)
+    board = board_store.load_or_create("review")
+    board_store.put_artifact(board, ArtifactEntry(
+        name="brief", kind=ArtifactKind.DOCUMENT, version=1, updated_by="writer", path="brief.md"
+    ))
+    records = HumanTaskRecordStore(tmp_path)
+    task = records.materialize(
+        workflow_id="workflow", step="review", iteration=1, trigger="confirm_output",
+        policy_id="output-review", prompt="Review",
+        expected_result={"input_schema": "decision", "correction": {"artifacts": ["brief"]}},
+        continuations={"revise": "draft"}, assignee_type="user",
+    )
+    store = ArtifactRevisionStore(tmp_path)
+    store.prepare("recover-1", [{"kind": "artifact", "id": "review"}], context={
+        "workflow_id": "workflow", "task_id": task.id, "artifact": "brief",
+        "base_hash": sha256_bytes(b"base"), "content": "replacement", "actor": "user",
+        "proxy_authorization_id": None, "suitability": {}, "completion_payload": {},
+    })
+    result = HumanTaskCorrectionService(tmp_path).recover("recover-1")
+    assert result.operation_id == "recover-1"
+    assert records.get_result(task.id) is not None
+    assert HumanTaskCorrectionService(tmp_path).recover("recover-1").revision == result.revision

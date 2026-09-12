@@ -105,7 +105,13 @@ class ArtifactRevisionStore:
             raise ArtifactRevisionError("revision path escapes issue directory")
         return candidate.read_text(encoding="utf-8")
 
-    def prepare(self, operation_id: str, manifest: list[dict[str, Any]]) -> dict[str, Any]:
+    def prepare(
+        self,
+        operation_id: str,
+        manifest: list[dict[str, Any]],
+        *,
+        context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Durably freeze one typed invalidation manifest before mutation."""
         if not _OPERATION_ID.fullmatch(operation_id) or not manifest:
             raise ArtifactRevisionError("operation and manifest are required")
@@ -119,7 +125,14 @@ class ArtifactRevisionStore:
             )
             if len({(item["kind"], item["id"]) for item in normalized}) != len(normalized):
                 raise ArtifactRevisionError("manifest entries must be unique")
-            journal = {"version": 1, "operation_id": operation_id, "state": "prepared", "manifest": normalized, "receipts": []}
+            journal = {
+                "version": 1,
+                "operation_id": operation_id,
+                "state": "prepared",
+                "manifest": normalized,
+                "receipts": [],
+                "context": dict(context or {}),
+            }
             atomic_write_bytes(journal_path, canonical_json(journal))
             return journal
 
@@ -143,6 +156,17 @@ class ArtifactRevisionStore:
             raise ArtifactRevisionError("operation identifier is invalid")
         with self._exclusive_lock():
             return self._load_journal(self.root / "journals" / f"{operation_id}.json")
+
+    def revision_for_operation(self, operation_id: str) -> ArtifactRevision | None:
+        """Return the immutable result for a completed idempotent operation."""
+        with self._exclusive_lock():
+            record = self._load_index()["operations"].get(operation_id)
+            if not isinstance(record, dict):
+                return None
+            artifact, digest = record.get("artifact"), record.get("sha256")
+            if not isinstance(artifact, str) or not isinstance(digest, str):
+                raise ArtifactRevisionError("operation index record is invalid")
+            return self._revision(artifact, digest, operation_id)
 
     def commit(self, operation_id: str) -> dict[str, Any]:
         """Commit only once every planned invalidation receipt is durable."""
@@ -183,7 +207,7 @@ class ArtifactRevisionStore:
             value = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise ArtifactRevisionError("correction journal is invalid") from exc
-        if set(value) != {"version", "operation_id", "state", "manifest", "receipts"}:
+        if set(value) != {"version", "operation_id", "state", "manifest", "receipts", "context"}:
             raise ArtifactRevisionError("correction journal has an unsupported schema")
         return value
 

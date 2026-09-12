@@ -107,7 +107,21 @@ class HumanTaskCorrectionService:
         )
         if request.base_hash != base_revision.sha256:
             raise ValueError("correction base hash is not current")
-        journal = self.revisions.prepare(request.operation_id, list(request.manifest))
+        journal = self.revisions.prepare(
+            request.operation_id,
+            list(request.manifest),
+            context={
+                "workflow_id": request.workflow_id,
+                "task_id": request.task_id,
+                "artifact": request.artifact,
+                "base_hash": request.base_hash,
+                "content": request.content,
+                "actor": request.actor,
+                "proxy_authorization_id": request.proxy_authorization_id,
+                "suitability": dict(request.suitability or {}),
+                "completion_payload": dict(request.completion_payload or {}),
+            },
+        )
         for entry in journal["manifest"]:
             self._invalidate(entry, request.operation_id)
             self.revisions.receipt(request.operation_id, entry)
@@ -140,6 +154,27 @@ class HumanTaskCorrectionService:
             source="human_task_correction",
         )
         return CorrectionResult(revision=revision, operation_id=request.operation_id)
+
+    def recover(self, operation_id: str) -> CorrectionResult:
+        """Replay one durable, incomplete correction without another submission."""
+        journal = self.revisions.journal(operation_id)
+        if journal["state"] == "committed":
+            revision = self.revisions.revision_for_operation(operation_id)
+            if revision is None:
+                raise ValueError("committed correction is missing its immutable revision")
+            return CorrectionResult(revision=revision, operation_id=operation_id)
+        context = journal["context"]
+        required = {"workflow_id", "task_id", "artifact", "base_hash", "content", "actor", "completion_payload"}
+        if not isinstance(context, dict) or not required <= set(context):
+            raise ValueError("correction recovery context is incomplete")
+        return self.apply(CorrectionRequest(
+            workflow_id=context["workflow_id"], task_id=context["task_id"], artifact=context["artifact"],
+            base_hash=context["base_hash"], content=context["content"], operation_id=operation_id,
+            actor=context["actor"], manifest=tuple(journal["manifest"]),
+            completion_payload=context["completion_payload"],
+            proxy_authorization_id=context.get("proxy_authorization_id"),
+            suitability=context.get("suitability") or None,
+        ))
 
     def _invalidate(self, entry: Mapping[str, str], operation_id: str) -> None:
         """Apply the typed revocation before acknowledging its receipt."""
