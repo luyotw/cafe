@@ -109,6 +109,8 @@ class HumanTaskCorrectionService:
         source = (self.revisions.issue_dir / entry.path).resolve()
         if self.revisions.issue_dir.resolve() not in source.parents:
             raise ValueError("correction artifact path escapes the issue")
+        if source.stat().st_size > 1_000_000:
+            raise ValueError("correction base content exceeds the task limit")
         content_bytes = source.read_bytes()
         if len(content_bytes) > 1_000_000:
             raise ValueError("correction base content exceeds the task limit")
