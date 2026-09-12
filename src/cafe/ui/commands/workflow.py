@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import hashlib
 import os
 import subprocess
 import sys
@@ -19,7 +20,6 @@ from cafe.core.blackboard import (
     is_genuine_cold_start,
 )
 from cafe.core.human_task_records import HumanTaskRecordStore
-from cafe.core.packet_io import sha256_bytes
 from cafe.workflow_execution.worker_launch import FixedWorkerLauncher, WorkerLaunchStore
 from cafe.workflow_execution.event_callback import (
     ResolvedWorkflowEventCallback,
@@ -53,6 +53,23 @@ from cafe.ui.human_tasks import (
 )
 
 
+MAX_CORRECTION_PROJECTION_BYTES = 1_000_000
+
+
+def _bounded_artifact_sha256(path: Path) -> Optional[str]:
+    """Hash an inspectable current artifact without unbounded operator memory use."""
+    try:
+        if path.stat().st_size > MAX_CORRECTION_PROJECTION_BYTES:
+            return None
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            while chunk := handle.read(64 * 1024):
+                digest.update(chunk)
+    except OSError:
+        return None
+    return digest.hexdigest()
+
+
 def _correction_projection(issue_dir: Path, artifact_name: Optional[str] = None) -> Optional[dict[str, Any]]:
     """Read bounded correction evidence for operator-facing current-state views."""
     if not (issue_dir / "blackboard.json").is_file() or not (issue_dir / "human_tasks.json").is_file():
@@ -73,10 +90,7 @@ def _correction_projection(issue_dir: Path, artifact_name: Optional[str] = None)
         if current is None:
             continue
         new_hash = correction.get("new_hash")
-        try:
-            current_hash = sha256_bytes((issue_dir / current.path).read_bytes())
-        except OSError:
-            continue
+        current_hash = _bounded_artifact_sha256(issue_dir / current.path)
         if not isinstance(new_hash, str) or new_hash != current_hash:
             continue
         next_gate = None

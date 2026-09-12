@@ -10,10 +10,19 @@ from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardStore
 from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.packet_io import sha256_bytes
 from cafe.ui.cli import app, _resolve_iteration_number, _get_show_file_path
+from cafe.ui.commands.workflow import MAX_CORRECTION_PROJECTION_BYTES, _bounded_artifact_sha256
 
 
 runner = CliRunner()
 pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
+
+
+def test_correction_projection_hash_skips_oversized_artifact(tmp_path):
+    """Operator inspection never allocates an unbounded current artifact."""
+    artifact = tmp_path / "oversized.md"
+    artifact.write_bytes(b"x" * (MAX_CORRECTION_PROJECTION_BYTES + 1))
+
+    assert _bounded_artifact_sha256(artifact) is None
 
 
 class TestResolveIterationNumber:
