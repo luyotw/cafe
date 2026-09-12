@@ -2420,6 +2420,11 @@ class BlackboardWorkflowRuntime:
         except ValueError as exc:
             raise RuntimeError("correction generation changed before result acceptance") from exc
 
+    def _require_current_correction_generation(self) -> None:
+        """Reject a result before it can publish completion or control state."""
+        if WorkerLaunchStore(self.issue_dir).generation != self._correction_generation:
+            raise RuntimeError("correction generation changed before completion publication")
+
     def _record_step_completion(
         self,
         *,
@@ -2430,6 +2435,7 @@ class BlackboardWorkflowRuntime:
         attempt_count: Optional[int] = None,
         hop_count: Optional[int] = None,
     ) -> None:
+        self._require_current_correction_generation()
         payload: Dict[str, Any] = {
             "step": current_step,
             "status_code": status_code,
@@ -2917,6 +2923,7 @@ class BlackboardWorkflowRuntime:
         update_contract: bool = False,
         contract_source: str = "workflow.transition",
     ) -> PlaybookRunResult:
+        self._require_current_correction_generation()
         self.blackboard_store.record_event(
             self.blackboard,
             "workflow_completed",
@@ -2965,6 +2972,7 @@ class BlackboardWorkflowRuntime:
         contract_source: str = "workflow.transition",
         transition_intent: HandoffIntent | str | None = None,
     ) -> None:
+        self._require_current_correction_generation()
         self.blackboard_store.record_decision(
             self.blackboard,
             {"from": current_step, "to": next_step, "status_code": status_code},
