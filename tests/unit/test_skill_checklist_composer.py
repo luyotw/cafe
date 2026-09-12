@@ -106,6 +106,42 @@ def test_checklist_variant_honors_declared_arbitrary_step() -> None:
     assert selected.when.step == "assemble"
 
 
+def test_declared_todo_projection_preserves_one_authoritative_row(tmp_path: Path) -> None:
+    todo_file = tmp_path / "plan.md"
+    todo_file.write_text(
+        "## Todo List\n"
+        "- [ ] `PLAN-001` — Source: `plan` — Work: add parser — "
+        "Closure: valid rows parse — Evidence: targeted pytest\n",
+        encoding="utf-8",
+    )
+    contract = SkillWorkflowContract.model_validate(
+        {
+            "checklist": {
+                "variants": [
+                    {
+                        "when": {},
+                        "sections": [
+                            {"todo_projection": {"artifact": "plan", "source": "plan"}}
+                        ],
+                    }
+                ]
+            }
+        }
+    )
+    output = tmp_path / "checklist.md"
+    compose_declared_checklist(
+        skill_name="cafe-develop",
+        contract=contract,
+        agent_name="Nick",
+        role="developer",
+        checklist_file_path=output,
+        iteration=1,
+        context={},
+        artifacts={"plan": todo_file},
+    )
+    assert "`PLAN-001` — add parser" in output.read_text(encoding="utf-8")
+
+
 GOLDEN_RUNNERS = {
     "spec_iter1": lambda path: generate_spec_checklist(
         iteration=1,

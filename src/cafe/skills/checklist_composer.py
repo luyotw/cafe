@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from cafe.agents.manager import AgentManager
+from cafe.core.todo import TodoContractError, parse_todo_list
 from cafe.skills.bridge import load_skill_reference, try_load_skill_reference
 from cafe.skills.contracts import ChecklistVariant, SkillWorkflowContract
 from cafe.skills.loader import canonical_skill_name
@@ -173,6 +174,20 @@ def compose_declared_checklist(
                     template_file=template_file,
                 )
             )
+        elif section.todo_projection:
+            artifact = artifacts.get(section.todo_projection.artifact)
+            if not artifact:
+                raise ValueError(
+                    f"Todo projection artifact is unavailable: {section.todo_projection.artifact}"
+                )
+            try:
+                todo_content = Path(str(artifact.path if hasattr(artifact, "path") else artifact)).read_text(
+                    encoding="utf-8"
+                )
+                items = parse_todo_list(todo_content, expected_source=section.todo_projection.source)
+            except (OSError, TodoContractError) as exc:
+                raise ValueError(f"Cannot project authoritative Todo List: {exc}") from exc
+            parts.extend(item.checklist_row() for item in items)
 
     role_dirs = {
         "pm": "pm",

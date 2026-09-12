@@ -182,6 +182,7 @@ class ChecklistSection(BaseModel):
     reference: Optional[str] = None
     optional_checklist: Optional[str] = None
     template_catalog: bool = False
+    todo_projection: Optional["TodoProjection"] = None
 
     @field_validator("reference", "optional_checklist")
     @classmethod
@@ -193,12 +194,31 @@ class ChecklistSection(BaseModel):
         if (
             sum(
                 value is not None and value is not False
-                for value in (self.reference, self.optional_checklist, self.template_catalog)
+                for value in (
+                    self.reference,
+                    self.optional_checklist,
+                    self.template_catalog,
+                    self.todo_projection,
+                )
             )
             != 1
         ):
             raise ValueError("checklist section requires exactly one source")
         return self
+
+
+class TodoProjection(BaseModel):
+    """A strict declaration for projecting one immutable Todo artifact."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    artifact: str
+    source: Literal["plan", "review", "qa", "pr_comment", "workflow_feedback"]
+
+    @field_validator("artifact")
+    @classmethod
+    def _validate_artifact(cls, value: str) -> str:
+        return _safe_token(value, field_name="todo projection artifact")
 
 
 class ChecklistVariant(BaseModel):
