@@ -13,6 +13,7 @@ from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardStore, H
 from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.human_tasks import agent_execution_interrupted_human_task
 from cafe.core.packet_io import sha256_bytes
+from cafe.driver.proxy import submit_authorized_correction
 from cafe.ui.commands.tasks import MAX_CORRECTION_CONTENT_BYTES, _read_bounded_correction_artifact
 from cafe.ui.commands.workflow import _correction_projection
 from cafe.ui.cli import app
@@ -294,6 +295,46 @@ def test_rejected_correction_is_durably_explainable_without_mutation(
         malformed_show = runner.invoke(app, ["show", "spec"])
     assert malformed_show.exit_code == 0
     assert "INJECTED-LINE" not in malformed_show.stdout
+
+
+def test_authorized_proxy_correction_has_public_operator_parity(tmp_path: Path, monkeypatch) -> None:
+    """Test List I2/I8: public authorization and proxy submission feed every operator view."""
+    issue_dir, original = _task_repo(tmp_path, monkeypatch)
+    (tmp_path / ".cafe" / "active_issue").write_text("issue-a\n", encoding="utf-8")
+    source = issue_dir / "spec" / "iteration_001" / "output.md"
+    source.parent.mkdir(parents=True)
+    (source.parent / "iteration.json").write_text("{}", encoding="utf-8")
+    source.write_text("original\n", encoding="utf-8")
+    boards = BlackboardStore(issue_dir)
+    board = boards.load_or_create("spec", playbook_id="standard")
+    boards.put_artifact(board, ArtifactEntry("spec", ArtifactKind.DOCUMENT, 1, "spec", "spec/iteration_001/output.md"))
+    task = HumanTaskRecordStore(issue_dir).refresh_pending_contract(
+        workflow_id=original.workflow_id, task_id=original.id, prompt=original.prompt,
+        expected_result={"input_schema": "decision", "correction": {"artifacts": ["spec"], "allow_driver_proxy": True}},
+        continuations={"revise": "spec"},
+    )
+    authorized = runner.invoke(app, ["task", "authorize-driver", task.id, "--json"])
+    assert authorized.exit_code == 0
+    authorization_id = json.loads(authorized.stdout)["data"]["authorization_id"]
+    submit_authorized_correction(
+        issue_dir=issue_dir, workflow_id=task.workflow_id, task_id=task.id, artifact="spec",
+        base_hash=sha256_bytes(b"original\n"), content="proxy corrected\n", operation_id="proxy-public",
+        authorization_id=authorization_id,
+        suitability={name: True for name in ("bounded", "clear", "reversible", "within_scope", "no_new_authority")},
+        manifest=({"kind": "artifact", "id": "spec"},),
+    )
+    inspected = runner.invoke(app, ["task", "inspect", task.id, "--json"])
+    assert inspected.exit_code == 0
+    assert json.loads(inspected.stdout)["data"]["task"]["correction"]["authorization_id"] == authorization_id
+    with patch("cafe.ui.cli.GitOperations") as git, patch("cafe.ui.cli.Path.cwd", return_value=tmp_path), patch("cafe.services.summary_service.GitOperations") as summary_git:
+        git.return_value.get_current_branch.return_value = "issue-a"
+        summary_git.return_value.get_current_branch.return_value = "issue-a"
+        summary_git.return_value.is_git_repository.return_value = True
+        shown, status = runner.invoke(app, ["show", "spec"]), runner.invoke(app, ["status"])
+    for result in (shown, status):
+        assert result.exit_code == 0
+        assert task.id in result.stdout and authorization_id in result.stdout and "proxy-public" in result.stdout
+    assert source.read_text(encoding="utf-8") == "original\n"
 
 
 def test_list_json_envelope_supports_filters(tmp_path: Path, monkeypatch) -> None:
