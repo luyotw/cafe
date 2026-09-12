@@ -991,7 +991,16 @@ class BlackboardStore:
     ) -> bool:
         """Remove one stale current pointer while retaining the event history."""
         if name not in state.artifacts:
-            return False
+            # An interruption can occur after this durable removal and before
+            # its correction-journal receipt.  The immutable event makes that
+            # exact operation safely replayable without accepting an unrelated
+            # absent target as a successful invalidation.
+            return any(
+                event.event_type == "artifact_invalidated_for_correction"
+                and event.data.get("artifact") == name
+                and event.data.get("operation_id") == operation_id
+                for event in state.events
+            )
         state.artifacts.pop(name)
         self.record_event(
             state,

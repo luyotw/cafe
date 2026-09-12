@@ -479,6 +479,44 @@ def test_recovery_finishes_after_revision_replacement_without_rechecking_old_bas
     assert records.get_task(task.id).status.value == "completed"
 
 
+def test_recovery_replays_an_artifact_invalidation_interrupted_before_its_receipt(tmp_path, monkeypatch) -> None:
+    source = tmp_path / "brief.md"
+    stale = tmp_path / "summary.md"
+    source.write_text("base", encoding="utf-8")
+    stale.write_text("stale", encoding="utf-8")
+    board_store = BlackboardStore(tmp_path)
+    board = board_store.load_or_create("review")
+    for name, path in (("brief", "brief.md"), ("summary", "summary.md")):
+        board_store.put_artifact(board, ArtifactEntry(
+            name=name, kind=ArtifactKind.DOCUMENT, version=1, updated_by="writer", path=path
+        ))
+    records = HumanTaskRecordStore(tmp_path)
+    task = records.materialize(
+        workflow_id="workflow", step="review", iteration=1, trigger="confirm_output",
+        policy_id="output-review", prompt="Review",
+        expected_result={"input_schema": "decision", "correction": {"artifacts": ["brief"]}},
+        continuations={"revise": "draft"}, assignee_type="user",
+    )
+    service = HumanTaskCorrectionService(tmp_path)
+    original_receipt = service.revisions.receipt
+
+    def interrupted_receipt(*_args, **_kwargs):
+        raise OSError("simulated interruption after invalidation")
+
+    monkeypatch.setattr(service.revisions, "receipt", interrupted_receipt)
+    with pytest.raises(OSError):
+        service.apply(CorrectionRequest(
+            workflow_id="workflow", task_id=task.id, artifact="brief", base_hash=sha256_bytes(b"base"),
+            content="replacement", operation_id="recover-after-invalidate", actor="user",
+            manifest=({"kind": "artifact", "id": "summary"},),
+        ))
+    monkeypatch.setattr(service.revisions, "receipt", original_receipt)
+
+    HumanTaskCorrectionService(tmp_path).recover("recover-after-invalidate")
+    assert "summary" not in BlackboardStore(tmp_path).load_or_create("review").artifacts
+    assert records.get_task(task.id).status.value == "completed"
+
+
 def test_correction_supersedes_downstream_pending_task_before_receipting(tmp_path) -> None:
     source = tmp_path / "brief.md"
     source.write_text("base", encoding="utf-8")
