@@ -24,9 +24,7 @@ def _load_skill_checklist_reference(skill_name: str, ref_name: str) -> str:
 def _load_agent_guidance(agent_name: str, role: str) -> tuple[str, str]:
     """Read role guidance without releasing the catalog lock between path and content."""
     agent_file, content = AgentManager.read_agent_file(agent_name, role)
-    guidelines = (
-        convert_to_checklist(content, "Agent Guidelines Checklist") if content else ""
-    )
+    guidelines = convert_to_checklist(content, "Agent Guidelines Checklist") if content else ""
     return agent_file, guidelines
 
 
@@ -181,10 +179,12 @@ def compose_declared_checklist(
                     f"Todo projection artifact is unavailable: {section.todo_projection.artifact}"
                 )
             try:
-                todo_content = Path(str(artifact.path if hasattr(artifact, "path") else artifact)).read_text(
-                    encoding="utf-8"
+                todo_content = Path(
+                    str(artifact.path if hasattr(artifact, "path") else artifact)
+                ).read_text(encoding="utf-8")
+                items = parse_todo_list(
+                    todo_content, expected_source=section.todo_projection.source
                 )
-                items = parse_todo_list(todo_content, expected_source=section.todo_projection.source)
             except (OSError, TodoContractError) as exc:
                 raise ValueError(f"Cannot project authoritative Todo List: {exc}") from exc
             parts.extend(item.checklist_row() for item in items)
@@ -197,9 +197,7 @@ def compose_declared_checklist(
         "researcher": "researcher",
         "ops": "ops",
     }
-    agent_file, guidelines = _load_agent_guidance(
-        agent_name, role_dirs.get(role, "developer")
-    )
+    agent_file, guidelines = _load_agent_guidance(agent_name, role_dirs.get(role, "developer"))
     if contract.checklist.include_role_guidance:
         if guidelines:
             if contract.checklist.compact_agent_guidance:
@@ -483,8 +481,7 @@ def generate_develop_checklist(
 
     guidance_separator = "\n\n" if basic_principles_checklist else "\n"
     checklist_content = (
-        f"{execution_steps}\n{basic_principles_checklist}"
-        f"{guidance_separator}{agent_guidelines}"
+        f"{execution_steps}\n{basic_principles_checklist}" f"{guidance_separator}{agent_guidelines}"
     )
 
     if questions_xml_file:

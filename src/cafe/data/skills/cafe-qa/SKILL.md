@@ -57,6 +57,7 @@ Read your agent file: {agent_file}
 - When a review result is provided, prioritize its identified risks and confirm that unresolved findings do not escape acceptance.
 - Exercise every applicable acceptance criterion using observable scenarios or commands; do not infer a pass from code inspection alone.
 - Do not modify product code. When acceptance fails, record reproducible evidence and route the work to `develop`.
+- When acceptance fails, emit every correction once under `## Todo List` as ``- [ ] `QA-NNN` — Source: `qa` — Work: ... — Closure: ... — Evidence: ...``. Keep stable unique IDs; ordinary report checkboxes are not correction work.
 - When a required check cannot run, use `need_clarification` or `need_permission` and resume in QA after the blocker is resolved.
 - Record the criteria checked, scenarios or commands exercised, observed outcomes, blocked checks, and reproducible failure details in the QA report.
 - Route a fully passing report to the playbook's next step.

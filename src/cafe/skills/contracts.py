@@ -213,7 +213,7 @@ class TodoProjection(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     artifact: str
-    source: Literal["plan", "review", "qa", "pr_comment", "workflow_feedback"]
+    source: Optional[Literal["plan", "review", "qa", "pr_comment", "workflow_feedback"]] = None
 
     @field_validator("artifact")
     @classmethod

@@ -1,9 +1,13 @@
 """Unit tests for checklist_validator module."""
 
-
 import pytest
 
-from cafe.utils.checklist_validator import completion_requires_checklist, validate_checklist
+from cafe.core.todo import parse_todo_list
+from cafe.utils.checklist_validator import (
+    completion_requires_checklist,
+    validate_checklist,
+    validate_projected_todos,
+)
 
 
 @pytest.mark.parametrize("intent", ["await_agent", "confirm_output", "workflow_complete"])
@@ -121,6 +125,24 @@ def test_validate_checklist_with_nested_checkboxes(tmp_path):
     assert result.is_complete is False
     assert result.unchecked_count == 3
     assert result.checklist_path == checklist_file
+
+
+def test_projected_todo_completion_requires_exact_set_and_ledger(tmp_path):
+    source = (
+        "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: x — Closure: y — Evidence: z\n"
+    )
+    item = parse_todo_list(source)[0]
+    checklist = tmp_path / "checklist.md"
+    output = tmp_path / "output.md"
+    checklist.write_text(item.checklist_row().replace("[ ]", "[x]") + "\n", encoding="utf-8")
+    output.write_text(
+        f"### PLAN-001\n- Status: completed\n- Source fingerprint: `{item.fingerprint}`\n"
+        "- Files: a.py\n- Commit: abc\n- Targeted evidence: tests passed\n",
+        encoding="utf-8",
+    )
+    assert validate_projected_todos(checklist, output, (item,)) == []
+    checklist.write_text("", encoding="utf-8")
+    assert validate_projected_todos(checklist, output, (item,))
 
 
 def test_validate_checklist_mixed_content(tmp_path):

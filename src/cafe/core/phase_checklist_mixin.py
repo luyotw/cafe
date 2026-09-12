@@ -85,6 +85,14 @@ class PhaseChecklistMixin:
                 checklist_path=checklist_path,
             )
 
+        if result.is_complete and hasattr(self, "_validate_projected_todo_completion"):
+            if not self._validate_projected_todo_completion(checklist_path):
+                result = ChecklistValidationResult(
+                    is_complete=False,
+                    unchecked_count=0,
+                    checklist_path=checklist_path,
+                )
+
         if result.is_complete:
             print(f"✅ Checklist validation passed - all items completed")
             # Get current response from context

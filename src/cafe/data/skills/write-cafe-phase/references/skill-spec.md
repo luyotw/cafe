@@ -405,7 +405,7 @@ skill 文件內不要假設只有某一條 playbook 會用它。
 - [ ] 若是共用規則，已更新 `cafe-workflow-common` 的 Where policies live 索引
 - [ ] plan → execute pair 使用 `output_artifact: plan` → `input_artifacts: [plan]`，execute 的 `## Context` 包含 `{plan_file}`
 - [ ] 若 phase 同時 execute 舊 plan 並產生下一份 plan，已依 §15 區分 `{plan_file}` 與 `{output_file}`、先完成舊 checklist、處理 `not_required` 分支
-- [ ] implementation tasks 位於 plan artifact 並使用 `- [ ]`／`- [x]`；沒有另建重複的 plan-derived checklist
+- [ ] executable work 使用 canonical `## Todo List` contract，consumer 以 `todo_projection` 宣告 immutable source，且 progress 只寫入 consumer output ledger
 - [ ] planned user approval 同時有 phase routing decision 與 playbook `on.confirm_output`，並正確分類為 assignable 或 mandatory；reactive interruption 未混入 kickoff 候選
 - [ ] 必要工具已集中宣告在 `workflow.required_tools`，所有綁定 step 的 `allowed_tools` 均滿足宣告，選用診斷工具沒有誤列為必要工具
 - [ ] 若 planned gate set 有變更，已執行 `cafe playbook confirmation-gates <id>` 並回報 issue contract 需要重新確認
@@ -468,7 +468,7 @@ execute skill 必須宣告：
 並遵守：
 
 - 先讀 `{plan_file}`，依 task dependency order 實作；不得靠搜尋目錄猜測另一份 plan。
-- 每完成一項，就直接在同一份 `{plan_file}` 將 `- [ ]` 改成 `- [x]`；不得複製 task list 到 sidecar 再各自漂移。
+- accepted `{plan_file}` 是不可變來源。每完成一項，在 consumer `{output_file}` 的 `## Todo Progress` 記錄 stable ID、status、source fingerprint、files/commit、targeted evidence、remaining work 與 next action；不得回寫 source 或建立 mutable sidecar。
 - 新增／修改的測試與 QA 必須對應 plan 的 Test List。scope 或 invariant 改變時，退回 plan phase更新與重新確認。
 - 完成前確認所有 implementation tasks 都為 `- [x]`、Test List invariants 全部通過、輸出與 evidence 已記錄。
 
@@ -606,7 +606,7 @@ Runtime `checklist.md` 是 **單一 phase iteration 的 procedure completion gat
 | 同一 iteration，且 output schema、所有 consumers/finalizers/publish hooks 明確允許 partial 與 final ledger | `{output_file}` 內的 structured progress section | evidence 必須 sanitized；finalization 依宣告保留或安全轉換 ledger |
 | 同一 iteration，但 output 是 exact-shape、會直接公開，或 consumer/hook 不接受額外 section | playbook 明確宣告的 artifact，或 domain-owned workspace ledger | 不得把 ledger 塞進 `{output_file}`；final artifact 保持 exact/public contract |
 | 跨 correction iterations | playbook 明確宣告並傳遞的 artifact，或 domain-owned workspace ledger | 必須有明確 input/output contract；不要靠猜上一輪 output path |
-| plan → execute implementation tasks | `{plan_file}` 的 task checkboxes | 依 §14 原地更新；不要再複製一份 progress sidecar |
+| plan → execute implementation tasks | execute `{output_file}` 的 `## Todo Progress` | runtime 從 immutable `{plan_file}` 投影 gates；resume 重新核對 fingerprint 與 evidence |
 
 `{output_file}` 不是無條件預設。若 final artifact 有 exact ordered sections、machine schema、public publication 或會被 hook 直接消費，只有 contract 明確允許 ledger 以及安全 finalization 時才能使用；否則另選 declared/domain-owned owner。Ledger evidence 只放穩定、必要、已清理的 receipt/identifier，不放 credential、token、raw API error 或不需要公開的內部路徑。
 

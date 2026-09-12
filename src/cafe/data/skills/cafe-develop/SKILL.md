@@ -77,6 +77,7 @@ workflow:
       - when: {feedback: true}
         sections:
           - reference: execution_steps_correction.md
+          - todo_projection: {artifact: causal_todo}
           - optional_checklist: basic_principles.md
       - when: {}
         sections:

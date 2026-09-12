@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from cafe.agents.manager import AgentManager
+from cafe.core.todo import parse_todo_list
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.bridge import load_skill_reference
 from cafe.skills.checklist_composer import (
@@ -120,9 +121,7 @@ def test_declared_todo_projection_preserves_one_authoritative_row(tmp_path: Path
                 "variants": [
                     {
                         "when": {},
-                        "sections": [
-                            {"todo_projection": {"artifact": "plan", "source": "plan"}}
-                        ],
+                        "sections": [{"todo_projection": {"artifact": "plan", "source": "plan"}}],
                     }
                 ]
             }
@@ -455,6 +454,17 @@ def test_production_composer_golden_checklist_matches_fixture(
                 "[ ] `PLAN-001` — add parser "
                 "(source fingerprint: 28653ad28cd864d9309af4159d4cd2c9d2df5bfdf1b124301b5d9b79f7125597)\n"
             )
+        elif case_name == "develop_correction":
+            feedback = tmp_path / "review.md"
+            feedback.write_text(
+                "## Todo List\n"
+                "- [ ] `BLK-001` — Source: `review` — Work: fix wiring — "
+                "Closure: production path works — Evidence: targeted pytest\n",
+                encoding="utf-8",
+            )
+            artifacts = {"causal_todo": feedback}
+            item = parse_todo_list(feedback.read_text(encoding="utf-8"))[0]
+            expected_extra = item.checklist_row() + "\n"
         assert compose_declared_checklist(
             skill_name=case["skill"],
             contract=SkillLoader().get_workflow_contract(case["skill"]),
@@ -472,7 +482,9 @@ def test_production_composer_golden_checklist_matches_fixture(
         for line in case.get("omitted_optional_lines", ()):
             expected = expected.replace(f"{line}\n", "")
         if expected_extra:
-            expected = expected.replace("## Basic Principles", expected_extra + "## Basic Principles")
+            expected = expected.replace(
+                "## Basic Principles", expected_extra + "## Basic Principles"
+            )
         assert actual == expected
     finally:
         AgentManager.read_agent_file = saved

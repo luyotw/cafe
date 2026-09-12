@@ -114,6 +114,7 @@ Read your agent file: {agent_file}
 - 第 1–3 輪是 discovery mode：可將新的、有證據的 in-scope Critical 或 Important finding 列為 blocker，但當輪必須完成全部相關 scope 才交棒，不得找到第一項就提前結束
 - 第 4 輪起是 convergence mode：原 blocker lineage 未解決、本輪修正直接造成的 regression，以及符合上述嚴格條件的新 Critical 仍然 blocking；其他新 Important / Minor finding 只能成為 follow-up proposal，不得重開 correction loop
 - 每個 blocker 使用首次出現時分配的穩定 `BLK-NNN` ID，每個 follow-up 使用穩定 `FUP-NNN` ID；以 root cause identity 與 production path 判定同一 lineage，correction 輪必須沿用既有 ID，不得因描述改寫而重新編號或建立重複項目
+- `## Todo List` 的每個 open blocker 必須使用 canonical 單行格式 ``- [ ] `BLK-NNN` — Source: `review` — Work: ... — Closure: ... — Evidence: ...``；區段外 checkbox 與 Follow-up Proposal 不屬於 correction work。
 - 每輪都要從上一輪帶入完整 `Finding Registry`，包含已關閉與已處置的 BLK/FUP lineage；只能依當前證據更新 status 與 evidence HEAD，不得刪除、改號或改寫 root-cause identity
 - 本 phase 只提出 follow-up，不得開立、留言或關閉 GitHub issue；設為 follow-up 也不能讓 Critical 放行
 - 若未來某個 CLI 提供可在 phase 內直接組合的原生 review Skill，必須先依 `write-cafe-phase` 的 selection matrix 流程取得 user 確認，再更新本 Skill；不得把 `codex review`、`claude ultrareview` 或其他巢狀 CLI subprocess 當成原生 Skill 偷跑

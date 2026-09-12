@@ -1,7 +1,14 @@
 """Checklist validation utilities for CAFE workflow."""
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
+
+from cafe.core.todo import TodoItem
+
+_PROJECTED = re.compile(
+    r"^\[x\] `(?P<id>[^`]+)` — .+ \(source fingerprint: (?P<fp>[0-9a-f]{64})\)$"
+)
 
 CHECKLIST_COMPLETION_INTENTS = frozenset(
     {
@@ -28,6 +35,7 @@ class ChecklistValidationResult:
         unchecked_count: Number of unchecked items found
         checklist_path: Path to the checklist file
     """
+
     is_complete: bool
     unchecked_count: int
     checklist_path: Path
@@ -89,3 +97,34 @@ def validate_checklist(checklist_path: Path) -> ChecklistValidationResult:
         unchecked_count=unchecked_count,
         checklist_path=checklist_path,
     )
+
+
+def validate_projected_todos(
+    checklist_path: Path, output_path: Path, expected: tuple[TodoItem, ...]
+) -> list[str]:
+    """Return fail-closed integrity errors for projected rows and their ledger."""
+    rows = []
+    for line in checklist_path.read_text(encoding="utf-8").splitlines():
+        match = _PROJECTED.fullmatch(line.strip())
+        if match:
+            rows.append((match.group("id"), match.group("fp")))
+    expected_rows = [(item.item_id, item.fingerprint) for item in expected]
+    errors: list[str] = []
+    if rows != expected_rows:
+        errors.append("projected Todo rows do not match the authoritative set")
+    ledger = output_path.read_text(encoding="utf-8") if output_path.is_file() else ""
+    for item_id, fingerprint in expected_rows:
+        marker = f"### {item_id}"
+        start = ledger.find(marker)
+        end = ledger.find("\n### ", start + len(marker)) if start >= 0 else -1
+        block = ledger[start : end if end >= 0 else None] if start >= 0 else ""
+        required = (
+            "- Status: completed",
+            f"- Source fingerprint: `{fingerprint}`",
+            "- Files:",
+            "- Commit:",
+            "- Targeted evidence:",
+        )
+        if not block or any(token not in block for token in required):
+            errors.append(f"Todo ledger evidence is incomplete for {item_id}")
+    return errors

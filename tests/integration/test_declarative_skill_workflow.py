@@ -475,7 +475,12 @@ def test_packaged_workflow_uses_full_then_packet_then_legacy_fallback(
         encoding="utf-8",
     )
     code.write_text("implementation evidence", encoding="utf-8")
-    feedback.write_text("review evidence", encoding="utf-8")
+    feedback.write_text(
+        "## Todo List\n"
+        "- [ ] `BLK-001` — Source: `review` — Work: fix review finding — "
+        "Closure: corrected journey passes — Evidence: targeted regression\n",
+        encoding="utf-8",
+    )
     store = BlackboardStore(issue_dir)
     state = store.load_or_create("develop")
     for name, artifact in (("spec", spec), ("plan", plan), ("code", code)):
@@ -528,6 +533,8 @@ def test_packaged_workflow_uses_full_then_packet_then_legacy_fallback(
     assert Path(final_host_inputs["plan_file"]).resolve() == plan
 
     spec.write_text("# Ordinary confirmed artifact\n", encoding="utf-8")
+    # This final probe is a normal entry; historical review feedback is not causal.
+    state.handoff_contract = None
     run("develop")
 
 

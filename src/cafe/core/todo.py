@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from hashlib import sha256
-import re
 from pathlib import Path
 from typing import Literal, Mapping
 
@@ -79,7 +79,9 @@ def resolve_todo_source(
     return TodoSourceArtifact(artifact=artifact, source=source, path=path)
 
 
-def parse_todo_list(content: str, *, expected_source: TodoSource | None = None) -> tuple[TodoItem, ...]:
+def parse_todo_list(
+    content: str, *, expected_source: TodoSource | None = None
+) -> tuple[TodoItem, ...]:
     """Parse exactly one designated Todo List section, failing closed on bad rows."""
     lines = content.splitlines()
     headings = [index for index, line in enumerate(lines) if _HEADING.match(line.strip())]
@@ -103,7 +105,9 @@ def parse_todo_list(content: str, *, expected_source: TodoSource | None = None) 
         if source not in TODO_SOURCES:
             raise TodoContractError(f"unsupported Todo source: {source}")
         if expected_source is not None and source != expected_source:
-            raise TodoContractError("Todo item source does not match the declared projection source")
+            raise TodoContractError(
+                "Todo item source does not match the declared projection source"
+            )
         item_id = match.group("id")
         if item_id in ids:
             raise TodoContractError(f"duplicate Todo item ID: {item_id}")
