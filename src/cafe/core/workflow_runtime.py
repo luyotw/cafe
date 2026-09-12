@@ -2435,7 +2435,6 @@ class BlackboardWorkflowRuntime:
         attempt_count: Optional[int] = None,
         hop_count: Optional[int] = None,
     ) -> None:
-        self._require_current_correction_generation()
         payload: Dict[str, Any] = {
             "step": current_step,
             "status_code": status_code,
@@ -2445,11 +2444,11 @@ class BlackboardWorkflowRuntime:
             payload["attempt"] = attempt_count
         if hop_count is not None:
             payload["hop"] = hop_count
-        self.blackboard_store.record_event(
-            self.blackboard,
-            event_type,
-            payload,
-        )
+        try:
+            with WorkerLaunchStore(self.issue_dir).generation_guard(self._correction_generation):
+                self.blackboard_store.record_event(self.blackboard, event_type, payload)
+        except ValueError as exc:
+            raise RuntimeError("correction generation changed before completion publication") from exc
         if self._pending_phase_terminal is not None:
             self._flush_phase_terminal()
         self._pending_phase_terminal = payload
@@ -2923,30 +2922,19 @@ class BlackboardWorkflowRuntime:
         update_contract: bool = False,
         contract_source: str = "workflow.transition",
     ) -> PlaybookRunResult:
-        self._require_current_correction_generation()
-        self.blackboard_store.record_event(
-            self.blackboard,
-            "workflow_completed",
-            {
-                "transition_id": str(uuid4()),
-                "step": current_step,
-                "status_code": status_code,
-                "next_step": next_step,
-                "reason": reason,
-                "runtime": runtime,
-            },
-        )
-        if update_contract:
-            self.blackboard_store.update_handoff_contract(
-                self.blackboard,
-                from_step=current_step,
-                to_owner=HandoffOwner.DONE,
-                to_step="done",
-                intent=HandoffIntent.WORKFLOW_COMPLETE,
-                status_code=status_code,
-                source=contract_source,
-            )
-        self.blackboard_store.set_current_step(self.blackboard, "done")
+        with WorkerLaunchStore(self.issue_dir).generation_guard(self._correction_generation):
+            self.blackboard_store.record_event(self.blackboard, "workflow_completed", {
+                "transition_id": str(uuid4()), "step": current_step,
+                "status_code": status_code, "next_step": next_step,
+                "reason": reason, "runtime": runtime,
+            })
+            if update_contract:
+                self.blackboard_store.update_handoff_contract(
+                    self.blackboard, from_step=current_step, to_owner=HandoffOwner.DONE,
+                    to_step="done", intent=HandoffIntent.WORKFLOW_COMPLETE,
+                    status_code=status_code, source=contract_source,
+                )
+            self.blackboard_store.set_current_step(self.blackboard, "done")
         cafe_dir = self.issue_dir.parent.parent
         clear_marker_if_matches(cafe_dir, self.issue_dir.name)
         if not self._flush_phase_terminal(event_type="workflow_completed"):
@@ -2972,48 +2960,27 @@ class BlackboardWorkflowRuntime:
         contract_source: str = "workflow.transition",
         transition_intent: HandoffIntent | str | None = None,
     ) -> None:
-        self._require_current_correction_generation()
-        self.blackboard_store.record_decision(
-            self.blackboard,
-            {"from": current_step, "to": next_step, "status_code": status_code},
-        )
-        transition_id = str(uuid4())
-        raw_transition_intent = (
-            transition_intent.value
-            if isinstance(transition_intent, HandoffIntent)
-            else transition_intent
-        )
-        self.blackboard_store.record_event(
-            self.blackboard,
-            "transition",
-            {
-                "transition_id": transition_id,
-                "from": current_step,
-                "to": next_step,
-                "status_code": status_code,
-                "source": source,
-                "runtime": runtime,
-                "transition_intent": raw_transition_intent,
-            },
-        )
-        self._reset_step_attempts_after_successful_advance(
-            current_step=current_step,
-            next_step=next_step,
-            status_code=status_code,
-            transition_intent=transition_intent,
-            transition_source=source,
-        )
-        self.blackboard_store.set_current_step(self.blackboard, next_step)
-        if update_contract:
-            self.blackboard_store.update_handoff_contract(
-                self.blackboard,
-                from_step=current_step,
-                to_owner=HandoffOwner.AGENT,
-                to_step=next_step,
-                intent=HandoffIntent.AWAIT_AGENT,
-                status_code=status_code,
-                source=contract_source,
+        raw_transition_intent = transition_intent.value if isinstance(transition_intent, HandoffIntent) else transition_intent
+        with WorkerLaunchStore(self.issue_dir).generation_guard(self._correction_generation):
+            self.blackboard_store.record_decision(
+                self.blackboard, {"from": current_step, "to": next_step, "status_code": status_code},
             )
+            self.blackboard_store.record_event(self.blackboard, "transition", {
+                "transition_id": str(uuid4()), "from": current_step, "to": next_step,
+                "status_code": status_code, "source": source, "runtime": runtime,
+                "transition_intent": raw_transition_intent,
+            })
+            self._reset_step_attempts_after_successful_advance(
+                current_step=current_step, next_step=next_step, status_code=status_code,
+                transition_intent=transition_intent, transition_source=source,
+            )
+            self.blackboard_store.set_current_step(self.blackboard, next_step)
+            if update_contract:
+                self.blackboard_store.update_handoff_contract(
+                    self.blackboard, from_step=current_step, to_owner=HandoffOwner.AGENT,
+                    to_step=next_step, intent=HandoffIntent.AWAIT_AGENT,
+                    status_code=status_code, source=contract_source,
+                )
         self._flush_phase_terminal()
 
     def _handle_post_contract(
