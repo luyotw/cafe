@@ -1698,7 +1698,7 @@ def test_runtime_legacy_step_stays_on_same_step_when_status_missing(tmp_path: Pa
     assert result.completed is False
     assert result.final_step == "spec"
     assert result.final_status_code == "INTERRUPTED:agent_status_code_missing"
-    assert calls == ["spec"]
+    assert calls == ["spec", "spec", "spec"]
     assert HumanTaskRecordStore(issue_dir).tasks()[0].continuations == {
         "retry": "spec",
         "retry_fresh_session": "spec",
@@ -2919,8 +2919,94 @@ def test_runtime_preserves_declared_manual_handoff_from_confirmation_gate(
     assert enforced == []
 
 
+def test_runtime_reprompts_clean_agent_exit_until_it_writes_a_handoff(tmp_path: Path) -> None:
+    """A progress-only exit is sent back to the same invocation for a real handoff."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "missing-then-handoff"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "develop": {
+                "skill": "develop",
+                "role": "developer",
+                "on": {"await_agent": "review"},
+            },
+            "review": {
+                "skill": "review",
+                "role": "reviewer",
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+    calls: list[tuple[str, str | None, bool]] = []
+
+    def executor(
+        step_name: str,
+        step_def: dict,
+        state: object,
+        extra_prompt: str | None = None,
+        same_invocation_retry: bool = False,
+    ):
+        calls.append((step_name, extra_prompt, same_invocation_retry))
+        store = BlackboardStore(issue_dir)
+        if step_name == "develop" and len(calls) == 1:
+            iteration_dir = issue_dir / "develop" / "iteration_001"
+            iteration_dir.mkdir(parents=True, exist_ok=True)
+            (iteration_dir / "iteration.json").write_text(
+                json.dumps(
+                    {
+                        "iteration": 1,
+                        "cli": "codex",
+                        "session_id": "develop-session",
+                        "end_time": "2026-09-12T09:26:54+08:00",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            return ("Implemented one unit; more work remains.", {})
+        if step_name == "develop":
+            store.update_handoff_contract(
+                state,
+                from_step="develop",
+                to_owner=HandoffOwner.AGENT,
+                to_step="review",
+                intent=HandoffIntent.AWAIT_AGENT,
+                source="test.develop_complete",
+            )
+            return ("Implementation complete.", {})
+        store.update_handoff_contract(
+            state,
+            from_step="review",
+            to_owner=HandoffOwner.DONE,
+            to_step="done",
+            intent=HandoffIntent.WORKFLOW_COMPLETE,
+            source="test.review_complete",
+        )
+        return ("Review complete.", {})
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    ).run(start_step="develop")
+
+    assert result.completed is True
+    assert [call[0] for call in calls] == ["develop", "develop", "review"]
+    assert calls[0][1:] == (None, False)
+    assert calls[1][2] is True
+    assert calls[1][1] is not None
+    assert "A progress update is not a workflow handoff" in calls[1][1]
+    assert "either finish the step and write its valid next-step baton" in calls[1][1]
+    blackboard = BlackboardStore(issue_dir).load_or_create("develop")
+    retries = [
+        event for event in blackboard.events if event.event_type == "completion_handoff_missing"
+    ]
+    assert len(retries) == 1
+    assert retries[0].data["will_retry"] is True
+    assert HumanTaskRecordStore(issue_dir).tasks() == ()
+
+
 def test_runtime_status_code_missing_no_handoff_contract(tmp_path: Path) -> None:
-    """A missing status and baton creates an explicit session recovery task."""
+    """Repeated missing status and baton falls back to explicit session recovery."""
     issue_dir = tmp_path / ".cafe" / "issues" / "missing-no-handoff"
     playbook = {
         "playbook": {"id": "default"},
@@ -2934,7 +3020,16 @@ def test_runtime_status_code_missing_no_handoff_contract(tmp_path: Path) -> None
         },
     }
 
-    def executor(step_name: str, step_def: dict, state: object):
+    calls: list[tuple[str | None, bool]] = []
+
+    def executor(
+        step_name: str,
+        step_def: dict,
+        state: object,
+        extra_prompt: str | None = None,
+        same_invocation_retry: bool = False,
+    ):
+        calls.append((extra_prompt, same_invocation_retry))
         # No handoff contract written — agent produced nothing useful.
         iteration_dir = issue_dir / "spec" / "iteration_001"
         iteration_dir.mkdir(parents=True, exist_ok=True)
@@ -2962,14 +3057,19 @@ def test_runtime_status_code_missing_no_handoff_contract(tmp_path: Path) -> None
 
     assert result.completed is False
     assert result.final_status_code == "INTERRUPTED:agent_status_code_missing"
+    assert len(calls) == 3
+    assert calls[0] == (None, False)
+    assert all(prompt and retry for prompt, retry in calls[1:])
     blackboard = BlackboardStore(issue_dir).load_or_create("spec")
+    retry_events = [
+        event for event in blackboard.events if event.event_type == "completion_handoff_missing"
+    ]
+    assert [event.data["will_retry"] for event in retry_events] == [True, True, False]
     missing_events = [e for e in blackboard.events if e.event_type == "status_code_missing"]
     assert missing_events
     assert "baton_fallback" not in missing_events[-1].data
     iteration_data = json.loads(
-        (issue_dir / "spec" / "iteration_001" / "iteration.json").read_text(
-            encoding="utf-8"
-        )
+        (issue_dir / "spec" / "iteration_001" / "iteration.json").read_text(encoding="utf-8")
     )
     assert iteration_data["end_time"]
     assert iteration_data["workflow_completion_trusted"] is False
@@ -2983,13 +3083,16 @@ def test_runtime_status_code_missing_no_handoff_contract(tmp_path: Path) -> None
         "retry": "spec",
         "retry_fresh_session": "spec",
     }
-    assert callback_events[0].items() >= {
-        "event_type": "human_task",
-        "step": "spec",
-        "status_code": "INTERRUPTED:agent_status_code_missing",
-        "reason": "agent_status_code_missing",
-        "task_id": task.id,
-    }.items()
+    assert (
+        callback_events[0].items()
+        >= {
+            "event_type": "human_task",
+            "step": "spec",
+            "status_code": "INTERRUPTED:agent_status_code_missing",
+            "reason": "agent_status_code_missing",
+            "task_id": task.id,
+        }.items()
+    )
 
 
 def test_runtime_pauses_ready_for_review_with_confirm_output_intent(tmp_path: Path) -> None:
@@ -5216,12 +5319,12 @@ def test_runtime_retries_same_phase_baton_then_succeeds(tmp_path: Path) -> None:
     assert result.completed is True
     assert len(captured_prompts) == 2
     assert captured_prompts[0] is None
-    assert "cannot point back to the same phase" in (captured_prompts[1] or "")
+    assert "A progress update is not a workflow handoff" in (captured_prompts[1] or "")
     bb = BlackboardStore(issue_dir).load_or_create("spec")
-    rejected_events = [e for e in bb.events if e.event_type == "baton_rejected"]
+    rejected_events = [e for e in bb.events if e.event_type == "completion_handoff_missing"]
     assert len(rejected_events) == 1
-    assert rejected_events[0].data["field"] == "to_step"
-    assert rejected_events[0].data["invalid_value"] == "spec"
+    assert rejected_events[0].data["retry"] == 1
+    assert rejected_events[0].data["will_retry"] is True
 
 
 def test_runtime_retries_same_phase_baton_for_pr_then_succeeds(tmp_path: Path) -> None:
@@ -5234,7 +5337,12 @@ def test_runtime_retries_same_phase_baton_for_pr_then_succeeds(tmp_path: Path) -
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
-            "pr": {"skill": "spec_first", "role": "developer", "on": {"await_agent": "_done"}},
+            "pr": {
+                "skill": "spec_first",
+                "role": "developer",
+                "behavior": {"completion": "baton"},
+                "on": {"workflow_complete": "_done"},
+            },
         },
     }
 
@@ -5265,12 +5373,77 @@ def test_runtime_retries_same_phase_baton_for_pr_then_succeeds(tmp_path: Path) -
     assert result.completed is True
     assert len(captured_prompts) == 2
     assert captured_prompts[0] is None
-    assert "cannot point back to the same phase" in (captured_prompts[1] or "")
+    assert "A progress update is not a workflow handoff" in (captured_prompts[1] or "")
     bb = BlackboardStore(issue_dir).load_or_create("pr")
-    rejected_events = [e for e in bb.events if e.event_type == "baton_rejected"]
+    rejected_events = [e for e in bb.events if e.event_type == "completion_handoff_missing"]
     assert len(rejected_events) == 1
-    assert rejected_events[0].data["field"] == "to_step"
-    assert rejected_events[0].data["invalid_value"] == "pr"
+    assert rejected_events[0].data["retry"] == 1
+    assert rejected_events[0].data["will_retry"] is True
+
+
+def test_baton_completion_missing_handoff_exhaustion_pauses_for_recovery(
+    tmp_path: Path,
+) -> None:
+    """A baton-only step fails safely after bounded completion-error retries."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "baton-missing-handoff"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "publish": {
+                "skill": "publish",
+                "role": "developer",
+                "behavior": {"completion": "baton"},
+                "on": {"workflow_complete": "_done"},
+            },
+        },
+    }
+    calls: list[tuple[str | None, bool]] = []
+
+    def executor(
+        step_name: str,
+        step_def: dict,
+        state: object,
+        extra_prompt: str | None = None,
+        same_invocation_retry: bool = False,
+    ) -> StepExecutionResult:
+        calls.append((extra_prompt, same_invocation_retry))
+        iteration_dir = issue_dir / "publish" / "iteration_001"
+        iteration_dir.mkdir(parents=True, exist_ok=True)
+        (iteration_dir / "iteration.json").write_text(
+            json.dumps(
+                {
+                    "iteration": 1,
+                    "cli": "codex",
+                    "session_id": "publish-session",
+                    "end_time": "2026-09-12T09:26:54+08:00",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return StepExecutionResult(response="Publishing is not finished.", artifacts={})
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    ).run(start_step="publish")
+
+    assert result.completed is False
+    assert result.final_status_code == "INTERRUPTED:agent_status_code_missing"
+    assert len(calls) == 3
+    assert calls[0] == (None, False)
+    assert all(prompt and retry for prompt, retry in calls[1:])
+    blackboard = BlackboardStore(issue_dir).load_or_create("publish")
+    retry_events = [
+        event for event in blackboard.events if event.event_type == "completion_handoff_missing"
+    ]
+    assert [event.data["will_retry"] for event in retry_events] == [True, True, False]
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    assert task.trigger == "agent_execution_interrupted"
+    assert task.continuations == {
+        "retry": "publish",
+        "retry_fresh_session": "publish",
+    }
 
 
 def test_runtime_crashes_after_three_baton_rejected(tmp_path: Path) -> None:

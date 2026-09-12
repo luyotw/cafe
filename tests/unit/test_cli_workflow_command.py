@@ -3110,14 +3110,19 @@ def test_workflow_command_prints_recovery_guidance_for_pr_baton_pause(
     )
 
     class FakeExecutor:
+        def __init__(self) -> None:
+            self.prompts: list[str | None] = []
+
         def execute_step(
             self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
         ) -> StepExecutionResult:
+            self.prompts.append(kwargs.get("extra_prompt"))
             return StepExecutionResult(response="no baton", artifacts={}, status_code=None)
 
+    executor = FakeExecutor()
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
-        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=executor),
     ):
         git = MagicMock()
         git.get_current_branch.return_value = "issue-233"
@@ -3125,9 +3130,14 @@ def test_workflow_command_prints_recovery_guidance_for_pr_baton_pause(
 
         result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
-    assert result.exit_code == 1
-    assert "wrote invalid baton 3 times" in result.stdout
-    assert "field 'to_step' got 'pr'" in result.stdout
+    assert result.exit_code == 0
+    assert len(executor.prompts) == 3
+    assert executor.prompts[0] is None
+    assert all("[COMPLETION ERROR]" in (prompt or "") for prompt in executor.prompts[1:])
+    assert "Workflow is waiting for user input" in result.stdout
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    assert task.trigger == "agent_execution_interrupted"
+    assert task.status is HumanTaskStatus.PENDING
 
 
 def test_workflow_command_offers_recovery_menu_for_baton_pause_in_interactive_mode(
@@ -3153,14 +3163,19 @@ def test_workflow_command_offers_recovery_menu_for_baton_pause_in_interactive_mo
     )
 
     class FakeExecutor:
+        def __init__(self) -> None:
+            self.prompts: list[str | None] = []
+
         def execute_step(
             self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
         ) -> StepExecutionResult:
+            self.prompts.append(kwargs.get("extra_prompt"))
             return StepExecutionResult(response="no baton", artifacts={}, status_code=None)
 
+    executor = FakeExecutor()
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
-        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=executor),
         patch("cafe.ui.cli.prompt_list", return_value="Leave it for now") as mock_prompt_list,
     ):
         git = MagicMock()
@@ -3169,10 +3184,15 @@ def test_workflow_command_offers_recovery_menu_for_baton_pause_in_interactive_mo
 
         result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
-    assert result.exit_code == 1
-    assert not mock_prompt_list.called
-    assert "wrote invalid baton 3 times" in result.stdout
-    assert "field 'to_step' got 'pr'" in result.stdout
+    assert result.exit_code == 0
+    assert len(executor.prompts) == 3
+    assert executor.prompts[0] is None
+    assert all("[COMPLETION ERROR]" in (prompt or "") for prompt in executor.prompts[1:])
+    assert mock_prompt_list.called
+    assert "Workflow is waiting for user input" in result.stdout
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    assert task.trigger == "agent_execution_interrupted"
+    assert task.status is HumanTaskStatus.PENDING
 
 
 def test_workflow_command_user_owner_can_set_next_phase(tmp_path: Path, monkeypatch) -> None:
