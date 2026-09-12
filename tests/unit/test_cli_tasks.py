@@ -13,7 +13,7 @@ from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardStore, H
 from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.human_tasks import agent_execution_interrupted_human_task
 from cafe.core.packet_io import sha256_bytes
-from cafe.driver.proxy import submit_authorized_correction
+from cafe.driver import DriverCorrectionCommand, submit_driver_correction
 from cafe.ui.commands.tasks import MAX_CORRECTION_CONTENT_BYTES, _read_bounded_correction_artifact
 from cafe.ui.commands.workflow import _correction_projection
 from cafe.ui.cli import app
@@ -316,16 +316,22 @@ def test_authorized_proxy_correction_has_public_operator_parity(tmp_path: Path, 
     authorized = runner.invoke(app, ["task", "authorize-driver", task.id, "--json"])
     assert authorized.exit_code == 0
     authorization_id = json.loads(authorized.stdout)["data"]["authorization_id"]
-    submit_authorized_correction(
+    command = DriverCorrectionCommand(
         issue_dir=issue_dir, workflow_id=task.workflow_id, task_id=task.id, artifact="spec",
         base_hash=sha256_bytes(b"original\n"), content="proxy corrected\n", operation_id="proxy-public",
         authorization_id=authorization_id,
         suitability={name: True for name in ("bounded", "clear", "reversible", "within_scope", "no_new_authority")},
         manifest=({"kind": "artifact", "id": "spec"},),
     )
+    first = submit_driver_correction(command)
+    replay = submit_driver_correction(command)
+    assert replay == first
     inspected = runner.invoke(app, ["task", "inspect", task.id, "--json"])
     assert inspected.exit_code == 0
-    assert json.loads(inspected.stdout)["data"]["task"]["correction"]["authorization_id"] == authorization_id
+    detail = json.loads(inspected.stdout)["data"]["task"]
+    assert detail["status"] == "completed"
+    assert detail["correction"]["actor"] == "driver_on_behalf_of_user"
+    assert detail["correction"]["authorization_id"] == authorization_id
     with patch("cafe.ui.cli.GitOperations") as git, patch("cafe.ui.cli.Path.cwd", return_value=tmp_path), patch("cafe.services.summary_service.GitOperations") as summary_git:
         git.return_value.get_current_branch.return_value = "issue-a"
         summary_git.return_value.get_current_branch.return_value = "issue-a"
@@ -333,7 +339,11 @@ def test_authorized_proxy_correction_has_public_operator_parity(tmp_path: Path, 
         shown, status = runner.invoke(app, ["show", "spec"]), runner.invoke(app, ["status"])
     for result in (shown, status):
         assert result.exit_code == 0
-        assert task.id in result.stdout and authorization_id in result.stdout and "proxy-public" in result.stdout
+        assert all(value in result.stdout for value in (task.id, authorization_id, "proxy-public", "driver_on_behalf_of_user", "plan"))
+    current = boards.load_or_create("spec").artifacts["spec"]
+    assert current.version == 2
+    assert (issue_dir / current.path).read_text(encoding="utf-8") == "proxy corrected\n"
+    assert len([event for event in HumanTaskRecordStore(issue_dir).lifecycle_events() if event.event_type == "completed"]) == 1
     assert source.read_text(encoding="utf-8") == "original\n"
 
 
