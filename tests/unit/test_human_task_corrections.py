@@ -254,6 +254,12 @@ steps:
             "driver_authorization": {"id": "authorized-by-user"},
         }}, continuations={"revise": "review"}, assignee_type="user",
     )
+    worker = WorkerLaunchStore(issue_dir).start()
+    driver_dir = issue_dir / "driver"
+    driver_dir.mkdir()
+    (driver_dir / "dispatch_state.json").write_text(
+        '{"events":{"event-1":{"status":"routing"}}}', encoding="utf-8"
+    )
 
     submit_authorized_correction(
         issue_dir=issue_dir, workflow_id="workflow", task_id=task.id, artifact="brief",
@@ -267,6 +273,8 @@ steps:
     assert resumed.current_step == "approve"
     assert resumed.handoff_contract.to_step == "approve"
     assert resumed.handoff_contract.to_owner.value == "agent"
+    assert WorkerLaunchStore(issue_dir).get(worker["worker_id"])["status"] == "stale"
+    assert EventDispatchFenceStore(issue_dir).is_fenced("event-1")
 
 
 def test_driver_manifest_cannot_expand_the_task_scoped_mutation_set(tmp_path) -> None:

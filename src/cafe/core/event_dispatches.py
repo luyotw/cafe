@@ -55,6 +55,24 @@ class EventDispatchFenceStore:
             raise ValueError("correction dispatch fences are invalid")
         return event_id in values
 
+    def correction_candidates(self) -> tuple[str, ...]:
+        """Return dispatch identities that have not reached a terminal outcome."""
+        if not self.state_path.exists():
+            return ()
+        state = self._read_json(self.state_path)
+        events = state.get("events")
+        if not isinstance(events, dict):
+            raise ValueError("event dispatch state is invalid")
+        terminal = {"completed", "exhausted", "failed"}
+        candidates: list[str] = []
+        for event_id, event in events.items():
+            self._validate_id(event_id)
+            if not isinstance(event, dict) or not isinstance(event.get("status"), str):
+                raise ValueError("event dispatch state is invalid")
+            if event["status"] not in terminal:
+                candidates.append(event_id)
+        return tuple(sorted(candidates))
+
     def _lock_path(self) -> Path:
         return self.driver_dir / "session.lock"
 

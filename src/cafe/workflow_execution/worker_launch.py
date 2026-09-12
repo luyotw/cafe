@@ -83,6 +83,17 @@ class WorkerLaunchStore:
             record = records.get(worker_id)
             return dict(record) if isinstance(record, dict) else None
 
+    def correction_candidates(self) -> tuple[str, ...]:
+        """Return durable worker handoffs that can still act on old inputs."""
+        with self._locked_records() as records:
+            return tuple(sorted(
+                worker_id
+                for worker_id, record in records.items()
+                if isinstance(worker_id, str)
+                and isinstance(record, dict)
+                and record.get("status") in {"starting", "started", "running"}
+            ))
+
     def mark(
         self,
         worker_id: str,

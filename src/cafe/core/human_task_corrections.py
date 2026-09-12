@@ -248,14 +248,19 @@ class HumanTaskCorrectionService:
         )
 
     def _validate_manifest_revocability(self, manifest: tuple[dict[str, str], ...]) -> None:
-        """Reject non-revocable approvals before a journal can fence execution."""
+        """Reject externally active work before a journal can fence execution."""
         for entry in manifest:
-            if entry["kind"] != "approval":
-                continue
-            approval = self.tasks.get_task(entry["id"])
-            metadata = approval.capability_approval or {}
-            if metadata.get("state") in {"attempt_started", "uncertain", "succeeded", "failed"}:
-                raise ValueError("capability approval requires external reconciliation")
+            if entry["kind"] == "approval":
+                approval = self.tasks.get_task(entry["id"])
+                metadata = approval.capability_approval or {}
+                if metadata.get("state") in {"attempt_started", "uncertain", "succeeded", "failed"}:
+                    raise ValueError("capability approval requires external reconciliation")
+            elif entry["kind"] == "worker":
+                worker = WorkerLaunchStore(self.revisions.issue_dir).get(entry["id"])
+                if worker is None:
+                    raise ValueError("correction worker invalidation target is absent")
+                if worker.get("status") in {"running", "completed"}:
+                    raise ValueError("worker has already crossed the correction fence")
 
     def _canonical_manifest(
         self, task, artifact: str
@@ -288,6 +293,14 @@ class HumanTaskCorrectionService:
             and candidate.id != task.id
             and candidate.status.value == "pending"
             and candidate.step in downstream_steps
+        )
+        manifest.extend(
+            {"kind": "worker", "id": worker_id}
+            for worker_id in WorkerLaunchStore(self.revisions.issue_dir).correction_candidates()
+        )
+        manifest.extend(
+            {"kind": "dispatch", "id": event_id}
+            for event_id in EventDispatchFenceStore(self.revisions.issue_dir).correction_candidates()
         )
         return tuple(manifest)
 
