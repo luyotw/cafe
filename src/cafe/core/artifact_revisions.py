@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ from typing import Any
 from cafe.core.packet_io import atomic_write_bytes, canonical_json, sha256_bytes
 
 _ARTIFACT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_OPERATION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 
 class ArtifactRevisionError(ValueError):
@@ -59,7 +61,7 @@ class ArtifactRevisionStore:
             raise ArtifactRevisionError("operation_id must not be empty")
         content_bytes = content.encode("utf-8")
         digest = sha256_bytes(content_bytes)
-        with self._lock:
+        with self._exclusive_lock():
             index = self._load_index()
             prior_operation = index["operations"].get(operation_id)
             requested = {"artifact": name, "base_hash": base_hash, "sha256": digest}
@@ -89,10 +91,10 @@ class ArtifactRevisionStore:
 
     def prepare(self, operation_id: str, manifest: list[dict[str, Any]]) -> dict[str, Any]:
         """Durably freeze one typed invalidation manifest before mutation."""
-        if not operation_id.strip() or not manifest:
+        if not _OPERATION_ID.fullmatch(operation_id) or not manifest:
             raise ArtifactRevisionError("operation and manifest are required")
         journal_path = self.root / "journals" / f"{operation_id}.json"
-        with self._lock:
+        with self._exclusive_lock():
             if journal_path.exists():
                 return self._load_journal(journal_path)
             normalized = sorted(
@@ -108,7 +110,7 @@ class ArtifactRevisionStore:
     def receipt(self, operation_id: str, entry: dict[str, Any]) -> dict[str, Any]:
         """Record an idempotent receipt for an entry from the frozen manifest."""
         journal_path = self.root / "journals" / f"{operation_id}.json"
-        with self._lock:
+        with self._exclusive_lock():
             journal = self._load_journal(journal_path)
             normalized = {"kind": str(entry["kind"]), "id": str(entry["id"])}
             if normalized not in journal["manifest"]:
@@ -122,7 +124,7 @@ class ArtifactRevisionStore:
     def commit(self, operation_id: str) -> dict[str, Any]:
         """Commit only once every planned invalidation receipt is durable."""
         journal_path = self.root / "journals" / f"{operation_id}.json"
-        with self._lock:
+        with self._exclusive_lock():
             journal = self._load_journal(journal_path)
             if set(map(lambda item: (item["kind"], item["id"]), journal["receipts"])) != set(
                 map(lambda item: (item["kind"], item["id"]), journal["manifest"])
@@ -161,6 +163,24 @@ class ArtifactRevisionStore:
         if set(value) != {"version", "operation_id", "state", "manifest", "receipts"}:
             raise ArtifactRevisionError("correction journal has an unsupported schema")
         return value
+
+    @contextmanager
+    def _exclusive_lock(self):
+        """Serialize index and journal mutations across processes on POSIX."""
+        with self._lock:
+            self.root.mkdir(parents=True, exist_ok=True)
+            lock_path = self.root / ".lock"
+            with lock_path.open("a+") as handle:
+                try:
+                    import fcntl
+                except ImportError:  # pragma: no cover
+                    yield
+                else:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                    try:
+                        yield
+                    finally:
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     @staticmethod
     def _artifact_name(value: str) -> str:
