@@ -18,6 +18,7 @@ from uuid import uuid4
 import yaml
 
 from cafe.core.active_issue import clear_marker_if_matches
+from cafe.core.artifact_revisions import ArtifactRevisionStore
 from cafe.core.automatic_steps import (
     AutomaticExecutionResult,
     AutomaticExecutorRegistry,
@@ -48,6 +49,7 @@ from cafe.core.human_task_records import (
     HumanTaskRecordStore,
     HumanTaskStatus,
 )
+from cafe.core.human_task_corrections import HumanTaskCorrectionService
 from cafe.core.human_tasks import (
     AGENT_EXECUTION_INTERRUPTED_TRIGGER,
     agent_execution_interrupted_human_task,
@@ -4243,6 +4245,11 @@ class BlackboardWorkflowRuntime:
         start_step: Optional[str] = None,
         single_step: bool = False,
     ) -> PlaybookRunResult:
+        # A non-committed correction is a global execution fence. Recovery is
+        # derived from the frozen journal, never from a fresh caller payload.
+        revisions = ArtifactRevisionStore(self.issue_dir)
+        for operation_id in revisions.incomplete_operations():
+            HumanTaskCorrectionService(self.issue_dir).recover(operation_id)
         publication_error = self._publication_contract_error()
         if publication_error is not None:
             return self._reject_invalid_publication_contract(

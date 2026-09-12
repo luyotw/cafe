@@ -157,6 +157,21 @@ class ArtifactRevisionStore:
         with self._exclusive_lock():
             return self._load_journal(self.root / "journals" / f"{operation_id}.json")
 
+    def incomplete_operations(self) -> tuple[str, ...]:
+        """Return bounded durable correction operations that fence execution."""
+        journal_dir = self.root / "journals"
+        if not journal_dir.exists():
+            return ()
+        paths = sorted(journal_dir.glob("*.json"))
+        if len(paths) > 1_000:
+            raise ArtifactRevisionError("too many correction journals to recover safely")
+        with self._exclusive_lock():
+            return tuple(
+                journal["operation_id"]
+                for path in paths
+                if (journal := self._load_journal(path)).get("state") != "committed"
+            )
+
     def revision_for_operation(self, operation_id: str) -> ArtifactRevision | None:
         """Return the immutable result for a completed idempotent operation."""
         with self._exclusive_lock():
