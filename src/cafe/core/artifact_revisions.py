@@ -87,6 +87,51 @@ class ArtifactRevisionStore:
             raise ArtifactRevisionError("revision path escapes issue directory")
         return candidate.read_text(encoding="utf-8")
 
+    def prepare(self, operation_id: str, manifest: list[dict[str, Any]]) -> dict[str, Any]:
+        """Durably freeze one typed invalidation manifest before mutation."""
+        if not operation_id.strip() or not manifest:
+            raise ArtifactRevisionError("operation and manifest are required")
+        journal_path = self.root / "journals" / f"{operation_id}.json"
+        with self._lock:
+            if journal_path.exists():
+                return self._load_journal(journal_path)
+            normalized = sorted(
+                ({"kind": str(item["kind"]), "id": str(item["id"])} for item in manifest),
+                key=lambda item: (item["kind"], item["id"]),
+            )
+            if len({(item["kind"], item["id"]) for item in normalized}) != len(normalized):
+                raise ArtifactRevisionError("manifest entries must be unique")
+            journal = {"version": 1, "operation_id": operation_id, "state": "prepared", "manifest": normalized, "receipts": []}
+            atomic_write_bytes(journal_path, canonical_json(journal))
+            return journal
+
+    def receipt(self, operation_id: str, entry: dict[str, Any]) -> dict[str, Any]:
+        """Record an idempotent receipt for an entry from the frozen manifest."""
+        journal_path = self.root / "journals" / f"{operation_id}.json"
+        with self._lock:
+            journal = self._load_journal(journal_path)
+            normalized = {"kind": str(entry["kind"]), "id": str(entry["id"])}
+            if normalized not in journal["manifest"]:
+                raise ArtifactRevisionError("receipt is not in the correction manifest")
+            if normalized not in journal["receipts"]:
+                journal["receipts"].append(normalized)
+                journal["state"] = "applying"
+                atomic_write_bytes(journal_path, canonical_json(journal))
+            return normalized
+
+    def commit(self, operation_id: str) -> dict[str, Any]:
+        """Commit only once every planned invalidation receipt is durable."""
+        journal_path = self.root / "journals" / f"{operation_id}.json"
+        with self._lock:
+            journal = self._load_journal(journal_path)
+            if set(map(lambda item: (item["kind"], item["id"]), journal["receipts"])) != set(
+                map(lambda item: (item["kind"], item["id"]), journal["manifest"])
+            ):
+                raise ArtifactRevisionError("correction journal has missing receipts")
+            journal["state"] = "committed"
+            atomic_write_bytes(journal_path, canonical_json(journal))
+            return journal
+
     def _revision(self, artifact: str, digest: str, operation_id: str) -> ArtifactRevision:
         path = self._revision_path(artifact, digest)
         return ArtifactRevision(artifact, digest, str(path.relative_to(self.issue_dir)), operation_id)
@@ -105,6 +150,16 @@ class ArtifactRevisionStore:
             raise ArtifactRevisionError("revision index has an unsupported schema")
         if not isinstance(value["current"], dict) or not isinstance(value["operations"], dict):
             raise ArtifactRevisionError("revision index is invalid")
+        return value
+
+    @staticmethod
+    def _load_journal(path: Path) -> dict[str, Any]:
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ArtifactRevisionError("correction journal is invalid") from exc
+        if set(value) != {"version", "operation_id", "state", "manifest", "receipts"}:
+            raise ArtifactRevisionError("correction journal has an unsupported schema")
         return value
 
     @staticmethod

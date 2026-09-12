@@ -76,6 +76,15 @@ def test_artifact_revision_is_immutable_and_replays_one_operation(tmp_path) -> N
         store.replace("brief", base_hash=first.sha256, content="third", operation_id="op-3")
 
 
+def test_correction_journal_reuses_the_recorded_manifest(tmp_path) -> None:
+    store = ArtifactRevisionStore(tmp_path)
+    prepared = store.prepare("op-1", [{"kind": "artifact", "id": "review"}])
+    assert prepared["state"] == "prepared"
+    assert store.receipt("op-1", {"kind": "artifact", "id": "review"})["id"] == "review"
+    assert store.commit("op-1")["state"] == "committed"
+    assert store.prepare("op-1", [{"kind": "different", "id": "new"}])["state"] == "committed"
+
+
 @pytest.mark.parametrize("field", ["bounded", "clear", "reversible", "within_scope", "no_new_authority"])
 def test_proxy_takeover_requires_every_suitability_predicate(field: str) -> None:
     evidence = {name: True for name in ("bounded", "clear", "reversible", "within_scope", "no_new_authority")}
