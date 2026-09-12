@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -20,6 +21,7 @@ from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.human_tasks import HumanTaskPolicy
 from cafe.core.playbook import PlaybookDefinition
 from cafe.core.task_inbox import TaskInboxError, TaskInboxService
+from cafe.driver.proxy import record_user_driver_authorization
 from cafe.playbooks.loader import PlaybookLoader, apply_issue_playbook_overrides
 from cafe.ui.commands import workflow as workflow_commands
 from cafe.ui.human_tasks import (
@@ -308,6 +310,38 @@ def inspect_task(
     console.print_json(data=detail.expected_result)
     console.print("Continuations:")
     console.print_json(data=detail.continuations)
+
+
+@task_app.command("authorize-driver")
+def authorize_driver(
+    task_id: str = typer.Argument(..., help="Pending correction task to authorize"),
+    json_output: bool = typer.Option(False, "--json", help="Emit one JSON result object"),
+) -> None:
+    """Record explicit user consent for the current Driver without completing a task."""
+    service = TaskInboxService(Path(".cafe"))
+    try:
+        preflight = service.preflight_completion(task_id)
+        authorization_id = record_user_driver_authorization(
+            issue_dir=preflight.issue_dir,
+            workflow_id=preflight.workflow_id,
+            task_id=task_id,
+            authorization_id=uuid.uuid4().hex,
+        )
+        detail = service.inspect(task_id)
+    except (ValueError, OSError) as exc:
+        _fail(
+            "authorize-driver",
+            TaskInboxError(
+                "invalid_response", str(exc),
+                recovery="Inspect a pending correction task that explicitly permits Driver proxy work.",
+                task_id=task_id,
+            ),
+            json_output,
+        )
+    if json_output:
+        _emit_json(_envelope("authorize-driver", data={"task": detail.to_dict(), "authorization_id": authorization_id}))
+    else:
+        console.print(f"Driver authorization recorded for task {task_id}.")
 
 
 @task_app.command("complete")

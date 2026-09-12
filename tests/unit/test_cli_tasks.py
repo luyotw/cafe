@@ -107,7 +107,24 @@ def test_task_group_is_discoverable_with_three_operations() -> None:
     result = runner.invoke(app, ["task", "--help"])
 
     assert result.exit_code == 0
-    assert all(command in result.stdout for command in ("ls", "inspect", "complete"))
+    assert all(command in result.stdout for command in ("ls", "inspect", "complete", "authorize-driver"))
+
+
+def test_authorize_driver_keeps_a_declared_correction_task_pending(tmp_path: Path, monkeypatch) -> None:
+    issue_dir, original = _task_repo(tmp_path, monkeypatch)
+    task = HumanTaskRecordStore(issue_dir).refresh_pending_contract(
+        workflow_id=original.workflow_id,
+        task_id=original.id,
+        prompt=original.prompt,
+        expected_result={"input_schema": "decision", "correction": {"artifacts": ["spec"], "allow_driver_proxy": True}},
+        continuations=original.continuations,
+    )
+    result = runner.invoke(app, ["task", "authorize-driver", task.id, "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert payload["data"]["task"]["status"] == "pending"
+    assert payload["data"]["authorization_id"] == payload["data"]["task"]["correction"]["contract"]["driver_authorization"]["id"]
 
 
 def test_list_json_envelope_supports_filters(tmp_path: Path, monkeypatch) -> None:
