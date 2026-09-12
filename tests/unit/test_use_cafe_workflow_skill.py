@@ -259,6 +259,7 @@ def test_use_cafe_workflow_preflights_runtime_and_all_catalogs_before_execution(
     assert "`content_mismatch_entry_ids`" in reference
     assert "at the very end of the kickoff contract" in normalized
     assert "scripts/catalog_version_check.py" in reference
+    assert "scripts/sync_helper_with_preflight.py" in reference
     assert "effective conversation locale" in normalized
     assert "Only unwrap those two fields when the script exits zero" in reference
     assert "do not read nested keys or reminder IDs" in normalized
@@ -266,6 +267,7 @@ def test_use_cafe_workflow_preflights_runtime_and_all_catalogs_before_execution(
         _read_skill_resource("references/kickoff.md").split()
     )
     assert (SKILL_ROOT / "scripts" / "catalog_version_check.py").is_file()
+    assert (SKILL_ROOT / "scripts" / "sync_helper_with_preflight.py").is_file()
     assert "not_requested" in reference
     assert "separate approval scopes" in normalized
     assert "must not be described as current" in normalized
@@ -312,6 +314,444 @@ def test_skill_local_catalog_sync_path_has_no_write_authority() -> None:
     assert "shell=True" not in source
     assert "os.replace" not in source
     assert "shutil.copytree" not in source
+
+
+def _helper_command(
+    payload: dict[str, object] | None = None,
+    *,
+    exit_code: int = 0,
+    text: str | None = None,
+) -> dict[str, object]:
+    stdout = text if text is not None else json.dumps(payload or {})
+    return {
+        "command": ["cafe", "fake"],
+        "completed_at": "2026-09-12T12:00:00+00:00",
+        "exit_code": exit_code,
+        "error": None,
+        "_stdout_raw": stdout,
+        "_stderr_raw": "",
+        "stdout": {"text": stdout, "truncated": False},
+        "stderr": {"text": "", "truncated": False},
+    }
+
+
+def _helper_update(token: str = "a" * 64) -> dict[str, object]:
+    return {
+        "status": "current",
+        "installed_version": "0.3.3",
+        "latest_version": "0.3.3",
+        "release_url": "https://github.com/luyotw/cafe/releases/tag/v0.3.3",
+        "token": token,
+        "error": None,
+    }
+
+
+def _helper_catalog(token: str = "b" * 64) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "status": "no_project_entries",
+        "comparison_token": token,
+        "compared_count": 0,
+        "difference_count": 0,
+        "effective_digests": {
+            "playbook": "c" * 64,
+            "phase": "d" * 64,
+            "agent": "e" * 64,
+        },
+        "entries": [],
+    }
+
+
+def test_helper_publication_runs_mandatory_pre_and_post_checks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_script_module(
+        SKILL_ROOT / "scripts" / "sync_helper_with_preflight.py",
+        "sync_helper_success",
+    )
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(_executable: str, arguments: tuple[str, ...] | list[str]):
+        call = tuple(arguments)
+        calls.append(call)
+        if call == ("update", "check", "--json"):
+            return _helper_command(_helper_update())
+        if call == ("catalog", "check", "--json"):
+            return _helper_command(_helper_catalog())
+        return _helper_command(text="updated: codex/use-cafe-workflow")
+
+    monkeypatch.setattr(module, "_run_command", fake_run)
+    exit_code, receipt = module.execute(
+        executable="/usr/bin/cafe",
+        skills=["use-cafe-workflow"],
+        clis=["codex"],
+    )
+
+    assert exit_code == 0
+    assert calls == [
+        ("update", "check", "--json"),
+        ("catalog", "check", "--json"),
+        ("skill", "sync-global", "--cli", "codex", "use-cafe-workflow"),
+        ("update", "check", "--json"),
+        ("catalog", "check", "--json"),
+    ]
+    assert receipt["stage"] == "complete"
+    assert receipt["post_change_verified"] is True
+    assert receipt["comparison"]["effective_catalog_digests_changed"] is False
+    assert receipt["comparison"]["semantic_review_required"] is True
+
+
+def test_helper_publication_failure_still_runs_postflight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_script_module(
+        SKILL_ROOT / "scripts" / "sync_helper_with_preflight.py",
+        "sync_helper_publication_failure",
+    )
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(_executable: str, arguments: tuple[str, ...] | list[str]):
+        call = tuple(arguments)
+        calls.append(call)
+        if call == ("update", "check", "--json"):
+            return _helper_command(_helper_update())
+        if call == ("catalog", "check", "--json"):
+            return _helper_command(_helper_catalog())
+        return _helper_command(exit_code=1, text="failed: codex/use-cafe-workflow")
+
+    monkeypatch.setattr(module, "_run_command", fake_run)
+    exit_code, receipt = module.execute(
+        executable="/usr/bin/cafe",
+        skills=["use-cafe-workflow"],
+        clis=["codex"],
+    )
+
+    assert exit_code == 1
+    assert calls[-2:] == [
+        ("update", "check", "--json"),
+        ("catalog", "check", "--json"),
+    ]
+    assert receipt["stage"] == "verification_failed"
+    assert receipt["postflight"]["valid"] is True
+    assert receipt["post_change_verified"] is False
+
+
+def test_helper_publication_cannot_succeed_without_valid_postflight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_script_module(
+        SKILL_ROOT / "scripts" / "sync_helper_with_preflight.py",
+        "sync_helper_postflight_failure",
+    )
+    catalog_calls = 0
+
+    def fake_run(_executable: str, arguments: tuple[str, ...] | list[str]):
+        nonlocal catalog_calls
+        call = tuple(arguments)
+        if call == ("update", "check", "--json"):
+            return _helper_command(_helper_update())
+        if call == ("catalog", "check", "--json"):
+            catalog_calls += 1
+            if catalog_calls == 2:
+                return _helper_command(exit_code=1, text="not-json")
+            return _helper_command(_helper_catalog())
+        return _helper_command(text="updated: codex/use-cafe-workflow")
+
+    monkeypatch.setattr(module, "_run_command", fake_run)
+    exit_code, receipt = module.execute(
+        executable="/usr/bin/cafe",
+        skills=["use-cafe-workflow"],
+        clis=["codex"],
+    )
+
+    assert exit_code == 1
+    assert receipt["stage"] == "verification_failed"
+    assert receipt["postflight"]["valid"] is False
+    assert receipt["comparison"] is None
+    assert receipt["post_change_verified"] is False
+
+
+def test_helper_publication_requires_exact_unique_scope() -> None:
+    module = _load_script_module(
+        SKILL_ROOT / "scripts" / "sync_helper_with_preflight.py",
+        "sync_helper_exact_scope",
+    )
+
+    with pytest.raises(ValueError, match="invalid helper skill name"):
+        module._validate_scope(["../use-cafe-workflow"], ["codex"])
+    with pytest.raises(ValueError, match="helper skill names must be unique"):
+        module._validate_scope(["use-cafe-workflow", "use-cafe-workflow"], ["codex"])
+    with pytest.raises(ValueError, match="destination CLIs must be unique"):
+        module._validate_scope(["use-cafe-workflow"], ["codex", "codex"])
+
+
+def test_helper_publication_rejects_malformed_postflight_without_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_script_module(
+        SKILL_ROOT / "scripts" / "sync_helper_with_preflight.py",
+        "sync_helper_malformed_postflight",
+    )
+    catalog_calls = 0
+
+    def fake_run(_executable: str, arguments: tuple[str, ...] | list[str]):
+        nonlocal catalog_calls
+        call = tuple(arguments)
+        if call == ("update", "check", "--json"):
+            return _helper_command(_helper_update())
+        if call == ("catalog", "check", "--json"):
+            catalog_calls += 1
+            if catalog_calls == 2:
+                malformed = _helper_catalog()
+                malformed["entries"] = 1
+                return _helper_command(malformed)
+            return _helper_command(_helper_catalog())
+        return _helper_command(text="updated: codex/use-cafe-workflow")
+
+    monkeypatch.setattr(module, "_run_command", fake_run)
+    exit_code, receipt = module.execute(
+        executable="/usr/bin/cafe",
+        skills=["use-cafe-workflow"],
+        clis=["codex"],
+    )
+
+    assert exit_code == 1
+    assert receipt["stage"] == "verification_failed"
+    assert receipt["postflight"]["errors"] == ["catalog check entries must be a list"]
+    assert receipt["post_change_verified"] is False
+
+
+def test_helper_publication_rejects_untyped_success_payloads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_script_module(
+        SKILL_ROOT / "scripts" / "sync_helper_with_preflight.py",
+        "sync_helper_untyped_payloads",
+    )
+
+    def fake_run(_executable: str, arguments: tuple[str, ...] | list[str]):
+        call = tuple(arguments)
+        if call == ("update", "check", "--json"):
+            return _helper_command(
+                {
+                    "status": "bogus",
+                    "installed_version": {},
+                    "latest_version": [],
+                    "release_url": 42,
+                    "token": 123,
+                    "error": None,
+                }
+            )
+        if call == ("catalog", "check", "--json"):
+            return _helper_command(
+                {
+                    "schema_version": 1,
+                    "status": "bogus",
+                    "comparison_token": None,
+                    "effective_digests": {"playbook": None, "phase": 42, "agent": []},
+                    "entries": [],
+                }
+            )
+        raise AssertionError("publication must not run after malformed preflight")
+
+    monkeypatch.setattr(module, "_run_command", fake_run)
+    exit_code, receipt = module.execute(
+        executable="/usr/bin/cafe",
+        skills=["use-cafe-workflow"],
+        clis=["codex"],
+    )
+
+    assert exit_code == 1
+    assert receipt["stage"] == "preflight_failed"
+    assert receipt["publication"] is None
+    assert receipt["post_change_verified"] is False
+
+
+def test_helper_cli_does_not_expose_an_executable_override() -> None:
+    module = _load_script_module(
+        SKILL_ROOT / "scripts" / "sync_helper_with_preflight.py",
+        "sync_helper_fixed_executable",
+    )
+
+    with pytest.raises(SystemExit):
+        module._parser().parse_args(
+            ["--cli", "codex", "--cafe-executable", "/tmp/fake", "use-cafe-workflow"]
+        )
+
+
+def test_helper_command_timeout_returns_structured_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_script_module(
+        SKILL_ROOT / "scripts" / "sync_helper_with_preflight.py",
+        "sync_helper_timeout",
+    )
+
+    def timeout(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(cmd=["/usr/bin/cafe"], timeout=120)
+
+    monkeypatch.setattr(module.subprocess, "run", timeout)
+    result = module._run_command("/usr/bin/cafe", ("update", "check", "--json"))
+
+    assert result["exit_code"] is None
+    assert result["error"] == "TimeoutExpired"
+    assert result["command"][0] == "/usr/bin/cafe"
+
+
+def test_helper_publication_rejects_contradictory_catalog_postflight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_script_module(
+        SKILL_ROOT / "scripts" / "sync_helper_with_preflight.py",
+        "sync_helper_contradictory_catalog",
+    )
+    catalog_calls = 0
+
+    def fake_run(_executable: str, arguments: tuple[str, ...] | list[str]):
+        nonlocal catalog_calls
+        call = tuple(arguments)
+        if call == ("update", "check", "--json"):
+            return _helper_command(_helper_update())
+        if call == ("catalog", "check", "--json"):
+            catalog_calls += 1
+            if catalog_calls == 2:
+                contradictory = _helper_catalog()
+                contradictory["status"] = "differences"
+                return _helper_command(contradictory)
+            return _helper_command(_helper_catalog())
+        return _helper_command(text="updated: codex/use-cafe-workflow")
+
+    monkeypatch.setattr(module, "_run_command", fake_run)
+    exit_code, receipt = module.execute(
+        executable="/usr/bin/cafe",
+        skills=["use-cafe-workflow"],
+        clis=["codex"],
+    )
+
+    assert exit_code == 1
+    assert receipt["postflight"]["errors"] == [
+        "differences catalog status requires a difference"
+    ]
+    assert receipt["post_change_verified"] is False
+
+
+def test_helper_publication_rejects_oversized_parsed_evidence_and_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_script_module(
+        SKILL_ROOT / "scripts" / "sync_helper_with_preflight.py",
+        "sync_helper_bounded_evidence",
+    )
+
+    with pytest.raises(ValueError, match="scope exceeds the skill limit"):
+        module._validate_scope(
+            [f"skill-{index}" for index in range(module.MAX_SCOPE_SKILLS + 1)],
+            ["codex"],
+        )
+
+    def fake_run(_executable: str, arguments: tuple[str, ...] | list[str]):
+        call = tuple(arguments)
+        if call == ("update", "check", "--json"):
+            oversized = _helper_update()
+            oversized["release_url"] = "x" * (module.MAX_TEXT_FIELD_CHARS + 1)
+            return _helper_command(oversized)
+        if call == ("catalog", "check", "--json"):
+            return _helper_command(_helper_catalog())
+        raise AssertionError("publication must not run after oversized preflight")
+
+    monkeypatch.setattr(module, "_run_command", fake_run)
+    exit_code, receipt = module.execute(
+        executable="/usr/bin/cafe",
+        skills=["use-cafe-workflow"],
+        clis=["codex"],
+    )
+
+    assert exit_code == 1
+    assert receipt["stage"] == "preflight_failed"
+    assert receipt["preflight"]["errors"] == [
+        "runtime update release_url exceeds the receipt field limit"
+    ]
+    assert receipt["publication"] is None
+
+
+def test_helper_accepts_complete_near_maximum_over_budget_discovery() -> None:
+    module = _load_script_module(
+        SKILL_ROOT / "scripts" / "sync_helper_with_preflight.py",
+        "sync_helper_maximum_discovery",
+    )
+    affected = [
+        f"agent:{index:04d}/" + ("x" * 590)
+        for index in range(module.MAX_CATALOG_ITEMS)
+    ]
+    payload = {
+        "schema_version": 1,
+        "status": "over_budget",
+        "discovery_complete": True,
+        "compared_entry_count": module.MAX_CATALOG_ITEMS,
+        "comparison_token": "a" * 64,
+        "effective_digests": {
+            "playbook": "b" * 64,
+            "phase": "c" * 64,
+            "agent": "d" * 64,
+        },
+        "affected_entry_ids": affected,
+    }
+
+    validated = module._validate_catalog(_helper_command(payload, exit_code=1))
+
+    assert validated["affected_entry_ids"] == affected
+    assert len(json.dumps(validated)) <= module.MAX_LIST_TOTAL_CHARS + 10_000
+
+
+@pytest.mark.parametrize("exit_code", [None, 2])
+def test_helper_rejects_contradictory_over_budget_discovery(
+    exit_code: int | None,
+) -> None:
+    module = _load_script_module(
+        SKILL_ROOT / "scripts" / "sync_helper_with_preflight.py",
+        f"sync_helper_contradictory_over_budget_{exit_code}",
+    )
+    payload = {
+        "schema_version": 1,
+        "status": "over_budget",
+        "discovery_complete": True,
+        "compared_entry_count": 0,
+        "comparison_token": "a" * 64,
+        "effective_digests": {
+            "playbook": "b" * 64,
+            "phase": "c" * 64,
+            "agent": "d" * 64,
+        },
+        "affected_entry_ids": ["phase:develop"],
+    }
+
+    with pytest.raises(ValueError):
+        module._validate_catalog(_helper_command(payload, exit_code=exit_code))
+
+
+def test_helper_rejects_more_affected_entries_than_compared() -> None:
+    module = _load_script_module(
+        SKILL_ROOT / "scripts" / "sync_helper_with_preflight.py",
+        "sync_helper_over_budget_count",
+    )
+    payload = {
+        "schema_version": 1,
+        "status": "over_budget",
+        "discovery_complete": True,
+        "compared_entry_count": 1,
+        "comparison_token": "a" * 64,
+        "effective_digests": {
+            "playbook": "b" * 64,
+            "phase": "c" * 64,
+            "agent": "d" * 64,
+        },
+        "affected_entry_ids": ["phase:develop", "agent:developer"],
+    }
+
+    with pytest.raises(
+        ValueError, match="affected_entry_ids cannot exceed compared_entry_count"
+    ):
+        module._validate_catalog(_helper_command(payload, exit_code=1))
 
 
 def test_use_cafe_workflow_skill_makes_driver_own_alignment_decisions() -> None:

@@ -95,7 +95,8 @@ cafe catalog sync-global --token <token-from-catalog-check> \
 Do not run either apply command without that explicit request. Catalog
 publication flows only from the effective project view to matching Global
 paths; it does not modify project content or CLI-native helper-skill installs.
-`cafe skill sync-global` remains a separate helper installation command.
+CLI-native helper publication remains a separate approval scope and uses the
+receipt-producing command below.
 
 ## Helper installation and publication
 
@@ -106,19 +107,35 @@ use their packaged bundle, while linked Git worktrees resolve the canonical main
 checkout bundle; an existing directory or symlink is never repaired or replaced
 by startup.
 
-Updating an existing CLI-native helper requires an explicit
-`cafe skill sync-global`. That command reports the exact resolved bundled source
-even when every destination is unchanged, and reports installed, updated,
-unchanged, or failed status per destination. Feature-worktree content is not
-published globally unless the user deliberately invokes this separate command.
-Catalog approval does not grant helper-publication approval.
+Updating existing CLI-native helpers requires an explicit, exact skill and CLI
+scope. After that approval, use the bundled orchestration helper instead of
+calling `cafe skill sync-global` directly:
 
-After an approved change, re-run both read-only checks and record the fresh
-results. Compare the effective workflow digests with the pre-change evidence.
-Digest changes trigger the bounded semantic comparison above, not an automatic
-confirmation stop. When it finds a material difference, re-render and reconfirm
-the kickoff contract; otherwise retain the post-change evidence and continue
-under the confirmed contract.
+```bash
+python3 <skill-dir>/scripts/sync_helper_with_preflight.py \
+  --cli codex use-cafe-workflow
+```
+
+Repeat `--cli` and list additional skill names only when the user approved each
+exact destination. The helper runs runtime and catalog checks before mutation,
+invokes `cafe skill sync-global` with an argv list, then runs both checks again
+even when publication reports a failure. It emits one bounded JSON receipt with
+the exact scope, command outcomes, timestamps, before/after tokens and effective
+digests, and `post_change_verified`. Missing, malformed, truncated, or failed
+postflight evidence makes the command exit nonzero. Do not report publication
+complete from the sync command's prose output or from pre-change evidence.
+In other words, every approved publication must re-run both read-only checks;
+the helper makes that post-change requirement inseparable from synchronization.
+
+A successful receipt still sets `semantic_review_required`: CLI-helper content
+can change Driver behavior even when playbook, phase, and agent catalog digests
+remain identical. Record the bounded semantic classification separately. Digest
+or runtime-version changes trigger the semantic comparison above, not automatic
+reconfirmation. When the comparison finds a material difference, re-render and
+reconfirm the kickoff contract; otherwise retain the receipt and classification
+as post-change evidence. Feature-worktree content is not published globally
+unless the user deliberately approves that separate command. Catalog approval
+does not grant helper-publication approval.
 
 For a Driver-managed issue, that confirmed contract is the one issue-scoped
 `driver/contract.json` authority. Cache files, raw source digests, labels,
