@@ -321,7 +321,7 @@ def test_builtin_spec_plan_playbooks_match_standard_prepare() -> None:
         resolve_prepare_config(loader.load_model("standard").model)
     )
 
-    for name in ("simple", "standard-qa", "tdd", "tdd-qa"):
+    for name in ("simple", "direct-qa", "standard-qa", "tdd", "tdd-qa"):
         resolved = resolve_prepare_config(loader.load_model(name).model)
         assert _legacy_prepare_dump(resolved) == standard_prepare
 
@@ -359,6 +359,7 @@ def test_every_builtin_prepare_is_declarative_or_explicitly_promptless() -> None
 
     for name in (
         "direct",
+        "direct-qa",
         "simple",
         "standard",
         "standard-qa",

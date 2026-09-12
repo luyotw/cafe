@@ -21,6 +21,7 @@ pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
 DEVELOPMENT_PLAYBOOKS = (
     "direct",
+    "direct-qa",
     "hotfix",
     "simple",
     "standard",

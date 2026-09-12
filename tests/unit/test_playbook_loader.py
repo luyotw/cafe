@@ -732,6 +732,7 @@ steps:
     "playbook_id",
     [
         "direct",
+        "direct-qa",
         "simple",
         "standard",
         "standard-qa",
@@ -762,13 +763,18 @@ def test_bundled_playbooks_preserve_declared_skill_environment_parity(
         "cafe-workflow-common",
         "cafe-github_sync",
     ]
-    assert resolve_playbook_skills(model, channel="chat", role=None, step_name=None) == [
+    expected_chat_skills = [
         "cafe-common-chat-handoff",
         "cafe-chat-develop-change",
         "cafe-chat-spec-revision",
         "cafe-chat-plan-revision",
         "cafe-chat-alignment-decision",
     ]
+    if playbook_id == "direct-qa":
+        expected_chat_skills.remove("cafe-chat-plan-revision")
+    assert resolve_playbook_skills(
+        model, channel="chat", role=None, step_name=None
+    ) == expected_chat_skills
 
 
 def test_playbook_rejects_human_task_outcome_outside_declared_steps(tmp_path: Path) -> None:
@@ -1241,7 +1247,10 @@ steps:
         loader.load_model("intake-flow")
 
 
-@pytest.mark.parametrize("playbook_name", ["standard", "standard-qa", "simple", "tdd", "tdd-qa"])
+@pytest.mark.parametrize(
+    "playbook_name",
+    ["standard", "standard-qa", "simple", "direct-qa", "tdd", "tdd-qa"],
+)
 def test_builtin_entry_steps_use_declared_initial_input_resolver(
     playbook_name: str, tmp_path: Path
 ) -> None:
@@ -1985,6 +1994,7 @@ def test_builtin_playbooks_declare_en_us_conversation_locale(
 
     for playbook_id in (
         "direct",
+        "direct-qa",
         "simple",
         "standard",
         "standard-qa",
@@ -2113,6 +2123,7 @@ def test_builtin_user_handoffs_resolve_nonempty_declared_policies(
 
     for playbook_id in (
         "direct",
+        "direct-qa",
         "simple",
         "standard",
         "standard-qa",

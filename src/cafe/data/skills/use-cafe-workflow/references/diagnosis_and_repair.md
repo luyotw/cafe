@@ -51,8 +51,12 @@ hooks synchronize installed copies. CLI startup performs a per-machine
 fingerprint repair. If synchronization fails, recover explicitly with:
 
 ```bash
-cafe skill sync-global
+python3 <skill-dir>/scripts/sync_helper_with_preflight.py \
+  --cli <approved-cli> <approved-skill>
 ```
+
+Use only the user's exact approved scope and require the successful post-change
+receipt; do not diagnose by bypassing the wrapper with a direct sync command.
 
 Do not use writer skills to change driver/meta skills, CAFE runtime Python,
 workflow state machinery, or host infrastructure. Do not invent a

@@ -620,7 +620,10 @@ def setup(
     playbook: Optional[str] = typer.Option(
         None,
         "--playbook",
-        help="Set the playbook (standard, standard-qa, tdd, tdd-qa, direct, simple, hotfix).",
+        help=(
+            "Set the playbook (standard, standard-qa, tdd, tdd-qa, direct, "
+            "direct-qa, simple, hotfix)."
+        ),
     ),
     rigor: Optional[str] = typer.Option(
         None,
