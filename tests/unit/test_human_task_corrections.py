@@ -363,6 +363,33 @@ def test_correction_invalidates_queued_worker_before_receipting(tmp_path) -> Non
     assert journal["receipts"] == [{"kind": "worker", "id": worker["worker_id"]}]
 
 
+def test_correction_fences_worker_store_opened_before_its_generation(tmp_path) -> None:
+    source = tmp_path / "brief.md"
+    source.write_text("base", encoding="utf-8")
+    board_store = BlackboardStore(tmp_path)
+    board = board_store.load_or_create("review")
+    board_store.put_artifact(board, ArtifactEntry(
+        name="brief", kind=ArtifactKind.DOCUMENT, version=1, updated_by="writer", path="brief.md"
+    ))
+    task = HumanTaskRecordStore(tmp_path).materialize(
+        workflow_id="workflow", step="review", iteration=1, trigger="confirm_output",
+        policy_id="output-review", prompt="Review",
+        expected_result={"input_schema": "decision", "correction": {"artifacts": ["brief"]}},
+        continuations={"revise": "draft"}, assignee_type="user",
+    )
+    stale_store = WorkerLaunchStore(tmp_path)
+    HumanTaskCorrectionService(tmp_path).apply(CorrectionRequest(
+        workflow_id="workflow", task_id=task.id, artifact="brief", base_hash=sha256_bytes(b"base"),
+        content="replacement", operation_id="generation-fence", actor="user",
+        manifest=({"kind": "continuation", "id": "workflow"},),
+    ))
+    worker = stale_store.start()
+    stale_store.mark(worker["worker_id"], "started")
+    assert stale_store.validate_child(
+        worker_id=worker["worker_id"], worker_token=worker["worker_token"]
+    ) is False
+
+
 def test_active_worker_rejects_before_correction_bootstrap(tmp_path) -> None:
     source = tmp_path / "brief.md"
     source.write_text("base", encoding="utf-8")

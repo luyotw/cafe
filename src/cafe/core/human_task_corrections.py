@@ -434,5 +434,6 @@ class HumanTaskCorrectionService:
                 store.load_or_create(step), operation_id=operation_id
             ):
                 raise ValueError("correction continuation invalidation target is absent")
+            WorkerLaunchStore(self.revisions.issue_dir).advance_correction_generation()
         else:  # pragma: no cover - request validation keeps this fail-closed.
             raise ValueError("correction invalidation kind is unsupported")

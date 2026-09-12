@@ -60,6 +60,15 @@ class WorkerLaunchStore:
         self.issue_dir = Path(issue_dir)
         self.path = self.issue_dir / LAUNCH_RECORD_FILENAME
         self.lock_path = self.issue_dir / f"{LAUNCH_RECORD_FILENAME}.lock"
+        self.generation_path = self.issue_dir / ".workflow-correction-generation"
+        self.generation = self._current_generation()
+
+    def advance_correction_generation(self) -> int:
+        """Fence stores opened before a correction from creating new work."""
+        with self._locked_records():
+            generation = self._current_generation() + 1
+            atomic_write_bytes(self.generation_path, str(generation).encode("ascii"))
+            return generation
 
     def start(self) -> dict[str, Any]:
         """Reserve one child handoff without reading workflow policy."""
@@ -69,6 +78,7 @@ class WorkerLaunchStore:
             "worker_id": worker_id,
             "worker_token": uuid.uuid4().hex,
             "status": "starting",
+            "correction_generation": self.generation,
             "created_at": now,
             "updated_at": now,
         }
@@ -159,6 +169,11 @@ class WorkerLaunchStore:
                 return False
             if record.get("status") == "stale":
                 return False
+            if record.get("correction_generation") != self._current_generation():
+                record["status"] = "stale"
+                record["error_code"] = "correction_generation_stale"
+                record["updated_at"] = _now()
+                return False
             valid = record.get("worker_token") == worker_token and record.get("status") == "started"
             if valid:
                 record["status"] = "running"
@@ -198,6 +213,13 @@ class WorkerLaunchStore:
             return {}
         attempts = loaded.get("attempts") if isinstance(loaded, dict) else None
         return dict(attempts) if isinstance(attempts, dict) else {}
+
+    def _current_generation(self) -> int:
+        try:
+            value = self.generation_path.read_text(encoding="ascii").strip()
+            return int(value) if int(value) >= 0 else 0
+        except (OSError, ValueError):
+            return 0
 
 
 def _thread_lock(path: Path) -> threading.RLock:
