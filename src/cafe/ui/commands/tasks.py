@@ -203,17 +203,6 @@ def _apply_declared_correction(
             issue=preflight.issue,
             workflow_id=preflight.workflow_id,
         )
-    try:
-        published_content = published_bytes.decode("utf-8")
-    except UnicodeError as exc:
-        raise TaskInboxError(
-            "invalid_response",
-            "Correction target is not valid UTF-8 text.",
-            recovery="Refresh the workflow task and retry with its current artifact version.",
-            task_id=preflight.task.id,
-            issue=preflight.issue,
-            workflow_id=preflight.workflow_id,
-        ) from exc
     manifest = tuple(
         {"kind": "artifact", "id": name}
         for name in (artifact, *playbook.downstream_steps(artifact))
@@ -223,7 +212,7 @@ def _apply_declared_correction(
             CorrectionRequest(
                 workflow_id=preflight.workflow_id, task_id=preflight.task.id, artifact=artifact,
                 base_hash=base_hash, content=content, operation_id=operation_id, actor="user",
-                manifest=manifest, base_content=published_content, completion_payload=raw_payload,
+                manifest=manifest, completion_payload=raw_payload,
             )
         )
     except (OSError, ValueError) as exc:

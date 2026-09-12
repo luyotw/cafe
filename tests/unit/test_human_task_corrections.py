@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from cafe.core.artifact_revisions import ArtifactRevisionStore, StaleArtifactRevision
+from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardStore
 from cafe.core.human_task_corrections import CorrectionRequest, HumanTaskCorrectionService
 from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.packet_io import sha256_bytes
@@ -99,6 +100,17 @@ def test_correction_journal_reuses_the_recorded_manifest(tmp_path) -> None:
 
 
 def test_correction_service_uses_the_pending_task_contract_not_caller_authority(tmp_path) -> None:
+    source = tmp_path / "brief.md"
+    source.write_text("", encoding="utf-8")
+    blackboard_store = BlackboardStore(tmp_path)
+    blackboard = blackboard_store.load_or_create("review")
+    blackboard_store.put_artifact(
+        blackboard,
+        ArtifactEntry(
+            name="brief", kind=ArtifactKind.DOCUMENT, version=1,
+            updated_by="writer", path="brief.md",
+        ),
+    )
     records = HumanTaskRecordStore(tmp_path)
     task = records.materialize(
         workflow_id="workflow",
@@ -124,7 +136,6 @@ def test_correction_service_uses_the_pending_task_contract_not_caller_authority(
         operation_id="correction-1",
         actor="user",
         manifest=({"kind": "artifact", "id": "review"},),
-        base_content="",
         completion_payload={"task": "output-review", "continuation": "draft"},
     )
     assert service.apply(request).revision.artifact == "brief"
@@ -147,7 +158,6 @@ def test_correction_service_uses_the_pending_task_contract_not_caller_authority(
                 workflow_id="workflow", task_id=other.id, artifact="brief", base_hash=None,
                 content="forged", operation_id="correction-2", actor="user",
                 manifest=({"kind": "artifact", "id": "review"},),
-                base_content="",
             )
         )
 

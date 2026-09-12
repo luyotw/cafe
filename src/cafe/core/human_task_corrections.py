@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from cafe.core.artifact_revisions import ArtifactRevision, ArtifactRevisionStore
+from cafe.core.blackboard import BlackboardStore
 from cafe.core.human_task_records import HumanTaskRecordStore
 
 
@@ -20,7 +21,6 @@ class CorrectionRequest:
     operation_id: str
     actor: str
     manifest: tuple[dict[str, str], ...]
-    base_content: str | None = None
     completion_payload: Mapping[str, Any] | None = None
 
 
@@ -58,13 +58,6 @@ class HumanTaskCorrectionService:
             raise ValueError("the pending task does not authorize a Driver proxy")
         if not isinstance(request.content, str) or len(request.content.encode("utf-8")) > 1_000_000:
             raise ValueError("correction content is invalid or exceeds the task limit")
-        if not isinstance(request.base_content, str):
-            raise ValueError("correction base content is required")
-        base_revision = self.revisions.bootstrap(
-            request.artifact, content=request.base_content
-        )
-        if request.base_hash != base_revision.sha256:
-            raise ValueError("correction base hash is not current")
         if not request.manifest or len(request.manifest) > 1_000:
             raise ValueError("correction invalidation manifest is required")
         if any(
@@ -76,6 +69,21 @@ class HumanTaskCorrectionService:
             raise ValueError("correction invalidation manifest is invalid")
         if len(str(request.manifest).encode("utf-8")) > 256_000:
             raise ValueError("correction invalidation manifest exceeds the task limit")
+        published = BlackboardStore(self.revisions.issue_dir).load_or_create(task.step)
+        entry = published.artifacts.get(request.artifact)
+        if entry is None:
+            raise ValueError("correction artifact is not currently published")
+        source = (self.revisions.issue_dir / entry.path).resolve()
+        if self.revisions.issue_dir.resolve() not in source.parents:
+            raise ValueError("correction artifact path escapes the issue")
+        content_bytes = source.read_bytes()
+        if len(content_bytes) > 1_000_000:
+            raise ValueError("correction base content exceeds the task limit")
+        base_revision = self.revisions.bootstrap(
+            request.artifact, content=content_bytes.decode("utf-8")
+        )
+        if request.base_hash != base_revision.sha256:
+            raise ValueError("correction base hash is not current")
         journal = self.revisions.prepare(request.operation_id, list(request.manifest))
         for entry in journal["manifest"]:
             self.revisions.receipt(request.operation_id, entry)
