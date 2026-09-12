@@ -458,14 +458,11 @@ def complete_task(
                     contract = preflight.task.expected_result.get("correction")
                     if isinstance(correction, dict) and isinstance(contract, dict):
                         artifact = correction.get("artifact")
-                        operation_id = correction.get("operation_id")
                         declared = contract.get("artifacts")
                         if (
                             isinstance(artifact, str)
                             and isinstance(declared, list)
                             and artifact in declared
-                            and isinstance(operation_id, str)
-                            and 0 < len(operation_id) <= 128
                         ):
                             HumanTaskRecordStore(preflight.issue_dir).record_rejection(
                                 workflow_id=preflight.workflow_id,
@@ -474,7 +471,6 @@ def complete_task(
                                 context={
                                     "correction": {
                                         "artifact": artifact,
-                                        "operation_id": operation_id,
                                         "outcome": "rejected",
                                         "code": exc.code,
                                         "recovery": exc.recovery,

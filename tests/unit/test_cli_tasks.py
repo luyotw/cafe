@@ -250,7 +250,7 @@ def test_rejected_correction_is_durably_explainable_without_mutation(
     rejection = detail["correction"]["last_rejection"]
     correction = rejection["correction"]
     assert correction["artifact"] == "spec"
-    assert correction["operation_id"] == "stale-base"
+    assert "operation_id" not in correction
     assert correction["outcome"] == "rejected"
     assert correction["code"] == "invalid_response"
     assert correction["state"] == "unchanged"
@@ -274,6 +274,26 @@ def test_rejected_correction_is_durably_explainable_without_mutation(
     assert "must not persist" not in shown.stdout
     assert workflow_status.exit_code == 0, workflow_status.stdout
     assert "Rejected correction attempt" in workflow_status.stdout
+
+    malformed = runner.invoke(app, [
+        "task", "complete", task.id, "--result", json.dumps({
+            "decision": "revise", "correction": {
+                "artifact": "spec", "base_hash": sha256_bytes(original.encode("utf-8")),
+                "content": "must not persist\n", "operation_id": "bad\nINJECTED-LINE",
+            },
+        }), "--no-resume", "--json",
+    ])
+    assert malformed.exit_code == 1
+    malformed_detail = runner.invoke(app, ["task", "inspect", task.id, "--json"])
+    assert malformed_detail.exit_code == 0
+    assert "INJECTED-LINE" not in malformed_detail.stdout
+    with patch("cafe.ui.cli.GitOperations") as mock_git_cls, patch(
+        "cafe.ui.cli.Path.cwd", return_value=tmp_path
+    ):
+        mock_git_cls.return_value.get_current_branch.return_value = "issue-a"
+        malformed_show = runner.invoke(app, ["show", "spec"])
+    assert malformed_show.exit_code == 0
+    assert "INJECTED-LINE" not in malformed_show.stdout
 
 
 def test_list_json_envelope_supports_filters(tmp_path: Path, monkeypatch) -> None:

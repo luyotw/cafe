@@ -123,7 +123,6 @@ def _correction_projection(issue_dir: Path, artifact_name: Optional[str] = None)
             continue
         return {
             "artifact": artifact,
-            "operation_id": correction.get("operation_id"),
             "outcome": correction.get("outcome"),
             "reason": event.context.get("reason"),
             "recovery": correction.get("recovery"),
@@ -152,7 +151,7 @@ def _render_correction_projection(projection: dict[str, Any]) -> str:
     if projection.get("outcome") == "rejected":
         return (
             "Rejected correction attempt\n"
-            f"Operation: {projection['operation_id']}\n"
+            f"Artifact: {projection['artifact']}\n"
             f"Reason: {projection['reason']}\n"
             f"Workflow state: {projection['state']}\n"
             f"Next action: {projection['recovery']}\n"
