@@ -184,3 +184,11 @@ class HumanTaskCorrectionService:
             )
             if invalidated is None:
                 raise ValueError("correction worker invalidation target is absent")
+        elif entry["kind"] == "human_task":
+            invalidated = self.tasks.invalidate_for_correction(
+                workflow_id=self.tasks.get_task(entry["id"]).workflow_id,
+                task_id=entry["id"],
+                operation_id=operation_id,
+            )
+            if invalidated is None:
+                raise ValueError("correction human-task invalidation target is absent")

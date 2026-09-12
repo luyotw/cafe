@@ -748,6 +748,36 @@ class HumanTaskRecordStore:
             self._save(envelope)
             return cancelled
 
+    def invalidate_for_correction(
+        self, *, workflow_id: str, task_id: str, operation_id: str
+    ) -> HumanTask | None:
+        """Supersede a still-pending downstream task and release its wait.
+
+        Completed records stay append-only evidence; only an unresolved task is
+        made non-authoritative. Replays are idempotent through the linked
+        correction operation identifier.
+        """
+        with self.transaction():
+            envelope = self._load_for_workflow(workflow_id, create=False)
+            task = envelope.tasks.get(task_id)
+            if task is None:
+                return None
+            if task.status is not HumanTaskStatus.PENDING:
+                return task
+            now = _now_iso()
+            cancelled = replace(task, status=HumanTaskStatus.CANCELLED, cancelled_at=now)
+            envelope.tasks[task_id] = cancelled
+            wait = envelope.wait_states[task_id]
+            envelope.wait_states[task_id] = replace(wait, released_at=now)
+            self._append_event(
+                envelope,
+                "invalidated_by_correction",
+                task_id=task_id,
+                context={"operation_id": _text(operation_id, "operation_id")},
+            )
+            self._save(envelope)
+            return cancelled
+
     def record_configuration_error(
         self,
         *,

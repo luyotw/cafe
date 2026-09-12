@@ -261,3 +261,32 @@ def test_recovery_replays_a_durable_prepared_correction_once(tmp_path) -> None:
     assert result.operation_id == "recover-1"
     assert records.get_result(task.id) is not None
     assert HumanTaskCorrectionService(tmp_path).recover("recover-1").revision == result.revision
+
+
+def test_correction_supersedes_downstream_pending_task_before_receipting(tmp_path) -> None:
+    source = tmp_path / "brief.md"
+    source.write_text("base", encoding="utf-8")
+    board_store = BlackboardStore(tmp_path)
+    board = board_store.load_or_create("review")
+    board_store.put_artifact(board, ArtifactEntry(
+        name="brief", kind=ArtifactKind.DOCUMENT, version=1, updated_by="writer", path="brief.md"
+    ))
+    records = HumanTaskRecordStore(tmp_path)
+    correction_task = records.materialize(
+        workflow_id="workflow", step="review", iteration=1, trigger="confirm_output",
+        policy_id="output-review", prompt="Review",
+        expected_result={"input_schema": "decision", "correction": {"artifacts": ["brief"]}},
+        continuations={"revise": "draft"}, assignee_type="user",
+    )
+    stale_task = records.materialize(
+        workflow_id="workflow", step="approve", iteration=1, trigger="confirm_output",
+        policy_id="approval", prompt="Approve", expected_result={"input_schema": "decision"},
+        continuations={"submit": "done"}, assignee_type="user",
+    )
+    HumanTaskCorrectionService(tmp_path).apply(CorrectionRequest(
+        workflow_id="workflow", task_id=correction_task.id, artifact="brief", base_hash=sha256_bytes(b"base"),
+        content="replacement", operation_id="task-fence", actor="user",
+        manifest=({"kind": "human_task", "id": stale_task.id},),
+    ))
+    assert records.get_task(stale_task.id).status.value == "cancelled"
+    assert records.get_wait_state(stale_task.id).released_at is not None
