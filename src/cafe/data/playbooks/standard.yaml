@@ -60,6 +60,7 @@ steps:
       - trigger: confirm_output
         task_id: output-review
         outcomes: {confirm: plan, revise: spec}
+        correction: {artifacts: [spec]}
       - trigger: need_clarification
         task_id: clarification-answers
         outcomes: {submit: spec}
@@ -90,6 +91,7 @@ steps:
       - trigger: confirm_output
         task_id: output-review
         outcomes: {confirm: develop, revise: plan}
+        correction: {artifacts: [plan]}
       - trigger: need_clarification
         task_id: clarification-answers
         outcomes: {submit: plan}

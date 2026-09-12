@@ -22,6 +22,8 @@ class CorrectionRequest:
     actor: str
     manifest: tuple[dict[str, str], ...]
     completion_payload: Mapping[str, Any] | None = None
+    proxy_authorization_id: str | None = None
+    suitability: Mapping[str, bool] | None = None
 
 
 @dataclass(frozen=True)
@@ -56,6 +58,23 @@ class HumanTaskCorrectionService:
             raise ValueError("correction actor is not trusted")
         if request.actor == "driver_on_behalf_of_user" and not declaration.get("allow_driver_proxy"):
             raise ValueError("the pending task does not authorize a Driver proxy")
+        if request.actor == "driver_on_behalf_of_user":
+            authorization = declaration.get("driver_authorization")
+            if not isinstance(authorization, dict):
+                raise ValueError("the pending task has no explicit Driver authorization")
+            authorization_id = authorization.get("id")
+            if (
+                not isinstance(authorization_id, str)
+                or request.proxy_authorization_id != authorization_id
+            ):
+                raise ValueError("Driver authorization does not match the pending task")
+            required_suitability = {
+                "bounded", "clear", "reversible", "within_scope", "no_new_authority"
+            }
+            if not isinstance(request.suitability, Mapping) or set(request.suitability) != required_suitability:
+                raise ValueError("Driver suitability assessment is incomplete")
+            if any(request.suitability[name] is not True for name in required_suitability):
+                raise ValueError("Driver correction is unsuitable for proxy completion")
         if not isinstance(request.content, str) or len(request.content.encode("utf-8")) > 1_000_000:
             raise ValueError("correction content is invalid or exceeds the task limit")
         if not request.manifest or len(request.manifest) > 1_000:
@@ -63,12 +82,15 @@ class HumanTaskCorrectionService:
         if any(
             not isinstance(entry, dict)
             or set(entry) != {"kind", "id"}
+            or entry.get("kind") not in {"artifact", "human_task", "approval", "worker", "dispatch", "continuation"}
             or not all(isinstance(entry[key], str) and entry[key] for key in ("kind", "id"))
             for entry in request.manifest
         ):
             raise ValueError("correction invalidation manifest is invalid")
         if len(str(request.manifest).encode("utf-8")) > 256_000:
             raise ValueError("correction invalidation manifest exceeds the task limit")
+        # All untrusted request structure is validated before bootstrap creates
+        # an immutable pointer.  Rejected requests therefore leave no state.
         published = BlackboardStore(self.revisions.issue_dir).load_or_create(task.step)
         entry = published.artifacts.get(request.artifact)
         if entry is None:

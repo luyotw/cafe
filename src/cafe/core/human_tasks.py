@@ -155,6 +155,7 @@ class HumanTaskCorrection(BaseModel):
 
     artifacts: tuple[str, ...]
     allow_driver_proxy: bool = False
+    driver_authorization: Optional[dict[str, str]] = None
 
     @field_validator("artifacts")
     @classmethod
@@ -165,6 +166,18 @@ class HumanTaskCorrection(BaseModel):
         if len(set(cleaned)) != len(cleaned):
             raise ValueError("correction artifacts must be unique")
         return cleaned
+
+    @model_validator(mode="after")
+    def _validate_proxy_authorization(self) -> "HumanTaskCorrection":
+        if self.driver_authorization is None:
+            return self
+        if not self.allow_driver_proxy:
+            raise ValueError("driver_authorization requires allow_driver_proxy")
+        if set(self.driver_authorization) != {"id"}:
+            raise ValueError("driver_authorization must contain exactly id")
+        if not _non_empty(self.driver_authorization["id"], field_name="driver authorization id"):
+            raise ValueError("driver authorization id must not be empty")
+        return self
 
 
 class HumanTaskBinding(BaseModel):

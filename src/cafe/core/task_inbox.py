@@ -114,6 +114,7 @@ class TaskDetail:
     wait: dict[str, Any]
     result: Optional[dict[str, Any]]
     capability_approval: Optional[dict[str, Any]]
+    correction: Optional[dict[str, Any]]
     timestamps: dict[str, Optional[str]]
 
     def to_dict(self) -> dict[str, Any]:
@@ -136,6 +137,7 @@ class TaskDetail:
             "wait": self.wait,
             "result": self.result,
             "capability_approval": self.capability_approval,
+            "correction": self.correction,
             "timestamps": self.timestamps,
         }
 
@@ -454,6 +456,16 @@ class TaskInboxService:
             result=record.result.to_dict() if record.result else None,
             capability_approval=(
                 dict(task.capability_approval) if task.capability_approval is not None else None
+            ),
+            correction=(
+                dict(record.result.payload["correction"])
+                if record.result is not None
+                and isinstance(record.result.payload.get("correction"), dict)
+                else (
+                    {"contract": dict(task.expected_result["correction"])}
+                    if isinstance(task.expected_result.get("correction"), dict)
+                    else None
+                )
             ),
             timestamps={
                 "created_at": task.created_at,
