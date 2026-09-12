@@ -18,6 +18,7 @@ from cafe.core.blackboard import (
     HandoffOwner,
     is_genuine_cold_start,
 )
+from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.workflow_execution.worker_launch import FixedWorkerLauncher, WorkerLaunchStore
 from cafe.workflow_execution.event_callback import (
     ResolvedWorkflowEventCallback,
@@ -26,7 +27,7 @@ from cafe.workflow_execution.event_callback import (
 )
 from cafe.core.issue_resolution import ActiveIssueResolutionError, resolve_active_issue
 from cafe.core.phase_state_mixin import next_runnable_iteration_number
-from cafe.core.playbook import resolve_step_behavior
+from cafe.core.playbook import PlaybookDefinition, resolve_step_behavior
 from cafe.core.types import CriticalPhaseError
 from cafe.workflow_execution.workflow_hosting import WorkflowHost
 from cafe.core.workflow_models import StepExecutionResult
@@ -49,6 +50,65 @@ from cafe.ui.human_tasks import (
     apply_durable_human_task_payload_if_present,
     apply_human_task_payload,
 )
+
+
+def _correction_projection(issue_dir: Path, artifact_name: Optional[str] = None) -> Optional[dict[str, Any]]:
+    """Read bounded correction evidence for operator-facing current-state views."""
+    if not (issue_dir / "blackboard.json").is_file() or not (issue_dir / "human_tasks.json").is_file():
+        return None
+    try:
+        board = BlackboardStore(issue_dir).load_or_create("spec")
+        results = HumanTaskRecordStore(issue_dir).results()
+    except (OSError, ValueError):
+        return None
+    for result in reversed(results):
+        correction = result.payload.get("correction")
+        if not isinstance(correction, dict):
+            continue
+        artifact = correction.get("artifact")
+        if not isinstance(artifact, str) or (artifact_name is not None and artifact != artifact_name):
+            continue
+        current = board.artifacts.get(artifact)
+        if current is None:
+            continue
+        next_gate = None
+        try:
+            playbook = PlaybookDefinition.model_validate(
+                apply_issue_playbook_overrides(
+                    PlaybookLoader(project_root=Path.cwd()).load(board.playbook_id),
+                    issue_dir / "issue.yaml",
+                )
+            )
+            next_gate = playbook.next_human_gate(board.current_step)
+        except (OSError, ValueError):
+            pass
+        return {
+            "artifact": artifact,
+            "actor": correction.get("actor"),
+            "operation_id": correction.get("operation_id"),
+            "manifest": correction.get("manifest", []),
+            "current_path": current.path,
+            "current_version": current.version,
+            "next_step": board.current_step,
+            "next_user_gate": next_gate,
+        }
+    return None
+
+
+def _render_correction_projection(projection: dict[str, Any]) -> str:
+    """Render trusted correction metadata without exposing submitted content."""
+    invalidated = projection["manifest"]
+    invalidated_count = len(invalidated) if isinstance(invalidated, list) else 0
+    next_gate = projection["next_user_gate"] or "none declared"
+    return (
+        "Current correction revision\n"
+        f"Actor: {projection['actor']}\n"
+        f"Operation: {projection['operation_id']}\n"
+        f"Current version: {projection['current_version']}\n"
+        f"Invalidated entries: {invalidated_count}\n"
+        f"Next workflow step: {projection['next_step']}\n"
+        f"Next user confirmation: {next_gate}\n"
+    )
 from cafe.utils.config import ConfigError, validate_directories_exist
 
 
@@ -395,6 +455,13 @@ def show(
             resolved_iteration = _resolve_iteration_number(phase_dir, iteration, content_type)
             # Get file path
             file_path = _get_show_file_path(phase_dir, resolved_iteration, content_type)
+            projection = (
+                _correction_projection(cafe_dir / "issues" / issue_name, phase_name)
+                if content_type == "output" and iteration == 0
+                else None
+            )
+            if projection is not None:
+                file_path = cafe_dir / "issues" / issue_name / projection["current_path"]
         else:
             # status and iterations don't need iteration number
             file_path = _get_show_file_path(phase_dir, 0, content_type)
@@ -441,6 +508,8 @@ def show(
             else:
                 # Preserve generated content verbatim. Rich treats bracketed text
                 # such as [x] and [/path] as markup, altering it or raising.
+                if projection is not None:
+                    print(_render_correction_projection(projection))
                 print(content)
 
         except UnicodeDecodeError:
@@ -499,6 +568,10 @@ def status() -> None:
         # Display as table
         display = SummaryDisplay()
         display.render_table(entries)
+
+        projection = _correction_projection(service.issues_root / issue_name)
+        if projection is not None:
+            console.print(_render_correction_projection(projection))
 
         load_context_packets = getattr(service, "load_context_packets", None)
         context_packets = display.format_context_packets(

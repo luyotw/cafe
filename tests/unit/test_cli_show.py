@@ -6,6 +6,8 @@ from pathlib import Path
 from typer.testing import CliRunner
 from unittest.mock import MagicMock, patch
 
+from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardStore
+from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.ui.cli import app, _resolve_iteration_number, _get_show_file_path
 
 
@@ -175,6 +177,48 @@ class TestShowCommand:
             # 驗證輸出包含檔案內容
             assert result.exit_code == 0
             assert "Test Output" in result.stdout
+
+    def test_show_current_correction_revision_not_superseded_output(self, tmp_path):
+        """Test List Integration 8: show presents the registry's current correction."""
+        issue_dir = tmp_path / ".cafe" / "issues" / "test-issue"
+        original = issue_dir / "spec" / "iteration_001" / "output.md"
+        original.parent.mkdir(parents=True)
+        (original.parent / "iteration.json").write_text("{}", encoding="utf-8")
+        original.write_text("original requirement\n", encoding="utf-8")
+        corrected = issue_dir / "artifact_revisions" / "spec" / "current.txt"
+        corrected.parent.mkdir(parents=True)
+        corrected.write_text("corrected requirement\n", encoding="utf-8")
+        (issue_dir / "issue.yaml").write_text("playbook: standard\n", encoding="utf-8")
+        boards = BlackboardStore(issue_dir)
+        board = boards.load_or_create("plan", playbook_id="standard")
+        boards.put_artifact(board, ArtifactEntry(
+            name="spec", kind=ArtifactKind.DOCUMENT, version=2,
+            updated_by="human_task_correction", path="artifact_revisions/spec/current.txt",
+        ))
+        records = HumanTaskRecordStore(issue_dir)
+        task = records.materialize(
+            workflow_id=board.workflow_id, step="spec", iteration=1,
+            trigger="confirm_output", policy_id="output-review", prompt="Review",
+            expected_result={"input_schema": "decision"}, continuations={"revise": "spec"},
+            assignee_type="user",
+        )
+        records.complete(
+            workflow_id=board.workflow_id, task_id=task.id,
+            payload={"correction": {
+                "artifact": "spec", "actor": "user", "operation_id": "show-current",
+                "manifest": [{"kind": "artifact", "id": "plan"}],
+            }}, source="human_task_correction",
+        )
+
+        with patch("cafe.ui.cli.GitOperations") as mock_git_cls, \
+             patch("cafe.ui.cli.Path.cwd", return_value=tmp_path):
+            mock_git_cls.return_value.get_current_branch.return_value = "test-issue"
+            result = runner.invoke(app, ["show", "spec"])
+
+        assert result.exit_code == 0
+        assert "Current correction revision" in result.stdout
+        assert "corrected requirement" in result.stdout
+        assert "original requirement" not in result.stdout
 
     def test_show_command_with_content_type(self, tmp_path):
         """測試指定內容類型"""
