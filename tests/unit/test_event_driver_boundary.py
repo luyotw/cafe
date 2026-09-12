@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import re
+from pathlib import Path
 
 
 def test_cafe_core_has_no_driver_mode_implementation() -> None:
@@ -42,10 +42,11 @@ def test_event_driver_status_projection_stays_in_the_skill_boundary() -> None:
 
 
 def test_driver_contract_application_has_one_production_skill_boundary() -> None:
-    """Test List 6: generic runtime and phases stay independent of #474 authority."""
+    """Only the workflow skill and exact task-command adapter may consume authority."""
     source_root = Path(__file__).parents[2] / "src" / "cafe"
     driver_root = source_root / "driver"
     skill_root = source_root / "data" / "skills" / "use-cafe-workflow"
+    task_adapter = source_root / "ui" / "commands" / "tasks.py"
     importers: list[Path] = []
 
     for path in source_root.rglob("*.py"):
@@ -58,7 +59,8 @@ def test_driver_contract_application_has_one_production_skill_boundary() -> None
             assert "driver/contract.json" not in source
 
     assert importers
-    assert all(path.is_relative_to(skill_root) for path in importers)
+    assert task_adapter in importers
+    assert all(path == task_adapter or path.is_relative_to(skill_root) for path in importers)
 
 
 def test_driver_contract_has_no_generic_configuration_bridge() -> None:
@@ -66,6 +68,7 @@ def test_driver_contract_has_no_generic_configuration_bridge() -> None:
     source_root = Path(__file__).parents[2] / "src" / "cafe"
     driver_root = source_root / "driver"
     skill_root = source_root / "data" / "skills" / "use-cafe-workflow"
+    task_adapter = source_root / "ui" / "commands" / "tasks.py"
     forbidden_driver_tokens = (
         "pr_auto_create",
         "cafe.pr.publish",
@@ -93,7 +96,11 @@ def test_driver_contract_has_no_generic_configuration_bridge() -> None:
     assert not (skill_root / "scripts" / "run_validated_driver_workflow.py").exists()
 
     for path in source_root.rglob("*.py"):
-        if path.is_relative_to(skill_root) or path.is_relative_to(driver_root):
+        if (
+            path == task_adapter
+            or path.is_relative_to(skill_root)
+            or path.is_relative_to(driver_root)
+        ):
             continue
         source = path.read_text(encoding="utf-8")
         assert "cafe.driver" not in source

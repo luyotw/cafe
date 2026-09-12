@@ -3253,6 +3253,10 @@ def test_use_cafe_workflow_keeps_human_task_completion_in_the_interactive_driver
     )
     assert "whose confirmed reactive policy is `driver_confirmable` may be completed by any driver" in normalized_running.lower()
     assert "cafe task complete <active-human-task-id>" in handoffs
+    assert "--driver-proxy" in skill
+    assert "--driver-proxy" in running
+    assert "--driver-proxy" in handoffs
+    assert '"work_report"' in handoffs
     assert '--user-input \'{"task":"output-review"' not in handoffs
 
 

@@ -209,13 +209,16 @@ def test_custom_pr_keeps_its_declared_terminal_route(tmp_path: Path) -> None:
         "entry_point": "pr",
     }
     model = PlaybookDefinition.model_validate(playbook)
-    assert validate_playbook(
-        model,
-        skill_loader=SkillLoader(project_root=tmp_path),
-        source="project",
-        path=tmp_path / "custom-terminal.yaml",
-        strict=True,
-    ) == []
+    assert (
+        validate_playbook(
+            model,
+            skill_loader=SkillLoader(project_root=tmp_path),
+            source="project",
+            path=tmp_path / "custom-terminal.yaml",
+            strict=True,
+        )
+        == []
+    )
 
     def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
         assert step_name == "pr"
@@ -281,9 +284,9 @@ def test_default_human_tasks_validate_and_route_all_user_handoff_patterns(tmp_pa
     )
 
     assert clarified.target == "develop"
-    assert (
-        clarification_dir / "develop" / "iteration_001" / "user_input.md"
-    ).read_text(encoding="utf-8") == "Explain the required compatibility behavior."
+    assert (clarification_dir / "develop" / "iteration_001" / "user_input.md").read_text(
+        encoding="utf-8"
+    ) == "Explain the required compatibility behavior."
     assert clarification_store.load_or_create("develop").current_step == "develop"
 
     no_change_dir = tmp_path / ".cafe" / "issues" / "no-change"
@@ -413,8 +416,10 @@ def test_runtime_replacement_handoff_supersedes_and_notifies_only_the_new_task(
     monkeypatch.setattr(
         runtime_mod,
         "run_capability_request",
-        lambda **kwargs: notifications.append(kwargs)
-        or SimpleNamespace(receipt={"capability": "cafe.slack.human_task", "success": True}),
+        lambda **kwargs: (
+            notifications.append(kwargs)
+            or SimpleNamespace(receipt={"capability": "cafe.slack.human_task", "success": True})
+        ),
     )
 
     def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
@@ -555,9 +560,7 @@ def test_local_review_follow_up_dispositions_are_durable_terminal_decisions(
     store, state = _paused_default_state(
         issue_dir, from_step="pr", intent=HandoffIntent.CONFIRM_OUTPUT
     )
-    task = _materialize_default_task(
-        issue_dir, state, from_step="pr", trigger="confirm_output"
-    )
+    task = _materialize_default_task(issue_dir, state, from_step="pr", trigger="confirm_output")
     payload = {
         "task": "local-review",
         "decision": decision,
@@ -593,9 +596,7 @@ def test_durable_local_review_delivers_feedback_and_completes_one_task(tmp_path:
     store, state = _paused_default_state(
         issue_dir, from_step="pr", intent=HandoffIntent.CONFIRM_OUTPUT
     )
-    task = _materialize_default_task(
-        issue_dir, state, from_step="pr", trigger="confirm_output"
-    )
+    task = _materialize_default_task(issue_dir, state, from_step="pr", trigger="confirm_output")
 
     result = apply_human_task_payload(
         issue_dir=issue_dir,
@@ -631,19 +632,21 @@ def test_completed_durable_result_recovers_the_declared_continuation_after_a_res
     store, state = _paused_default_state(
         issue_dir, from_step="spec", intent=HandoffIntent.CONFIRM_OUTPUT
     )
-    task = _materialize_default_task(
-        issue_dir, state, from_step="spec", trigger="confirm_output"
-    )
+    task = _materialize_default_task(issue_dir, state, from_step="spec", trigger="confirm_output")
     payload = {
         "task": "output-review",
         "decision": "confirm",
         "human_task_id": task.id,
+        "work_report": {
+            "summary": "Confirmed the recovered specification.",
+            "outcome": "The plan may proceed.",
+            "evidence": ["spec/iteration_001/output.md"],
+        },
     }
 
     with monkeypatch.context() as crashing:
         crashing.setattr(
-            BlackboardStore,
-            "set_current_step",
+            "cafe.ui.human_tasks._write_next_iteration_user_input",
             lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("interrupted")),
         )
         with pytest.raises(RuntimeError, match="interrupted"):
@@ -675,6 +678,242 @@ def test_completed_durable_result_recovers_the_declared_continuation_after_a_res
     assert recovered.target == "plan"
     assert store.load_or_create("spec").handoff_contract.to_step == "plan"
     assert len(HumanTaskRecordStore(issue_dir).results()) == 1
+    report_input = (issue_dir / "plan" / "iteration_001" / "user_input.md").read_text(
+        encoding="utf-8"
+    )
+    assert '"type": "human_task_work_report"' in report_input
+    assert '"actor": "user"' in report_input
+
+
+def test_completed_result_replay_does_not_rewrite_a_later_human_gate(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "replay-after-later-gate"
+    playbook = PlaybookLoader().load("standard")
+    store, state = _paused_default_state(
+        issue_dir, from_step="spec", intent=HandoffIntent.CONFIRM_OUTPUT
+    )
+    spec_task = _materialize_default_task(
+        issue_dir, state, from_step="spec", trigger="confirm_output"
+    )
+    payload = {
+        "task": "output-review",
+        "decision": "confirm",
+        "human_task_id": spec_task.id,
+    }
+    completed = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        from_step="spec",
+        trigger="confirm_output",
+        raw_payload=payload,
+        source="command",
+    )
+    assert completed.target == "plan"
+
+    later = store.load_or_create("plan", playbook_id="standard")
+    store.set_current_step(later, "user")
+    store.update_handoff_contract(
+        later,
+        from_step="plan",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.CONFIRM_OUTPUT,
+        source="test.later_gate",
+    )
+    plan_task = _materialize_default_task(
+        issue_dir, later, from_step="plan", trigger="confirm_output"
+    )
+
+    replayed = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=later,
+        from_step="spec",
+        trigger="confirm_output",
+        raw_payload=payload,
+        source="command",
+    )
+
+    reloaded = store.load_or_create("plan", playbook_id="standard")
+    completion_events = [
+        event
+        for event in reloaded.events
+        if event.event_type == "human_task_completed" and event.data.get("task_id") == spec_task.id
+    ]
+    assert replayed.replayed is True
+    assert reloaded.current_step == "user"
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.from_step == "plan"
+    assert reloaded.handoff_contract.to_step == "user"
+    assert HumanTaskRecordStore(issue_dir).get_task(plan_task.id).status is HumanTaskStatus.PENDING
+    assert len(completion_events) == 1
+
+
+def test_completed_result_repairs_a_partial_blackboard_projection(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "partial-result-projection"
+    playbook = PlaybookLoader().load("standard")
+    store, state = _paused_default_state(
+        issue_dir, from_step="spec", intent=HandoffIntent.CONFIRM_OUTPUT
+    )
+    task = _materialize_default_task(issue_dir, state, from_step="spec", trigger="confirm_output")
+    payload = {
+        "task": "output-review",
+        "decision": "confirm",
+        "human_task_id": task.id,
+    }
+    applied = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        from_step="spec",
+        trigger="confirm_output",
+        raw_payload=payload,
+        source="command",
+    )
+    assert applied.result is not None
+
+    partial = store.load_or_create("spec", playbook_id="standard")
+    partial.events = [
+        event
+        for event in partial.events
+        if not (event.event_type == "human_task_completed" and event.data.get("task_id") == task.id)
+    ]
+    store.update_handoff_contract(
+        partial,
+        from_step="spec",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.CONFIRM_OUTPUT,
+        source="test.partial_projection",
+    )
+
+    recovered = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=partial,
+        from_step="spec",
+        trigger="confirm_output",
+        raw_payload=payload,
+        source="command",
+    )
+
+    reloaded = store.load_or_create("spec", playbook_id="standard")
+    completion_events = [
+        event
+        for event in reloaded.events
+        if event.event_type == "human_task_completed"
+        and event.data.get("result_id") == applied.result.id
+    ]
+    assert recovered.replayed is False
+    assert reloaded.current_step == "plan"
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.to_step == "plan"
+    assert len(completion_events) == 1
+
+
+def test_work_report_follows_a_custom_declared_continuation(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "custom-work-report"
+    (issue_dir / "alpha" / "iteration_001").mkdir(parents=True)
+    playbook = {
+        "steps": {
+            "alpha": {
+                "skill": "cafe-spec",
+                "human_tasks": [
+                    {
+                        "trigger": "confirm_output",
+                        "task_id": "output-review",
+                        "outcomes": {"confirm": "omega"},
+                    }
+                ],
+            },
+            "omega": {"skill": "cafe-plan"},
+        }
+    }
+    store, state = _paused_default_state(
+        issue_dir, from_step="alpha", intent=HandoffIntent.CONFIRM_OUTPUT
+    )
+    policy, binding = resolve_step_human_task(
+        playbook_data=playbook,
+        step_name="alpha",
+        trigger="confirm_output",
+    )
+    task = HumanTaskRecordStore(issue_dir).materialize(
+        workflow_id=state.workflow_id,
+        step="alpha",
+        iteration=1,
+        trigger="confirm_output",
+        policy_id=policy.id,
+        prompt=policy.prompt,
+        expected_result=policy.model_dump(mode="json"),
+        continuations=binding.outcomes,
+        assignee_type="user",
+    )
+
+    applied = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        from_step="alpha",
+        trigger="confirm_output",
+        raw_payload={
+            "decision": "confirm",
+            "human_task_id": task.id,
+            "work_report": {
+                "summary": "Implemented the custom adapter.",
+                "outcome": "The custom route is ready.",
+                "evidence": ["commit:abc123"],
+            },
+        },
+        source="command",
+    )
+
+    result = HumanTaskRecordStore(issue_dir).get_result(task.id)
+    assert applied.target == "omega"
+    assert result is not None
+    assert result.actor == "user"
+    assert result.payload["work_report"]["summary"] == "Implemented the custom adapter."
+    projection = (issue_dir / "omega" / "iteration_001" / "user_input.md").read_text(
+        encoding="utf-8"
+    )
+    assert task.id in projection
+    assert result.id in projection
+    assert "Implemented the custom adapter." in projection
+    completed_event = [
+        event
+        for event in store.load_or_create("alpha").events
+        if event.event_type == "human_task_completed"
+    ][-1]
+    assert completed_event.data["task_id"] == task.id
+    assert completed_event.data["result_id"] == result.id
+    assert completed_event.data["actor"] == "user"
+
+
+def test_invalid_work_report_leaves_the_original_task_pending(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "invalid-work-report"
+    playbook = PlaybookLoader().load("standard")
+    store, state = _paused_default_state(
+        issue_dir, from_step="spec", intent=HandoffIntent.CONFIRM_OUTPUT
+    )
+    task = _materialize_default_task(issue_dir, state, from_step="spec", trigger="confirm_output")
+
+    applied = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        from_step="spec",
+        trigger="confirm_output",
+        raw_payload={
+            "decision": "confirm",
+            "human_task_id": task.id,
+            "work_report": {"summary": "Missing the required outcome."},
+        },
+        source="command",
+    )
+
+    assert applied.rejection is not None
+    assert HumanTaskRecordStore(issue_dir).get_task(task.id).status is HumanTaskStatus.PENDING
+    assert HumanTaskRecordStore(issue_dir).results() == ()
+    assert store.load_or_create("spec").current_step == "user"
 
 
 def test_durable_self_loop_decision_projection_recovers_after_an_interruption(
@@ -753,9 +992,7 @@ def test_durable_command_requires_the_matching_task_identifier(tmp_path: Path) -
     store, state = _paused_default_state(
         issue_dir, from_step="spec", intent=HandoffIntent.CONFIRM_OUTPUT
     )
-    task = _materialize_default_task(
-        issue_dir, state, from_step="spec", trigger="confirm_output"
-    )
+    task = _materialize_default_task(issue_dir, state, from_step="spec", trigger="confirm_output")
 
     result = apply_human_task_payload(
         issue_dir=issue_dir,
@@ -782,9 +1019,7 @@ def test_durable_invalid_stale_and_cross_workflow_results_leave_the_pause_intact
     store, state = _paused_default_state(
         issue_dir, from_step="spec", intent=HandoffIntent.CONFIRM_OUTPUT
     )
-    task = _materialize_default_task(
-        issue_dir, state, from_step="spec", trigger="confirm_output"
-    )
+    task = _materialize_default_task(issue_dir, state, from_step="spec", trigger="confirm_output")
 
     invalid = apply_human_task_payload(
         issue_dir=issue_dir,
@@ -872,7 +1107,9 @@ def test_durable_invalid_stale_and_cross_workflow_results_leave_the_pause_intact
     )
 
     assert completed.target == "plan"
-    assert duplicate.target is None and duplicate.rejection is not None
+    assert duplicate.target == "plan"
+    assert duplicate.rejection is None
+    assert duplicate.replayed is True
     assert len(HumanTaskRecordStore(duplicate_dir).results()) == 1
     assert duplicate_store.load_or_create("spec").current_step == "plan"
 
@@ -1027,7 +1264,7 @@ def test_editorial_human_tasks_use_editorial_contracts_without_development_copy(
     )
 
     assert clarification.target == "brief"
-    assert (
-        clarification_dir / "brief" / "iteration_001" / "user_input.md"
-    ).read_text(encoding="utf-8") == "audience: Editors"
+    assert (clarification_dir / "brief" / "iteration_001" / "user_input.md").read_text(
+        encoding="utf-8"
+    ) == "audience: Editors"
     assert clarification_store.load_or_create("brief").current_step == "brief"

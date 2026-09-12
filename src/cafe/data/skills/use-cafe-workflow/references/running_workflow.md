@@ -175,10 +175,18 @@ repeat it when the user already has the same task and options unless they ask.
    record a concise contract basis and do not submit when the answer changes
    the contract, triggers a deviation, needs new authority, is reserved to the
    user, or its authority is uncertain.
-3. Run `cafe task complete <task-id> --result '<json>' --no-resume --json`.
+3. Run `cafe task complete <task-id> --result '<json>' --no-resume --json` when
+   relaying an explicit user answer. For a Driver-owned `driver_confirmable`
+   response, add `--driver-proxy`; this makes the runtime re-check the current
+   confirmed contract and record task-bound Driver provenance. Never add the
+   flag to a user-owned, permission, or capability response. The response may
+   include `work_report` with non-empty `summary` and `outcome`, plus optional
+   `evidence` references, when recording work already performed. The report is
+   metadata only: it cannot replace the task's required response or select a
+   continuation.
    Treat an uncertain command result as unconfirmed: inspect durable task and
-   handoff state before retrying. If the task is already complete, do not submit
-   another answer.
+   handoff state before retrying. Repeating the exact normalized response and
+   provenance is safe and does not resume twice; a different response conflicts.
 4. After durable completion, continue with the confirmed mode: attached starts
    the foreground continuous workflow; unattended starts the ordinary background
    worker; event-driven starts the background worker with its trusted callback.

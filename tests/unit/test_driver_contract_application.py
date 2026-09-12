@@ -10,20 +10,22 @@ from pathlib import Path
 
 import pytest
 
-from tests.fixtures.delivery_contract import delivery_contract
-
 from cafe.driver import (
     ActivateConfirmedContract,
     DriverContractMissingError,
     DriverEntryRequest,
+    DriverTaskCompletionDeniedError,
+    DriverTaskCompletionRequest,
     Freshness,
     LegacyAdoptionRequest,
     ReplaceConfirmedContract,
     activate_confirmed_contract,
     adopt_legacy_contract,
+    authorize_driver_task_completion,
     evaluate_driver_entry,
     replace_confirmed_contract,
 )
+from tests.fixtures.delivery_contract import delivery_contract
 
 
 def _proposal() -> dict[str, object]:
@@ -146,6 +148,142 @@ def test_public_application_contract_persists_only_a_complete_valid_policy(tmp_p
     runtime_state["session"] = {"provider_session": "must-not-persist"}
     with pytest.raises(ValueError):
         activate_confirmed_contract(_activation(tmp_path / "runtime", runtime_state))
+
+
+def test_driver_task_completion_authority_is_exact_and_task_bound(tmp_path: Path) -> None:
+    issue_dir = tmp_path / "issue474"
+    proposal = _proposal()
+    proposal["confirmation_contract"] = {
+        "user_required": ["plan"],
+        "driver_confirmable": ["spec"],
+        "mandatory_human_stops": ["plan"],
+    }
+    proposal["reactive_user_handoffs"]["need_clarification"] = "driver_confirmable"
+    proposal["semantic_facts"] = _fresh_policy_facts(proposal)
+    activated = activate_confirmed_contract(_activation(issue_dir, proposal))
+    response = {
+        "task": "output-review",
+        "decision": "confirm",
+        "continuation": "plan",
+        "work_report": {"summary": "done", "outcome": "passing", "evidence": []},
+    }
+
+    authority = authorize_driver_task_completion(
+        DriverTaskCompletionRequest(
+            issue_dir=issue_dir,
+            issue_name="issue474",
+            workflow_id="workflow-474",
+            task_id="task-1",
+            step="spec",
+            trigger="confirm_output",
+            policy_id="output-review",
+            response=response,
+        )
+    )
+    clarification = authorize_driver_task_completion(
+        DriverTaskCompletionRequest(
+            issue_dir=issue_dir,
+            issue_name="issue474",
+            workflow_id="workflow-474",
+            task_id="task-2",
+            step="develop",
+            trigger="need_clarification",
+            policy_id="clarification-feedback",
+            response={"task": "clarification-feedback", "feedback": "Keep the API stable."},
+        )
+    )
+
+    assert authority.contract_sha256 == activated.contract_sha256
+    assert authority.revision == 1
+    assert authority.task_id == "task-1"
+    assert authority.basis == "confirmation_contract.driver_confirmable"
+    assert authority.response_sha256
+    assert clarification.basis == "reactive_user_handoffs.need_clarification"
+
+
+@pytest.mark.parametrize(
+    ("step", "trigger"),
+    [
+        ("plan", "confirm_output"),
+        ("develop", "confirm_output"),
+        ("spec", "need_permission"),
+        ("spec", "capability_request"),
+        ("spec", "unknown"),
+    ],
+)
+def test_driver_task_completion_rejects_user_owned_or_unauthorized_intents(
+    tmp_path: Path, step: str, trigger: str
+) -> None:
+    issue_dir = tmp_path / f"issue474-{step}-{trigger}"
+    proposal = _proposal()
+    proposal["confirmation_contract"] = {
+        "user_required": ["plan"],
+        "driver_confirmable": ["spec"],
+        "mandatory_human_stops": ["plan"],
+    }
+    proposal["reactive_user_handoffs"]["need_clarification"] = "driver_confirmable"
+    proposal["semantic_facts"] = _fresh_policy_facts(proposal)
+    activate_confirmed_contract(_activation(issue_dir, proposal))
+
+    with pytest.raises(DriverTaskCompletionDeniedError):
+        authorize_driver_task_completion(
+            DriverTaskCompletionRequest(
+                issue_dir=issue_dir,
+                issue_name="issue474",
+                workflow_id="workflow-474",
+                task_id="task-1",
+                step=step,
+                trigger=trigger,
+                policy_id="policy",
+                response={"task": "policy", "decision": "confirm"},
+            )
+        )
+
+
+def test_driver_task_completion_rejects_missing_or_mismatched_contract(tmp_path: Path) -> None:
+    command = DriverTaskCompletionRequest(
+        issue_dir=tmp_path / "issue474",
+        issue_name="issue474",
+        workflow_id="workflow-474",
+        task_id="task-1",
+        step="spec",
+        trigger="confirm_output",
+        policy_id="output-review",
+        response={"task": "output-review", "decision": "confirm"},
+    )
+    with pytest.raises(DriverContractMissingError):
+        authorize_driver_task_completion(command)
+
+    activate_confirmed_contract(_activation(command.issue_dir))
+    with pytest.raises(ValueError):
+        authorize_driver_task_completion(
+            DriverTaskCompletionRequest(
+                **{**command.__dict__, "workflow_id": "stale-workflow"}
+            )
+        )
+
+
+def test_driver_task_completion_respects_user_owned_clarification_policy(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / "issue474"
+    activate_confirmed_contract(_activation(issue_dir))
+
+    with pytest.raises(
+        DriverTaskCompletionDeniedError, match="need_clarification is not driver-confirmable"
+    ):
+        authorize_driver_task_completion(
+            DriverTaskCompletionRequest(
+                issue_dir=issue_dir,
+                issue_name="issue474",
+                workflow_id="workflow-474",
+                task_id="task-1",
+                step="develop",
+                trigger="need_clarification",
+                policy_id="clarification-feedback",
+                response={"task": "clarification-feedback", "feedback": "answer"},
+            )
+        )
 
 
 def test_contract_rejects_removed_model_adjustment_authority(tmp_path: Path) -> None:

@@ -13,6 +13,11 @@ from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.ui.cli import app
 from cafe.ui.human_tasks import resolve_step_human_task
+from tests.unit.test_driver_contract_application import (
+    _activation,
+    _fresh_policy_facts,
+    _proposal,
+)
 
 pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
@@ -118,6 +123,174 @@ def test_noninteractive_completion_can_defer_workflow_resume(
     assert BlackboardStore(issue_dir).load_or_create("spec").current_step == "plan"
     assert resumed == []
     assert "--issue deferred --execute --background" in result.stdout
+
+
+def test_work_report_completion_is_inspectable_and_replay_does_not_resume_twice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir, task = _pending_issue(tmp_path / ".cafe", "reported")
+    resumed: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        "cafe.ui.commands.tasks._resume_issue_workflow",
+        lambda issue, playbook: resumed.append((issue, playbook)),
+    )
+    payload = json.dumps(
+        {
+            "decision": "confirm",
+            "work_report": {
+                "summary": "Implemented the requested behavior.",
+                "outcome": "Targeted tests pass.",
+                "evidence": ["pytest:tests/unit"],
+            },
+        }
+    )
+
+    first = runner.invoke(
+        app,
+        ["task", "complete", task.id, "--result", payload, "--json"],
+    )
+    replay = runner.invoke(
+        app,
+        ["task", "complete", task.id, "--result", payload, "--json"],
+    )
+    conflict = runner.invoke(
+        app,
+        [
+            "task",
+            "complete",
+            task.id,
+            "--result",
+            '{"decision":"confirm","work_report":{"summary":"different","outcome":"ok"}}',
+            "--json",
+        ],
+    )
+
+    assert first.exit_code == replay.exit_code == 0
+    assert conflict.exit_code != 0
+    assert json.loads(replay.stdout)["data"]["replayed"] is True
+    assert json.loads(conflict.stdout)["error"]["code"] == "invalid_response"
+    assert resumed == [("reported", "standard")]
+    assert len(HumanTaskRecordStore(issue_dir).results()) == 1
+    inspected = runner.invoke(app, ["task", "inspect", task.id])
+    assert inspected.exit_code == 0
+    assert "Implemented the requested behavior." in inspected.stdout
+    assert "actor" in inspected.stdout
+
+
+def test_completed_receipt_replays_while_a_later_iteration_is_pending(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir, first_task = _pending_issue(tmp_path / ".cafe", "later-iteration")
+    resumed: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        "cafe.ui.commands.tasks._resume_issue_workflow",
+        lambda issue, playbook: resumed.append((issue, playbook)),
+    )
+    payload = '{"decision":"confirm"}'
+    first = runner.invoke(
+        app,
+        ["task", "complete", first_task.id, "--result", payload, "--no-resume", "--json"],
+    )
+    assert first.exit_code == 0
+
+    store = BlackboardStore(issue_dir)
+    later = store.load_or_create("spec", playbook_id="standard")
+    store.set_current_step(later, "user")
+    store.update_handoff_contract(
+        later,
+        from_step="spec",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.CONFIRM_OUTPUT,
+        source="test.later_iteration",
+    )
+    policy, binding = resolve_step_human_task(
+        playbook_data=PlaybookLoader().load("standard"),
+        step_name="spec",
+        trigger="confirm_output",
+        iteration=2,
+    )
+    later_task = HumanTaskRecordStore(issue_dir).materialize(
+        workflow_id=later.workflow_id,
+        step="spec",
+        iteration=2,
+        trigger="confirm_output",
+        policy_id=policy.id,
+        prompt=policy.prompt,
+        expected_result=policy.model_dump(mode="json"),
+        continuations=binding.outcomes,
+        assignee_type="user",
+    )
+
+    replay = runner.invoke(
+        app,
+        ["task", "complete", first_task.id, "--result", payload, "--json"],
+    )
+
+    reloaded = store.load_or_create("spec", playbook_id="standard")
+    assert replay.exit_code == 0
+    assert json.loads(replay.stdout)["data"]["replayed"] is True
+    assert reloaded.current_step == "user"
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.from_step == "spec"
+    assert reloaded.handoff_contract.to_step == "user"
+    assert HumanTaskRecordStore(issue_dir).get_task(later_task.id).status is HumanTaskStatus.PENDING
+    assert resumed == []
+
+
+def test_driver_proxy_completion_uses_current_contract_and_records_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cafe.driver import activate_confirmed_contract
+
+    monkeypatch.chdir(tmp_path)
+    issue_dir, task = _pending_issue(tmp_path / ".cafe", "issue474")
+    proposal = _proposal()
+    proposal["confirmation_contract"] = {
+        "user_required": ["plan"],
+        "driver_confirmable": ["spec"],
+        "mandatory_human_stops": ["plan"],
+    }
+    proposal["reactive_user_handoffs"]["need_clarification"] = "driver_confirmable"
+    proposal["semantic_facts"] = _fresh_policy_facts(proposal)
+    activated = activate_confirmed_contract(
+        _activation(issue_dir, proposal, workflow_id=task.workflow_id)
+    )
+
+    completed = runner.invoke(
+        app,
+        [
+            "task",
+            "complete",
+            task.id,
+            "--result",
+            json.dumps(
+                {
+                    "decision": "confirm",
+                    "work_report": {
+                        "summary": "Driver verified the expected output.",
+                        "outcome": "No unexpected changes were found.",
+                    },
+                }
+            ),
+            "--driver-proxy",
+            "--no-resume",
+            "--json",
+        ],
+    )
+
+    assert completed.exit_code == 0, (completed.stdout, completed.exception)
+    result = HumanTaskRecordStore(issue_dir).get_result(task.id)
+    assert result is not None
+    assert result.actor == "driver_on_behalf_of_user"
+    assert result.authority is not None
+    assert result.authority["contract_sha256"] == activated.contract_sha256
+    assert result.authority["task_id"] == task.id
+    assert result.authority["step"] == "spec"
+    assert result.authority["trigger"] == "confirm_output"
+    assert result.authority["response_sha256"]
 
 
 def test_deferred_self_loop_completion_persists_the_decision_for_the_worker(

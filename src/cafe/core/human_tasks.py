@@ -23,6 +23,10 @@ HumanTaskPattern = Literal[
 ]
 HumanTaskInputSchema = Literal["decision", "answers", "feedback", "target"]
 
+WORK_REPORT_TEXT_LIMIT = 2_000
+WORK_REPORT_EVIDENCE_LIMIT = 20
+WORK_REPORT_EVIDENCE_TEXT_LIMIT = 1_000
+
 AGENT_EXECUTION_INTERRUPTED_TRIGGER = "agent_execution_interrupted"
 AGENT_EXECUTION_INTERRUPTED_TASK_ID = "agent-execution-interrupted"
 AGENT_EXECUTION_RETRY_DECISION = "retry"
@@ -197,6 +201,43 @@ class HumanTaskFeedbackDelivery(BaseModel):
 HumanTaskBinding.model_rebuild()
 
 
+class HumanTaskWorkReport(BaseModel):
+    """Bounded, transport-neutral account of work reported with a completion."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    summary: str
+    outcome: str
+    evidence: tuple[str, ...] = ()
+
+    @field_validator("summary", "outcome")
+    @classmethod
+    def _validate_text(cls, value: str, info) -> str:
+        text = _non_empty(value, field_name=info.field_name)
+        if len(text) > WORK_REPORT_TEXT_LIMIT:
+            raise ValueError(
+                f"{info.field_name} must not exceed {WORK_REPORT_TEXT_LIMIT} characters"
+            )
+        return text
+
+    @field_validator("evidence")
+    @classmethod
+    def _validate_evidence(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(value) > WORK_REPORT_EVIDENCE_LIMIT:
+            raise ValueError(
+                f"evidence must not contain more than {WORK_REPORT_EVIDENCE_LIMIT} entries"
+            )
+        cleaned = tuple(_non_empty(item, field_name="evidence") for item in value)
+        if any(len(item) > WORK_REPORT_EVIDENCE_TEXT_LIMIT for item in cleaned):
+            raise ValueError(
+                "evidence entries must not exceed "
+                f"{WORK_REPORT_EVIDENCE_TEXT_LIMIT} characters"
+            )
+        if len(set(cleaned)) != len(cleaned):
+            raise ValueError("evidence entries must be unique")
+        return cleaned
+
+
 class HumanTaskPolicyError(ValueError):
     """Raised when a task declaration cannot be resolved safely."""
 
@@ -210,6 +251,7 @@ class HumanTaskCompletion:
     answers: Optional[dict[str, tuple[str, ...]]] = None
     feedback: Optional[str] = None
     target: Optional[str] = None
+    work_report: Optional[HumanTaskWorkReport] = None
 
     def agent_input(self) -> str:
         """Preserve the existing agent-facing text-file boundary."""
@@ -345,6 +387,14 @@ def validate_human_task_completion(
     payload = _parse_payload(policy, raw_payload)
     if isinstance(payload, HumanTaskRejection):
         return payload
+    if "actor" in payload or "authority" in payload:
+        return _reject(policy, "Actor and authority are derived by CAFE, not response input.")
+    work_report: Optional[HumanTaskWorkReport] = None
+    if "work_report" in payload:
+        try:
+            work_report = HumanTaskWorkReport.model_validate(payload["work_report"])
+        except (TypeError, ValueError):
+            return _reject(policy, "The work report does not match its declared structure.")
     task_id = str(payload.get("task") or payload.get("task_id") or policy.id).strip()
     if task_id != policy.id:
         return _reject(policy, "This response belongs to a different human task.")
@@ -352,7 +402,11 @@ def validate_human_task_completion(
         feedback = str(payload.get("feedback") or "").strip()
         if not feedback and policy.required:
             return _reject(policy, "Feedback is required before this task can continue.")
-        return HumanTaskCompletion(task_id=policy.id, feedback=feedback or None)
+        return HumanTaskCompletion(
+            task_id=policy.id,
+            feedback=feedback or None,
+            work_report=work_report,
+        )
     if policy.input_schema == "decision":
         decision = str(payload.get("decision") or "").strip()
         valid = {item.id: item for item in policy.decisions}
@@ -375,12 +429,17 @@ def validate_human_task_completion(
             decision=decision,
             feedback=feedback,
             target=target,
+            work_report=work_report,
         )
     if policy.input_schema == "target":
         target = str(payload.get("target") or "").strip()
         if target not in policy.allowed_targets:
             return _reject(policy, "Choose a target declared by this task.")
-        return HumanTaskCompletion(task_id=policy.id, target=target)
+        return HumanTaskCompletion(
+            task_id=policy.id,
+            target=target,
+            work_report=work_report,
+        )
     raw_answers = payload.get("answers")
     if not isinstance(raw_answers, Mapping):
         return _reject(policy, "Answers must be an object keyed by question id.")
@@ -402,7 +461,11 @@ def validate_human_task_completion(
         ):
             return _reject(policy, f"Question {question.id!r} has an unsupported answer.")
         answers[question.id] = values
-    return HumanTaskCompletion(task_id=policy.id, answers=answers)
+    return HumanTaskCompletion(
+        task_id=policy.id,
+        answers=answers,
+        work_report=work_report,
+    )
 
 
 def resolve_human_task_continuation(

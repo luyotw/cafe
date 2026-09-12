@@ -15,6 +15,7 @@ from cafe.core.human_task_records import (
     HumanTaskRecordSchemaError,
     HumanTaskRecordStore,
     HumanTaskStatus,
+    TaskResult,
 )
 
 
@@ -104,6 +105,24 @@ def test_versioned_records_round_trip_with_assignment_wait_and_result(tmp_path: 
     assert wait_state.released_at is not None
     assert loaded_result == result
     assert loaded_result.payload["feedback"] == "Keep old handoffs working."
+    assert loaded_result.actor == "user"
+
+
+def test_legacy_task_result_without_actor_remains_readable() -> None:
+    result = TaskResult.from_dict(
+        {
+            "id": "result-1",
+            "task_id": "task-1",
+            "workflow_id": "workflow-one",
+            "payload": {"decision": "confirm"},
+            "source": "command",
+            "completed_at": "2026-09-13T00:00:00+08:00",
+        }
+    )
+
+    assert result.actor is None
+    assert result.authority is None
+    assert "actor" not in result.to_dict()
 
 
 def test_materialization_is_idempotent_per_handoff_key(tmp_path: Path) -> None:
@@ -375,9 +394,16 @@ def test_terminal_lifecycle_transitions_preserve_the_first_result(tmp_path: Path
     repeated = store.complete(
         workflow_id="workflow-one",
         task_id=completed.id,
-        payload={"feedback": "second"},
+        payload={"feedback": "first"},
         source="interactive",
     )
+    with pytest.raises(HumanTaskCorrelationError, match="different response or actor"):
+        store.complete(
+            workflow_id="workflow-one",
+            task_id=completed.id,
+            payload={"feedback": "second"},
+            source="interactive",
+        )
     cancelled = _materialize(store, iteration=2)
     store.cancel(
         workflow_id="workflow-one", task_id=cancelled.id, reason="workflow ended"
