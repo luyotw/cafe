@@ -10,6 +10,8 @@ from cafe.core.artifact_revisions import ArtifactRevision, ArtifactRevisionStore
 from cafe.core.blackboard import ArtifactEntry, BlackboardStore
 from cafe.core.event_dispatches import EventDispatchFenceStore
 from cafe.core.human_task_records import HumanTaskRecordStore
+from cafe.core.playbook import PlaybookDefinition
+from cafe.playbooks.loader import PlaybookLoader, apply_issue_playbook_overrides
 from cafe.workflow_execution.worker_launch import WorkerLaunchStore
 
 
@@ -119,9 +121,17 @@ class HumanTaskCorrectionService:
         )
         if request.base_hash != base_revision.sha256:
             raise ValueError("correction base hash is not current")
+        # Direct callers already derive their graph closure at the trusted CLI
+        # boundary.  Driver requests are public API input, so their manifest is
+        # never authority; derive it again from the durable workflow instead.
+        manifest = (
+            self._canonical_manifest(task.step, request.artifact)
+            if request.actor == "driver_on_behalf_of_user"
+            else request.manifest
+        )
         journal = self.revisions.prepare(
             request.operation_id,
-            list(request.manifest),
+            list(manifest),
             context={
                 "workflow_id": request.workflow_id,
                 "task_id": request.task_id,
@@ -197,6 +207,31 @@ class HumanTaskCorrectionService:
         self.revisions.commit(request.operation_id)
         return CorrectionResult(revision=revision, operation_id=request.operation_id)
 
+    def _canonical_manifest(
+        self, step: str, artifact: str
+    ) -> tuple[dict[str, str], ...]:
+        """Derive mutation targets from the active graph, never a Driver request.
+
+        Older unit-level callers do not have an issue playbook on disk.  Their
+        only safe compatibility behavior is to replace the declared artifact;
+        production issues always have the persisted playbook declaration.
+        """
+        board = BlackboardStore(self.revisions.issue_dir).load_or_create(step)
+        issue_config = self.revisions.issue_dir / "issue.yaml"
+        if not issue_config.is_file():
+            return ({"kind": "artifact", "id": artifact},)
+        project_root = self.revisions.issue_dir.parents[2]
+        data = PlaybookLoader(project_root=project_root).load(board.playbook_id)
+        playbook = PlaybookDefinition.model_validate(
+            apply_issue_playbook_overrides(data, issue_config)
+        )
+        names = (artifact, *playbook.downstream_artifacts(artifact))
+        return tuple(
+            {"kind": "artifact", "id": name}
+            for name in names
+            if name == artifact or name in board.artifacts
+        )
+
     def recover(self, operation_id: str) -> CorrectionResult:
         """Replay one durable, incomplete correction without another submission."""
         journal = self.revisions.journal(operation_id)
@@ -216,6 +251,14 @@ class HumanTaskCorrectionService:
                 raise ValueError("completed correction is missing its immutable revision")
             self.revisions.commit(operation_id)
             return CorrectionResult(revision=revision, operation_id=operation_id)
+        revision = self.revisions.revision_for_operation(operation_id)
+        if revision is not None:
+            # Replacement is already immutable and idempotent.  Do not run the
+            # original base-CAS again: publication may have advanced between
+            # replacement and task completion when the process stopped.
+            return self._finish_recovered_replacement(
+                task=task, journal=journal, context=context, revision=revision
+            )
         return self.apply(CorrectionRequest(
             workflow_id=context["workflow_id"], task_id=context["task_id"], artifact=context["artifact"],
             base_hash=context["base_hash"], content=context["content"], operation_id=operation_id,
@@ -224,6 +267,38 @@ class HumanTaskCorrectionService:
             proxy_authorization_id=context.get("proxy_authorization_id"),
             suitability=context.get("suitability") or None,
         ))
+
+    def _finish_recovered_replacement(
+        self, *, task, journal: Mapping[str, Any], context: Mapping[str, Any], revision: ArtifactRevision
+    ) -> CorrectionResult:
+        with self.tasks.transaction():
+            board_store = BlackboardStore(self.revisions.issue_dir)
+            board = board_store.load_or_create(task.step)
+            current = board.artifacts.get(revision.artifact)
+            if current is None:
+                raise ValueError("recovered correction artifact is no longer published")
+            if current.path != revision.path:
+                board_store.put_artifact(board, ArtifactEntry(
+                    name=current.name, kind=current.kind, version=current.version + 1,
+                    updated_by="human_task_correction", path=revision.path,
+                    summary=current.summary, base_sha=current.base_sha, head_sha=current.head_sha,
+                ))
+            payload = dict(context["completion_payload"])
+            payload["correction"] = {
+                "actor": context["actor"], "artifact": revision.artifact,
+                "base_hash": context["base_hash"], "new_hash": revision.sha256,
+                "operation_id": journal["operation_id"],
+                "authorization_id": context.get("proxy_authorization_id"),
+                "validation": {"suitability": dict(context.get("suitability") or {})}
+                if context.get("suitability") else {"source": "user_command"},
+                "manifest": list(journal["manifest"]),
+            }
+            self.tasks.complete(
+                workflow_id=context["workflow_id"], task_id=context["task_id"],
+                payload=payload, source="human_task_correction",
+            )
+            self.revisions.commit(journal["operation_id"])
+            return CorrectionResult(revision=revision, operation_id=journal["operation_id"])
 
     def _invalidate(
         self,

@@ -1032,6 +1032,19 @@ class PlaybookDefinition(BaseModel):
                     pending.append(step.output_artifact)
         return tuple(affected)
 
+    def downstream_artifacts(self, artifact: str) -> tuple[str, ...]:
+        """Return outputs made stale by an artifact correction.
+
+        The graph is expressed in steps, while the correction store operates on
+        artifact identifiers.  Keep that adaptation here so callers cannot
+        accidentally submit step names as artifact invalidation targets.
+        """
+        return tuple(
+            self.steps[step_name].output_artifact
+            for step_name in self.downstream_steps(artifact)
+            if self.steps[step_name].output_artifact is not None
+        )
+
     def next_human_gate(self, step_name: str) -> Optional[str]:
         """Return the first reachable declared human-owned step, if any."""
         pending = deque(

@@ -58,6 +58,7 @@ def test_playbook_derives_dependency_closure_and_next_human_gate() -> None:
     playbook = PlaybookDefinition.model_validate(_playbook())
     assert playbook.correction_targets("review", "confirm_output") == ("brief",)
     assert playbook.downstream_steps("brief") == ("review", "approve")
+    assert playbook.downstream_artifacts("brief") == ("review", "approval")
     assert playbook.next_human_gate("review") == "approve"
 
 
@@ -215,6 +216,39 @@ def test_driver_proxy_requires_task_bound_authorization_and_assessment(tmp_path)
     assert correction["actor"] == "driver_on_behalf_of_user"
     assert correction["authorization_id"] == "authorized-by-user"
     assert correction["validation"]["suitability"]["bounded"] is True
+
+
+def test_driver_manifest_cannot_expand_the_task_scoped_mutation_set(tmp_path) -> None:
+    source = tmp_path / "brief.md"
+    unrelated = tmp_path / "unrelated.md"
+    source.write_text("base", encoding="utf-8")
+    unrelated.write_text("keep", encoding="utf-8")
+    board_store = BlackboardStore(tmp_path)
+    board = board_store.load_or_create("review")
+    for name, path in (("brief", "brief.md"), ("unrelated", "unrelated.md")):
+        board_store.put_artifact(board, ArtifactEntry(
+            name=name, kind=ArtifactKind.DOCUMENT, version=1, updated_by="writer", path=path
+        ))
+    task = HumanTaskRecordStore(tmp_path).materialize(
+        workflow_id="workflow", step="review", iteration=1, trigger="confirm_output",
+        policy_id="output-review", prompt="Review", expected_result={"input_schema": "decision", "correction": {
+            "artifacts": ["brief"], "allow_driver_proxy": True,
+            "driver_authorization": {"id": "authorized-by-user"},
+        }}, continuations={"revise": "draft"}, assignee_type="user",
+    )
+
+    submit_authorized_correction(
+        issue_dir=tmp_path, workflow_id="workflow", task_id=task.id, artifact="brief",
+        base_hash=sha256_bytes(b"base"), content="replacement", operation_id="proxy-scope",
+        authorization_id="authorized-by-user", suitability={name: True for name in (
+            "bounded", "clear", "reversible", "within_scope", "no_new_authority"
+        )}, manifest=(
+            {"kind": "artifact", "id": "brief"},
+            {"kind": "artifact", "id": "unrelated"},
+        ),
+    )
+
+    assert BlackboardStore(tmp_path).load_or_create("review").artifacts["unrelated"].path == "unrelated.md"
 
 
 def test_user_authorization_is_durable_and_task_scoped(tmp_path) -> None:
@@ -408,6 +442,41 @@ def test_recovery_replays_a_durable_prepared_correction_once(tmp_path) -> None:
     assert result.operation_id == "recover-1"
     assert records.get_result(task.id) is not None
     assert HumanTaskCorrectionService(tmp_path).recover("recover-1").revision == result.revision
+
+
+def test_recovery_finishes_after_revision_replacement_without_rechecking_old_base(tmp_path, monkeypatch) -> None:
+    source = tmp_path / "brief.md"
+    source.write_text("base", encoding="utf-8")
+    board_store = BlackboardStore(tmp_path)
+    board = board_store.load_or_create("review")
+    board_store.put_artifact(board, ArtifactEntry(
+        name="brief", kind=ArtifactKind.DOCUMENT, version=1, updated_by="writer", path="brief.md"
+    ))
+    records = HumanTaskRecordStore(tmp_path)
+    task = records.materialize(
+        workflow_id="workflow", step="review", iteration=1, trigger="confirm_output",
+        policy_id="output-review", prompt="Review",
+        expected_result={"input_schema": "decision", "correction": {"artifacts": ["brief"]}},
+        continuations={"revise": "draft"}, assignee_type="user",
+    )
+    service = HumanTaskCorrectionService(tmp_path)
+    original_complete = service.tasks.complete
+
+    def interrupted_complete(**_kwargs):
+        raise OSError("simulated interruption after publication")
+
+    monkeypatch.setattr(service.tasks, "complete", interrupted_complete)
+    with pytest.raises(OSError):
+        service.apply(CorrectionRequest(
+            workflow_id="workflow", task_id=task.id, artifact="brief", base_hash=sha256_bytes(b"base"),
+            content="replacement", operation_id="recover-after-replace", actor="user",
+            manifest=({"kind": "artifact", "id": "brief"},),
+        ))
+    monkeypatch.setattr(service.tasks, "complete", original_complete)
+
+    recovered = HumanTaskCorrectionService(tmp_path).recover("recover-after-replace")
+    assert recovered.revision.sha256 == sha256_bytes(b"replacement")
+    assert records.get_task(task.id).status.value == "completed"
 
 
 def test_correction_supersedes_downstream_pending_task_before_receipting(tmp_path) -> None:

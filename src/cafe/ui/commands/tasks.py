@@ -221,7 +221,7 @@ def _apply_declared_correction(
         )
     manifest = tuple(
         {"kind": "artifact", "id": name}
-        for name in (artifact, *playbook.downstream_steps(artifact))
+        for name in (artifact, *playbook.downstream_artifacts(artifact))
     )
     try:
         result = HumanTaskCorrectionService(preflight.issue_dir).apply(
