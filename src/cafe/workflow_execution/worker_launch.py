@@ -215,11 +215,16 @@ class WorkerLaunchStore:
         return dict(attempts) if isinstance(attempts, dict) else {}
 
     def _current_generation(self) -> int:
+        if not self.generation_path.exists():
+            return 0
         try:
             value = self.generation_path.read_text(encoding="ascii").strip()
-            return int(value) if int(value) >= 0 else 0
-        except (OSError, ValueError):
-            return 0
+            generation = int(value)
+        except (OSError, UnicodeError, ValueError) as exc:
+            raise ValueError("correction generation is unreadable") from exc
+        if generation < 0:
+            raise ValueError("correction generation is invalid")
+        return generation
 
 
 def _thread_lock(path: Path) -> threading.RLock:
