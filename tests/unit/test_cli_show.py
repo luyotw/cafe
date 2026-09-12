@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardStore
 from cafe.core.human_task_records import HumanTaskRecordStore
+from cafe.core.packet_io import sha256_bytes
 from cafe.ui.cli import app, _resolve_iteration_number, _get_show_file_path
 
 
@@ -206,6 +207,7 @@ class TestShowCommand:
             workflow_id=board.workflow_id, task_id=task.id,
             payload={"correction": {
                 "artifact": "spec", "actor": "user", "operation_id": "show-current",
+                "new_hash": sha256_bytes(b"corrected requirement\n"),
                 "manifest": [{"kind": "artifact", "id": "plan"}],
             }}, source="human_task_correction",
         )
@@ -219,6 +221,23 @@ class TestShowCommand:
         assert "Current correction revision" in result.stdout
         assert "corrected requirement" in result.stdout
         assert "original requirement" not in result.stdout
+
+        later = issue_dir / "spec" / "iteration_002" / "output.md"
+        later.parent.mkdir(parents=True)
+        (later.parent / "iteration.json").write_text("{}", encoding="utf-8")
+        later.write_text("normal replacement\n", encoding="utf-8")
+        boards.put_artifact(boards.load_or_create("spec"), ArtifactEntry(
+            name="spec", kind=ArtifactKind.DOCUMENT, version=3,
+            updated_by="spec", path="spec/iteration_002/output.md",
+        ))
+        with patch("cafe.ui.cli.GitOperations") as mock_git_cls, \
+             patch("cafe.ui.cli.Path.cwd", return_value=tmp_path):
+            mock_git_cls.return_value.get_current_branch.return_value = "test-issue"
+            later_result = runner.invoke(app, ["show", "spec"])
+
+        assert later_result.exit_code == 0
+        assert "normal replacement" in later_result.stdout
+        assert "Current correction revision" not in later_result.stdout
 
     def test_show_command_with_content_type(self, tmp_path):
         """測試指定內容類型"""

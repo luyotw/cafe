@@ -19,6 +19,7 @@ from cafe.core.blackboard import (
     is_genuine_cold_start,
 )
 from cafe.core.human_task_records import HumanTaskRecordStore
+from cafe.core.packet_io import sha256_bytes
 from cafe.workflow_execution.worker_launch import FixedWorkerLauncher, WorkerLaunchStore
 from cafe.workflow_execution.event_callback import (
     ResolvedWorkflowEventCallback,
@@ -71,6 +72,13 @@ def _correction_projection(issue_dir: Path, artifact_name: Optional[str] = None)
         current = board.artifacts.get(artifact)
         if current is None:
             continue
+        new_hash = correction.get("new_hash")
+        try:
+            current_hash = sha256_bytes((issue_dir / current.path).read_bytes())
+        except OSError:
+            continue
+        if not isinstance(new_hash, str) or new_hash != current_hash:
+            continue
         next_gate = None
         try:
             playbook = PlaybookDefinition.model_validate(
@@ -93,6 +101,20 @@ def _correction_projection(issue_dir: Path, artifact_name: Optional[str] = None)
             "next_user_gate": next_gate,
         }
     return None
+
+
+def _current_artifact_path(issue_dir: Path, artifact_name: str) -> Optional[Path]:
+    """Return the registry's current artifact path without assigning correction history."""
+    if not (issue_dir / "blackboard.json").is_file():
+        return None
+    try:
+        entry = BlackboardStore(issue_dir).load_or_create("spec").artifacts.get(artifact_name)
+    except (OSError, ValueError):
+        return None
+    if entry is None:
+        return None
+    path = (issue_dir / entry.path).resolve()
+    return path if issue_dir.resolve() in path.parents else None
 
 
 def _render_correction_projection(projection: dict[str, Any]) -> str:
@@ -460,7 +482,14 @@ def show(
                 if content_type == "output" and iteration == 0
                 else None
             )
-            if projection is not None:
+            current_path = (
+                _current_artifact_path(cafe_dir / "issues" / issue_name, phase_name)
+                if content_type == "output" and iteration == 0
+                else None
+            )
+            if current_path is not None:
+                file_path = current_path
+            elif projection is not None:
                 file_path = cafe_dir / "issues" / issue_name / projection["current_path"]
         else:
             # status and iterations don't need iteration number
