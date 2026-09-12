@@ -3,6 +3,7 @@
 [ ] Read src/cafe/data/agents/developer/Nick.md to understand your role and native language
 [ ] Carefully read .cafe/issues/test/spec/iteration_001/output.md and .cafe/issues/test/plan/iteration_001/output.md
 [ ] Read feedback todo list in .cafe/issues/test/review/iteration_001/output.md
+[ ] Keep this Develop invocation running through every authorized executable blocker; after each bounded unit, validate evidence, update the authoritative feedback/plan progress and cumulative development summary, then continue instead of treating a commit or targeted check as an iteration boundary
 [ ] Address each issue raised in the feedback
 [ ] Mark completed items in .cafe/issues/test/review/iteration_001/output.md if applicable (change - [ ] to - [x])
 [ ] Commit changes with descriptive messages

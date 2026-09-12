@@ -6,6 +6,7 @@
 [ ] Mark each completed task as checked in .cafe/issues/test/plan/iteration_001/output.md (change - [ ] to - [x])
 [ ] Keep the plan contract valid when marking completion: set matching `Task Status` rows to `completed` (never `done`)
 [ ] Follow existing commit message style, commit multiple times if needed
+[ ] Keep this Develop invocation running through every authorized executable item; after each bounded unit, validate evidence, update the authoritative plan progress and cumulative development summary, then continue instead of treating a commit or targeted check as an iteration boundary
 [ ] Do NOT modify commits from other branches
 [ ] Confirm: Maximized code reuse by looking for existing patterns and utilities
 [ ] Confirm: Commit messages strictly match existing format, language, and structure

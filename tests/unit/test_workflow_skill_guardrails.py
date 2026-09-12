@@ -13,7 +13,7 @@ def test_packaged_workflow_common_uses_bounded_digest() -> None:
     builtin_root = PROJECT_ROOT / "src" / "cafe" / "data" / "skills"
     text = _skill_text(builtin_root, "cafe-workflow-common")
 
-    assert "version: 1.8.3" in text
+    assert "version: 1.8.4" in text
     assert "Bounded blackboard digest" in text
     assert "Do **not** read or print the whole file" in text
     assert '"from_step": "<current step name>"' not in text
@@ -24,13 +24,15 @@ def test_packaged_workflow_common_uses_bounded_digest() -> None:
     assert "in-workflow request" in text
     assert "outside the active workflow" in text
     assert "and Driver" not in text
+    assert "A final response ends the current CLI invocation" in text
+    assert "not as a neutral progress checkpoint" in text
 
 
 def test_packaged_develop_skill_uses_repository_quality_gate_guidance() -> None:
     builtin_root = PROJECT_ROOT / "src" / "cafe" / "data" / "skills"
     text = _skill_text(builtin_root, "cafe-develop")
 
-    assert "version: 1.9.0" in text
+    assert "version: 1.10.0" in text
     assert "與變更直接相關的 targeted checks" in text
     assert "Repository-owned quality gates" in text
     assert "max_read_only_commands" not in text
@@ -42,6 +44,9 @@ def test_packaged_develop_skill_uses_repository_quality_gate_guidance() -> None:
     assert "`Task Status` 僅使用 schema 允許的 `completed`" in text
     assert "不得寫 `done`" in text
     assert "在 handoff 前寫入非空的 development summary" in text
+    assert "完成一個 bounded unit、commit 或 targeted check 都只是進度" in text
+    assert "不得以純進度說明" in text
+    assert "只因 checkbox 已勾選或 commit 存在就假定工作完成" in text
 
 
 def test_behaviorally_changed_skills_have_minor_version_bumps() -> None:
@@ -53,8 +58,8 @@ def test_behaviorally_changed_skills_have_minor_version_bumps() -> None:
         "cafe-plan": "version: 1.8.1",
         "cafe-review": "version: 1.13.0",
         "cafe-pr": "version: 1.4.1",
-        "cafe-workflow-common": "version: 1.8.3",
-        "use-cafe-workflow": "metadata: {version: 1.46.0}",
+        "cafe-workflow-common": "version: 1.8.4",
+        "use-cafe-workflow": "metadata: {version: 1.47.0}",
     }
     for name, version in expected_versions.items():
         assert version in _skill_text(builtin_root, name)

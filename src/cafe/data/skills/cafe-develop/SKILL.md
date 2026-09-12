@@ -1,7 +1,7 @@
 ---
 name: cafe-develop
 description: "依計畫進行程式開發與測試"
-version: 1.9.0
+version: 1.10.0
 workflow:
   execution_profile:
     workload: implementation
@@ -100,7 +100,11 @@ Read your agent file: {agent_file}
 - 實作中只執行與變更直接相關的 targeted checks，並保持輸出有界；若 workflow 提供 plan，將 checks 對應其 Test List；不要在本 phase 重複 repository 的 full-suite、coverage、release 或 pre-push gate
 - 若 workflow 提供 plan，新增或修改的測試必須對應其 **Test List** 項目（範圍變更時先更新計畫）
 - 斷言以 invariant 為主：避免綁定 UI copy、CSS class、DOM 結構、內部 state shape；允許 a11y role/label、`data-testid`、以及規格明訂的文案（見 `cafe-plan/references/test_invariants_policy.md`）
-- 每輪完成後更新 checklist
+- 將一次 Develop CLI invocation 視為同一個持續執行單位：只要仍有已授權且可執行的未完成工作，就繼續處理；完成一個 bounded unit、commit 或 targeted check 都只是進度，不是 iteration 邊界、checkpoint 終點或 handoff 理由
+- 每完成一個 bounded unit，先驗證 evidence，再立即更新權威進度：有 plan 時更新對應 task checkbox 與 `Task Status`，有 review feedback 時只把已實際解決並驗證的 blocker 勾選；同時更新 `{output_file}` 的累積摘要，記錄完成的 item ID、變更、commit（若有）、test command/result/revision、剩餘工作與下一個動作，然後直接繼續下一個未完成項目
+- retry 或重新進入 phase 時，先從 plan、review feedback 與 `{output_file}` 重建未完成工作，並對照目前 worktree、dependency 與 evidence 驗證既有進度；不得只因 checkbox 已勾選或 commit 存在就假定工作完成，只跳過證據仍有效的項目
+- 不得以純進度說明、要求外部再說 `continue`／`resume`、或等待下一次呼叫作為結束本次 invocation 的方式
+- 只有三種情況可以結束本次 invocation：所有適用 checklist gate 與工作均已完成並寫出合法 handoff；確實需要 clarification、permission 或 user arbitration 並寫出合法 handoff；或 provider/tool 無法繼續。最後一種情況只保留真實 checkpoint，不得偽造已完成 checkbox、問題或 baton
 - 更新 plan 的完成狀態時，authoritative body checkbox 使用 `[x]`，`## Downstream Contract` 的 `Task Status` 僅使用 schema 允許的 `completed`；不得寫 `done`
 - 在 handoff 前寫入非空的 development summary 到 `{output_file}`
 - 維持既有 commit 風格與程式碼註解語言

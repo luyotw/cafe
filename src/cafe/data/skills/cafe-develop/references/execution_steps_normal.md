@@ -2,6 +2,7 @@
 
 [ ] Read {agent_file} to understand your role and native language
 {normal_plan_context}[ ] Follow existing commit message style, commit multiple times if needed
+[ ] Keep this Develop invocation running through every authorized executable item; after each bounded unit, validate evidence, update the authoritative plan progress and cumulative development summary, then continue instead of treating a commit or targeted check as an iteration boundary
 [ ] Do NOT modify commits from other branches
 [ ] Confirm: Maximized code reuse by looking for existing patterns and utilities
 [ ] Confirm: Commit messages strictly match existing format, language, and structure
