@@ -235,7 +235,12 @@ def _apply_declared_correction(
         )
     except (OSError, ValueError) as exc:
         raise TaskInboxError("invalid_response", str(exc), recovery="Refresh the task and submit a declared correction based on the current revision.", task_id=preflight.task.id, issue=preflight.issue, workflow_id=preflight.workflow_id) from exc
-    return continuation
+    # The correction service derives and publishes the authoritative continuation
+    # from the playbook's agent edge. A task decision is only the user's amendment
+    # choice and can deliberately differ from that graph-derived target.
+    return BlackboardStore(preflight.issue_dir).load_or_create(
+        preflight.task.step, playbook_id=preflight.playbook_id
+    ).current_step
 
 
 @task_app.command("ls")

@@ -167,7 +167,7 @@ def test_direct_correction_cli_completes_once_and_replay_does_not_mutate(
             "input_schema": "decision",
             "correction": {"artifacts": ["spec"], "allow_driver_proxy": True},
         },
-        continuations={"revise": "plan"},
+        continuations={"confirm": "plan", "revise": "spec"},
     )
     request = {
         "decision": "revise",
@@ -185,7 +185,9 @@ def test_direct_correction_cli_completes_once_and_replay_does_not_mutate(
     )
 
     assert first.exit_code == 0, (first.stdout, first.exception)
-    assert json.loads(first.stdout)["ok"] is True
+    payload = json.loads(first.stdout)
+    assert payload["ok"] is True
+    assert payload["data"]["workflow"]["continuation"] == "plan"
     records = HumanTaskRecordStore(issue_dir)
     assert records.get_task(task.id).status is HumanTaskStatus.COMPLETED
     assert records.get_result(task.id) is not None
@@ -194,7 +196,10 @@ def test_direct_correction_cli_completes_once_and_replay_does_not_mutate(
     assert current.version == 2
     assert (issue_dir / current.path).read_text(encoding="utf-8") == "corrected requirement\n"
     assert original_path.read_text(encoding="utf-8") == original_content
-    assert boards.load_or_create("spec").current_step == "plan"
+    durable_state = boards.load_or_create("spec")
+    assert durable_state.current_step == "plan"
+    assert durable_state.handoff_contract is not None
+    assert durable_state.handoff_contract.to_step == payload["data"]["workflow"]["continuation"]
 
     replay = runner.invoke(
         app,
