@@ -638,12 +638,19 @@ class BlackboardWorkflowRuntime:
             )
         return message
 
-    def _same_step_baton_rejected(self, *, current_step: str) -> BatonRejected:
-        valid_targets = sorted((set(self.steps.keys()) | {"user", "done"}) - {current_step})
-        return BatonRejected(
-            field="to_step",
-            invalid_value=current_step,
-            valid_values=valid_targets,
+    @staticmethod
+    def _missing_completion_prompt(*, current_step: str) -> str:
+        """Return the corrective prompt for a clean exit without a handoff."""
+        return (
+            "[COMPLETION ERROR] Your previous response ended the CLI invocation with a "
+            "progress update but no valid completion status or outbound baton. A progress "
+            "update is not a workflow handoff. Continue every remaining authorized and "
+            f"executable item for step '{current_step}' now; do not stop merely to report "
+            "progress. Before ending this invocation, either finish the step and write its "
+            "valid next-step baton, or write the valid user handoff required by a real "
+            "clarification, permission, or arbitration blocker. Preserve truthful partial "
+            "progress if the provider or a tool actually prevents continuation; never mark "
+            "unfinished work complete or invent a handoff."
         )
 
     def _validate_agent_baton(self, *, current_step: str) -> None:
@@ -3521,7 +3528,29 @@ class BlackboardWorkflowRuntime:
                     if contract.to_owner == HandoffOwner.AGENT and contract.to_step == current_step:
                         explicit_status_code = getattr(frame.execution_result, "status_code", None)
                         if not explicit_status_code:
-                            raise self._same_step_baton_rejected(current_step=current_step)
+                            retry_num = _baton_attempt + 1
+                            will_retry = retry_num < 3
+                            self.blackboard_store.record_event(
+                                self.blackboard,
+                                "completion_handoff_missing",
+                                {
+                                    "step": current_step,
+                                    "retry": retry_num,
+                                    "will_retry": will_retry,
+                                    "runtime": runtime_label,
+                                },
+                            )
+                            if not will_retry:
+                                return self._pause_for_agent_execution_interruption(
+                                    current_step=current_step,
+                                    reason="agent_status_code_missing",
+                                    runtime=runtime_label,
+                                )
+                            self._mark_latest_iteration_completion_untrusted(current_step)
+                            _baton_retry_extra_prompt = self._missing_completion_prompt(
+                                current_step=current_step
+                            )
+                            continue
                         status_code = str(explicit_status_code)
                     else:
                         status_code = (
@@ -3856,36 +3885,47 @@ class BlackboardWorkflowRuntime:
                 self._store_artifacts(frame.artifacts)
                 try:
                     post_contract = self._load_step_handoff_contract(current_step=current_step)
-                    if (
-                        post_contract is not None
-                        and post_contract.to_owner == HandoffOwner.AGENT
+                    status_code_obj, goto_target, valid_codes = self._parse_legacy_status(
+                        step_def=step_def,
+                        response=frame.response,
+                        explicit_status_code=frame.explicit_status_code,
+                    )
+                    allowed_status_codes = {code.value for code in valid_codes}
+                    status_like_tokens = self._extract_status_like_tokens(
+                        response=frame.response,
+                        explicit_status_code=frame.explicit_status_code,
+                    )
+                    invalid_intents = {
+                        token for token in status_like_tokens if token not in allowed_status_codes
+                    }
+                    has_outbound_handoff = post_contract is not None and not (
+                        post_contract.to_owner == HandoffOwner.AGENT
                         and post_contract.to_step == current_step
-                        and post_contract.source
-                        not in {"bootstrap", "workflow.start_step_override"}
+                    )
+                    if (
+                        not has_outbound_handoff
+                        and status_code_obj is None
+                        and not goto_target
+                        and not invalid_intents
                     ):
-                        status_code_obj, goto_target, valid_codes = self._parse_legacy_status(
-                            step_def=step_def,
-                            response=frame.response,
-                            explicit_status_code=frame.explicit_status_code,
+                        retry_num = _baton_attempt + 1
+                        will_retry = retry_num < 3
+                        self.blackboard_store.record_event(
+                            self.blackboard,
+                            "completion_handoff_missing",
+                            {
+                                "step": current_step,
+                                "retry": retry_num,
+                                "will_retry": will_retry,
+                                "runtime": runtime_label,
+                            },
                         )
-                        allowed_status_codes = {code.value for code in valid_codes}
-                        status_like_tokens = self._extract_status_like_tokens(
-                            response=frame.response,
-                            explicit_status_code=frame.explicit_status_code,
-                        )
-                        invalid_intents = {
-                            token
-                            for token in status_like_tokens
-                            if token not in allowed_status_codes
-                        }
-                        has_default_transition = bool(step_def.get("on", {}).get("default"))
-                        if (
-                            status_code_obj is None
-                            and not goto_target
-                            and not invalid_intents
-                            and not has_default_transition
-                        ):
-                            raise self._same_step_baton_rejected(current_step=current_step)
+                        if will_retry:
+                            self._mark_latest_iteration_completion_untrusted(current_step)
+                            _baton_retry_extra_prompt = self._missing_completion_prompt(
+                                current_step=current_step
+                            )
+                            continue
                     break
                 except BatonRejected as br:
                     retry_num = _baton_attempt + 1
