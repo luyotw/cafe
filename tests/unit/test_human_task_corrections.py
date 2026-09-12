@@ -573,6 +573,44 @@ def test_recovery_finishes_after_revision_replacement_without_rechecking_old_bas
     assert records.get_task(task.id).status.value == "completed"
 
 
+def test_recovery_publishes_graph_handoff_after_task_completion_interruption(tmp_path, monkeypatch) -> None:
+    source = tmp_path / "brief.md"
+    source.write_text("base", encoding="utf-8")
+    board_store = BlackboardStore(tmp_path)
+    board = board_store.load_or_create("review")
+    board_store.put_artifact(board, ArtifactEntry(
+        name="brief", kind=ArtifactKind.DOCUMENT, version=1, updated_by="writer", path="brief.md"
+    ))
+    records = HumanTaskRecordStore(tmp_path)
+    task = records.materialize(
+        workflow_id="workflow", step="review", iteration=1, trigger="confirm_output",
+        policy_id="output-review", prompt="Review",
+        expected_result={"input_schema": "decision", "correction": {"artifacts": ["brief"]}},
+        continuations={"revise": "draft"}, assignee_type="user",
+    )
+    service = HumanTaskCorrectionService(tmp_path)
+    monkeypatch.setattr(service, "_schedule_graph_continuation", lambda _task: (_ for _ in ()).throw(OSError("stop")))
+    with pytest.raises(OSError, match="stop"):
+        service.apply(CorrectionRequest(
+            workflow_id="workflow", task_id=task.id, artifact="brief", base_hash=sha256_bytes(b"base"),
+            content="replacement", operation_id="recover-handoff", actor="user",
+            manifest=({"kind": "artifact", "id": "brief"},),
+        ))
+
+    observed_states: list[str] = []
+    original = HumanTaskCorrectionService._schedule_graph_continuation
+
+    def observe_schedule(self, recovered_task):
+        observed_states.append(ArtifactRevisionStore(tmp_path).journal("recover-handoff")["state"])
+        return original(self, recovered_task)
+
+    monkeypatch.setattr(HumanTaskCorrectionService, "_schedule_graph_continuation", observe_schedule)
+    HumanTaskCorrectionService(tmp_path).recover("recover-handoff")
+
+    assert observed_states == ["applying"]
+    assert ArtifactRevisionStore(tmp_path).journal("recover-handoff")["state"] == "committed"
+
+
 def test_recovery_replays_an_artifact_invalidation_interrupted_before_its_receipt(tmp_path, monkeypatch) -> None:
     source = tmp_path / "brief.md"
     stale = tmp_path / "summary.md"
