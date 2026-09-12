@@ -18,6 +18,17 @@ class CorrectionTakeoverAssessment:
     reason: str | None = None
 
 
+def record_user_driver_authorization(
+    *, issue_dir: Path, workflow_id: str, task_id: str, authorization_id: str
+) -> str:
+    """Record explicit user consent before any Driver mutation is possible."""
+    task = HumanTaskRecordStore(issue_dir).authorize_driver_correction(
+        workflow_id=workflow_id, task_id=task_id, authorization_id=authorization_id
+    )
+    authorization = task.expected_result["correction"]["driver_authorization"]
+    return str(authorization["id"])
+
+
 def assess_correction_takeover(
     *,
     bounded: bool,

@@ -600,6 +600,41 @@ class HumanTaskRecordStore:
             self._save(envelope)
             return refreshed
 
+    def authorize_driver_correction(
+        self, *, workflow_id: str, task_id: str, authorization_id: str
+    ) -> HumanTask:
+        """Attach one explicit user authorization to a still-pending task.
+
+        The authorization is task-local durable state, not a Driver supplied
+        flag.  It intentionally leaves the wait pending for the Driver's later
+        suitability assessment and shared correction transaction.
+        """
+        with self.transaction():
+            envelope = self._load_for_workflow(workflow_id, create=False)
+            task = self._task(envelope, task_id)
+            correction = task.expected_result.get("correction")
+            if (
+                task.status is not HumanTaskStatus.PENDING
+                or not isinstance(correction, dict)
+                or correction.get("allow_driver_proxy") is not True
+                or correction.get("driver_authorization") is not None
+            ):
+                raise HumanTaskCorrelationError("task cannot accept Driver correction authorization")
+            if not isinstance(authorization_id, str) or not authorization_id.strip():
+                raise HumanTaskCorrelationError("Driver authorization identifier is invalid")
+            updated_correction = dict(correction)
+            updated_correction["driver_authorization"] = {"id": authorization_id}
+            expected_result = dict(task.expected_result)
+            expected_result["correction"] = updated_correction
+            updated = replace(task, expected_result=expected_result)
+            envelope.tasks[task.id] = updated
+            self._append_event(
+                envelope, "driver_correction_authorized", task_id=task.id,
+                context={"authorization_id": authorization_id},
+            )
+            self._save(envelope)
+            return updated
+
     def transition_capability_approval_if_state(
         self,
         *,
