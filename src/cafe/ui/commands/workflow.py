@@ -104,16 +104,21 @@ def _correction_projection(issue_dir: Path, artifact_name: Optional[str] = None)
             next_gate = playbook.next_human_gate(board.current_step)
         except (OSError, ValueError):
             pass
-        return {
+        projection = {
             "artifact": artifact,
             "actor": correction.get("actor"),
             "operation_id": correction.get("operation_id"),
+            "human_task_id": result.task_id,
             "manifest": correction.get("manifest", []),
             "current_path": current.path,
             "current_version": current.version,
             "next_step": board.current_step,
             "next_user_gate": next_gate,
         }
+        authorization_id = correction.get("authorization_id")
+        if isinstance(authorization_id, str):
+            projection["authorization_id"] = authorization_id
+        return projection
     for event in reversed(HumanTaskRecordStore(issue_dir).lifecycle_events()):
         correction = event.context.get("correction")
         if event.event_type != "rejected" or not isinstance(correction, dict):
@@ -160,10 +165,17 @@ def _render_correction_projection(projection: dict[str, Any]) -> str:
     invalidated = projection["manifest"]
     invalidated_count = len(invalidated) if isinstance(invalidated, list) else 0
     next_gate = projection["next_user_gate"] or "none declared"
+    proxy_evidence = ""
+    if projection.get("actor") == "driver_on_behalf_of_user":
+        proxy_evidence = (
+            f"Governing task: {projection['human_task_id']}\n"
+            f"Driver authorization: {projection.get('authorization_id', 'unavailable')}\n"
+        )
     return (
         "Current correction revision\n"
         f"Actor: {projection['actor']}\n"
         f"Operation: {projection['operation_id']}\n"
+        f"{proxy_evidence}"
         f"Current version: {projection['current_version']}\n"
         f"Invalidated entries: {invalidated_count}\n"
         f"Next workflow step: {projection['next_step']}\n"

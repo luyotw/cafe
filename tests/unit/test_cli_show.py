@@ -215,7 +215,8 @@ class TestShowCommand:
         records.complete(
             workflow_id=board.workflow_id, task_id=task.id,
             payload={"correction": {
-                "artifact": "spec", "actor": "user", "operation_id": "show-current",
+                "artifact": "spec", "actor": "driver_on_behalf_of_user", "operation_id": "show-current",
+                "authorization_id": "task-bound-authorization",
                 "new_hash": sha256_bytes(b"corrected requirement\n"),
                 "manifest": [{"kind": "artifact", "id": "plan"}],
             }}, source="human_task_correction",
@@ -228,6 +229,8 @@ class TestShowCommand:
 
         assert result.exit_code == 0
         assert "Current correction revision" in result.stdout
+        assert task.id in result.stdout
+        assert "task-bound-authorization" in result.stdout
         assert "corrected requirement" in result.stdout
         assert "original requirement" not in result.stdout
 
