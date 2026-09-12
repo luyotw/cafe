@@ -32,6 +32,7 @@ This inventory is executable documentation: the unit contract discovers every `s
 | `src/cafe/workflow_execution/event_callback.py::dispatch_workflow_event_callback` | Trusted builtin asynchronous workflow event callback |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/format_kickoff_contract.py::_reexec_with_cafe_python` | Internal fixed Python re-exec |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/catalog_version_check.py::run_catalog_check` | Internal fixed CAFE catalog inspection |
+| `src/cafe/data/skills/use-cafe-workflow/scripts/sync_helper_with_preflight.py::_run_command` | Explicit CLI-native helper publication with fixed CAFE pre/post checks |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/preflight_cache.py::_cli_fingerprint` | Internal version probe |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/preflight_cache.py::candidate_probe` | User-requested model availability probe |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/workflow_event_callback.py::_queue_host_callback` | Trusted builtin callback queue transport |
