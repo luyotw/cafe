@@ -261,7 +261,7 @@ steps:
         '{"events":{"event-1":{"status":"routing"}}}', encoding="utf-8"
     )
 
-    submit_authorized_correction(
+    result = submit_authorized_correction(
         issue_dir=issue_dir, workflow_id="workflow", task_id=task.id, artifact="brief",
         base_hash=sha256_bytes(b"base"), content="replacement", operation_id="proxy-resume",
         authorization_id="authorized-by-user", suitability={name: True for name in (
@@ -275,6 +275,12 @@ steps:
     assert resumed.handoff_contract.to_owner.value == "agent"
     assert WorkerLaunchStore(issue_dir).get(worker["worker_id"])["status"] == "stale"
     assert EventDispatchFenceStore(issue_dir).is_fenced("event-1")
+    assert {frozenset(entry.items()) for entry in ArtifactRevisionStore(issue_dir).journal(result.operation_id)["receipts"]} >= {
+        frozenset({("kind", "worker"), ("id", worker["worker_id"])}),
+        frozenset({("kind", "dispatch"), ("id", "event-1")}),
+        frozenset({("kind", "continuation"), ("id", "workflow")}),
+    }
+    assert any(event.event_type == "continuation_invalidated_for_correction" for event in resumed.events)
 
 
 def test_driver_manifest_cannot_expand_the_task_scoped_mutation_set(tmp_path) -> None:

@@ -95,7 +95,7 @@ class HumanTaskCorrectionService:
         if any(
             not isinstance(entry, dict)
             or set(entry) != {"kind", "id"}
-            or entry.get("kind") not in {"artifact", "human_task", "approval", "worker", "dispatch"}
+            or entry.get("kind") not in {"artifact", "human_task", "approval", "worker", "dispatch", "continuation"}
             or not all(isinstance(entry[key], str) and entry[key] for key in ("kind", "id"))
             for entry in request.manifest
         ):
@@ -154,6 +154,7 @@ class HumanTaskCorrectionService:
                 request.operation_id,
                 corrected_artifact=request.artifact,
                 step=task.step,
+                workflow_id=task.workflow_id,
             )
             self.revisions.receipt(request.operation_id, entry)
         revision = self.revisions.replace(
@@ -302,6 +303,7 @@ class HumanTaskCorrectionService:
             {"kind": "dispatch", "id": event_id}
             for event_id in EventDispatchFenceStore(self.revisions.issue_dir).correction_candidates()
         )
+        manifest.append({"kind": "continuation", "id": task.workflow_id})
         return tuple(manifest)
 
     def recover(self, operation_id: str) -> CorrectionResult:
@@ -380,6 +382,7 @@ class HumanTaskCorrectionService:
         *,
         corrected_artifact: str,
         step: str,
+        workflow_id: str,
     ) -> None:
         """Apply the typed revocation before acknowledging its receipt."""
         if entry["kind"] == "artifact":
@@ -419,5 +422,13 @@ class HumanTaskCorrectionService:
                 entry["id"], operation_id=operation_id
             ):
                 raise ValueError("correction dispatch invalidation target is absent")
+        elif entry["kind"] == "continuation":
+            if entry["id"] != workflow_id:
+                raise ValueError("correction continuation invalidation target is invalid")
+            store = BlackboardStore(self.revisions.issue_dir)
+            if not store.invalidate_continuation_for_correction(
+                store.load_or_create(step), operation_id=operation_id
+            ):
+                raise ValueError("correction continuation invalidation target is absent")
         else:  # pragma: no cover - request validation keeps this fail-closed.
             raise ValueError("correction invalidation kind is unsupported")

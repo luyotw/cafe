@@ -1009,6 +1009,24 @@ class BlackboardStore:
         )
         return True
 
+    def invalidate_continuation_for_correction(
+        self, state: BlackboardState, *, operation_id: str
+    ) -> bool:
+        """Retire the current handoff/attempt cycle before graph resumption."""
+        if any(
+            event.event_type == "continuation_invalidated_for_correction"
+            and event.data.get("operation_id") == operation_id
+            for event in state.events
+        ):
+            return True
+        state.step_attempt_counts.clear()
+        self.record_event(
+            state,
+            "continuation_invalidated_for_correction",
+            {"operation_id": operation_id, "prior_step": state.current_step},
+        )
+        return True
+
     def append_capability_receipt(self, state: BlackboardState, receipt: Dict[str, Any]) -> None:
         """Append one structured host capability receipt and persist the blackboard."""
         state.capability_receipts.append(dict(receipt))
