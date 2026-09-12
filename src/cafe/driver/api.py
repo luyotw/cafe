@@ -8,6 +8,9 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping
 
+from cafe.core.human_task_corrections import CorrectionResult
+from cafe.driver.proxy import submit_authorized_correction
+
 from ._freshness import Freshness
 from ._lifecycle import activate, adopt_legacy, evaluate, event_callback_policy, replace
 from ._store import DriverContractMissingError, DriverContractUnsafeError
@@ -41,6 +44,23 @@ class DriverEntryRequest:
     issue_name: str
     workflow_id: str
     fresh_facts: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class DriverCorrectionCommand:
+    """A task-scoped correction request from the current Driver runtime."""
+
+    issue_dir: Path
+    workflow_id: str
+    task_id: str
+    artifact: str
+    base_hash: str | None
+    content: str
+    operation_id: str
+    authorization_id: str
+    suitability: Mapping[str, bool]
+    manifest: tuple[dict[str, str], ...]
+    completion_payload: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -149,6 +169,7 @@ def evaluate_driver_entry(command: DriverEntryRequest) -> DriverEntryResult:
         workflow_id=command.workflow_id,
         fresh_facts=command.fresh_facts,
     )
+
     phase_model_authority = {
         phase["name"]: tuple(dict(entry) for entry in phase["chain"])
         for phase in contract["phases"]
@@ -166,6 +187,23 @@ def evaluate_driver_entry(command: DriverEntryRequest) -> DriverEntryResult:
         phase_model_authority=_freeze(phase_model_authority),
         delivery_contract=_freeze(contract["delivery_contract"]),
         confirmation_contract=_freeze(contract["confirmation_contract"]),
+    )
+
+
+def submit_driver_correction(command: DriverCorrectionCommand) -> CorrectionResult:
+    """Apply an explicitly authorized proxy correction through CAFE stores."""
+    return submit_authorized_correction(
+        issue_dir=command.issue_dir,
+        workflow_id=command.workflow_id,
+        task_id=command.task_id,
+        artifact=command.artifact,
+        base_hash=command.base_hash,
+        content=command.content,
+        operation_id=command.operation_id,
+        authorization_id=command.authorization_id,
+        suitability=command.suitability,
+        manifest=command.manifest,
+        completion_payload=command.completion_payload,
     )
 
 
@@ -193,6 +231,7 @@ __all__ = [
     "ActivationResult",
     "DriverEntryRequest",
     "DriverEntryResult",
+    "DriverCorrectionCommand",
     "DriverContractMissingError",
     "DriverContractUnsafeError",
     "EventCallbackPolicy",
@@ -207,4 +246,5 @@ __all__ = [
     "evaluate_driver_entry",
     "event_callback_projection",
     "replace_confirmed_contract",
+    "submit_driver_correction",
 ]

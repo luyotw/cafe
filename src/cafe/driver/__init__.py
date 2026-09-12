@@ -6,6 +6,7 @@ from .api import (
     DriverContractMissingError,
     DriverContractUnsafeError,
     DriverEntryRequest,
+    DriverCorrectionCommand,
     DriverEntryResult,
     EventCallbackPolicy,
     EventCallbackRequest,
@@ -17,6 +18,7 @@ from .api import (
     activate_confirmed_contract,
     adopt_legacy_contract,
     evaluate_driver_entry,
+    submit_driver_correction,
     event_callback_projection,
     replace_confirmed_contract,
 )
@@ -27,6 +29,7 @@ __all__ = [
     "DriverContractMissingError",
     "DriverContractUnsafeError",
     "DriverEntryRequest",
+    "DriverCorrectionCommand",
     "DriverEntryResult",
     "EventCallbackPolicy",
     "EventCallbackRequest",
@@ -38,6 +41,7 @@ __all__ = [
     "activate_confirmed_contract",
     "adopt_legacy_contract",
     "evaluate_driver_entry",
+    "submit_driver_correction",
     "event_callback_projection",
     "replace_confirmed_contract",
 ]
