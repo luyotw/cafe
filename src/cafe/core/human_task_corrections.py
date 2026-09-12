@@ -323,6 +323,10 @@ class HumanTaskCorrectionService:
             revision = self.revisions.revision_for_operation(operation_id)
             if revision is None:
                 raise ValueError("completed correction is missing its immutable revision")
+            # Task completion and handoff publication are separate durable
+            # writes.  A crash between them must resume the frozen graph edge
+            # before this journal can become authoritative.
+            self._schedule_graph_continuation(task)
             self.revisions.commit(operation_id)
             return CorrectionResult(revision=revision, operation_id=operation_id)
         revision = self.revisions.revision_for_operation(operation_id)
