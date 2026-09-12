@@ -45,7 +45,10 @@ def next_runnable_iteration_number(phase_dir: Path) -> int:
     try:
         with open(last_context_file, "r", encoding="utf-8") as f:
             last_iteration_data = json.load(f)
-        if not last_iteration_data.get("end_time"):
+        if (
+            not last_iteration_data.get("end_time")
+            or last_iteration_data.get("workflow_completion_trusted") is False
+        ):
             return last_iteration
     except (json.JSONDecodeError, KeyError, FileNotFoundError):
         return last_iteration

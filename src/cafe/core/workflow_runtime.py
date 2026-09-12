@@ -53,6 +53,7 @@ from cafe.core.human_tasks import (
     agent_execution_interrupted_human_task,
     resolve_step_human_task,
 )
+from cafe.core.packet_io import atomic_write_bytes
 from cafe.core.playbook import (
     playbook_requests_capability,
     resolve_step_attempt_limit,
@@ -1189,6 +1190,7 @@ class BlackboardWorkflowRuntime:
             handoff_key=self._human_task_handoff_key(contract),
         )
         task = materialization.task
+        self._mark_latest_iteration_completion_untrusted(current_step)
         self._notify_new_human_task(task)
         self.blackboard_store.set_current_step(self.blackboard, "user")
         if materialization.created:
@@ -2739,6 +2741,28 @@ class BlackboardWorkflowRuntime:
         except ValueError:
             return 1
 
+    def _mark_latest_iteration_completion_untrusted(self, current_step: str) -> None:
+        """Keep a clean provider exit retryable when workflow completion was unusable."""
+        iteration_dir = self._latest_iteration_dir(current_step)
+        if iteration_dir is None:
+            return
+        context_file = iteration_dir / "iteration.json"
+        if context_file.is_symlink() or not context_file.is_file():
+            return
+        if context_file.stat().st_size > 1_048_576:
+            raise RuntimeError("Iteration context is too large to mark as interrupted")
+        try:
+            context = json.loads(context_file.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError("Cannot mark invalid iteration context as interrupted") from exc
+        if not isinstance(context, dict):
+            raise RuntimeError("Cannot mark invalid iteration context as interrupted")
+        context["workflow_completion_trusted"] = False
+        atomic_write_bytes(
+            context_file,
+            json.dumps(context, ensure_ascii=False, indent=2).encode("utf-8") + b"\n",
+        )
+
     def _superseded_human_task_ids(
         self,
         records: HumanTaskRecordStore,
@@ -4002,12 +4026,16 @@ class BlackboardWorkflowRuntime:
                                     "runtime": runtime_label,
                                 },
                             )
-                            # The agent returned with neither a status code
-                            # nor a baton, so stop at this workflow boundary.
-                            return PlaybookRunResult(
-                                final_step=current_step,
-                                final_status_code="NO_STATUS_CODE",
-                                completed=False,
+                            # A clean process exit is not a trusted phase
+                            # completion when the agent supplied neither a
+                            # status code nor a baton. Route it through the
+                            # same explicit recovery task as transport-level
+                            # agent interruptions so the user can choose
+                            # whether to retain or rotate the session.
+                            return self._pause_for_agent_execution_interruption(
+                                current_step=current_step,
+                                reason="agent_status_code_missing",
+                                runtime=runtime_label,
                             )
             else:
                 handoff_next_step = None
