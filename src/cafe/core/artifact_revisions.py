@@ -137,6 +137,13 @@ class ArtifactRevisionStore:
                 atomic_write_bytes(journal_path, canonical_json(journal))
             return normalized
 
+    def journal(self, operation_id: str) -> dict[str, Any]:
+        """Read one bounded correction journal for recovery or inspection."""
+        if not _OPERATION_ID.fullmatch(operation_id):
+            raise ArtifactRevisionError("operation identifier is invalid")
+        with self._exclusive_lock():
+            return self._load_journal(self.root / "journals" / f"{operation_id}.json")
+
     def commit(self, operation_id: str) -> dict[str, Any]:
         """Commit only once every planned invalidation receipt is durable."""
         journal_path = self.root / "journals" / f"{operation_id}.json"

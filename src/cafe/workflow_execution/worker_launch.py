@@ -115,6 +115,24 @@ class WorkerLaunchStore:
             record["updated_at"] = _now()
             return dict(record)
 
+    def invalidate(self, worker_id: str, *, operation_id: str) -> dict[str, Any] | None:
+        """Fence a queued worker without erasing its audit record.
+
+        A correction may revoke only workers that have not crossed into a
+        side-effecting runtime.  The child validator treats this durable state
+        as terminal and never changes it into an unrelated startup failure.
+        """
+        with self._locked_records() as records:
+            record = records.get(worker_id)
+            if not isinstance(record, dict):
+                return None
+            if record.get("status") in {"running", "completed"}:
+                raise ValueError("worker has already crossed the correction fence")
+            record["status"] = "stale"
+            record["correction_operation_id"] = operation_id
+            record["updated_at"] = _now()
+            return dict(record)
+
     def validate_child(
         self,
         *,
@@ -127,6 +145,8 @@ class WorkerLaunchStore:
         with self._locked_records() as records:
             record = records.get(worker_id)
             if not isinstance(record, dict):
+                return False
+            if record.get("status") == "stale":
                 return False
             valid = record.get("worker_token") == worker_token and record.get("status") == "started"
             if valid:

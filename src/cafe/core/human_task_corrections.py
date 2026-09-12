@@ -9,6 +9,7 @@ from typing import Any, Mapping
 from cafe.core.artifact_revisions import ArtifactRevision, ArtifactRevisionStore
 from cafe.core.blackboard import BlackboardStore
 from cafe.core.human_task_records import HumanTaskRecordStore
+from cafe.workflow_execution.worker_launch import WorkerLaunchStore
 
 
 @dataclass(frozen=True)
@@ -108,6 +109,7 @@ class HumanTaskCorrectionService:
             raise ValueError("correction base hash is not current")
         journal = self.revisions.prepare(request.operation_id, list(request.manifest))
         for entry in journal["manifest"]:
+            self._invalidate(entry, request.operation_id)
             self.revisions.receipt(request.operation_id, entry)
         revision = self.revisions.replace(
             request.artifact,
@@ -138,3 +140,12 @@ class HumanTaskCorrectionService:
             source="human_task_correction",
         )
         return CorrectionResult(revision=revision, operation_id=request.operation_id)
+
+    def _invalidate(self, entry: Mapping[str, str], operation_id: str) -> None:
+        """Apply the typed revocation before acknowledging its receipt."""
+        if entry["kind"] == "worker":
+            invalidated = WorkerLaunchStore(self.revisions.issue_dir).invalidate(
+                entry["id"], operation_id=operation_id
+            )
+            if invalidated is None:
+                raise ValueError("correction worker invalidation target is absent")
