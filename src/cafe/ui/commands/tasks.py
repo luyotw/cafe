@@ -15,7 +15,6 @@ from rich.table import Table
 from cafe.core.blackboard import ArtifactEntry, BlackboardStore
 from cafe.core.capability_approvals import CapabilityApprovalError
 from cafe.core.human_task_corrections import CorrectionRequest, HumanTaskCorrectionService
-from cafe.core.artifact_revisions import ArtifactRevisionError, ArtifactRevisionStore
 from cafe.core.packet_io import sha256_bytes
 from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.human_tasks import HumanTaskPolicy
@@ -205,14 +204,11 @@ def _apply_declared_correction(
             workflow_id=preflight.workflow_id,
         )
     try:
-        current = ArtifactRevisionStore(preflight.issue_dir).bootstrap(
-            artifact,
-            content=published_bytes.decode("utf-8"),
-        )
-    except (ArtifactRevisionError, OSError, UnicodeError) as exc:
+        published_content = published_bytes.decode("utf-8")
+    except UnicodeError as exc:
         raise TaskInboxError(
             "invalid_response",
-            "Correction target cannot be bound to its current artifact.",
+            "Correction target is not valid UTF-8 text.",
             recovery="Refresh the workflow task and retry with its current artifact version.",
             task_id=preflight.task.id,
             issue=preflight.issue,
@@ -227,7 +223,7 @@ def _apply_declared_correction(
             CorrectionRequest(
                 workflow_id=preflight.workflow_id, task_id=preflight.task.id, artifact=artifact,
                 base_hash=base_hash, content=content, operation_id=operation_id, actor="user",
-                manifest=manifest, completion_payload=raw_payload,
+                manifest=manifest, base_content=published_content, completion_payload=raw_payload,
             )
         )
     except (OSError, ValueError) as exc:

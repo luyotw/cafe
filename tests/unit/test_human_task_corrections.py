@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from cafe.core.artifact_revisions import ArtifactRevisionStore, StaleArtifactRevision
 from cafe.core.human_task_corrections import CorrectionRequest, HumanTaskCorrectionService
 from cafe.core.human_task_records import HumanTaskRecordStore
+from cafe.core.packet_io import sha256_bytes
 from cafe.driver.proxy import assess_correction_takeover
 from cafe.core.human_tasks import HumanTaskBinding, HumanTaskCorrection
 from cafe.core.playbook import PlaybookDefinition
@@ -118,11 +119,12 @@ def test_correction_service_uses_the_pending_task_contract_not_caller_authority(
         workflow_id="workflow",
         task_id=task.id,
         artifact="brief",
-        base_hash=None,
+        base_hash=sha256_bytes(b""),
         content="replacement",
         operation_id="correction-1",
         actor="user",
         manifest=({"kind": "artifact", "id": "review"},),
+        base_content="",
         completion_payload={"task": "output-review", "continuation": "draft"},
     )
     assert service.apply(request).revision.artifact == "brief"
@@ -145,6 +147,7 @@ def test_correction_service_uses_the_pending_task_contract_not_caller_authority(
                 workflow_id="workflow", task_id=other.id, artifact="brief", base_hash=None,
                 content="forged", operation_id="correction-2", actor="user",
                 manifest=({"kind": "artifact", "id": "review"},),
+                base_content="",
             )
         )
 

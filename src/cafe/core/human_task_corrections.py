@@ -20,6 +20,7 @@ class CorrectionRequest:
     operation_id: str
     actor: str
     manifest: tuple[dict[str, str], ...]
+    base_content: str | None = None
     completion_payload: Mapping[str, Any] | None = None
 
 
@@ -57,6 +58,13 @@ class HumanTaskCorrectionService:
             raise ValueError("the pending task does not authorize a Driver proxy")
         if not isinstance(request.content, str) or len(request.content.encode("utf-8")) > 1_000_000:
             raise ValueError("correction content is invalid or exceeds the task limit")
+        if not isinstance(request.base_content, str):
+            raise ValueError("correction base content is required")
+        base_revision = self.revisions.bootstrap(
+            request.artifact, content=request.base_content
+        )
+        if request.base_hash != base_revision.sha256:
+            raise ValueError("correction base hash is not current")
         if not request.manifest or len(request.manifest) > 1_000:
             raise ValueError("correction invalidation manifest is required")
         if any(
