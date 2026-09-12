@@ -34,6 +34,20 @@ from cafe.ui.human_tasks import (
 
 task_app = typer.Typer(help="List, inspect, and complete durable repository tasks")
 console = Console()
+MAX_CORRECTION_CONTENT_BYTES = 1_000_000
+
+
+def _read_bounded_correction_artifact(path: Path) -> bytes:
+    """Read a published correction base without allocating unbounded input."""
+    try:
+        if path.stat().st_size > MAX_CORRECTION_CONTENT_BYTES:
+            raise ValueError("correction base content exceeds the task limit")
+        content = path.read_bytes()
+    except OSError as exc:
+        raise ValueError("correction target cannot be read from the artifact registry") from exc
+    if len(content) > MAX_CORRECTION_CONTENT_BYTES:
+        raise ValueError("correction base content exceeds the task limit")
+    return content
 
 
 def _render_capability_approval(approval: dict[str, Any]) -> None:
@@ -186,11 +200,11 @@ def _apply_declared_correction(
     if prior is None:
         raise TaskInboxError("invalid_response", "Correction target is absent from the workflow artifact registry.", recovery="Refresh the workflow task before retrying.", task_id=preflight.task.id, issue=preflight.issue, workflow_id=preflight.workflow_id)
     try:
-        published_bytes = (preflight.issue_dir / prior.path).read_bytes()
-    except OSError as exc:
+        published_bytes = _read_bounded_correction_artifact(preflight.issue_dir / prior.path)
+    except ValueError as exc:
         raise TaskInboxError(
             "invalid_response",
-            "Correction target cannot be read from the artifact registry.",
+            str(exc),
             recovery="Refresh the workflow task and retry with its current artifact version.",
             task_id=preflight.task.id,
             issue=preflight.issue,

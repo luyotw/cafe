@@ -5,14 +5,24 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.human_tasks import agent_execution_interrupted_human_task
+from cafe.ui.commands.tasks import MAX_CORRECTION_CONTENT_BYTES, _read_bounded_correction_artifact
 from cafe.ui.cli import app
 
 runner = CliRunner()
+
+
+def test_correction_base_reader_rejects_oversized_published_artifacts(tmp_path: Path) -> None:
+    artifact = tmp_path / "oversized.md"
+    artifact.write_bytes(b"x" * (MAX_CORRECTION_CONTENT_BYTES + 1))
+
+    with pytest.raises(ValueError):
+        _read_bounded_correction_artifact(artifact)
 
 
 def _task_repo(tmp_path: Path, monkeypatch):
