@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from cafe.core.artifact_revisions import ArtifactRevision, ArtifactRevisionStore
-from cafe.core.blackboard import BlackboardStore
+from cafe.core.blackboard import ArtifactEntry, BlackboardStore
 from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.workflow_execution.worker_launch import WorkerLaunchStore
 
@@ -47,6 +47,14 @@ class HumanTaskCorrectionService:
 
     def _apply_locked(self, request: CorrectionRequest) -> CorrectionResult:
         task = self.tasks.get_task(request.task_id)
+        if task.workflow_id == request.workflow_id and task.status.value == "completed":
+            result = self.tasks.get_result(task.id)
+            correction = result.payload.get("correction") if result is not None else None
+            if isinstance(correction, Mapping) and correction.get("operation_id") == request.operation_id:
+                revision = self.revisions.revision_for_operation(request.operation_id)
+                if revision is None:
+                    raise ValueError("completed correction is missing its immutable revision")
+                return CorrectionResult(revision=revision, operation_id=request.operation_id)
         if task.workflow_id != request.workflow_id or task.status.value != "pending":
             raise ValueError("correction task is not pending for this workflow")
         declaration = task.expected_result.get("correction")
@@ -131,7 +139,28 @@ class HumanTaskCorrectionService:
             content=request.content,
             operation_id=request.operation_id,
         )
-        self.revisions.commit(request.operation_id)
+        # Publishing the replacement pointer is part of the correction
+        # transaction, rather than a best-effort responsibility of one caller.
+        # This keeps direct-user and Driver submissions on the same authority
+        # path and makes recovery independent of a particular UI command.
+        blackboard_store = BlackboardStore(self.revisions.issue_dir)
+        blackboard = blackboard_store.load_or_create(task.step)
+        current = blackboard.artifacts.get(request.artifact)
+        if current is None:
+            raise ValueError("correction artifact is no longer published")
+        blackboard_store.put_artifact(
+            blackboard,
+            ArtifactEntry(
+                name=current.name,
+                kind=current.kind,
+                version=current.version + 1,
+                updated_by="human_task_correction",
+                path=revision.path,
+                summary=current.summary,
+                base_sha=current.base_sha,
+                head_sha=current.head_sha,
+            ),
+        )
         payload = dict(request.completion_payload or {})
         payload["correction"] = {
             "actor": request.actor,
@@ -153,6 +182,10 @@ class HumanTaskCorrectionService:
             payload=payload,
             source="human_task_correction",
         )
+        # A committed journal means all durable stores, including the task
+        # result that drives continuation, have reached the same correction.
+        # Until then runtime recovery keeps the operation fenced.
+        self.revisions.commit(request.operation_id)
         return CorrectionResult(revision=revision, operation_id=request.operation_id)
 
     def recover(self, operation_id: str) -> CorrectionResult:
@@ -167,6 +200,13 @@ class HumanTaskCorrectionService:
         required = {"workflow_id", "task_id", "artifact", "base_hash", "content", "actor", "completion_payload"}
         if not isinstance(context, dict) or not required <= set(context):
             raise ValueError("correction recovery context is incomplete")
+        task = self.tasks.get_task(context["task_id"])
+        if task.status.value == "completed":
+            revision = self.revisions.revision_for_operation(operation_id)
+            if revision is None:
+                raise ValueError("completed correction is missing its immutable revision")
+            self.revisions.commit(operation_id)
+            return CorrectionResult(revision=revision, operation_id=operation_id)
         return self.apply(CorrectionRequest(
             workflow_id=context["workflow_id"], task_id=context["task_id"], artifact=context["artifact"],
             base_hash=context["base_hash"], content=context["content"], operation_id=operation_id,

@@ -139,8 +139,13 @@ def test_correction_service_uses_the_pending_task_contract_not_caller_authority(
         manifest=({"kind": "artifact", "id": "review"},),
         completion_payload={"task": "output-review", "continuation": "draft"},
     )
-    assert service.apply(request).revision.artifact == "brief"
+    applied = service.apply(request)
+    assert applied.revision.artifact == "brief"
+    assert service.apply(request) == applied
     assert records.get_result(task.id).payload["continuation"] == "draft"
+    published = BlackboardStore(tmp_path).load_or_create("review").artifacts["brief"]
+    assert published.path.startswith("artifact_revisions/brief/")
+    assert published.version == 2
 
     other = records.materialize(
         workflow_id="workflow",

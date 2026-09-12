@@ -12,7 +12,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from cafe.core.blackboard import ArtifactEntry, BlackboardStore
+from cafe.core.blackboard import BlackboardStore
 from cafe.core.capability_approvals import CapabilityApprovalError
 from cafe.core.human_task_corrections import CorrectionRequest, HumanTaskCorrectionService
 from cafe.core.packet_io import sha256_bytes
@@ -217,7 +217,6 @@ def _apply_declared_correction(
         )
     except (OSError, ValueError) as exc:
         raise TaskInboxError("invalid_response", str(exc), recovery="Refresh the task and submit a declared correction based on the current revision.", task_id=preflight.task.id, issue=preflight.issue, workflow_id=preflight.workflow_id) from exc
-    blackboard_store.put_artifact(blackboard, ArtifactEntry(name=artifact, kind=prior.kind, version=prior.version + 1, updated_by="human_task_correction", path=result.revision.path))
 
 
 @task_app.command("ls")
