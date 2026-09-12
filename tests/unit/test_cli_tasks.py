@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from typer.testing import CliRunner
@@ -13,6 +14,7 @@ from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.human_tasks import agent_execution_interrupted_human_task
 from cafe.core.packet_io import sha256_bytes
 from cafe.ui.commands.tasks import MAX_CORRECTION_CONTENT_BYTES, _read_bounded_correction_artifact
+from cafe.ui.commands.workflow import _correction_projection
 from cafe.ui.cli import app
 
 runner = CliRunner()
@@ -209,6 +211,69 @@ def test_direct_correction_cli_completes_once_and_replay_does_not_mutate(
     assert replay.exit_code != 0
     assert json.loads(replay.stdout)["error"]["code"] == "task_not_pending"
     assert boards.load_or_create("spec").artifacts["spec"].version == 2
+
+
+def test_rejected_correction_is_durably_explainable_without_mutation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Test List I4/I8: stale correction evidence reaches public task and status projections."""
+    issue_dir, original_task = _task_repo(tmp_path, monkeypatch)
+    (tmp_path / ".cafe" / "active_issue").write_text("issue-a\n", encoding="utf-8")
+    original = "original requirement\n"
+    path = issue_dir / "spec" / "iteration_001" / "output.md"
+    path.parent.mkdir(parents=True)
+    (path.parent / "iteration.json").write_text("{}", encoding="utf-8")
+    path.write_text(original, encoding="utf-8")
+    boards = BlackboardStore(issue_dir)
+    board = boards.load_or_create("spec", playbook_id="standard")
+    boards.put_artifact(board, ArtifactEntry(
+        name="spec", kind=ArtifactKind.DOCUMENT, version=1,
+        updated_by="spec", path="spec/iteration_001/output.md",
+    ))
+    task = HumanTaskRecordStore(issue_dir).refresh_pending_contract(
+        workflow_id=original_task.workflow_id, task_id=original_task.id,
+        prompt=original_task.prompt,
+        expected_result={"input_schema": "decision", "correction": {"artifacts": ["spec"]}},
+        continuations={"revise": "spec"},
+    )
+    response = runner.invoke(app, [
+        "task", "complete", task.id, "--result", json.dumps({
+            "decision": "revise", "correction": {
+                "artifact": "spec", "base_hash": "0" * 64,
+                "content": "must not persist\n", "operation_id": "stale-base",
+            },
+        }), "--no-resume", "--json",
+    ])
+
+    assert response.exit_code == 1
+    detail = json.loads(runner.invoke(app, ["task", "inspect", task.id, "--json"]).stdout)["data"]["task"]
+    rejection = detail["correction"]["last_rejection"]
+    correction = rejection["correction"]
+    assert correction["artifact"] == "spec"
+    assert correction["operation_id"] == "stale-base"
+    assert correction["outcome"] == "rejected"
+    assert correction["code"] == "invalid_response"
+    assert correction["state"] == "unchanged"
+    assert correction["recovery"]
+    assert HumanTaskRecordStore(issue_dir).get_task(task.id).status is HumanTaskStatus.PENDING
+    assert path.read_text(encoding="utf-8") == original
+    projection = _correction_projection(issue_dir)
+    assert projection is not None
+    assert projection["outcome"] == "rejected"
+    assert projection["reason"]
+    with patch("cafe.ui.cli.GitOperations") as mock_git_cls, patch(
+        "cafe.ui.cli.Path.cwd", return_value=tmp_path
+    ), patch("cafe.services.summary_service.GitOperations") as mock_summary_git_cls:
+        mock_summary_git_cls.return_value.get_current_branch.return_value = "issue-a"
+        mock_summary_git_cls.return_value.is_git_repository.return_value = True
+        mock_git_cls.return_value.get_current_branch.return_value = "issue-a"
+        shown = runner.invoke(app, ["show", "spec"])
+        workflow_status = runner.invoke(app, ["status"])
+    assert shown.exit_code == 0
+    assert "Rejected correction attempt" in shown.stdout
+    assert "must not persist" not in shown.stdout
+    assert workflow_status.exit_code == 0, workflow_status.stdout
+    assert "Rejected correction attempt" in workflow_status.stdout
 
 
 def test_list_json_envelope_supports_filters(tmp_path: Path, monkeypatch) -> None:

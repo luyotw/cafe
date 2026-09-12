@@ -13,6 +13,7 @@ from cafe.core.human_task_records import (
     HumanTaskRecordError,
     HumanTaskRecordStore,
     HumanTaskStatus,
+    LifecycleEvent,
     TaskResult,
     WaitState,
 )
@@ -163,6 +164,7 @@ class _Record:
     assignment: Assignment
     wait: WaitState
     result: Optional[TaskResult]
+    events: tuple[LifecycleEvent, ...]
 
 
 class TaskInboxService:
@@ -384,6 +386,7 @@ class TaskInboxService:
                     assignment=assignments[task.id],
                     wait=waits[task.id],
                     result=results[task.id],
+                    events=tuple(store.lifecycle_events()),
                 )
                 for task in tasks
             )
@@ -430,6 +433,14 @@ class TaskInboxService:
     @staticmethod
     def _detail(record: _Record) -> TaskDetail:
         task = record.task
+        rejection = next(
+            (
+                event.context
+                for event in reversed(record.events)
+                if event.event_type == "rejected" and event.task_id == task.id
+            ),
+            None,
+        )
         return TaskDetail(
             id=task.id,
             issue=record.issue,
@@ -462,7 +473,10 @@ class TaskInboxService:
                 if record.result is not None
                 and isinstance(record.result.payload.get("correction"), dict)
                 else (
-                    {"contract": dict(task.expected_result["correction"])}
+                    {
+                        "contract": dict(task.expected_result["correction"]),
+                        **({"last_rejection": dict(rejection)} if rejection else {}),
+                    }
                     if isinstance(task.expected_result.get("correction"), dict)
                     else None
                 )

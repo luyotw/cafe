@@ -449,9 +449,40 @@ def complete_task(
             )
             correction_target = None
             if isinstance(raw_payload, dict):
-                correction_target = _apply_declared_correction(
-                    preflight=preflight, playbook_data=playbook_data, raw_payload=raw_payload
-                )
+                try:
+                    correction_target = _apply_declared_correction(
+                        preflight=preflight, playbook_data=playbook_data, raw_payload=raw_payload
+                    )
+                except TaskInboxError as exc:
+                    correction = raw_payload.get("correction")
+                    contract = preflight.task.expected_result.get("correction")
+                    if isinstance(correction, dict) and isinstance(contract, dict):
+                        artifact = correction.get("artifact")
+                        operation_id = correction.get("operation_id")
+                        declared = contract.get("artifacts")
+                        if (
+                            isinstance(artifact, str)
+                            and isinstance(declared, list)
+                            and artifact in declared
+                            and isinstance(operation_id, str)
+                            and 0 < len(operation_id) <= 128
+                        ):
+                            HumanTaskRecordStore(preflight.issue_dir).record_rejection(
+                                workflow_id=preflight.workflow_id,
+                                task_id=preflight.task.id,
+                                reason=exc.message,
+                                context={
+                                    "correction": {
+                                        "artifact": artifact,
+                                        "operation_id": operation_id,
+                                        "outcome": "rejected",
+                                        "code": exc.code,
+                                        "recovery": exc.recovery,
+                                        "state": "unchanged",
+                                    }
+                                },
+                            )
+                    raise
             applied = (
                 HumanTaskApplication(target=correction_target, policy=None)
                 if correction_target is not None

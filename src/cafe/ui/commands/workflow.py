@@ -114,6 +114,22 @@ def _correction_projection(issue_dir: Path, artifact_name: Optional[str] = None)
             "next_step": board.current_step,
             "next_user_gate": next_gate,
         }
+    for event in reversed(HumanTaskRecordStore(issue_dir).lifecycle_events()):
+        correction = event.context.get("correction")
+        if event.event_type != "rejected" or not isinstance(correction, dict):
+            continue
+        artifact = correction.get("artifact")
+        if not isinstance(artifact, str) or (artifact_name is not None and artifact != artifact_name):
+            continue
+        return {
+            "artifact": artifact,
+            "operation_id": correction.get("operation_id"),
+            "outcome": correction.get("outcome"),
+            "reason": event.context.get("reason"),
+            "recovery": correction.get("recovery"),
+            "state": correction.get("state"),
+            "next_step": board.current_step,
+        }
     return None
 
 
@@ -133,6 +149,15 @@ def _current_artifact_path(issue_dir: Path, artifact_name: str) -> Optional[Path
 
 def _render_correction_projection(projection: dict[str, Any]) -> str:
     """Render trusted correction metadata without exposing submitted content."""
+    if projection.get("outcome") == "rejected":
+        return (
+            "Rejected correction attempt\n"
+            f"Operation: {projection['operation_id']}\n"
+            f"Reason: {projection['reason']}\n"
+            f"Workflow state: {projection['state']}\n"
+            f"Next action: {projection['recovery']}\n"
+            f"Next workflow step: {projection['next_step']}\n"
+        )
     invalidated = projection["manifest"]
     invalidated_count = len(invalidated) if isinstance(invalidated, list) else 0
     next_gate = projection["next_user_gate"] or "none declared"

@@ -785,12 +785,23 @@ class HumanTaskRecordStore:
             self._save(envelope)
             return result
 
-    def record_rejection(self, *, workflow_id: str, task_id: str, reason: str) -> None:
+    def record_rejection(
+        self,
+        *,
+        workflow_id: str,
+        task_id: str,
+        reason: str,
+        context: Optional[Mapping[str, Any]] = None,
+    ) -> None:
+        """Append bounded rejection evidence without changing the pending task."""
         with self.transaction():
             envelope = self._load_for_workflow(workflow_id, create=False)
             self._task(envelope, task_id)
+            event_context = {"reason": _text(reason, "reason")}
+            if context is not None:
+                event_context.update(dict(context))
             self._append_event(
-                envelope, "rejected", task_id=task_id, context={"reason": _text(reason, "reason")}
+                envelope, "rejected", task_id=task_id, context=event_context
             )
             self._save(envelope)
 
