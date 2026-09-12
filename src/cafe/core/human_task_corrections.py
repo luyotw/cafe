@@ -111,10 +111,12 @@ class HumanTaskCorrectionService:
         source = (self.revisions.issue_dir / entry.path).resolve()
         if self.revisions.issue_dir.resolve() not in source.parents:
             raise ValueError("correction artifact path escapes the issue")
-        if source.stat().st_size > 1_000_000:
-            raise ValueError("correction base content exceeds the task limit")
-        content_bytes = source.read_bytes()
-        if len(content_bytes) > 1_000_000:
+        # A stat/read pair is raceable.  Read at most the allowed bytes, then
+        # probe one additional byte without allocating an unbounded replacement.
+        with source.open("rb") as handle:
+            content_bytes = handle.read(1_000_000)
+            exceeds_limit = bool(handle.read(1))
+        if exceeds_limit:
             raise ValueError("correction base content exceeds the task limit")
         base_revision = self.revisions.bootstrap(
             request.artifact, content=content_bytes.decode("utf-8")
@@ -125,8 +127,9 @@ class HumanTaskCorrectionService:
         # boundary.  Driver requests are public API input, so their manifest is
         # never authority; derive it again from the durable workflow instead.
         manifest = (
-            self._canonical_manifest(task.step, request.artifact)
+            self._canonical_manifest(task, request.artifact)
             if request.actor == "driver_on_behalf_of_user"
+            or (self.revisions.issue_dir / "issue.yaml").is_file()
             else request.manifest
         )
         journal = self.revisions.prepare(
@@ -208,7 +211,7 @@ class HumanTaskCorrectionService:
         return CorrectionResult(revision=revision, operation_id=request.operation_id)
 
     def _canonical_manifest(
-        self, step: str, artifact: str
+        self, task, artifact: str
     ) -> tuple[dict[str, str], ...]:
         """Derive mutation targets from the active graph, never a Driver request.
 
@@ -216,7 +219,7 @@ class HumanTaskCorrectionService:
         only safe compatibility behavior is to replace the declared artifact;
         production issues always have the persisted playbook declaration.
         """
-        board = BlackboardStore(self.revisions.issue_dir).load_or_create(step)
+        board = BlackboardStore(self.revisions.issue_dir).load_or_create(task.step)
         issue_config = self.revisions.issue_dir / "issue.yaml"
         if not issue_config.is_file():
             return ({"kind": "artifact", "id": artifact},)
@@ -226,11 +229,20 @@ class HumanTaskCorrectionService:
             apply_issue_playbook_overrides(data, issue_config)
         )
         names = (artifact, *playbook.downstream_artifacts(artifact))
-        return tuple(
+        manifest = [
             {"kind": "artifact", "id": name}
             for name in names
             if name == artifact or name in board.artifacts
+        ]
+        downstream_steps = set(playbook.downstream_steps(artifact))
+        manifest.extend(
+            {"kind": "human_task", "id": candidate.id}
+            for candidate in self.tasks.tasks()
+            if candidate.workflow_id == task.workflow_id
+            and candidate.status.value == "pending"
+            and candidate.step in downstream_steps
         )
+        return tuple(manifest)
 
     def recover(self, operation_id: str) -> CorrectionResult:
         """Replay one durable, incomplete correction without another submission."""
