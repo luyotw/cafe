@@ -132,6 +132,7 @@ class HumanTaskCorrectionService:
             or (self.revisions.issue_dir / "issue.yaml").is_file()
             else request.manifest
         )
+        self._validate_manifest_revocability(manifest)
         journal = self.revisions.prepare(
             request.operation_id,
             list(manifest),
@@ -209,6 +210,16 @@ class HumanTaskCorrectionService:
         # Until then runtime recovery keeps the operation fenced.
         self.revisions.commit(request.operation_id)
         return CorrectionResult(revision=revision, operation_id=request.operation_id)
+
+    def _validate_manifest_revocability(self, manifest: tuple[dict[str, str], ...]) -> None:
+        """Reject non-revocable approvals before a journal can fence execution."""
+        for entry in manifest:
+            if entry["kind"] != "approval":
+                continue
+            approval = self.tasks.get_task(entry["id"])
+            metadata = approval.capability_approval or {}
+            if metadata.get("state") in {"attempt_started", "uncertain", "succeeded", "failed"}:
+                raise ValueError("capability approval requires external reconciliation")
 
     def _canonical_manifest(
         self, task, artifact: str
