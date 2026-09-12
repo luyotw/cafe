@@ -133,21 +133,35 @@ class HumanTaskCorrectionService:
         )
         if request.base_hash != base_revision.sha256:
             raise ValueError("correction base hash is not current")
+        correction_generation = (
+            WorkerLaunchStore(self.revisions.issue_dir).generation + 1
+            if any(entry["kind"] == "continuation" for entry in manifest)
+            else None
+        )
+        context = {
+            "workflow_id": request.workflow_id,
+            "task_id": request.task_id,
+            "artifact": request.artifact,
+            "base_hash": request.base_hash,
+            "content": request.content,
+            "actor": request.actor,
+            "proxy_authorization_id": request.proxy_authorization_id,
+            "suitability": dict(request.suitability or {}),
+            "completion_payload": dict(request.completion_payload or {}),
+        }
+        if correction_generation is not None:
+            context["correction_generation"] = correction_generation
         journal = self.revisions.prepare(
             request.operation_id,
             list(manifest),
-            context={
-                "workflow_id": request.workflow_id,
-                "task_id": request.task_id,
-                "artifact": request.artifact,
-                "base_hash": request.base_hash,
-                "content": request.content,
-                "actor": request.actor,
-                "proxy_authorization_id": request.proxy_authorization_id,
-                "suitability": dict(request.suitability or {}),
-                "completion_payload": dict(request.completion_payload or {}),
-            },
+            context=context,
         )
+        journal_generation = journal["context"].get("correction_generation")
+        if journal_generation is not None and (
+            not isinstance(journal_generation, int) or journal_generation < 1
+        ):
+            raise ValueError("correction journal has an invalid generation")
+        correction_generation = journal_generation
         for entry in journal["manifest"]:
             self._invalidate(
                 entry,
@@ -155,6 +169,7 @@ class HumanTaskCorrectionService:
                 corrected_artifact=request.artifact,
                 step=task.step,
                 workflow_id=task.workflow_id,
+                correction_generation=correction_generation,
             )
             self.revisions.receipt(request.operation_id, entry)
         revision = self.revisions.replace(
@@ -387,6 +402,7 @@ class HumanTaskCorrectionService:
         corrected_artifact: str,
         step: str,
         workflow_id: str,
+        correction_generation: int | None,
     ) -> None:
         """Apply the typed revocation before acknowledging its receipt."""
         if entry["kind"] == "artifact":
@@ -434,6 +450,10 @@ class HumanTaskCorrectionService:
                 store.load_or_create(step), operation_id=operation_id
             ):
                 raise ValueError("correction continuation invalidation target is absent")
-            WorkerLaunchStore(self.revisions.issue_dir).advance_correction_generation()
+            if correction_generation is None:
+                raise ValueError("correction continuation generation is missing")
+            WorkerLaunchStore(
+                self.revisions.issue_dir, allow_initial_prepared_generation=True
+            ).ensure_correction_generation(correction_generation)
         else:  # pragma: no cover - request validation keeps this fail-closed.
             raise ValueError("correction invalidation kind is unsupported")

@@ -56,11 +56,12 @@ def detached_child_environment() -> dict[str, str]:
 class WorkerLaunchStore:
     """Atomic per-worker launch records; not a daemon or liveness registry."""
 
-    def __init__(self, issue_dir: Path) -> None:
+    def __init__(self, issue_dir: Path, *, allow_initial_prepared_generation: bool = False) -> None:
         self.issue_dir = Path(issue_dir)
         self.path = self.issue_dir / LAUNCH_RECORD_FILENAME
         self.lock_path = self.issue_dir / f"{LAUNCH_RECORD_FILENAME}.lock"
         self.generation_path = self.issue_dir / ".workflow-correction-generation"
+        self._allow_initial_prepared_generation = allow_initial_prepared_generation
         self.generation = self._current_generation()
 
     def advance_correction_generation(self) -> int:
@@ -69,6 +70,30 @@ class WorkerLaunchStore:
             generation = self._current_generation() + 1
             atomic_write_bytes(self.generation_path, str(generation).encode("ascii"))
             return generation
+
+    def ensure_correction_generation(self, expected: int) -> int:
+        """Publish one journaled generation or verify its recovery replay.
+
+        The correction journal records ``expected`` before this sidecar changes.
+        Consequently an absent sidecar is acceptable only for the first
+        prepared correction; every later absence is a lost authority record,
+        not a pristine generation zero.
+        """
+        if not isinstance(expected, int) or expected < 1:
+            raise ValueError("correction generation is invalid")
+        with self._locked_records():
+            if not self.generation_path.exists():
+                if expected != 1:
+                    raise ValueError("correction generation is missing")
+                atomic_write_bytes(self.generation_path, str(expected).encode("ascii"))
+                return expected
+            current = self._current_generation()
+            if current == expected:
+                return current
+            if current != expected - 1:
+                raise ValueError("correction generation does not match its journal")
+            atomic_write_bytes(self.generation_path, str(expected).encode("ascii"))
+            return expected
 
     def start(self) -> dict[str, Any]:
         """Reserve one child handoff without reading workflow policy."""
@@ -216,6 +241,8 @@ class WorkerLaunchStore:
 
     def _current_generation(self) -> int:
         if not self.generation_path.exists():
+            if self._journal_requires_generation() and not self._is_initial_prepared_generation():
+                raise ValueError("correction generation is missing")
             return 0
         try:
             value = self.generation_path.read_text(encoding="ascii").strip()
@@ -225,6 +252,44 @@ class WorkerLaunchStore:
         if generation < 0:
             raise ValueError("correction generation is invalid")
         return generation
+
+    def _journal_requires_generation(self) -> bool:
+        """Whether a frozen correction journal makes the sidecar mandatory."""
+        journal_dir = self.issue_dir / "artifact_revisions" / "journals"
+        if not journal_dir.exists():
+            return False
+        paths = sorted(journal_dir.glob("*.json"))
+        if len(paths) > 1_000:
+            raise ValueError("too many correction journals to validate generation")
+        for path in paths:
+            try:
+                journal = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                raise ValueError("correction generation journal is unreadable") from exc
+            context = journal.get("context") if isinstance(journal, dict) else None
+            if isinstance(context, dict) and isinstance(context.get("correction_generation"), int):
+                return True
+        return False
+
+    def _is_initial_prepared_generation(self) -> bool:
+        """Allow only the narrow crash window before generation one is written."""
+        if not self._allow_initial_prepared_generation:
+            return False
+        journal_dir = self.issue_dir / "artifact_revisions" / "journals"
+        paths = sorted(journal_dir.glob("*.json")) if journal_dir.exists() else []
+        for path in paths:
+            try:
+                journal = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError):
+                return False
+            context = journal.get("context") if isinstance(journal, dict) else None
+            if (
+                isinstance(context, dict)
+                and context.get("correction_generation") == 1
+                and journal.get("state") in {"prepared", "applying"}
+            ):
+                return True
+        return False
 
 
 def _thread_lock(path: Path) -> threading.RLock:

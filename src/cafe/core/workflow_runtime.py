@@ -24,6 +24,7 @@ from cafe.core.automatic_steps import (
     AutomaticExecutorRegistry,
     default_automatic_executor_registry,
 )
+from cafe.workflow_execution.worker_launch import WorkerLaunchStore
 from cafe.core.blackboard import (
     BlackboardState,
     BlackboardStore,
@@ -425,6 +426,7 @@ class BlackboardWorkflowRuntime:
         self._pending_phase_terminal: Dict[str, Any] | None = None
         self._observed_result_keys: set[tuple[str, str]] = set()
         self._validated_pr_auto_create: bool | None = None
+        self._correction_generation = WorkerLaunchStore(issue_dir).generation
 
     def _validate_automatic_executor_declarations(self) -> None:
         """Reject unavailable automatic authority before recording a workflow visit."""
@@ -2403,6 +2405,8 @@ class BlackboardWorkflowRuntime:
         )
 
     def _store_artifacts(self, artifacts: Dict[str, str]) -> None:
+        if WorkerLaunchStore(self.issue_dir).generation != self._correction_generation:
+            raise RuntimeError("correction generation changed before result acceptance")
         for key, value in artifacts.items():
             self.blackboard_store.set_artifact(self.blackboard, key, value)
 

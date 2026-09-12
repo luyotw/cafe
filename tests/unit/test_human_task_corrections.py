@@ -390,6 +390,34 @@ def test_correction_fences_worker_store_opened_before_its_generation(tmp_path) -
     ) is False
 
 
+def test_lost_post_correction_generation_fails_closed_from_frozen_journal(tmp_path) -> None:
+    source = tmp_path / "brief.md"
+    source.write_text("base", encoding="utf-8")
+    board_store = BlackboardStore(tmp_path)
+    board = board_store.load_or_create("review")
+    board_store.put_artifact(board, ArtifactEntry(
+        name="brief", kind=ArtifactKind.DOCUMENT, version=1, updated_by="writer", path="brief.md"
+    ))
+    task = HumanTaskRecordStore(tmp_path).materialize(
+        workflow_id="workflow", step="review", iteration=1, trigger="confirm_output",
+        policy_id="output-review", prompt="Review",
+        expected_result={"input_schema": "decision", "correction": {"artifacts": ["brief"]}},
+        continuations={"revise": "draft"}, assignee_type="user",
+    )
+
+    result = HumanTaskCorrectionService(tmp_path).apply(CorrectionRequest(
+        workflow_id="workflow", task_id=task.id, artifact="brief", base_hash=sha256_bytes(b"base"),
+        content="replacement", operation_id="durable-generation", actor="user",
+        manifest=({"kind": "continuation", "id": "workflow"},),
+    ))
+
+    journal = ArtifactRevisionStore(tmp_path).journal(result.operation_id)
+    assert journal["context"]["correction_generation"] == 1
+    (tmp_path / ".workflow-correction-generation").unlink()
+    with pytest.raises(ValueError, match="generation is missing"):
+        WorkerLaunchStore(tmp_path)
+
+
 def test_active_worker_rejects_before_correction_bootstrap(tmp_path) -> None:
     source = tmp_path / "brief.md"
     source.write_text("base", encoding="utf-8")
