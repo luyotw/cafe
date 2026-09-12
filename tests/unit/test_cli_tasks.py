@@ -340,6 +340,8 @@ def test_authorized_proxy_correction_has_public_operator_parity(tmp_path: Path, 
     for result in (shown, status):
         assert result.exit_code == 0
         assert all(value in result.stdout for value in (task.id, authorization_id, "proxy-public", "driver_on_behalf_of_user", "plan"))
+        assert "Invalidated entries: 2" in result.stdout
+        assert "Next user confirmation: plan" in result.stdout
     current = boards.load_or_create("spec").artifacts["spec"]
     assert current.version == 2
     assert (issue_dir / current.path).read_text(encoding="utf-8") == "proxy corrected\n"
