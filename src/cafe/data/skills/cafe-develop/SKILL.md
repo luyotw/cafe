@@ -81,6 +81,7 @@ workflow:
       - when: {}
         sections:
           - reference: execution_steps_normal.md
+          - todo_projection: {artifact: plan, source: plan}
           - optional_checklist: basic_principles.md
     include_role_guidance: true
 ---

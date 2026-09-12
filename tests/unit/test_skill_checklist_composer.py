@@ -440,6 +440,21 @@ def test_production_composer_golden_checklist_matches_fixture(
     AgentManager.read_agent_file = classmethod(_builtin_agent_file)  # type: ignore[assignment]
     try:
         output_path = tmp_path / f"production-{case_name}.md"
+        artifacts = {}
+        expected_extra = ""
+        if case_name == "develop_normal":
+            plan = tmp_path / "plan.md"
+            plan.write_text(
+                "## Todo List\n"
+                "- [ ] `PLAN-001` — Source: `plan` — Work: add parser — "
+                "Closure: valid rows parse — Evidence: targeted pytest\n",
+                encoding="utf-8",
+            )
+            artifacts = {"plan": plan}
+            expected_extra = (
+                "[ ] `PLAN-001` — add parser "
+                "(source fingerprint: 28653ad28cd864d9309af4159d4cd2c9d2df5bfdf1b124301b5d9b79f7125597)\n"
+            )
         assert compose_declared_checklist(
             skill_name=case["skill"],
             contract=SkillLoader().get_workflow_contract(case["skill"]),
@@ -448,7 +463,7 @@ def test_production_composer_golden_checklist_matches_fixture(
             checklist_file_path=output_path,
             iteration=case["iteration"],
             context=case["context"],
-            artifacts={},
+            artifacts=artifacts,
             feedback=case.get("feedback", False),
             template_mode="manual",
         )
@@ -456,6 +471,8 @@ def test_production_composer_golden_checklist_matches_fixture(
         expected = (FIXTURES_DIR / f"{case_name}.md").read_text(encoding="utf-8")
         for line in case.get("omitted_optional_lines", ()):
             expected = expected.replace(f"{line}\n", "")
+        if expected_extra:
+            expected = expected.replace("## Basic Principles", expected_extra + "## Basic Principles")
         assert actual == expected
     finally:
         AgentManager.read_agent_file = saved
@@ -475,6 +492,13 @@ def test_declared_checklist_uses_readable_builtin_agent_path_outside_checkout(
     )
     case = PRODUCTION_GOLDEN_CASES["develop_normal"]
     checklist = tmp_path / "develop.md"
+    plan = tmp_path / "plan.md"
+    plan.write_text(
+        "## Todo List\n"
+        "- [ ] `PLAN-001` — Source: `plan` — Work: add parser — "
+        "Closure: valid rows parse — Evidence: targeted pytest\n",
+        encoding="utf-8",
+    )
 
     assert compose_declared_checklist(
         skill_name=case["skill"],
@@ -484,7 +508,7 @@ def test_declared_checklist_uses_readable_builtin_agent_path_outside_checkout(
         checklist_file_path=checklist,
         iteration=case["iteration"],
         context=case["context"],
-        artifacts={},
+        artifacts={"plan": plan},
         feedback=False,
         template_mode="manual",
     )
