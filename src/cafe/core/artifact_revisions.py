@@ -83,6 +83,22 @@ class ArtifactRevisionStore:
             atomic_write_bytes(self.index_path, canonical_json(index))
             return self._revision(name, digest, operation_id)
 
+    def bootstrap(self, artifact: str, *, content: str) -> ArtifactRevision:
+        """Bind the first correction to the immutable bytes currently in use."""
+        name = self._artifact_name(artifact)
+        if not isinstance(content, str):
+            raise ArtifactRevisionError("revision content must be text")
+        digest = sha256_bytes(content.encode("utf-8"))
+        operation_id = f"bootstrap-{name}-{digest[:32]}"
+        with self._exclusive_lock():
+            index = self._load_index()
+            current = index["current"].get(name)
+            if current is not None:
+                if current["sha256"] != digest:
+                    raise StaleArtifactRevision("artifact pointer no longer matches its revision")
+                return self._revision(name, digest, operation_id)
+        return self.replace(name, base_hash=None, content=content, operation_id=operation_id)
+
     def read(self, path: str) -> str:
         candidate = (self.issue_dir / path).resolve()
         if self.issue_dir.resolve() not in candidate.parents:

@@ -15,6 +15,7 @@ from rich.table import Table
 from cafe.core.blackboard import ArtifactEntry, BlackboardStore
 from cafe.core.capability_approvals import CapabilityApprovalError
 from cafe.core.human_task_corrections import CorrectionRequest, HumanTaskCorrectionService
+from cafe.core.artifact_revisions import ArtifactRevisionError, ArtifactRevisionStore
 from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.human_tasks import HumanTaskPolicy
 from cafe.core.playbook import PlaybookDefinition
@@ -158,6 +159,22 @@ def _apply_declared_correction(
         raise TaskInboxError("invalid_response", "Correction fields have invalid types.", recovery="Submit text artifact, content, and operation_id values.", task_id=preflight.task.id, issue=preflight.issue, workflow_id=preflight.workflow_id)
     if base_hash is not None and not isinstance(base_hash, str):
         raise TaskInboxError("invalid_response", "Correction base_hash must be text or null.", recovery="Use the exact current revision hash or null.", task_id=preflight.task.id, issue=preflight.issue, workflow_id=preflight.workflow_id)
+    decision = raw_payload.get("decision")
+    continuation = (
+        preflight.task.continuations.get(decision) if isinstance(decision, str) else None
+    )
+    if not isinstance(continuation, str) or not continuation:
+        raise TaskInboxError(
+            "invalid_response",
+            "Correction must select one continuation declared by the pending task.",
+            recovery="Submit a declared task decision with the correction.",
+            task_id=preflight.task.id,
+            issue=preflight.issue,
+            workflow_id=preflight.workflow_id,
+        )
+    # Recovery reads this field from the durable result. Derive it from the
+    # frozen task rather than accepting a caller-selected continuation.
+    raw_payload["continuation"] = continuation
     playbook = PlaybookDefinition.model_validate(playbook_data)
     blackboard_store = BlackboardStore(preflight.issue_dir)
     blackboard = blackboard_store.load_or_create(
@@ -166,6 +183,29 @@ def _apply_declared_correction(
     prior = blackboard.artifacts.get(artifact)
     if prior is None:
         raise TaskInboxError("invalid_response", "Correction target is absent from the workflow artifact registry.", recovery="Refresh the workflow task before retrying.", task_id=preflight.task.id, issue=preflight.issue, workflow_id=preflight.workflow_id)
+    try:
+        current = ArtifactRevisionStore(preflight.issue_dir).bootstrap(
+            artifact,
+            content=(preflight.issue_dir / prior.path).read_text(encoding="utf-8"),
+        )
+    except (ArtifactRevisionError, OSError, UnicodeError) as exc:
+        raise TaskInboxError(
+            "invalid_response",
+            "Correction target cannot be bound to its current artifact.",
+            recovery="Refresh the workflow task and retry with its current artifact version.",
+            task_id=preflight.task.id,
+            issue=preflight.issue,
+            workflow_id=preflight.workflow_id,
+        ) from exc
+    if base_hash != current.sha256:
+        raise TaskInboxError(
+            "invalid_response",
+            "Correction base_hash does not match the current artifact.",
+            recovery="Refresh the task and submit the current artifact hash.",
+            task_id=preflight.task.id,
+            issue=preflight.issue,
+            workflow_id=preflight.workflow_id,
+        )
     manifest = tuple(
         {"kind": "artifact", "id": name}
         for name in (artifact, *playbook.downstream_steps(artifact))
@@ -382,8 +422,8 @@ def complete_task(
                     recovery="Inspect the expected result and submit one declared response.",
                     task_id=task_id,
                     issue=preflight.issue,
-                    workflow_id=preflight.workflow_id,
-                )
+            workflow_id=preflight.workflow_id,
+        )
         if not no_resume:
             try:
                 if json_output:

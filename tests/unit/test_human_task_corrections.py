@@ -78,6 +78,16 @@ def test_artifact_revision_is_immutable_and_replays_one_operation(tmp_path) -> N
         store.replace("brief", base_hash=first.sha256, content="third", operation_id="op-3")
 
 
+def test_bootstrap_binds_a_first_correction_to_existing_artifact_bytes(tmp_path) -> None:
+    store = ArtifactRevisionStore(tmp_path)
+    current = store.bootstrap("brief", content="published")
+    assert store.replace(
+        "brief", base_hash=current.sha256, content="corrected", operation_id="op-1"
+    ).sha256 != current.sha256
+    with pytest.raises(StaleArtifactRevision):
+        store.bootstrap("brief", content="different")
+
+
 def test_correction_journal_reuses_the_recorded_manifest(tmp_path) -> None:
     store = ArtifactRevisionStore(tmp_path)
     prepared = store.prepare("op-1", [{"kind": "artifact", "id": "review"}])
@@ -113,8 +123,10 @@ def test_correction_service_uses_the_pending_task_contract_not_caller_authority(
         operation_id="correction-1",
         actor="user",
         manifest=({"kind": "artifact", "id": "review"},),
+        completion_payload={"task": "output-review", "continuation": "draft"},
     )
     assert service.apply(request).revision.artifact == "brief"
+    assert records.get_result(task.id).payload["continuation"] == "draft"
 
     other = records.materialize(
         workflow_id="workflow",

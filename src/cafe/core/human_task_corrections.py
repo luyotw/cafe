@@ -52,7 +52,7 @@ class HumanTaskCorrectionService:
             raise ValueError("the pending task does not authorize a Driver proxy")
         if not isinstance(request.content, str) or len(request.content.encode("utf-8")) > 1_000_000:
             raise ValueError("correction content is invalid or exceeds the task limit")
-        if not request.manifest:
+        if not request.manifest or len(request.manifest) > 1_000:
             raise ValueError("correction invalidation manifest is required")
         if any(
             not isinstance(entry, dict)
@@ -61,6 +61,8 @@ class HumanTaskCorrectionService:
             for entry in request.manifest
         ):
             raise ValueError("correction invalidation manifest is invalid")
+        if len(str(request.manifest).encode("utf-8")) > 256_000:
+            raise ValueError("correction invalidation manifest exceeds the task limit")
         journal = self.revisions.prepare(request.operation_id, list(request.manifest))
         for entry in journal["manifest"]:
             self.revisions.receipt(request.operation_id, entry)
