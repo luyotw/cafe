@@ -136,7 +136,7 @@ def test_correction_service_uses_the_pending_task_contract_not_caller_authority(
         content="replacement",
         operation_id="correction-1",
         actor="user",
-        manifest=({"kind": "artifact", "id": "review"},),
+        manifest=({"kind": "artifact", "id": "brief"},),
         completion_payload={"task": "output-review", "continuation": "draft"},
     )
     applied = service.apply(request)
@@ -163,7 +163,7 @@ def test_correction_service_uses_the_pending_task_contract_not_caller_authority(
             CorrectionRequest(
                 workflow_id="workflow", task_id=other.id, artifact="brief", base_hash=None,
                 content="forged", operation_id="correction-2", actor="user",
-                manifest=({"kind": "artifact", "id": "review"},),
+                manifest=({"kind": "artifact", "id": "brief"},),
             )
         )
 
@@ -200,14 +200,14 @@ def test_driver_proxy_requires_task_bound_authorization_and_assessment(tmp_path)
             base_hash=sha256_bytes(b"base"), content="replacement", operation_id="proxy-1",
             authorization_id="forged", suitability={name: True for name in (
                 "bounded", "clear", "reversible", "within_scope", "no_new_authority"
-            )}, manifest=({"kind": "artifact", "id": "review"},),
+            )}, manifest=({"kind": "artifact", "id": "brief"},),
         )
     result = submit_authorized_correction(
         issue_dir=tmp_path, workflow_id="workflow", task_id=task.id, artifact="brief",
         base_hash=sha256_bytes(b"base"), content="replacement", operation_id="proxy-1",
         authorization_id="authorized-by-user", suitability={name: True for name in (
             "bounded", "clear", "reversible", "within_scope", "no_new_authority"
-        )}, manifest=({"kind": "artifact", "id": "review"},),
+        )}, manifest=({"kind": "artifact", "id": "brief"},),
     )
     assert result.revision.artifact == "brief"
     correction = records.get_result(task.id).payload["correction"]
@@ -260,6 +260,44 @@ def test_correction_invalidates_queued_worker_before_receipting(tmp_path) -> Non
     assert journal["receipts"] == [{"kind": "worker", "id": worker["worker_id"]}]
 
 
+def test_correction_removes_a_stale_downstream_artifact_pointer_before_receipting(tmp_path) -> None:
+    source = tmp_path / "brief.md"
+    downstream = tmp_path / "summary.md"
+    source.write_text("base", encoding="utf-8")
+    downstream.write_text("stale", encoding="utf-8")
+    board_store = BlackboardStore(tmp_path)
+    board = board_store.load_or_create("review")
+    board_store.put_artifact(board, ArtifactEntry(
+        name="brief", kind=ArtifactKind.DOCUMENT, version=1, updated_by="writer", path="brief.md"
+    ))
+    board_store.put_artifact(board, ArtifactEntry(
+        name="summary", kind=ArtifactKind.DOCUMENT, version=1, updated_by="writer", path="summary.md"
+    ))
+    task = HumanTaskRecordStore(tmp_path).materialize(
+        workflow_id="workflow", step="review", iteration=1, trigger="confirm_output",
+        policy_id="output-review", prompt="Review",
+        expected_result={"input_schema": "decision", "correction": {"artifacts": ["brief"]}},
+        continuations={"revise": "draft"}, assignee_type="user",
+    )
+
+    result = HumanTaskCorrectionService(tmp_path).apply(CorrectionRequest(
+        workflow_id="workflow", task_id=task.id, artifact="brief", base_hash=sha256_bytes(b"base"),
+        content="replacement", operation_id="artifact-fence", actor="user",
+        manifest=(
+            {"kind": "artifact", "id": "brief"},
+            {"kind": "artifact", "id": "summary"},
+        ),
+    ))
+
+    current = BlackboardStore(tmp_path).load_or_create("review")
+    assert current.artifacts["brief"].path == result.revision.path
+    assert "summary" not in current.artifacts
+    assert ArtifactRevisionStore(tmp_path).journal(result.operation_id)["receipts"] == [
+        {"kind": "artifact", "id": "brief"},
+        {"kind": "artifact", "id": "summary"},
+    ]
+
+
 def test_recovery_replays_a_durable_prepared_correction_once(tmp_path) -> None:
     source = tmp_path / "brief.md"
     source.write_text("base", encoding="utf-8")
@@ -276,7 +314,7 @@ def test_recovery_replays_a_durable_prepared_correction_once(tmp_path) -> None:
         continuations={"revise": "draft"}, assignee_type="user",
     )
     store = ArtifactRevisionStore(tmp_path)
-    store.prepare("recover-1", [{"kind": "artifact", "id": "review"}], context={
+    store.prepare("recover-1", [{"kind": "artifact", "id": "brief"}], context={
         "workflow_id": "workflow", "task_id": task.id, "artifact": "brief",
         "base_hash": sha256_bytes(b"base"), "content": "replacement", "actor": "user",
         "proxy_authorization_id": None, "suitability": {}, "completion_payload": {},

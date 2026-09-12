@@ -131,7 +131,12 @@ class HumanTaskCorrectionService:
             },
         )
         for entry in journal["manifest"]:
-            self._invalidate(entry, request.operation_id)
+            self._invalidate(
+                entry,
+                request.operation_id,
+                corrected_artifact=request.artifact,
+                step=task.step,
+            )
             self.revisions.receipt(request.operation_id, entry)
         revision = self.revisions.replace(
             request.artifact,
@@ -216,9 +221,27 @@ class HumanTaskCorrectionService:
             suitability=context.get("suitability") or None,
         ))
 
-    def _invalidate(self, entry: Mapping[str, str], operation_id: str) -> None:
+    def _invalidate(
+        self,
+        entry: Mapping[str, str],
+        operation_id: str,
+        *,
+        corrected_artifact: str,
+        step: str,
+    ) -> None:
         """Apply the typed revocation before acknowledging its receipt."""
-        if entry["kind"] == "worker":
+        if entry["kind"] == "artifact":
+            # The replacement below is the corrected artifact's new current
+            # pointer. Every other listed pointer is stale immediately.
+            if entry["id"] == corrected_artifact:
+                return
+            store = BlackboardStore(self.revisions.issue_dir)
+            blackboard = store.load_or_create(step)
+            if not store.invalidate_artifact_for_correction(
+                blackboard, name=entry["id"], operation_id=operation_id
+            ):
+                raise ValueError("correction artifact invalidation target is absent")
+        elif entry["kind"] == "worker":
             invalidated = WorkerLaunchStore(self.revisions.issue_dir).invalidate(
                 entry["id"], operation_id=operation_id
             )

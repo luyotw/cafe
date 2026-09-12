@@ -986,6 +986,20 @@ class BlackboardStore:
         state.artifacts[entry.name] = entry
         self.save(state)
 
+    def invalidate_artifact_for_correction(
+        self, state: BlackboardState, *, name: str, operation_id: str
+    ) -> bool:
+        """Remove one stale current pointer while retaining the event history."""
+        if name not in state.artifacts:
+            return False
+        state.artifacts.pop(name)
+        self.record_event(
+            state,
+            "artifact_invalidated_for_correction",
+            {"artifact": name, "operation_id": operation_id},
+        )
+        return True
+
     def append_capability_receipt(self, state: BlackboardState, receipt: Dict[str, Any]) -> None:
         """Append one structured host capability receipt and persist the blackboard."""
         state.capability_receipts.append(dict(receipt))
