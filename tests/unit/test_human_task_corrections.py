@@ -218,6 +218,57 @@ def test_driver_proxy_requires_task_bound_authorization_and_assessment(tmp_path)
     assert correction["validation"]["suitability"]["bounded"] is True
 
 
+def test_proxy_correction_resumes_on_the_persisted_graph_agent_edge(tmp_path) -> None:
+    project = tmp_path / "project"
+    issue_dir = project / ".cafe" / "issues" / "463"
+    playbooks = project / ".cafe" / "playbooks"
+    playbooks.mkdir(parents=True)
+    (playbooks / "custom.yaml").write_text(
+        """playbook: {id: custom}
+steps:
+  draft: {skill: review, role: writer, output_artifact: brief, on: {await_agent: review}}
+  review: {skill: review, role: reviewer, output_artifact: review, on: {await_agent: approve}}
+  approve:
+    skill: cafe-review
+    role: owner
+    assignee_type: human
+    human_tasks: [{trigger: initial, task_id: clarification-feedback, outcomes: {submit: _done}}]
+    on: {await_agent: _done}
+""",
+        encoding="utf-8",
+    )
+    issue_dir.mkdir(parents=True)
+    (issue_dir / "issue.yaml").write_text("playbook_id: custom\n", encoding="utf-8")
+    source = issue_dir / "brief.md"
+    source.write_text("base", encoding="utf-8")
+    board_store = BlackboardStore(issue_dir)
+    board = board_store.load_or_create("review", playbook_id="custom")
+    board_store.put_artifact(board, ArtifactEntry(
+        name="brief", kind=ArtifactKind.DOCUMENT, version=1, updated_by="writer", path="brief.md"
+    ))
+    records = HumanTaskRecordStore(issue_dir)
+    task = records.materialize(
+        workflow_id="workflow", step="review", iteration=1, trigger="confirm_output",
+        policy_id="output-review", prompt="Review", expected_result={"input_schema": "decision", "correction": {
+            "artifacts": ["brief"], "allow_driver_proxy": True,
+            "driver_authorization": {"id": "authorized-by-user"},
+        }}, continuations={"revise": "review"}, assignee_type="user",
+    )
+
+    submit_authorized_correction(
+        issue_dir=issue_dir, workflow_id="workflow", task_id=task.id, artifact="brief",
+        base_hash=sha256_bytes(b"base"), content="replacement", operation_id="proxy-resume",
+        authorization_id="authorized-by-user", suitability={name: True for name in (
+            "bounded", "clear", "reversible", "within_scope", "no_new_authority"
+        )}, manifest=({"kind": "artifact", "id": "brief"},),
+    )
+
+    resumed = BlackboardStore(issue_dir).load_or_create("review")
+    assert resumed.current_step == "approve"
+    assert resumed.handoff_contract.to_step == "approve"
+    assert resumed.handoff_contract.to_owner.value == "agent"
+
+
 def test_driver_manifest_cannot_expand_the_task_scoped_mutation_set(tmp_path) -> None:
     source = tmp_path / "brief.md"
     unrelated = tmp_path / "unrelated.md"

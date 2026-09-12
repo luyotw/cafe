@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from cafe.core.artifact_revisions import ArtifactRevision, ArtifactRevisionStore
-from cafe.core.blackboard import ArtifactEntry, BlackboardStore
+from cafe.core.blackboard import ArtifactEntry, BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.event_dispatches import EventDispatchFenceStore
 from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.playbook import PlaybookDefinition
@@ -205,11 +205,47 @@ class HumanTaskCorrectionService:
             payload=payload,
             source="human_task_correction",
         )
+        self._schedule_graph_continuation(task)
         # A committed journal means all durable stores, including the task
         # result that drives continuation, have reached the same correction.
         # Until then runtime recovery keeps the operation fenced.
         self.revisions.commit(request.operation_id)
         return CorrectionResult(revision=revision, operation_id=request.operation_id)
+
+    def _schedule_graph_continuation(self, task) -> None:
+        """Resume at the task step's declared agent edge after correction.
+
+        Correction replaces an already-reviewed output; it is not a confirmation
+        of the old output.  The persisted graph remains the authority for the
+        next agent step, so a custom playbook receives the same durable baton
+        without naming a built-in phase or gate here.
+        """
+        issue_config = self.revisions.issue_dir / "issue.yaml"
+        if not issue_config.is_file():
+            return
+        board_store = BlackboardStore(self.revisions.issue_dir)
+        board = board_store.load_or_create(task.step)
+        playbook = self._load_playbook(board, issue_config)
+        step = playbook.steps.get(task.step)
+        target = step.on.get("await_agent") if step is not None else None
+        if not isinstance(target, str) or target not in playbook.steps:
+            raise ValueError("correction task has no declared agent continuation")
+        board_store.set_current_step(board, target)
+        board_store.update_handoff_contract(
+            board,
+            from_step=task.step,
+            to_owner=HandoffOwner.AGENT,
+            to_step=target,
+            intent=HandoffIntent.AWAIT_AGENT,
+            source="human_task_correction",
+        )
+
+    def _load_playbook(self, board, issue_config: Path) -> PlaybookDefinition:
+        project_root = self.revisions.issue_dir.parents[2]
+        data = PlaybookLoader(project_root=project_root).load(board.playbook_id)
+        return PlaybookDefinition.model_validate(
+            apply_issue_playbook_overrides(data, issue_config)
+        )
 
     def _validate_manifest_revocability(self, manifest: tuple[dict[str, str], ...]) -> None:
         """Reject non-revocable approvals before a journal can fence execution."""
@@ -234,11 +270,7 @@ class HumanTaskCorrectionService:
         issue_config = self.revisions.issue_dir / "issue.yaml"
         if not issue_config.is_file():
             return ({"kind": "artifact", "id": artifact},)
-        project_root = self.revisions.issue_dir.parents[2]
-        data = PlaybookLoader(project_root=project_root).load(board.playbook_id)
-        playbook = PlaybookDefinition.model_validate(
-            apply_issue_playbook_overrides(data, issue_config)
-        )
+        playbook = self._load_playbook(board, issue_config)
         names = (artifact, *playbook.downstream_artifacts(artifact))
         manifest = [
             {"kind": "artifact", "id": name}
@@ -253,6 +285,7 @@ class HumanTaskCorrectionService:
             }
             for candidate in self.tasks.tasks()
             if candidate.workflow_id == task.workflow_id
+            and candidate.id != task.id
             and candidate.status.value == "pending"
             and candidate.step in downstream_steps
         )
@@ -323,6 +356,7 @@ class HumanTaskCorrectionService:
                 workflow_id=context["workflow_id"], task_id=context["task_id"],
                 payload=payload, source="human_task_correction",
             )
+            self._schedule_graph_continuation(task)
             self.revisions.commit(journal["operation_id"])
             return CorrectionResult(revision=revision, operation_id=journal["operation_id"])
 
