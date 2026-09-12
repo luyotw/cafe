@@ -2,6 +2,7 @@
 
 [ ] Read {agent_file} to understand your role and native language
 {correction_plan_context}[ ] Read feedback todo list in {feedback_file}
+[ ] Keep this Develop invocation running through every authorized executable blocker; after each bounded unit, validate evidence, update the authoritative feedback/plan progress and cumulative development summary, then continue instead of treating a commit or targeted check as an iteration boundary
 [ ] Address each issue raised in the feedback
 [ ] Mark completed items in {feedback_file} if applicable (change - [ ] to - [x])
 [ ] Commit changes with descriptive messages

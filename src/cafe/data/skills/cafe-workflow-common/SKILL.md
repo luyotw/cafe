@@ -1,7 +1,7 @@
 ---
 name: cafe-workflow-common
 description: Use this skill at the start of any CAFE workflow phase to load the bounded workflow digest, identify the current baton state, and ground the phase in shared context before reading phase-specific artifacts.
-version: 1.8.3
+version: 1.8.4
 ---
 
 # Workflow Common
@@ -26,6 +26,8 @@ You control the next workflow step by writing a **baton** — a JSON object writ
 3. The runtime reads your baton and transitions accordingly.
 
 If you do NOT write a baton, the runtime falls back to your response's status code to derive a transition — but this is less precise and may not match your intent. **Always write the baton for precise control.**
+
+A final response ends the current CLI invocation. Treat it as a real execution boundary, not as a neutral progress checkpoint; phase-specific skills decide when the work is actually ready to end or hand off.
 
 ## Baton Schema
 
