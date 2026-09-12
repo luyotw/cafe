@@ -37,6 +37,11 @@ class HumanTaskCorrectionService:
         self.tasks = HumanTaskRecordStore(issue_dir)
 
     def apply(self, request: CorrectionRequest) -> CorrectionResult:
+        """Serialize every correction for a task through its durable lock."""
+        with self.tasks.transaction():
+            return self._apply_locked(request)
+
+    def _apply_locked(self, request: CorrectionRequest) -> CorrectionResult:
         task = self.tasks.get_task(request.task_id)
         if task.workflow_id != request.workflow_id or task.status.value != "pending":
             raise ValueError("correction task is not pending for this workflow")

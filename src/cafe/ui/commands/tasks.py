@@ -16,6 +16,7 @@ from cafe.core.blackboard import ArtifactEntry, BlackboardStore
 from cafe.core.capability_approvals import CapabilityApprovalError
 from cafe.core.human_task_corrections import CorrectionRequest, HumanTaskCorrectionService
 from cafe.core.artifact_revisions import ArtifactRevisionError, ArtifactRevisionStore
+from cafe.core.packet_io import sha256_bytes
 from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.human_tasks import HumanTaskPolicy
 from cafe.core.playbook import PlaybookDefinition
@@ -184,9 +185,29 @@ def _apply_declared_correction(
     if prior is None:
         raise TaskInboxError("invalid_response", "Correction target is absent from the workflow artifact registry.", recovery="Refresh the workflow task before retrying.", task_id=preflight.task.id, issue=preflight.issue, workflow_id=preflight.workflow_id)
     try:
+        published_bytes = (preflight.issue_dir / prior.path).read_bytes()
+    except OSError as exc:
+        raise TaskInboxError(
+            "invalid_response",
+            "Correction target cannot be read from the artifact registry.",
+            recovery="Refresh the workflow task and retry with its current artifact version.",
+            task_id=preflight.task.id,
+            issue=preflight.issue,
+            workflow_id=preflight.workflow_id,
+        ) from exc
+    if base_hash != sha256_bytes(published_bytes):
+        raise TaskInboxError(
+            "invalid_response",
+            "Correction base_hash does not match the current artifact.",
+            recovery="Refresh the task and submit the current artifact hash.",
+            task_id=preflight.task.id,
+            issue=preflight.issue,
+            workflow_id=preflight.workflow_id,
+        )
+    try:
         current = ArtifactRevisionStore(preflight.issue_dir).bootstrap(
             artifact,
-            content=(preflight.issue_dir / prior.path).read_text(encoding="utf-8"),
+            content=published_bytes.decode("utf-8"),
         )
     except (ArtifactRevisionError, OSError, UnicodeError) as exc:
         raise TaskInboxError(
@@ -197,15 +218,6 @@ def _apply_declared_correction(
             issue=preflight.issue,
             workflow_id=preflight.workflow_id,
         ) from exc
-    if base_hash != current.sha256:
-        raise TaskInboxError(
-            "invalid_response",
-            "Correction base_hash does not match the current artifact.",
-            recovery="Refresh the task and submit the current artifact hash.",
-            task_id=preflight.task.id,
-            issue=preflight.issue,
-            workflow_id=preflight.workflow_id,
-        )
     manifest = tuple(
         {"kind": "artifact", "id": name}
         for name in (artifact, *playbook.downstream_steps(artifact))
