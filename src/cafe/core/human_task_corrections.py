@@ -123,6 +123,13 @@ class HumanTaskCorrectionService:
             "base_hash": request.base_hash,
             "new_hash": revision.sha256,
             "operation_id": request.operation_id,
+            "authorization_id": request.proxy_authorization_id,
+            "validation": (
+                {"suitability": dict(request.suitability)}
+                if request.suitability is not None
+                else {"source": "user_command"}
+            ),
+            "manifest": list(journal["manifest"]),
         }
         self.tasks.complete(
             workflow_id=request.workflow_id,

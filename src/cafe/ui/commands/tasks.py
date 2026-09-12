@@ -302,6 +302,9 @@ def inspect_task(
     console.print(f"Prompt: {detail.prompt}")
     if detail.capability_approval is not None:
         _render_capability_approval(detail.capability_approval)
+    if detail.correction is not None:
+        console.print("Correction:")
+        console.print_json(data=detail.correction)
     console.print("Expected result:")
     console.print_json(data=detail.expected_result)
     console.print("Continuations:")

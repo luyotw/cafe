@@ -204,4 +204,7 @@ def test_driver_proxy_requires_task_bound_authorization_and_assessment(tmp_path)
         )}, manifest=({"kind": "artifact", "id": "review"},),
     )
     assert result.revision.artifact == "brief"
-    assert records.get_result(task.id).payload["correction"]["actor"] == "driver_on_behalf_of_user"
+    correction = records.get_result(task.id).payload["correction"]
+    assert correction["actor"] == "driver_on_behalf_of_user"
+    assert correction["authorization_id"] == "authorized-by-user"
+    assert correction["validation"]["suitability"]["bounded"] is True
