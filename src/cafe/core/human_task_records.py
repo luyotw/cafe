@@ -667,6 +667,33 @@ class HumanTaskRecordStore:
             self._save(envelope)
             return updated, True
 
+    def invalidate_capability_for_correction(
+        self, *, workflow_id: str, task_id: str, operation_id: str
+    ) -> HumanTask | None:
+        """Revoke a revocable capability approval before correction receipts."""
+        with self.transaction():
+            envelope = self._load_for_workflow(workflow_id, create=False)
+            task = envelope.tasks.get(task_id)
+            if task is None or task.capability_approval is None:
+                return None
+            metadata = dict(task.capability_approval)
+            state = metadata.get("state")
+            if state in {"attempt_started", "uncertain", "succeeded", "failed"}:
+                raise HumanTaskCorrelationError("capability approval requires external reconciliation")
+            if state not in {"pending", "approved", "cancelled"}:
+                return task
+            if state != "cancelled":
+                metadata["state"] = "cancelled"
+                metadata["correction_operation_id"] = _text(operation_id, "operation_id")
+                metadata["decision"] = {"outcome": "cancel", "source": "human_task_correction"}
+                task = replace(task, capability_approval=metadata, status=HumanTaskStatus.CANCELLED, cancelled_at=_now_iso())
+                envelope.tasks[task.id] = task
+                wait = envelope.wait_states[task.id]
+                envelope.wait_states[task.id] = replace(wait, released_at=task.cancelled_at)
+                self._append_event(envelope, "capability_invalidated_by_correction", task_id=task.id, context={"operation_id": operation_id})
+                self._save(envelope)
+            return task
+
     def transition_capability_approval(
         self,
         *,
