@@ -246,6 +246,8 @@ steps:
     board_store.put_artifact(board, ArtifactEntry(
         name="brief", kind=ArtifactKind.DOCUMENT, version=1, updated_by="writer", path="brief.md"
     ))
+    board.ownership_cursor = {"step": "review", "portion": "old", "attempt_count": 7}
+    board_store.save(board)
     records = HumanTaskRecordStore(issue_dir)
     task = records.materialize(
         workflow_id="workflow", step="review", iteration=1, trigger="confirm_output",
@@ -273,6 +275,7 @@ steps:
     assert resumed.current_step == "approve"
     assert resumed.handoff_contract.to_step == "approve"
     assert resumed.handoff_contract.to_owner.value == "agent"
+    assert resumed.ownership_cursor is None
     assert WorkerLaunchStore(issue_dir).get(worker["worker_id"])["status"] == "stale"
     assert EventDispatchFenceStore(issue_dir).is_fenced("event-1")
     assert {frozenset(entry.items()) for entry in ArtifactRevisionStore(issue_dir).journal(result.operation_id)["receipts"]} >= {

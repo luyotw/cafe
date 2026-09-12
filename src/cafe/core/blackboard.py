@@ -1019,6 +1019,10 @@ class BlackboardStore:
             for event in state.events
         ):
             return True
+        # A hybrid ownership cursor is a resumable continuation just like its
+        # attempt counter.  It may otherwise direct a replacement workflow
+        # through a portion selected from the superseded artifact generation.
+        state.ownership_cursor = None
         state.step_attempt_counts.clear()
         self.record_event(
             state,
