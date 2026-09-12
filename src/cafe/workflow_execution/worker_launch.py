@@ -95,6 +95,14 @@ class WorkerLaunchStore:
             atomic_write_bytes(self.generation_path, str(expected).encode("ascii"))
             return expected
 
+    @contextmanager
+    def generation_guard(self, expected: int) -> Iterator[None]:
+        """Keep a generation check and its guarded work in one file lock."""
+        with self._locked_records():
+            if self._current_generation() != expected:
+                raise ValueError("correction generation is stale")
+            yield
+
     def start(self) -> dict[str, Any]:
         """Reserve one child handoff without reading workflow policy."""
         worker_id = str(uuid.uuid4())

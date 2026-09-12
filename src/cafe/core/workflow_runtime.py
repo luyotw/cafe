@@ -1831,6 +1831,13 @@ class BlackboardWorkflowRuntime:
         self, *, current_step: str, step_def: Dict
     ) -> AutomaticExecutionResult | PlaybookRunResult:
         """Execute and validate a trusted automatic result before workflow mutation."""
+        if WorkerLaunchStore(self.issue_dir).generation != self._correction_generation:
+            return PlaybookRunResult(
+                final_step=current_step,
+                final_status_code="AUTOMATIC_EXECUTOR_REJECTED",
+                completed=False,
+                detail="correction generation changed before automatic dispatch",
+            )
         declaration = step_def.get("automatic")
         if not isinstance(declaration, dict):
             raise RuntimeError(f"Step '{current_step}' has no automatic executor declaration")
@@ -1841,7 +1848,8 @@ class BlackboardWorkflowRuntime:
                 f"Step '{current_step}' has an invalid automatic executor declaration"
             )
         try:
-            result: AutomaticExecutionResult = self.automatic_registry.execute(executor_id, inputs)
+            with WorkerLaunchStore(self.issue_dir).generation_guard(self._correction_generation):
+                result: AutomaticExecutionResult = self.automatic_registry.execute(executor_id, inputs)
         except Exception as exc:
             self.blackboard_store.record_event(
                 self.blackboard,
@@ -2405,10 +2413,12 @@ class BlackboardWorkflowRuntime:
         )
 
     def _store_artifacts(self, artifacts: Dict[str, str]) -> None:
-        if WorkerLaunchStore(self.issue_dir).generation != self._correction_generation:
-            raise RuntimeError("correction generation changed before result acceptance")
-        for key, value in artifacts.items():
-            self.blackboard_store.set_artifact(self.blackboard, key, value)
+        try:
+            with WorkerLaunchStore(self.issue_dir).generation_guard(self._correction_generation):
+                for key, value in artifacts.items():
+                    self.blackboard_store.set_artifact(self.blackboard, key, value)
+        except ValueError as exc:
+            raise RuntimeError("correction generation changed before result acceptance") from exc
 
     def _record_step_completion(
         self,

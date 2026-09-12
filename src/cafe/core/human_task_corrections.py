@@ -48,7 +48,9 @@ class HumanTaskCorrectionService:
         with self.tasks.transaction():
             return self._apply_locked(request)
 
-    def _apply_locked(self, request: CorrectionRequest) -> CorrectionResult:
+    def _apply_locked(
+        self, request: CorrectionRequest, *, allow_initial_prepared_generation: bool = False
+    ) -> CorrectionResult:
         self.revisions.validate_operation_id(request.operation_id)
         task = self.tasks.get_task(request.task_id)
         if task.workflow_id == request.workflow_id and task.status.value == "completed":
@@ -134,7 +136,10 @@ class HumanTaskCorrectionService:
         if request.base_hash != base_revision.sha256:
             raise ValueError("correction base hash is not current")
         correction_generation = (
-            WorkerLaunchStore(self.revisions.issue_dir).generation + 1
+            WorkerLaunchStore(
+                self.revisions.issue_dir,
+                allow_initial_prepared_generation=allow_initial_prepared_generation,
+            ).generation + 1
             if any(entry["kind"] == "continuation" for entry in manifest)
             else None
         )
@@ -162,6 +167,10 @@ class HumanTaskCorrectionService:
         ):
             raise ValueError("correction journal has an invalid generation")
         correction_generation = journal_generation
+        if correction_generation is not None:
+            WorkerLaunchStore(
+                self.revisions.issue_dir, allow_initial_prepared_generation=True
+            ).ensure_correction_generation(correction_generation)
         for entry in journal["manifest"]:
             self._invalidate(
                 entry,
@@ -352,14 +361,16 @@ class HumanTaskCorrectionService:
             return self._finish_recovered_replacement(
                 task=task, journal=journal, context=context, revision=revision
             )
-        return self.apply(CorrectionRequest(
+        request = CorrectionRequest(
             workflow_id=context["workflow_id"], task_id=context["task_id"], artifact=context["artifact"],
             base_hash=context["base_hash"], content=context["content"], operation_id=operation_id,
             actor=context["actor"], manifest=tuple(journal["manifest"]),
             completion_payload=context["completion_payload"],
             proxy_authorization_id=context.get("proxy_authorization_id"),
             suitability=context.get("suitability") or None,
-        ))
+        )
+        with self.tasks.transaction():
+            return self._apply_locked(request, allow_initial_prepared_generation=True)
 
     def _finish_recovered_replacement(
         self, *, task, journal: Mapping[str, Any], context: Mapping[str, Any], revision: ArtifactRevision
@@ -452,8 +463,6 @@ class HumanTaskCorrectionService:
                 raise ValueError("correction continuation invalidation target is absent")
             if correction_generation is None:
                 raise ValueError("correction continuation generation is missing")
-            WorkerLaunchStore(
-                self.revisions.issue_dir, allow_initial_prepared_generation=True
-            ).ensure_correction_generation(correction_generation)
+            WorkerLaunchStore(self.revisions.issue_dir).ensure_correction_generation(correction_generation)
         else:  # pragma: no cover - request validation keeps this fail-closed.
             raise ValueError("correction invalidation kind is unsupported")

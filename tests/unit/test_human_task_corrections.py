@@ -596,6 +596,34 @@ def test_recovery_replays_a_durable_prepared_correction_once(tmp_path) -> None:
     assert HumanTaskCorrectionService(tmp_path).recover("recover-1").revision == result.revision
 
 
+def test_recovery_restores_first_prepared_generation_before_replaying(tmp_path) -> None:
+    source = tmp_path / "brief.md"
+    source.write_text("base", encoding="utf-8")
+    board_store = BlackboardStore(tmp_path)
+    board = board_store.load_or_create("review")
+    board_store.put_artifact(board, ArtifactEntry(
+        name="brief", kind=ArtifactKind.DOCUMENT, version=1, updated_by="writer", path="brief.md"
+    ))
+    records = HumanTaskRecordStore(tmp_path)
+    task = records.materialize(
+        workflow_id="workflow", step="review", iteration=1, trigger="confirm_output",
+        policy_id="output-review", prompt="Review",
+        expected_result={"input_schema": "decision", "correction": {"artifacts": ["brief"]}},
+        continuations={"revise": "draft"}, assignee_type="user",
+    )
+    ArtifactRevisionStore(tmp_path).prepare("recover-generation", [{"kind": "continuation", "id": "workflow"}], context={
+        "workflow_id": "workflow", "task_id": task.id, "artifact": "brief",
+        "base_hash": sha256_bytes(b"base"), "content": "replacement", "actor": "user",
+        "proxy_authorization_id": None, "suitability": {}, "completion_payload": {},
+        "correction_generation": 1,
+    })
+
+    result = HumanTaskCorrectionService(tmp_path).recover("recover-generation")
+
+    assert result.operation_id == "recover-generation"
+    assert WorkerLaunchStore(tmp_path).generation == 1
+
+
 def test_recovery_finishes_after_revision_replacement_without_rechecking_old_base(tmp_path, monkeypatch) -> None:
     source = tmp_path / "brief.md"
     source.write_text("base", encoding="utf-8")

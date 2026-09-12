@@ -23,6 +23,7 @@ from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime, StepIterationFrame
 from cafe.playbooks.simulate import analyze_playbook, format_dot, format_text_report
 from cafe.ui.human_tasks import apply_human_task_payload
+from cafe.workflow_execution.worker_launch import WorkerLaunchStore
 
 
 def _approval_policy() -> HumanTaskPolicy:
@@ -534,6 +535,36 @@ def test_automatic_owner_dispatches_registry_without_agent(tmp_path: Path) -> No
     assert result.completed is True
     assert agent_calls == 0
     assert automatic_calls == [{"safe": True}]
+
+
+def test_automatic_owner_rejects_a_stale_generation_before_dispatch(tmp_path: Path) -> None:
+    """A correction fence prevents automatic executor effects before invocation."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "automatic-generation"
+    calls: list[dict[str, object]] = []
+    registry = AutomaticExecutorRegistry(
+        {"advance": lambda inputs: calls.append(dict(inputs)) or AutomaticExecutionResult("await_agent")}
+    )
+    playbook = {
+        "playbook": {"id": "owner-test"},
+        "steps": {
+            "automatic": {
+                "skill": "phase", "role": "operator", "assignee_type": "auto",
+                "automatic": {"executor": "advance", "inputs": {"safe": True}},
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir, playbook=playbook,
+        executor=lambda *_args, **_kwargs: pytest.fail("automatic work must not call an agent"),
+        automatic_registry=registry,
+    )
+    WorkerLaunchStore(issue_dir).advance_correction_generation()
+
+    result = runtime.run(start_step="automatic")
+
+    assert result.final_status_code == "AUTOMATIC_EXECUTOR_REJECTED"
+    assert calls == []
 
 
 def test_automatic_inputs_are_validated_before_a_visit_is_persisted(tmp_path: Path) -> None:
