@@ -236,7 +236,10 @@ class HumanTaskCorrectionService:
         ]
         downstream_steps = set(playbook.downstream_steps(artifact))
         manifest.extend(
-            {"kind": "human_task", "id": candidate.id}
+            {
+                "kind": "approval" if candidate.capability_approval is not None else "human_task",
+                "id": candidate.id,
+            }
             for candidate in self.tasks.tasks()
             if candidate.workflow_id == task.workflow_id
             and candidate.status.value == "pending"
