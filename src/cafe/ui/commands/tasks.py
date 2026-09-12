@@ -25,6 +25,7 @@ from cafe.driver.proxy import record_user_driver_authorization
 from cafe.playbooks.loader import PlaybookLoader, apply_issue_playbook_overrides
 from cafe.ui.commands import workflow as workflow_commands
 from cafe.ui.human_tasks import (
+    HumanTaskApplication,
     apply_capability_approval_payload,
     apply_capability_cancellation,
     apply_human_task_payload,
@@ -156,11 +157,11 @@ def _load_result(
 
 def _apply_declared_correction(
     *, preflight: Any, playbook_data: dict[str, Any], raw_payload: dict[str, Any]
-) -> None:
+) -> str | None:
     """Apply a direct user amendment through the pending task's frozen contract."""
     correction = raw_payload.get("correction")
     if not isinstance(correction, dict):
-        return
+        return None
     required = {"artifact", "base_hash", "content", "operation_id"}
     if set(correction) != required:
         raise TaskInboxError(
@@ -225,7 +226,7 @@ def _apply_declared_correction(
         if name == artifact or name in blackboard.artifacts
     )
     try:
-        result = HumanTaskCorrectionService(preflight.issue_dir).apply(
+        HumanTaskCorrectionService(preflight.issue_dir).apply(
             CorrectionRequest(
                 workflow_id=preflight.workflow_id, task_id=preflight.task.id, artifact=artifact,
                 base_hash=base_hash, content=content, operation_id=operation_id, actor="user",
@@ -234,6 +235,7 @@ def _apply_declared_correction(
         )
     except (OSError, ValueError) as exc:
         raise TaskInboxError("invalid_response", str(exc), recovery="Refresh the task and submit a declared correction based on the current revision.", task_id=preflight.task.id, issue=preflight.issue, workflow_id=preflight.workflow_id) from exc
+    return continuation
 
 
 @task_app.command("ls")
@@ -440,23 +442,23 @@ def complete_task(
             playbook_data = apply_issue_playbook_overrides(
                 playbook_data, preflight.issue_dir / "issue.yaml"
             )
-            blackboard = BlackboardStore(preflight.issue_dir).load_or_create(
-                preflight.task.step, playbook_id=preflight.playbook_id
-            )
+            correction_target = None
             if isinstance(raw_payload, dict):
-                _apply_declared_correction(
+                correction_target = _apply_declared_correction(
                     preflight=preflight, playbook_data=playbook_data, raw_payload=raw_payload
                 )
-            applied = apply_human_task_payload(
-                issue_dir=preflight.issue_dir,
-                playbook_data=playbook_data,
-                blackboard=blackboard,
-                from_step=preflight.task.step,
-                trigger=preflight.task.trigger,
-                raw_payload=raw_payload,
-                source=(
-                    "command" if result is not None or result_file is not None else "interactive"
-                ),
+            applied = (
+                HumanTaskApplication(target=correction_target, policy=None)
+                if correction_target is not None
+                else apply_human_task_payload(
+                    issue_dir=preflight.issue_dir, playbook_data=playbook_data,
+                    blackboard=BlackboardStore(preflight.issue_dir).load_or_create(
+                        preflight.task.step, playbook_id=preflight.playbook_id
+                    ),
+                    from_step=preflight.task.step,
+                    trigger=preflight.task.trigger, raw_payload=raw_payload,
+                    source="command" if result is not None or result_file is not None else "interactive",
+                )
             )
             if applied.rejection is not None or applied.target is None:
                 message = (

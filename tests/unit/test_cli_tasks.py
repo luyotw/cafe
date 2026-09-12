@@ -8,9 +8,10 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
+from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.human_tasks import agent_execution_interrupted_human_task
+from cafe.core.packet_io import sha256_bytes
 from cafe.ui.commands.tasks import MAX_CORRECTION_CONTENT_BYTES, _read_bounded_correction_artifact
 from cafe.ui.cli import app
 
@@ -135,6 +136,74 @@ def test_authorize_driver_keeps_a_declared_correction_task_pending(tmp_path: Pat
     assert payload["ok"] is True
     assert payload["data"]["task"]["status"] == "pending"
     assert payload["data"]["authorization_id"] == payload["data"]["task"]["correction"]["contract"]["driver_authorization"]["id"]
+
+
+def test_direct_correction_cli_completes_once_and_replay_does_not_mutate(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Test List I1/I6: the public correction command reports its committed result."""
+    issue_dir, original_task = _task_repo(tmp_path, monkeypatch)
+    original_content = "original requirement\n"
+    original_path = issue_dir / "spec" / "iteration_001" / "output.md"
+    original_path.parent.mkdir(parents=True)
+    original_path.write_text(original_content, encoding="utf-8")
+    boards = BlackboardStore(issue_dir)
+    board = boards.load_or_create("spec", playbook_id="standard")
+    boards.put_artifact(
+        board,
+        ArtifactEntry(
+            name="spec",
+            kind=ArtifactKind.DOCUMENT,
+            version=1,
+            updated_by="spec",
+            path="spec/iteration_001/output.md",
+        ),
+    )
+    task = HumanTaskRecordStore(issue_dir).refresh_pending_contract(
+        workflow_id=original_task.workflow_id,
+        task_id=original_task.id,
+        prompt=original_task.prompt,
+        expected_result={
+            "input_schema": "decision",
+            "correction": {"artifacts": ["spec"], "allow_driver_proxy": True},
+        },
+        continuations={"revise": "plan"},
+    )
+    request = {
+        "decision": "revise",
+        "correction": {
+            "artifact": "spec",
+            "base_hash": sha256_bytes(original_content.encode("utf-8")),
+            "content": "corrected requirement\n",
+            "operation_id": "direct-cli-correction",
+        },
+    }
+
+    first = runner.invoke(
+        app,
+        ["task", "complete", task.id, "--result", json.dumps(request), "--no-resume", "--json"],
+    )
+
+    assert first.exit_code == 0, (first.stdout, first.exception)
+    assert json.loads(first.stdout)["ok"] is True
+    records = HumanTaskRecordStore(issue_dir)
+    assert records.get_task(task.id).status is HumanTaskStatus.COMPLETED
+    assert records.get_result(task.id) is not None
+    assert len([event for event in records.lifecycle_events() if event.event_type == "completed"]) == 1
+    current = boards.load_or_create("spec").artifacts["spec"]
+    assert current.version == 2
+    assert (issue_dir / current.path).read_text(encoding="utf-8") == "corrected requirement\n"
+    assert original_path.read_text(encoding="utf-8") == original_content
+    assert boards.load_or_create("spec").current_step == "plan"
+
+    replay = runner.invoke(
+        app,
+        ["task", "complete", task.id, "--result", json.dumps(request), "--no-resume", "--json"],
+    )
+
+    assert replay.exit_code != 0
+    assert json.loads(replay.stdout)["error"]["code"] == "task_not_pending"
+    assert boards.load_or_create("spec").artifacts["spec"].version == 2
 
 
 def test_list_json_envelope_supports_filters(tmp_path: Path, monkeypatch) -> None:
