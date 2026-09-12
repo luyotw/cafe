@@ -43,7 +43,7 @@ steps:
       bind: {artifact: spec, prompt_context: user_input}
       legacy_presentation: true
     human_tasks:
-      - {trigger: confirm_output, task_id: output-review, outcomes: {confirm: plan, revise: spec}, correction: {artifacts: [spec]}}
+      - {trigger: confirm_output, task_id: output-review, outcomes: {confirm: plan, revise: spec}, correction: {artifacts: [spec], allow_driver_proxy: true}}
       - {trigger: need_clarification, task_id: clarification-answers, outcomes: {submit: spec}}
     allowed_tools: [Read, Grep, Glob, WebFetch, WebSearch]
     hooks:
@@ -60,7 +60,7 @@ steps:
     output_artifact: plan
     human_tasks:
       - {trigger: initial, task_id: development-guide}
-      - {trigger: confirm_output, task_id: output-review, outcomes: {confirm: develop, revise: plan}, correction: {artifacts: [plan]}}
+      - {trigger: confirm_output, task_id: output-review, outcomes: {confirm: develop, revise: plan}, correction: {artifacts: [plan], allow_driver_proxy: true}}
       - {trigger: need_clarification, task_id: clarification-answers, outcomes: {submit: plan}}
     allowed_tools: [Read, Grep, Glob, WebFetch, WebSearch]
     hooks: {prepare_input: [UserInputCollector]}

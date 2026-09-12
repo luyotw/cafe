@@ -58,6 +58,16 @@ def test_development_playbooks_are_discoverable_and_strictly_valid() -> None:
         assert simulation.missing_intent_handlers == ()
 
 
+@pytest.mark.parametrize("playbook_id", ["standard", "standard-qa"])
+def test_builtin_document_reviews_enable_explicit_driver_corrections(playbook_id: str) -> None:
+    """Test List U1/U2: bundled declarations reach the proxy entry boundary."""
+    playbook = PlaybookLoader().load_model(playbook_id, strict=True).model
+    for step_name in ("spec", "plan"):
+        task = next(task for task in playbook.steps[step_name].human_tasks if task.task_id == "output-review")
+        assert task.correction is not None
+        assert task.correction.allow_driver_proxy is True
+
+
 def test_every_builtin_pr_requires_local_review_before_done() -> None:
     """A PR artifact cannot complete a built-in development workflow by itself."""
     loader = PlaybookLoader()
