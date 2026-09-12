@@ -29,6 +29,7 @@ from cafe.core.human_task_notifications import (
 )
 from cafe.core.session import SessionStore
 from cafe.core.session_continuation import SessionContinuation
+from cafe.core.event_dispatches import EventDispatchFenceStore
 from cafe.core.types import AgentCLI, AgentConfig, SessionData
 from cafe.core.workflow_runtime import resolve_human_task_notification_repository_root
 
@@ -1742,6 +1743,8 @@ def _run_v3_callback(
     if executor_factory is None:
         executor_factory = AgentExecutor
     event_id = event["event_id"]
+    if EventDispatchFenceStore(driver_dir.parent).is_fenced(event_id):
+        return state
     event_state = state["events"][event_id]
     if event_state["status"] in {"accepted", "exhausted", "recovery_pending"}:
         return state

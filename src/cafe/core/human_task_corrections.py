@@ -8,6 +8,7 @@ from typing import Any, Mapping
 
 from cafe.core.artifact_revisions import ArtifactRevision, ArtifactRevisionStore
 from cafe.core.blackboard import ArtifactEntry, BlackboardStore
+from cafe.core.event_dispatches import EventDispatchFenceStore
 from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.workflow_execution.worker_launch import WorkerLaunchStore
 
@@ -91,7 +92,7 @@ class HumanTaskCorrectionService:
         if any(
             not isinstance(entry, dict)
             or set(entry) != {"kind", "id"}
-            or entry.get("kind") not in {"artifact", "human_task", "approval", "worker"}
+            or entry.get("kind") not in {"artifact", "human_task", "approval", "worker", "dispatch"}
             or not all(isinstance(entry[key], str) and entry[key] for key in ("kind", "id"))
             for entry in request.manifest
         ):
@@ -262,5 +263,10 @@ class HumanTaskCorrectionService:
             )
             if invalidated is None:
                 raise ValueError("correction approval invalidation target is absent")
+        elif entry["kind"] == "dispatch":
+            if not EventDispatchFenceStore(self.revisions.issue_dir).invalidate(
+                entry["id"], operation_id=operation_id
+            ):
+                raise ValueError("correction dispatch invalidation target is absent")
         else:  # pragma: no cover - request validation keeps this fail-closed.
             raise ValueError("correction invalidation kind is unsupported")

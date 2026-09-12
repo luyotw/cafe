@@ -493,6 +493,24 @@ def _v3_event_context(callback, tmp_path: Path, clis: list[tuple[str, str]]):
     return driver_dir, state, event
 
 
+def test_correction_fenced_dispatch_is_not_delivered(tmp_path: Path) -> None:
+    from cafe.core.event_dispatches import EventDispatchFenceStore
+
+    callback = _callback_module()
+    driver_dir, state, event = _v3_event_context(callback, tmp_path, [("codex", "gpt-5")])
+    assert EventDispatchFenceStore(driver_dir.parent).invalidate(
+        event["event_id"], operation_id="correction-1"
+    )
+
+    class UnexpectedExecutor:
+        def __init__(self, *_args, **_kwargs) -> None:
+            raise AssertionError("a fenced dispatch must not start an executor")
+
+    assert callback._run_v3_callback(
+        driver_dir, state, event, repository_root=tmp_path, executor_factory=UnexpectedExecutor
+    ) == state
+
+
 def _contract_event_context(
     callback,
     tmp_path: Path,

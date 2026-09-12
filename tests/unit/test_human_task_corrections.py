@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from cafe.core.artifact_revisions import ArtifactRevisionStore, StaleArtifactRevision
 from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardStore
+from cafe.core.event_dispatches import EventDispatchFenceStore
 from cafe.core.human_task_corrections import CorrectionRequest, HumanTaskCorrectionService
 from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.packet_io import sha256_bytes
@@ -258,6 +259,38 @@ def test_correction_invalidates_queued_worker_before_receipting(tmp_path) -> Non
     assert WorkerLaunchStore(tmp_path).get(worker["worker_id"])["status"] == "stale"
     journal = ArtifactRevisionStore(tmp_path).journal(result.operation_id)
     assert journal["receipts"] == [{"kind": "worker", "id": worker["worker_id"]}]
+
+
+def test_correction_fences_a_preexisting_event_dispatch_before_receipting(tmp_path) -> None:
+    source = tmp_path / "brief.md"
+    source.write_text("base", encoding="utf-8")
+    board_store = BlackboardStore(tmp_path)
+    board = board_store.load_or_create("review")
+    board_store.put_artifact(board, ArtifactEntry(
+        name="brief", kind=ArtifactKind.DOCUMENT, version=1, updated_by="writer", path="brief.md"
+    ))
+    driver_dir = tmp_path / "driver"
+    driver_dir.mkdir()
+    (driver_dir / "dispatch_state.json").write_text(
+        '{"events":{"event-1":{"status":"routing"}}}', encoding="utf-8"
+    )
+    task = HumanTaskRecordStore(tmp_path).materialize(
+        workflow_id="workflow", step="review", iteration=1, trigger="confirm_output",
+        policy_id="output-review", prompt="Review",
+        expected_result={"input_schema": "decision", "correction": {"artifacts": ["brief"]}},
+        continuations={"revise": "draft"}, assignee_type="user",
+    )
+
+    result = HumanTaskCorrectionService(tmp_path).apply(CorrectionRequest(
+        workflow_id="workflow", task_id=task.id, artifact="brief", base_hash=sha256_bytes(b"base"),
+        content="replacement", operation_id="dispatch-fence", actor="user",
+        manifest=({"kind": "dispatch", "id": "event-1"},),
+    ))
+
+    assert EventDispatchFenceStore(tmp_path).is_fenced("event-1")
+    assert ArtifactRevisionStore(tmp_path).journal(result.operation_id)["receipts"] == [
+        {"kind": "dispatch", "id": "event-1"}
+    ]
 
 
 def test_correction_rejects_an_unimplemented_executable_invalidator_before_mutation(tmp_path) -> None:
