@@ -1257,6 +1257,49 @@ def _perform_squash_merge(
     )
 
 
+def _delete_remote_feature_branch(
+    git_ops: GitOperations,
+    feature_branch: str,
+    *,
+    restore_local_branch_on_failure: bool = False,
+) -> None:
+    """Delete one remote feature branch without losing retryable local state."""
+    try:
+        console.print(f"[dim]Deleting remote branch: origin/{feature_branch}[/dim]")
+        deleted = git_ops.delete_remote_branch_if_exists(feature_branch)
+        if deleted:
+            console.print(f"[green]✓ Deleted remote branch: origin/{feature_branch}[/green]")
+        else:
+            console.print(
+                f"[green]✓ Remote branch already absent: origin/{feature_branch}[/green]"
+            )
+    except Exception as e:
+        console.print(f"[red]❌ Failed to delete remote branch: {e}[/red]")
+        console.print()
+        restored = False
+        if restore_local_branch_on_failure:
+            try:
+                git_ops.checkout_branch(feature_branch)
+                restored = True
+                console.print(
+                    f"[green]✓ Restored feature branch for retry: {feature_branch}[/green]"
+                )
+            except Exception as restore_error:
+                console.print(
+                    f"[yellow]⚠️  Failed to restore feature branch: {restore_error}[/yellow]"
+                )
+        console.print("[yellow]Remaining steps (please execute manually):[/yellow]")
+        if restored or not restore_local_branch_on_failure:
+            console.print(f"  1. git push origin --delete {feature_branch}")
+            console.print("  2. cafe close")
+        else:
+            console.print(f"  1. git checkout {feature_branch}")
+            console.print(f"  2. git push origin --delete {feature_branch}")
+            console.print("  3. cafe close")
+        console.print()
+        raise typer.Exit(1)
+
+
 def close(
     squash: bool = typer.Option(
         False,
@@ -1275,9 +1318,9 @@ def close(
     \b
     This command:
     1. Checks for open/draft PRs (blocks if found)
-    2. For worktree mode: switches back to main repo, removes worktree, deletes branch
-    3. For normal mode: switches to base branch, deletes feature branch
-    4. Pulls latest changes from remote
+    2. Switches to and updates the base branch
+    3. Deletes the remote feature branch when it exists
+    4. Removes the worktree, when used, and deletes the local feature branch
     5. Archives .cafe/issues/<issue-name>/ to ~/.cafe/projects/<project-path>/archived/<issue-name>/
     """
     import os
@@ -1439,13 +1482,18 @@ def close(
                 console.print()
                 raise typer.Exit(1)
 
-            # Step 4: Move worktree config.yaml into issue dir before sync
+            # Step 4: Delete the remote feature branch while the local
+            # worktree is still intact, so a transport or permission failure
+            # leaves the lifecycle command safely retryable.
+            _delete_remote_feature_branch(git_ops, feature_branch)
+
+            # Step 5: Move worktree config.yaml into issue dir before sync
             # so it gets archived and restore puts it back in issue dir (override)
             worktree_config = worktree_abs / ".cafe" / "config.yaml"
             if worktree_config.exists() and worktree_issue_dir.exists():
                 shutil.move(str(worktree_config), str(worktree_issue_dir / "config.yaml"))
 
-            # Step 5: Sync .cafe/issues/{issue_name}/ from worktree to repo root
+            # Step 6: Sync .cafe/issues/{issue_name}/ from worktree to repo root
             try:
                 console.print("[dim]Syncing issue data from worktree to repo root...[/dim]")
                 # Use absolute path for repo_issue_dir since we're in main_repo after os.chdir()
@@ -1473,7 +1521,7 @@ def close(
                 )
                 # Continue with worktree removal even if sync fails
 
-            # Step 5: Remove worktree
+            # Step 7: Remove worktree
             try:
                 console.print(f"[dim]Removing worktree: {worktree_path}[/dim]")
                 git_ops.remove_worktree(worktree_path)
@@ -1490,7 +1538,7 @@ def close(
 
             clear_marker_if_matches(worktree_abs / ".cafe", issue_name)
 
-            # Step 6: Delete feature branch
+            # Step 8: Delete local feature branch
             # Squash merges leave no merge commit pointing at the feature branch,
             # so Git treats it as "not merged" and `git branch -d` would fail.
             # Force-delete in that case.
@@ -1572,7 +1620,15 @@ def close(
                 console.print()
                 raise typer.Exit(1)
 
-            # Step 3: Delete feature branch
+            # Step 3: Delete the remote feature branch before deleting its
+            # local counterpart, preserving a retryable local state on error.
+            _delete_remote_feature_branch(
+                git_ops,
+                feature_branch,
+                restore_local_branch_on_failure=True,
+            )
+
+            # Step 4: Delete local feature branch
             # Squash merges leave no merge commit, so `git branch -d` fails;
             # force-delete when we squashed.
             force_delete = squash

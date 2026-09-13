@@ -35,6 +35,7 @@ def mock_git_ops(monkeypatch):
         mock.pull.return_value = None
         mock.merge.return_value = None  # Add merge mock
         mock.delete_branch.return_value = None
+        mock.delete_remote_branch_if_exists.return_value = True
         mock.get_current_branch.return_value = "test-issue"
         yield mock
 
