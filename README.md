@@ -313,6 +313,20 @@ cafe task complete 7fe1a9e8-66fa-4df2-88d4-cd6af87fae43 \
   --result-file response.json
 ```
 
+A supervising user may explicitly override the declared continuation and hand
+the completed task to any phase that exists in the owning playbook. The task's
+declared response is still required and validated:
+
+```bash
+cafe task complete 7fe1a9e8-66fa-4df2-88d4-cd6af87fae43 \
+  --result '{"decision":"confirm","work_report":{"summary":"Implemented the requested change.","outcome":"The change is ready for review."}}' \
+  --handoff-to review
+```
+
+The override, original continuation, and optional work report are retained in
+the TaskResult. `--handoff-to` does not accept arbitrary names or terminate the
+workflow; its value must be a phase declared by the playbook.
+
 Add `--json` to list, inspect, or complete to receive one result object with
 `ok`, `operation`, `data`, and `error` fields. Filters combine with AND
 semantics. Current HumanTask records have no due timestamp, so their due state

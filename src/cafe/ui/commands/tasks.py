@@ -233,6 +233,11 @@ def complete_task(
     result_file: Optional[Path] = typer.Option(
         None, "--result-file", help="Read a non-interactive JSON response from a file"
     ),
+    handoff_to: Optional[str] = typer.Option(
+        None,
+        "--handoff-to",
+        help="Supervisor override: continue at any phase declared by the owning playbook",
+    ),
     no_resume: bool = typer.Option(
         False,
         "--no-resume",
@@ -247,6 +252,15 @@ def complete_task(
         raw_payload = _load_result(result, result_file)
         applied: Any
         if preflight.task.capability_approval is not None:
+            if handoff_to is not None:
+                raise TaskInboxError(
+                    "invalid_response",
+                    "Capability approval tasks do not accept a phase handoff override.",
+                    recovery="Complete the capability decision without --handoff-to.",
+                    task_id=task_id,
+                    issue=preflight.issue,
+                    workflow_id=preflight.workflow_id,
+                )
             approval = dict(preflight.task.capability_approval)
             if raw_payload is None:
                 _render_capability_approval(approval)
@@ -320,6 +334,7 @@ def complete_task(
                 source=(
                     "command" if result is not None or result_file is not None else "interactive"
                 ),
+                supervisor_handoff_to=handoff_to,
             )
             if applied.rejection is not None or applied.target is None:
                 message = (

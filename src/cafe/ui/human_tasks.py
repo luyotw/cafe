@@ -272,6 +272,7 @@ def apply_human_task_payload(
     trigger: str,
     raw_payload: str | Mapping[str, Any],
     source: str,
+    supervisor_handoff_to: Optional[str] = None,
 ) -> HumanTaskApplication:
     """Validate and apply one response while retaining a pause on rejection."""
     record_store = HumanTaskRecordStore(issue_dir)
@@ -306,6 +307,7 @@ def apply_human_task_payload(
             raw_payload=raw_payload,
             source=source,
             record_store=record_store,
+            supervisor_handoff_to=supervisor_handoff_to,
         )
 
 
@@ -462,6 +464,7 @@ def _apply_human_task_payload(
     raw_payload: str | Mapping[str, Any],
     source: str,
     record_store: HumanTaskRecordStore,
+    supervisor_handoff_to: Optional[str] = None,
 ) -> HumanTaskApplication:
     """Apply a response while holding the matching durable-record transaction."""
     store = BlackboardStore(issue_dir)
@@ -527,6 +530,7 @@ def _apply_human_task_payload(
     result_was_recovered = durable_result is not None
 
     recovered_agent_input = ""
+    declared_continuation: str
     if durable_result is not None:
         assert durable_task is not None
         blackboard = store.load_or_create(
@@ -573,6 +577,12 @@ def _apply_human_task_payload(
                 },
             )
             return HumanTaskApplication(target=None, policy=policy, rejection=continuation)
+        stored_declared = durable_result.payload.get("declared_continuation")
+        declared_continuation = (
+            stored_declared
+            if isinstance(stored_declared, str) and stored_declared
+            else continuation
+        )
     else:
         if isinstance(completion, HumanTaskRejection):
             if durable_task is not None:
@@ -617,6 +627,33 @@ def _apply_human_task_payload(
                 },
             )
             return HumanTaskApplication(target=None, policy=policy, rejection=continuation)
+        declared_continuation = continuation
+
+        if supervisor_handoff_to is not None:
+            requested_handoff = supervisor_handoff_to.strip()
+            playbook_steps = playbook_data.get("steps", {})
+            if durable_task is None:
+                rejection = HumanTaskRejection(
+                    message="A supervisor handoff requires a durable HumanTask record.",
+                    correction_guidance=policy.correction_guidance,
+                )
+                return HumanTaskApplication(target=None, policy=policy, rejection=rejection)
+            if (
+                not requested_handoff
+                or not isinstance(playbook_steps, Mapping)
+                or requested_handoff not in playbook_steps
+            ):
+                rejection = HumanTaskRejection(
+                    message="Choose a phase declared by this task's owning playbook.",
+                    correction_guidance=policy.correction_guidance,
+                )
+                record_store.record_rejection(
+                    workflow_id=blackboard.workflow_id,
+                    task_id=durable_task.id,
+                    reason=rejection.message,
+                )
+                return HumanTaskApplication(target=None, policy=policy, rejection=rejection)
+            continuation = requested_handoff
 
     validated_completion = completion if isinstance(completion, HumanTaskCompletion) else None
     if durable_result is None:
@@ -701,10 +738,8 @@ def _apply_human_task_payload(
             # deliberately separate from the fixed decision outcomes (for
             # example, ``confirm -> closeout``), so both sources must be
             # accepted by the durable-task correlation fence.
-            permitted_continuations.update(
-                item for item in raw_allowed if isinstance(item, str)
-            )
-        if continuation not in permitted_continuations:
+            permitted_continuations.update(item for item in raw_allowed if isinstance(item, str))
+        if declared_continuation not in permitted_continuations:
             rejection = HumanTaskRejection(
                 message="This response does not select the pending task's declared continuation.",
                 correction_guidance=policy.correction_guidance,
@@ -731,6 +766,7 @@ def _apply_human_task_payload(
                 completion_payload = _validated_completion_payload(
                     validated_completion,
                     continuation,
+                    declared_continuation=declared_continuation,
                 )
                 if (
                     trigger == AGENT_EXECUTION_INTERRUPTED_TRIGGER
@@ -794,6 +830,19 @@ def _apply_human_task_payload(
     if (
         durable_task is not None
         and durable_result is not None
+        and continuation != declared_continuation
+    ):
+        pending_inputs.setdefault(continuation, []).append(
+            _supervisor_handoff_continuation_input(
+                task=durable_task,
+                result=durable_result,
+                declared_continuation=declared_continuation,
+                continuation=continuation,
+            )
+        )
+    if (
+        durable_task is not None
+        and durable_result is not None
         and durable_result.payload.get("work_report") is not None
         and continuation != "_done"
     ):
@@ -808,9 +857,7 @@ def _apply_human_task_payload(
         )
     is_done = continuation == "_done"
     playbook_steps = playbook_data.get("steps", {})
-    from_step_def = (
-        playbook_steps.get(from_step, {}) if isinstance(playbook_steps, Mapping) else {}
-    )
+    from_step_def = playbook_steps.get(from_step, {}) if isinstance(playbook_steps, Mapping) else {}
     if (
         not is_done
         and continuation != from_step
@@ -845,6 +892,14 @@ def _apply_human_task_payload(
             "task_id": policy.id,
             "pattern": policy.pattern,
             "to_step": continuation,
+            **(
+                {
+                    "declared_to_step": declared_continuation,
+                    "supervisor_handoff": True,
+                }
+                if continuation != declared_continuation
+                else {}
+            ),
             "source": source,
             **_work_report_event_data(task=durable_task, result=durable_result),
         },
@@ -1020,7 +1075,10 @@ def _submitted_human_task_id(raw_payload: str | Mapping[str, Any]) -> Optional[s
 
 
 def _validated_completion_payload(
-    completion: HumanTaskCompletion, continuation: str
+    completion: HumanTaskCompletion,
+    continuation: str,
+    *,
+    declared_continuation: str,
 ) -> dict[str, Any]:
     """Store the validated, transport-neutral completion rather than raw input."""
     payload: dict[str, Any] = {"task": completion.task_id, "continuation": continuation}
@@ -1034,6 +1092,9 @@ def _validated_completion_payload(
         payload["target"] = completion.target
     if completion.work_report is not None:
         payload["work_report"] = completion.work_report.model_dump(mode="json")
+    if continuation != declared_continuation:
+        payload["declared_continuation"] = declared_continuation
+        payload["supervisor_handoff_to"] = continuation
     return payload
 
 
@@ -1069,6 +1130,35 @@ def _work_report_continuation_input(*, task: HumanTask, result: TaskResult) -> s
     }
     return (
         "CAFE validated this HumanTask work report for the continuation phase:\n"
+        f"{json.dumps(receipt, ensure_ascii=False, sort_keys=True)}"
+    )
+
+
+def _supervisor_handoff_continuation_input(
+    *,
+    task: HumanTask,
+    result: TaskResult,
+    declared_continuation: str,
+    continuation: str,
+) -> str:
+    """Give any selected phase the validated response behind an explicit override."""
+    response = {
+        key: result.payload[key]
+        for key in ("decision", "answers", "feedback", "target")
+        if key in result.payload
+    }
+    receipt = {
+        "schema_version": 1,
+        "type": "supervisor_handoff",
+        "human_task_id": task.id,
+        "result_id": result.id,
+        "from_step": task.step,
+        "declared_continuation": declared_continuation,
+        "continuation": continuation,
+        "response": response,
+    }
+    return (
+        "CAFE validated this explicit supervisor handoff for the selected phase:\n"
         f"{json.dumps(receipt, ensure_ascii=False, sort_keys=True)}"
     )
 
