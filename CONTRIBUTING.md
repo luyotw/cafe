@@ -110,6 +110,25 @@ Default development flow (spec → plan → develop → review → pr) is driven
 | Agent instructions, checklists, phase prompts | Skills (`SKILL.md` and related files) |
 | Orchestration, blackboard, execution | Runtime code under `src/cafe/core/` and `src/cafe/phases/` |
 
+### Driver dependency boundary
+
+Driver policy, mode, session, prompt, and authorization semantics are owned by
+`src/cafe/driver/` and `src/cafe/data/skills/use-cafe-workflow/`. Dependencies
+flow from those Driver-owned adapters toward mode-neutral workflow services,
+never from the generic workflow layers back into Driver code.
+
+Code under `src/cafe/core/`, `src/cafe/phases/`, generic UI commands, generic
+HumanTask services and records, hooks, and agents must remain Driver-free. They
+must not import `cafe.driver` or encode Driver-specific flags, actor names,
+contracts, routing, or authorization rules. When Driver needs a generic
+operation, expose a mode-neutral interface at the owning layer and adapt it only
+from a Driver-owned boundary.
+
+Architecture-boundary tests are protected contracts. Do not weaken them, add a
+feature-specific allowlist exception, or relocate Driver semantics merely to
+make a feature pass. A real boundary change requires explicit user approval and
+an accompanying update to the confirmed strategic or engineering guidelines.
+
 Primary CLI entrypoints: `cafe make` and `cafe workflow`. Legacy `cafe spec` / `plan` / `develop` / `review` / `pr` commands were removed in issue #315; use `cafe workflow --start-step <step> --execute` for explicit single-step runs.
 
 Built-in **plan** templates require three architecture sections in every plan artifact: **Negative space** (what we decline to add), **Layering map** (concrete paths for logic/persistence/UI), and **Dependency ADR** (per new dependency or an explicit "none"). The user sees these at plan confirm; **review** diffs dependency manifests against the ADR and routes undeclared packages back to develop.
