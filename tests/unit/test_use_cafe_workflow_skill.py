@@ -1989,6 +1989,24 @@ def test_preflight_cache_can_invalidate_candidate_evidence(tmp_path: Path, monke
     assert miss.returncode == 3
 
 
+def test_preflight_cache_preserves_accepted_model_identifier_when_only_case_differs(
+    tmp_path: Path,
+) -> None:
+    module = _load_script_module(
+        SKILL_ROOT / "scripts" / "preflight_cache.py",
+        "preflight_cache_model_identifier",
+    )
+
+    assert module._canonical_resolved_model(
+        requested_model="auto",
+        reported_model="Auto",
+    ) == "auto"
+    assert module._canonical_resolved_model(
+        requested_model="floating-alias",
+        reported_model="canonical-model-v1",
+    ) == "canonical-model-v1"
+
+
 def test_preflight_cache_runs_and_reuses_cafe_fallback_smoke(tmp_path: Path) -> None:
     cache_file = tmp_path / "preflight.json"
     args = (
