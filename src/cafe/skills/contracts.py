@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -213,7 +214,7 @@ class TodoProjection(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     artifact: str
-    source: Optional[Literal["plan", "review", "qa", "pr_comment", "workflow_feedback"]] = None
+    source: Optional[str] = None
     causal: bool = False
 
     @field_validator("artifact")
@@ -221,26 +222,22 @@ class TodoProjection(BaseModel):
     def _validate_artifact(cls, value: str) -> str:
         return _safe_token(value, field_name="todo projection artifact")
 
+    @field_validator("source")
+    @classmethod
+    def _validate_declared_source(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        source = value.strip()
+        if not re.fullmatch(r"[a-z][a-z0-9_]*", source):
+            raise ValueError("todo projection source must be a lowercase identifier")
+        return source
+
     @model_validator(mode="after")
     def _validate_source_strategy(self) -> "TodoProjection":
         if (self.source is None) == (not self.causal):
             raise ValueError(
                 "todo projection requires exactly one source strategy: source or causal"
             )
-        if self.causal and self.artifact != "causal_todo":
-            raise ValueError("causal Todo projection must own the causal_todo artifact")
-        if not self.causal and self.artifact == "causal_todo":
-            raise ValueError("causal_todo ownership requires the causal source strategy")
-        ownership = {
-            "plan": "plan",
-            "review_feedback": "review",
-            "qa_feedback": "qa",
-            "pr_result": "pr_comment",
-            "workflow_feedback": "workflow_feedback",
-        }
-        expected = ownership.get(self.artifact)
-        if expected is not None and self.source != expected:
-            raise ValueError("todo projection source/artifact ownership does not match")
         return self
 
 

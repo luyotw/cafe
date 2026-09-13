@@ -73,7 +73,7 @@ def test_write_cafe_phase_requires_interrupt_safe_batch_progress() -> None:
     normalized_skill = " ".join(skill.split())
     normalized_spec = " ".join(spec.split())
 
-    assert "version: 2.10.0" in skill
+    assert "version: 2.11.0" in skill
     assert "## Interruptible and Batch Phases" in skill
     assert "it is not a per-target resume ledger" in normalized_skill
     assert (
@@ -121,3 +121,20 @@ def test_write_cafe_phase_requires_interrupt_safe_batch_progress() -> None:
     assert "完整內容完全相同的 completed item" in normalized_spec
     assert "runtime 會重新安裝 resolved skill" in normalized_spec
     assert "active `SKILL.md`" in normalized_spec
+
+
+def test_write_cafe_phase_requires_topology_neutral_todo_routing() -> None:
+    skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+    spec = (SKILL_ROOT / "references" / "skill-spec.md").read_text(encoding="utf-8")
+    normalized_skill = " ".join(skill.split())
+    normalized_spec = " ".join(spec.split())
+
+    assert "Custom workflows may use any safe artifact" in normalized_skill
+    assert "`feedback_todo_source`" in normalized_skill
+    assert "generic runtime must not infer" in normalized_skill
+    assert "artifact/source 可使用自訂名稱" in normalized_spec
+    assert "HumanTask 則含 `feedback_delivery.todo_source`" in normalized_spec
+    assert (
+        "generic runtime 不得從內建 phase、role、artifact 或 playbook 名稱推斷"
+        in normalized_spec
+    )

@@ -81,19 +81,21 @@ def test_todo_projection_requires_exactly_one_source_strategy() -> None:
         )
 
     direct = contract({"artifact": "plan", "source": "plan"})
-    causal = contract({"artifact": "causal_todo", "causal": True})
+    causal = contract({"artifact": "active_work", "causal": True})
     assert direct.checklist.variants[0].sections[0].todo_projection.source == "plan"
     assert causal.checklist.variants[0].sections[0].todo_projection.causal is True
 
     for invalid in (
         {"artifact": "plan"},
         {"artifact": "causal_todo", "source": "review", "causal": True},
-        {"artifact": "causal_todo", "source": "review"},
-        {"artifact": "plan", "causal": True},
-        {"artifact": "review_feedback", "source": "qa"},
+        {"artifact": "active_work", "source": "review", "causal": True},
+        {"artifact": "plan", "source": "not-valid"},
     ):
-        with pytest.raises(ValidationError, match="source strategy|ownership|own the"):
+        with pytest.raises(ValidationError, match="source strategy|lowercase identifier"):
             contract(invalid)
+
+    custom = contract({"artifact": "inspection", "source": "bespoke"})
+    assert custom.checklist.variants[0].sections[0].todo_projection.source == "bespoke"
 
 
 def test_workflow_contract_parses_provider_neutral_execution_profile() -> None:

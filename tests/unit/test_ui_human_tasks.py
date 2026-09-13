@@ -589,10 +589,11 @@ def test_feedback_delivery_records_before_the_declared_correction_route(tmp_path
                             "create_follow_up": "_done",
                             "continue_without_issue": "_done",
                         },
-                        "feedback_delivery": {
-                            "artifact": "workflow_feedback",
-                            "source_kind": "local_review",
-                        },
+                            "feedback_delivery": {
+                                "artifact": "workflow_feedback",
+                                "source_kind": "local_review",
+                                "todo_source": "workflow_feedback",
+                            },
                     }
                 ],
             },
@@ -643,6 +644,7 @@ def test_feedback_delivery_records_before_the_declared_correction_route(tmp_path
             "workflow_feedback": blackboard.artifacts["workflow_feedback"],
         },
         blackboard,
+        playbook=playbook,
     )["causal_todo"]
     assert [item.work for item in resolved.items] == ["Cover the empty input boundary."]
     assert blackboard.step_attempt_counts == {"pr": 3}
@@ -672,10 +674,11 @@ def test_feedback_delivery_terminal_disposition_does_not_record_feedback(
                             "create_follow_up": "_done",
                             "continue_without_issue": "_done",
                         },
-                        "feedback_delivery": {
-                            "artifact": "workflow_feedback",
-                            "source_kind": "local_review",
-                        },
+                            "feedback_delivery": {
+                                "artifact": "workflow_feedback",
+                                "source_kind": "local_review",
+                                "todo_source": "workflow_feedback",
+                            },
                     }
                 ],
             },

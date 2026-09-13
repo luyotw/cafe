@@ -34,7 +34,7 @@ def test_todo_parser_only_accepts_items_in_its_designated_section() -> None:
         "## Todo List\nNo actionable work.\n" + _item(),
         "## Todo List\n- [ ] malformed",
         "## Todo List\n" + _item() + "\n" + _item("another task"),
-        "## Todo List\n- [ ] `PLAN-001` — Source: `unknown` — Work: x — Closure: y — Evidence: z",
+        "## Todo List\n- [ ] `PLAN-001` — Source: `not-valid` — Work: x — Closure: y — Evidence: z",
     ],
 )
 def test_todo_parser_rejects_malformed_or_ambiguous_authoritative_work(content: str) -> None:
@@ -50,6 +50,15 @@ def test_todo_fingerprint_changes_when_any_closure_requirement_changes() -> None
 
 def test_todo_parser_accepts_only_the_canonical_intentionally_empty_marker() -> None:
     assert parse_todo_list("## Todo List\nNo actionable work.\n") == ()
+
+
+def test_todo_parser_accepts_a_declared_custom_source() -> None:
+    items = parse_todo_list(
+        "## Todo List\n- [ ] `CUSTOM-001` — Source: `bespoke` — Work: build — "
+        "Closure: done — Evidence: test",
+        expected_source="bespoke",
+    )
+    assert items[0].source == "bespoke"
 
 
 def test_every_builtin_todo_producer_declares_the_empty_marker() -> None:
@@ -75,12 +84,15 @@ def test_correction_source_requires_explicit_causal_artifact(tmp_path) -> None:
     review.write_text("## Todo List\n", encoding="utf-8")
     qa.write_text("## Todo List\n", encoding="utf-8")
     selected = resolve_todo_source(
-        correction_artifact="qa_feedback",
+        artifact="qa_feedback",
+        source="qa",
         artifacts={"review_feedback": review, "qa_feedback": qa},
     )
     assert selected.artifact == "qa_feedback"
     with pytest.raises(TodoContractError, match="missing causal"):
-        resolve_todo_source(correction_artifact="pr_result", artifacts={"qa_feedback": qa})
+        resolve_todo_source(
+            artifact="pr_result", source="pr_comment", artifacts={"qa_feedback": qa}
+        )
 
 
 def test_workflow_feedback_normalization_selects_exact_causal_entries(tmp_path) -> None:
@@ -122,10 +134,14 @@ def test_workflow_feedback_normalization_selects_exact_causal_entries(tmp_path) 
     ]
     ledger.write_text(json.dumps({"version": 1, "entries": entries}), encoding="utf-8")
 
-    pending = workflow_feedback_todo_items(ledger, target_step="develop")
+    sources = {"github_pr": "pr_comment", "local_review": "workflow_feedback"}
+    pending = workflow_feedback_todo_items(
+        ledger, target_step="develop", source_by_kind=sources
+    )
     delivered = workflow_feedback_todo_items(
         ledger,
         target_step="develop",
+        source_by_kind=sources,
         source_identities=("local_review:pr:local-review:1",),
     )
     assert [item.source for item in pending] == ["pr_comment"]
@@ -134,4 +150,9 @@ def test_workflow_feedback_normalization_selects_exact_causal_entries(tmp_path) 
     assert [item.work for item in delivered] == ["fix the local review blocker"]
 
     with pytest.raises(TodoContractError, match="missing"):
-        workflow_feedback_todo_items(ledger, target_step="develop", source_identities=("stale",))
+        workflow_feedback_todo_items(
+            ledger,
+            target_step="develop",
+            source_by_kind=sources,
+            source_identities=("stale",),
+        )

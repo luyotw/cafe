@@ -2668,6 +2668,7 @@ steps:
         feedback_delivery:
           artifact: workflow_feedback
           source_kind: local_review
+          todo_source: workflow_feedback
     'on': {confirm_output: publish}
 entry_point: define
 """,

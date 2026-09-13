@@ -52,25 +52,28 @@ def test_policy_accepts_each_supported_response_pattern(
     assert policy.input_schema == input_schema
 
 
-def test_feedback_delivery_binding_is_strict_and_uses_the_canonical_artifact() -> None:
-    """UT-004 — delivery metadata cannot silently bind an arbitrary artifact."""
+def test_feedback_delivery_binding_declares_portable_artifact_and_source() -> None:
     binding = HumanTaskBinding.model_validate(
         {
             "trigger": "confirm_output",
             "task_id": "local-review",
             "outcomes": {"request_changes": "develop"},
             "feedback_delivery": {
-                "artifact": "workflow_feedback",
-                "source_kind": "local_review",
+                "artifact": "signals",
+                "source_kind": "inspection_note",
+                "todo_source": "bespoke",
             },
         }
     )
 
     assert binding.feedback_delivery is not None
+    assert binding.feedback_delivery.artifact == "signals"
+    assert binding.feedback_delivery.todo_source == "bespoke"
     for malformed in (
-        {"artifact": "user_input", "source_kind": "local_review"},
-        {"artifact": "workflow_feedback", "source_kind": " "},
-        {"artifact": "workflow_feedback", "source_kind": "local_review", "target": "develop"},
+        {"artifact": "", "source_kind": "local_review", "todo_source": "custom"},
+        {"artifact": "signals", "source_kind": " ", "todo_source": "custom"},
+        {"artifact": "signals", "source_kind": "note", "todo_source": " "},
+        {"artifact": "signals", "source_kind": "note", "todo_source": "custom", "target": "build"},
     ):
         with pytest.raises(ValidationError):
             HumanTaskBinding.model_validate(

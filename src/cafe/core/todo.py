@@ -7,10 +7,9 @@ import re
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
-from typing import Literal, Mapping
+from typing import Mapping
 
-TodoSource = Literal["plan", "review", "qa", "pr_comment", "workflow_feedback"]
-TODO_SOURCES = frozenset({"plan", "review", "qa", "pr_comment", "workflow_feedback"})
+TodoSource = str
 MAX_TODO_ITEMS = 100
 _HEADING = re.compile(r"^#{1,6}\s+Todo List\s*$", re.IGNORECASE)
 _ANY_HEADING = re.compile(r"^#{1,6}\s+")
@@ -59,21 +58,13 @@ class TodoSourceArtifact:
 
 def resolve_todo_source(
     *,
-    correction_artifact: str | None,
+    artifact: str,
+    source: TodoSource,
     artifacts: Mapping[str, object],
 ) -> TodoSourceArtifact:
-    """Resolve an explicit causal artifact; never prioritize historical feedback."""
-    source_by_artifact: dict[str, TodoSource] = {
-        "plan": "plan",
-        "review_feedback": "review",
-        "qa_feedback": "qa",
-        "pr_result": "pr_comment",
-        "workflow_feedback": "workflow_feedback",
-    }
-    artifact = correction_artifact or "plan"
-    source = source_by_artifact.get(artifact)
-    if source is None:
-        raise TodoContractError(f"unsupported causal Todo artifact: {artifact}")
+    """Resolve one explicitly declared artifact/source pair."""
+    if not re.fullmatch(r"[a-z][a-z0-9_]*", source):
+        raise TodoContractError(f"unsupported Todo source: {source}")
     value = artifacts.get(artifact)
     if value is None:
         raise TodoContractError(f"missing causal Todo artifact: {artifact}")
@@ -111,8 +102,6 @@ def parse_todo_list(
         if match is None:
             raise TodoContractError("Todo List contains a malformed item")
         source = match.group("source")
-        if source not in TODO_SOURCES:
-            raise TodoContractError(f"unsupported Todo source: {source}")
         if expected_source is not None and source != expected_source:
             raise TodoContractError(
                 "Todo item source does not match the declared projection source"
@@ -140,6 +129,7 @@ def workflow_feedback_todo_items(
     path: Path,
     *,
     target_step: str,
+    source_by_kind: Mapping[str, TodoSource],
     source_identities: tuple[str, ...] | None = None,
 ) -> tuple[TodoItem, ...]:
     """Normalize one exact workflow-feedback delivery into canonical Todo items."""
@@ -184,10 +174,9 @@ def workflow_feedback_todo_items(
     items: list[TodoItem] = []
     for entry in selected:
         identity = entry.source_identity
-        kind = entry.source_kind.lower()
-        source: TodoSource = (
-            "pr_comment" if kind.startswith(("github", "pr")) else "workflow_feedback"
-        )
+        source = source_by_kind.get(entry.source_kind)
+        if source is None:
+            raise TodoContractError("workflow feedback source kind is not declared")
         work = " ".join(entry.content.split())
         if not work:
             raise TodoContractError("workflow feedback Todo work is empty")

@@ -127,6 +127,9 @@ steps:
       completion: baton
       publish_confirmation: true
       feedback_target: develop
+      feedback_artifact: workflow_feedback
+      feedback_source_kind: github_pr
+      feedback_todo_source: pr_comment
       context_providers: [git_history, local_review]
     capability_requests: [cafe.pr.publish]
     allowed_tools: [Read, Edit, Write, Grep, Glob]
@@ -138,7 +141,7 @@ steps:
       - trigger: confirm_output
         task_id: local-review
         outcomes: {fix_now: develop, create_follow_up: _done, continue_without_issue: _done}
-        feedback_delivery: {artifact: workflow_feedback, source_kind: local_review}
+        feedback_delivery: {artifact: workflow_feedback, source_kind: local_review, todo_source: workflow_feedback}
     "on":
       confirm_output: pr
       need_permission: pr

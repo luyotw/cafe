@@ -723,15 +723,30 @@ class GenericWorkflowStepExecutor(Phase):
             self._resolve_skill_name(step_def, self.iteration)
         )
         input_artifacts = self._step_input_artifacts(step_def, blackboard_state)
+        causal_artifact = next(
+            (
+                section.todo_projection.artifact
+                for variant in (contract.checklist.variants if contract.checklist else ())
+                for section in variant.sections
+                if section.todo_projection and section.todo_projection.causal
+            ),
+            None,
+        )
+        if causal_artifact is not None:
+            input_artifacts = self._add_causal_todo_artifact(
+                input_artifacts,
+                blackboard_state,
+                playbook=self.playbook,
+                causal_artifact=causal_artifact,
+            )
+        feedback = bool(causal_artifact and input_artifacts.get(causal_artifact))
         authoritative_inputs = resolve_prompt_inputs(contract, input_artifacts)
         packet_requested_placeholders = self._packet_requested_placeholders(
             contract,
             input_artifacts,
             step=step_name,
             iteration=self.iteration,
-            feedback=bool(
-                input_artifacts.get("review_feedback") or input_artifacts.get("pr_result")
-            ),
+            feedback=feedback,
             authoritative_inputs=authoritative_inputs,
         )
         resolved_inputs = self._load_persisted_effective_inputs(
@@ -750,9 +765,7 @@ class GenericWorkflowStepExecutor(Phase):
                 input_artifacts,
                 step=step_name,
                 iteration=self.iteration,
-                feedback=bool(
-                    input_artifacts.get("review_feedback") or input_artifacts.get("pr_result")
-                ),
+                feedback=feedback,
                 packet_dir=iteration_dir,
             )
         workspace: dict[str, Any] = {}
@@ -1504,6 +1517,23 @@ class GenericWorkflowStepExecutor(Phase):
         skill_name = self._resolve_skill_name(step_def, self.iteration)
         contract = self._get_skill_loader().get_workflow_contract(skill_name)
         input_artifacts = self._step_input_artifacts(step_def, blackboard_state)
+        causal_projections = [
+            section.todo_projection
+            for variant in (contract.checklist.variants if contract.checklist else ())
+            for section in variant.sections
+            if section.todo_projection and section.todo_projection.causal
+        ]
+        if causal_projections:
+            causal_artifact = causal_projections[0].artifact
+            input_artifacts = self._add_causal_todo_artifact(
+                input_artifacts,
+                blackboard_state,
+                playbook=self.playbook,
+                causal_artifact=causal_artifact,
+            )
+            feedback = bool(input_artifacts.get(causal_artifact))
+        else:
+            feedback = False
         try:
             authoritative_inputs = resolve_prompt_inputs(contract, input_artifacts)
         except DeclaredArtifactError as exc:
@@ -1514,10 +1544,6 @@ class GenericWorkflowStepExecutor(Phase):
             placeholder: self._display_path(Path(path))
             for placeholder, path in authoritative_inputs.items()
         }
-        feedback = any(
-            input_artifacts.get(name)
-            for name in ("review_feedback", "qa_feedback", "pr_result", "workflow_feedback")
-        )
         packet_requested_placeholders = self._packet_requested_placeholders(
             contract,
             input_artifacts,
@@ -1675,13 +1701,28 @@ class GenericWorkflowStepExecutor(Phase):
         declares_causal_todo = bool(
             contract.checklist
             and any(
-                section.todo_projection and section.todo_projection.artifact == "causal_todo"
+                section.todo_projection and section.todo_projection.causal
                 for variant in contract.checklist.variants
                 for section in variant.sections
             )
         )
+        causal_artifact = next(
+            (
+                section.todo_projection.artifact
+                for variant in (contract.checklist.variants if contract.checklist else ())
+                for section in variant.sections
+                if section.todo_projection and section.todo_projection.causal
+            ),
+            None,
+        )
         if declares_causal_todo:
-            input_artifacts = self._add_causal_todo_artifact(input_artifacts, blackboard_state)
+            assert causal_artifact is not None
+            input_artifacts = self._add_causal_todo_artifact(
+                input_artifacts,
+                blackboard_state,
+                playbook=self.playbook,
+                causal_artifact=causal_artifact,
+            )
         try:
             declared_inputs = resolve_prompt_inputs(contract, input_artifacts)
         except DeclaredArtifactError as exc:
@@ -1711,20 +1752,13 @@ class GenericWorkflowStepExecutor(Phase):
                 ),
             }
         )
-        causal_entry = input_artifacts.get("causal_todo")
+        causal_entry = input_artifacts.get(causal_artifact) if causal_artifact else None
         if causal_entry is not None:
             context.setdefault(
                 "feedback_file",
                 self._display_path(Path(str(getattr(causal_entry, "path", causal_entry)))),
             )
-        feedback = (
-            bool(input_artifacts.get("causal_todo"))
-            if declares_causal_todo
-            else any(
-                input_artifacts.get(name)
-                for name in ("review_feedback", "qa_feedback", "pr_result")
-            )
-        )
+        feedback = bool(causal_entry)
         if contract.checklist is None:
             generated = generate_custom_skill_checklist(
                 skill_name=canonical_name,
@@ -1790,12 +1824,14 @@ class GenericWorkflowStepExecutor(Phase):
 
     @staticmethod
     def _add_causal_todo_artifact(
-        artifacts: Dict[str, Any], state: BlackboardState
+        artifacts: Dict[str, Any],
+        state: BlackboardState,
+        *,
+        playbook: Mapping[str, Any] | None = None,
+        causal_artifact: str = "causal_todo",
     ) -> Dict[str, Any]:
         """Expose only the artifact selected by the persisted inbound transition."""
-        feedback_names = ("review_feedback", "qa_feedback", "pr_result", "workflow_feedback")
-        present = {name: artifacts[name] for name in feedback_names if name in artifacts}
-        if not present:
+        if not artifacts:
             return artifacts
 
         transition = next(
@@ -1812,9 +1848,50 @@ class GenericWorkflowStepExecutor(Phase):
             if candidate and candidate != state.current_step:
                 from_step = candidate
 
-        workflow_entry = present.get("workflow_feedback")
+        playbook_data: Dict[str, Any] = dict(playbook or {})
+        steps = playbook_data.get("steps", {})
+        if not isinstance(steps, Mapping):
+            steps = {}
+        producer = steps.get(from_step, {})
+        direct_artifact = producer.get("output_artifact") if isinstance(producer, Mapping) else None
+        selected = artifacts.get(direct_artifact) if isinstance(direct_artifact, str) else None
+
+        routes: list[dict[str, str]] = []
+        for producer_name, raw_step in steps.items():
+            if not isinstance(raw_step, Mapping):
+                continue
+            behavior = resolve_step_behavior(playbook_data, str(producer_name))
+            if behavior.feedback_target == state.current_step:
+                values = {
+                    "producer": str(producer_name),
+                    "artifact": behavior.feedback_artifact,
+                    "source_kind": behavior.feedback_source_kind,
+                    "todo_source": behavior.feedback_todo_source,
+                }
+                if all(isinstance(value, str) and value for value in values.values()):
+                    routes.append({key: str(value) for key, value in values.items()})
+            for binding in raw_step.get("human_tasks", ()) or ():
+                if not isinstance(binding, Mapping):
+                    continue
+                targets = [
+                    *(binding.get("outcomes", {}) or {}).values(),
+                    *(binding.get("allowed_targets", ()) or ()),
+                ]
+                delivery = binding.get("feedback_delivery")
+                if state.current_step not in targets or not isinstance(delivery, Mapping):
+                    continue
+                values = {
+                    "producer": str(producer_name),
+                    "task_id": binding.get("task_id"),
+                    "artifact": delivery.get("artifact"),
+                    "source_kind": delivery.get("source_kind"),
+                    "todo_source": delivery.get("todo_source"),
+                }
+                if all(isinstance(value, str) and value for value in values.values()):
+                    routes.append({key: str(value) for key, value in values.items()})
+
         delivered: tuple[str, ...] | None = None
-        if workflow_entry is not None and transition is not None:
+        if transition is not None:
             event = next(
                 (
                     candidate
@@ -1836,16 +1913,9 @@ class GenericWorkflowStepExecutor(Phase):
                     raise ValueError("Correction Todo delivery identities are invalid")
                 delivered = tuple(raw)
 
-        artifact_by_step = {
-            "review": "review_feedback",
-            "qa": "qa_feedback",
-            "pr": "pr_result",
-        }
-        selected_name = artifact_by_step.get(from_step or "")
-        selected = present.get(selected_name) if selected_name else None
-
         human_task_identities: tuple[str, ...] | None = None
-        if workflow_entry is not None and from_step == "pr":
+        selected_route: dict[str, str] | None = None
+        if from_step is not None:
             human_task_event = next(
                 (
                     candidate
@@ -1860,30 +1930,63 @@ class GenericWorkflowStepExecutor(Phase):
             )
             if human_task_event is not None:
                 task_id = str(human_task_event.data["task_id"])
+                matching_routes = [
+                    route
+                    for route in routes
+                    if route.get("producer") == from_step and route.get("task_id") == task_id
+                ]
+                if len(matching_routes) != 1:
+                    raise ValueError("Correction Todo feedback route is ambiguous")
+                selected_route = matching_routes[0]
+                workflow_entry = artifacts.get(selected_route["artifact"])
+                if workflow_entry is None:
+                    raise ValueError("Correction Todo feedback artifact is missing")
                 try:
                     human_task_identities = workflow_feedback_matching_identities(
                         Path(str(getattr(workflow_entry, "path", workflow_entry))),
                         target_step=state.current_step,
-                        source_kind="local_review",
-                        identity_prefix=f"local_review:{from_step}:{task_id}:",
+                        source_kind=selected_route["source_kind"],
+                        identity_prefix=(
+                            f"{selected_route['source_kind']}:{from_step}:{task_id}:"
+                        ),
                     )
                 except TodoContractError as exc:
                     raise ValueError(f"Correction Todo provenance is invalid: {exc}") from exc
 
-        # A persisted delivery is the strongest route evidence. Otherwise an
-        # explicit Review/QA/PR transition owns the correction whenever its
-        # direct artifact exists; unrelated pending feedback must not replace it.
+        candidate_routes = [
+            route
+            for route in routes
+            if (from_step is None or route["producer"] == from_step)
+            and route["artifact"] in artifacts
+        ]
+        if selected_route is None and (delivered is not None or selected is None):
+            artifacts_for_routes = {route["artifact"] for route in candidate_routes}
+            if len(artifacts_for_routes) > 1:
+                raise ValueError("Correction Todo feedback artifact is ambiguous")
+            if candidate_routes:
+                selected_route = candidate_routes[0]
+        workflow_entry = (
+            artifacts.get(selected_route["artifact"]) if selected_route is not None else None
+        )
         use_workflow = workflow_entry is not None and (
-            delivered is not None
-            or human_task_identities is not None
-            or from_step in {None, state.current_step}
-            or (from_step == "pr" and selected is None)
+            delivered is not None or human_task_identities is not None or selected is None
         )
         if use_workflow:
+            assert selected_route is not None
+            source_by_kind: dict[str, str] = {}
+            for route in candidate_routes:
+                if route["artifact"] != selected_route["artifact"]:
+                    continue
+                previous = source_by_kind.setdefault(
+                    route["source_kind"], route["todo_source"]
+                )
+                if previous != route["todo_source"]:
+                    raise ValueError("Correction Todo source mapping is ambiguous")
             try:
                 workflow_items = workflow_feedback_todo_items(
                     Path(str(getattr(workflow_entry, "path", workflow_entry))),
                     target_step=state.current_step,
+                    source_by_kind=source_by_kind,
                     source_identities=(
                         delivered if delivered is not None else human_task_identities
                     ),
@@ -1892,8 +1995,8 @@ class GenericWorkflowStepExecutor(Phase):
                 raise ValueError(f"Correction Todo provenance is invalid: {exc}") from exc
             if workflow_items:
                 resolved = dict(artifacts)
-                resolved["causal_todo"] = TodoSourceArtifact(
-                    artifact="workflow_feedback",
+                resolved[causal_artifact] = TodoSourceArtifact(
+                    artifact=selected_route["artifact"],
                     source=workflow_items[0].source,
                     path=Path(str(getattr(workflow_entry, "path", workflow_entry))),
                     items=workflow_items,
@@ -1902,14 +2005,14 @@ class GenericWorkflowStepExecutor(Phase):
 
         if selected is not None and getattr(selected, "updated_by", from_step) != from_step:
             raise ValueError("Correction Todo artifact ownership conflicts with provenance")
-        if selected is None and from_step in artifact_by_step:
+        if selected is None and isinstance(direct_artifact, str):
             raise ValueError("Correction Todo provenance is missing")
-        if selected is None and from_step not in {None, "plan", state.current_step}:
+        if selected is None and from_step not in {None, state.current_step}:
             raise ValueError("Correction Todo provenance is unsupported")
         if selected is None:
             return artifacts
         resolved = dict(artifacts)
-        resolved["causal_todo"] = selected
+        resolved[causal_artifact] = selected
         return resolved
 
     def _resolved_template_mode(self, step_name: str, step_def: Dict[str, Any]) -> str:
@@ -2059,16 +2162,26 @@ class GenericWorkflowStepExecutor(Phase):
             return True
         state = BlackboardStore(self.issue_dir).load_or_create(self.phase_name)
         artifacts = self._step_input_artifacts(self.playbook["steps"][self.phase_name], state)
-        if any(
-            section.todo_projection and section.todo_projection.artifact == "causal_todo"
-            for candidate in contract.checklist.variants
-            for section in candidate.sections
-        ):
+        causal_artifact = next(
+            (
+                section.todo_projection.artifact
+                for candidate in contract.checklist.variants
+                for section in candidate.sections
+                if section.todo_projection and section.todo_projection.causal
+            ),
+            None,
+        )
+        if causal_artifact is not None:
             try:
-                artifacts = self._add_causal_todo_artifact(artifacts, state)
+                artifacts = self._add_causal_todo_artifact(
+                    artifacts,
+                    state,
+                    playbook=self.playbook,
+                    causal_artifact=causal_artifact,
+                )
             except ValueError:
                 return False
-        feedback = bool(artifacts.get("causal_todo"))
+        feedback = bool(causal_artifact and artifacts.get(causal_artifact))
         variant = select_checklist_variant(
             contract,
             step=self.phase_name,

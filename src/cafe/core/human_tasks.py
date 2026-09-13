@@ -8,6 +8,7 @@ responsibilities.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, Literal, Mapping, Optional, Sequence
 
@@ -185,13 +186,22 @@ class HumanTaskFeedbackDelivery(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    artifact: Literal["workflow_feedback"]
+    artifact: str
     source_kind: str
+    todo_source: str
 
-    @field_validator("source_kind")
+    @field_validator("artifact", "source_kind", "todo_source")
     @classmethod
-    def _validate_source_kind(cls, value: str) -> str:
-        return _non_empty(value, field_name="source_kind")
+    def _validate_feedback_identifier(cls, value: str, info: Any) -> str:
+        token = _non_empty(value, field_name=info.field_name)
+        pattern = (
+            r"[a-z][a-z0-9_]*"
+            if info.field_name == "todo_source"
+            else r"[A-Za-z][A-Za-z0-9_-]*"
+        )
+        if not re.fullmatch(pattern, token):
+            raise ValueError(f"{info.field_name} must be a safe identifier")
+        return token
 
 
 HumanTaskBinding.model_rebuild()

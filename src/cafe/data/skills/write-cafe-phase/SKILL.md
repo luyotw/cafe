@@ -1,7 +1,7 @@
 ---
 name: write-cafe-phase
 description: Use this skill when creating, updating, or repairing a CAFE workflow phase or its supporting shared/chat skill under src/cafe/data/skills or .cafe/skills. Covers phase scope, SKILL.md structure, placeholders, plan handoffs, interruption-safe checkpoint/resume behavior, and runtime conventions, including declarative defects identified by use-cafe-workflow. Not for generic skill files, playbook YAML, driver skills, or CAFE core/runtime defects.
-version: 2.10.0
+version: 2.11.0
 ---
 
 # Write CAFE Phase Skill
@@ -19,7 +19,7 @@ version: 2.10.0
 ## Structural Spec (required reading)
 - Before writing or restructuring any SKILL.md, read `references/skill-spec.md`.
 - It defines the four skill types (phase / shared / chat / driver), the canonical section order per type, the runtime placeholder contract, and where handoff rules live.
-- For a plan → execute phase pair, follow `references/skill-spec.md` §14 exactly; for a forward chain where one phase executes an incoming plan and produces the next phase's plan, also follow §15.
+- For a plan → execute phase pair, follow `references/skill-spec.md` §14 exactly; for a forward chain where one phase executes an incoming plan and produces the next phase's plan, also follow §15. For correction Todo routing, follow the topology-neutral declaration rules in §18.
 - For a phase that processes many independent items, performs long external/API work, runs repeated reviews, or may exceed one provider session, follow `references/skill-spec.md` §17 exactly.
 - If an existing skill conflicts with the spec, fix the skill to match the spec.
 
@@ -145,7 +145,7 @@ version: 2.10.0
 - Edge cases only appear if they materially change the workflow.
 - References are one hop away from `SKILL.md`, not deeply chained.
 - The skill does not rely on hidden context that runtime will not provide.
-- A plan → execute pair uses `plan` as the artifact key, emits at most 100 canonical rows only inside `## Todo List`, and declares `{todo_projection: {artifact: plan, source: plan}}` in the execute checklist. A producer with no work writes exactly `No actionable work.` under that heading; a blank section is invalid. Correction consumers declare `{todo_projection: {artifact: causal_todo, causal: true}}` and project only the runtime-resolved source; every declaration must choose exactly one direct `source` or `causal: true` strategy. They never prioritize or union historical feedback artifacts. A completion consumer must batch repository evidence lookup, reject more than 32 files or 8 full commit SHAs per item before lookup, and bind targeted pytest evidence to a current durable receipt rather than trusting prose.
+- A plan → execute pair uses `plan` as the conventional built-in artifact key, emits at most 100 canonical rows only inside `## Todo List`, and declares a direct projection such as `{todo_projection: {artifact: plan, source: plan}}` in the execute checklist. Custom workflows may use any safe artifact and lowercase Todo source identifiers. A producer with no work writes exactly `No actionable work.` under that heading; a blank section is invalid. Correction consumers declare a causal alias such as `{todo_projection: {artifact: active_work, causal: true}}` and project only the runtime-resolved source; every declaration must choose exactly one direct `source` or `causal: true` strategy. The playbook declares producer `output_artifact` ownership and every feedback route's `feedback_target`, `feedback_artifact`, `feedback_source_kind`, and `feedback_todo_source` (or HumanTask `feedback_delivery.todo_source`); generic runtime must not infer those relationships from built-in step or artifact names. Consumers never prioritize or union historical feedback artifacts. A completion consumer must batch repository evidence lookup, reject more than 32 files or 8 full commit SHAs per item before lookup, and bind targeted pytest evidence to a current durable receipt rather than trusting prose.
 - A bridge phase that consumes one plan and produces the next clearly distinguishes incoming `{plan_file}` from next-plan `{output_file}`, completes the incoming checklist before handoff, and supports a `not_required` next plan.
 - Every planned output-confirmation route has a matching playbook `on.confirm_output` declaration and is classified as assignable or mandatory; reactive user interruptions are not mislabeled as kickoff candidates.
 - A same-phase staged checkpoint, when used, is mandatory user-owned, resumes from durable stage evidence, remains unreachable from downstream execution until final `confirm_output`, and is not presented as a kickoff-assignable approval.

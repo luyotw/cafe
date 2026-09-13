@@ -4128,7 +4128,13 @@ def test_runtime_chains_pr_need_changes_through_develop_to_review(tmp_path: Path
                 "skill": "spec_first",
                 "role": "developer",
                 "assignee_type": "agent",
-                "behavior": {"completion": "baton", "feedback_target": "develop"},
+                "behavior": {
+                    "completion": "baton",
+                    "feedback_target": "develop",
+                    "feedback_artifact": "workflow_feedback",
+                    "feedback_source_kind": "github_pr",
+                    "feedback_todo_source": "pr_comment",
+                },
                 "on": {},
             },
             "develop": {
