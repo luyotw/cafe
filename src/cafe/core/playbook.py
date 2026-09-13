@@ -1368,7 +1368,7 @@ def _validate_initial_input_declarations(model: PlaybookDefinition, *, source: s
         if declaration.legacy_presentation and (
             source != "builtin"
             or model.playbook.id
-            not in {"standard", "standard-qa", "simple", "direct-qa", "tdd", "tdd-qa"}
+            not in {"standard", "standard-qa", "simple", "tdd", "tdd-qa"}
         ):
             raise ValueError(
                 f"{field_path}.legacy_presentation is reserved for bundled development playbooks"

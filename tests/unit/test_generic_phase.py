@@ -749,7 +749,7 @@ def test_prepare_builtin_pr_skill_omits_unavailable_contexts(tmp_path: Path) -> 
     assert "{plan_file}" not in installed
 
 
-def test_prepare_builtin_qa_skill_omits_optional_plan_and_review_contexts(
+def test_prepare_builtin_qa_skill_omits_unavailable_optional_contexts(
     tmp_path: Path,
 ) -> None:
     """The shipped QA skill supports simple while preserving richer QA context."""
@@ -772,12 +772,12 @@ def test_prepare_builtin_qa_skill_omits_optional_plan_and_review_contexts(
     phase.prepare_skill(
         skill_name="cafe-qa",
         agent_cli=AgentCLI.CODEX,
-        context={"spec_file": "spec.md", "develop_file": "code.md"},
+        context={"develop_file": "code.md"},
     )
 
     installed_path = project_root / ".codex" / "skills" / "cafe-qa" / "SKILL.md"
     installed = installed_path.read_text(encoding="utf-8")
-    assert "Requirements Specification: spec.md" in installed
+    assert "Requirements Specification:" not in installed
     assert "Development Summary: code.md" in installed
     assert "Implementation Plan:" not in installed
     assert "Review Result:" not in installed
@@ -794,6 +794,7 @@ def test_prepare_builtin_qa_skill_omits_optional_plan_and_review_contexts(
     )
 
     installed = installed_path.read_text(encoding="utf-8")
+    assert "Requirements Specification: spec.md" in installed
     assert "Implementation Plan: plan.md" in installed
     assert "Review Result: review.md" in installed
 

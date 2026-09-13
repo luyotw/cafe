@@ -72,7 +72,6 @@ def test_sync_script_skips_when_sync_disabled_without_gh(
 def test_standard_playbooks_leave_confirmed_sync_to_trusted_runtime() -> None:
     project_root = Path(__file__).resolve().parents[2]
     phases_by_playbook = {
-        "direct-qa": ("spec",),
         "standard": ("spec", "plan"),
         "standard-qa": ("spec", "plan"),
         "tdd": ("spec", "plan"),

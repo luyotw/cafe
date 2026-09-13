@@ -257,8 +257,8 @@ def test_simple_owns_the_spec_develop_qa_pr_graph() -> None:
 def test_direct_qa_owns_the_planless_reviewed_qa_graph() -> None:
     playbook = PlaybookLoader().load_model("direct-qa", strict=True).model
 
-    assert list(playbook.steps) == ["spec", "develop", "review", "qa", "pr"]
-    assert playbook.steps["spec"].on["await_agent"] == "develop"
+    assert playbook.entry_point == "develop"
+    assert list(playbook.steps) == ["develop", "review", "qa", "pr"]
     assert playbook.steps["develop"].on["await_agent"] == "review"
     assert playbook.steps["review"].on["await_agent"] == "qa"
     assert playbook.steps["qa"].on["await_agent"] == "pr"
@@ -266,6 +266,8 @@ def test_direct_qa_owns_the_planless_reviewed_qa_graph() -> None:
     assert playbook.steps["qa"].on["manual_handoff"] == "develop"
     assert "qa_feedback" in playbook.steps["develop"].input_artifacts
     assert "qa_feedback" in playbook.steps["pr"].input_artifacts
+    assert "pm" not in playbook.roles
+    assert all("spec" not in step.input_artifacts for step in playbook.steps.values())
 
 
 def test_existing_hotfix_and_tdd_paths_remain_unchanged() -> None:
@@ -355,8 +357,8 @@ def test_qa_feedback_is_exposed_by_every_correction_and_publication_skill() -> N
         for mapping in qa_contract.prompt_inputs
         if not mapping.required
     }
-    assert required == {"spec", "code"}
-    assert optional == {"plan", "review_feedback"}
+    assert required == {"code"}
+    assert optional == {"spec", "plan", "review_feedback"}
 
     pr_contract = loader.get_workflow_contract("cafe-pr")
     resolved = resolve_prompt_inputs(

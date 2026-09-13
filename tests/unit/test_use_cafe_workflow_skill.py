@@ -2386,7 +2386,7 @@ def test_builtin_confirmation_gate_candidates_come_from_playbook_declarations() 
 
     assert actual == {
         "direct": (),
-        "direct-qa": ("spec",),
+        "direct-qa": (),
         "simple": ("spec",),
         "standard": ("spec", "plan"),
         "standard-qa": ("spec", "plan"),

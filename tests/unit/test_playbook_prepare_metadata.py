@@ -321,7 +321,7 @@ def test_builtin_spec_plan_playbooks_match_standard_prepare() -> None:
         resolve_prepare_config(loader.load_model("standard").model)
     )
 
-    for name in ("simple", "direct-qa", "standard-qa", "tdd", "tdd-qa"):
+    for name in ("simple", "standard-qa", "tdd", "tdd-qa"):
         resolved = resolve_prepare_config(loader.load_model(name).model)
         assert _legacy_prepare_dump(resolved) == standard_prepare
 
@@ -335,8 +335,11 @@ def test_builtin_hotfix_disables_spec_plan_prompts() -> None:
     assert resolved.quick_setup.pr.post_todo_list_when_auto_create is True
 
 
-def test_builtin_direct_uses_its_declarative_input_fields() -> None:
-    loaded = PlaybookLoader().load_model("direct")
+@pytest.mark.parametrize("playbook_name", ["direct", "direct-qa"])
+def test_builtin_direct_playbooks_use_declarative_input_fields(
+    playbook_name: str,
+) -> None:
+    loaded = PlaybookLoader().load_model(playbook_name)
     resolved = resolve_prepare_config(loaded.model)
 
     assert resolved.fields is not None

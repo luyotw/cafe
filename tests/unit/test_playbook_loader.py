@@ -771,6 +771,7 @@ def test_bundled_playbooks_preserve_declared_skill_environment_parity(
         "cafe-chat-alignment-decision",
     ]
     if playbook_id == "direct-qa":
+        expected_chat_skills.remove("cafe-chat-spec-revision")
         expected_chat_skills.remove("cafe-chat-plan-revision")
     assert resolve_playbook_skills(
         model, channel="chat", role=None, step_name=None
@@ -1249,7 +1250,7 @@ steps:
 
 @pytest.mark.parametrize(
     "playbook_name",
-    ["standard", "standard-qa", "simple", "direct-qa", "tdd", "tdd-qa"],
+    ["standard", "standard-qa", "simple", "tdd", "tdd-qa"],
 )
 def test_builtin_entry_steps_use_declared_initial_input_resolver(
     playbook_name: str, tmp_path: Path
@@ -1272,6 +1273,32 @@ def test_builtin_entry_steps_use_declared_initial_input_resolver(
     assert entry.initial_input.legacy_presentation is True
     assert "InitialInputProviderResolver" in entry.hooks.prepare_input
     assert "GitHubIssueFetcher" not in entry.hooks.prepare_input
+
+
+@pytest.mark.parametrize(
+    ("playbook_name", "bound_artifact"),
+    [("direct", None), ("direct-qa", None)],
+)
+def test_builtin_direct_entry_steps_bind_initial_input_to_prompt_context(
+    playbook_name: str, bound_artifact: str | None, tmp_path: Path
+) -> None:
+    builtin_root = Path(__file__).resolve().parents[2] / "src" / "cafe" / "data"
+    model = (
+        PlaybookLoader(
+            project_root=tmp_path,
+            global_root=tmp_path / "global",
+            builtin_root=builtin_root,
+        )
+        .load_model(playbook_name)
+        .model
+    )
+    entry = model.steps[model.entry_point]
+
+    assert entry.initial_input.providers == ["manual_text", "github_issue"]
+    assert entry.initial_input.bind.artifact == bound_artifact
+    assert entry.initial_input.bind.prompt_context == "user_input"
+    assert entry.initial_input.legacy_presentation is False
+    assert "InitialInputProviderResolver" in entry.hooks.prepare_input
 
 
 def test_initial_input_declaration_requires_generic_resolver_hook(tmp_path: Path) -> None:
