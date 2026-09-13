@@ -6360,6 +6360,17 @@ def test_declared_correction_generation_and_completion_pin_causal_source(
     )
     item = parse_todo_list(original)[0]
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    evidence_commit = subprocess.check_output(
+        [
+            "git",
+            "log",
+            "-1",
+            "--format=%H",
+            "--",
+            "tests/unit/test_generic_workflow_step.py",
+        ],
+        text=True,
+    ).strip()
     checklist.write_text(
         checklist.read_text(encoding="utf-8").replace(
             item.checklist_row(), item.checklist_row().replace("[ ]", "[x]")
@@ -6369,9 +6380,8 @@ def test_declared_correction_generation_and_completion_pin_causal_source(
     output.write_text(
         "## Todo Progress\n\n### BLK-001\n\n- Status: completed\n"
         f"- Source fingerprint: `{item.fingerprint}`\n"
-        "- Files: `src/cafe/phases/generic_workflow_step.py`, "
-        "`tests/unit/test_generic_workflow_step.py`\n"
-        f"- Commit: `{head}`\n"
+        "- Files: `tests/unit/test_generic_workflow_step.py`\n"
+        f"- Commit: `{evidence_commit}`\n"
         "- Targeted evidence: command=`pytest -q tests/unit/test_generic_workflow_step.py`; "
         f"exit=0; head=`{head}`\n"
         "- Remaining work: None.\n- Next action: Review.\n",
