@@ -2465,6 +2465,24 @@ def test_use_cafe_workflow_skill_protects_issue_overrides() -> None:
     assert "Leave `issues:` untouched unless the user explicitly requested" in reference
 
 
+def test_use_cafe_workflow_bootstraps_strategy_with_conventional_paths() -> None:
+    reference = _read_skill_resource("references/strategic_context.md")
+    normalized = " ".join(reference.split())
+
+    assert "## Document inventory" in reference
+    assert "### First-use bootstrap paths" in reference
+    assert "create all missing strategic documents in the same bootstrap" in normalized
+    assert "Reuse the valid path already configured for that category" in normalized
+    assert "reuse an existing repository document" in normalized
+    assert "`docs/roadmap.md`" in reference
+    assert "`docs/positioning.md`" in reference
+    assert "`docs/engineering-guidelines.md`" in reference
+    assert "`docs/policies/<name>.md`" in reference
+    assert "never overwrite an existing document" in normalized
+    assert "path: docs/engineering-guidelines.md" in reference
+    assert "path: CONTRIBUTING.md" not in reference
+
+
 def test_use_cafe_workflow_bounds_diagnosis_and_repairs_only_declarative_layers() -> None:
     skill = _read_skill_resource("SKILL.md")
     reference = _read_skill_resource("references/diagnosis_and_repair.md")
@@ -3253,6 +3271,7 @@ def test_use_cafe_workflow_keeps_human_task_completion_in_the_interactive_driver
     )
     assert "whose confirmed reactive policy is `driver_confirmable` may be completed by any driver" in normalized_running.lower()
     assert "cafe task complete <active-human-task-id>" in handoffs
+    assert '"work_report"' in handoffs
     assert '--user-input \'{"task":"output-review"' not in handoffs
 
 

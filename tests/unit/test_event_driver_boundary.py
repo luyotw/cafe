@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import re
+from pathlib import Path
 
 
 def test_cafe_core_has_no_driver_mode_implementation() -> None:
