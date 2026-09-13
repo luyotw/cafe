@@ -13,6 +13,7 @@ TodoSource = Literal["plan", "review", "qa", "pr_comment", "workflow_feedback"]
 TODO_SOURCES = frozenset({"plan", "review", "qa", "pr_comment", "workflow_feedback"})
 _HEADING = re.compile(r"^#{1,6}\s+Todo List\s*$", re.IGNORECASE)
 _ANY_HEADING = re.compile(r"^#{1,6}\s+")
+_INTENTIONALLY_EMPTY = "No actionable work."
 _ITEM = re.compile(
     r"^- \[(?P<checked>[ xX])\] `(?P<id>[A-Za-z][A-Za-z0-9_-]*)`\s+— "
     r"Source: `(?P<source>[a-z_]+)`\s+— Work: (?P<work>.+?)\s+— "
@@ -97,6 +98,11 @@ def parse_todo_list(
         section.append(line)
     items: list[TodoItem] = []
     ids: set[str] = set()
+    meaningful = [line.strip() for line in section if line.strip()]
+    if meaningful == [_INTENTIONALLY_EMPTY]:
+        return ()
+    if not meaningful:
+        raise TodoContractError("Todo List must declare that it has no actionable work")
     for line in section:
         if not line.strip():
             continue

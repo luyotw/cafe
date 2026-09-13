@@ -96,6 +96,7 @@ Read your agent file: {agent_file}
 - Use the workflow inputs listed in the runtime context. When a specification or plan is supplied, treat it as authoritative for this run.
 
 ## Instructions
+- `## Todo Progress` 的 completed item 必須使用可驗證 evidence contract：`Files` 列出 backtick 包住的 repo-relative tracked paths；`Commit` 列出涵蓋這些檔案且可解析的 backtick SHA；`Targeted evidence` 使用 ``command=`...`; exit=0; head=`<完整 HEAD SHA>` ``。確實沒有 repository change 時，`Files` 寫 `N/A (no repository changes)`、`Commit` 寫 `N/A (no repository changes): <reason>`，且只在 tracked worktree clean 時有效。不得使用自由文字或杜撰的檔案、commit、測試結果。
 - 依目前 workflow 已提供的需求與計畫逐項完成；若此 workflow 未提供 spec 或 plan，依使用者輸入與 review feedback 完成範圍內修正
 - 先補測試再改程式
 - 第一次探索只做一輪：讀一次已提供的 spec、plan 與 feedback，再針對可用 Test List 與預計修改點搜尋程式碼；未出現新證據時不得重讀同一檔案或重跑相同的搜尋、`git status`、`git diff`

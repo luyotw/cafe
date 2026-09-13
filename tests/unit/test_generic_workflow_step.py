@@ -1,6 +1,7 @@
 """Tests for direct workflow step execution."""
 
 import json
+import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 from types import MethodType, SimpleNamespace
@@ -5214,9 +5215,7 @@ def test_same_invocation_baton_retry_resumes_actual_session(
         def execute(self, *args, continuation=None, phase_name=None, **kwargs):
             self.continuations.append(continuation)
             result = super().execute(*args, **kwargs)
-            _complete_current_checklist(
-                streaming_output_file=kwargs.get("streaming_output_file")
-            )
+            _complete_current_checklist(streaming_output_file=kwargs.get("streaming_output_file"))
             return result
 
         def get_last_cli(self):
@@ -6040,6 +6039,12 @@ def test_causal_todo_normalizes_pending_and_delivered_workflow_feedback(tmp_path
     assert [item.source for item in pending.items] == ["pr_comment"]
 
     ledger.consume(feedback.source_identity)
+    ledger.record(
+        source_identity="github-pr:10:30",
+        source_kind="github_pr",
+        target_step="develop",
+        content="unrelated later comment",
+    )
     state.events.append(
         EventEntry(
             timestamp="2026-01-01T00:00:02Z",
@@ -6053,6 +6058,78 @@ def test_causal_todo_normalizes_pending_and_delivered_workflow_feedback(tmp_path
         {"workflow_feedback": entry}, state
     )["causal_todo"]
     assert delivered.items == pending.items
+
+
+def test_causal_todo_direct_transition_ignores_unrelated_pending_feedback(tmp_path: Path) -> None:
+    review = tmp_path / "review.md"
+    review.write_text(
+        "## Todo List\n"
+        "- [ ] `BLK-001` — Source: `review` — Work: direct — Closure: done — Evidence: test\n"
+    )
+    ledger = WorkflowFeedbackLedger(tmp_path / "issue")
+    ledger.record(
+        source_identity="github-pr:10:99",
+        source_kind="github_pr",
+        target_step="develop",
+        content="unrelated pending",
+    )
+    state = BlackboardStore(tmp_path / "issue").load_or_create("develop")
+    state.events.append(
+        EventEntry(
+            timestamp="2026-01-01T00:00:00Z",
+            step="review",
+            event_type="transition",
+            message="",
+            data={"from": "review", "to": "develop"},
+        )
+    )
+    direct = ArtifactEntry(
+        name="review_feedback",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="review",
+        path=str(review),
+    )
+    workflow = ArtifactEntry(
+        name="workflow_feedback",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="hook",
+        path=str(ledger.path),
+    )
+    resolved = GenericWorkflowStepExecutor._add_causal_todo_artifact(
+        {"review_feedback": direct, "workflow_feedback": workflow}, state
+    )
+    assert resolved["causal_todo"] is direct
+
+
+def test_causal_todo_normal_plan_entry_ignores_feedback_history(tmp_path: Path) -> None:
+    ledger = WorkflowFeedbackLedger(tmp_path / "issue")
+    ledger.record(
+        source_identity="github-pr:10:99",
+        source_kind="github_pr",
+        target_step="develop",
+        content="historical pending",
+    )
+    state = BlackboardStore(tmp_path / "issue").load_or_create("develop")
+    state.events.append(
+        EventEntry(
+            timestamp="2026-01-01T00:00:00Z",
+            step="plan",
+            event_type="transition",
+            message="",
+            data={"from": "plan", "to": "develop"},
+        )
+    )
+    workflow = ArtifactEntry(
+        name="workflow_feedback",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="hook",
+        path=str(ledger.path),
+    )
+    artifacts = {"workflow_feedback": workflow}
+    assert GenericWorkflowStepExecutor._add_causal_todo_artifact(artifacts, state) is artifacts
 
 
 def test_declared_correction_generation_and_completion_pin_causal_source(
@@ -6122,6 +6199,7 @@ def test_declared_correction_generation_and_completion_pin_causal_source(
         questions_xml_file=iteration_dir / "questions.xml",
     )
     item = parse_todo_list(original)[0]
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     checklist.write_text(
         checklist.read_text(encoding="utf-8").replace(
             item.checklist_row(), item.checklist_row().replace("[ ]", "[x]")
@@ -6130,8 +6208,11 @@ def test_declared_correction_generation_and_completion_pin_causal_source(
     )
     output.write_text(
         "## Todo Progress\n\n### BLK-001\n\n- Status: completed\n"
-        f"- Source fingerprint: `{item.fingerprint}`\n- Files: a.py\n"
-        "- Commit: abc\n- Targeted evidence: tests passed\n"
+        f"- Source fingerprint: `{item.fingerprint}`\n"
+        "- Files: `src/cafe/phases/generic_workflow_step.py`\n"
+        f"- Commit: `{head}`\n"
+        "- Targeted evidence: command=`pytest -q tests/unit/test_generic_workflow_step.py`; "
+        f"exit=0; head=`{head}`\n"
         "- Remaining work: None.\n- Next action: Review.\n",
         encoding="utf-8",
     )

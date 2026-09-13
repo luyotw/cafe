@@ -1,6 +1,7 @@
 """Invariant tests for the canonical workflow Todo grammar."""
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -14,7 +15,8 @@ from cafe.core.todo import (
 
 def _item(work: str = "add parser") -> str:
     return (
-        "- [ ] `PLAN-001` — Source: `plan` — Work: " + work
+        "- [ ] `PLAN-001` — Source: `plan` — Work: "
+        + work
         + " — Closure: parser accepts valid input — Evidence: targeted pytest"
     )
 
@@ -28,6 +30,8 @@ def test_todo_parser_only_accepts_items_in_its_designated_section() -> None:
 @pytest.mark.parametrize(
     "content",
     [
+        "## Todo List\n",
+        "## Todo List\nNo actionable work.\n" + _item(),
         "## Todo List\n- [ ] malformed",
         "## Todo List\n" + _item() + "\n" + _item("another task"),
         "## Todo List\n- [ ] `PLAN-001` — Source: `unknown` — Work: x — Closure: y — Evidence: z",
@@ -42,6 +46,16 @@ def test_todo_fingerprint_changes_when_any_closure_requirement_changes() -> None
     first = parse_todo_list("## Todo List\n" + _item())[0]
     changed = parse_todo_list("## Todo List\n" + _item("implement parser"))[0]
     assert first.fingerprint != changed.fingerprint
+
+
+def test_todo_parser_accepts_only_the_canonical_intentionally_empty_marker() -> None:
+    assert parse_todo_list("## Todo List\nNo actionable work.\n") == ()
+
+
+def test_every_builtin_todo_producer_declares_the_empty_marker() -> None:
+    skills = Path("src/cafe/data/skills")
+    for name in ("cafe-plan", "cafe-review", "cafe-qa", "cafe-pr"):
+        assert "No actionable work." in (skills / name / "SKILL.md").read_text(encoding="utf-8")
 
 
 def test_correction_source_requires_explicit_causal_artifact(tmp_path) -> None:

@@ -3,10 +3,13 @@
 import os
 import re
 import stat
+import subprocess
 import tempfile
 from collections import Counter
 from pathlib import Path
 from typing import Mapping, Union
+
+from cafe.utils.checklist_validator import validate_todo_evidence
 
 _CHECKBOX_LINE = re.compile(
     r"^(?P<indent>[ \t]*)(?P<bullet>[-*][ \t]+)?\[(?P<state>[ xX])\](?P<body>.*)$"
@@ -151,6 +154,19 @@ def _restore_completed_items(
                     "unknown",
                 }:
                     valid_projected.discard((item_id, fingerprint))
+            repository = subprocess.run(
+                ["git", "-C", str(todo_ledger_path.parent), "rev-parse", "--show-toplevel"],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            if repository.returncode == 0 and validate_todo_evidence(
+                item_id,
+                {name: values[0] for name, values in fields.items()},
+                Path(repository.stdout.strip()),
+            ):
+                valid_projected.discard((item_id, fingerprint))
 
     projected_row = re.compile(
         r"^\[[ xX]\] `(?P<id>[^`]+)` — .+ " r"\(source fingerprint: (?P<fp>[0-9a-f]{64})\)$"

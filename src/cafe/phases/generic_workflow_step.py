@@ -1812,38 +1812,46 @@ class GenericWorkflowStepExecutor(Phase):
                 from_step = candidate
 
         workflow_entry = present.get("workflow_feedback")
-        if workflow_entry is not None:
-            delivered: tuple[str, ...] | None = None
-            if transition is not None:
-                event = next(
-                    (
-                        candidate
-                        for candidate in reversed(state.events)
-                        if candidate.event_type == "workflow_feedback_delivered"
-                        and candidate.step == state.current_step
-                        and candidate.timestamp >= transition.timestamp
-                    ),
-                    None,
-                )
-                if event is not None:
-                    raw = event.data.get("source_identities")
-                    if isinstance(raw, list) and all(isinstance(item, str) for item in raw):
-                        delivered = tuple(raw)
+        delivered: tuple[str, ...] | None = None
+        if workflow_entry is not None and transition is not None:
+            event = next(
+                (
+                    candidate
+                    for candidate in reversed(state.events)
+                    if candidate.event_type == "workflow_feedback_delivered"
+                    and candidate.step == state.current_step
+                    and candidate.timestamp >= transition.timestamp
+                ),
+                None,
+            )
+            if event is not None:
+                raw = event.data.get("source_identities")
+                if isinstance(raw, list) and all(isinstance(item, str) for item in raw):
+                    delivered = tuple(raw)
+
+        artifact_by_step = {
+            "review": "review_feedback",
+            "qa": "qa_feedback",
+            "pr": "pr_result",
+        }
+        selected_name = artifact_by_step.get(from_step or "")
+        selected = present.get(selected_name) if selected_name else None
+
+        # A persisted delivery is the strongest route evidence. Otherwise an
+        # explicit Review/QA/PR transition owns the correction whenever its
+        # direct artifact exists; unrelated pending feedback must not replace it.
+        use_workflow = workflow_entry is not None and (
+            delivered is not None
+            or from_step in {None, state.current_step}
+            or (from_step == "pr" and selected is None)
+        )
+        if use_workflow:
             try:
                 workflow_items = workflow_feedback_todo_items(
                     Path(str(getattr(workflow_entry, "path", workflow_entry))),
                     target_step=state.current_step,
                     source_identities=delivered,
                 )
-                if delivered is not None:
-                    pending_items = workflow_feedback_todo_items(
-                        Path(str(getattr(workflow_entry, "path", workflow_entry))),
-                        target_step=state.current_step,
-                    )
-                    known = {item.item_id for item in workflow_items}
-                    workflow_items = workflow_items + tuple(
-                        item for item in pending_items if item.item_id not in known
-                    )
             except TodoContractError as exc:
                 raise ValueError(f"Correction Todo provenance is invalid: {exc}") from exc
             if workflow_items:
@@ -1856,13 +1864,6 @@ class GenericWorkflowStepExecutor(Phase):
                 )
                 return resolved
 
-        artifact_by_step = {
-            "review": "review_feedback",
-            "qa": "qa_feedback",
-            "pr": "pr_result",
-        }
-        selected_name = artifact_by_step.get(from_step or "")
-        selected = present.get(selected_name) if selected_name else None
         if selected is not None and getattr(selected, "updated_by", from_step) != from_step:
             raise ValueError("Correction Todo artifact ownership conflicts with provenance")
         if selected is None and from_step in artifact_by_step:
@@ -2012,6 +2013,8 @@ class GenericWorkflowStepExecutor(Phase):
 
     def _validate_projected_todo_completion(self, checklist_path: Path) -> bool:
         """Re-resolve declared Todo sources before accepting phase completion."""
+        if self.phase_name not in self.playbook.get("steps", {}):
+            return True
         skill_name = self._resolve_skill_name(
             self.playbook["steps"][self.phase_name], self.iteration
         )
@@ -2069,7 +2072,12 @@ class GenericWorkflowStepExecutor(Phase):
         pinned = self._load_todo_projection_snapshot(output_path.parent)
         if pinned != current_projections:
             return False
-        return not validate_projected_todos(checklist_path, output_path, tuple(expected))
+        return not validate_projected_todos(
+            checklist_path,
+            output_path,
+            tuple(expected),
+            repo_root=get_git_toplevel(),
+        )
 
     def _validate_produced_packet_contracts(
         self, *, producer_step: str, artifact_name: str, output_file: Path

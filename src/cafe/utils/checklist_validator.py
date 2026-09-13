@@ -1,6 +1,8 @@
 """Checklist validation utilities for CAFE workflow."""
 
 import re
+import shlex
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -107,7 +109,11 @@ def validate_checklist(checklist_path: Path) -> ChecklistValidationResult:
 
 
 def validate_projected_todos(
-    checklist_path: Path, output_path: Path, expected: tuple[TodoItem, ...]
+    checklist_path: Path,
+    output_path: Path,
+    expected: tuple[TodoItem, ...],
+    *,
+    repo_root: Path | None = None,
 ) -> list[str]:
     """Return fail-closed integrity errors for projected rows and their ledger."""
     rows: list[str] = []
@@ -120,11 +126,13 @@ def validate_projected_todos(
     if rows != expected_rows:
         errors.append("projected Todo rows do not match the authoritative set")
     ledger = output_path.read_text(encoding="utf-8") if output_path.is_file() else ""
-    errors.extend(validate_todo_ledger(ledger, expected))
+    errors.extend(validate_todo_ledger(ledger, expected, repo_root=repo_root))
     return errors
 
 
-def validate_todo_ledger(content: str, expected: tuple[TodoItem, ...]) -> list[str]:
+def validate_todo_ledger(
+    content: str, expected: tuple[TodoItem, ...], *, repo_root: Path | None = None
+) -> list[str]:
     """Validate exact, non-empty per-item evidence inside one Todo Progress section."""
     lines = content.splitlines()
     headings = [index for index, line in enumerate(lines) if line.strip() == "## Todo Progress"]
@@ -184,4 +192,80 @@ def validate_todo_ledger(content: str, expected: tuple[TodoItem, ...]) -> list[s
         for name in ("Files", "Commit", "Targeted evidence"):
             if fields[name].strip().lower() in _UNAVAILABLE:
                 errors.append(f"Todo ledger {name.lower()} is unavailable for {item.item_id}")
+        if repo_root is not None:
+            errors.extend(validate_todo_evidence(item.item_id, fields, repo_root))
+    return errors
+
+
+def _git(repo_root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "-C", str(repo_root), *args],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+
+def validate_todo_evidence(item_id: str, fields: dict[str, str], repo_root: Path) -> list[str]:
+    """Verify that a completion claim is bound to the current repository state."""
+    errors: list[str] = []
+    root = repo_root.resolve()
+    files_value = fields.get("Files", "")
+    commit_value = fields.get("Commit", "")
+    no_changes = files_value == "N/A (no repository changes)" and bool(
+        re.fullmatch(r"N/A \(no repository changes\): \S.*", commit_value)
+    )
+    if no_changes:
+        paths: list[str] = []
+        if _git(root, "status", "--porcelain", "--untracked-files=no").stdout.strip():
+            errors.append(
+                f"Todo ledger no-change claim conflicts with repository state for {item_id}"
+            )
+    else:
+        paths = re.findall(r"`([^`]+)`", files_value)
+        if not paths:
+            errors.append(f"Todo ledger files are not canonical for {item_id}")
+            return errors
+    for value in paths:
+        candidate = (root / value).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            errors.append(f"Todo ledger file escapes the repository for {item_id}")
+            continue
+        if not candidate.is_file() or _git(root, "ls-files", "--error-unmatch", value).returncode:
+            errors.append(f"Todo ledger file is missing or untracked for {item_id}")
+
+    commits = re.findall(r"`([0-9a-fA-F]{7,40})`", commit_value)
+    if not commits and not no_changes:
+        errors.append(f"Todo ledger commit is not canonical for {item_id}")
+    changed: set[str] = set()
+    for commit in commits:
+        if _git(root, "cat-file", "-e", f"{commit}^{{commit}}").returncode:
+            errors.append(f"Todo ledger commit does not exist for {item_id}")
+            continue
+        result = _git(root, "show", "--format=", "--name-only", commit)
+        changed.update(line for line in result.stdout.splitlines() if line)
+    if commits and any(path not in changed for path in paths):
+        errors.append(f"Todo ledger commit does not contain every claimed file for {item_id}")
+
+    evidence = fields.get("Targeted evidence", "")
+    match = re.fullmatch(
+        r"command=`(?P<command>[^`]+)`; exit=0; head=`(?P<head>[0-9a-fA-F]{40})`",
+        evidence,
+    )
+    if match is None:
+        errors.append(f"Todo ledger targeted evidence is not canonical for {item_id}")
+        return errors
+    head = _git(root, "rev-parse", "HEAD")
+    if head.returncode or match.group("head").lower() != head.stdout.strip().lower():
+        errors.append(f"Todo ledger targeted evidence is stale for {item_id}")
+    try:
+        command_parts = shlex.split(match.group("command"))
+    except ValueError:
+        command_parts = []
+    test_paths = [part for part in command_parts if part.startswith("tests/")]
+    if not test_paths or any(not (root / path).is_file() for path in test_paths):
+        errors.append(f"Todo ledger targeted evidence is unrelated for {item_id}")
     return errors
