@@ -36,6 +36,9 @@ def test_write_cafe_playbook_skill_preserves_core_contracts() -> None:
     assert "incoming plan remains immutable" in reference
     assert "consumer output's `## Todo Progress` ledger" in reference
     assert "plan checkboxes are the cross-phase implementation worklist" not in reference
+    assert "runtime checklist owns projected completion gates" in skill
+    assert "consumer output owns the mutable `## Todo Progress` ledger" in skill
+    assert "update the same checkboxes" not in skill
     assert "UserInputCollector" in reference
     assert "planned output confirmation gate" in normalized_reference
     assert "confirmation-gates" in skill

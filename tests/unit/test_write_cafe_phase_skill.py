@@ -142,8 +142,12 @@ def test_write_cafe_phase_requires_topology_neutral_todo_routing() -> None:
 
 
 def test_write_cafe_phase_keeps_incoming_plans_immutable() -> None:
+    skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
     spec = (SKILL_ROOT / "references" / "skill-spec.md").read_text(encoding="utf-8")
 
+    assert "runtime `checklist.md` owns the derived gates" in skill
+    assert "consumer `{output_file}` owns the only mutable per-item ledger" in skill
+    assert "execution phase marks those same items `- [x]`" not in skill
     assert "accepted `{plan_file}` 是不可變來源" in spec
     assert "consumer `{output_file}` 的 `## Todo Progress`" in spec
     assert "execute 直接更新 `[ ]` → `[x]`" not in spec

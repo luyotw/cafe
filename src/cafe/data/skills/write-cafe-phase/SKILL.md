@@ -101,7 +101,7 @@ version: 2.12.0
 
 ## Plan → Execution Convention
 - Follow the standard playbook contract: the planning step uses `output_artifact: plan`; the execution step declares `input_artifacts: [plan]` and reads `Implementation Plan: {plan_file}` in `## Context`.
-- The plan output itself is the implementation worklist. It must include a Test List and an ordered task breakdown using `- [ ]`; the execution phase marks those same items `- [x]` as work completes.
+- The plan output itself is the immutable implementation worklist. It must include a Test List and an ordered task breakdown using `- [ ]`; the execution phase completes the projected runtime rows and records their evidence in its consumer ledger without editing the Plan.
 - For executable upstream work, declare `todo_projection` in the consumer checklist. The accepted upstream artifact is immutable; runtime `checklist.md` owns the derived gates and the consumer `{output_file}` owns the only mutable per-item ledger. Never create an undeclared sidecar or write progress back to the accepted source.
 - A domain-specific step or skill name is allowed, but the artifact key must remain exactly `plan` unless runtime placeholder support is deliberately extended.
 - Forward chains may reuse the `plan` artifact key serially. A bridge step may declare both `input_artifacts: [plan]` and `output_artifact: plan`: `{plan_file}` is the incoming plan it executes, while `{output_file}` is the new plan for the next step. Never overwrite or repurpose the incoming plan.
