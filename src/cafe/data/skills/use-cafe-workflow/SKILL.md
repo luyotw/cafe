@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
-metadata: {version: 1.50.0}
+metadata: {version: 1.51.0}
 ---
 
 # Use CAFE Workflow
@@ -129,8 +129,7 @@ If more than one situation applies, read every listed reference before acting; d
   diagnosis reference.
 
 ### Complete
-- [ ] Follow `references/completion_and_authority.md`: assess any cheaper bounded
-  direct closeout, or verify the declared terminal state and proactively help close out.
+- [ ] Follow `references/completion_and_authority.md`: assess any cheaper bounded direct closeout, or verify the declared terminal state and proactively help close out, including guiding applicable lifecycle cleanup without requiring command-name knowledge.
 - [ ] Present the deliverables and only relevant remaining actions, grounded in
   the actual playbook and user goal. Continue authorized assistance; ask only
   for missing action-specific authority. Do not invent an extra workflow gate.
