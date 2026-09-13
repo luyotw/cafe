@@ -1999,6 +1999,7 @@ class GenericWorkflowStepExecutor(Phase):
                     artifact=selected_route["artifact"],
                     source=workflow_items[0].source,
                     path=Path(str(getattr(workflow_entry, "path", workflow_entry))),
+                    version=getattr(workflow_entry, "version", None),
                     items=workflow_items,
                 )
                 return resolved

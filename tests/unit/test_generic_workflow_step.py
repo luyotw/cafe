@@ -6096,6 +6096,7 @@ def test_causal_todo_normalizes_pending_and_delivered_workflow_feedback(tmp_path
     )["causal_todo"]
     assert [item.work for item in pending.items] == ["fix comment"]
     assert [item.source for item in pending.items] == ["pr_comment"]
+    assert pending.version == 1
 
     ledger.consume(feedback.source_identity)
     ledger.record(

@@ -53,6 +53,7 @@ class TodoSourceArtifact:
     artifact: str
     source: TodoSource
     path: Path
+    version: int | None = None
     items: tuple[TodoItem, ...] | None = None
 
 
@@ -71,7 +72,12 @@ def resolve_todo_source(
     path = Path(str(getattr(value, "path", value)))
     if not path.is_file():
         raise TodoContractError(f"unreadable causal Todo artifact: {artifact}")
-    return TodoSourceArtifact(artifact=artifact, source=source, path=path)
+    return TodoSourceArtifact(
+        artifact=artifact,
+        source=source,
+        path=path,
+        version=getattr(value, "version", None),
+    )
 
 
 def parse_todo_list(
