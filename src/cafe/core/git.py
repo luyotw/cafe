@@ -356,6 +356,30 @@ class GitOperations:
         flag = "-D" if force else "-d"
         self.run_git("branch", flag, branch_name)
 
+    def delete_remote_branch_if_exists(
+        self, branch_name: str, *, remote: str = "origin"
+    ) -> bool:
+        """Delete a remote branch when it exists.
+
+        Returns ``True`` when a branch was deleted and ``False`` when the
+        remote branch was already absent. Transport and permission failures
+        remain errors so lifecycle cleanup can stop without discarding its
+        still-retryable local state.
+        """
+        remote_ref = f"refs/heads/{branch_name}"
+        if not self.run_git("ls-remote", "--heads", remote, remote_ref).strip():
+            return False
+        try:
+            self.run_git("push", remote, "--delete", branch_name)
+        except GitError:
+            # Another actor may have removed the branch after the initial
+            # lookup. Re-check before treating an already-achieved end state
+            # as a lifecycle failure.
+            if not self.run_git("ls-remote", "--heads", remote, remote_ref).strip():
+                return False
+            raise
+        return True
+
     def pull(self) -> None:
         """Pull latest changes from remote.
 

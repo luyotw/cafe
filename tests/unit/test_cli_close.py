@@ -1,7 +1,7 @@
 """Tests for close CLI command."""
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 import yaml
@@ -38,6 +38,7 @@ def mock_git_ops():
         mock_git.get_current_branch.return_value = "test-issue"
         mock_git.checkout_branch.return_value = None
         mock_git.delete_branch.return_value = None
+        mock_git.delete_remote_branch_if_exists.return_value = True
         mock_git.pull.return_value = None
 
         yield mock_git
@@ -103,17 +104,53 @@ class TestCloseCommand:
         mock_git_ops.get_current_branch.assert_called()
         mock_git_ops.checkout_branch.assert_called_once_with("main")
         mock_git_ops.delete_branch.assert_called_once_with("test-issue")
+        mock_git_ops.delete_remote_branch_if_exists.assert_called_once_with("test-issue")
         mock_git_ops.pull.assert_called_once()
 
         # Verify issue directory moved to archive
         assert not issue_with_config.exists(), "Issue directory should be moved to archive"
 
         # Verify archived location
-        from pathlib import Path
-        import os
         project_path = str(temp_repo_dir.resolve()).lstrip('/').replace('/', '-')
         archive_path = Path.home() / ".cafe" / "projects" / project_path / "archived" / "test-issue"
         assert archive_path.exists(), f"Issue should be archived at {archive_path}"
+
+    def test_close_remote_delete_failure_preserves_local_cleanup_state(
+        self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_config
+    ):
+        mock_git_ops.delete_remote_branch_if_exists.side_effect = GitError(
+            "remote permission denied"
+        )
+
+        result = runner.invoke(app, ["close"])
+
+        assert result.exit_code == 1
+        assert "Failed to delete remote branch" in result.stdout
+        assert "Restored feature branch for retry: test-issue" in result.stdout
+        assert "git push origin --delete test-issue" in result.stdout
+        mock_git_ops.delete_branch.assert_not_called()
+        assert mock_git_ops.checkout_branch.call_args_list == [
+            call("main"),
+            call("test-issue"),
+        ]
+        assert issue_with_config.exists()
+
+    def test_close_remote_delete_and_branch_restore_failure_has_manual_recovery(
+        self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_config
+    ):
+        mock_git_ops.checkout_branch.side_effect = [None, GitError("checkout failed")]
+        mock_git_ops.delete_remote_branch_if_exists.side_effect = GitError(
+            "remote permission denied"
+        )
+
+        result = runner.invoke(app, ["close"])
+
+        assert result.exit_code == 1
+        assert "Failed to restore feature branch: checkout failed" in result.stdout
+        assert "git checkout test-issue" in result.stdout
+        assert "git push origin --delete test-issue" in result.stdout
+        mock_git_ops.delete_branch.assert_not_called()
+        assert issue_with_config.exists()
 
     def test_close_checkout_fails(self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_config):
         """測試切換分支失敗（AC-2）"""
@@ -379,6 +416,22 @@ class TestCloseCommandWorktree:
         mock_git_ops.delete_branch.assert_called_once()
         assert "git branch -D test-worktree-issue" in result.stdout
         assert "cafe rm test-worktree-issue" in result.stdout
+
+    def test_close_with_worktree_remote_delete_failure_preserves_worktree(
+        self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_worktree_config
+    ):
+        mock_git_ops.get_current_branch.return_value = "test-worktree-issue"
+        mock_git_ops.delete_remote_branch_if_exists.side_effect = GitError(
+            "remote permission denied"
+        )
+
+        result = runner.invoke(app, ["close"])
+
+        assert result.exit_code == 1
+        assert "Failed to delete remote branch" in result.stdout
+        mock_git_ops.remove_worktree.assert_not_called()
+        mock_git_ops.delete_branch.assert_not_called()
+        assert issue_with_worktree_config.exists()
 
     def test_close_worktree_remove_failure_preserves_active_issue_marker(
         self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_worktree_config

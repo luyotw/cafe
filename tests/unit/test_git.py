@@ -2,7 +2,7 @@
 
 import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -502,6 +502,52 @@ class TestGitOperations:
 
             with pytest.raises(GitError, match="Branch deletion failed"):
                 git.delete_branch("feature-branch")
+
+    def test_delete_remote_branch_if_exists(self) -> None:
+        git = GitOperations()
+
+        with patch.object(git, "run_git", side_effect=["remote sha\n", ""]) as mock_run:
+            assert git.delete_remote_branch_if_exists("feature-branch") is True
+
+        assert mock_run.call_args_list == [
+            call("ls-remote", "--heads", "origin", "refs/heads/feature-branch"),
+            call("push", "origin", "--delete", "feature-branch"),
+        ]
+
+    def test_delete_remote_branch_if_exists_is_idempotent(self) -> None:
+        git = GitOperations()
+
+        with patch.object(git, "run_git", return_value="") as mock_run:
+            assert git.delete_remote_branch_if_exists("feature-branch") is False
+
+        mock_run.assert_called_once_with(
+            "ls-remote", "--heads", "origin", "refs/heads/feature-branch"
+        )
+
+    def test_delete_remote_branch_if_exists_accepts_concurrent_deletion(self) -> None:
+        git = GitOperations()
+
+        with patch.object(
+            git,
+            "run_git",
+            side_effect=["remote sha\n", GitError("remote ref missing"), ""],
+        ) as mock_run:
+            assert git.delete_remote_branch_if_exists("feature-branch") is False
+
+        assert mock_run.call_args_list[-1] == call(
+            "ls-remote", "--heads", "origin", "refs/heads/feature-branch"
+        )
+
+    def test_delete_remote_branch_if_exists_preserves_real_failure(self) -> None:
+        git = GitOperations()
+
+        with patch.object(
+            git,
+            "run_git",
+            side_effect=["remote sha\n", GitError("permission denied"), "remote sha\n"],
+        ):
+            with pytest.raises(GitError, match="permission denied"):
+                git.delete_remote_branch_if_exists("feature-branch")
 
     def test_merge_squash(self) -> None:
         """測試 squash merge 只 stage 不 commit"""
