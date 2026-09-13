@@ -405,7 +405,7 @@ skill 文件內不要假設只有某一條 playbook 會用它。
 - [ ] 若是共用規則，已更新 `cafe-workflow-common` 的 Where policies live 索引
 - [ ] plan → execute pair 使用 `output_artifact: plan` → `input_artifacts: [plan]`，execute 的 `## Context` 包含 `{plan_file}`
 - [ ] 若 phase 同時 execute 舊 plan 並產生下一份 plan，已依 §15 區分 `{plan_file}` 與 `{output_file}`、先完成舊 checklist、處理 `not_required` 分支
-- [ ] executable work 使用 canonical `## Todo List` contract，consumer 以 `todo_projection` 宣告 immutable source，且 progress 只寫入 consumer output ledger
+- [ ] executable work 使用 canonical `## Todo List` contract，consumer 以 `todo_projection` 宣告恰好一種來源策略（direct `source` 或 `{artifact: causal_todo, causal: true}`）與 immutable source，且 progress 只寫入 consumer output ledger
 - [ ] planned user approval 同時有 phase routing decision 與 playbook `on.confirm_output`，並正確分類為 assignable 或 mandatory；reactive interruption 未混入 kickoff 候選
 - [ ] 必要工具已集中宣告在 `workflow.required_tools`，所有綁定 step 的 `allowed_tools` 均滿足宣告，選用診斷工具沒有誤列為必要工具
 - [ ] 若 planned gate set 有變更，已執行 `cafe playbook confirmation-gates <id>` 並回報 issue contract 需要重新確認

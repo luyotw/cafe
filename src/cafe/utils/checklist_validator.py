@@ -7,8 +7,15 @@ from pathlib import Path
 from cafe.core.todo import TodoItem
 
 _PROJECTED = re.compile(
-    r"^\[x\] `(?P<id>[^`]+)` — .+ \(source fingerprint: (?P<fp>[0-9a-f]{64})\)$"
+    r"^\[(?P<state>[ xX])\] `(?P<id>[^`]+)` — (?P<work>.+) "
+    r"\(source fingerprint: (?P<fp>[0-9a-f]{64})\)$"
 )
+_LEDGER_HEADING = re.compile(r"^### (?P<id>[A-Za-z][A-Za-z0-9_-]*)\s*$")
+_LEDGER_FIELD = re.compile(
+    r"^- (?P<name>Status|Source fingerprint|Files|Commit|Targeted evidence|"
+    r"Remaining work|Next action):(?P<value>.*)$"
+)
+_UNAVAILABLE = frozenset({"", "n/a", "none", "unavailable", "unknown"})
 
 CHECKLIST_COMPLETION_INTENTS = frozenset(
     {
@@ -103,28 +110,78 @@ def validate_projected_todos(
     checklist_path: Path, output_path: Path, expected: tuple[TodoItem, ...]
 ) -> list[str]:
     """Return fail-closed integrity errors for projected rows and their ledger."""
-    rows = []
+    rows: list[str] = []
     for line in checklist_path.read_text(encoding="utf-8").splitlines():
         match = _PROJECTED.fullmatch(line.strip())
         if match:
-            rows.append((match.group("id"), match.group("fp")))
-    expected_rows = [(item.item_id, item.fingerprint) for item in expected]
+            rows.append(line.strip())
+    expected_rows = [item.checklist_row().replace("[ ]", "[x]", 1) for item in expected]
     errors: list[str] = []
     if rows != expected_rows:
         errors.append("projected Todo rows do not match the authoritative set")
     ledger = output_path.read_text(encoding="utf-8") if output_path.is_file() else ""
-    for item_id, fingerprint in expected_rows:
-        marker = f"### {item_id}"
-        start = ledger.find(marker)
-        end = ledger.find("\n### ", start + len(marker)) if start >= 0 else -1
-        block = ledger[start : end if end >= 0 else None] if start >= 0 else ""
-        required = (
-            "- Status: completed",
-            f"- Source fingerprint: `{fingerprint}`",
-            "- Files:",
-            "- Commit:",
-            "- Targeted evidence:",
-        )
-        if not block or any(token not in block for token in required):
-            errors.append(f"Todo ledger evidence is incomplete for {item_id}")
+    errors.extend(validate_todo_ledger(ledger, expected))
+    return errors
+
+
+def validate_todo_ledger(content: str, expected: tuple[TodoItem, ...]) -> list[str]:
+    """Validate exact, non-empty per-item evidence inside one Todo Progress section."""
+    lines = content.splitlines()
+    headings = [index for index, line in enumerate(lines) if line.strip() == "## Todo Progress"]
+    if len(headings) != 1:
+        return ["Todo ledger must contain exactly one Todo Progress section"] if expected else []
+    entries: dict[str, dict[str, str]] = {}
+    duplicates: set[str] = set()
+    malformed: set[str] = set()
+    current_id: str | None = None
+    for line in lines[headings[0] + 1 :]:
+        if line.startswith("## "):
+            break
+        heading = _LEDGER_HEADING.fullmatch(line.strip())
+        if heading:
+            current_id = heading.group("id")
+            if current_id in entries:
+                duplicates.add(current_id)
+            entries.setdefault(current_id, {})
+            continue
+        if line.strip().startswith("### "):
+            current_id = None
+            continue
+        field = _LEDGER_FIELD.fullmatch(line.strip())
+        if field and current_id is not None:
+            name = field.group("name")
+            if name in entries[current_id]:
+                duplicates.add(current_id)
+            entries[current_id][name] = field.group("value").strip()
+        elif current_id is not None and line.strip().startswith("- ") and ":" in line:
+            malformed.add(current_id)
+
+    errors: list[str] = []
+    expected_ids = {item.item_id for item in expected}
+    if set(entries) != expected_ids:
+        errors.append("Todo ledger item set does not match the authoritative set")
+    for item in expected:
+        fields = entries.get(item.item_id, {})
+        if item.item_id in duplicates or item.item_id in malformed:
+            errors.append(f"Todo ledger evidence is malformed or duplicated for {item.item_id}")
+            continue
+        required = {
+            "Status",
+            "Source fingerprint",
+            "Files",
+            "Commit",
+            "Targeted evidence",
+            "Remaining work",
+            "Next action",
+        }
+        if set(fields) != required:
+            errors.append(f"Todo ledger evidence is incomplete for {item.item_id}")
+            continue
+        if fields["Status"].lower() != "completed":
+            errors.append(f"Todo ledger status is not completed for {item.item_id}")
+        if fields["Source fingerprint"] != f"`{item.fingerprint}`":
+            errors.append(f"Todo ledger fingerprint is stale for {item.item_id}")
+        for name in ("Files", "Commit", "Targeted evidence"):
+            if fields[name].strip().lower() in _UNAVAILABLE:
+                errors.append(f"Todo ledger {name.lower()} is unavailable for {item.item_id}")
     return errors

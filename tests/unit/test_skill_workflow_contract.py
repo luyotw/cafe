@@ -70,6 +70,32 @@ def test_workflow_contract_parses_declared_inputs_checklists_and_templates() -> 
     assert contract.output_templates.catalog == "research-report"
 
 
+def test_todo_projection_requires_exactly_one_source_strategy() -> None:
+    def contract(projection: dict) -> SkillWorkflowContract:
+        return SkillWorkflowContract.model_validate(
+            {
+                "checklist": {
+                    "variants": [{"when": {}, "sections": [{"todo_projection": projection}]}]
+                }
+            }
+        )
+
+    direct = contract({"artifact": "plan", "source": "plan"})
+    causal = contract({"artifact": "causal_todo", "causal": True})
+    assert direct.checklist.variants[0].sections[0].todo_projection.source == "plan"
+    assert causal.checklist.variants[0].sections[0].todo_projection.causal is True
+
+    for invalid in (
+        {"artifact": "plan"},
+        {"artifact": "causal_todo", "source": "review", "causal": True},
+        {"artifact": "causal_todo", "source": "review"},
+        {"artifact": "plan", "causal": True},
+        {"artifact": "review_feedback", "source": "qa"},
+    ):
+        with pytest.raises(ValidationError, match="source strategy|ownership|own the"):
+            contract(invalid)
+
+
 def test_workflow_contract_parses_provider_neutral_execution_profile() -> None:
     contract = SkillWorkflowContract.model_validate(
         {

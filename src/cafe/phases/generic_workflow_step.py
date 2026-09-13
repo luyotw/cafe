@@ -64,7 +64,12 @@ from cafe.core.status_codes import (
     transition_map_key,
 )
 from cafe.core.takeover import build_takeover_snapshot
-from cafe.core.todo import parse_todo_list
+from cafe.core.todo import (
+    TodoContractError,
+    TodoSourceArtifact,
+    projection_todo_items,
+    workflow_feedback_todo_items,
+)
 from cafe.core.types import AgentCLI
 from cafe.core.workflow_models import BatonRejected, StepExecutionResult
 from cafe.phases.generic_phase import GenericPhase
@@ -846,6 +851,33 @@ class GenericWorkflowStepExecutor(Phase):
         # obsolete projection so status cannot diverge from launch inputs.
         raw.pop("context_packets", None)
         path.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    @staticmethod
+    def _persist_todo_projection_snapshot(
+        iteration_dir: Path, projections: list[dict[str, Any]]
+    ) -> None:
+        """Pin the source identity rendered for this invocation in iteration metadata."""
+        path = iteration_dir / "iteration.json"
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError("Unable to persist Todo projection provenance") from exc
+        if not isinstance(raw, dict):
+            raise ValueError("Invalid iteration metadata for Todo projection provenance")
+        raw["todo_projections"] = projections
+        path.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    @staticmethod
+    def _load_todo_projection_snapshot(iteration_dir: Path) -> list[dict[str, Any]] | None:
+        path = iteration_dir / "iteration.json"
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        value = raw.get("todo_projections") if isinstance(raw, dict) else None
+        if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+            return None
+        return value
 
     def _load_iteration_user_input_candidate(self, step_name: str) -> str:
         """Load raw user input before resume-token optimization."""
@@ -1718,33 +1750,123 @@ class GenericWorkflowStepExecutor(Phase):
                 contract,
             ),
             preserve_completed_items=preserve_completed_items,
+            todo_ledger_path=output_file,
         )
+        variant = select_checklist_variant(
+            contract,
+            step=step_name,
+            iteration=self.iteration,
+            artifacts=input_artifacts,
+            feedback=feedback,
+        )
+        projections: list[dict[str, Any]] = []
+        for section in variant.sections:
+            declaration = section.todo_projection
+            if declaration is None:
+                continue
+            entry = input_artifacts.get(declaration.artifact)
+            if entry is None:
+                raise ValueError("Todo projection artifact disappeared during generation")
+            items = projection_todo_items(entry, expected_source=declaration.source)
+            projections.append(
+                {
+                    "declaration_artifact": declaration.artifact,
+                    "artifact": str(
+                        getattr(entry, "artifact", getattr(entry, "name", declaration.artifact))
+                    ),
+                    "path": str(getattr(entry, "path", entry)),
+                    "version": getattr(entry, "version", None),
+                    "rows": [item.checklist_row() for item in items],
+                }
+            )
+        self._persist_todo_projection_snapshot(output_file.parent, projections)
 
     @staticmethod
     def _add_causal_todo_artifact(
         artifacts: Dict[str, Any], state: BlackboardState
     ) -> Dict[str, Any]:
-        """Expose a correction artifact only when its producer caused this handoff."""
+        """Expose only the artifact selected by the persisted inbound transition."""
         feedback_names = ("review_feedback", "qa_feedback", "pr_result", "workflow_feedback")
         present = {name: artifacts[name] for name in feedback_names if name in artifacts}
         if not present:
             return artifacts
-        from_step = state.handoff_contract.from_step if state.handoff_contract else None
-        aliases = {"review_feedback": "review", "qa_feedback": "qa", "pr_result": "pr"}
-        matches = [
-            entry
-            for name, entry in present.items()
-            if getattr(entry, "updated_by", aliases.get(name, name)) == from_step
-        ]
-        correction_steps = {"review", "qa", "pr", "workflow_feedback"}
-        if not matches and from_step in correction_steps:
+
+        transition = next(
+            (
+                event
+                for event in reversed(state.events)
+                if event.event_type == "transition" and event.data.get("to") == state.current_step
+            ),
+            None,
+        )
+        from_step = str(transition.data.get("from")) if transition is not None else None
+        if from_step is None and state.handoff_contract is not None:
+            candidate = state.handoff_contract.from_step
+            if candidate and candidate != state.current_step:
+                from_step = candidate
+
+        workflow_entry = present.get("workflow_feedback")
+        if workflow_entry is not None:
+            delivered: tuple[str, ...] | None = None
+            if transition is not None:
+                event = next(
+                    (
+                        candidate
+                        for candidate in reversed(state.events)
+                        if candidate.event_type == "workflow_feedback_delivered"
+                        and candidate.step == state.current_step
+                        and candidate.timestamp >= transition.timestamp
+                    ),
+                    None,
+                )
+                if event is not None:
+                    raw = event.data.get("source_identities")
+                    if isinstance(raw, list) and all(isinstance(item, str) for item in raw):
+                        delivered = tuple(raw)
+            try:
+                workflow_items = workflow_feedback_todo_items(
+                    Path(str(getattr(workflow_entry, "path", workflow_entry))),
+                    target_step=state.current_step,
+                    source_identities=delivered,
+                )
+                if delivered is not None:
+                    pending_items = workflow_feedback_todo_items(
+                        Path(str(getattr(workflow_entry, "path", workflow_entry))),
+                        target_step=state.current_step,
+                    )
+                    known = {item.item_id for item in workflow_items}
+                    workflow_items = workflow_items + tuple(
+                        item for item in pending_items if item.item_id not in known
+                    )
+            except TodoContractError as exc:
+                raise ValueError(f"Correction Todo provenance is invalid: {exc}") from exc
+            if workflow_items:
+                resolved = dict(artifacts)
+                resolved["causal_todo"] = TodoSourceArtifact(
+                    artifact="workflow_feedback",
+                    source=workflow_items[0].source,
+                    path=Path(str(getattr(workflow_entry, "path", workflow_entry))),
+                    items=workflow_items,
+                )
+                return resolved
+
+        artifact_by_step = {
+            "review": "review_feedback",
+            "qa": "qa_feedback",
+            "pr": "pr_result",
+        }
+        selected_name = artifact_by_step.get(from_step or "")
+        selected = present.get(selected_name) if selected_name else None
+        if selected is not None and getattr(selected, "updated_by", from_step) != from_step:
+            raise ValueError("Correction Todo artifact ownership conflicts with provenance")
+        if selected is None and from_step in artifact_by_step:
             raise ValueError("Correction Todo provenance is missing")
-        if not matches:
+        if selected is None and from_step not in {None, "plan", state.current_step}:
+            raise ValueError("Correction Todo provenance is unsupported")
+        if selected is None:
             return artifacts
-        if len(matches) != 1:
-            raise ValueError("Correction Todo provenance is ambiguous")
         resolved = dict(artifacts)
-        resolved["causal_todo"] = matches[0]
+        resolved["causal_todo"] = selected
         return resolved
 
     def _resolved_template_mode(self, step_name: str, step_def: Dict[str, Any]) -> str:
@@ -1910,25 +2032,37 @@ class GenericWorkflowStepExecutor(Phase):
             feedback=feedback,
         )
         expected = []
+        current_projections: list[dict[str, Any]] = []
         for section in variant.sections:
             if section.todo_projection is None:
                 continue
             entry = artifacts.get(section.todo_projection.artifact)
             if entry is None:
                 return False
-            path = Path(str(getattr(entry, "path", entry)))
             try:
-                expected.extend(
-                    parse_todo_list(
-                        path.read_text(encoding="utf-8"),
-                        expected_source=section.todo_projection.source,
-                    )
+                items = projection_todo_items(entry, expected_source=section.todo_projection.source)
+                expected.extend(items)
+                current_projections.append(
+                    {
+                        "declaration_artifact": section.todo_projection.artifact,
+                        "artifact": str(
+                            getattr(
+                                entry,
+                                "artifact",
+                                getattr(entry, "name", section.todo_projection.artifact),
+                            )
+                        ),
+                        "path": str(getattr(entry, "path", entry)),
+                        "version": getattr(entry, "version", None),
+                        "rows": [item.checklist_row() for item in items],
+                    }
                 )
             except (OSError, ValueError):
                 return False
-        if not expected:
-            return True
         output_path = self._get_versioned_file_path(self.phase_name, self.iteration, self.phase_dir)
+        pinned = self._load_todo_projection_snapshot(output_path.parent)
+        if pinned != current_projections:
+            return False
         return not validate_projected_todos(checklist_path, output_path, tuple(expected))
 
     def _validate_produced_packet_contracts(

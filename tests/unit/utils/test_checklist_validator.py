@@ -136,12 +136,122 @@ def test_projected_todo_completion_requires_exact_set_and_ledger(tmp_path):
     output = tmp_path / "output.md"
     checklist.write_text(item.checklist_row().replace("[ ]", "[x]") + "\n", encoding="utf-8")
     output.write_text(
-        f"### PLAN-001\n- Status: completed\n- Source fingerprint: `{item.fingerprint}`\n"
-        "- Files: a.py\n- Commit: abc\n- Targeted evidence: tests passed\n",
+        "## Todo Progress\n\n### PLAN-001\n- Status: completed\n"
+        f"- Source fingerprint: `{item.fingerprint}`\n"
+        "- Files: a.py\n- Commit: abc\n- Targeted evidence: tests passed\n"
+        "- Remaining work: None.\n- Next action: Review.\n",
         encoding="utf-8",
     )
     assert validate_projected_todos(checklist, output, (item,)) == []
     checklist.write_text("", encoding="utf-8")
+    assert validate_projected_todos(checklist, output, (item,))
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "rename",
+        "rewrite",
+        "duplicate",
+        "omit",
+        "unchecked",
+    ],
+)
+def test_projected_todo_completion_rejects_every_row_tamper(tmp_path, mutation):
+    items = parse_todo_list(
+        "## Todo List\n"
+        "- [ ] `PLAN-001` — Source: `plan` — Work: first — Closure: done — Evidence: test\n"
+        "- [ ] `PLAN-002` — Source: `plan` — Work: second — Closure: done — Evidence: test\n"
+    )
+    rows = [item.checklist_row().replace("[ ]", "[x]") for item in items]
+    if mutation == "rename":
+        rows[0] = rows[0].replace("PLAN-001", "PLAN-009")
+    elif mutation == "rewrite":
+        rows[0] = rows[0].replace("first", "different")
+    elif mutation == "duplicate":
+        rows.append(rows[0])
+    elif mutation == "omit":
+        rows.pop()
+    else:
+        rows[0] = rows[0].replace("[x]", "[ ]")
+    checklist = tmp_path / "checklist.md"
+    output = tmp_path / "output.md"
+    checklist.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    output.write_text(
+        "## Todo Progress\n\n"
+        + "\n\n".join(
+            f"### {item.item_id}\n\n- Status: completed\n"
+            f"- Source fingerprint: `{item.fingerprint}`\n- Files: a.py\n"
+            "- Commit: abc\n- Targeted evidence: tests passed\n"
+            "- Remaining work: None.\n- Next action: Review."
+            for item in items
+        ),
+        encoding="utf-8",
+    )
+    assert validate_projected_todos(checklist, output, items)
+
+
+def test_empty_authoritative_set_still_reconciles_projected_rows(tmp_path):
+    checklist = tmp_path / "checklist.md"
+    output = tmp_path / "output.md"
+    output.write_text("## Todo Progress\n", encoding="utf-8")
+    checklist.write_text(
+        "[x] `STALE-001` — stale work (source fingerprint: " + "a" * 64 + ")\n",
+        encoding="utf-8",
+    )
+    assert validate_projected_todos(checklist, output, ())
+    checklist.write_text("[x] ordinary gate\n", encoding="utf-8")
+    assert validate_projected_todos(checklist, output, ()) == []
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        "- Files: ",
+        "- Commit: ",
+        "- Targeted evidence: unavailable",
+        "- Status: disputed",
+    ],
+)
+def test_todo_ledger_rejects_empty_unavailable_or_open_evidence(tmp_path, replacement):
+    item = parse_todo_list(
+        "## Todo List\n"
+        "- [ ] `BLK-001` — Source: `review` — Work: fix — Closure: done — Evidence: test\n"
+    )[0]
+    checklist = tmp_path / "checklist.md"
+    output = tmp_path / "output.md"
+    checklist.write_text(item.checklist_row().replace("[ ]", "[x]") + "\n")
+    fields = [
+        "- Status: completed",
+        f"- Source fingerprint: `{item.fingerprint}`",
+        "- Files: a.py",
+        "- Commit: abc",
+        "- Targeted evidence: tests passed",
+        "- Remaining work: None.",
+        "- Next action: Review.",
+    ]
+    prefix = replacement.split(":", 1)[0] + ":"
+    fields = [replacement if field.startswith(prefix) else field for field in fields]
+    output.write_text("## Todo Progress\n\n### BLK-001\n\n" + "\n".join(fields))
+    assert validate_projected_todos(checklist, output, (item,))
+
+
+def test_todo_ledger_rejects_duplicate_and_prefix_colliding_entries(tmp_path):
+    item = parse_todo_list(
+        "## Todo List\n"
+        "- [ ] `BLK-001` — Source: `review` — Work: fix — Closure: done — Evidence: test\n"
+    )[0]
+    checklist = tmp_path / "checklist.md"
+    output = tmp_path / "output.md"
+    checklist.write_text(item.checklist_row().replace("[ ]", "[x]") + "\n")
+    valid = (
+        f"- Status: completed\n- Source fingerprint: `{item.fingerprint}`\n"
+        "- Files: a.py\n- Commit: abc\n- Targeted evidence: tests passed\n"
+        "- Remaining work: None.\n- Next action: Review.\n"
+    )
+    output.write_text("## Todo Progress\n\n### BLK-001-extra\n\n" + valid)
+    assert validate_projected_todos(checklist, output, (item,))
+    output.write_text("## Todo Progress\n\n### BLK-001\n\n" + valid + "\n### BLK-001\n\n" + valid)
     assert validate_projected_todos(checklist, output, (item,))
 
 

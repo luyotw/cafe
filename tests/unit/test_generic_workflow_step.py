@@ -14,6 +14,8 @@ from cafe.core.blackboard import (
     ArtifactEntry,
     ArtifactKind,
     BlackboardStore,
+    EventEntry,
+    HandoffContract,
     HandoffIntent,
     HandoffOwner,
 )
@@ -26,7 +28,9 @@ from cafe.core.session_continuation import (
     SessionContinuationPolicy,
 )
 from cafe.core.status_codes import PhaseStatusCode
+from cafe.core.todo import parse_todo_list
 from cafe.core.types import AgentCLI, AgentConfig, AgentResponse, CliEntry, TokenUsage
+from cafe.core.workflow_feedback import WorkflowFeedbackLedger
 from cafe.phases.generic_phase import GenericPhase, GenericPhaseExecution
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
 from cafe.skills.exceptions import SkillDiscoveryError
@@ -5954,3 +5958,184 @@ def test_hybrid_portion_uses_a_private_baton_sink(tmp_path: Path, monkeypatch) -
     )
     assert "write(./.cafe/issues/hybrid-sink/next_step.txt)" not in allowed_tools
     assert any(event["type"] == "hybrid_portion_baton" for event in result.events)
+
+
+def test_causal_todo_uses_inbound_transition_after_start_override(tmp_path: Path) -> None:
+    review = tmp_path / "review.md"
+    review.write_text(
+        "## Todo List\n"
+        "- [ ] `BLK-001` — Source: `review` — Work: fix — Closure: done — Evidence: test\n"
+    )
+    state = BlackboardStore(tmp_path / "issue").load_or_create("develop")
+    state.events.extend(
+        [
+            EventEntry(
+                timestamp="2026-01-01T00:00:00Z",
+                step="review",
+                event_type="transition",
+                message="",
+                data={"from": "review", "to": "develop"},
+            ),
+            EventEntry(
+                timestamp="2026-01-01T00:00:01Z",
+                step="develop",
+                event_type="step_started",
+                message="",
+                data={"step": "develop"},
+            ),
+        ]
+    )
+    state.handoff_contract = HandoffContract(
+        version=1,
+        to_owner=HandoffOwner.AGENT,
+        to_step="develop",
+        intent=HandoffIntent.AWAIT_AGENT,
+        from_step="develop",
+        source="workflow.start_step_override",
+    )
+    entry = ArtifactEntry(
+        name="review_feedback",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="review",
+        path=str(review),
+    )
+
+    resolved = GenericWorkflowStepExecutor._add_causal_todo_artifact(
+        {"review_feedback": entry}, state
+    )
+    assert resolved["causal_todo"] is entry
+
+
+def test_causal_todo_normalizes_pending_and_delivered_workflow_feedback(tmp_path: Path) -> None:
+    issue_dir = tmp_path / "issue"
+    ledger = WorkflowFeedbackLedger(issue_dir)
+    _created, feedback = ledger.record(
+        source_identity="github-pr:10:20",
+        source_kind="github_pr",
+        target_step="develop",
+        content="fix comment",
+    )
+    state = BlackboardStore(issue_dir).load_or_create("develop")
+    transition = EventEntry(
+        timestamp="2026-01-01T00:00:00Z",
+        step="pr",
+        event_type="transition",
+        message="",
+        data={"from": "pr", "to": "develop"},
+    )
+    state.events.append(transition)
+    entry = ArtifactEntry(
+        name="workflow_feedback",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="human_task",
+        path=str(ledger.path),
+    )
+
+    pending = GenericWorkflowStepExecutor._add_causal_todo_artifact(
+        {"workflow_feedback": entry}, state
+    )["causal_todo"]
+    assert [item.work for item in pending.items] == ["fix comment"]
+    assert [item.source for item in pending.items] == ["pr_comment"]
+
+    ledger.consume(feedback.source_identity)
+    state.events.append(
+        EventEntry(
+            timestamp="2026-01-01T00:00:02Z",
+            step="develop",
+            event_type="workflow_feedback_delivered",
+            message="",
+            data={"source_identities": [feedback.source_identity]},
+        )
+    )
+    delivered = GenericWorkflowStepExecutor._add_causal_todo_artifact(
+        {"workflow_feedback": entry}, state
+    )["causal_todo"]
+    assert delivered.items == pending.items
+
+
+def test_declared_correction_generation_and_completion_pin_causal_source(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "causal-projection"
+    review = tmp_path / "review.md"
+    original = (
+        "## Todo List\n"
+        "- [ ] `BLK-001` — Source: `review` — Work: fix wiring — "
+        "Closure: production path works — Evidence: targeted pytest\n"
+    )
+    review.write_text(original, encoding="utf-8")
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    state.events.append(
+        EventEntry(
+            timestamp="2026-01-01T00:00:00Z",
+            step="review",
+            event_type="transition",
+            message="",
+            data={"from": "review", "to": "develop"},
+        )
+    )
+    state.artifacts["review_feedback"] = ArtifactEntry(
+        name="review_feedback",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="review",
+        path=str(review),
+    )
+    store.save(state)
+    loader = SkillLoader()
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="causal-projection",
+        playbook={
+            "playbook": {"id": "standard-qa"},
+            "roles": {"developer": {"default_agent": "David"}},
+            "steps": {
+                "develop": {
+                    "skill": "cafe-develop",
+                    "role": "developer",
+                    "input_artifacts": ["review_feedback"],
+                }
+            },
+        },
+        generic_phase=GenericPhase(loader),
+        agent_manager=FakeAgentManager(""),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+    executor.phase_name = "develop"
+    executor.phase_dir = issue_dir / "develop"
+    executor.iteration = 1
+    iteration_dir = executor.phase_dir / "iteration_001"
+    checklist = iteration_dir / "checklist.md"
+    output = iteration_dir / "output.md"
+    executor._generate_checklist(
+        step_name="develop",
+        skill_name="cafe-develop",
+        agent_name="David",
+        step_def=executor.playbook["steps"]["develop"],
+        blackboard_state=state,
+        checklist_file=checklist,
+        output_file=output,
+        questions_xml_file=iteration_dir / "questions.xml",
+    )
+    item = parse_todo_list(original)[0]
+    checklist.write_text(
+        checklist.read_text(encoding="utf-8").replace(
+            item.checklist_row(), item.checklist_row().replace("[ ]", "[x]")
+        ),
+        encoding="utf-8",
+    )
+    output.write_text(
+        "## Todo Progress\n\n### BLK-001\n\n- Status: completed\n"
+        f"- Source fingerprint: `{item.fingerprint}`\n- Files: a.py\n"
+        "- Commit: abc\n- Targeted evidence: tests passed\n"
+        "- Remaining work: None.\n- Next action: Review.\n",
+        encoding="utf-8",
+    )
+    assert executor._validate_projected_todo_completion(checklist)
+
+    review.write_text("## Todo List\n", encoding="utf-8")
+    assert not executor._validate_projected_todo_completion(checklist)

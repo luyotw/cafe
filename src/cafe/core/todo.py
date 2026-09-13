@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from hashlib import sha256
@@ -51,6 +52,7 @@ class TodoSourceArtifact:
     artifact: str
     source: TodoSource
     path: Path
+    items: tuple[TodoItem, ...] | None = None
 
 
 def resolve_todo_source(
@@ -123,3 +125,91 @@ def parse_todo_list(
             )
         )
     return tuple(items)
+
+
+def workflow_feedback_todo_items(
+    path: Path,
+    *,
+    target_step: str,
+    source_identities: tuple[str, ...] | None = None,
+) -> tuple[TodoItem, ...]:
+    """Normalize one exact workflow-feedback delivery into canonical Todo items."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise TodoContractError("workflow feedback Todo source is unreadable") from exc
+    entries = raw.get("entries") if isinstance(raw, dict) and raw.get("version") == 1 else None
+    if not isinstance(entries, list):
+        raise TodoContractError("workflow feedback Todo source has an invalid shape")
+    identities = set(source_identities) if source_identities is not None else None
+    from cafe.core.workflow_feedback import WorkflowFeedbackEntry, WorkflowFeedbackError
+
+    selected: list[WorkflowFeedbackEntry] = []
+    seen: set[str] = set()
+    for entry in entries:
+        try:
+            normalized = WorkflowFeedbackEntry.from_dict(entry)
+        except WorkflowFeedbackError as exc:
+            raise TodoContractError("workflow feedback Todo entry has an invalid shape") from exc
+        identity = normalized.source_identity
+        if not identity or identity in seen:
+            raise TodoContractError("workflow feedback Todo identities are missing or duplicate")
+        seen.add(identity)
+        if normalized.target_step != target_step:
+            continue
+        if identities is None:
+            if not normalized.actionable:
+                continue
+        elif identity not in identities:
+            continue
+        selected.append(normalized)
+    if identities is not None and {item.source_identity for item in selected} != identities:
+        raise TodoContractError("workflow feedback Todo delivery identities are missing")
+    if not selected and identities is None:
+        return ()
+    if not selected:
+        raise TodoContractError("workflow feedback Todo delivery is missing")
+
+    items: list[TodoItem] = []
+    for entry in selected:
+        identity = entry.source_identity
+        kind = entry.source_kind.lower()
+        source: TodoSource = (
+            "pr_comment" if kind.startswith(("github", "pr")) else "workflow_feedback"
+        )
+        work = " ".join(entry.content.split())
+        if not work:
+            raise TodoContractError("workflow feedback Todo work is empty")
+        prefix = "PRC" if source == "pr_comment" else "WF"
+        item_id = f"{prefix}-{sha256(identity.encode('utf-8')).hexdigest()[:12].upper()}"
+        items.append(
+            TodoItem(
+                item_id=item_id,
+                source=source,
+                work=work,
+                closure="The causal feedback request is addressed",
+                evidence="Targeted verification for this feedback item",
+                checked=False,
+            )
+        )
+    return tuple(items)
+
+
+def projection_todo_items(
+    artifact: object, *, expected_source: TodoSource | None = None
+) -> tuple[TodoItem, ...]:
+    """Read normalized in-memory or Markdown Todo items from one artifact."""
+    normalized = getattr(artifact, "items", None)
+    if normalized is not None:
+        items = tuple(normalized)
+        if expected_source is not None and any(item.source != expected_source for item in items):
+            raise TodoContractError(
+                "Todo item source does not match the declared projection source"
+            )
+        return items
+    path = Path(str(getattr(artifact, "path", artifact)))
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise TodoContractError("authoritative Todo source is unreadable") from exc
+    return parse_todo_list(content, expected_source=expected_source)

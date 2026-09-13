@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from cafe.agents.manager import AgentManager
-from cafe.core.todo import TodoContractError, parse_todo_list
+from cafe.core.todo import TodoContractError, projection_todo_items
 from cafe.skills.bridge import load_skill_reference, try_load_skill_reference
 from cafe.skills.contracts import ChecklistVariant, SkillWorkflowContract
 from cafe.skills.loader import canonical_skill_name
@@ -142,6 +142,7 @@ def compose_declared_checklist(
     template_mode: str = "auto",
     template_file: Optional[str] = None,
     preserve_completed_items: bool = False,
+    todo_ledger_path: Path | None = None,
 ) -> bool:
     """Compose a skill-declared checklist without phase-name behavior branches."""
     if contract.checklist is None:
@@ -179,11 +180,8 @@ def compose_declared_checklist(
                     f"Todo projection artifact is unavailable: {section.todo_projection.artifact}"
                 )
             try:
-                todo_content = Path(
-                    str(artifact.path if hasattr(artifact, "path") else artifact)
-                ).read_text(encoding="utf-8")
-                items = parse_todo_list(
-                    todo_content, expected_source=section.todo_projection.source
+                items = projection_todo_items(
+                    artifact, expected_source=section.todo_projection.source
                 )
             except (OSError, TodoContractError) as exc:
                 raise ValueError(f"Cannot project authoritative Todo List: {exc}") from exc
@@ -234,6 +232,7 @@ def compose_declared_checklist(
         checklist_file_path,
         content,
         preserve_completed_items=preserve_completed_items,
+        todo_ledger_path=todo_ledger_path,
     )
     return True
 

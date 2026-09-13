@@ -34,7 +34,7 @@ class TestResolveChecklistPlaceholders:
             "spec_file_path": ".cafe/issues/issue1/spec/iteration_001/output.md",
             "plan_file_path": ".cafe/issues/issue1/plan/iteration_001/output.md",
             "agent_file": ".cafe/agents/developer/David.md",
-            "iteration": "1"
+            "iteration": "1",
         }
 
         result = resolve_checklist_placeholders(checklist, placeholders)
@@ -170,6 +170,43 @@ class TestGenerateChecklistFile:
         assert output_path.read_text(encoding="utf-8") == (
             "[ ] Validate consumer review:\n  - new checkpoint rule\n"
         )
+
+    def test_projected_completion_is_preserved_only_with_current_ledger_evidence(self, tmp_path):
+        from cafe.core.todo import parse_todo_list
+
+        item = parse_todo_list(
+            "## Todo List\n"
+            "- [ ] `PLAN-001` — Source: `plan` — Work: implement — "
+            "Closure: complete — Evidence: tests\n"
+        )[0]
+        output_path = tmp_path / "checklist.md"
+        ledger_path = tmp_path / "output.md"
+        row = item.checklist_row()
+        output_path.write_text(row.replace("[ ]", "[x]") + "\n", encoding="utf-8")
+        ledger_path.write_text(
+            "## Todo Progress\n\n### PLAN-001\n\n- Status: completed\n"
+            f"- Source fingerprint: `{item.fingerprint}`\n- Files: a.py\n"
+            "- Commit: abc\n- Targeted evidence: tests passed\n"
+            "- Remaining work: None.\n- Next action: Review.\n",
+            encoding="utf-8",
+        )
+
+        generate_checklist_file(
+            output_path,
+            row + "\n",
+            preserve_completed_items=True,
+            todo_ledger_path=ledger_path,
+        )
+        assert output_path.read_text(encoding="utf-8").startswith("[x]")
+
+        ledger_path.write_text("## Todo Progress\n", encoding="utf-8")
+        generate_checklist_file(
+            output_path,
+            row + "\n",
+            preserve_completed_items=True,
+            todo_ledger_path=ledger_path,
+        )
+        assert output_path.read_text(encoding="utf-8").startswith("[ ]")
 
     def test_rejects_symlink_without_touching_its_target(self, tmp_path):
         victim = tmp_path / "victim.md"

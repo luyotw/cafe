@@ -1,8 +1,15 @@
 """Invariant tests for the canonical workflow Todo grammar."""
 
+import json
+
 import pytest
 
-from cafe.core.todo import TodoContractError, parse_todo_list, resolve_todo_source
+from cafe.core.todo import (
+    TodoContractError,
+    parse_todo_list,
+    resolve_todo_source,
+    workflow_feedback_todo_items,
+)
 
 
 def _item(work: str = "add parser") -> str:
@@ -49,3 +56,57 @@ def test_correction_source_requires_explicit_causal_artifact(tmp_path) -> None:
     assert selected.artifact == "qa_feedback"
     with pytest.raises(TodoContractError, match="missing causal"):
         resolve_todo_source(correction_artifact="pr_result", artifacts={"qa_feedback": qa})
+
+
+def test_workflow_feedback_normalization_selects_exact_causal_entries(tmp_path) -> None:
+    ledger = tmp_path / "workflow_feedback.json"
+    entries = [
+        {
+            "source_identity": "local_review:pr:local-review:1",
+            "source_kind": "local_review",
+            "target_step": "develop",
+            "content": "fix the local review blocker",
+            "actionable": False,
+            "consumed": True,
+            "resolved": False,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:01Z",
+        },
+        {
+            "source_identity": "github-pr:10:20",
+            "source_kind": "github_pr",
+            "target_step": "develop",
+            "content": "fix the PR comment",
+            "actionable": True,
+            "consumed": False,
+            "resolved": False,
+            "created_at": "2026-01-02T00:00:00Z",
+            "updated_at": "2026-01-02T00:00:00Z",
+        },
+        {
+            "source_identity": "github-pr:10:30",
+            "source_kind": "github_pr",
+            "target_step": "other",
+            "content": "unrelated",
+            "actionable": True,
+            "consumed": False,
+            "resolved": False,
+            "created_at": "2026-01-02T00:00:00Z",
+            "updated_at": "2026-01-02T00:00:00Z",
+        },
+    ]
+    ledger.write_text(json.dumps({"version": 1, "entries": entries}), encoding="utf-8")
+
+    pending = workflow_feedback_todo_items(ledger, target_step="develop")
+    delivered = workflow_feedback_todo_items(
+        ledger,
+        target_step="develop",
+        source_identities=("local_review:pr:local-review:1",),
+    )
+    assert [item.source for item in pending] == ["pr_comment"]
+    assert [item.work for item in pending] == ["fix the PR comment"]
+    assert [item.source for item in delivered] == ["workflow_feedback"]
+    assert [item.work for item in delivered] == ["fix the local review blocker"]
+
+    with pytest.raises(TodoContractError, match="missing"):
+        workflow_feedback_todo_items(ledger, target_step="develop", source_identities=("stale",))

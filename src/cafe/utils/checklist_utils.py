@@ -81,7 +81,9 @@ def _checklist_item_blocks(content: str) -> list[tuple[int, str, bool]]:
     return items
 
 
-def _restore_completed_items(content: str, previous: str) -> str:
+def _restore_completed_items(
+    content: str, previous: str, *, todo_ledger_path: Path | None = None
+) -> str:
     """Keep completion only for unchanged, skill-declared checklist items."""
     completed = Counter(
         block for _start, block, is_complete in _checklist_item_blocks(previous) if is_complete
@@ -89,6 +91,70 @@ def _restore_completed_items(content: str, previous: str) -> str:
     if not completed:
         return content
 
+    valid_projected: set[tuple[str, str]] = set()
+    if todo_ledger_path is not None and todo_ledger_path.is_file():
+        projected = re.compile(
+            r"^\[[ xX]\] `(?P<id>[^`]+)` — (?P<work>.+) "
+            r"\(source fingerprint: (?P<fp>[0-9a-f]{64})\)$"
+        )
+        for line in content.splitlines():
+            match = projected.fullmatch(line.strip())
+            if match:
+                # Only identity/fingerprint are needed here. The synthetic
+                # fields deliberately reproduce the rendered fingerprint via
+                # the ledger's exact fingerprint comparison below.
+                valid_projected.add((match.group("id"), match.group("fp")))
+        ledger = todo_ledger_path.read_text(encoding="utf-8")
+        # Parse exact sections locally because the source Todo fields are not
+        # available at this generic file-publication layer.
+        for item_id, fingerprint in tuple(valid_projected):
+            marker = re.compile(rf"^### {re.escape(item_id)}\s*$", re.MULTILINE)
+            matches = list(marker.finditer(ledger))
+            if len(matches) != 1:
+                valid_projected.discard((item_id, fingerprint))
+                continue
+            start = matches[0].end()
+            following = re.search(r"^#{2,3} ", ledger[start:], re.MULTILINE)
+            block = ledger[start : start + following.start() if following else None]
+            required = {
+                "Status": "completed",
+                "Source fingerprint": f"`{fingerprint}`",
+            }
+            fields = {}
+            for raw in block.splitlines():
+                match = re.fullmatch(r"- ([A-Za-z ]+):\s*(.*)", raw.strip())
+                if match:
+                    fields.setdefault(match.group(1), []).append(match.group(2).strip())
+            expected_fields = {
+                "Status",
+                "Source fingerprint",
+                "Files",
+                "Commit",
+                "Targeted evidence",
+                "Remaining work",
+                "Next action",
+            }
+            if (
+                set(fields) != expected_fields
+                or any(fields.get(name) != [value] for name, value in required.items())
+                or any(len(values) != 1 for values in fields.values())
+            ):
+                valid_projected.discard((item_id, fingerprint))
+                continue
+            for name in ("Files", "Commit", "Targeted evidence"):
+                values = fields.get(name, [])
+                if len(values) != 1 or values[0].lower() in {
+                    "",
+                    "n/a",
+                    "none",
+                    "unavailable",
+                    "unknown",
+                }:
+                    valid_projected.discard((item_id, fingerprint))
+
+    projected_row = re.compile(
+        r"^\[[ xX]\] `(?P<id>[^`]+)` — .+ " r"\(source fingerprint: (?P<fp>[0-9a-f]{64})\)$"
+    )
     lines = content.splitlines(keepends=True)
     for start, block, _is_complete in _checklist_item_blocks(content):
         if completed[block] <= 0:
@@ -96,6 +162,12 @@ def _restore_completed_items(content: str, previous: str) -> str:
         line = lines[start]
         match = _CHECKBOX_LINE.match(line.rstrip("\r\n"))
         assert match is not None
+        projected_match = projected_row.fullmatch(line.strip())
+        if (
+            projected_match
+            and (projected_match.group("id"), projected_match.group("fp")) not in valid_projected
+        ):
+            continue
         ending = line[len(line.rstrip("\r\n")) :]
         lines[start] = (
             f"{match.group('indent')}{match.group('bullet') or ''}[x]"
@@ -162,6 +234,7 @@ def generate_checklist_file(
     checklist_content: str,
     *,
     preserve_completed_items: bool = False,
+    todo_ledger_path: Path | None = None,
 ) -> None:
     """Generate checklist file at specified path.
 
@@ -178,6 +251,8 @@ def generate_checklist_file(
 
     previous = _read_existing_regular_file(output_path)
     if preserve_completed_items and previous is not None:
-        checklist_content = _restore_completed_items(checklist_content, previous)
+        checklist_content = _restore_completed_items(
+            checklist_content, previous, todo_ledger_path=todo_ledger_path
+        )
 
     _atomic_write_checklist(output_path, checklist_content)
