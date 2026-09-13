@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import re
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -21,6 +23,7 @@ from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
 from cafe.utils.phase_config import PhaseStepModelResolution
+from cafe.verification import run_verification
 
 pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
@@ -241,6 +244,34 @@ def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(
     from cafe.ui.cli_shared import _find_external_resume_step
 
     monkeypatch.chdir(tmp_path)
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "config", "user.email", "test@example.com"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "config", "user.name", "Test User"],
+        check=True,
+    )
+    (tmp_path / ".gitignore").write_text(
+        ".cafe/\n.pytest_cache/\n__pycache__/\n", encoding="utf-8"
+    )
+    source_file = tmp_path / "src" / "feedback.py"
+    test_file = tmp_path / "tests" / "test_feedback.py"
+    source_file.parent.mkdir()
+    test_file.parent.mkdir()
+    source_file.write_text("DELIVERED = True\n", encoding="utf-8")
+    test_file.write_text(
+        "from pathlib import Path\n\n"
+        "def test_feedback_delivery_evidence() -> None:\n"
+        "    assert Path('src/feedback.py').read_text().strip() == 'DELIVERED = True'\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "commit", "-qm", "Add feedback fixture"],
+        check=True,
+    )
     monkeypatch.setattr(
         "cafe.phases.generic_workflow_step.load_phase_step_model",
         lambda **_kwargs: PhaseStepModelResolution(
@@ -344,8 +375,41 @@ def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(
 
         def execute(self, _name: str, prompt: str, **_kwargs):
             self.prompts.append(prompt)
-            checklist = Path(_kwargs["streaming_output_file"]).parent / "checklist.md"
-            checklist.write_text("[x] completed by test agent\n", encoding="utf-8")
+            iteration_dir = Path(_kwargs["streaming_output_file"]).parent
+            checklist = iteration_dir / "checklist.md"
+            content = checklist.read_text(encoding="utf-8").replace("[ ]", "[x]")
+            checklist.write_text(content, encoding="utf-8")
+            projected = re.findall(
+                r"^\[x\] `([^`]+)` .*source fingerprint: ([0-9a-f]{64}\)?)$",
+                content,
+                flags=re.MULTILINE,
+            )
+            entries = []
+            head = subprocess.check_output(
+                ["git", "-C", str(tmp_path), "rev-parse", "HEAD"], text=True
+            ).strip()
+            command = ["pytest", "-q", "tests/test_feedback.py"]
+            for item_id, fingerprint in projected:
+                entries.append(
+                    f"### {item_id}\n\n- Status: completed\n"
+                    f"- Source fingerprint: `{fingerprint.rstrip(')')}`\n"
+                    "- Files: `src/feedback.py`, `tests/test_feedback.py`\n"
+                    f"- Commit: `{head}`\n"
+                    f"- Targeted evidence: command=`{' '.join(command)}`; exit=0; "
+                    f"head=`{head}`\n- Remaining work: None.\n"
+                    "- Next action: Review."
+                )
+            output = iteration_dir / "output.md"
+            output.write_text(
+                "## Todo Progress\n\n" + "\n\n".join(entries) + "\n",
+                encoding="utf-8",
+            )
+            assert run_verification(
+                output_file=output,
+                command=command,
+                scope="targeted",
+                cwd=tmp_path,
+            )[0] == 0
             return "await_agent", TokenUsage(), [], [], [], None
 
     class GitOperations:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -182,6 +183,7 @@ class ChecklistSection(BaseModel):
     reference: Optional[str] = None
     optional_checklist: Optional[str] = None
     template_catalog: bool = False
+    todo_projection: Optional["TodoProjection"] = None
 
     @field_validator("reference", "optional_checklist")
     @classmethod
@@ -193,11 +195,49 @@ class ChecklistSection(BaseModel):
         if (
             sum(
                 value is not None and value is not False
-                for value in (self.reference, self.optional_checklist, self.template_catalog)
+                for value in (
+                    self.reference,
+                    self.optional_checklist,
+                    self.template_catalog,
+                    self.todo_projection,
+                )
             )
             != 1
         ):
             raise ValueError("checklist section requires exactly one source")
+        return self
+
+
+class TodoProjection(BaseModel):
+    """A strict declaration for projecting one immutable Todo artifact."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    artifact: str
+    source: Optional[str] = None
+    causal: bool = False
+
+    @field_validator("artifact")
+    @classmethod
+    def _validate_artifact(cls, value: str) -> str:
+        return _safe_token(value, field_name="todo projection artifact")
+
+    @field_validator("source")
+    @classmethod
+    def _validate_declared_source(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        source = value.strip()
+        if not re.fullmatch(r"[a-z][a-z0-9_]*", source):
+            raise ValueError("todo projection source must be a lowercase identifier")
+        return source
+
+    @model_validator(mode="after")
+    def _validate_source_strategy(self) -> "TodoProjection":
+        if (self.source is None) == (not self.causal):
+            raise ValueError(
+                "todo projection requires exactly one source strategy: source or causal"
+            )
         return self
 
 

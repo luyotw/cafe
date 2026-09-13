@@ -333,8 +333,36 @@ class StepBehaviorDeclaration(BaseModel):
     completion: Optional[CompletionMode] = None
     publish_confirmation: Optional[bool] = None
     feedback_target: Optional[str] = None
+    feedback_artifact: Optional[str] = None
+    feedback_source_kind: Optional[str] = None
+    feedback_todo_source: Optional[str] = None
+    feedback_todo_id_prefix: Optional[str] = None
     context_providers: Optional[List[str]] = None
     runtime_tool_grants: Optional[List[str]] = None
+
+    @field_validator(
+        "feedback_target",
+        "feedback_artifact",
+        "feedback_source_kind",
+        "feedback_todo_source",
+        "feedback_todo_id_prefix",
+    )
+    @classmethod
+    def _validate_feedback_identifiers(
+        cls, value: Optional[str], info: Any
+    ) -> Optional[str]:
+        if value is None:
+            return None
+        token = value.strip()
+        if info.field_name == "feedback_todo_source":
+            pattern = r"[a-z][a-z0-9_]*"
+        elif info.field_name == "feedback_todo_id_prefix":
+            pattern = r"[A-Z][A-Z0-9_]*"
+        else:
+            pattern = r"[A-Za-z][A-Za-z0-9_-]*"
+        if not re.fullmatch(pattern, token):
+            raise ValueError(f"{info.field_name} must be a safe identifier")
+        return token
 
     @field_validator("context_providers", "runtime_tool_grants")
     @classmethod
@@ -356,6 +384,24 @@ class StepBehaviorDeclaration(BaseModel):
             raise ValueError(f"{info.field_name} contains unknown runtime-owned id {unknown[0]!r}")
         return cleaned
 
+    @model_validator(mode="after")
+    def _validate_feedback_route(self) -> "StepBehaviorDeclaration":
+        route = (
+            self.feedback_target,
+            self.feedback_artifact,
+            self.feedback_source_kind,
+            self.feedback_todo_source,
+            self.feedback_todo_id_prefix,
+        )
+        if any(value is not None for value in route) and not all(
+            isinstance(value, str) and value.strip() for value in route
+        ):
+            raise ValueError(
+                "feedback routing requires target, artifact, source kind, Todo source, "
+                "and Todo ID prefix"
+            )
+        return self
+
 
 class EffectiveStepBehavior(BaseModel):
     """Fully resolved, name-independent runtime behavior for one step."""
@@ -365,6 +411,10 @@ class EffectiveStepBehavior(BaseModel):
     completion: CompletionMode = "status_code"
     publish_confirmation: bool = False
     feedback_target: Optional[str] = None
+    feedback_artifact: Optional[str] = None
+    feedback_source_kind: Optional[str] = None
+    feedback_todo_source: Optional[str] = None
+    feedback_todo_id_prefix: Optional[str] = None
     context_providers: List[str] = Field(default_factory=list)
     runtime_tool_grants: List[str] = Field(default_factory=list)
 
@@ -888,8 +938,8 @@ class PlaybookDefinition(BaseModel):
         if self.entry_point is None:
             self.entry_point = next(iter(self.steps.keys()))
 
-        def declares_workflow_feedback(step: StepConfig) -> bool:
-            return "input_artifacts" in step.model_fields_set and "workflow_feedback" in (
+        def declares_feedback_artifact(step: StepConfig, artifact: str) -> bool:
+            return "input_artifacts" in step.model_fields_set and artifact in (
                 step.input_artifacts or []
             )
 
@@ -929,10 +979,16 @@ class PlaybookDefinition(BaseModel):
                 raise ValueError(
                     f"steps.{step_name}.behavior.feedback_target {target!r} is not a defined step"
                 )
-            if target is not None and not declares_workflow_feedback(self.steps[target]):
+            if (
+                target is not None
+                and behavior.feedback_artifact is not None
+                and not declares_feedback_artifact(
+                    self.steps[target], behavior.feedback_artifact
+                )
+            ):
                 raise ValueError(
                     f"steps.{step_name}.behavior.feedback_target {target!r} must declare "
-                    "workflow_feedback in input_artifacts"
+                    f"{behavior.feedback_artifact} in input_artifacts"
                 )
             for binding in step.human_tasks:
                 if binding.feedback_delivery is None:
@@ -944,11 +1000,14 @@ class PlaybookDefinition(BaseModel):
                     if (
                         delivery_target != DONE_TARGET
                         and delivery_target in self.steps
-                        and not declares_workflow_feedback(self.steps[delivery_target])
+                        and not declares_feedback_artifact(
+                            self.steps[delivery_target], binding.feedback_delivery.artifact
+                        )
                     ):
                         raise ValueError(
                             f"steps.{step_name}.human_tasks feedback_delivery target "
-                            f"{delivery_target!r} must declare workflow_feedback in input_artifacts"
+                            f"{delivery_target!r} must declare "
+                            f"{binding.feedback_delivery.artifact} in input_artifacts"
                         )
             if behavior.publish_confirmation and "cafe.pr.publish" not in step.capability_requests:
                 raise ValueError(
@@ -996,6 +1055,16 @@ def resolve_step_behavior(
         completion=_behavior_value(defaults, override, "completion", "status_code"),
         publish_confirmation=_behavior_value(defaults, override, "publish_confirmation", False),
         feedback_target=_behavior_value(defaults, override, "feedback_target", None),
+        feedback_artifact=_behavior_value(defaults, override, "feedback_artifact", None),
+        feedback_source_kind=_behavior_value(
+            defaults, override, "feedback_source_kind", None
+        ),
+        feedback_todo_source=_behavior_value(
+            defaults, override, "feedback_todo_source", None
+        ),
+        feedback_todo_id_prefix=_behavior_value(
+            defaults, override, "feedback_todo_id_prefix", None
+        ),
         context_providers=_behavior_value(defaults, override, "context_providers", []),
         runtime_tool_grants=_behavior_value(defaults, override, "runtime_tool_grants", []),
     )
@@ -1527,27 +1596,37 @@ def _validate_feedback_target_prompt_inputs(
 ) -> None:
     """Ensure routed feedback is exposed to every possible target skill."""
 
-    def receives_workflow_feedback(skill_name: str) -> bool:
+    def receives_feedback_artifact(skill_name: str, artifact: str) -> bool:
         return any(
-            mapping.artifacts[0] == "workflow_feedback"
+            mapping.artifacts == (artifact,)
             for mapping in skill_loader.get_workflow_contract(skill_name).prompt_inputs
         )
 
     for step_name, step in model.steps.items():
         behavior = resolve_step_behavior(model, step_name)
-        targets: List[tuple[str, str]] = []
-        if behavior.feedback_target is not None:
-            targets.append(("behavior.feedback_target", behavior.feedback_target))
+        targets: List[tuple[str, str, str]] = []
+        if behavior.feedback_target is not None and behavior.feedback_artifact is not None:
+            targets.append(
+                (
+                    "behavior.feedback_target",
+                    behavior.feedback_target,
+                    behavior.feedback_artifact,
+                )
+            )
         for binding in step.human_tasks:
             if binding.feedback_delivery is None:
                 continue
             targets.extend(
-                ("human_tasks feedback_delivery", target)
+                (
+                    "human_tasks feedback_delivery",
+                    target,
+                    binding.feedback_delivery.artifact,
+                )
                 for target in [*binding.outcomes.values(), *binding.allowed_targets]
                 if target != DONE_TARGET
             )
 
-        for source, target_name in targets:
+        for source, target_name, artifact in targets:
             target = model.steps[target_name]
             selectors = (
                 [target.skill] if isinstance(target.skill, str) else list(target.skill.values())
@@ -1555,12 +1634,12 @@ def _validate_feedback_target_prompt_inputs(
             missing = [
                 canonical_skill_name(skill_name)
                 for skill_name in selectors
-                if not receives_workflow_feedback(skill_name)
+                if not receives_feedback_artifact(skill_name, artifact)
             ]
             if missing:
                 raise ValueError(
                     f"Step {step_name!r} {source} target {target_name!r} must declare "
-                    "a prompt input for workflow_feedback; missing from "
+                    f"a prompt input for {artifact}; missing from "
                     f"{missing}"
                 )
 

@@ -5,7 +5,7 @@
 [ ] Read feedback todo list in .cafe/issues/test/review/iteration_001/output.md
 [ ] Keep this Develop invocation running through every authorized executable blocker; after each bounded unit, validate evidence, update the authoritative feedback/plan progress and cumulative development summary, then continue instead of treating a commit or targeted check as an iteration boundary
 [ ] Address each issue raised in the feedback
-[ ] Mark completed items in .cafe/issues/test/review/iteration_001/output.md if applicable (change - [ ] to - [x])
+[ ] Keep .cafe/issues/test/review/iteration_001/output.md immutable; record completion only in .cafe/issues/test/develop/iteration_001/output.md `## Todo Progress` with current fingerprint and evidence
 [ ] Commit changes with descriptive messages
 [ ] Confirm: Maximized code reuse by looking for existing patterns and utilities
 [ ] Confirm: Commit messages strictly match existing format, language, and structure

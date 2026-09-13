@@ -326,11 +326,11 @@ Use `plan` only when the artifact itself contains the executable worklist, inclu
 
 The bridge receives the old plan as `{plan_file}` and writes the next plan to `{output_file}`. Runtime resolves the incoming artifact before registering the new one, so these are separate versioned files. The bridge must:
 
-1. Complete and check the incoming plan.
+1. Complete the incoming plan while keeping the accepted source immutable, and record progress in the phase-owned ledger.
 2. Obtain user acceptance of its result.
 3. Produce and confirm the next plan, or produce `not_required` with no unchecked tasks.
 
-Do not duplicate plan tasks in a sidecar checklist. Runtime `checklist.md` is procedural; the plan checkboxes are the cross-phase implementation worklist.
+Do not duplicate plan tasks in an ad hoc sidecar. The incoming plan remains immutable; runtime `checklist.md` projects its work items, and completion belongs in the consumer output's `## Todo Progress` ledger.
 
 ## 7. Optional Phases And Skips
 

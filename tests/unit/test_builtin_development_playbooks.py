@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from cafe.core.playbook import resolve_step_behavior
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.playbooks.simulate import analyze_playbook
 from cafe.skills.contracts import resolve_prompt_inputs
@@ -281,6 +282,27 @@ def test_existing_hotfix_and_tdd_paths_remain_unchanged() -> None:
     assert tdd.roles["developer"].default_agent == "Nick"
     assert tdd.steps["develop"].on["await_agent"] == "review"
     assert tdd.steps["review"].on["await_agent"] == "pr"
+
+
+@pytest.mark.parametrize(
+    "playbook_id",
+    ["standard", "standard-qa", "direct", "direct-qa", "hotfix", "simple", "tdd", "tdd-qa"],
+)
+def test_builtin_pr_feedback_routes_declare_portable_todo_metadata(
+    playbook_id: str,
+) -> None:
+    playbook = PlaybookLoader().load_model(playbook_id, strict=True).model
+    behavior = resolve_step_behavior(playbook, "pr")
+
+    assert behavior.feedback_target == "develop"
+    assert behavior.feedback_artifact == "workflow_feedback"
+    assert behavior.feedback_source_kind == "github_pr"
+    assert behavior.feedback_todo_source == "pr_comment"
+    assert behavior.feedback_todo_id_prefix == "PRC"
+    binding = next(task for task in playbook.steps["pr"].human_tasks if task.feedback_delivery)
+    assert binding.feedback_delivery is not None
+    assert binding.feedback_delivery.todo_source == "workflow_feedback"
+    assert binding.feedback_delivery.todo_id_prefix == "WF"
 
 
 @pytest.mark.parametrize("playbook_id", ["standard-qa", "tdd-qa"])

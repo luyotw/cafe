@@ -18,6 +18,7 @@ from typing import Any, Sequence
 SCHEMA_VERSION = 2
 SUPPORTED_SCHEMA_VERSIONS = frozenset({1, SCHEMA_VERSION})
 VALID_SCOPES = frozenset({"full", "targeted"})
+GIT_RECEIPT_TIMEOUT_SECONDS = 10
 PYTEST_EXECUTABLES = frozenset({"pytest", "py.test"})
 VERIFICATION_LOG_NAME = "verification.log"
 VERIFICATION_OUTPUT_MAX_BYTES = 32 * 1024
@@ -119,13 +120,17 @@ def verification_log_excerpt(
 
 
 def _run_git(args: Sequence[str], *, cwd: Path) -> str:
-    result = subprocess.run(
-        ["git", *args],
-        cwd=cwd,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=GIT_RECEIPT_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise VerificationReceiptError(f"git evidence lookup failed: {exc}") from exc
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or "unknown git error"
         raise VerificationReceiptError(f"git {' '.join(args)} failed: {detail}")

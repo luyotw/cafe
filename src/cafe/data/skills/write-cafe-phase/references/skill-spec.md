@@ -405,7 +405,7 @@ skill 文件內不要假設只有某一條 playbook 會用它。
 - [ ] 若是共用規則，已更新 `cafe-workflow-common` 的 Where policies live 索引
 - [ ] plan → execute pair 使用 `output_artifact: plan` → `input_artifacts: [plan]`，execute 的 `## Context` 包含 `{plan_file}`
 - [ ] 若 phase 同時 execute 舊 plan 並產生下一份 plan，已依 §15 區分 `{plan_file}` 與 `{output_file}`、先完成舊 checklist、處理 `not_required` 分支
-- [ ] implementation tasks 位於 plan artifact 並使用 `- [ ]`／`- [x]`；沒有另建重複的 plan-derived checklist
+- [ ] executable work 使用 canonical `## Todo List` contract（最多 100 items）；沒有 work 時必須以唯一一行 `No actionable work.` 表示 intentional empty，空白區段無效；consumer 以 `todo_projection` 宣告恰好一種來源策略（direct `source` 或任意 safe alias 的 `{artifact: active_work, causal: true}`）與 immutable source，artifact/source 可使用自訂名稱；playbook 以 producer `output_artifact` 與 feedback route metadata（`feedback_target` / `feedback_artifact` / `feedback_source_kind` / `feedback_todo_source` / `feedback_todo_id_prefix`，HumanTask 則宣告對應的 `feedback_delivery` 欄位）宣告 ownership、因果路由與 Todo ID 呈現，generic runtime 不得從內建 phase、role、artifact、source 或 playbook 名稱推斷；progress 只寫入 consumer output ledger；completed evidence 每項最多 32 files/8 full commit SHAs，以 batch lookup 驗證並綁定 current targeted pytest receipt
 - [ ] planned user approval 同時有 phase routing decision 與 playbook `on.confirm_output`，並正確分類為 assignable 或 mandatory；reactive interruption 未混入 kickoff 候選
 - [ ] 必要工具已集中宣告在 `workflow.required_tools`，所有綁定 step 的 `allowed_tools` 均滿足宣告，選用診斷工具沒有誤列為必要工具
 - [ ] 若 planned gate set 有變更，已執行 `cafe playbook confirmation-gates <id>` 並回報 issue contract 需要重新確認
@@ -468,9 +468,9 @@ execute skill 必須宣告：
 並遵守：
 
 - 先讀 `{plan_file}`，依 task dependency order 實作；不得靠搜尋目錄猜測另一份 plan。
-- 每完成一項，就直接在同一份 `{plan_file}` 將 `- [ ]` 改成 `- [x]`；不得複製 task list 到 sidecar 再各自漂移。
+- accepted `{plan_file}` 是不可變來源。每完成一項，在 consumer `{output_file}` 的 `## Todo Progress` 記錄 stable ID、status、source fingerprint、files/commit、targeted evidence、remaining work 與 next action；不得回寫 source 或建立 mutable sidecar。
 - 新增／修改的測試與 QA 必須對應 plan 的 Test List。scope 或 invariant 改變時，退回 plan phase更新與重新確認。
-- 完成前確認所有 implementation tasks 都為 `- [x]`、Test List invariants 全部通過、輸出與 evidence 已記錄。
+- 完成前確認 runtime checklist 中所有 projected implementation Todo rows 都為 `- [x]`、Test List invariants 全部通過、consumer output ledger 與 evidence 已記錄；不得以回寫 accepted Plan 表示完成。
 
 ### Plan tasks vs runtime checklist
 
@@ -478,8 +478,8 @@ execute skill 必須宣告：
 
 | 機制 | 來源 | 生命週期 | 用途 |
 | --- | --- | --- | --- |
-| Plan task checkboxes | plan artifact 的 task breakdown | 跨 plan → execute phases | 要實作什麼；execute 直接更新 `[ ]` → `[x]` |
-| Runtime `checklist.md` | `references/execution_steps_*` 加上 opt-in `references/basic_principles.md` | 單一 phase iteration | agent 是否遵守該 phase 的程序與不變式 |
+| Plan task checkboxes | plan artifact 的 task breakdown | 跨 plan → execute phases | immutable scope 與 stable item identity；execute 不回寫 |
+| Runtime `checklist.md` | `references/execution_steps_*`、projected Plan Todo rows 與 opt-in `references/basic_principles.md` | 單一 phase iteration | phase-owned completion state，以及 agent 是否遵守該 phase 的程序與不變式 |
 
 不要額外產生 `implementation_checklist.md`、`execute_checklist.md` 等重複 plan tasks 的 sidecar。只有當 artifact 本身不是 implementation plan，且 playbook 明確定義不同 contract 時，才另設 domain artifact。
 
@@ -517,14 +517,14 @@ steps:
 
 CAFE 在 step 啟動時先從 artifact state 解析 incoming `plan`，再為本 iteration 建立獨立 `{output_file}`，完成後才把新的 `plan` 註冊為 latest artifact。因此 bridge skill 中：
 
-- `{plan_file}` 永遠是本 phase 要執行並勾選的 incoming implementation plan。
+- `{plan_file}` 永遠是本 phase 要執行的 immutable incoming implementation plan。
 - `{output_file}` 永遠是下一個 phase 的新 implementation plan。
 - 兩者不得是同一檔案；不得把 incoming plan 改寫成另一個 domain 的 plan。
-- incoming plan 的 checkbox 仍由本 phase 原地更新為 `- [x]`；execution report 存在 domain workspace，並由 next plan 引用，不占用 `{output_file}`。
+- incoming plan 的 completion progress 寫入 phase-owned execution report／Todo Progress ledger，並由 next plan 引用；不得原地更新 incoming plan，也不占用 `{output_file}`。
 
 ### Bridge phase order
 
-1. 驗證 incoming `{plan_file}` 已 confirmed，依 dependency order 執行並更新 checkboxes。
+1. 驗證 incoming `{plan_file}` 已 confirmed，依 dependency order 執行，並在 phase-owned ledger 記錄 progress，不修改 incoming Plan。
 2. 產生 preview／結果，留在本 phase 與 user 反覆修正，直到 user 明確接受。
 3. 根據已接受結果判斷下一 phase 是否有工作。
 4. 有工作時，把 scope、sources、Test List、費用／外部服務授權與 `- [ ]` task breakdown 寫入 `{output_file}`，取得 user 確認後標為 `confirmed`。
@@ -606,7 +606,7 @@ Runtime `checklist.md` 是 **單一 phase iteration 的 procedure completion gat
 | 同一 iteration，且 output schema、所有 consumers/finalizers/publish hooks 明確允許 partial 與 final ledger | `{output_file}` 內的 structured progress section | evidence 必須 sanitized；finalization 依宣告保留或安全轉換 ledger |
 | 同一 iteration，但 output 是 exact-shape、會直接公開，或 consumer/hook 不接受額外 section | playbook 明確宣告的 artifact，或 domain-owned workspace ledger | 不得把 ledger 塞進 `{output_file}`；final artifact 保持 exact/public contract |
 | 跨 correction iterations | playbook 明確宣告並傳遞的 artifact，或 domain-owned workspace ledger | 必須有明確 input/output contract；不要靠猜上一輪 output path |
-| plan → execute implementation tasks | `{plan_file}` 的 task checkboxes | 依 §14 原地更新；不要再複製一份 progress sidecar |
+| plan → execute implementation tasks | execute `{output_file}` 的 `## Todo Progress` | runtime 從 immutable `{plan_file}` 投影 gates；resume 重新核對 fingerprint 與 evidence |
 
 `{output_file}` 不是無條件預設。若 final artifact 有 exact ordered sections、machine schema、public publication 或會被 hook 直接消費，只有 contract 明確允許 ledger 以及安全 finalization 時才能使用；否則另選 declared/domain-owned owner。Ledger evidence 只放穩定、必要、已清理的 receipt/identifier，不放 credential、token、raw API error 或不需要公開的內部路徑。
 

@@ -41,8 +41,8 @@ def test_packaged_develop_skill_uses_repository_quality_gate_guidance() -> None:
     assert "不得繼續探索" not in text
     assert "任兩次實質修改之間" not in text
     assert "3 次唯讀呼叫內" not in text
-    assert "`Task Status` 僅使用 schema 允許的 `completed`" in text
-    assert "不得寫 `done`" in text
+    assert "accepted plan 與 feedback 是不可變輸入" in text
+    assert "不得修改其 checkbox 或 Task Status" in text
     assert "在 handoff 前寫入非空的 development summary" in text
     assert "完成一個 bounded unit、commit 或 targeted check 都只是進度" in text
     assert "不得以純進度說明" in text

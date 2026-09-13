@@ -216,7 +216,7 @@ steps:
   source:
     role: operator
     skill: source
-    behavior: {feedback_target: receiver}
+    behavior: {feedback_target: receiver, feedback_artifact: workflow_feedback, feedback_source_kind: github_pr, feedback_todo_source: pr_comment, feedback_todo_id_prefix: PRC}
     hooks: {prepare_input: [GitHubPRFeedbackSource]}
     on: {await_agent: receiver}
   receiver:
@@ -308,7 +308,7 @@ workflow:
         "custom",
         """
 playbook: {id: custom}
-behavior: {feedback_target: receiver}
+behavior: {feedback_target: receiver, feedback_artifact: workflow_feedback, feedback_source_kind: github_pr, feedback_todo_source: pr_comment, feedback_todo_id_prefix: PRC}
 steps:
   source:
     role: operator
@@ -364,7 +364,7 @@ steps:
   source:
     role: operator
     skill: source
-    behavior: {{feedback_target: receiver}}
+    behavior: {{feedback_target: receiver, feedback_artifact: workflow_feedback, feedback_source_kind: github_pr, feedback_todo_source: pr_comment, feedback_todo_id_prefix: PRC}}
     hooks: {{{stage}: [GitHubPRFeedbackSource]}}
     on: {{await_agent: receiver}}
   receiver:
@@ -430,7 +430,7 @@ steps:
         outcomes:
           {fix_now: repair, create_follow_up: _done,
            continue_without_issue: _done}
-        feedback_delivery: {artifact: workflow_feedback, source_kind: local_review}
+        feedback_delivery: {artifact: workflow_feedback, source_kind: local_review, todo_source: workflow_feedback, todo_id_prefix: WF}
     on: {confirm_output: fixed-review, await_agent: _done}
   target-review:
     role: developer
@@ -440,7 +440,7 @@ steps:
         task_id: choose-repair
         outcomes: {approve: _done}
         allowed_targets: [repair]
-        feedback_delivery: {artifact: workflow_feedback, source_kind: local_review}
+        feedback_delivery: {artifact: workflow_feedback, source_kind: local_review, todo_source: workflow_feedback, todo_id_prefix: WF}
     on: {confirm_output: target-review, await_agent: _done}
   repair:
     role: developer

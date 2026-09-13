@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from cafe.agents.manager import AgentManager
+from cafe.core.todo import TodoContractError, projection_todo_items
 from cafe.skills.bridge import load_skill_reference, try_load_skill_reference
 from cafe.skills.contracts import ChecklistVariant, SkillWorkflowContract
 from cafe.skills.loader import canonical_skill_name
@@ -23,9 +24,7 @@ def _load_skill_checklist_reference(skill_name: str, ref_name: str) -> str:
 def _load_agent_guidance(agent_name: str, role: str) -> tuple[str, str]:
     """Read role guidance without releasing the catalog lock between path and content."""
     agent_file, content = AgentManager.read_agent_file(agent_name, role)
-    guidelines = (
-        convert_to_checklist(content, "Agent Guidelines Checklist") if content else ""
-    )
+    guidelines = convert_to_checklist(content, "Agent Guidelines Checklist") if content else ""
     return agent_file, guidelines
 
 
@@ -143,6 +142,7 @@ def compose_declared_checklist(
     template_mode: str = "auto",
     template_file: Optional[str] = None,
     preserve_completed_items: bool = False,
+    todo_ledger_path: Path | None = None,
 ) -> bool:
     """Compose a skill-declared checklist without phase-name behavior branches."""
     if contract.checklist is None:
@@ -173,6 +173,19 @@ def compose_declared_checklist(
                     template_file=template_file,
                 )
             )
+        elif section.todo_projection:
+            artifact = artifacts.get(section.todo_projection.artifact)
+            if not artifact:
+                raise ValueError(
+                    f"Todo projection artifact is unavailable: {section.todo_projection.artifact}"
+                )
+            try:
+                items = projection_todo_items(
+                    artifact, expected_source=section.todo_projection.source
+                )
+            except (OSError, TodoContractError) as exc:
+                raise ValueError(f"Cannot project authoritative Todo List: {exc}") from exc
+            parts.extend(item.checklist_row() for item in items)
 
     role_dirs = {
         "pm": "pm",
@@ -182,9 +195,7 @@ def compose_declared_checklist(
         "researcher": "researcher",
         "ops": "ops",
     }
-    agent_file, guidelines = _load_agent_guidance(
-        agent_name, role_dirs.get(role, "developer")
-    )
+    agent_file, guidelines = _load_agent_guidance(agent_name, role_dirs.get(role, "developer"))
     if contract.checklist.include_role_guidance:
         if guidelines:
             if contract.checklist.compact_agent_guidance:
@@ -221,6 +232,7 @@ def compose_declared_checklist(
         checklist_file_path,
         content,
         preserve_completed_items=preserve_completed_items,
+        todo_ledger_path=todo_ledger_path,
     )
     return True
 
@@ -468,8 +480,7 @@ def generate_develop_checklist(
 
     guidance_separator = "\n\n" if basic_principles_checklist else "\n"
     checklist_content = (
-        f"{execution_steps}\n{basic_principles_checklist}"
-        f"{guidance_separator}{agent_guidelines}"
+        f"{execution_steps}\n{basic_principles_checklist}" f"{guidance_separator}{agent_guidelines}"
     )
 
     if questions_xml_file:

@@ -67,7 +67,7 @@ version: 1.4.1
 - Define only roles the steps actually use. Choose an existing agent and CLI that are available for that role.
 - Give every step an explicit skill, role, artifact contract, allowed tools, hooks, valid intents, and complete `"on"` map.
 - Resolve each selected skill's `workflow.required_tools` and include every mandatory dependency in `allowed_tools`; validation rejects an incomplete binding.
-- Use `output_artifact: plan` and downstream `input_artifacts: [plan]` whenever the upstream output is an implementation checklist. The execute skill must read `{plan_file}` and update the same checkboxes.
+- Use `output_artifact: plan` and downstream `input_artifacts: [plan]` whenever the upstream output is an implementation checklist. The execute skill reads immutable `{plan_file}`; the runtime checklist owns projected completion gates and the consumer output owns the mutable `## Todo Progress` ledger.
 - A serial bridge may declare both `input_artifacts: [plan]` and `output_artifact: plan`; the incoming `{plan_file}` and next `{output_file}` are different files.
 - Keep user-requested revisions in the phase responsible for the current output. Model them as self-loops through `confirm_output`, `need_clarification`, `need_permission`, or `manual_handoff`.
 - Represent optional work with a confirmed or `not_required` plan and an explicit forward skip. Do not add routine backward cycles merely to rewrite a checklist.

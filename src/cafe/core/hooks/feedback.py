@@ -73,9 +73,18 @@ class GitHubPRFeedbackSource(NoOpHook):
         if isinstance(behavior, dict):
             behavior = behavior.get("behavior") or {}
         target = behavior.get("feedback_target") if isinstance(behavior, dict) else None
-        if not isinstance(target, str) or not target.strip():
+        artifact = behavior.get("feedback_artifact") if isinstance(behavior, dict) else None
+        source_kind = (
+            behavior.get("feedback_source_kind") if isinstance(behavior, dict) else None
+        )
+        if not all(
+            isinstance(value, str) and value.strip()
+            for value in (target, artifact, source_kind)
+        ):
             return HookResult(context_updates=context_updates)
-        target_step = target.strip()
+        target_step = str(target).strip()
+        feedback_artifact = str(artifact).strip()
+        feedback_source_kind = str(source_kind).strip()
 
         try:
             comments = get_all_pr_comments(int(pr_number))
@@ -91,11 +100,15 @@ class GitHubPRFeedbackSource(NoOpHook):
             for comment in comments:
                 comment_id = str(_comment_value(comment, "id")).strip()
                 body = str(_comment_value(comment, "body")).strip()
-                if not comment_id or not body or bool(_comment_value(comment, "is_resolved", False)):
+                if (
+                    not comment_id
+                    or not body
+                    or bool(_comment_value(comment, "is_resolved", False))
+                ):
                     continue
                 created, _entry = ledger.record(
                     source_identity=f"github-pr:{pr_number}:{comment_id}",
-                    source_kind=str(_comment_value(comment, "comment_type", "github_pr")),
+                    source_kind=feedback_source_kind,
                     target_step=target_step,
                     content=body,
                 )
@@ -115,13 +128,15 @@ class GitHubPRFeedbackSource(NoOpHook):
         _register_artifact(
             phase=phase,
             blackboard_state=kwargs.get("blackboard_state"),
-            name=WorkflowFeedbackLedger.artifact_name,
+            name=feedback_artifact,
             path=ledger.path,
             updated_by=self.name,
         )
         if not new_comments:
             return HookResult(context_updates=context_updates)
-        feedback_text = "\n\n".join(str(_comment_value(comment, "body")).strip() for comment in new_comments)
+        feedback_text = "\n\n".join(
+            str(_comment_value(comment, "body")).strip() for comment in new_comments
+        )
         step_name = kwargs.get("step_name")
         if isinstance(step_name, str) and step_name:
             phase.step_user_inputs[step_name] = feedback_text
