@@ -1,1 +1,1 @@
-- Requirements Specification: {spec_file}
+- Requirements Source: {spec_file}

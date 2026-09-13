@@ -267,7 +267,9 @@ def test_direct_qa_owns_the_planless_reviewed_qa_graph() -> None:
     assert "qa_feedback" in playbook.steps["develop"].input_artifacts
     assert "qa_feedback" in playbook.steps["pr"].input_artifacts
     assert "pm" not in playbook.roles
-    assert all("spec" not in step.input_artifacts for step in playbook.steps.values())
+    assert "spec" not in playbook.steps
+    assert "requirements" in playbook.steps["review"].input_artifacts
+    assert "requirements" in playbook.steps["qa"].input_artifacts
 
 
 def test_existing_hotfix_and_tdd_paths_remain_unchanged() -> None:
@@ -347,18 +349,20 @@ def test_qa_feedback_is_exposed_by_every_correction_and_publication_skill() -> N
         assert any("qa_feedback" in item.artifacts for item in prompt_inputs)
 
     qa_contract = loader.get_workflow_contract("cafe-qa")
-    required = {
-        mapping.artifacts[0]
-        for mapping in qa_contract.prompt_inputs
-        if mapping.required
-    }
+    required = {mapping.artifacts for mapping in qa_contract.prompt_inputs if mapping.required}
     optional = {
         mapping.artifacts[0]
         for mapping in qa_contract.prompt_inputs
         if not mapping.required
     }
-    assert required == {"code"}
-    assert optional == {"spec", "plan", "review_feedback"}
+    assert required == {("spec", "requirements"), ("code",)}
+    assert optional == {"plan", "review_feedback"}
+    with pytest.raises(ValueError, match="requirements_file"):
+        resolve_prompt_inputs(qa_contract, {"code": "code.md"})
+    assert resolve_prompt_inputs(
+        qa_contract,
+        {"requirements": "requirements.md", "code": "code.md"},
+    )["requirements_file"] == "requirements.md"
 
     pr_contract = loader.get_workflow_contract("cafe-pr")
     resolved = resolve_prompt_inputs(
@@ -367,3 +371,14 @@ def test_qa_feedback_is_exposed_by_every_correction_and_publication_skill() -> N
     )
     assert resolved["feedback_file"] == "qa.md"
     assert resolved["review_feedback_file"] == "review.md"
+
+
+def test_standard_qa_fails_closed_without_its_specification() -> None:
+    playbook = PlaybookLoader().load_model("standard-qa", strict=True).model
+    qa = playbook.steps["qa"]
+    assert qa.input_artifacts is not None
+    assert "spec" in qa.input_artifacts
+
+    contract = SkillLoader().get_workflow_contract(qa.skill)
+    with pytest.raises(ValueError, match="requirements_file"):
+        resolve_prompt_inputs(contract, {"code": "code.md"})

@@ -1,7 +1,7 @@
 ---
 name: cafe-review
 description: "審查程式碼品質與風險"
-version: 1.13.0
+version: 1.14.0
 workflow:
   execution_profile:
     workload: review
@@ -21,13 +21,13 @@ workflow:
         - id: resume
           label: Resume after increasing the iteration limit
   prompt_inputs:
-    - artifacts: [spec]
+    - artifacts: [spec, requirements]
       placeholder: spec_file
       required: false
       load_policy:
         - mode: packet
           contract_kind: spec
-    - artifacts: [spec]
+    - artifacts: [spec, requirements]
       placeholder: spec_file_path
       required: false
       load_policy:

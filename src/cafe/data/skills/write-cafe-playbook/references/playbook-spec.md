@@ -414,10 +414,15 @@ steps:
 
 `initial_input` is permitted only on `entry_point`. Providers must be unique and
 implemented by CAFE's trusted host registry; this release supplies only
-`manual_text` and `github_issue`. `bind` must name an artifact equal to this
-step's `output_artifact`, `user_input` prompt context, or both. Validation fails
-before agent execution for unsupported providers, non-entry declarations, missing
-bindings, or invalid destinations.
+`manual_text` and `github_issue`. `bind` may name a safe artifact identifier,
+`user_input` prompt context, or both. When the artifact equals the step's
+`output_artifact`, the resolver seeds that output for legacy intake behavior.
+Otherwise it writes the immutable source under
+`.cafe/issues/<issue>/initial_input/<artifact>.md`, registers it before agent
+execution, and never overwrites an existing non-empty source. Downstream steps
+must declare that artifact in `input_artifacts`. Validation fails before agent
+execution for unsupported providers, non-entry declarations, missing bindings,
+or unsafe destinations.
 
 Prepare persists a canonical `initial_input` block in `issue.yaml` using the
 stable field IDs `input_method` and `github_issue_id`; those fields may write to
@@ -430,6 +435,27 @@ does not grant agent credentials or arbitrary host execution.
 keeps their established requirements heading and guided manual/GitHub interaction
 while they use `InitialInputProviderResolver`; custom playbooks should omit it so
 the resolver writes only the declared input content.
+
+### Persisted step migrations
+
+When a released playbook removes a step that may still be recorded in existing
+issues, declare the redirect instead of hardcoding a playbook ID in runtime:
+
+```yaml
+migrations:
+  step_redirects:
+    removed_step: replacement_step
+  artifact_aliases:
+    old_source: current_source
+```
+
+The step source must no longer exist and the replacement must be a current step.
+Artifact aliases preserve an authoritative old artifact under the name expected
+by the replacement step without modifying its content. On resume without an
+explicit `start_step`, runtime applies aliases, cancels pending HumanTasks owned
+by the removed step, repairs the baton, and records durable migration start and
+completion events so every write boundary is safely repeatable after an
+interruption. Explicit start overrides retain their existing semantics.
 
 ## 8.1 Skill environments
 

@@ -7,7 +7,15 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
-from cafe.core.blackboard import BlackboardState, HandoffContract, HandoffIntent, HandoffOwner
+from cafe.core.blackboard import (
+    ArtifactEntry,
+    ArtifactKind,
+    BlackboardState,
+    BlackboardStore,
+    HandoffContract,
+    HandoffIntent,
+    HandoffOwner,
+)
 from cafe.core.hooks import HookResult, NoOpHook
 from cafe.core.human_tasks import resolve_step_human_task
 from cafe.core.initial_input import (
@@ -659,13 +667,38 @@ class InitialInputProviderResolver(NoOpHook):
 
         output_file: Optional[Path] = kwargs.get("output_file")
         artifact = binding.get("artifact")
+        artifact_file: Optional[Path] = None
         if artifact is not None:
-            if output_file is None:
-                raise ValueError(
-                    f"initial_input.bind.artifact for step {step_name!r} requires output_file"
+            artifact_file = self._artifact_file(
+                phase=phase,
+                step_name=step_name,
+                step_def=step_def,
+                artifact=str(artifact),
+                output_file=output_file,
+            )
+            blackboard_state = kwargs.get("blackboard_state")
+            if isinstance(blackboard_state, BlackboardState):
+                registered = blackboard_state.artifacts.get(str(artifact))
+                if registered is not None:
+                    registered_file = Path(registered.path)
+                    if registered_file.is_file():
+                        artifact_file = registered_file
+            if artifact_file.exists() and artifact_file.read_text(encoding="utf-8").strip():
+                content = artifact_file.read_text(encoding="utf-8").rstrip("\n")
+                self._register_source_artifact(
+                    phase=phase,
+                    blackboard_state=kwargs.get("blackboard_state"),
+                    artifact=str(artifact),
+                    artifact_file=artifact_file,
+                    output_artifact=str(step_def.get("output_artifact") or step_name),
                 )
-            if output_file.exists() and output_file.read_text(encoding="utf-8").strip():
-                return HookResult()
+                return HookResult(
+                    context_updates=(
+                        {"user_input": content}
+                        if binding.get("prompt_context") == "user_input"
+                        else {}
+                    )
+                )
 
         legacy_adapter = GitHubIssueFetcher() if legacy_presentation else None
         legacy_empty_seed = self._should_seed_empty_legacy_requirements(
@@ -705,16 +738,23 @@ class InitialInputProviderResolver(NoOpHook):
                 ),
             )
         if artifact is not None:
-            assert output_file is not None
-            output_file.parent.mkdir(parents=True, exist_ok=True)
+            assert artifact_file is not None
+            artifact_file.parent.mkdir(parents=True, exist_ok=True)
             formatter = kwargs.get("initial_input_output_formatter") or (
                 legacy_adapter._format_initial_requirements if legacy_adapter is not None else None
             )
             content = formatter(result.content) if callable(formatter) else result.content
             if legacy_empty_seed:
-                output_file.write_text(f"{content}\n", encoding="utf-8")
+                artifact_file.write_text(f"{content}\n", encoding="utf-8")
             else:
-                output_file.write_text(f"{content.rstrip()}\n", encoding="utf-8")
+                artifact_file.write_text(f"{content.rstrip()}\n", encoding="utf-8")
+            self._register_source_artifact(
+                phase=phase,
+                blackboard_state=kwargs.get("blackboard_state"),
+                artifact=str(artifact),
+                artifact_file=artifact_file,
+                output_artifact=str(step_def.get("output_artifact") or step_name),
+            )
 
         context_updates = (
             {"user_input": result.content} if binding.get("prompt_context") == "user_input" else {}
@@ -728,6 +768,57 @@ class InitialInputProviderResolver(NoOpHook):
                     "provider": result.provider,
                 }
             ],
+        )
+
+    @staticmethod
+    def _artifact_file(
+        *,
+        phase: Any,
+        step_name: str,
+        step_def: dict[str, Any],
+        artifact: str,
+        output_file: Optional[Path],
+    ) -> Path:
+        output_artifact = str(step_def.get("output_artifact") or step_name)
+        if artifact == output_artifact:
+            if output_file is None:
+                raise ValueError(
+                    f"initial_input.bind.artifact for step {step_name!r} requires output_file"
+                )
+            return output_file
+        issue_dir = getattr(phase, "issue_dir", None)
+        if not isinstance(issue_dir, Path):
+            raise ValueError(
+                f"initial_input.bind.artifact for step {step_name!r} requires issue_dir"
+            )
+        return issue_dir / "initial_input" / f"{artifact}.md"
+
+    @staticmethod
+    def _register_source_artifact(
+        *,
+        phase: Any,
+        blackboard_state: Any,
+        artifact: str,
+        artifact_file: Path,
+        output_artifact: str,
+    ) -> None:
+        if artifact == output_artifact or not isinstance(blackboard_state, BlackboardState):
+            return
+        existing = blackboard_state.artifacts.get(artifact)
+        if existing is not None and Path(existing.path) == artifact_file:
+            return
+        issue_dir = getattr(phase, "issue_dir", None)
+        if not isinstance(issue_dir, Path):
+            return
+        BlackboardStore(issue_dir).put_artifact(
+            blackboard_state,
+            ArtifactEntry(
+                name=artifact,
+                kind=ArtifactKind.DOCUMENT,
+                version=(existing.version + 1) if existing else 1,
+                updated_by=InitialInputProviderResolver.name,
+                path=str(artifact_file),
+            ),
         )
 
     def _should_seed_empty_legacy_requirements(

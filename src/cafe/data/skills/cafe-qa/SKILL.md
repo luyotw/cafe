@@ -1,7 +1,7 @@
 ---
 name: cafe-qa
 description: Use this skill when a workflow needs independent black-box acceptance before PR publication.
-version: 1.2.0
+version: 1.3.0
 workflow:
   execution_profile:
     workload: review
@@ -23,9 +23,9 @@ workflow:
         - id: resume
           label: Resume after increasing the iteration limit
   prompt_inputs:
-    - artifacts: [spec]
-      placeholder: spec_file
-      required: false
+    - artifacts: [spec, requirements]
+      placeholder: requirements_file
+      required: true
     - artifacts: [code]
       placeholder: develop_file
       required: true
@@ -36,7 +36,6 @@ workflow:
       placeholder: review_file
       required: false
   prompt_references:
-    optional_spec_context: optional_spec_context.md
     optional_plan_context: optional_plan_context.md
     optional_review_context: optional_review_context.md
 ---
@@ -47,13 +46,13 @@ workflow:
 Read your agent file: {agent_file}
 
 ## Context
-{optional_spec_context}
+- Requirements Source: {requirements_file}
 - Development Summary: {develop_file}
 {optional_plan_context}
 {optional_review_context}
 
 ## Instructions
-- Perform black-box acceptance against the requested behavior. When a requirements specification is provided, treat it as the acceptance source of truth; otherwise derive the behavior from the development summary and verify it against the changed product.
+- Perform black-box acceptance against the requested behavior recorded in the requirements source; treat that source as authoritative whether it is a formal specification or the immutable initial request.
 - When an implementation plan is provided, exercise its Test List; otherwise derive observable scenarios from the available requirements and acceptance evidence.
 - When a review result is provided, prioritize its identified risks and confirm that unresolved findings do not escape acceptance.
 - Exercise every applicable acceptance criterion using observable scenarios or commands; do not infer a pass from code inspection alone.

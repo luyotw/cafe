@@ -574,6 +574,41 @@ def test_declared_skill_environment_resolves_layers_with_stable_deduplication() 
     assert resolve_playbook_skills(model, channel="chat", role="developer", step_name="build") == []
 
 
+@pytest.mark.parametrize(
+    "redirects",
+    [
+        {"develop": "develop"},
+        {"spec": "missing"},
+        {"../spec": "develop"},
+    ],
+)
+def test_step_migrations_require_removed_sources_and_current_safe_targets(
+    redirects: dict[str, str],
+) -> None:
+    with pytest.raises(ValueError, match="step_redirects"):
+        PlaybookDefinition.model_validate(
+            {
+                "playbook": {"id": "migrating"},
+                "migrations": {"step_redirects": redirects},
+                "steps": {
+                    "develop": {
+                        "role": "developer",
+                        "skill": "develop",
+                        "on": {"await_agent": "_done"},
+                    }
+                },
+            }
+        )
+
+
+def test_direct_qa_declares_spec_to_develop_persisted_step_migration() -> None:
+    model = PlaybookLoader().load_model("direct-qa", strict=True).model
+
+    assert model.migrations is not None
+    assert model.migrations.step_redirects == {"spec": "develop"}
+    assert model.migrations.artifact_aliases == {"spec": "requirements"}
+
+
 def test_skill_environment_reports_missing_channel_and_missing_skill_before_execution(
     tmp_path: Path,
 ) -> None:
@@ -1052,14 +1087,6 @@ steps:
         (
             """
     initial_input:
-      providers: [manual_text]
-      bind: {artifact: unrelated}
-""",
-            "bind.artifact",
-        ),
-        (
-            """
-    initial_input:
       providers: [manual_text, manual_text]
       bind: {artifact: intake_brief}
 """,
@@ -1142,6 +1169,41 @@ commands:
 
     with pytest.raises(ValueError, match="initial_input.bind.artifact"):
         loader.load_model("empty-artifact")
+
+
+def test_initial_input_rejects_unsafe_artifact_binding_before_execution(tmp_path: Path) -> None:
+    builtin_root = tmp_path / "builtin"
+    _write_skill(builtin_root / "skills", "intake")
+    _write_playbook(
+        builtin_root / "playbooks",
+        "unsafe-artifact",
+        """
+playbook: {id: unsafe-artifact}
+entry_point: intake
+steps:
+  intake:
+    role: pm
+    skill: intake
+    output_artifact: intake_brief
+    initial_input:
+      providers: [manual_text]
+      bind: {artifact: ../requirements}
+    hooks:
+      prepare_input: [InitialInputProviderResolver]
+    on: {await_agent: _done}
+commands:
+  prepare:
+    prompt_for_spec_plan_config: false
+""",
+    )
+    loader = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError, match="initial_input.bind.artifact"):
+        loader.load_model("unsafe-artifact")
 
 
 def test_initial_input_rejects_non_entry_or_unimplemented_provider(
@@ -1277,7 +1339,7 @@ def test_builtin_entry_steps_use_declared_initial_input_resolver(
 
 @pytest.mark.parametrize(
     ("playbook_name", "bound_artifact"),
-    [("direct", None), ("direct-qa", None)],
+    [("direct", None), ("direct-qa", "requirements")],
 )
 def test_builtin_direct_entry_steps_bind_initial_input_to_prompt_context(
     playbook_name: str, bound_artifact: str | None, tmp_path: Path

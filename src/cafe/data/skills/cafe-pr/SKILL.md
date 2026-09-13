@@ -1,7 +1,7 @@
 ---
 name: cafe-pr
 description: "整理提交內容並產出 pull request 標題與描述"
-version: 1.4.1
+version: 1.5.0
 workflow:
   execution_profile:
     workload: publication
@@ -23,13 +23,13 @@ workflow:
         - id: continue_without_issue
           label: Approve / continue without issues
   prompt_inputs:
-    - artifacts: [spec]
+    - artifacts: [spec, requirements]
       placeholder: spec_file
       required: false
       load_policy:
         - mode: packet
           contract_kind: spec
-    - artifacts: [spec]
+    - artifacts: [spec, requirements]
       placeholder: spec_file_path
       required: false
       load_policy:
