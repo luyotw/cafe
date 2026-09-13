@@ -14,12 +14,6 @@ playbook:
 behavior:
   completion: status_code
 
-migrations:
-  step_redirects:
-    spec: develop
-  artifact_aliases:
-    spec: requirements
-
 skills:
   workflow:
     shared: [cafe-workflow-common, cafe-github_sync]
@@ -62,7 +56,7 @@ steps:
     skill: cafe-develop
     role: developer
     assignee_type: agent
-    input_artifacts: [requirements, spec, review_feedback, qa_feedback, pr_result, workflow_feedback]
+    input_artifacts: [requirements, review_feedback, qa_feedback, pr_result, workflow_feedback]
     output_artifact: code
     initial_input:
       providers: [manual_text, github_issue]
@@ -84,7 +78,7 @@ steps:
     skill: cafe-review
     role: reviewer
     assignee_type: agent
-    input_artifacts: [requirements, spec, code, qa_feedback, workflow_feedback]
+    input_artifacts: [requirements, code, qa_feedback, workflow_feedback]
     output_artifact: review_feedback
     behavior: {runtime_tool_grants: [git_inspection]}
     human_tasks:
@@ -103,7 +97,7 @@ steps:
     skill: cafe-qa
     role: qa
     assignee_type: agent
-    input_artifacts: [requirements, spec, code, review_feedback]
+    input_artifacts: [requirements, code, review_feedback]
     output_artifact: qa_feedback
     human_tasks:
       - {trigger: need_clarification, task_id: clarification-feedback, outcomes: {submit: qa}}
@@ -119,7 +113,7 @@ steps:
     skill: cafe-pr
     role: developer
     assignee_type: agent
-    input_artifacts: [requirements, spec, code, review_feedback, qa_feedback, workflow_feedback]
+    input_artifacts: [requirements, code, review_feedback, qa_feedback, workflow_feedback]
     output_artifact: pr_result
     behavior:
       completion: baton

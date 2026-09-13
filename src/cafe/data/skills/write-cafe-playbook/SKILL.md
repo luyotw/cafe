@@ -1,7 +1,7 @@
 ---
 name: write-cafe-playbook
-description: Use this skill when creating, restructuring, reviewing, or repairing a CAFE playbook YAML under src/cafe/data/playbooks or .cafe/playbooks. Covers applicability, conversation locale, step graphs, roles, artifacts, persisted-step migrations, plan/checklist handoffs, forward plan chains, user review loops, conditional skips, hooks, tools, and strict validation. Use it whenever a user asks to write or update a CAFE playbook, or use-cafe-workflow identifies a playbook declarative defect.
-version: 1.5.0
+description: Use this skill when creating, restructuring, reviewing, or repairing a CAFE playbook YAML under src/cafe/data/playbooks or .cafe/playbooks. Covers applicability, conversation locale, step graphs, roles, artifacts, plan/checklist handoffs, forward plan chains, user review loops, conditional skips, hooks, tools, and strict validation. Use it whenever a user asks to write or update a CAFE playbook, or use-cafe-workflow identifies a playbook declarative defect.
+version: 1.4.1
 ---
 
 # Write CAFE Playbook
@@ -66,7 +66,6 @@ version: 1.5.0
   quoted text.
 - Define only roles the steps actually use. Choose an existing agent and CLI that are available for that role.
 - Give every step an explicit skill, role, artifact contract, allowed tools, hooks, valid intents, and complete `"on"` map.
-- When removing a step that may exist in persisted issues, declare `migrations.step_redirects` to a current step; preserve compatible artifacts and define cancellation of obsolete pending HumanTasks.
 - Resolve each selected skill's `workflow.required_tools` and include every mandatory dependency in `allowed_tools`; validation rejects an incomplete binding.
 - Use `output_artifact: plan` and downstream `input_artifacts: [plan]` whenever the upstream output is an implementation checklist. The execute skill reads immutable `{plan_file}`; the runtime checklist owns projected completion gates and the consumer output owns the mutable `## Todo Progress` ledger.
 - A serial bridge may declare both `input_artifacts: [plan]` and `output_artifact: plan`; the incoming `{plan_file}` and next `{output_file}` are different files.

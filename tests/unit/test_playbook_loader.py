@@ -574,41 +574,6 @@ def test_declared_skill_environment_resolves_layers_with_stable_deduplication() 
     assert resolve_playbook_skills(model, channel="chat", role="developer", step_name="build") == []
 
 
-@pytest.mark.parametrize(
-    "redirects",
-    [
-        {"develop": "develop"},
-        {"spec": "missing"},
-        {"../spec": "develop"},
-    ],
-)
-def test_step_migrations_require_removed_sources_and_current_safe_targets(
-    redirects: dict[str, str],
-) -> None:
-    with pytest.raises(ValueError, match="step_redirects"):
-        PlaybookDefinition.model_validate(
-            {
-                "playbook": {"id": "migrating"},
-                "migrations": {"step_redirects": redirects},
-                "steps": {
-                    "develop": {
-                        "role": "developer",
-                        "skill": "develop",
-                        "on": {"await_agent": "_done"},
-                    }
-                },
-            }
-        )
-
-
-def test_direct_qa_declares_spec_to_develop_persisted_step_migration() -> None:
-    model = PlaybookLoader().load_model("direct-qa", strict=True).model
-
-    assert model.migrations is not None
-    assert model.migrations.step_redirects == {"spec": "develop"}
-    assert model.migrations.artifact_aliases == {"spec": "requirements"}
-
-
 def test_skill_environment_reports_missing_channel_and_missing_skill_before_execution(
     tmp_path: Path,
 ) -> None:

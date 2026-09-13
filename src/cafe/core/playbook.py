@@ -320,24 +320,6 @@ class InitialInputDeclaration(BaseModel):
         return providers
 
 
-class PlaybookMigrations(BaseModel):
-    """Declarative redirects for persisted positions removed from a playbook."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    step_redirects: Dict[str, str] = Field(default_factory=dict)
-    artifact_aliases: Dict[str, str] = Field(default_factory=dict)
-
-    @field_validator("step_redirects", "artifact_aliases")
-    @classmethod
-    def _validate_safe_migration_identifiers(cls, value: Dict[str, str]) -> Dict[str, str]:
-        pattern = r"[A-Za-z][A-Za-z0-9_-]*"
-        for source, target in value.items():
-            if not re.fullmatch(pattern, source) or not re.fullmatch(pattern, target):
-                raise ValueError("migration mappings must use safe identifiers")
-        return value
-
-
 CompletionMode = Literal["status_code", "baton"]
 
 
@@ -950,7 +932,6 @@ class PlaybookDefinition(BaseModel):
     roles: Dict[str, PlaybookRole] = Field(default_factory=dict)
     skills: Optional[PlaybookSkillEnvironments] = None
     behavior: StepBehaviorDeclaration = Field(default_factory=StepBehaviorDeclaration)
-    migrations: Optional[PlaybookMigrations] = None
     steps: Dict[str, StepConfig]
     commands: Optional[CommandsConfig] = None
     entry_point: Optional[str] = None
@@ -959,18 +940,6 @@ class PlaybookDefinition(BaseModel):
     def _default_entry_point(self) -> "PlaybookDefinition":
         if self.entry_point is None:
             self.entry_point = next(iter(self.steps.keys()))
-
-        if self.migrations is not None:
-            for removed_step, replacement_step in self.migrations.step_redirects.items():
-                if removed_step in self.steps:
-                    raise ValueError(
-                        f"migrations.step_redirects source {removed_step!r} is still a defined step"
-                    )
-                if replacement_step not in self.steps:
-                    raise ValueError(
-                        "migrations.step_redirects target "
-                        f"{replacement_step!r} is not a defined step"
-                    )
 
         def declares_feedback_artifact(step: StepConfig, artifact: str) -> bool:
             return "input_artifacts" in step.model_fields_set and artifact in (

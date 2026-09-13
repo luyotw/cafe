@@ -676,13 +676,6 @@ class InitialInputProviderResolver(NoOpHook):
                 artifact=str(artifact),
                 output_file=output_file,
             )
-            blackboard_state = kwargs.get("blackboard_state")
-            if isinstance(blackboard_state, BlackboardState):
-                registered = blackboard_state.artifacts.get(str(artifact))
-                if registered is not None:
-                    registered_file = Path(registered.path)
-                    if registered_file.is_file():
-                        artifact_file = registered_file
             if artifact_file.exists() and artifact_file.read_text(encoding="utf-8").strip():
                 content = artifact_file.read_text(encoding="utf-8").rstrip("\n")
                 self._register_source_artifact(

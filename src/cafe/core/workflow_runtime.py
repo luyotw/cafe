@@ -24,7 +24,6 @@ from cafe.core.automatic_steps import (
     default_automatic_executor_registry,
 )
 from cafe.core.blackboard import (
-    ArtifactEntry,
     BlackboardState,
     BlackboardStore,
     HandoffContract,
@@ -4283,8 +4282,6 @@ class BlackboardWorkflowRuntime:
         start_step: Optional[str] = None,
         single_step: bool = False,
     ) -> PlaybookRunResult:
-        if start_step is None:
-            self._apply_declared_step_migration()
         publication_error = self._publication_contract_error()
         if publication_error is not None:
             return self._reject_invalid_publication_contract(
@@ -4394,133 +4391,6 @@ class BlackboardWorkflowRuntime:
 
         return self._finalize_observed_result(
             self._run_from_current_step(current_step=current_step, max_transitions=max_transitions)
-        )
-
-    def _apply_declared_step_migration(self) -> None:
-        """Move persisted positions off a step explicitly removed by this playbook."""
-        raw_migrations = self.playbook.get("migrations")
-        if not isinstance(raw_migrations, Mapping):
-            return
-        raw_redirects = raw_migrations.get("step_redirects")
-        if not isinstance(raw_redirects, Mapping):
-            return
-
-        removed_step: str | None = None
-        current_step = self.blackboard.current_step
-        handoff = self.blackboard.handoff_contract
-        incomplete_migration: Any = None
-        for source, target in raw_redirects.items():
-            started = next(
-                (
-                    event
-                    for event in reversed(self.blackboard.events)
-                    if event.event_type == "workflow_step_migration_started"
-                    and event.data.get("from_step") == source
-                    and event.data.get("to_step") == target
-                ),
-                None,
-            )
-            completed = any(
-                event.event_type == "workflow_step_migrated"
-                and event.data.get("from_step") == source
-                and event.data.get("to_step") == target
-                for event in self.blackboard.events
-            )
-            if started is not None and not completed:
-                removed_step = str(source)
-                incomplete_migration = started
-                break
-        if current_step in raw_redirects:
-            removed_step = current_step
-        elif (
-            current_step == "user"
-            and handoff is not None
-            and handoff.from_step in raw_redirects
-        ):
-            removed_step = handoff.from_step
-        elif handoff is not None:
-            for source, target in raw_redirects.items():
-                if current_step == target and source in {handoff.from_step, handoff.to_step}:
-                    removed_step = str(source)
-                    break
-        if removed_step is None:
-            return
-
-        replacement = str(raw_redirects[removed_step])
-        if replacement not in self.steps:
-            raise ValueError(
-                f"Persisted step migration target {replacement!r} is not a defined playbook step"
-            )
-
-        raw_aliases = raw_migrations.get("artifact_aliases")
-        if isinstance(raw_aliases, Mapping):
-            for source_artifact, target_artifact in raw_aliases.items():
-                source = self.blackboard.artifacts.get(str(source_artifact))
-                target = self.blackboard.artifacts.get(str(target_artifact))
-                if source is not None and target is None:
-                    self.blackboard_store.put_artifact(
-                        self.blackboard,
-                        ArtifactEntry(
-                            name=str(target_artifact),
-                            kind=source.kind,
-                            version=1,
-                            updated_by="workflow.step_migration",
-                            path=source.path,
-                            summary=source.summary,
-                            base_sha=source.base_sha,
-                            head_sha=source.head_sha,
-                        ),
-                    )
-
-        pending_tasks: list[HumanTask] = []
-        records = HumanTaskRecordStore(self.issue_dir)
-        if records.exists:
-            pending_tasks = [
-                task
-                for task in records.tasks()
-                if task.workflow_id == self.blackboard.workflow_id
-                and task.status is HumanTaskStatus.PENDING
-                and task.step == removed_step
-            ]
-
-        cancelled_task_ids = (
-            list(incomplete_migration.data.get("cancelled_task_ids", []))
-            if incomplete_migration is not None
-            else [task.id for task in pending_tasks]
-        )
-        if incomplete_migration is None:
-            self.blackboard_store.record_event(
-                self.blackboard,
-                "workflow_step_migration_started",
-                {
-                    "from_step": removed_step,
-                    "to_step": replacement,
-                    "cancelled_task_ids": cancelled_task_ids,
-                },
-            )
-        for task in pending_tasks:
-            records.cancel(
-                workflow_id=self.blackboard.workflow_id,
-                task_id=task.id,
-                reason=f"workflow step {removed_step!r} was replaced by {replacement!r}",
-            )
-        self.blackboard_store.update_handoff_contract(
-            self.blackboard,
-            from_step=replacement,
-            to_owner=HandoffOwner.AGENT,
-            to_step=replacement,
-            intent=HandoffIntent.AWAIT_AGENT,
-            source="workflow.step_migration",
-        )
-        self.blackboard_store.set_current_step(self.blackboard, replacement)
-        self.blackboard_store.record_event(
-            self.blackboard,
-            "workflow_step_migrated",
-            {
-                "from_step": removed_step,
-                "to_step": replacement,
-                "cancelled_task_ids": cancelled_task_ids,
-            },
         )
 
     def _run_from_current_step(
