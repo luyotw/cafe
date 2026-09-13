@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from types import SimpleNamespace
 
-from cafe.core.blackboard import BlackboardStore
+from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardStore, EventEntry
 from cafe.core.downstream_contract import ContractValidationError
 from cafe.core.types import AgentCLI, TokenUsage
 from cafe.phases.generic_phase import GenericPhase
@@ -503,7 +503,22 @@ def test_packaged_workflow_uses_full_then_packet_then_legacy_fallback(
     assert "spec_file=full" in first_develop.prompts[0]
     assert "plan_file=full" in first_develop.prompts[0]
 
-    store.set_artifact(state, "review_feedback", str(feedback))
+    state.artifacts["review_feedback"] = ArtifactEntry(
+        name="review_feedback",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="review",
+        path=str(feedback),
+    )
+    state.events.append(
+        EventEntry(
+            timestamp="2026-01-01T00:00:00Z",
+            step="review",
+            event_type="transition",
+            message="",
+            data={"from": "review", "to": "develop"},
+        )
+    )
     correction_develop = run("develop")
     review = run("review")
     pr = run("pr")
