@@ -240,6 +240,12 @@ approval would change requirements beyond authority, public positioning,
 business/legal/pricing decisions, production access, destructive operations,
 or an ambiguous strategic tradeoff.
 
+When the Driver performed relevant work before completing the task, it may add
+`"work_report":{"summary":"<work done>","outcome":"<observed result>","evidence":["<reference>"]}`
+to the same JSON object. This records provenance for the declared continuation;
+it does not approve the output, grant authority, or replace the required
+decision, answer, feedback, or target.
+
 ## Driver-owned alignment
 
 Bundled playbooks omit `alignment:` configuration, so the globally registered

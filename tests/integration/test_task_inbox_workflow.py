@@ -19,32 +19,39 @@ pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 runner = CliRunner()
 
 
-def _pending_issue(cafe_dir: Path, name: str):
+def _pending_issue(
+    cafe_dir: Path,
+    name: str,
+    *,
+    playbook_id: str = "standard",
+    step: str = "spec",
+    trigger: str = "confirm_output",
+):
     issue_dir = cafe_dir / "issues" / name
-    iteration_dir = issue_dir / "spec" / "iteration_001"
+    iteration_dir = issue_dir / step / "iteration_001"
     iteration_dir.mkdir(parents=True)
-    (issue_dir / "issue.yaml").write_text("playbook: standard\n", encoding="utf-8")
+    (issue_dir / "issue.yaml").write_text(f"playbook: {playbook_id}\n", encoding="utf-8")
     blackboards = BlackboardStore(issue_dir)
-    state = blackboards.load_or_create("spec", playbook_id="standard")
+    state = blackboards.load_or_create(step, playbook_id=playbook_id)
     blackboards.set_current_step(state, "user")
     blackboards.update_handoff_contract(
         state,
-        from_step="spec",
+        from_step=step,
         to_owner=HandoffOwner.USER,
         to_step="user",
-        intent=HandoffIntent.CONFIRM_OUTPUT,
+        intent=HandoffIntent(trigger),
         source="test",
     )
     policy, binding = resolve_step_human_task(
-        playbook_data=PlaybookLoader().load("standard"),
-        step_name="spec",
-        trigger="confirm_output",
+        playbook_data=PlaybookLoader().load(playbook_id),
+        step_name=step,
+        trigger=trigger,
     )
     task = HumanTaskRecordStore(issue_dir).materialize(
         workflow_id=state.workflow_id,
-        step="spec",
+        step=step,
         iteration=1,
-        trigger="confirm_output",
+        trigger=trigger,
         policy_id=policy.id,
         prompt=policy.prompt,
         expected_result=policy.model_dump(mode="json"),
@@ -118,6 +125,174 @@ def test_noninteractive_completion_can_defer_workflow_resume(
     assert BlackboardStore(issue_dir).load_or_create("spec").current_step == "plan"
     assert resumed == []
     assert "--issue deferred --execute --background" in result.stdout
+
+
+def test_task_command_accepts_and_inspects_a_work_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir, task = _pending_issue(tmp_path / ".cafe", "reported")
+
+    completed = runner.invoke(
+        app,
+        [
+            "task",
+            "complete",
+            task.id,
+            "--result",
+            json.dumps(
+                {
+                    "decision": "confirm",
+                    "work_report": {
+                        "summary": "Updated the requested files.",
+                        "outcome": "Targeted checks pass.",
+                    },
+                }
+            ),
+            "--no-resume",
+            "--json",
+        ],
+    )
+    inspected = runner.invoke(app, ["task", "inspect", task.id])
+
+    assert completed.exit_code == 0, (completed.stdout, completed.exception)
+    assert inspected.exit_code == 0
+    assert "Updated the requested files." in inspected.stdout
+    stored = HumanTaskRecordStore(issue_dir).get_result(task.id)
+    assert stored is not None
+    assert stored.payload["work_report"]["outcome"] == "Targeted checks pass."
+
+
+def test_task_command_allows_supervisor_to_handoff_to_any_playbook_phase(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir, task = _pending_issue(tmp_path / ".cafe", "supervisor-handoff")
+
+    completed = runner.invoke(
+        app,
+        [
+            "task",
+            "complete",
+            task.id,
+            "--result",
+            json.dumps(
+                {
+                    "decision": "confirm",
+                    "work_report": {
+                        "summary": "Completed work outside the normal phase order.",
+                        "outcome": "The change is ready for review.",
+                    },
+                }
+            ),
+            "--handoff-to",
+            "review",
+            "--no-resume",
+            "--json",
+        ],
+    )
+
+    assert completed.exit_code == 0, (completed.stdout, completed.exception)
+    payload = json.loads(completed.stdout)
+    assert payload["data"]["workflow"]["continuation"] == "review"
+    assert BlackboardStore(issue_dir).load_or_create("spec").current_step == "review"
+    stored = HumanTaskRecordStore(issue_dir).get_result(task.id)
+    assert stored is not None
+    assert stored.payload["continuation"] == "review"
+    assert stored.payload["declared_continuation"] == "plan"
+    assert stored.payload["supervisor_handoff_to"] == "review"
+    receipt = (issue_dir / "review" / "iteration_001" / "user_input.md").read_text(encoding="utf-8")
+    handoff = json.loads(receipt.splitlines()[1])
+    assert handoff["type"] == "supervisor_handoff"
+    assert handoff["from_step"] == "spec"
+    assert handoff["declared_continuation"] == "plan"
+    assert handoff["continuation"] == "review"
+    assert handoff["response"] == {"decision": "confirm"}
+    assert "Completed work outside the normal phase order." in receipt
+
+
+def test_task_command_rejects_supervisor_handoff_outside_playbook(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir, task = _pending_issue(tmp_path / ".cafe", "invalid-supervisor-handoff")
+
+    completed = runner.invoke(
+        app,
+        [
+            "task",
+            "complete",
+            task.id,
+            "--result",
+            '{"decision":"confirm"}',
+            "--handoff-to",
+            "not-a-phase",
+            "--no-resume",
+            "--json",
+        ],
+    )
+
+    assert completed.exit_code == 1
+    assert HumanTaskRecordStore(issue_dir).get_task(task.id).status is HumanTaskStatus.PENDING
+    assert BlackboardStore(issue_dir).load_or_create("spec").current_step == "user"
+
+
+def test_supervisor_handoff_projects_feedback_to_the_selected_phase(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir, task = _pending_issue(tmp_path / ".cafe", "feedback-handoff", step="pr")
+
+    completed = runner.invoke(
+        app,
+        [
+            "task",
+            "complete",
+            task.id,
+            "--result",
+            '{"decision":"fix_now","feedback":"Correct the specification requirement."}',
+            "--handoff-to",
+            "spec",
+            "--no-resume",
+        ],
+    )
+
+    assert completed.exit_code == 0, (completed.stdout, completed.exception)
+    receipt = (issue_dir / "spec" / "iteration_001" / "user_input.md").read_text(encoding="utf-8")
+    assert "Correct the specification requirement." in receipt
+    assert '"type": "supervisor_handoff"' in receipt
+
+
+def test_supervisor_handoff_projects_answers_to_the_selected_phase(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir, task = _pending_issue(
+        tmp_path / ".cafe",
+        "answers-handoff",
+        playbook_id="editorial",
+        step="brief",
+        trigger="need_clarification",
+    )
+
+    completed = runner.invoke(
+        app,
+        [
+            "task",
+            "complete",
+            task.id,
+            "--result",
+            '{"answers":{"audience":"Editors"}}',
+            "--handoff-to",
+            "draft",
+            "--no-resume",
+        ],
+    )
+
+    assert completed.exit_code == 0, (completed.stdout, completed.exception)
+    receipt = (issue_dir / "draft" / "iteration_001" / "user_input.md").read_text(encoding="utf-8")
+    assert '"answers": {"audience": ["Editors"]}' in receipt
+    assert '"type": "supervisor_handoff"' in receipt
 
 
 def test_deferred_self_loop_completion_persists_the_decision_for_the_worker(

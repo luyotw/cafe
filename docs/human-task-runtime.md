@@ -54,11 +54,17 @@ records add a second guard after that validation:
    `human_task_id` that matches that active task. After an interruption that
    occurs after result persistence, interactive recovery reuses the matching
    stored result and task id without asking the participant to resubmit it.
-3. The selected continuation must be one captured by that task's handoff.
+3. The selected continuation must be one captured by that task's handoff,
+   unless a supervising user explicitly supplies `cafe task complete
+   --handoff-to <phase>`. That override may select any real phase in the owning
+   playbook, while the original HumanTask response remains mandatory and valid.
 4. CAFE persists the one TaskResult before it updates the baton.
 
 This prevents a result from another workflow, a stale/cancelled task, a
 duplicate completion, or a changed continuation from advancing the workflow.
+For an explicit supervisor override, the TaskResult and Blackboard completion
+event retain both the declared and selected continuations, and an optional work
+report is delivered to the selected phase.
 
 ## Migration and compatibility
 

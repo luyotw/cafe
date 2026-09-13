@@ -329,3 +329,44 @@ def test_continuation_must_be_declared_by_binding_and_playbook() -> None:
     )
 
     assert isinstance(result, HumanTaskRejection)
+
+
+def test_completion_accepts_only_a_bounded_structured_work_report() -> None:
+    policy = HumanTaskPolicy(
+        id="review",
+        pattern="confirm_output",
+        prompt="Review",
+        input_schema="decision",
+        decisions=_decisions("confirm"),
+    )
+
+    completion = validate_human_task_completion(
+        policy,
+        {
+            "decision": "confirm",
+            "work_report": {
+                "summary": "  Updated the adapter.  ",
+                "outcome": "  Targeted tests pass.  ",
+                "evidence": ["tests/unit/test_adapter.py"],
+            },
+        },
+    )
+
+    assert isinstance(completion, HumanTaskCompletion)
+    assert completion.work_report is not None
+    assert completion.work_report.summary == "Updated the adapter."
+    assert completion.work_report.outcome == "Targeted tests pass."
+    assert completion.work_report.evidence == ("tests/unit/test_adapter.py",)
+
+    invalid_payloads = (
+        {"decision": "confirm", "work_report": {"summary": "done"}},
+        {
+            "decision": "confirm",
+            "work_report": {"summary": "done", "outcome": "ok", "extra": True},
+        },
+        {"work_report": {"summary": "done", "outcome": "ok"}},
+    )
+    assert all(
+        isinstance(validate_human_task_completion(policy, payload), HumanTaskRejection)
+        for payload in invalid_payloads
+    )

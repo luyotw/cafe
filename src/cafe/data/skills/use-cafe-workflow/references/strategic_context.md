@@ -13,12 +13,31 @@ Do not split this information into `mandate.yaml` or another parallel config.
 | --- | --- | --- |
 | Product direction | What is being built, priorities, boundaries | `docs/roadmap.md` |
 | Company positioning | Audience, positioning, non-goals | `docs/positioning.md` |
-| Department norms | How the team operates | `CONTRIBUTING.md`, `docs/guidelines/*.md` |
+| Engineering direction | Architecture, dependency boundaries, and engineering policy | `docs/engineering-guidelines.md` |
 | Playbook policy | Rules for this workflow type | `docs/policies/<name>.md` |
 
 If a needed category is `missing`, do not start workflow execution. Interview
 the user, draft the document, obtain confirmation, save it at the agreed path,
 then mark it `exists` or user-approved `draft`.
+
+### First-use bootstrap paths
+
+On the first strategic-context setup, inventory every required category and
+help the user create all missing strategic documents in the same bootstrap.
+Resolve each path in this order:
+
+1. Reuse the valid path already configured for that category.
+2. Otherwise reuse an existing repository document only when its content
+   actually serves that category, and record that path in strategic context.
+3. Otherwise propose the category's conventional path:
+   `docs/roadmap.md`, `docs/positioning.md`,
+   `docs/engineering-guidelines.md`, or `docs/policies/<name>.md`.
+
+These paths are defaults, not silent authority. Confirm each new document's
+content and path with the user, and never overwrite an existing document.
+`CONTRIBUTING.md` remains valid when it is already configured and genuinely
+contains the project's engineering strategy, but do not select it merely
+because it exists.
 
 ## Authority model
 
@@ -52,7 +71,7 @@ documents:
     path: docs/positioning.md
     status: missing
   engineering_guidelines:
-    path: CONTRIBUTING.md
+    path: docs/engineering-guidelines.md
     status: exists
 
 mandate:
