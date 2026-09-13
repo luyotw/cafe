@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -344,8 +345,28 @@ def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(
 
         def execute(self, _name: str, prompt: str, **_kwargs):
             self.prompts.append(prompt)
-            checklist = Path(_kwargs["streaming_output_file"]).parent / "checklist.md"
-            checklist.write_text("[x] completed by test agent\n", encoding="utf-8")
+            iteration_dir = Path(_kwargs["streaming_output_file"]).parent
+            checklist = iteration_dir / "checklist.md"
+            content = checklist.read_text(encoding="utf-8").replace("[ ]", "[x]")
+            checklist.write_text(content, encoding="utf-8")
+            projected = re.findall(
+                r"^\[x\] `([^`]+)` .*source fingerprint: ([0-9a-f]{64}\)?)$",
+                content,
+                flags=re.MULTILINE,
+            )
+            entries = []
+            for item_id, fingerprint in projected:
+                entries.append(
+                    f"### {item_id}\n\n- Status: completed\n"
+                    f"- Source fingerprint: `{fingerprint.rstrip(')')}`\n"
+                    "- Files: src/cafe/core/todo.py\n- Commit: test-commit\n"
+                    "- Targeted evidence: journey passed\n- Remaining work: None.\n"
+                    "- Next action: Review."
+                )
+            (iteration_dir / "output.md").write_text(
+                "## Todo Progress\n\n" + "\n\n".join(entries) + "\n",
+                encoding="utf-8",
+            )
             return "await_agent", TokenUsage(), [], [], [], None
 
     class GitOperations:

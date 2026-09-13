@@ -1710,6 +1710,12 @@ class GenericWorkflowStepExecutor(Phase):
                 ),
             }
         )
+        causal_entry = input_artifacts.get("causal_todo")
+        if causal_entry is not None:
+            context.setdefault(
+                "feedback_file",
+                self._display_path(Path(str(getattr(causal_entry, "path", causal_entry)))),
+            )
         feedback = (
             bool(input_artifacts.get("causal_todo"))
             if declares_causal_todo
