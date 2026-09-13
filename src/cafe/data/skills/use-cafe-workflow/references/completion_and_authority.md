@@ -124,9 +124,16 @@ checklist to every playbook.
   unexecuted and use the existing self-contained user handoff if needed. Never
   reinterpret a general instruction to finish as the missing answer.
 
-Do not invent integration state, executor, or cleanup behavior here. Local
-archive/worktree cleanup also needs its own scoped authority and the existing
-lifecycle command's checks; it is not a prerequisite for workflow completion.
+Do not invent integration state, executor, or cleanup behavior here. After
+integration or issue resolution, inspect the completed issue's remaining
+lifecycle state read-only. When lifecycle cleanup applies, proactively describe
+its actual mode-specific effects in the user's language and ask only for missing
+scoped authority; the user must not need to know or name `cafe close`, and an
+ambiguous request such as "merge and close" must not be silently reduced to
+GitHub issue closure. Reuse equivalent explicit authority, run cleanup only
+through the existing lifecycle command's checks, and verify the resulting
+checkout, worktree, branch, and archive state. Cleanup is not a prerequisite for
+workflow completion.
 
 Before any proposed external action, run the read-only
 `scripts/check_action_authority.py --request '<JSON>' [--authority '<JSON>']`.

@@ -3348,6 +3348,20 @@ def test_driver_can_propose_a_user_approved_bounded_direct_closeout() -> None:
     assert "user-approved bounded" in running
 
 
+def test_driver_proactively_guides_cafe_lifecycle_cleanup_in_plain_language() -> None:
+    skill = _read_skill_resource("SKILL.md")
+    reference = _read_skill_resource("references/completion_and_authority.md")
+    normalized = " ".join(reference.split())
+
+    assert "guiding applicable lifecycle cleanup" in skill
+    assert "inspect the completed issue's remaining lifecycle state read-only" in normalized
+    assert "actual mode-specific effects in the user's language" in normalized
+    assert "must not need to know or name `cafe close`" in normalized
+    assert '"merge and close" must not be silently reduced to GitHub issue closure' in normalized
+    assert "Reuse equivalent explicit authority" in normalized
+    assert "verify the resulting checkout, worktree, branch, and archive state" in normalized
+
+
 class TestPollingContract:
     def test_first_poll_waits_for_the_full_confirmed_interval(self) -> None:
         skill = " ".join(_read_skill_resource("SKILL.md").split())
