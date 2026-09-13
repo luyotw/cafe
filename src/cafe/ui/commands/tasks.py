@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
 from contextlib import redirect_stdout
-from functools import partial
 from io import StringIO
 from pathlib import Path
 from typing import Any, Optional
@@ -16,13 +14,9 @@ from rich.table import Table
 
 from cafe.core.blackboard import BlackboardStore
 from cafe.core.capability_approvals import CapabilityApprovalError
-from cafe.core.human_task_records import HumanTask, HumanTaskRecordStore
+from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.human_tasks import HumanTaskPolicy
 from cafe.core.task_inbox import TaskInboxError, TaskInboxService
-from cafe.driver import (
-    DriverTaskCompletionRequest,
-    authorize_driver_task_completion,
-)
 from cafe.playbooks.loader import PlaybookLoader, apply_issue_playbook_overrides
 from cafe.ui.commands import workflow as workflow_commands
 from cafe.ui.human_tasks import (
@@ -35,29 +29,6 @@ from cafe.ui.human_tasks import (
 
 task_app = typer.Typer(help="List, inspect, and complete durable repository tasks")
 console = Console()
-
-
-def _driver_completion_authority(
-    task: HumanTask,
-    payload: Mapping[str, Any],
-    *,
-    issue_dir: Path,
-    issue_name: str,
-    workflow_id: str,
-) -> Mapping[str, Any]:
-    """Bridge the task CLI to the narrow, current Driver authority check."""
-    return authorize_driver_task_completion(
-        DriverTaskCompletionRequest(
-            issue_dir=issue_dir,
-            issue_name=issue_name,
-            workflow_id=workflow_id,
-            task_id=task.id,
-            step=task.step,
-            trigger=task.trigger,
-            policy_id=task.policy_id,
-            response=payload,
-        )
-    ).to_dict()
 
 
 def _render_capability_approval(approval: dict[str, Any]) -> None:
@@ -267,38 +238,13 @@ def complete_task(
         "--no-resume",
         help="Persist the response without resuming the owning workflow",
     ),
-    driver_proxy: bool = typer.Option(
-        False,
-        "--driver-proxy",
-        help="Complete through the current confirmed Driver contract",
-    ),
     json_output: bool = typer.Option(False, "--json", help="Emit one JSON result object"),
 ) -> None:
     """Complete one pending task and normally resume its owning workflow."""
     service = TaskInboxService(Path(".cafe"))
     try:
+        preflight = service.preflight_completion(task_id)
         raw_payload = _load_result(result, result_file)
-        preflight = service.preflight_completion(
-            task_id, allow_completed=raw_payload is not None
-        )
-        if driver_proxy and raw_payload is None:
-            raise TaskInboxError(
-                "invalid_response",
-                "Driver proxy completion requires an explicit structured result.",
-                recovery="Pass --result or --result-file with the exact declared response.",
-                task_id=task_id,
-                issue=preflight.issue,
-                workflow_id=preflight.workflow_id,
-            )
-        if driver_proxy and preflight.task.capability_approval is not None:
-            raise TaskInboxError(
-                "driver_not_authorized",
-                "Driver proxy completion cannot approve or deny capabilities.",
-                recovery="Leave this capability task for the user.",
-                task_id=task_id,
-                issue=preflight.issue,
-                workflow_id=preflight.workflow_id,
-            )
         applied: Any
         if preflight.task.capability_approval is not None:
             approval = dict(preflight.task.capability_approval)
@@ -356,9 +302,7 @@ def complete_task(
         if preflight.task.capability_approval is None:
             # Reload immediately before the existing locked validator/mutator so a
             # stale concurrent completion cannot proceed on old ownership evidence.
-            preflight = service.preflight_completion(
-                task_id, allow_completed=raw_payload is not None
-            )
+            preflight = service.preflight_completion(task_id)
             playbook_data = PlaybookLoader(project_root=Path.cwd()).load(preflight.playbook_id)
             playbook_data = apply_issue_playbook_overrides(
                 playbook_data, preflight.issue_dir / "issue.yaml"
@@ -376,17 +320,6 @@ def complete_task(
                 source=(
                     "command" if result is not None or result_file is not None else "interactive"
                 ),
-                actor=("driver_on_behalf_of_user" if driver_proxy else "user"),
-                authority_resolver=(
-                    partial(
-                        _driver_completion_authority,
-                        issue_dir=preflight.issue_dir,
-                        issue_name=preflight.issue,
-                        workflow_id=preflight.workflow_id,
-                    )
-                    if driver_proxy
-                    else None
-                ),
             )
             if applied.rejection is not None or applied.target is None:
                 message = (
@@ -402,7 +335,7 @@ def complete_task(
                     issue=preflight.issue,
                     workflow_id=preflight.workflow_id,
                 )
-        if not no_resume and not applied.replayed:
+        if not no_resume:
             try:
                 if json_output:
                     # The workflow runner is historically stdout-oriented. Capture its
@@ -454,15 +387,8 @@ def complete_task(
                         "playbook": preflight.playbook_id,
                         "continuation": applied.target,
                     },
-                    "replayed": applied.replayed,
                 },
             )
-        )
-        return
-    if applied.replayed:
-        console.print(
-            f"[green]Already completed[/green] task {task_id}; the matching result was replayed "
-            "without resuming the workflow again."
         )
         return
     if no_resume:

@@ -21,7 +21,6 @@ from cafe.core.packet_io import atomic_write_bytes, canonical_json
 
 HUMAN_TASK_RECORD_FILENAME = "human_tasks.json"
 HUMAN_TASK_RECORD_SCHEMA_VERSION = 1
-TASK_RESULT_ACTORS = frozenset({"user", "driver_on_behalf_of_user"})
 
 
 def _now_iso() -> str:
@@ -202,11 +201,9 @@ class TaskResult:
     payload: dict[str, Any]
     source: str
     completed_at: str
-    actor: Optional[str] = None
-    authority: Optional[dict[str, Any]] = None
 
     def to_dict(self) -> dict[str, Any]:
-        result = {
+        return {
             "id": self.id,
             "task_id": self.task_id,
             "workflow_id": self.workflow_id,
@@ -214,25 +211,10 @@ class TaskResult:
             "source": self.source,
             "completed_at": self.completed_at,
         }
-        if self.actor is not None:
-            result["actor"] = self.actor
-        if self.authority is not None:
-            result["authority"] = dict(self.authority)
-        return result
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "TaskResult":
         try:
-            actor = _optional_text(data.get("actor"))
-            authority = (
-                _mapping(data, "authority") if data.get("authority") is not None else None
-            )
-            if actor is not None and actor not in TASK_RESULT_ACTORS:
-                raise ValueError(f"unsupported actor {actor!r}")
-            if actor == "driver_on_behalf_of_user" and not authority:
-                raise ValueError("Driver result is missing authority evidence")
-            if actor != "driver_on_behalf_of_user" and authority is not None:
-                raise ValueError("Driver authority requires a Driver result actor")
             return cls(
                 id=_required_text(data, "id"),
                 task_id=_required_text(data, "task_id"),
@@ -240,8 +222,6 @@ class TaskResult:
                 payload=_mapping(data, "payload"),
                 source=_required_text(data, "source"),
                 completed_at=_required_text(data, "completed_at"),
-                actor=actor,
-                authority=authority,
             )
         except (TypeError, ValueError) as exc:
             raise HumanTaskRecordSchemaError(f"invalid task result: {exc}") from exc
@@ -711,32 +691,13 @@ class HumanTaskRecordStore:
         task_id: str,
         payload: Mapping[str, Any],
         source: str,
-        actor: str = "user",
-        authority: Optional[Mapping[str, Any]] = None,
     ) -> TaskResult:
-        normalized_actor = _text(actor, "actor")
-        if normalized_actor not in TASK_RESULT_ACTORS:
-            raise HumanTaskCorrelationError(f"unsupported task result actor {normalized_actor!r}")
-        normalized_authority = dict(authority) if authority is not None else None
-        if normalized_actor == "driver_on_behalf_of_user" and not normalized_authority:
-            raise HumanTaskCorrelationError("Driver proxy completion requires authority evidence")
-        if normalized_actor == "user" and normalized_authority is not None:
-            raise HumanTaskCorrelationError("User completion must not carry Driver authority")
-        normalized_payload = dict(payload)
         with self.transaction():
             envelope = self._load_for_workflow(workflow_id, create=False)
             task = self._task(envelope, task_id)
             existing = envelope.results.get(task.id)
             if existing is not None:
-                if (
-                    existing.payload == normalized_payload
-                    and existing.actor == normalized_actor
-                    and existing.authority == normalized_authority
-                ):
-                    return existing
-                raise HumanTaskCorrelationError(
-                    f"task {task.id} already completed with a different response or actor"
-                )
+                return existing
             if task.status is not HumanTaskStatus.PENDING:
                 raise HumanTaskCorrelationError(f"task {task.id} is not pending")
             wait_state = envelope.wait_states[task.id]
@@ -747,11 +708,9 @@ class HumanTaskRecordStore:
                 id=str(uuid4()),
                 task_id=task.id,
                 workflow_id=workflow_id,
-                payload=normalized_payload,
+                payload=dict(payload),
                 source=_text(source, "source"),
                 completed_at=now,
-                actor=normalized_actor,
-                authority=normalized_authority,
             )
             envelope.results[task.id] = result
             envelope.tasks[task.id] = replace(
@@ -759,10 +718,7 @@ class HumanTaskRecordStore:
             )
             envelope.wait_states[task.id] = replace(wait_state, released_at=now)
             self._append_event(
-                envelope,
-                "completed",
-                task_id=task.id,
-                context={"result_id": result.id, "actor": normalized_actor},
+                envelope, "completed", task_id=task.id, context={"result_id": result.id}
             )
             self._save(envelope)
             return result

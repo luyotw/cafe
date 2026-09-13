@@ -387,8 +387,6 @@ def validate_human_task_completion(
     payload = _parse_payload(policy, raw_payload)
     if isinstance(payload, HumanTaskRejection):
         return payload
-    if "actor" in payload or "authority" in payload:
-        return _reject(policy, "Actor and authority are derived by CAFE, not response input.")
     work_report: Optional[HumanTaskWorkReport] = None
     if "work_report" in payload:
         try:

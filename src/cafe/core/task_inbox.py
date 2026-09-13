@@ -149,7 +149,6 @@ class CompletionPreflight:
     issue_dir: Path
     workflow_id: str
     playbook_id: str
-    result: Optional[TaskResult]
 
 
 @dataclass(frozen=True)
@@ -220,17 +219,9 @@ class TaskInboxService:
     def inspect(self, task_id: str) -> TaskDetail:
         return self._detail(self._select(task_id))
 
-    def preflight_completion(
-        self, task_id: str, *, allow_completed: bool = False
-    ) -> CompletionPreflight:
+    def preflight_completion(self, task_id: str) -> CompletionPreflight:
         record = self._select(task_id)
-        completed_replay = (
-            allow_completed
-            and record.task.status is HumanTaskStatus.COMPLETED
-            and record.result is not None
-            and record.task.capability_approval is None
-        )
-        if record.task.status is not HumanTaskStatus.PENDING and not completed_replay:
+        if record.task.status is not HumanTaskStatus.PENDING:
             raise TaskInboxError(
                 "task_not_pending",
                 f"Task {task_id} is {record.task.status.value}, not pending.",
@@ -239,9 +230,7 @@ class TaskInboxService:
                 issue=record.issue,
                 workflow_id=record.workflow_id,
             )
-        if not completed_replay and (
-            record.wait.released_at is not None or record.result is not None
-        ):
+        if record.wait.released_at is not None or record.result is not None:
             raise TaskInboxError(
                 "stale_task",
                 f"Task {task_id} no longer has one active wait.",
@@ -256,7 +245,6 @@ class TaskInboxService:
             issue_dir=record.issue_dir,
             workflow_id=record.workflow_id,
             playbook_id=record.playbook_id,
-            result=record.result,
         )
 
     def _select(self, task_id: str) -> _Record:

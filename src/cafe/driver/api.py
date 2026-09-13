@@ -8,11 +8,9 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from cafe.core.packet_io import canonical_json, sha256_bytes
-
 from ._freshness import Freshness
 from ._lifecycle import activate, adopt_legacy, evaluate, event_callback_policy, replace
-from ._store import DriverContractMissingError, DriverContractUnsafeError, load_contract
+from ._store import DriverContractMissingError, DriverContractUnsafeError
 
 
 @dataclass(frozen=True)
@@ -46,20 +44,6 @@ class DriverEntryRequest:
 
 
 @dataclass(frozen=True)
-class DriverTaskCompletionRequest:
-    """Exact HumanTask response a Driver-only adapter wants to complete."""
-
-    issue_dir: Path
-    issue_name: str
-    workflow_id: str
-    task_id: str
-    step: str
-    trigger: str
-    policy_id: str
-    response: Mapping[str, Any]
-
-
-@dataclass(frozen=True)
 class LegacyAdoptionRequest:
     issue_dir: Path
     issue_name: str
@@ -90,37 +74,6 @@ class DriverEntryResult:
     phase_model_authority: Mapping[str, tuple[Mapping[str, str], ...]]
     delivery_contract: Mapping[str, Any]
     confirmation_contract: Mapping[str, Any]
-
-
-@dataclass(frozen=True)
-class DriverTaskCompletionAuthority:
-    """Task-bound evidence derived from the current confirmed contract."""
-
-    contract_sha256: str
-    revision: int
-    basis: str
-    task_id: str
-    step: str
-    trigger: str
-    policy_id: str
-    response_sha256: str
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "schema_version": 1,
-            "contract_sha256": self.contract_sha256,
-            "revision": self.revision,
-            "basis": self.basis,
-            "task_id": self.task_id,
-            "step": self.step,
-            "trigger": self.trigger,
-            "policy_id": self.policy_id,
-            "response_sha256": self.response_sha256,
-        }
-
-
-class DriverTaskCompletionDeniedError(ValueError):
-    """The confirmed Driver contract does not authorize this exact HumanTask."""
 
 
 @dataclass(frozen=True)
@@ -216,56 +169,6 @@ def evaluate_driver_entry(command: DriverEntryRequest) -> DriverEntryResult:
     )
 
 
-def authorize_driver_task_completion(
-    command: DriverTaskCompletionRequest,
-) -> DriverTaskCompletionAuthority:
-    """Authorize one exact proxy completion without creating new Driver authority."""
-    contract, digest = load_contract(
-        command.issue_dir,
-        issue_name=command.issue_name,
-        workflow_id=command.workflow_id,
-    )
-    confirmation = contract["confirmation_contract"]
-    user_required = set(confirmation["user_required"])
-    mandatory = set(confirmation["mandatory_human_stops"])
-    driver_confirmable = set(confirmation["driver_confirmable"])
-    if command.step in mandatory or command.step in user_required:
-        raise DriverTaskCompletionDeniedError(
-            f"phase {command.step!r} is reserved for the user"
-        )
-
-    if command.trigger == "confirm_output":
-        if command.step not in driver_confirmable:
-            raise DriverTaskCompletionDeniedError(
-                f"phase {command.step!r} is not driver-confirmable"
-            )
-        basis = "confirmation_contract.driver_confirmable"
-    elif command.trigger == "need_clarification":
-        if (
-            contract["reactive_user_handoffs"]["need_clarification"]
-            != "driver_confirmable"
-        ):
-            raise DriverTaskCompletionDeniedError(
-                "need_clarification is not driver-confirmable"
-            )
-        basis = "reactive_user_handoffs.need_clarification"
-    else:
-        raise DriverTaskCompletionDeniedError(
-            f"HumanTask trigger {command.trigger!r} is not Driver-completable"
-        )
-
-    return DriverTaskCompletionAuthority(
-        contract_sha256=digest,
-        revision=contract["revision"]["generation"],
-        basis=basis,
-        task_id=command.task_id,
-        step=command.step,
-        trigger=command.trigger,
-        policy_id=command.policy_id,
-        response_sha256=sha256_bytes(canonical_json(dict(command.response))),
-    )
-
-
 def event_callback_projection(command: EventCallbackRequest) -> EventCallbackPolicy:
     """Load and project the event transport from the checked contract only."""
     event, digest = event_callback_policy(
@@ -290,9 +193,6 @@ __all__ = [
     "ActivationResult",
     "DriverEntryRequest",
     "DriverEntryResult",
-    "DriverTaskCompletionAuthority",
-    "DriverTaskCompletionDeniedError",
-    "DriverTaskCompletionRequest",
     "DriverContractMissingError",
     "DriverContractUnsafeError",
     "EventCallbackPolicy",
@@ -304,7 +204,6 @@ __all__ = [
     "ReplacementResult",
     "activate_confirmed_contract",
     "adopt_legacy_contract",
-    "authorize_driver_task_completion",
     "evaluate_driver_entry",
     "event_callback_projection",
     "replace_confirmed_contract",

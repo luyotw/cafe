@@ -6,7 +6,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional, Sequence
+from typing import Any, Optional, Sequence
 
 from cafe.core.blackboard import (
     ArtifactEntry,
@@ -43,8 +43,6 @@ from cafe.core.phase_state_mixin import next_runnable_iteration_number
 from cafe.core.playbook import resolve_step_attempt_limit
 from cafe.core.workflow_feedback import WorkflowFeedbackError, WorkflowFeedbackLedger
 from cafe.skills.loader import SkillLoader
-
-CompletionAuthorityResolver = Callable[[HumanTask, Mapping[str, Any]], Mapping[str, Any]]
 
 
 def resolve_step_human_task(
@@ -197,8 +195,6 @@ class HumanTaskApplication:
     target: Optional[str]
     policy: Optional[HumanTaskPolicy]
     rejection: Optional[HumanTaskRejection] = None
-    result: Optional[TaskResult] = None
-    replayed: bool = False
 
 
 def apply_capability_approval_payload(
@@ -276,8 +272,6 @@ def apply_human_task_payload(
     trigger: str,
     raw_payload: str | Mapping[str, Any],
     source: str,
-    actor: Optional[str] = "user",
-    authority_resolver: Optional[CompletionAuthorityResolver] = None,
 ) -> HumanTaskApplication:
     """Validate and apply one response while retaining a pause on rejection."""
     record_store = HumanTaskRecordStore(issue_dir)
@@ -292,13 +286,8 @@ def apply_human_task_payload(
                 submitted_task is not None
                 and submitted_task.workflow_id == getattr(blackboard, "workflow_id", None)
                 and submitted_task.status is HumanTaskStatus.PENDING
-                and (
-                    actor == "driver_on_behalf_of_user"
-                    or getattr(
-                        getattr(blackboard, "handoff_contract", None),
-                        "has_meaningful_source",
-                        False,
-                    )
+                and getattr(
+                    getattr(blackboard, "handoff_contract", None), "has_meaningful_source", False
                 )
                 and not durable_task_matches_current_handoff(submitted_task, blackboard)
             ):
@@ -316,8 +305,6 @@ def apply_human_task_payload(
             trigger=trigger,
             raw_payload=raw_payload,
             source=source,
-            actor=actor,
-            authority_resolver=authority_resolver,
             record_store=record_store,
         )
 
@@ -329,8 +316,6 @@ def apply_durable_human_task_payload_if_present(
     blackboard: Any,
     raw_payload: str | Mapping[str, Any],
     source: str,
-    actor: Optional[str] = "user",
-    authority_resolver: Optional[CompletionAuthorityResolver] = None,
 ) -> Optional[HumanTaskApplication]:
     """Apply a durable task response before intent-based user-input routing.
 
@@ -416,8 +401,6 @@ def apply_durable_human_task_payload_if_present(
             trigger=task.trigger,
             raw_payload=raw_payload,
             source=source,
-            actor=actor,
-            authority_resolver=authority_resolver,
             record_store=record_store,
         )
 
@@ -478,27 +461,12 @@ def _apply_human_task_payload(
     trigger: str,
     raw_payload: str | Mapping[str, Any],
     source: str,
-    actor: Optional[str],
-    authority_resolver: Optional[CompletionAuthorityResolver],
     record_store: HumanTaskRecordStore,
 ) -> HumanTaskApplication:
     """Apply a response while holding the matching durable-record transaction."""
     store = BlackboardStore(issue_dir)
     try:
         iteration = latest_step_iteration(issue_dir=issue_dir, step_name=from_step)
-        submitted_id = _submitted_human_task_id(raw_payload)
-        if submitted_id is not None and record_store.exists:
-            try:
-                submitted_task = record_store.get_task(submitted_id)
-            except HumanTaskCorrelationError:
-                submitted_task = None
-            if (
-                submitted_task is not None
-                and submitted_task.workflow_id == blackboard.workflow_id
-                and submitted_task.step == from_step
-                and submitted_task.trigger == trigger
-            ):
-                iteration = submitted_task.iteration
         questions = _load_dynamic_questions(
             issue_dir=issue_dir,
             step_name=from_step,
@@ -558,96 +526,33 @@ def _apply_human_task_payload(
         return HumanTaskApplication(target=None, policy=policy, rejection=durable_rejection)
     result_was_recovered = durable_result is not None
 
-    if isinstance(completion, HumanTaskRejection):
-        if durable_task is not None:
-            record_store.record_rejection(
-                workflow_id=blackboard.workflow_id,
-                task_id=durable_task.id,
-                reason=completion.message,
-            )
-        store.record_event(
-            blackboard,
-            "human_task_rejected",
-            {
-                "step": from_step,
-                "trigger": trigger,
-                "task_id": durable_task.id if durable_task is not None else policy.id,
-                "reason": completion.message,
-            },
+    recovered_agent_input = ""
+    if durable_result is not None:
+        assert durable_task is not None
+        blackboard = store.load_or_create(
+            from_step, playbook_id=getattr(blackboard, "playbook_id", "standard")
         )
-        return HumanTaskApplication(target=None, policy=policy, rejection=completion)
-
-    validated_completion = completion
-    submitted_continuation = resolve_step_human_task_continuation(
-        playbook_data=playbook_data,
-        policy=policy,
-        binding=binding,
-        completion=validated_completion,
-    )
-    if isinstance(submitted_continuation, HumanTaskRejection):
-        if durable_task is not None:
-            record_store.record_rejection(
-                workflow_id=blackboard.workflow_id,
-                task_id=durable_task.id,
-                reason=submitted_continuation.message,
-            )
-        store.record_event(
-            blackboard,
-            "human_task_rejected",
-            {
-                "step": from_step,
-                "trigger": trigger,
-                "task_id": durable_task.id if durable_task is not None else policy.id,
-                "reason": submitted_continuation.message,
-            },
-        )
-        return HumanTaskApplication(
-            target=None,
-            policy=policy,
-            rejection=submitted_continuation,
-        )
-
-    submitted_payload = _validated_completion_payload(
-        validated_completion,
-        submitted_continuation,
-    )
-    completion_authority: Optional[dict[str, Any]] = None
-    if durable_task is not None and durable_result is not None:
-        completion_authority = durable_result.authority
-    elif durable_task is not None:
-        try:
-            completion_authority = _completion_authority(
-                actor=actor,
-                task=durable_task,
-                payload=submitted_payload,
-                authority_resolver=authority_resolver,
-            )
-        except (HumanTaskCorrelationError, ValueError) as exc:
+        if blackboard.current_step != "user":
             rejection = HumanTaskRejection(
-                message=str(exc), correction_guidance=policy.correction_guidance
+                message="This human task has already completed.",
+                correction_guidance=policy.correction_guidance,
             )
             record_store.record_rejection(
                 workflow_id=blackboard.workflow_id,
                 task_id=durable_task.id,
                 reason=rejection.message,
             )
+            store.record_event(
+                blackboard,
+                "human_task_rejected",
+                {
+                    "step": from_step,
+                    "trigger": trigger,
+                    "task_id": policy.id,
+                    "reason": rejection.message,
+                },
+            )
             return HumanTaskApplication(target=None, policy=policy, rejection=rejection)
-    elif actor != "user":
-        rejection = HumanTaskRejection(
-            message="Driver proxy completion requires a durable HumanTask record.",
-            correction_guidance=policy.correction_guidance,
-        )
-        return HumanTaskApplication(target=None, policy=policy, rejection=rejection)
-    elif validated_completion.work_report is not None:
-        rejection = HumanTaskRejection(
-            message="A work report requires a durable HumanTask record.",
-            correction_guidance=policy.correction_guidance,
-        )
-        return HumanTaskApplication(target=None, policy=policy, rejection=rejection)
-
-    recovered_agent_input = ""
-    if durable_result is not None:
-        assert durable_task is not None
         continuation, recovered_agent_input = _recorded_result_continuation(
             durable_result, policy=policy
         )
@@ -657,45 +562,71 @@ def _apply_human_task_payload(
                 task_id=durable_task.id,
                 reason=continuation.message,
             )
+            store.record_event(
+                blackboard,
+                "human_task_rejected",
+                {
+                    "step": from_step,
+                    "trigger": trigger,
+                    "task_id": policy.id,
+                    "reason": continuation.message,
+                },
+            )
             return HumanTaskApplication(target=None, policy=policy, rejection=continuation)
-        if (
-            submitted_continuation != continuation
-            or not _same_completion_payload(durable_result.payload, submitted_payload)
-            or durable_result.actor != actor
-            or durable_result.authority != completion_authority
-        ):
+    else:
+        if isinstance(completion, HumanTaskRejection):
+            if durable_task is not None:
+                record_store.record_rejection(
+                    workflow_id=blackboard.workflow_id,
+                    task_id=durable_task.id,
+                    reason=completion.message,
+                )
+            store.record_event(
+                blackboard,
+                "human_task_rejected",
+                {
+                    "step": from_step,
+                    "trigger": trigger,
+                    "task_id": policy.id,
+                    "reason": completion.message,
+                },
+            )
+            return HumanTaskApplication(target=None, policy=policy, rejection=completion)
+
+        continuation = resolve_step_human_task_continuation(
+            playbook_data=playbook_data,
+            policy=policy,
+            binding=binding,
+            completion=completion,
+        )
+        if isinstance(continuation, HumanTaskRejection):
+            if durable_task is not None:
+                record_store.record_rejection(
+                    workflow_id=blackboard.workflow_id,
+                    task_id=durable_task.id,
+                    reason=continuation.message,
+                )
+            store.record_event(
+                blackboard,
+                "human_task_rejected",
+                {
+                    "step": from_step,
+                    "trigger": trigger,
+                    "task_id": policy.id,
+                    "reason": continuation.message,
+                },
+            )
+            return HumanTaskApplication(target=None, policy=policy, rejection=continuation)
+
+    validated_completion = completion if isinstance(completion, HumanTaskCompletion) else None
+    if durable_result is None:
+        assert validated_completion is not None
+        if durable_task is None and validated_completion.work_report is not None:
             rejection = HumanTaskRejection(
-                message="This human task already completed with a different response or actor.",
+                message="A work report requires a durable HumanTask record.",
                 correction_guidance=policy.correction_guidance,
             )
-            record_store.record_rejection(
-                workflow_id=blackboard.workflow_id,
-                task_id=durable_task.id,
-                reason=rejection.message,
-            )
             return HumanTaskApplication(target=None, policy=policy, rejection=rejection)
-        blackboard = store.load_or_create(
-            from_step, playbook_id=getattr(blackboard, "playbook_id", "standard")
-        )
-        if _human_task_completion_was_projected(
-            blackboard=blackboard,
-            task=durable_task,
-            result=durable_result,
-        ) or not _human_task_projection_can_recover(
-            blackboard=blackboard,
-            record_store=record_store,
-            task=durable_task,
-            result=durable_result,
-            continuation=continuation,
-        ):
-            return HumanTaskApplication(
-                target="done" if continuation == "_done" else continuation,
-                policy=policy,
-                result=durable_result,
-                replayed=True,
-            )
-    else:
-        continuation = submitted_continuation
 
     if durable_result is not None:
         feedback = durable_result.payload.get("feedback", "")
@@ -719,7 +650,7 @@ def _apply_human_task_payload(
     ):
         ledger = WorkflowFeedbackLedger(issue_dir)
         try:
-            created, _entry = ledger.record(
+            ledger.record(
                 source_identity=(
                     f"{binding.feedback_delivery.source_kind}:{from_step}:{policy.id}:{iteration}"
                 ),
@@ -728,17 +659,16 @@ def _apply_human_task_payload(
                 content=feedback,
             )
             previous = getattr(blackboard, "artifacts", {}).get(binding.feedback_delivery.artifact)
-            if created or previous is None:
-                store.put_artifact(
-                    blackboard,
-                    ArtifactEntry(
-                        name=binding.feedback_delivery.artifact,
-                        kind=ArtifactKind.DOCUMENT,
-                        version=(previous.version + 1) if previous else 1,
-                        updated_by="human_task",
-                        path=str(ledger.path),
-                    ),
-                )
+            store.put_artifact(
+                blackboard,
+                ArtifactEntry(
+                    name=binding.feedback_delivery.artifact,
+                    kind=ArtifactKind.DOCUMENT,
+                    version=(previous.version + 1) if previous else 1,
+                    updated_by="human_task",
+                    path=str(ledger.path),
+                ),
+            )
         except WorkflowFeedbackError as exc:
             rejection = HumanTaskRejection(
                 message="Feedback could not be stored; the review remains paused.",
@@ -771,7 +701,9 @@ def _apply_human_task_payload(
             # deliberately separate from the fixed decision outcomes (for
             # example, ``confirm -> closeout``), so both sources must be
             # accepted by the durable-task correlation fence.
-            permitted_continuations.update(item for item in raw_allowed if isinstance(item, str))
+            permitted_continuations.update(
+                item for item in raw_allowed if isinstance(item, str)
+            )
         if continuation not in permitted_continuations:
             rejection = HumanTaskRejection(
                 message="This response does not select the pending task's declared continuation.",
@@ -795,9 +727,11 @@ def _apply_human_task_payload(
             return HumanTaskApplication(target=None, policy=policy, rejection=rejection)
         if durable_result is None:
             assert validated_completion is not None
-            assert actor is not None
             try:
-                completion_payload = dict(submitted_payload)
+                completion_payload = _validated_completion_payload(
+                    validated_completion,
+                    continuation,
+                )
                 if (
                     trigger == AGENT_EXECUTION_INTERRUPTED_TRIGGER
                     and validated_completion.decision == AGENT_EXECUTION_FRESH_SESSION_DECISION
@@ -814,8 +748,6 @@ def _apply_human_task_payload(
                     task_id=durable_task.id,
                     payload=completion_payload,
                     source=source,
-                    actor=actor,
-                    authority=completion_authority,
                 )
             except (HumanTaskCorrelationError, OSError, ValueError) as exc:
                 rejection = HumanTaskRejection(
@@ -876,7 +808,9 @@ def _apply_human_task_payload(
         )
     is_done = continuation == "_done"
     playbook_steps = playbook_data.get("steps", {})
-    from_step_def = playbook_steps.get(from_step, {}) if isinstance(playbook_steps, Mapping) else {}
+    from_step_def = (
+        playbook_steps.get(from_step, {}) if isinstance(playbook_steps, Mapping) else {}
+    )
     if (
         not is_done
         and continuation != from_step
@@ -893,9 +827,6 @@ def _apply_human_task_payload(
         )
     store.set_current_step(blackboard, "done" if is_done else continuation)
     store.set_handoff_summary(blackboard, f"Completed human task {policy.id} for {from_step}")
-    projection_source = f"human_task.{source}"
-    if durable_result is not None:
-        projection_source = f"{projection_source}:{durable_result.id}"
     store.update_handoff_contract(
         blackboard,
         from_step=from_step,
@@ -903,7 +834,7 @@ def _apply_human_task_payload(
         to_step="done" if is_done else continuation,
         intent=HandoffIntent.WORKFLOW_COMPLETE if is_done else HandoffIntent.AWAIT_AGENT,
         status_code="",
-        source=projection_source,
+        source=f"human_task.{source}",
     )
     store.record_event(
         blackboard,
@@ -911,27 +842,14 @@ def _apply_human_task_payload(
         {
             "step": from_step,
             "trigger": trigger,
-            "task_id": durable_task.id if durable_task is not None else policy.id,
-            "policy_id": policy.id,
+            "task_id": policy.id,
             "pattern": policy.pattern,
             "to_step": continuation,
             "source": source,
-            **(
-                {
-                    "result_id": durable_result.id,
-                    "actor": durable_result.actor,
-                    "work_report_summary": _work_report_summary(durable_result),
-                }
-                if durable_result is not None
-                else {}
-            ),
+            **_work_report_event_data(task=durable_task, result=durable_result),
         },
     )
-    return HumanTaskApplication(
-        target="done" if is_done else continuation,
-        policy=policy,
-        result=durable_result,
-    )
+    return HumanTaskApplication(target="done" if is_done else continuation, policy=policy)
 
 
 def _resolve_durable_task(
@@ -954,20 +872,6 @@ def _resolve_durable_task(
         and task.trigger == trigger
         and task.policy_id == policy.id
     ]
-    submitted_id = _submitted_human_task_id(raw_payload)
-    completed = next(
-        (
-            task
-            for task in matching
-            if task.id == submitted_id and task.status is HumanTaskStatus.COMPLETED
-        ),
-        None,
-    )
-    if completed is not None:
-        result = record_store.get_result(completed.id)
-        if result is not None:
-            return completed, result, None
-
     active = next(
         (
             task
@@ -977,6 +881,7 @@ def _resolve_durable_task(
         ),
         None,
     )
+    submitted_id = _submitted_human_task_id(raw_payload)
     if active is not None:
         if submitted_id is None:
             record_store.record_rejection(
@@ -1032,6 +937,19 @@ def _resolve_durable_task(
                 correction_guidance=policy.correction_guidance,
             ),
         )
+
+    completed = next(
+        (
+            task
+            for task in matching
+            if task.id == submitted_id and task.status is HumanTaskStatus.COMPLETED
+        ),
+        None,
+    )
+    if completed is not None:
+        result = record_store.get_result(completed.id)
+        if result is not None:
+            return completed, result, None
 
     rejected_task = next((task for task in matching if task.id == submitted_id), matching[0])
     record_store.record_rejection(
@@ -1119,124 +1037,22 @@ def _validated_completion_payload(
     return payload
 
 
-def _completion_authority(
-    *,
-    actor: Optional[str],
-    task: HumanTask,
-    payload: Mapping[str, Any],
-    authority_resolver: Optional[CompletionAuthorityResolver],
-) -> Optional[dict[str, Any]]:
-    """Derive actor provenance from a trusted invocation path, never raw input."""
-    if actor == "user":
-        if authority_resolver is not None:
-            raise HumanTaskCorrelationError("User completion must not use an authority resolver")
-        return None
-    if actor != "driver_on_behalf_of_user":
-        raise HumanTaskCorrelationError(f"unsupported task result actor {actor!r}")
-    if authority_resolver is None:
-        raise HumanTaskCorrelationError("Driver proxy completion requires an authority resolver")
-    authority = dict(authority_resolver(task, payload))
-    if not authority:
-        raise HumanTaskCorrelationError("Driver proxy completion requires authority evidence")
-    return authority
-
-
-def _same_completion_payload(recorded: Mapping[str, Any], submitted: Mapping[str, Any]) -> bool:
-    """Compare normalized responses while allowing only runtime-owned recovery data."""
-    comparable_recorded = {
-        key: value for key, value in recorded.items() if key != "session_continuation"
-    }
-    return comparable_recorded == dict(submitted)
-
-
-def _human_task_completion_was_projected(
-    *, blackboard: Any, task: HumanTask, result: TaskResult
-) -> bool:
-    """Return whether this exact durable result already reached the Blackboard."""
-    for event in getattr(blackboard, "events", ()):
-        if getattr(event, "event_type", None) != "human_task_completed":
-            continue
-        data = getattr(event, "data", {})
-        if not isinstance(data, Mapping) or data.get("task_id") != task.id:
-            continue
-        recorded_result_id = data.get("result_id")
-        if recorded_result_id is None or recorded_result_id == result.id:
-            return True
-    return False
-
-
-def _human_task_projection_can_recover(
-    *,
-    blackboard: Any,
-    record_store: HumanTaskRecordStore,
-    task: HumanTask,
-    result: TaskResult,
-    continuation: str,
-) -> bool:
-    """Prove that the Blackboard is still at this result's incomplete projection."""
-    active_wait = record_store.active_wait_state(task.workflow_id)
-    if active_wait is not None and active_wait.task_id != task.id:
-        return False
-
-    contract = getattr(blackboard, "handoff_contract", None)
-    if contract is None or contract.from_step != task.step:
-        return False
-
-    expected_step = "done" if continuation == "_done" else continuation
-    current_step = getattr(blackboard, "current_step", None)
-    expected_owner = HandoffOwner.DONE if continuation == "_done" else HandoffOwner.AGENT
-    expected_intent = (
-        HandoffIntent.WORKFLOW_COMPLETE if continuation == "_done" else HandoffIntent.AWAIT_AGENT
-    )
-    if (
-        contract.to_owner is expected_owner
-        and contract.to_step == expected_step
-        and contract.intent is expected_intent
-        and str(contract.source).endswith(f":{result.id}")
-    ):
-        return current_step in {"user", expected_step}
-
-    if current_step == "user":
-        if contract.to_owner is not HandoffOwner.USER or contract.to_step != "user":
-            return False
-        current_key = ":".join(
-            (
-                "user-handoff",
-                task.workflow_id,
-                contract.from_step,
-                contract.intent.value,
-                contract.created_at,
-            )
-        )
-        if task.handoff_key.startswith("user-handoff:"):
-            return task.handoff_key == current_key
-        return contract.intent.value == task.trigger
-
-    if current_step != expected_step:
-        return False
-    if contract.to_owner is HandoffOwner.USER and contract.to_step == "user":
-        if task.handoff_key.startswith("user-handoff:"):
-            current_key = ":".join(
-                (
-                    "user-handoff",
-                    task.workflow_id,
-                    contract.from_step,
-                    contract.intent.value,
-                    contract.created_at,
-                )
-            )
-            return task.handoff_key == current_key
-        return contract.intent.value == task.trigger
-
-    return False
-
-
-def _work_report_summary(result: TaskResult) -> Optional[str]:
+def _work_report_event_data(
+    *, task: Optional[HumanTask], result: Optional[TaskResult]
+) -> dict[str, Any]:
+    if task is None or result is None:
+        return {}
     report = result.payload.get("work_report")
     if not isinstance(report, Mapping):
-        return None
+        return {}
     summary = report.get("summary")
-    return summary if isinstance(summary, str) else None
+    if not isinstance(summary, str):
+        return {}
+    return {
+        "human_task_id": task.id,
+        "result_id": result.id,
+        "work_report_summary": summary,
+    }
 
 
 def _work_report_continuation_input(*, task: HumanTask, result: TaskResult) -> str:
@@ -1249,7 +1065,6 @@ def _work_report_continuation_input(*, task: HumanTask, result: TaskResult) -> s
         "type": "human_task_work_report",
         "human_task_id": task.id,
         "result_id": result.id,
-        "actor": result.actor,
         "work_report": dict(report),
     }
     return (
@@ -1371,8 +1186,10 @@ def _load_dynamic_questions(
 
     from cafe.core.questions_schema import parse_questions_xml, validate_questions_xml
 
-    questions_file = issue_dir / step_name / f"iteration_{iteration:03d}" / "questions.xml"
-    if not validate_questions_xml(questions_file):
+    step_dir = issue_dir / step_name
+    iteration_dirs = sorted(step_dir.glob("iteration_*")) if step_dir.exists() else []
+    questions_file = iteration_dirs[-1] / "questions.xml" if iteration_dirs else None
+    if questions_file is None or not validate_questions_xml(questions_file):
         return ()
     return tuple(
         HumanTaskQuestion(

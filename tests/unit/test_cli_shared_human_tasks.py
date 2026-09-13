@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -11,7 +10,7 @@ from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.ui import cli_shared
-from cafe.ui.human_tasks import apply_human_task_payload, resolve_step_human_task
+from cafe.ui.human_tasks import resolve_step_human_task
 
 pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
@@ -230,9 +229,9 @@ def test_interactive_handoff_recovers_a_persisted_same_step_completion_after_int
     records = HumanTaskRecordStore(issue_dir)
     assert target == "develop"
     assert len(records.results()) == 1
-    assert (issue_dir / "develop" / "iteration_002" / "user_input.md").read_text(
-        encoding="utf-8"
-    ) == response["feedback"]
+    assert (
+        issue_dir / "develop" / "iteration_002" / "user_input.md"
+    ).read_text(encoding="utf-8") == response["feedback"]
     assert store.load_or_create("develop").handoff_contract.to_step == "develop"
 
 
@@ -248,7 +247,7 @@ def test_interactive_handoff_recovers_dynamic_answers_from_completed_iteration(
     (phase_dir / "questions.xml").write_text(
         (
             "<questions>\n"
-            '  <question id="scope"><title>Scope?</title><options><option>Small</option>'
+            "  <question id=\"scope\"><title>Scope?</title><options><option>Small</option>"
             "</options></question>\n"
             "</questions>"
         ),
@@ -323,156 +322,3 @@ def test_interactive_handoff_recovers_dynamic_answers_from_completed_iteration(
         encoding="utf-8"
     ) == "scope: Small"
     assert store.load_or_create("spec").handoff_contract.to_step == "spec"
-
-
-def test_interactive_recovery_preserves_a_stored_driver_actor(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    issue_dir = tmp_path / ".cafe" / "issues" / "driver-result-recovery"
-    playbook = PlaybookLoader().load("standard")
-    store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("spec", playbook_id="standard")
-    store.set_current_step(blackboard, "user")
-    store.update_handoff_contract(
-        blackboard,
-        from_step="spec",
-        to_owner=HandoffOwner.USER,
-        to_step="user",
-        intent=HandoffIntent.CONFIRM_OUTPUT,
-        source="test",
-    )
-    policy, binding = resolve_step_human_task(
-        playbook_data=playbook, step_name="spec", trigger="confirm_output"
-    )
-    task = HumanTaskRecordStore(issue_dir).materialize(
-        workflow_id=blackboard.workflow_id,
-        step="spec",
-        iteration=1,
-        trigger="confirm_output",
-        policy_id=policy.id,
-        prompt=policy.prompt,
-        expected_result=policy.model_dump(mode="json"),
-        continuations=binding.outcomes,
-        assignee_type="user",
-    )
-    payload = {
-        "task": policy.id,
-        "decision": "confirm",
-        "human_task_id": task.id,
-        "work_report": {"summary": "Implemented it.", "outcome": "Tests pass."},
-    }
-
-    with monkeypatch.context() as interrupted:
-        interrupted.setattr(
-            "cafe.ui.human_tasks._write_next_iteration_user_input",
-            lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("interrupted")),
-        )
-        with pytest.raises(RuntimeError, match="interrupted"):
-            apply_human_task_payload(
-                issue_dir=issue_dir,
-                playbook_data=playbook,
-                blackboard=blackboard,
-                from_step="spec",
-                trigger="confirm_output",
-                raw_payload=payload,
-                source="command",
-                actor="driver_on_behalf_of_user",
-                authority_resolver=lambda _task, _payload: {"basis": "test contract"},
-            )
-
-    monkeypatch.setattr(
-        "cafe.ui.human_tasks.collect_human_task_payload",
-        lambda *_args, **_kwargs: pytest.fail("recovery must not re-prompt the participant"),
-    )
-    target = cli_shared._handle_declared_human_task_handoff(
-        issue_name="driver-result-recovery",
-        issue_dir=issue_dir,
-        blackboard=store.load_or_create("spec", playbook_id="standard"),
-        from_step="spec",
-        summary="",
-        playbook_data=playbook,
-        trigger="confirm_output",
-    )
-
-    result = HumanTaskRecordStore(issue_dir).get_result(task.id)
-    assert target == "plan"
-    assert result is not None
-    assert result.actor == "driver_on_behalf_of_user"
-    assert store.load_or_create("spec").handoff_contract.to_step == "plan"
-
-
-def test_interactive_recovery_preserves_an_unknown_legacy_actor(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    issue_dir = tmp_path / ".cafe" / "issues" / "legacy-result-recovery"
-    playbook = PlaybookLoader().load("standard")
-    store = BlackboardStore(issue_dir)
-    blackboard = store.load_or_create("spec", playbook_id="standard")
-    store.set_current_step(blackboard, "user")
-    store.update_handoff_contract(
-        blackboard,
-        from_step="spec",
-        to_owner=HandoffOwner.USER,
-        to_step="user",
-        intent=HandoffIntent.CONFIRM_OUTPUT,
-        source="test",
-    )
-    policy, binding = resolve_step_human_task(
-        playbook_data=playbook, step_name="spec", trigger="confirm_output"
-    )
-    task = HumanTaskRecordStore(issue_dir).materialize(
-        workflow_id=blackboard.workflow_id,
-        step="spec",
-        iteration=1,
-        trigger="confirm_output",
-        policy_id=policy.id,
-        prompt=policy.prompt,
-        expected_result=policy.model_dump(mode="json"),
-        continuations=binding.outcomes,
-        assignee_type="user",
-    )
-    payload = {"task": policy.id, "decision": "confirm", "human_task_id": task.id}
-
-    with monkeypatch.context() as interrupted:
-        interrupted.setattr(
-            BlackboardStore,
-            "set_current_step",
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("interrupted")),
-        )
-        with pytest.raises(RuntimeError, match="interrupted"):
-            apply_human_task_payload(
-                issue_dir=issue_dir,
-                playbook_data=playbook,
-                blackboard=blackboard,
-                from_step="spec",
-                trigger="confirm_output",
-                raw_payload=payload,
-                source="command",
-            )
-
-    record_path = issue_dir / "human_tasks.json"
-    record_data = json.loads(record_path.read_text(encoding="utf-8"))
-    stored_result = next(item for item in record_data["results"] if item["task_id"] == task.id)
-    stored_result.pop("actor")
-    stored_result.pop("authority", None)
-    record_path.write_text(json.dumps(record_data), encoding="utf-8")
-
-    monkeypatch.setattr(
-        "cafe.ui.human_tasks.collect_human_task_payload",
-        lambda *_args, **_kwargs: pytest.fail("recovery must not re-prompt the participant"),
-    )
-    target = cli_shared._handle_declared_human_task_handoff(
-        issue_name="legacy-result-recovery",
-        issue_dir=issue_dir,
-        blackboard=store.load_or_create("spec", playbook_id="standard"),
-        from_step="spec",
-        summary="",
-        playbook_data=playbook,
-        trigger="confirm_output",
-    )
-
-    result = HumanTaskRecordStore(issue_dir).get_result(task.id)
-    assert target == "plan"
-    assert result is not None
-    assert result.actor is None
-    assert store.load_or_create("spec").handoff_contract.to_step == "plan"

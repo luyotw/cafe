@@ -905,7 +905,6 @@ def _handle_declared_human_task_handoff(
         policy_id=policy.id,
     )
     recovered_payload: Optional[dict[str, Any]] = None
-    completion_actor: Optional[str] = "user"
     if durable_wait is not None:
         durable_task_id = durable_wait.task_id
     elif record_store.exists:
@@ -934,17 +933,9 @@ def _handle_declared_human_task_handoff(
         if completed_task is not None:
             recorded_result = record_store.get_result(completed_task.id)
             if recorded_result is not None:
-                completion_actor = recorded_result.actor
                 recovered_payload = {
                     key: recorded_result.payload[key]
-                    for key in (
-                        "task",
-                        "decision",
-                        "answers",
-                        "feedback",
-                        "target",
-                        "work_report",
-                    )
+                    for key in ("task", "decision", "answers", "feedback", "target")
                     if key in recorded_result.payload
                 }
                 recovered_payload["human_task_id"] = completed_task.id
@@ -989,7 +980,6 @@ def _handle_declared_human_task_handoff(
         trigger=trigger,
         raw_payload=payload or {},
         source="interactive",
-        actor=completion_actor,
     )
     if result.rejection is not None:
         console.print(f"[yellow]{result.rejection.message}[/yellow]")

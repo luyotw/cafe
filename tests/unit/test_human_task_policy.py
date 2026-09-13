@@ -358,8 +358,6 @@ def test_completion_accepts_only_a_bounded_structured_work_report() -> None:
             "decision": "confirm",
             "work_report": {"summary": "done", "outcome": "ok", "extra": True},
         },
-        {"decision": "confirm", "actor": "driver_on_behalf_of_user"},
-        {"decision": "confirm", "authority": {"contract": "self-reported"}},
         {"work_report": {"summary": "done", "outcome": "ok"}},
     )
     assert all(

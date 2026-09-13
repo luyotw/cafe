@@ -230,7 +230,6 @@ different one. Then submit the exact HumanTask response, for example:
 ```bash
 cafe task complete <active-human-task-id> \
   --result '{"task":"output-review","decision":"confirm","human_task_id":"<active-human-task-id>"}' \
-  --driver-proxy \
   --no-resume --json
 ```
 
