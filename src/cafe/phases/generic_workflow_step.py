@@ -68,6 +68,7 @@ from cafe.core.todo import (
     TodoContractError,
     TodoSourceArtifact,
     projection_todo_items,
+    workflow_feedback_matching_identities,
     workflow_feedback_todo_items,
 )
 from cafe.core.types import AgentCLI
@@ -1837,11 +1838,38 @@ class GenericWorkflowStepExecutor(Phase):
         selected_name = artifact_by_step.get(from_step or "")
         selected = present.get(selected_name) if selected_name else None
 
+        human_task_identities: tuple[str, ...] | None = None
+        if workflow_entry is not None and from_step == "pr":
+            human_task_event = next(
+                (
+                    candidate
+                    for candidate in reversed(state.events)
+                    if candidate.event_type == "human_task_completed"
+                    and candidate.step == from_step
+                    and (transition is None or candidate.timestamp >= transition.timestamp)
+                    and candidate.data.get("to_step") == state.current_step
+                    and isinstance(candidate.data.get("task_id"), str)
+                ),
+                None,
+            )
+            if human_task_event is not None:
+                task_id = str(human_task_event.data["task_id"])
+                try:
+                    human_task_identities = workflow_feedback_matching_identities(
+                        Path(str(getattr(workflow_entry, "path", workflow_entry))),
+                        target_step=state.current_step,
+                        source_kind="local_review",
+                        identity_prefix=f"local_review:{from_step}:{task_id}:",
+                    )
+                except TodoContractError as exc:
+                    raise ValueError(f"Correction Todo provenance is invalid: {exc}") from exc
+
         # A persisted delivery is the strongest route evidence. Otherwise an
         # explicit Review/QA/PR transition owns the correction whenever its
         # direct artifact exists; unrelated pending feedback must not replace it.
         use_workflow = workflow_entry is not None and (
             delivered is not None
+            or human_task_identities is not None
             or from_step in {None, state.current_step}
             or (from_step == "pr" and selected is None)
         )
@@ -1850,7 +1878,7 @@ class GenericWorkflowStepExecutor(Phase):
                 workflow_items = workflow_feedback_todo_items(
                     Path(str(getattr(workflow_entry, "path", workflow_entry))),
                     target_step=state.current_step,
-                    source_identities=delivered,
+                    source_identities=delivered or human_task_identities,
                 )
             except TodoContractError as exc:
                 raise ValueError(f"Correction Todo provenance is invalid: {exc}") from exc

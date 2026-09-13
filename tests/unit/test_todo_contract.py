@@ -55,7 +55,18 @@ def test_todo_parser_accepts_only_the_canonical_intentionally_empty_marker() -> 
 def test_every_builtin_todo_producer_declares_the_empty_marker() -> None:
     skills = Path("src/cafe/data/skills")
     for name in ("cafe-plan", "cafe-review", "cafe-qa", "cafe-pr"):
-        assert "No actionable work." in (skills / name / "SKILL.md").read_text(encoding="utf-8")
+        guidance = (skills / name / "SKILL.md").read_text(encoding="utf-8")
+        assert "No actionable work." in guidance
+        assert "100" in guidance
+
+
+def test_todo_parser_rejects_limit_plus_one_items() -> None:
+    rows = [
+        _item(f"work {index}").replace("PLAN-001", f"PLAN-{index:03d}") for index in range(1, 102)
+    ]
+    assert len(parse_todo_list("## Todo List\n" + "\n".join(rows[:100]))) == 100
+    with pytest.raises(TodoContractError):
+        parse_todo_list("## Todo List\n" + "\n".join(rows))
 
 
 def test_correction_source_requires_explicit_causal_artifact(tmp_path) -> None:

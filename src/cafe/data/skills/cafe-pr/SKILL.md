@@ -112,7 +112,7 @@ the review task can expose a verified PR URL.
 
 ### PR review comments mode
 如果 `Current user input for this iteration` 內是 PR review comments：
-- 只把明確路由為 `fix_now` 的 comments 整理到 `## Todo List`，格式為 ``- [ ] `PR-NNN` — Source: `pr_comment` — Work: ... — Closure: ... — Evidence: ...``；沒有 `fix_now` comments 時只寫 canonical marker `No actionable work.`，不得留下空白區段；ordinary PR body、`## Test Plan` 與未決 Follow-up Proposal 不得匯入
+- 只把明確路由為 `fix_now` 的 comments 整理到 `## Todo List`，最多 100 列，格式為 ``- [ ] `PR-NNN` — Source: `pr_comment` — Work: ... — Closure: ... — Evidence: ...``；沒有 `fix_now` comments 時只寫 canonical marker `No actionable work.`，不得留下空白區段；ordinary PR body、`## Test Plan` 與未決 Follow-up Proposal 不得匯入
 - 只把 todo list 寫到輸出檔，不要混入原始 PR comments
 - 把 next-step baton 寫成 `develop`
 

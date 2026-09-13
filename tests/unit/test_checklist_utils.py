@@ -1,6 +1,7 @@
 """Tests for checklist utilities."""
 
 import os
+import subprocess
 
 import pytest
 
@@ -8,6 +9,7 @@ from cafe.utils.checklist_utils import (
     generate_checklist_file,
     resolve_checklist_placeholders,
 )
+from cafe.verification import run_verification
 
 
 class TestResolveChecklistPlaceholders:
@@ -207,6 +209,72 @@ class TestGenerateChecklistFile:
             todo_ledger_path=ledger_path,
         )
         assert output_path.read_text(encoding="utf-8").startswith("[ ]")
+
+    def test_projected_resume_requires_a_current_targeted_receipt(self, tmp_path):
+        from cafe.core.todo import parse_todo_list
+
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "config", "user.email", "test@example.com"],
+            check=True,
+        )
+        subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "Test"], check=True)
+        (tmp_path / ".gitignore").write_text(
+            "checklist.md\noutput.md\nverification.json\nverification.log\n"
+            ".pytest_cache/\n__pycache__/\n"
+        )
+        source = tmp_path / "src" / "feature.py"
+        test = tmp_path / "tests" / "test_feature.py"
+        source.parent.mkdir()
+        test.parent.mkdir()
+        source.write_text("VALUE = 1\n")
+        test.write_text("def test_value(): assert True\n")
+        subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "Add feature"], check=True)
+        head = subprocess.check_output(
+            ["git", "-C", str(tmp_path), "rev-parse", "HEAD"], text=True
+        ).strip()
+        item = parse_todo_list(
+            "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: implement — "
+            "Closure: done — Evidence: test\n"
+        )[0]
+        output_path = tmp_path / "checklist.md"
+        ledger_path = tmp_path / "output.md"
+        row = item.checklist_row()
+        output_path.write_text(row.replace("[ ]", "[x]") + "\n")
+        command = "pytest -q tests/test_feature.py::test_value"
+        ledger_path.write_text(
+            "## Todo Progress\n\n### PLAN-001\n- Status: completed\n"
+            f"- Source fingerprint: `{item.fingerprint}`\n"
+            "- Files: `src/feature.py`, `tests/test_feature.py`\n"
+            f"- Commit: `{head}`\n"
+            f"- Targeted evidence: command=`{command}`; exit=0; head=`{head}`\n"
+            "- Remaining work: None.\n- Next action: Review.\n"
+        )
+        assert (
+            run_verification(
+                output_file=ledger_path,
+                command=command.split(),
+                scope="targeted",
+                cwd=tmp_path,
+            )[0]
+            == 0
+        )
+        generate_checklist_file(
+            output_path,
+            row + "\n",
+            preserve_completed_items=True,
+            todo_ledger_path=ledger_path,
+        )
+        assert output_path.read_text().startswith("[x]")
+        (tmp_path / "verification.log").write_text("forged\n")
+        generate_checklist_file(
+            output_path,
+            row + "\n",
+            preserve_completed_items=True,
+            todo_ledger_path=ledger_path,
+        )
+        assert output_path.read_text().startswith("[ ]")
 
     def test_rejects_symlink_without_touching_its_target(self, tmp_path):
         victim = tmp_path / "victim.md"

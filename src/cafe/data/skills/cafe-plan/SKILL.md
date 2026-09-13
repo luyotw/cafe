@@ -107,7 +107,7 @@ Read your agent file: {agent_file}
 - 前一份 output 的 canonical marker 已是 `detailed-plan` 時，維持既有 Plan revision；只有
   feedback 實質改變方案方向時，才切回 `solution-alignment` 並重新確認。
 - Detailed Plan 階段才依規格拆解實作步驟，先列測試，再列實作
-- Detailed Plan 的可執行工作只放在 `## Todo List`，每列使用 ``- [ ] `PLAN-NNN` — Source: `plan` — Work: ... — Closure: ... — Evidence: ...``；ID 唯一穩定，欄位皆不可為空，其他 checkbox 不代表 Develop work。確定沒有可執行項目時，區段必須只寫 canonical marker `No actionable work.`，不得留下空白區段。
+- Detailed Plan 的可執行工作只放在 `## Todo List`，最多 100 列；每列使用 ``- [ ] `PLAN-NNN` — Source: `plan` — Work: ... — Closure: ... — Evidence: ...``；ID 唯一穩定，欄位皆不可為空，其他 checkbox 不代表 Develop work。確定沒有可執行項目時，區段必須只寫 canonical marker `No actionable work.`，不得留下空白區段。
 - 嚴格遵守 TDD，避免直接寫程式碼
 - 選定執行或部署架構前，除非 repo、規格或本輪對話已有明確證據，否則預設 user
   不熟悉主機、網路與雲端維運。先透過 `questions.xml` 用生活化問題確認會在哪些裝置與

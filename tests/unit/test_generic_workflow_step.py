@@ -6132,6 +6132,64 @@ def test_causal_todo_normal_plan_entry_ignores_feedback_history(tmp_path: Path) 
     assert GenericWorkflowStepExecutor._add_causal_todo_artifact(artifacts, state) is artifacts
 
 
+def test_causal_todo_local_review_human_task_precedes_direct_pr_fallback(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / "issue"
+    ledger = WorkflowFeedbackLedger(issue_dir)
+    ledger.record(
+        source_identity="local_review:pr:local-review:4",
+        source_kind="local_review",
+        target_step="develop",
+        content="fix the user's selected PR concern",
+    )
+    pr_result = tmp_path / "pr.md"
+    pr_result.write_text(
+        "## Todo List\n"
+        "- [ ] `PR-001` — Source: `pr_comment` — Work: stale direct work — "
+        "Closure: done — Evidence: test\n"
+    )
+    state = BlackboardStore(issue_dir).load_or_create("develop")
+    state.events.extend(
+        [
+            EventEntry(
+                timestamp="2026-01-01T00:00:00Z",
+                step="pr",
+                event_type="transition",
+                message="",
+                data={"from": "pr", "to": "develop"},
+            ),
+            EventEntry(
+                timestamp="2026-01-01T00:00:01Z",
+                step="pr",
+                event_type="human_task_completed",
+                message="",
+                data={"step": "pr", "task_id": "local-review", "to_step": "develop"},
+            ),
+        ]
+    )
+    resolved = GenericWorkflowStepExecutor._add_causal_todo_artifact(
+        {
+            "pr_result": ArtifactEntry(
+                name="pr_result",
+                kind=ArtifactKind.DOCUMENT,
+                version=1,
+                updated_by="pr",
+                path=str(pr_result),
+            ),
+            "workflow_feedback": ArtifactEntry(
+                name="workflow_feedback",
+                kind=ArtifactKind.DOCUMENT,
+                version=1,
+                updated_by="human_task",
+                path=str(ledger.path),
+            ),
+        },
+        state,
+    )["causal_todo"]
+    assert [item.work for item in resolved.items] == ["fix the user's selected PR concern"]
+
+
 def test_declared_correction_generation_and_completion_pin_causal_source(
     tmp_path: Path,
 ) -> None:
@@ -6209,14 +6267,22 @@ def test_declared_correction_generation_and_completion_pin_causal_source(
     output.write_text(
         "## Todo Progress\n\n### BLK-001\n\n- Status: completed\n"
         f"- Source fingerprint: `{item.fingerprint}`\n"
-        "- Files: `src/cafe/phases/generic_workflow_step.py`\n"
+        "- Files: `src/cafe/phases/generic_workflow_step.py`, "
+        "`tests/unit/test_generic_workflow_step.py`\n"
         f"- Commit: `{head}`\n"
         "- Targeted evidence: command=`pytest -q tests/unit/test_generic_workflow_step.py`; "
         f"exit=0; head=`{head}`\n"
         "- Remaining work: None.\n- Next action: Review.\n",
         encoding="utf-8",
     )
-    assert executor._validate_projected_todo_completion(checklist)
+    with patch(
+        "cafe.utils.checklist_validator.check_verification_receipt",
+        return_value=SimpleNamespace(
+            valid=True,
+            receipt={"command": ["pytest", "-q", "tests/unit/test_generic_workflow_step.py"]},
+        ),
+    ):
+        assert executor._validate_projected_todo_completion(checklist)
 
     review.write_text("## Todo List\n", encoding="utf-8")
     assert not executor._validate_projected_todo_completion(checklist)

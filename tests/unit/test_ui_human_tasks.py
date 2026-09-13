@@ -16,6 +16,7 @@ from cafe.core.blackboard import (
 )
 from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.human_tasks import HumanTaskPolicy
+from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
 from cafe.skills.loader import SkillLoader
 from cafe.ui.human_tasks import (
     apply_human_task_payload,
@@ -599,6 +600,23 @@ def test_feedback_delivery_records_before_the_declared_correction_route(tmp_path
         }
     }
     blackboard.step_attempt_counts["pr"] = 3
+    pr_result = issue_dir / "pr" / "iteration_001" / "output.md"
+    pr_result.parent.mkdir(parents=True)
+    pr_result.write_text(
+        "## Todo List\n"
+        "- [ ] `PR-001` — Source: `pr_comment` — Work: prior PR item — "
+        "Closure: done — Evidence: test\n"
+    )
+    store.put_artifact(
+        blackboard,
+        ArtifactEntry(
+            name="pr_result",
+            kind=ArtifactKind.DOCUMENT,
+            version=1,
+            updated_by="pr",
+            path=str(pr_result),
+        ),
+    )
 
     result = apply_human_task_payload(
         issue_dir=issue_dir,
@@ -619,6 +637,14 @@ def test_feedback_delivery_records_before_the_declared_correction_route(tmp_path
         "Cover the empty input boundary."
     ]
     assert "workflow_feedback" in blackboard.artifacts
+    resolved = GenericWorkflowStepExecutor._add_causal_todo_artifact(
+        {
+            "pr_result": blackboard.artifacts["pr_result"],
+            "workflow_feedback": blackboard.artifacts["workflow_feedback"],
+        },
+        blackboard,
+    )["causal_todo"]
+    assert [item.work for item in resolved.items] == ["Cover the empty input boundary."]
     assert blackboard.step_attempt_counts == {"pr": 3}
     assert not (issue_dir / "develop" / "iteration_001" / "user_input.md").exists()
 
@@ -827,9 +853,7 @@ def test_cross_step_revision_feedback_replaces_pending_input_without_state(
     )
 
     assert result.target == "develop"
-    assert (target_iteration / "user_input.md").read_text(encoding="utf-8") == (
-        "New feedback"
-    )
+    assert (target_iteration / "user_input.md").read_text(encoding="utf-8") == ("New feedback")
     assert not (issue_dir / "develop" / "iteration_002").exists()
 
 
@@ -1100,9 +1124,9 @@ def test_dynamic_xml_questions_reject_incomplete_command_answers(tmp_path: Path)
     (iteration_dir / "questions.xml").write_text(
         (
             "<questions>\n"
-            "  <question id=\"scope\"><title>Scope?</title><options><option>Small</option>"
+            '  <question id="scope"><title>Scope?</title><options><option>Small</option>'
             "</options></question>\n"
-            "  <question id=\"compatibility\"><title>Compatibility?</title><options>"
+            '  <question id="compatibility"><title>Compatibility?</title><options>'
             "<option>Yes</option></options></question>\n"
             "</questions>"
         ),

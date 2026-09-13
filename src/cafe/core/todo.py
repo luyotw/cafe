@@ -11,6 +11,7 @@ from typing import Literal, Mapping
 
 TodoSource = Literal["plan", "review", "qa", "pr_comment", "workflow_feedback"]
 TODO_SOURCES = frozenset({"plan", "review", "qa", "pr_comment", "workflow_feedback"})
+MAX_TODO_ITEMS = 100
 _HEADING = re.compile(r"^#{1,6}\s+Todo List\s*$", re.IGNORECASE)
 _ANY_HEADING = re.compile(r"^#{1,6}\s+")
 _INTENTIONALLY_EMPTY = "No actionable work."
@@ -130,6 +131,8 @@ def parse_todo_list(
                 checked=match.group("checked").lower() == "x",
             )
         )
+        if len(items) > MAX_TODO_ITEMS:
+            raise TodoContractError(f"Todo List exceeds {MAX_TODO_ITEMS} items")
     return tuple(items)
 
 
@@ -175,6 +178,8 @@ def workflow_feedback_todo_items(
         return ()
     if not selected:
         raise TodoContractError("workflow feedback Todo delivery is missing")
+    if len(selected) > MAX_TODO_ITEMS:
+        raise TodoContractError(f"Todo List exceeds {MAX_TODO_ITEMS} items")
 
     items: list[TodoItem] = []
     for entry in selected:
@@ -199,6 +204,37 @@ def workflow_feedback_todo_items(
             )
         )
     return tuple(items)
+
+
+def workflow_feedback_matching_identities(
+    path: Path, *, target_step: str, source_kind: str, identity_prefix: str
+) -> tuple[str, ...]:
+    """Return bounded pending identities matching one declared inbound route."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise TodoContractError("workflow feedback Todo source is unreadable") from exc
+    entries = raw.get("entries") if isinstance(raw, dict) and raw.get("version") == 1 else None
+    if not isinstance(entries, list):
+        raise TodoContractError("workflow feedback Todo source has an invalid shape")
+    from cafe.core.workflow_feedback import WorkflowFeedbackEntry, WorkflowFeedbackError
+
+    matches: list[str] = []
+    for raw_entry in entries:
+        try:
+            entry = WorkflowFeedbackEntry.from_dict(raw_entry)
+        except WorkflowFeedbackError as exc:
+            raise TodoContractError("workflow feedback Todo entry has an invalid shape") from exc
+        if (
+            entry.target_step == target_step
+            and entry.source_kind == source_kind
+            and entry.source_identity.startswith(identity_prefix)
+            and entry.actionable
+        ):
+            matches.append(entry.source_identity)
+    if len(matches) != 1:
+        raise TodoContractError("workflow feedback human-task route is ambiguous")
+    return tuple(matches)
 
 
 def projection_todo_items(
