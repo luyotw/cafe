@@ -9,7 +9,10 @@ from collections import Counter
 from pathlib import Path
 from typing import Mapping, Union
 
-from cafe.utils.checklist_validator import validate_todo_evidence_set
+from cafe.utils.checklist_validator import (
+    GIT_EVIDENCE_TIMEOUT_SECONDS,
+    validate_todo_evidence_set,
+)
 
 _CHECKBOX_LINE = re.compile(
     r"^(?P<indent>[ \t]*)(?P<bullet>[-*][ \t]+)?\[(?P<state>[ xX])\](?P<body>.*)$"
@@ -157,22 +160,36 @@ def _restore_completed_items(
                     valid_projected.discard((item_id, fingerprint))
             if (item_id, fingerprint) in valid_projected:
                 evidence_by_id[item_id] = {name: values[0] for name, values in fields.items()}
-        repository = subprocess.run(
-            ["git", "-C", str(todo_ledger_path.parent), "rev-parse", "--show-toplevel"],
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-        )
-        if repository.returncode == 0 and evidence_by_id:
-            evidence_errors = validate_todo_evidence_set(
-                evidence_by_id,
-                Path(repository.stdout.strip()),
-                output_path=todo_ledger_path,
-            )
-            for item_id, fingerprint in tuple(valid_projected):
-                if evidence_errors.get(item_id):
-                    valid_projected.discard((item_id, fingerprint))
+        if evidence_by_id:
+            try:
+                repository = subprocess.run(
+                    [
+                        "git",
+                        "-C",
+                        str(todo_ledger_path.parent),
+                        "rev-parse",
+                        "--show-toplevel",
+                    ],
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                    timeout=GIT_EVIDENCE_TIMEOUT_SECONDS,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                repository = None
+            if repository is None or repository.returncode != 0 or not repository.stdout.strip():
+                valid_projected.clear()
+            else:
+                evidence_errors = validate_todo_evidence_set(
+                    evidence_by_id,
+                    Path(repository.stdout.strip()),
+                    output_path=todo_ledger_path,
+                )
+                # Validation is one atomic evidence-set decision. This also
+                # protects against older validators returning sparse errors.
+                if any(evidence_errors.values()):
+                    valid_projected.clear()
 
     projected_row = re.compile(
         r"^\[[ xX]\] `(?P<id>[^`]+)` — .+ " r"\(source fingerprint: (?P<fp>[0-9a-f]{64})\)$"

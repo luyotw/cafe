@@ -287,8 +287,14 @@ def validate_todo_evidence_set(
         parsed[item_id] = (paths, commits, command, claimed_head)
         all_commits.update(commits)
 
-    # Reject oversized input before any repository or receipt lookup.
+    # A preflight failure makes the submitted evidence set indivisible: callers
+    # must not reuse siblings which have not reached repository/receipt checks.
     if any(errors.values()):
+        for item_id, item_errors in errors.items():
+            if not item_errors:
+                item_errors.append(
+                    f"Todo ledger evidence set failed preflight for {item_id}"
+                )
         return errors
     status = _git(root, "status", "--porcelain", "--untracked-files=no")
     head = _git(root, "rev-parse", "HEAD")

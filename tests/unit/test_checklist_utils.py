@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+from unittest.mock import patch
 
 import pytest
 
@@ -193,12 +194,19 @@ class TestGenerateChecklistFile:
             encoding="utf-8",
         )
 
-        generate_checklist_file(
-            output_path,
-            row + "\n",
-            preserve_completed_items=True,
-            todo_ledger_path=ledger_path,
+        repository = subprocess.CompletedProcess(
+            args=["git"], returncode=0, stdout=str(tmp_path), stderr=""
         )
+        with (
+            patch("cafe.utils.checklist_utils.subprocess.run", return_value=repository),
+            patch("cafe.utils.checklist_utils.validate_todo_evidence_set", return_value={}),
+        ):
+            generate_checklist_file(
+                output_path,
+                row + "\n",
+                preserve_completed_items=True,
+                todo_ledger_path=ledger_path,
+            )
         assert output_path.read_text(encoding="utf-8").startswith("[x]")
 
         ledger_path.write_text("## Todo Progress\n", encoding="utf-8")
@@ -260,13 +268,18 @@ class TestGenerateChecklistFile:
             )[0]
             == 0
         )
-        generate_checklist_file(
-            output_path,
-            row + "\n",
-            preserve_completed_items=True,
-            todo_ledger_path=ledger_path,
-        )
+        real_run = subprocess.run
+        with patch("cafe.utils.checklist_utils.subprocess.run", wraps=real_run) as git_run:
+            generate_checklist_file(
+                output_path,
+                row + "\n",
+                preserve_completed_items=True,
+                todo_ledger_path=ledger_path,
+            )
         assert output_path.read_text().startswith("[x]")
+        # One repository discovery, four batched ledger queries, and three
+        # current-state queries made by the targeted receipt validator.
+        assert git_run.call_count == 8
         (tmp_path / "verification.log").write_text("forged\n")
         generate_checklist_file(
             output_path,
@@ -275,6 +288,126 @@ class TestGenerateChecklistFile:
             todo_ledger_path=ledger_path,
         )
         assert output_path.read_text().startswith("[ ]")
+
+    @pytest.mark.parametrize(
+        "repository_result",
+        [
+            subprocess.CompletedProcess(args=["git"], returncode=1, stdout="", stderr="fail"),
+            subprocess.TimeoutExpired("git", 10),
+        ],
+    )
+    def test_projected_resume_fails_closed_when_repository_discovery_fails(
+        self, tmp_path, repository_result
+    ):
+        from cafe.core.todo import parse_todo_list
+
+        item = parse_todo_list(
+            "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: implement — "
+            "Closure: done — Evidence: test\n"
+        )[0]
+        checklist = tmp_path / "checklist.md"
+        ledger = tmp_path / "output.md"
+        row = item.checklist_row()
+        checklist.write_text(row.replace("[ ]", "[x]") + "\n", encoding="utf-8")
+        ledger.write_text(
+            "## Todo Progress\n\n### PLAN-001\n- Status: completed\n"
+            f"- Source fingerprint: `{item.fingerprint}`\n"
+            "- Files: `tests/test_feature.py`\n"
+            f"- Commit: `{'a' * 40}`\n"
+            f"- Targeted evidence: command=`pytest -q tests/test_feature.py`; exit=0; "
+            f"head=`{'a' * 40}`\n"
+            "- Remaining work: None.\n- Next action: Review.\n",
+            encoding="utf-8",
+        )
+        effect = (
+            repository_result
+            if isinstance(repository_result, BaseException)
+            else None
+        )
+        with patch(
+            "cafe.utils.checklist_utils.subprocess.run",
+            return_value=None if effect else repository_result,
+            side_effect=effect,
+        ) as run:
+            generate_checklist_file(
+                checklist,
+                row + "\n",
+                preserve_completed_items=True,
+                todo_ledger_path=ledger,
+            )
+        assert checklist.read_text(encoding="utf-8").startswith("[ ]")
+        assert run.call_args.kwargs["timeout"] == 10
+
+    def test_projected_resume_reopens_complete_set_on_one_preflight_error(self, tmp_path):
+        from cafe.core.todo import parse_todo_list
+        from cafe.utils.checklist_validator import MAX_EVIDENCE_PATHS_PER_ITEM
+
+        items = parse_todo_list(
+            "## Todo List\n"
+            "- [ ] `PLAN-001` — Source: `plan` — Work: first — Closure: done — Evidence: test\n"
+            "- [ ] `PLAN-002` — Source: `plan` — Work: second — Closure: done — Evidence: test\n"
+        )
+        checklist = tmp_path / "checklist.md"
+        ledger = tmp_path / "output.md"
+        rows = [item.checklist_row() for item in items]
+        checklist.write_text(
+            "\n".join(row.replace("[ ]", "[x]") for row in rows) + "\n",
+            encoding="utf-8",
+        )
+        evidence = []
+        for index, item in enumerate(items):
+            files = (
+                ", ".join(
+                    f"`tests/test_{path_index}.py`"
+                    for path_index in range(MAX_EVIDENCE_PATHS_PER_ITEM + 1)
+                )
+                if index == 0
+                else "`tests/test_sibling.py`"
+            )
+            evidence.append(
+                f"### {item.item_id}\n- Status: completed\n"
+                f"- Source fingerprint: `{item.fingerprint}`\n"
+                f"- Files: {files}\n"
+                f"- Commit: `{'a' * 40}`\n"
+                "- Targeted evidence: command=`pytest -q tests/test_sibling.py`; "
+                f"exit=0; head=`{'a' * 40}`\n"
+                "- Remaining work: None.\n- Next action: Review."
+            )
+        ledger.write_text(
+            "## Todo Progress\n\n" + "\n\n".join(evidence), encoding="utf-8"
+        )
+        repository = subprocess.CompletedProcess(
+            args=["git"], returncode=0, stdout=str(tmp_path), stderr=""
+        )
+        with (
+            patch("cafe.utils.checklist_utils.subprocess.run", return_value=repository),
+            patch("cafe.utils.checklist_validator._git") as git_call,
+            patch("cafe.utils.checklist_validator.check_verification_receipt") as receipt,
+        ):
+            generate_checklist_file(
+                checklist,
+                "\n".join(rows) + "\n",
+                preserve_completed_items=True,
+                todo_ledger_path=ledger,
+            )
+        assert checklist.read_text(encoding="utf-8").count("[ ]") == 2
+        git_call.assert_not_called()
+        receipt.assert_not_called()
+
+    def test_projected_resume_without_evidence_performs_no_repository_query(self, tmp_path):
+        checklist = tmp_path / "checklist.md"
+        ledger = tmp_path / "output.md"
+        checklist.write_text("[x] Ordinary gate\n", encoding="utf-8")
+        ledger.write_text("## Todo Progress\n", encoding="utf-8")
+        with patch("cafe.utils.checklist_utils.subprocess.run") as run:
+            generate_checklist_file(
+                checklist,
+                "[ ] Ordinary gate\n",
+                preserve_completed_items=True,
+                todo_ledger_path=ledger,
+            )
+        run.assert_not_called()
+        assert checklist.read_text(encoding="utf-8") == "[x] Ordinary gate\n"
 
     def test_rejects_symlink_without_touching_its_target(self, tmp_path):
         victim = tmp_path / "victim.md"

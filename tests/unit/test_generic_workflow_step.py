@@ -6060,6 +6060,108 @@ def test_causal_todo_normalizes_pending_and_delivered_workflow_feedback(tmp_path
     assert delivered.items == pending.items
 
 
+@pytest.mark.parametrize("source_identities", [[], [None], [""], ["same", "same"]])
+def test_causal_todo_rejects_invalid_delivered_identities_without_widening(
+    tmp_path: Path, source_identities: list[object]
+) -> None:
+    issue_dir = tmp_path / "issue"
+    ledger = WorkflowFeedbackLedger(issue_dir)
+    ledger.record(
+        source_identity="github-pr:10:99",
+        source_kind="github_pr",
+        target_step="develop",
+        content="unrelated pending",
+    )
+    direct_path = tmp_path / "pr.md"
+    direct_path.write_text(
+        "## Todo List\n"
+        "- [ ] `PR-001` — Source: `pr_comment` — Work: direct — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+    state = BlackboardStore(issue_dir).load_or_create("develop")
+    state.events.extend(
+        [
+            EventEntry(
+                timestamp="2026-01-01T00:00:00Z",
+                step="pr",
+                event_type="transition",
+                message="",
+                data={"from": "pr", "to": "develop"},
+            ),
+            EventEntry(
+                timestamp="2026-01-01T00:00:01Z",
+                step="develop",
+                event_type="workflow_feedback_delivered",
+                message="",
+                data={"source_identities": source_identities},
+            ),
+        ]
+    )
+    artifacts = {
+        "pr_result": ArtifactEntry(
+            name="pr_result",
+            kind=ArtifactKind.DOCUMENT,
+            version=1,
+            updated_by="pr",
+            path=str(direct_path),
+        ),
+        "workflow_feedback": ArtifactEntry(
+            name="workflow_feedback",
+            kind=ArtifactKind.DOCUMENT,
+            version=1,
+            updated_by="human_task",
+            path=str(ledger.path),
+        ),
+    }
+    with pytest.raises(ValueError, match="delivery identities"):
+        GenericWorkflowStepExecutor._add_causal_todo_artifact(artifacts, state)
+
+
+def test_causal_todo_preserves_multiple_delivered_identities(tmp_path: Path) -> None:
+    issue_dir = tmp_path / "issue"
+    ledger = WorkflowFeedbackLedger(issue_dir)
+    identities = []
+    for index in range(2):
+        _created, entry = ledger.record(
+            source_identity=f"github-pr:10:{index}",
+            source_kind="github_pr",
+            target_step="develop",
+            content=f"fix comment {index}",
+        )
+        identities.append(entry.source_identity)
+    state = BlackboardStore(issue_dir).load_or_create("develop")
+    state.events.extend(
+        [
+            EventEntry(
+                timestamp="2026-01-01T00:00:00Z",
+                step="pr",
+                event_type="transition",
+                message="",
+                data={"from": "pr", "to": "develop"},
+            ),
+            EventEntry(
+                timestamp="2026-01-01T00:00:01Z",
+                step="develop",
+                event_type="workflow_feedback_delivered",
+                message="",
+                data={"source_identities": identities},
+            ),
+        ]
+    )
+    workflow = ArtifactEntry(
+        name="workflow_feedback",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="human_task",
+        path=str(ledger.path),
+    )
+    resolved = GenericWorkflowStepExecutor._add_causal_todo_artifact(
+        {"workflow_feedback": workflow}, state
+    )["causal_todo"]
+    assert [item.work for item in resolved.items] == ["fix comment 0", "fix comment 1"]
+
+
 def test_causal_todo_direct_transition_ignores_unrelated_pending_feedback(tmp_path: Path) -> None:
     review = tmp_path / "review.md"
     review.write_text(

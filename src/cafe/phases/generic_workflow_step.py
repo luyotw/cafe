@@ -1827,8 +1827,14 @@ class GenericWorkflowStepExecutor(Phase):
             )
             if event is not None:
                 raw = event.data.get("source_identities")
-                if isinstance(raw, list) and all(isinstance(item, str) for item in raw):
-                    delivered = tuple(raw)
+                if (
+                    not isinstance(raw, list)
+                    or not raw
+                    or any(not isinstance(item, str) or not item for item in raw)
+                    or len(set(raw)) != len(raw)
+                ):
+                    raise ValueError("Correction Todo delivery identities are invalid")
+                delivered = tuple(raw)
 
         artifact_by_step = {
             "review": "review_feedback",
@@ -1878,7 +1884,9 @@ class GenericWorkflowStepExecutor(Phase):
                 workflow_items = workflow_feedback_todo_items(
                     Path(str(getattr(workflow_entry, "path", workflow_entry))),
                     target_step=state.current_step,
-                    source_identities=delivered or human_task_identities,
+                    source_identities=(
+                        delivered if delivered is not None else human_task_identities
+                    ),
                 )
             except TodoContractError as exc:
                 raise ValueError(f"Correction Todo provenance is invalid: {exc}") from exc

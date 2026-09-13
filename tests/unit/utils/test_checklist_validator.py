@@ -340,6 +340,34 @@ def test_repository_evidence_rejects_path_limit_before_git(tmp_path):
     git_call.assert_not_called()
 
 
+def test_repository_evidence_preflight_failure_rejects_complete_set(tmp_path):
+    oversized = {
+        "Files": ", ".join(
+            f"`tests/test_{index}.py`" for index in range(MAX_EVIDENCE_PATHS_PER_ITEM + 1)
+        ),
+        "Commit": f"`{'a' * 40}`",
+        "Targeted evidence": (
+            f"command=`pytest -q tests/test_0.py`; exit=0; head=`{'a' * 40}`"
+        ),
+    }
+    unchecked_sibling = {
+        "Files": "`tests/test_sibling.py`",
+        "Commit": f"`{'a' * 40}`",
+        "Targeted evidence": (
+            f"command=`pytest -q tests/test_sibling.py`; exit=0; head=`{'a' * 40}`"
+        ),
+    }
+    with patch("cafe.utils.checklist_validator._git") as git_call:
+        errors = validate_todo_evidence_set(
+            {"PLAN-001": oversized, "PLAN-002": unchecked_sibling},
+            tmp_path,
+            output_path=tmp_path / "output.md",
+        )
+    assert errors["PLAN-001"]
+    assert errors["PLAN-002"]
+    git_call.assert_not_called()
+
+
 def test_repository_evidence_rejects_commit_limit_before_git(tmp_path):
     from cafe.utils.checklist_validator import MAX_EVIDENCE_COMMITS_PER_ITEM
 
