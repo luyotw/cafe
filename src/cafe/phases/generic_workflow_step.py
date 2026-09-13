@@ -1843,7 +1843,7 @@ class GenericWorkflowStepExecutor(Phase):
             None,
         )
         from_step = str(transition.data.get("from")) if transition is not None else None
-        if from_step is None and state.handoff_contract is not None:
+        if state.handoff_contract is not None:
             candidate = state.handoff_contract.from_step
             if candidate and candidate != state.current_step:
                 from_step = candidate

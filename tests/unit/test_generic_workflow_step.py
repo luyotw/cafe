@@ -6337,10 +6337,10 @@ def test_causal_todo_local_review_human_task_precedes_direct_pr_fallback(
         [
             EventEntry(
                 timestamp="2026-01-01T00:00:00Z",
-                step="pr",
+                step="review",
                 event_type="transition",
                 message="",
-                data={"from": "pr", "to": "develop"},
+                data={"from": "review", "to": "develop"},
             ),
             EventEntry(
                 timestamp="2026-01-01T00:00:01Z",
@@ -6350,6 +6350,14 @@ def test_causal_todo_local_review_human_task_precedes_direct_pr_fallback(
                 data={"step": "pr", "task_id": "local-review", "to_step": "develop"},
             ),
         ]
+    )
+    state.handoff_contract = HandoffContract(
+        version=1,
+        to_owner=HandoffOwner.AGENT,
+        to_step="develop",
+        intent=HandoffIntent.AWAIT_AGENT,
+        from_step="pr",
+        source="human_task.command",
     )
     resolved = GenericWorkflowStepExecutor._add_causal_todo_artifact(
         {
