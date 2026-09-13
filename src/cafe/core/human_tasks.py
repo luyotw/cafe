@@ -189,16 +189,18 @@ class HumanTaskFeedbackDelivery(BaseModel):
     artifact: str
     source_kind: str
     todo_source: str
+    todo_id_prefix: str
 
-    @field_validator("artifact", "source_kind", "todo_source")
+    @field_validator("artifact", "source_kind", "todo_source", "todo_id_prefix")
     @classmethod
     def _validate_feedback_identifier(cls, value: str, info: Any) -> str:
         token = _non_empty(value, field_name=info.field_name)
-        pattern = (
-            r"[a-z][a-z0-9_]*"
-            if info.field_name == "todo_source"
-            else r"[A-Za-z][A-Za-z0-9_-]*"
-        )
+        if info.field_name == "todo_source":
+            pattern = r"[a-z][a-z0-9_]*"
+        elif info.field_name == "todo_id_prefix":
+            pattern = r"[A-Z][A-Z0-9_]*"
+        else:
+            pattern = r"[A-Za-z][A-Za-z0-9_-]*"
         if not re.fullmatch(pattern, token):
             raise ValueError(f"{info.field_name} must be a safe identifier")
         return token

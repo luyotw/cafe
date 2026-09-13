@@ -2669,6 +2669,7 @@ steps:
           artifact: workflow_feedback
           source_kind: local_review
           todo_source: workflow_feedback
+          todo_id_prefix: WF
     'on': {confirm_output: publish}
 entry_point: define
 """,

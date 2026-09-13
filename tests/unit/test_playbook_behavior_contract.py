@@ -53,6 +53,7 @@ def _playbook(*, build_behavior=None, defaults=None):
                 "feedback_artifact": "workflow_feedback",
                 "feedback_source_kind": "github_pr",
                 "feedback_todo_source": "pr_comment",
+                "feedback_todo_id_prefix": "PRC",
                 **build_behavior,
             }
         payload["steps"]["build"]["behavior"] = build_behavior
@@ -170,6 +171,7 @@ def test_feedback_route_preserves_custom_topology_identifiers():
         "feedback_artifact": "signals",
         "feedback_source_kind": "inspection_note",
         "feedback_todo_source": "bespoke",
+        "feedback_todo_id_prefix": "TASK",
     }
 
     behavior = resolve_step_behavior(PlaybookDefinition.model_validate(payload), "build")
@@ -178,6 +180,7 @@ def test_feedback_route_preserves_custom_topology_identifiers():
     assert behavior.feedback_artifact == "signals"
     assert behavior.feedback_source_kind == "inspection_note"
     assert behavior.feedback_todo_source == "bespoke"
+    assert behavior.feedback_todo_id_prefix == "TASK"
 
 
 def test_feedback_targets_require_an_explicit_workflow_feedback_consumer():
@@ -201,6 +204,7 @@ def test_human_feedback_delivery_requires_an_explicit_workflow_feedback_consumer
                 "artifact": "workflow_feedback",
                 "source_kind": "local_review",
                 "todo_source": "workflow_feedback",
+                "todo_id_prefix": "WF",
             },
         }
     ]

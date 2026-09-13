@@ -298,9 +298,11 @@ def test_builtin_pr_feedback_routes_declare_portable_todo_metadata(
     assert behavior.feedback_artifact == "workflow_feedback"
     assert behavior.feedback_source_kind == "github_pr"
     assert behavior.feedback_todo_source == "pr_comment"
+    assert behavior.feedback_todo_id_prefix == "PRC"
     binding = next(task for task in playbook.steps["pr"].human_tasks if task.feedback_delivery)
     assert binding.feedback_delivery is not None
     assert binding.feedback_delivery.todo_source == "workflow_feedback"
+    assert binding.feedback_delivery.todo_id_prefix == "WF"
 
 
 @pytest.mark.parametrize("playbook_id", ["standard-qa", "tdd-qa"])

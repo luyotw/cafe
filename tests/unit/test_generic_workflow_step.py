@@ -29,7 +29,7 @@ from cafe.core.session_continuation import (
     SessionContinuationPolicy,
 )
 from cafe.core.status_codes import PhaseStatusCode
-from cafe.core.todo import parse_todo_list
+from cafe.core.todo import parse_todo_list, workflow_feedback_todo_items
 from cafe.core.types import AgentCLI, AgentConfig, AgentResponse, CliEntry, TokenUsage
 from cafe.core.workflow_feedback import WorkflowFeedbackLedger
 from cafe.phases.generic_phase import GenericPhase, GenericPhaseExecution
@@ -6000,6 +6000,7 @@ def _causal_todo_playbook() -> dict:
                     "feedback_artifact": "workflow_feedback",
                     "feedback_source_kind": "github_pr",
                     "feedback_todo_source": "pr_comment",
+                    "feedback_todo_id_prefix": "PRC",
                 },
                 "human_tasks": [
                     {
@@ -6009,6 +6010,7 @@ def _causal_todo_playbook() -> dict:
                             "artifact": "workflow_feedback",
                             "source_kind": "local_review",
                             "todo_source": "workflow_feedback",
+                            "todo_id_prefix": "WF",
                         },
                     }
                 ],
@@ -6387,30 +6389,39 @@ def test_custom_topology_generation_and_completion_pin_causal_source(
     tmp_path: Path,
 ) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "custom-topology"
-    review = tmp_path / "inspection.md"
-    original = (
-        "## Todo List\n"
-        "- [ ] `BLK-001` — Source: `bespoke` — Work: fix wiring — "
-        "Closure: production path works — Evidence: targeted pytest\n"
+    ledger = WorkflowFeedbackLedger(issue_dir)
+    _created, feedback = ledger.record(
+        source_identity="inspection:17",
+        source_kind="inspection_note",
+        target_step="repair_shop",
+        content="fix wiring",
     )
-    review.write_text(original, encoding="utf-8")
     store = BlackboardStore(issue_dir)
     state = store.load_or_create("repair_shop")
-    state.events.append(
-        EventEntry(
-            timestamp="2026-01-01T00:00:00Z",
-            step="inspector",
-            event_type="transition",
-            message="",
-            data={"from": "inspector", "to": "repair_shop"},
-        )
+    state.events.extend(
+        [
+            EventEntry(
+                timestamp="2026-01-01T00:00:00Z",
+                step="inspector",
+                event_type="transition",
+                message="",
+                data={"from": "inspector", "to": "repair_shop"},
+            ),
+            EventEntry(
+                timestamp="2026-01-01T00:00:01Z",
+                step="repair_shop",
+                event_type="workflow_feedback_delivered",
+                message="",
+                data={"source_identities": [feedback.source_identity]},
+            ),
+        ]
     )
-    state.artifacts["findings"] = ArtifactEntry(
-        name="findings",
+    state.artifacts["signals"] = ArtifactEntry(
+        name="signals",
         kind=ArtifactKind.DOCUMENT,
-        version=1,
-        updated_by="inspector",
-        path=str(review),
+        version=3,
+        updated_by="feedback_hook",
+        path=str(ledger.path),
     )
     store.save(state)
     skill_dir = tmp_path / ".cafe" / "skills" / "repair-kit"
@@ -6440,11 +6451,19 @@ workflow:
             "playbook": {"id": "custom-topology"},
             "roles": {"artisan": {"default_agent": "David"}},
             "steps": {
-                "inspector": {"output_artifact": "findings"},
+                "inspector": {
+                    "behavior": {
+                        "feedback_target": "repair_shop",
+                        "feedback_artifact": "signals",
+                        "feedback_source_kind": "inspection_note",
+                        "feedback_todo_source": "bespoke",
+                        "feedback_todo_id_prefix": "TASK",
+                    }
+                },
                 "repair_shop": {
                     "skill": "repair-kit",
                     "role": "artisan",
-                    "input_artifacts": ["findings"],
+                    "input_artifacts": ["signals"],
                 }
             },
         },
@@ -6469,7 +6488,16 @@ workflow:
         output_file=output,
         questions_xml_file=iteration_dir / "questions.xml",
     )
-    item = parse_todo_list(original)[0]
+    item = workflow_feedback_todo_items(
+        ledger.path,
+        target_step="repair_shop",
+        source_by_kind={"inspection_note": "bespoke"},
+        id_prefix_by_kind={"inspection_note": "TASK"},
+        source_identities=(feedback.source_identity,),
+    )[0]
+    assert item.item_id.startswith("TASK-")
+    assert item.source == "bespoke"
+    assert item.checklist_row() in checklist.read_text(encoding="utf-8")
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     evidence_commit = subprocess.check_output(
         [
@@ -6489,7 +6517,7 @@ workflow:
         encoding="utf-8",
     )
     output.write_text(
-        "## Todo Progress\n\n### BLK-001\n\n- Status: completed\n"
+        f"## Todo Progress\n\n### {item.item_id}\n\n- Status: completed\n"
         f"- Source fingerprint: `{item.fingerprint}`\n"
         "- Files: `tests/unit/test_generic_workflow_step.py`\n"
         f"- Commit: `{evidence_commit}`\n"
@@ -6507,5 +6535,5 @@ workflow:
     ):
         assert executor._validate_projected_todo_completion(checklist)
 
-    review.write_text("## Todo List\n", encoding="utf-8")
+    ledger.path.write_text('{"version": 1, "entries": []}\n', encoding="utf-8")
     assert not executor._validate_projected_todo_completion(checklist)

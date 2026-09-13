@@ -593,6 +593,7 @@ def test_feedback_delivery_records_before_the_declared_correction_route(tmp_path
                                 "artifact": "workflow_feedback",
                                 "source_kind": "local_review",
                                 "todo_source": "workflow_feedback",
+                                "todo_id_prefix": "WF",
                             },
                     }
                 ],
@@ -678,6 +679,7 @@ def test_feedback_delivery_terminal_disposition_does_not_record_feedback(
                                 "artifact": "workflow_feedback",
                                 "source_kind": "local_review",
                                 "todo_source": "workflow_feedback",
+                                "todo_id_prefix": "WF",
                             },
                     }
                 ],

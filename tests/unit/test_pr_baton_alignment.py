@@ -38,6 +38,7 @@ def test_align_pr_baton_updates_when_needs_changes_and_stale(tmp_path: Path) -> 
                     "feedback_artifact": "workflow_feedback",
                     "feedback_source_kind": "github_pr",
                     "feedback_todo_source": "pr_comment",
+                    "feedback_todo_id_prefix": "PRC",
                 }
             },
             "develop": {},

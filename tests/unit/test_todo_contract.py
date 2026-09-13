@@ -135,24 +135,41 @@ def test_workflow_feedback_normalization_selects_exact_causal_entries(tmp_path) 
     ledger.write_text(json.dumps({"version": 1, "entries": entries}), encoding="utf-8")
 
     sources = {"github_pr": "pr_comment", "local_review": "workflow_feedback"}
+    prefixes = {"github_pr": "PRC", "local_review": "WF"}
     pending = workflow_feedback_todo_items(
-        ledger, target_step="develop", source_by_kind=sources
+        ledger,
+        target_step="develop",
+        source_by_kind=sources,
+        id_prefix_by_kind=prefixes,
     )
     delivered = workflow_feedback_todo_items(
         ledger,
         target_step="develop",
         source_by_kind=sources,
+        id_prefix_by_kind=prefixes,
         source_identities=("local_review:pr:local-review:1",),
     )
     assert [item.source for item in pending] == ["pr_comment"]
+    assert pending[0].item_id.startswith("PRC-")
     assert [item.work for item in pending] == ["fix the PR comment"]
     assert [item.source for item in delivered] == ["workflow_feedback"]
+    assert delivered[0].item_id.startswith("WF-")
     assert [item.work for item in delivered] == ["fix the local review blocker"]
+
+    custom_source = workflow_feedback_todo_items(
+        ledger,
+        target_step="develop",
+        source_by_kind={"github_pr": "bespoke"},
+        id_prefix_by_kind={"github_pr": "PRC"},
+    )
+    assert custom_source[0].item_id == pending[0].item_id
+    assert custom_source[0].source == "bespoke"
 
     with pytest.raises(TodoContractError, match="missing"):
         workflow_feedback_todo_items(
             ledger,
             target_step="develop",
             source_by_kind=sources,
+            id_prefix_by_kind=prefixes,
             source_identities=("stale",),
         )

@@ -62,6 +62,7 @@ def test_feedback_delivery_binding_declares_portable_artifact_and_source() -> No
                 "artifact": "signals",
                 "source_kind": "inspection_note",
                 "todo_source": "bespoke",
+                "todo_id_prefix": "TASK",
             },
         }
     )
@@ -69,11 +70,13 @@ def test_feedback_delivery_binding_declares_portable_artifact_and_source() -> No
     assert binding.feedback_delivery is not None
     assert binding.feedback_delivery.artifact == "signals"
     assert binding.feedback_delivery.todo_source == "bespoke"
+    assert binding.feedback_delivery.todo_id_prefix == "TASK"
     for malformed in (
-        {"artifact": "", "source_kind": "local_review", "todo_source": "custom"},
-        {"artifact": "signals", "source_kind": " ", "todo_source": "custom"},
-        {"artifact": "signals", "source_kind": "note", "todo_source": " "},
-        {"artifact": "signals", "source_kind": "note", "todo_source": "custom", "target": "build"},
+        {"artifact": "", "source_kind": "local_review", "todo_source": "custom", "todo_id_prefix": "TASK"},
+        {"artifact": "signals", "source_kind": " ", "todo_source": "custom", "todo_id_prefix": "TASK"},
+        {"artifact": "signals", "source_kind": "note", "todo_source": " ", "todo_id_prefix": "TASK"},
+        {"artifact": "signals", "source_kind": "note", "todo_source": "custom", "todo_id_prefix": "bad"},
+        {"artifact": "signals", "source_kind": "note", "todo_source": "custom", "todo_id_prefix": "TASK", "target": "build"},
     ):
         with pytest.raises(ValidationError):
             HumanTaskBinding.model_validate(

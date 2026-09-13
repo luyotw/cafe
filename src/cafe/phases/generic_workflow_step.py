@@ -1867,6 +1867,7 @@ class GenericWorkflowStepExecutor(Phase):
                     "artifact": behavior.feedback_artifact,
                     "source_kind": behavior.feedback_source_kind,
                     "todo_source": behavior.feedback_todo_source,
+                    "todo_id_prefix": behavior.feedback_todo_id_prefix,
                 }
                 if all(isinstance(value, str) and value for value in values.values()):
                     routes.append({key: str(value) for key, value in values.items()})
@@ -1886,6 +1887,7 @@ class GenericWorkflowStepExecutor(Phase):
                     "artifact": delivery.get("artifact"),
                     "source_kind": delivery.get("source_kind"),
                     "todo_source": delivery.get("todo_source"),
+                    "todo_id_prefix": delivery.get("todo_id_prefix"),
                 }
                 if all(isinstance(value, str) and value for value in values.values()):
                     routes.append({key: str(value) for key, value in values.items()})
@@ -1974,6 +1976,7 @@ class GenericWorkflowStepExecutor(Phase):
         if use_workflow:
             assert selected_route is not None
             source_by_kind: dict[str, str] = {}
+            id_prefix_by_kind: dict[str, str] = {}
             for route in candidate_routes:
                 if route["artifact"] != selected_route["artifact"]:
                     continue
@@ -1982,11 +1985,17 @@ class GenericWorkflowStepExecutor(Phase):
                 )
                 if previous != route["todo_source"]:
                     raise ValueError("Correction Todo source mapping is ambiguous")
+                previous_prefix = id_prefix_by_kind.setdefault(
+                    route["source_kind"], route["todo_id_prefix"]
+                )
+                if previous_prefix != route["todo_id_prefix"]:
+                    raise ValueError("Correction Todo ID prefix mapping is ambiguous")
             try:
                 workflow_items = workflow_feedback_todo_items(
                     Path(str(getattr(workflow_entry, "path", workflow_entry))),
                     target_step=state.current_step,
                     source_by_kind=source_by_kind,
+                    id_prefix_by_kind=id_prefix_by_kind,
                     source_identities=(
                         delivered if delivered is not None else human_task_identities
                     ),

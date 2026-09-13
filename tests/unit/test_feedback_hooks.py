@@ -55,6 +55,7 @@ def test_github_feedback_source_records_new_unresolved_comments_for_declared_tar
                     "feedback_artifact": "signals",
                     "feedback_source_kind": "inspection_note",
                     "feedback_todo_source": "bespoke",
+                    "feedback_todo_id_prefix": "TASK",
                 }
             },
         )

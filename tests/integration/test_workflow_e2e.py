@@ -277,6 +277,7 @@ steps:
       feedback_artifact: workflow_feedback
       feedback_source_kind: github_pr
       feedback_todo_source: pr_comment
+      feedback_todo_id_prefix: PRC
       context_providers: [workflow_metadata]
       runtime_tool_grants: [git_inspection]
     hooks:

@@ -336,6 +336,7 @@ class StepBehaviorDeclaration(BaseModel):
     feedback_artifact: Optional[str] = None
     feedback_source_kind: Optional[str] = None
     feedback_todo_source: Optional[str] = None
+    feedback_todo_id_prefix: Optional[str] = None
     context_providers: Optional[List[str]] = None
     runtime_tool_grants: Optional[List[str]] = None
 
@@ -344,6 +345,7 @@ class StepBehaviorDeclaration(BaseModel):
         "feedback_artifact",
         "feedback_source_kind",
         "feedback_todo_source",
+        "feedback_todo_id_prefix",
     )
     @classmethod
     def _validate_feedback_identifiers(
@@ -352,11 +354,12 @@ class StepBehaviorDeclaration(BaseModel):
         if value is None:
             return None
         token = value.strip()
-        pattern = (
-            r"[a-z][a-z0-9_]*"
-            if info.field_name == "feedback_todo_source"
-            else r"[A-Za-z][A-Za-z0-9_-]*"
-        )
+        if info.field_name == "feedback_todo_source":
+            pattern = r"[a-z][a-z0-9_]*"
+        elif info.field_name == "feedback_todo_id_prefix":
+            pattern = r"[A-Z][A-Z0-9_]*"
+        else:
+            pattern = r"[A-Za-z][A-Za-z0-9_-]*"
         if not re.fullmatch(pattern, token):
             raise ValueError(f"{info.field_name} must be a safe identifier")
         return token
@@ -388,12 +391,14 @@ class StepBehaviorDeclaration(BaseModel):
             self.feedback_artifact,
             self.feedback_source_kind,
             self.feedback_todo_source,
+            self.feedback_todo_id_prefix,
         )
         if any(value is not None for value in route) and not all(
             isinstance(value, str) and value.strip() for value in route
         ):
             raise ValueError(
-                "feedback routing requires target, artifact, source kind, and Todo source"
+                "feedback routing requires target, artifact, source kind, Todo source, "
+                "and Todo ID prefix"
             )
         return self
 
@@ -409,6 +414,7 @@ class EffectiveStepBehavior(BaseModel):
     feedback_artifact: Optional[str] = None
     feedback_source_kind: Optional[str] = None
     feedback_todo_source: Optional[str] = None
+    feedback_todo_id_prefix: Optional[str] = None
     context_providers: List[str] = Field(default_factory=list)
     runtime_tool_grants: List[str] = Field(default_factory=list)
 
@@ -1055,6 +1061,9 @@ def resolve_step_behavior(
         ),
         feedback_todo_source=_behavior_value(
             defaults, override, "feedback_todo_source", None
+        ),
+        feedback_todo_id_prefix=_behavior_value(
+            defaults, override, "feedback_todo_id_prefix", None
         ),
         context_providers=_behavior_value(defaults, override, "context_providers", []),
         runtime_tool_grants=_behavior_value(defaults, override, "runtime_tool_grants", []),

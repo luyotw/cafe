@@ -136,6 +136,7 @@ def workflow_feedback_todo_items(
     *,
     target_step: str,
     source_by_kind: Mapping[str, TodoSource],
+    id_prefix_by_kind: Mapping[str, str],
     source_identities: tuple[str, ...] | None = None,
 ) -> tuple[TodoItem, ...]:
     """Normalize one exact workflow-feedback delivery into canonical Todo items."""
@@ -183,10 +184,12 @@ def workflow_feedback_todo_items(
         source = source_by_kind.get(entry.source_kind)
         if source is None:
             raise TodoContractError("workflow feedback source kind is not declared")
+        prefix = id_prefix_by_kind.get(entry.source_kind)
+        if prefix is None or not re.fullmatch(r"[A-Z][A-Z0-9_]*", prefix):
+            raise TodoContractError("workflow feedback Todo ID prefix is not declared")
         work = " ".join(entry.content.split())
         if not work:
             raise TodoContractError("workflow feedback Todo work is empty")
-        prefix = "PRC" if source == "pr_comment" else "WF"
         item_id = f"{prefix}-{sha256(identity.encode('utf-8')).hexdigest()[:12].upper()}"
         items.append(
             TodoItem(
