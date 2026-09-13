@@ -2468,6 +2468,11 @@ def test_use_cafe_workflow_skill_protects_issue_overrides() -> None:
 def test_use_cafe_workflow_bootstraps_strategy_with_conventional_paths() -> None:
     reference = _read_skill_resource("references/strategic_context.md")
     normalized = " ".join(reference.split())
+    engineering_policy = PROJECT_ROOT / "docs" / "engineering-guidelines.md"
+    engineering_candidates = sorted(
+        path.relative_to(PROJECT_ROOT)
+        for path in (PROJECT_ROOT / "docs").glob("engineering*guidelines.md")
+    )
 
     assert "## Document inventory" in reference
     assert "### First-use bootstrap paths" in reference
@@ -2481,6 +2486,11 @@ def test_use_cafe_workflow_bootstraps_strategy_with_conventional_paths() -> None
     assert "never overwrite an existing document" in normalized
     assert "path: docs/engineering-guidelines.md" in reference
     assert "path: CONTRIBUTING.md" not in reference
+    assert engineering_candidates == [Path("docs/engineering-guidelines.md")]
+    policy = engineering_policy.read_text(encoding="utf-8")
+    assert "## Driver dependency boundary" in policy
+    assert "## Keep generic runtime independent of workflow topology" in policy
+    assert "Todo identity presentation" in policy
 
 
 def test_use_cafe_workflow_bounds_diagnosis_and_repairs_only_declarative_layers() -> None:
