@@ -139,3 +139,12 @@ def test_write_cafe_phase_requires_topology_neutral_todo_routing() -> None:
         "generic runtime 不得從內建 phase、role、artifact、source 或 playbook 名稱推斷"
         in normalized_spec
     )
+
+
+def test_write_cafe_phase_keeps_incoming_plans_immutable() -> None:
+    spec = (SKILL_ROOT / "references" / "skill-spec.md").read_text(encoding="utf-8")
+
+    assert "accepted `{plan_file}` 是不可變來源" in spec
+    assert "consumer `{output_file}` 的 `## Todo Progress`" in spec
+    assert "execute 直接更新 `[ ]` → `[x]`" not in spec
+    assert "incoming plan 的 checkbox 仍由本 phase 原地更新" not in spec

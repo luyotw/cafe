@@ -33,6 +33,9 @@ def test_write_cafe_playbook_skill_preserves_core_contracts() -> None:
     assert "output_artifact: plan" in reference
     assert "Serial Plan Bridge" in reference
     assert "not_required" in reference
+    assert "incoming plan remains immutable" in reference
+    assert "consumer output's `## Todo Progress` ledger" in reference
+    assert "plan checkboxes are the cross-phase implementation worklist" not in reference
     assert "UserInputCollector" in reference
     assert "planned output confirmation gate" in normalized_reference
     assert "confirmation-gates" in skill

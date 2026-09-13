@@ -470,7 +470,7 @@ execute skill 必須宣告：
 - 先讀 `{plan_file}`，依 task dependency order 實作；不得靠搜尋目錄猜測另一份 plan。
 - accepted `{plan_file}` 是不可變來源。每完成一項，在 consumer `{output_file}` 的 `## Todo Progress` 記錄 stable ID、status、source fingerprint、files/commit、targeted evidence、remaining work 與 next action；不得回寫 source 或建立 mutable sidecar。
 - 新增／修改的測試與 QA 必須對應 plan 的 Test List。scope 或 invariant 改變時，退回 plan phase更新與重新確認。
-- 完成前確認所有 implementation tasks 都為 `- [x]`、Test List invariants 全部通過、輸出與 evidence 已記錄。
+- 完成前確認 runtime checklist 中所有 projected implementation Todo rows 都為 `- [x]`、Test List invariants 全部通過、consumer output ledger 與 evidence 已記錄；不得以回寫 accepted Plan 表示完成。
 
 ### Plan tasks vs runtime checklist
 
@@ -478,8 +478,8 @@ execute skill 必須宣告：
 
 | 機制 | 來源 | 生命週期 | 用途 |
 | --- | --- | --- | --- |
-| Plan task checkboxes | plan artifact 的 task breakdown | 跨 plan → execute phases | 要實作什麼；execute 直接更新 `[ ]` → `[x]` |
-| Runtime `checklist.md` | `references/execution_steps_*` 加上 opt-in `references/basic_principles.md` | 單一 phase iteration | agent 是否遵守該 phase 的程序與不變式 |
+| Plan task checkboxes | plan artifact 的 task breakdown | 跨 plan → execute phases | immutable scope 與 stable item identity；execute 不回寫 |
+| Runtime `checklist.md` | `references/execution_steps_*`、projected Plan Todo rows 與 opt-in `references/basic_principles.md` | 單一 phase iteration | phase-owned completion state，以及 agent 是否遵守該 phase 的程序與不變式 |
 
 不要額外產生 `implementation_checklist.md`、`execute_checklist.md` 等重複 plan tasks 的 sidecar。只有當 artifact 本身不是 implementation plan，且 playbook 明確定義不同 contract 時，才另設 domain artifact。
 
@@ -517,14 +517,14 @@ steps:
 
 CAFE 在 step 啟動時先從 artifact state 解析 incoming `plan`，再為本 iteration 建立獨立 `{output_file}`，完成後才把新的 `plan` 註冊為 latest artifact。因此 bridge skill 中：
 
-- `{plan_file}` 永遠是本 phase 要執行並勾選的 incoming implementation plan。
+- `{plan_file}` 永遠是本 phase 要執行的 immutable incoming implementation plan。
 - `{output_file}` 永遠是下一個 phase 的新 implementation plan。
 - 兩者不得是同一檔案；不得把 incoming plan 改寫成另一個 domain 的 plan。
-- incoming plan 的 checkbox 仍由本 phase 原地更新為 `- [x]`；execution report 存在 domain workspace，並由 next plan 引用，不占用 `{output_file}`。
+- incoming plan 的 completion progress 寫入 phase-owned execution report／Todo Progress ledger，並由 next plan 引用；不得原地更新 incoming plan，也不占用 `{output_file}`。
 
 ### Bridge phase order
 
-1. 驗證 incoming `{plan_file}` 已 confirmed，依 dependency order 執行並更新 checkboxes。
+1. 驗證 incoming `{plan_file}` 已 confirmed，依 dependency order 執行，並在 phase-owned ledger 記錄 progress，不修改 incoming Plan。
 2. 產生 preview／結果，留在本 phase 與 user 反覆修正，直到 user 明確接受。
 3. 根據已接受結果判斷下一 phase 是否有工作。
 4. 有工作時，把 scope、sources、Test List、費用／外部服務授權與 `- [ ]` task breakdown 寫入 `{output_file}`，取得 user 確認後標為 `confirmed`。

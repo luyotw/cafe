@@ -878,6 +878,30 @@ def test_develop_correction_checklist_uses_feedback_file_path(tmp_path: Path) ->
     assert "{pr_feedback_file_path}" not in content
 
 
+def test_develop_normal_checklist_keeps_accepted_plan_immutable(tmp_path: Path) -> None:
+    checklist_path = tmp_path / "checklist.md"
+    plan = ".cafe/issues/test/plan/iteration_001/output.md"
+
+    generate_develop_checklist(
+        agent_name="David",
+        spec_file_path=".cafe/issues/test/spec/iteration_001/output.md",
+        plan_file_path=plan,
+        develop_file=None,
+        checklist_file_path=checklist_path,
+        correction_mode=False,
+    )
+
+    content = checklist_path.read_text(encoding="utf-8")
+    assert plan in content
+    assert "accepted Plan as an immutable source" in content
+    assert "`## Todo Progress` ledger" in content
+    assert "change - [ ] to - [x]" not in content
+    assert "set matching `Task Status` rows" not in content
+    assert "update the authoritative plan progress" not in content
+    assert f"All tasks in {plan} are marked [x]" not in content
+    assert "All projected Plan Todo rows" in content
+
+
 def test_spec_checklist_includes_dod_instruction(tmp_path: Path) -> None:
     checklist_path = tmp_path / "checklist.md"
     generate_spec_checklist(
