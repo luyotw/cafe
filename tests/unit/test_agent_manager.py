@@ -189,7 +189,7 @@ class TestAgentExecution:
 
         assert result[0] == "completed"
         assert execute.call_count == 2
-        sleep.assert_called_once_with(60)
+        sleep.assert_called_once_with(30)
         assert manager.get_failed_attempts() == [
             {
                 "cli": "codex",

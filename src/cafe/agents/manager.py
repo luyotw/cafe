@@ -40,7 +40,7 @@ class AgentManager:
         "cli_unavailable",
         "model_not_found",
     )
-    PROVIDER_OVERLOAD_RETRY_DELAYS_SECONDS = (60, 120, 300)
+    TRANSIENT_RETRY_DELAYS_SECONDS = (30, 120)
     SUPPORTS_COLD_TAKEOVER = True
 
     def __init__(
@@ -478,8 +478,7 @@ class AgentManager:
 
         # Track if we've already retried for session conflict
         retried = False
-        transient_retry_done = False
-        provider_overload_retries = 0
+        transient_failures = 0
         primary_attempt = 1
         attempt_prompt = prompt
 
@@ -514,6 +513,7 @@ class AgentManager:
                     hasattr(e, "error_type")
                     and e.error_type == "SESSION_CONFLICT"
                     and not retried
+                    and primary_attempt < len(self.TRANSIENT_RETRY_DELAYS_SECONDS) + 1
                     and not effective_continuation.is_exact
                 ):
                     retried = True
@@ -523,25 +523,19 @@ class AgentManager:
                     primary_attempt += 1
 
                     # Loop will retry (with no session ID, a new one will be created)
-                elif is_transient_same_cli_error(e) and not transient_retry_done:
-                    transient_retry_done = True
-                    primary_attempt += 1
-                    print(
-                        f"⚠️  {executor.config.cli.value} connection closed unexpectedly, "
-                        "retrying once..."
+                elif (
+                    delay := self._transient_retry_delay(
+                        e,
+                        failed_attempt=primary_attempt,
+                        prior_transient_failures=transient_failures,
                     )
-                elif getattr(
-                    e, "error_type", None
-                ) == "provider_overloaded" and provider_overload_retries < len(
-                    self.PROVIDER_OVERLOAD_RETRY_DELAYS_SECONDS
-                ):
-                    delay = self.PROVIDER_OVERLOAD_RETRY_DELAYS_SECONDS[provider_overload_retries]
-                    provider_overload_retries += 1
+                ) is not None:
+                    transient_failures += 1
                     primary_attempt += 1
                     print(
-                        f"⚠️  {executor.config.cli.value} provider is temporarily at capacity; "
-                        f"retrying in {delay}s ({provider_overload_retries}/"
-                        f"{len(self.PROVIDER_OVERLOAD_RETRY_DELAYS_SECONDS)})..."
+                        f"⚠️  {executor.config.cli.value} failed temporarily; "
+                        f"retrying in {delay}s (attempt {primary_attempt}/"
+                        f"{len(self.TRANSIENT_RETRY_DELAYS_SECONDS) + 1})..."
                     )
                     time.sleep(delay)
                 elif (
@@ -799,8 +793,7 @@ class AgentManager:
             backup_executor.stream_output = self.stream_agent_output
 
             backup_attempt = 1
-            transient_retry_done = False
-            provider_overload_retries = 0
+            transient_failures = 0
             while True:
                 try:
                     control_kwargs = (
@@ -830,27 +823,19 @@ class AgentManager:
                         attempt=backup_attempt,
                         error=backup_error,
                     )
-                    if is_transient_same_cli_error(backup_error) and not transient_retry_done:
-                        transient_retry_done = True
-                        backup_attempt += 1
-                        print(
-                            f"⚠️  {entry.cli.value} connection closed unexpectedly, retrying once..."
+                    if (
+                        delay := self._transient_retry_delay(
+                            backup_error,
+                            failed_attempt=backup_attempt,
+                            prior_transient_failures=transient_failures,
                         )
-                        continue
-                    if getattr(
-                        backup_error, "error_type", None
-                    ) == "provider_overloaded" and provider_overload_retries < len(
-                        self.PROVIDER_OVERLOAD_RETRY_DELAYS_SECONDS
-                    ):
-                        delay = self.PROVIDER_OVERLOAD_RETRY_DELAYS_SECONDS[
-                            provider_overload_retries
-                        ]
-                        provider_overload_retries += 1
+                    ) is not None:
+                        transient_failures += 1
                         backup_attempt += 1
                         print(
-                            f"⚠️  {entry.cli.value} provider is temporarily at capacity; "
-                            f"retrying in {delay}s ({provider_overload_retries}/"
-                            f"{len(self.PROVIDER_OVERLOAD_RETRY_DELAYS_SECONDS)})..."
+                            f"⚠️  {entry.cli.value} failed temporarily; "
+                            f"retrying in {delay}s (attempt {backup_attempt}/"
+                            f"{len(self.TRANSIENT_RETRY_DELAYS_SECONDS) + 1})..."
                         )
                         time.sleep(delay)
                         continue
@@ -898,6 +883,27 @@ class AgentManager:
                 error=error,
             )
         )
+
+    @classmethod
+    def _transient_retry_delay(
+        cls,
+        error: AgentExecutionError,
+        *,
+        failed_attempt: int,
+        prior_transient_failures: int,
+    ) -> int | None:
+        """Return the delay before retrying a transient failure on the same CLI."""
+        error_type = getattr(error, "error_type", None)
+        retryable = error_type in {"rate_limit", "provider_overloaded"} or (
+            is_transient_same_cli_error(error)
+        )
+        if (
+            not retryable
+            or failed_attempt >= len(cls.TRANSIENT_RETRY_DELAYS_SECONDS) + 1
+            or prior_transient_failures >= len(cls.TRANSIENT_RETRY_DELAYS_SECONDS)
+        ):
+            return None
+        return cls.TRANSIENT_RETRY_DELAYS_SECONDS[prior_transient_failures]
 
     def get_failed_attempts(self) -> List[Dict[str, object]]:
         """Return a defensive copy of this execution's failed CLI attempts."""

@@ -157,7 +157,7 @@ class TestGeminiSessionIntegration:
         def first_run_side_effect(*_, **__):
             nonlocal call_count
             call_count += 1
-            if call_count == 1:
+            if call_count <= 3:
                 # Primary CLI fails with a fallbackable error
                 return mock_process([], return_code=1, stderr="You have exceeded your usage limit")
             # Primary fallback runs Gemini and establishes its session
@@ -169,8 +169,9 @@ class TestGeminiSessionIntegration:
                 ],
             )
 
-        with patch("subprocess.Popen", side_effect=first_run_side_effect), \
-             patch("sys.platform", "win32"):
+        with patch("subprocess.Popen", side_effect=first_run_side_effect), patch(
+            "cafe.agents.manager.time.sleep"
+        ), patch("sys.platform", "win32"):
             response1, _, _, _, _, _ = agent_manager.execute(
                 "PM_Agent", "First prompt", phase_name="spec"
             )
