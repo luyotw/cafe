@@ -28,6 +28,11 @@ def test_write_cafe_phase_repairs_only_its_declarative_layer() -> None:
     assert "provider-neutral execution-requirement metadata" in normalized_spec
     assert "Do not name a CLI provider, model, pricing tier" in normalized_spec
     assert "conservatively aggregate every declared variant" in normalized_spec
+    assert "### Workflow metadata contract" in spec
+    assert "### Human-task policy contract" in spec
+    assert "Prompt references name files under `references/`" in normalized_spec
+    assert "A template catalog belongs to the owning skill's" in normalized_spec
+    assert "A mandatory HumanTask binding with `feedback_delivery`" in normalized_spec
 
 
 def test_write_cafe_phase_requires_confirmed_supporting_skill_selection() -> None:

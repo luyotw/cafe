@@ -451,3 +451,6 @@ This section is authoritative for current artifact normalization.
 - Validate every changed authoritative skill and playbook in strict mode and
   record targeted runtime evidence for all declared domain routes, custom names,
   process restart, and v0.2 compatibility.
+- The metadata, HumanTask, confirmation, lifecycle, and artifact rules above
+  are one authoritative contract; authors must preserve the complete contract
+  when translating or reorganizing this reference.
