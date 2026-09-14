@@ -322,6 +322,50 @@ class TestAgentManagerBackupRetry:
         assert [call.args[0] for call in sleep.call_args_list] == [30, 120]
         assert [attempt["attempt"] for attempt in manager.get_failed_attempts()] == [1, 2, 3]
 
+    def test_session_conflict_cannot_extend_transient_retry_past_three_attempts(self) -> None:
+        manager = AgentManager()
+        manager.register_agent(AgentConfig(name="David", cli=AgentCLI.CLAUDE))
+        session_conflict = AgentExecutionError(
+            "session conflict", error_type="SESSION_CONFLICT"
+        )
+
+        with (
+            patch("cafe.agents.executor.AgentExecutor.execute") as execute,
+            patch("cafe.agents.manager.time.sleep") as sleep,
+        ):
+            execute.side_effect = [
+                self._make_rate_limit_error(),
+                self._make_rate_limit_error(),
+                session_conflict,
+            ]
+            with pytest.raises(AgentExecutionError, match="session conflict"):
+                manager.execute("David", "test prompt")
+
+        assert execute.call_count == 3
+        assert [call.args[0] for call in sleep.call_args_list] == [30, 120]
+
+    def test_first_transient_after_session_conflict_uses_first_delay(self) -> None:
+        manager = AgentManager()
+        manager.register_agent(AgentConfig(name="David", cli=AgentCLI.CLAUDE))
+        session_conflict = AgentExecutionError(
+            "session conflict", error_type="SESSION_CONFLICT"
+        )
+
+        with (
+            patch("cafe.agents.executor.AgentExecutor.execute") as execute,
+            patch("cafe.agents.manager.time.sleep") as sleep,
+        ):
+            execute.side_effect = [
+                session_conflict,
+                self._make_rate_limit_error(),
+                self._make_success_response(),
+            ]
+            response, *_ = manager.execute("David", "test prompt")
+
+        assert response == "success"
+        assert execute.call_count == 3
+        sleep.assert_called_once_with(30)
+
     def test_duplicate_cli_in_backup_is_skipped(self) -> None:
         """Test that duplicate CLIs in the backup list are only attempted once."""
         manager = AgentManager()

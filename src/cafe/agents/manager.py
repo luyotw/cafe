@@ -478,6 +478,7 @@ class AgentManager:
 
         # Track if we've already retried for session conflict
         retried = False
+        transient_failures = 0
         primary_attempt = 1
         attempt_prompt = prompt
 
@@ -512,6 +513,7 @@ class AgentManager:
                     hasattr(e, "error_type")
                     and e.error_type == "SESSION_CONFLICT"
                     and not retried
+                    and primary_attempt < len(self.TRANSIENT_RETRY_DELAYS_SECONDS) + 1
                     and not effective_continuation.is_exact
                 ):
                     retried = True
@@ -521,7 +523,14 @@ class AgentManager:
                     primary_attempt += 1
 
                     # Loop will retry (with no session ID, a new one will be created)
-                elif (delay := self._transient_retry_delay(e, primary_attempt)) is not None:
+                elif (
+                    delay := self._transient_retry_delay(
+                        e,
+                        failed_attempt=primary_attempt,
+                        prior_transient_failures=transient_failures,
+                    )
+                ) is not None:
+                    transient_failures += 1
                     primary_attempt += 1
                     print(
                         f"⚠️  {executor.config.cli.value} failed temporarily; "
@@ -784,6 +793,7 @@ class AgentManager:
             backup_executor.stream_output = self.stream_agent_output
 
             backup_attempt = 1
+            transient_failures = 0
             while True:
                 try:
                     control_kwargs = (
@@ -814,8 +824,13 @@ class AgentManager:
                         error=backup_error,
                     )
                     if (
-                        delay := self._transient_retry_delay(backup_error, backup_attempt)
+                        delay := self._transient_retry_delay(
+                            backup_error,
+                            failed_attempt=backup_attempt,
+                            prior_transient_failures=transient_failures,
+                        )
                     ) is not None:
+                        transient_failures += 1
                         backup_attempt += 1
                         print(
                             f"⚠️  {entry.cli.value} failed temporarily; "
@@ -871,16 +886,24 @@ class AgentManager:
 
     @classmethod
     def _transient_retry_delay(
-        cls, error: AgentExecutionError, failed_attempt: int
+        cls,
+        error: AgentExecutionError,
+        *,
+        failed_attempt: int,
+        prior_transient_failures: int,
     ) -> int | None:
         """Return the delay before retrying a transient failure on the same CLI."""
         error_type = getattr(error, "error_type", None)
         retryable = error_type in {"rate_limit", "provider_overloaded"} or (
             is_transient_same_cli_error(error)
         )
-        if not retryable or failed_attempt > len(cls.TRANSIENT_RETRY_DELAYS_SECONDS):
+        if (
+            not retryable
+            or failed_attempt >= len(cls.TRANSIENT_RETRY_DELAYS_SECONDS) + 1
+            or prior_transient_failures >= len(cls.TRANSIENT_RETRY_DELAYS_SECONDS)
+        ):
             return None
-        return cls.TRANSIENT_RETRY_DELAYS_SECONDS[failed_attempt - 1]
+        return cls.TRANSIENT_RETRY_DELAYS_SECONDS[prior_transient_failures]
 
     def get_failed_attempts(self) -> List[Dict[str, object]]:
         """Return a defensive copy of this execution's failed CLI attempts."""
