@@ -5231,10 +5231,10 @@ def test_rejected_feedback_delivery_does_not_replay_after_later_success(
     assert BlackboardStore(issue_dir).load_or_create("curator").current_step == "done"
 
 
-def test_recovery_rejects_missing_preparation_before_consumer_use(
+def test_recovery_rejects_missing_preparation_after_source_resolves(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A durable artifact without its prepared binding cannot wake a consumer."""
+    """A resolved source cannot erase a missing delivery binding on recovery."""
     from cafe.core.workflow_feedback import WorkflowFeedbackLedger
 
     issue_dir = tmp_path / ".cafe" / "issues" / "recover-missing-preparation"
@@ -5254,13 +5254,17 @@ def test_recovery_rejects_missing_preparation_before_consumer_use(
     monkeypatch.setattr(interrupted, "_prepare_feedback_delivery", crash_before_preparation)
     with pytest.raises(RuntimeError, match="pre-preparation"):
         interrupted.run(start_step="curator", max_transitions=2)
+    assert ledger.reconcile_resolved({feedback.source_identity}) == 1
 
     resumed = _recovery_fault_curation_runtime(issue_dir=issue_dir, calls=calls)
     result = resumed.run(max_transitions=2)
 
     assert result.final_status_code == "INVALID_FEEDBACK_DELIVERY"
     assert calls == ["curator"]
-    assert ledger.pending(target_step="curator") == [feedback]
+    resolved = {entry.source_identity: entry for entry in ledger.load()}[feedback.source_identity]
+    assert resolved.resolved is True
+    assert resolved.consumed is False
+    assert ledger.pending(target_step="curator") == []
     state = BlackboardStore(issue_dir).load_or_create("curator")
     failures = [
         event for event in state.events if event.event_type == "step_reconciliation_failed"
@@ -5268,11 +5272,37 @@ def test_recovery_rejects_missing_preparation_before_consumer_use(
     assert "feedback_delivery_prepared" in failures[-1].data["missing_evidence"]
     assert not any(event.event_type == "workflow_feedback_delivered" for event in state.events)
 
+    _created, later = ledger.record(
+        source_identity="external:recovery:later-after-missing-preparation",
+        source_kind="external_note",
+        target_step="curator",
+        content="Deliver this later independent source once.",
+    )
+    delivered = _recovery_fault_curation_runtime(issue_dir=issue_dir, calls=calls).run(
+        start_step="curator", max_transitions=2
+    )
 
-def test_recovery_rejects_malformed_preparation_before_consumer_use(
+    assert delivered.completed is True
+    assert calls == ["curator", "curator", "consumer"]
+    assert ledger.pending(target_step="curator") == []
+    state = BlackboardStore(issue_dir).load_or_create("curator")
+    delivered_events = [
+        event for event in state.events if event.event_type == "workflow_feedback_delivered"
+    ]
+    assert delivered_events[-1].data["source_identities"] == [later.source_identity]
+
+    clean = _recovery_fault_curation_runtime(issue_dir=issue_dir, calls=calls).run(
+        max_transitions=2
+    )
+
+    assert clean.completed is True
+    assert calls == ["curator", "curator", "consumer"]
+
+
+def test_recovery_rejects_malformed_preparation_after_source_resolves(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A malformed prepared batch is terminalized before downstream work."""
+    """A resolved source cannot erase malformed delivery evidence on recovery."""
     from cafe.core.workflow_feedback import WorkflowFeedbackLedger
 
     issue_dir = tmp_path / ".cafe" / "issues" / "recover-malformed-preparation"
@@ -5300,13 +5330,17 @@ def test_recovery_rejects_malformed_preparation_before_consumer_use(
     ]
     prepared[-1].data["source_identities"] = "not-a-source-identity-list"
     store.save(state)
+    assert ledger.reconcile_resolved({feedback.source_identity}) == 1
 
     resumed = _recovery_fault_curation_runtime(issue_dir=issue_dir, calls=calls)
     result = resumed.run(max_transitions=2)
 
     assert result.final_status_code == "INVALID_FEEDBACK_DELIVERY"
     assert calls == ["curator"]
-    assert ledger.pending(target_step="curator") == [feedback]
+    resolved = {entry.source_identity: entry for entry in ledger.load()}[feedback.source_identity]
+    assert resolved.resolved is True
+    assert resolved.consumed is False
+    assert ledger.pending(target_step="curator") == []
     state = store.load_or_create("curator")
     rejected = [
         event for event in state.events if event.event_type == "workflow_feedback_delivery_rejected"
@@ -5316,6 +5350,33 @@ def test_recovery_rejects_malformed_preparation_before_consumer_use(
         event for event in state.events if event.event_type == "step_reconciliation_failed"
     ]
     assert "feedback_delivery_batch" in failures[-1].data["missing_evidence"]
+    assert not any(event.event_type == "workflow_feedback_delivered" for event in state.events)
+
+    _created, later = ledger.record(
+        source_identity="external:recovery:later-after-malformed-preparation",
+        source_kind="external_note",
+        target_step="curator",
+        content="Deliver this later independent source once.",
+    )
+    delivered = _recovery_fault_curation_runtime(issue_dir=issue_dir, calls=calls).run(
+        start_step="curator", max_transitions=2
+    )
+
+    assert delivered.completed is True
+    assert calls == ["curator", "curator", "consumer"]
+    assert ledger.pending(target_step="curator") == []
+    state = BlackboardStore(issue_dir).load_or_create("curator")
+    delivered_events = [
+        event for event in state.events if event.event_type == "workflow_feedback_delivered"
+    ]
+    assert delivered_events[-1].data["source_identities"] == [later.source_identity]
+
+    clean = _recovery_fault_curation_runtime(issue_dir=issue_dir, calls=calls).run(
+        max_transitions=2
+    )
+
+    assert clean.completed is True
+    assert calls == ["curator", "curator", "consumer"]
 
 
 def test_recovery_terminalizes_resolved_preparation_before_later_delivery(

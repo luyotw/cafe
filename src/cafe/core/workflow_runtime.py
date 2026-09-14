@@ -4010,8 +4010,10 @@ class BlackboardWorkflowRuntime:
         )
         if artifact is None or artifact.updated_by != current_step:
             return None
-        if not WorkflowFeedbackLedger(self.issue_dir).pending(target_step=current_step):
-            return None
+        # The durable artifact and outbound baton remain a recovery boundary even
+        # after their source rows become resolved or stale.  Rechecking only the
+        # live ledger here would let that lifecycle change bypass validation and
+        # reach the downstream consumer without a valid prepared delivery.
         prepared = self._latest_feedback_delivery_preparation(current_step=current_step)
         if prepared is None:
             return current_step, None
