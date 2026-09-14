@@ -65,6 +65,7 @@ from cafe.core.status_codes import (
 )
 from cafe.core.takeover import build_takeover_snapshot
 from cafe.core.todo import (
+    MAX_TODO_ITEMS,
     TodoContractError,
     TodoSourceArtifact,
     projection_todo_items,
@@ -72,6 +73,10 @@ from cafe.core.todo import (
     workflow_feedback_todo_items,
 )
 from cafe.core.types import AgentCLI
+from cafe.core.workflow_feedback import (
+    WorkflowFeedbackLedger,
+    feedback_todo_mappings,
+)
 from cafe.core.workflow_models import BatonRejected, StepExecutionResult
 from cafe.phases.generic_phase import GenericPhase
 from cafe.skills.checklist_composer import (
@@ -505,6 +510,28 @@ class GenericWorkflowStepExecutor(Phase):
             iteration_dir=iteration_dir,
             agent_invoked=False,
         )
+        feedback_batch_source_identities: tuple[str, ...] | None = None
+
+        def prepare_agent_context(runtime_context: Dict[str, str]) -> Dict[str, str]:
+            """Expose one immutable, bounded feedback batch immediately before prompt."""
+            nonlocal feedback_batch_source_identities
+            if not feedback_todo_mappings(self.playbook, target_step=step_name):
+                return runtime_context
+            snapshot_path = iteration_dir / "workflow_feedback_batch.json"
+            ledger = WorkflowFeedbackLedger(self.issue_dir)
+            feedback_batch_source_identities = ledger.write_pending_snapshot(
+                path=snapshot_path,
+                target_step=step_name,
+                limit=MAX_TODO_ITEMS,
+            )
+            runtime_context.update(
+                {
+                    "workflow_feedback_batch_file": self._display_path(snapshot_path),
+                    "workflow_feedback_batch_count": str(len(feedback_batch_source_identities)),
+                }
+            )
+            return runtime_context
+
         execution = self.generic_phase.execute(
             skill_name=skill_name,
             step_def=step_def,
@@ -515,6 +542,7 @@ class GenericWorkflowStepExecutor(Phase):
             output_file=output_file,
             checklist_file=checklist_file,
             questions_xml_file=questions_xml_file,
+            prepare_agent_context=prepare_agent_context,
             hook_context={
                 "phase": self,
                 "step_name": step_name,
@@ -682,6 +710,7 @@ class GenericWorkflowStepExecutor(Phase):
             artifact_ready=execution.artifact_ready and not checklist_validation_failed,
             agent_invoked=agent_was_invoked,
             events=events,
+            feedback_source_identities=feedback_batch_source_identities,
         )
 
     def _persist_agent_invocation_marker(

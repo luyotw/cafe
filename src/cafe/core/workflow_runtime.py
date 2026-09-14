@@ -74,7 +74,11 @@ from cafe.core.todo import (
     parse_todo_list,
     workflow_feedback_todo_items,
 )
-from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+from cafe.core.workflow_feedback import (
+    WorkflowFeedbackError,
+    WorkflowFeedbackLedger,
+    feedback_todo_mappings,
+)
 from cafe.core.workflow_models import (
     BatonRejected,
     PlaybookRunResult,
@@ -182,6 +186,8 @@ class StepIterationFrame:
     explicit_status_code: Optional[str]
     auto_continue: bool
     pending_feedback: tuple[str, ...] = ()
+    feedback_batch_provided: bool = False
+    feedback_batch_error: str | None = None
 
 
 @dataclass
@@ -2388,63 +2394,45 @@ class BlackboardWorkflowRuntime:
         response, artifacts, explicit_status_code, auto_continue = self._normalize_execution_result(
             execution_result
         )
-        # Prepare-input hooks can discover feedback during this invocation.
-        # Capture only after they and the agent have both completed so the
-        # eventual delivery commit covers the exact curated input set.
-        pending_feedback = feedback_ledger.pending(target_step=current_step)
+        batch = getattr(execution_result, "feedback_source_identities", None)
+        feedback_batch_error: str | None = None
+        if batch is None:
+            # Executors that do not expose an agent-visible batch retain the
+            # pending snapshot only for a fail-closed legacy decision below.
+            pending_feedback = tuple(
+                entry.source_identity
+                for entry in feedback_ledger.pending(target_step=current_step)[:MAX_TODO_ITEMS]
+            )
+            feedback_batch_provided = False
+        elif (
+            not isinstance(batch, tuple)
+            or len(batch) > MAX_TODO_ITEMS
+            or any(not isinstance(identity, str) or not identity for identity in batch)
+            or len(set(batch)) != len(batch)
+        ):
+            pending_feedback = ()
+            feedback_batch_provided = False
+            feedback_batch_error = "the agent-visible feedback batch is invalid"
+        else:
+            pending_feedback = batch
+            feedback_batch_provided = True
         return StepIterationFrame(
             execution_result=execution_result,
             response=response,
             artifacts=artifacts,
             explicit_status_code=explicit_status_code,
             auto_continue=auto_continue,
-            pending_feedback=tuple(
-                entry.source_identity for entry in pending_feedback[:MAX_TODO_ITEMS]
-            ),
+            pending_feedback=pending_feedback,
+            feedback_batch_provided=feedback_batch_provided,
+            feedback_batch_error=feedback_batch_error,
         )
 
     def _feedback_todo_mappings(self, *, current_step: str) -> dict[str, tuple[str, str]]:
         """Resolve declared source-kind Todo mappings for one curator step."""
-        mappings: dict[str, tuple[str, str]] = {}
-
-        def add_mapping(source_kind: object, todo_source: object, id_prefix: object) -> None:
-            if not all(
-                isinstance(value, str) and value.strip()
-                for value in (source_kind, todo_source, id_prefix)
-            ):
-                return
-            normalized = (str(todo_source), str(id_prefix))
-            existing = mappings.setdefault(str(source_kind), normalized)
-            if existing != normalized:
-                raise TodoContractError("workflow feedback Todo mapping is ambiguous")
-
-        for producer_name, raw_step in self.steps.items():
-            if not isinstance(raw_step, Mapping):
-                continue
-            behavior = resolve_step_behavior(self.playbook, str(producer_name))
-            if behavior.feedback_target == current_step:
-                add_mapping(
-                    behavior.feedback_source_kind,
-                    behavior.feedback_todo_source,
-                    behavior.feedback_todo_id_prefix,
-                )
-            for binding in raw_step.get("human_tasks", ()) or ():
-                if not isinstance(binding, Mapping):
-                    continue
-                outcomes = binding.get("outcomes", {})
-                targets = [
-                    *(outcomes.values() if isinstance(outcomes, Mapping) else ()),
-                    *(binding.get("allowed_targets", ()) or ()),
-                ]
-                delivery = binding.get("feedback_delivery")
-                if current_step not in targets or not isinstance(delivery, Mapping):
-                    continue
-                add_mapping(
-                    delivery.get("source_kind"),
-                    delivery.get("todo_source"),
-                    delivery.get("todo_id_prefix"),
-                )
-        return mappings
+        try:
+            return feedback_todo_mappings(self.playbook, target_step=current_step)
+        except WorkflowFeedbackError as exc:
+            raise TodoContractError(str(exc)) from exc
 
     def _commit_delivered_feedback(
         self,
@@ -2457,14 +2445,20 @@ class BlackboardWorkflowRuntime:
         Returns a rejection reason when a declared curator produced an output
         that cannot prove each represented row is deterministic source work.
         """
-        if not frame.pending_feedback or not getattr(
-            frame.execution_result, "agent_invoked", False
-        ):
+        if not getattr(frame.execution_result, "agent_invoked", False):
+            return None
+        if frame.feedback_batch_error is not None:
+            return frame.feedback_batch_error
+        mappings = self._feedback_todo_mappings(current_step=current_step)
+        if mappings and not frame.feedback_batch_provided:
+            if frame.pending_feedback:
+                return "the curated feedback batch was not exposed to the agent"
+            return None
+        if not frame.pending_feedback:
             return None
         output_artifact = self.steps.get(current_step, {}).get("output_artifact")
         if not isinstance(output_artifact, str) or output_artifact not in frame.artifacts:
             return "the declared curated artifact is missing"
-        mappings = self._feedback_todo_mappings(current_step=current_step)
         if not mappings:
             # Playbooks without the correction declarations retain their
             # historical consume-after-handoff behavior.

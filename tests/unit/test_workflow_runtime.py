@@ -4411,6 +4411,7 @@ def test_runtime_commits_feedback_discovered_during_current_curator_invocation(
             response="curated",
             artifacts={"curated_result": str(output)},
             agent_invoked=True,
+            feedback_source_identities=(identity,),
         )
 
     result = BlackboardWorkflowRuntime(
@@ -4472,6 +4473,7 @@ def test_runtime_records_excluded_feedback_without_widening_the_curated_handoff(
             response="incomplete",
             artifacts={"curated_result": str(output)},
             agent_invoked=True,
+            feedback_source_identities=tuple(identities),
         )
 
     result = BlackboardWorkflowRuntime(
@@ -4559,6 +4561,7 @@ def test_runtime_rejects_noncanonical_curated_feedback_without_consuming_sources
             response="invalid curation",
             artifacts={"curated_result": str(output)},
             agent_invoked=True,
+            feedback_source_identities=(identity,),
         )
 
     result = BlackboardWorkflowRuntime(
@@ -4602,6 +4605,7 @@ def test_runtime_accepts_canonical_empty_as_a_durable_exclusion_and_replay_is_id
             )
             return StepExecutionResult(response="consumed", artifacts={})
         assert step_name == "curator"
+        batch = (identity,) if ledger.pending(target_step="curator") else ()
         output.write_text("## Todo List\n\nNo actionable work.\n", encoding="utf-8")
         _write_baton(
             issue_dir,
@@ -4614,6 +4618,7 @@ def test_runtime_accepts_canonical_empty_as_a_durable_exclusion_and_replay_is_id
             response="empty curation",
             artifacts={"curated_result": str(output)},
             agent_invoked=True,
+            feedback_source_identities=batch,
         )
 
     runtime = BlackboardWorkflowRuntime(
@@ -4686,6 +4691,7 @@ def test_runtime_delivers_over_budget_feedback_in_two_bounded_curation_cycles(
             response="over budget",
             artifacts={"curated_result": str(output)},
             agent_invoked=True,
+            feedback_source_identities=tuple(pending[:100]),
         )
 
     runtime = BlackboardWorkflowRuntime(
@@ -4713,6 +4719,151 @@ def test_runtime_delivers_over_budget_feedback_in_two_bounded_curation_cycles(
         identities[100:],
         [],
     ]
+
+
+def test_runtime_defers_feedback_that_arrives_after_the_agent_batch_is_pinned(
+    tmp_path: Path,
+) -> None:
+    """A post-output source remains pending for its own later curator cycle."""
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "post-output-feedback"
+    ledger = WorkflowFeedbackLedger(issue_dir)
+    initial = "external:review:initial"
+    later = "external:review:later"
+    ledger.record(
+        source_identity=initial,
+        source_kind="external_note",
+        target_step="curator",
+        content="Address the reviewed source.",
+    )
+    output = issue_dir / "curator" / "iteration_001" / "output.md"
+    output.parent.mkdir(parents=True)
+    calls: list[str] = []
+    batches: list[tuple[str, ...]] = []
+
+    def executor(step_name: str, _step: dict, _state: object) -> StepExecutionResult:
+        calls.append(step_name)
+        if step_name == "consumer":
+            _write_baton(
+                issue_dir,
+                from_step="consumer",
+                to_owner="done",
+                to_step="done",
+                intent="workflow_complete",
+            )
+            return StepExecutionResult(response="consumed", artifacts={})
+        batch = (initial,) if not batches else (later,)
+        batches.append(batch)
+        _curated_feedback_output(output, list(batch))
+        if len(batches) == 1:
+            ledger.record(
+                source_identity=later,
+                source_kind="external_note",
+                target_step="curator",
+                content="Arrived after the agent wrote its artifact.",
+            )
+        _write_baton(
+            issue_dir,
+            from_step="curator",
+            to_owner="agent",
+            to_step="consumer",
+            intent="manual_handoff",
+        )
+        return StepExecutionResult(
+            response="curated",
+            artifacts={"curated_result": str(output)},
+            agent_invoked=True,
+            feedback_source_identities=batch,
+        )
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_feedback_curation_playbook(),
+        executor=executor,
+    )
+    first = runtime.run(start_step="curator", max_transitions=2)
+    assert first.final_step == "consumer"
+    entries = {entry.source_identity: entry for entry in ledger.load()}
+    assert entries[initial].disposition == "delivered"
+    assert entries[later].disposition == "pending"
+    assert [entry.source_identity for entry in ledger.pending(target_step="curator")] == [later]
+
+    second = runtime.run(start_step="curator", max_transitions=2)
+    assert second.final_step == "consumer"
+    assert calls == ["curator", "consumer", "curator", "consumer"]
+    assert ledger.pending(target_step="curator") == []
+    delivered = [
+        event
+        for event in BlackboardStore(issue_dir).load_or_create("curator").events
+        if event.event_type == "workflow_feedback_delivered"
+    ]
+    assert [event.data["source_identities"] for event in delivered] == [[initial], [later]]
+
+
+def test_runtime_settles_the_exact_agent_selected_bounded_batch(
+    tmp_path: Path,
+) -> None:
+    """A valid non-prefix 100-source batch reaches the declared consumer first."""
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "agent-selected-batch"
+    ledger = WorkflowFeedbackLedger(issue_dir)
+    identities = [f"external:review:{index}" for index in range(101)]
+    for identity in identities:
+        ledger.record(
+            source_identity=identity,
+            source_kind="external_note",
+            target_step="curator",
+            content=f"Address {identity}.",
+        )
+    output = issue_dir / "curator" / "iteration_001" / "output.md"
+    output.parent.mkdir(parents=True)
+    selected_batches = [tuple(identities[1:]), (identities[0],)]
+    calls: list[str] = []
+
+    def executor(step_name: str, _step: dict, _state: object) -> StepExecutionResult:
+        calls.append(step_name)
+        if step_name == "consumer":
+            _write_baton(
+                issue_dir,
+                from_step="consumer",
+                to_owner="done",
+                to_step="done",
+                intent="workflow_complete",
+            )
+            return StepExecutionResult(response="consumed", artifacts={})
+        batch = selected_batches.pop(0)
+        _curated_feedback_output(output, list(batch))
+        _write_baton(
+            issue_dir,
+            from_step="curator",
+            to_owner="agent",
+            to_step="consumer",
+            intent="manual_handoff",
+        )
+        return StepExecutionResult(
+            response="curated",
+            artifacts={"curated_result": str(output)},
+            agent_invoked=True,
+            feedback_source_identities=batch,
+        )
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_feedback_curation_playbook(),
+        executor=executor,
+    )
+    first = runtime.run(start_step="curator", max_transitions=2)
+    assert first.final_step == "consumer"
+    assert [entry.source_identity for entry in ledger.pending(target_step="curator")] == [
+        identities[0]
+    ]
+
+    second = runtime.run(start_step="curator", max_transitions=2)
+    assert second.final_step == "consumer"
+    assert calls == ["curator", "consumer", "curator", "consumer"]
+    assert ledger.pending(target_step="curator") == []
 
 
 def test_runtime_rejects_plain_text_baton_written_by_pr_agent(tmp_path: Path) -> None:

@@ -546,6 +546,9 @@ def test_default_requested_changes_follow_declared_loop_without_publish_authorit
                 artifacts={"pr_result": str(output)},
                 status_code="confirmed",
                 agent_invoked=True,
+                feedback_source_identities=tuple(
+                    entry.source_identity for entry in pending
+                ),
                 events=[
                     {
                         "type": "capability_receipt",

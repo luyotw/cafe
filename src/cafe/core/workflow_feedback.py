@@ -13,11 +13,62 @@ import tempfile
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 
 class WorkflowFeedbackError(RuntimeError):
     """Raised when the durable feedback ledger cannot be validated or stored."""
+
+
+def feedback_todo_mappings(
+    playbook: Mapping[str, Any], *, target_step: str
+) -> dict[str, tuple[str, str]]:
+    """Resolve one curator's declared feedback source-to-Todo mappings."""
+    from cafe.core.playbook import resolve_step_behavior
+
+    mappings: dict[str, tuple[str, str]] = {}
+
+    def add_mapping(source_kind: object, todo_source: object, id_prefix: object) -> None:
+        if not all(
+            isinstance(value, str) and value.strip()
+            for value in (source_kind, todo_source, id_prefix)
+        ):
+            return
+        normalized = (str(todo_source), str(id_prefix))
+        existing = mappings.setdefault(str(source_kind), normalized)
+        if existing != normalized:
+            raise WorkflowFeedbackError("workflow feedback Todo mapping is ambiguous")
+
+    steps = playbook.get("steps", {})
+    if not isinstance(steps, Mapping):
+        return mappings
+    for producer_name, raw_step in steps.items():
+        if not isinstance(raw_step, Mapping):
+            continue
+        behavior = resolve_step_behavior(playbook, str(producer_name))
+        if behavior.feedback_target == target_step:
+            add_mapping(
+                behavior.feedback_source_kind,
+                behavior.feedback_todo_source,
+                behavior.feedback_todo_id_prefix,
+            )
+        for binding in raw_step.get("human_tasks", ()) or ():
+            if not isinstance(binding, Mapping):
+                continue
+            outcomes = binding.get("outcomes", {})
+            targets = [
+                *(outcomes.values() if isinstance(outcomes, Mapping) else ()),
+                *(binding.get("allowed_targets", ()) or ()),
+            ]
+            delivery = binding.get("feedback_delivery")
+            if target_step not in targets or not isinstance(delivery, Mapping):
+                continue
+            add_mapping(
+                delivery.get("source_kind"),
+                delivery.get("todo_source"),
+                delivery.get("todo_id_prefix"),
+            )
+    return mappings
 
 
 def _now() -> str:
@@ -356,16 +407,30 @@ class WorkflowFeedbackLedger:
             if entry.actionable and (target_step is None or entry.target_step == target_step)
         ]
 
+    def write_pending_snapshot(
+        self, *, path: Path, target_step: str, limit: int
+    ) -> tuple[str, ...]:
+        """Persist the exact bounded feedback batch that an agent must review."""
+        if limit < 1:
+            raise WorkflowFeedbackError("workflow feedback snapshot limit must be positive")
+        entries = self.pending(target_step=target_step)[:limit]
+        self._store_at(Path(path), entries)
+        return tuple(entry.source_identity for entry in entries)
+
     def _store(self, entries: list[WorkflowFeedbackEntry]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._store_at(self.path, entries)
+
+    @staticmethod
+    def _store_at(path: Path, entries: list[WorkflowFeedbackEntry]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
         payload = {"version": 1, "entries": [asdict(entry) for entry in entries]}
         temp_name: str | None = None
         try:
             with tempfile.NamedTemporaryFile(
                 mode="w",
                 encoding="utf-8",
-                dir=self.path.parent,
-                prefix=f".{self.path.name}.",
+                dir=path.parent,
+                prefix=f".{path.name}.",
                 suffix=".tmp",
                 delete=False,
             ) as handle:
@@ -374,7 +439,7 @@ class WorkflowFeedbackLedger:
                 handle.write("\n")
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(temp_name, self.path)
+            os.replace(temp_name, path)
         except OSError as exc:
             raise WorkflowFeedbackError("could not persist workflow feedback ledger") from exc
         finally:

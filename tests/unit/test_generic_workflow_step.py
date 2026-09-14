@@ -3781,6 +3781,96 @@ workflow:
     assert parse_todo_list(findings_file.read_text(encoding="utf-8"))[0].fingerprint in checklist
 
 
+def test_curator_pins_feedback_batch_after_preparation_before_agent_prompt(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The executor gives the agent one immutable source set, not the live ledger."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-curated-batch"
+    playbook = {
+        "playbook": {"id": "feedback-curation"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "curator": {
+                "skill": "pr",
+                "role": "developer",
+                "output_artifact": "curated_result",
+                "allowed_tools": ["Read"],
+                "behavior": {
+                    "completion": "baton",
+                    "feedback_target": "curator",
+                    "feedback_artifact": "workflow_feedback",
+                    "feedback_source_kind": "external_note",
+                    "feedback_todo_source": "review_note",
+                    "feedback_todo_id_prefix": "REV",
+                },
+                "on": {"manual_handoff": "consumer"},
+            },
+            "consumer": {"skill": "develop", "role": "developer"},
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("curator")
+    ledger = WorkflowFeedbackLedger(issue_dir)
+    _created, prepared = ledger.record(
+        source_identity="review:508:prepared",
+        source_kind="external_note",
+        target_step="curator",
+        content="Prepared before the agent prompt.",
+    )
+    generic_phase = _build_loader(tmp_path)
+
+    def curate_and_record_late(*, prompt: str, streaming_output_file: str, **_kwargs) -> None:
+        iteration_dir = Path(streaming_output_file).parent
+        snapshot = iteration_dir / "workflow_feedback_batch.json"
+        assert snapshot.is_file()
+        assert "./" + str(snapshot.relative_to(tmp_path)) in prompt
+        payload = json.loads(snapshot.read_text(encoding="utf-8"))
+        assert [entry["source_identity"] for entry in payload["entries"]] == [
+            prepared.source_identity
+        ]
+        iteration_dir.joinpath("checklist.md").write_text(
+            "[x] completed by test agent\n", encoding="utf-8"
+        )
+        _created, late = ledger.record(
+            source_identity="review:508:late",
+            source_kind="external_note",
+            target_step="curator",
+            content="Arrived after the agent context was pinned.",
+        )
+        (issue_dir / "next_step.txt").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "to_owner": "agent",
+                    "to_step": "consumer",
+                    "intent": "manual_handoff",
+                }
+            ),
+            encoding="utf-8",
+        )
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-curated-batch",
+        playbook=playbook,
+        generic_phase=generic_phase,
+        agent_manager=FakeAgentManager("curated", on_execute=curate_and_record_late),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+
+    result = executor.execute_step("curator", playbook["steps"]["curator"], state)
+
+    assert result.feedback_source_identities == (prepared.source_identity,)
+    snapshot = issue_dir / "curator" / "iteration_001" / "workflow_feedback_batch.json"
+    payload = json.loads(snapshot.read_text(encoding="utf-8"))
+    assert [entry["source_identity"] for entry in payload["entries"]] == [prepared.source_identity]
+    assert [entry.source_identity for entry in ledger.pending(target_step="curator")] == [
+        prepared.source_identity,
+        "review:508:late",
+    ]
+
+
 def test_workflow_refreshes_declared_checklist_on_interrupted_resume(
     tmp_path: Path, monkeypatch
 ) -> None:

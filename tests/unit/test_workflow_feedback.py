@@ -50,6 +50,42 @@ def test_new_unresolved_feedback_is_durable_and_actionable(tmp_path) -> None:
     assert ledger.pending(target_step="develop") == [entry]
 
 
+def test_pending_snapshot_is_bounded_and_unchanged_by_late_feedback(tmp_path) -> None:
+    """A curator's source context remains stable after the pre-prompt snapshot."""
+    ledger = WorkflowFeedbackLedger(tmp_path / "issue-snapshot")
+    _created, first = ledger.record(
+        source_identity="github-pr:508:comment-1",
+        source_kind="github_pr",
+        target_step="pr",
+        content="First actionable comment.",
+    )
+    _created, second = ledger.record(
+        source_identity="github-pr:508:comment-2",
+        source_kind="github_pr",
+        target_step="pr",
+        content="Second actionable comment.",
+    )
+    snapshot = tmp_path / "issue-snapshot" / "pr" / "iteration_001" / "batch.json"
+
+    assert ledger.write_pending_snapshot(path=snapshot, target_step="pr", limit=1) == (
+        first.source_identity,
+    )
+    ledger.record(
+        source_identity="github-pr:508:comment-late",
+        source_kind="github_pr",
+        target_step="pr",
+        content="Arrived after the snapshot.",
+    )
+
+    persisted = json.loads(snapshot.read_text(encoding="utf-8"))
+    assert [entry["source_identity"] for entry in persisted["entries"]] == [first.source_identity]
+    assert [entry.source_identity for entry in ledger.pending(target_step="pr")] == [
+        first.source_identity,
+        second.source_identity,
+        "github-pr:508:comment-late",
+    ]
+
+
 def test_ledger_deduplicates_cross_form_consumed_and_resolved_items(tmp_path) -> None:
     """UT-002 — the ledger alone determines whether feedback can wake work."""
     ledger = WorkflowFeedbackLedger(tmp_path / "issue-348")

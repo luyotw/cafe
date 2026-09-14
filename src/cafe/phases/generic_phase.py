@@ -287,6 +287,18 @@ class GenericPhase:
                     "A packet is a validated exact Downstream Contract; full and full_fallback paths remain complete authoritative sources.",
                 ]
             )
+        if context and context.get("workflow_feedback_batch_file"):
+            runtime_context.extend(
+                [
+                    "Authoritative curated feedback batch:",
+                    "- Read only the immutable current-cycle batch at "
+                    + context["workflow_feedback_batch_file"],
+                    "- This batch contains "
+                    + context.get("workflow_feedback_batch_count", "0")
+                    + " source identities; do not classify feedback outside it.",
+                    "- Sources observed after this snapshot remain pending for a later cycle.",
+                ]
+            )
         if context and context.get("delta_packet"):
             runtime_context.extend(
                 [
@@ -355,6 +367,7 @@ class GenericPhase:
         checklist_file: Optional[Path] = None,
         questions_xml_file: Optional[Path] = None,
         hook_context: Optional[Dict[str, Any]] = None,
+        prepare_agent_context: Optional[Callable[[Dict[str, str]], Dict[str, str]]] = None,
         max_retries: int = 3,
     ) -> GenericPhaseExecution:
         runtime_context = dict(context or {})
@@ -404,6 +417,9 @@ class GenericPhase:
                 artifact_ready=artifact_ready,
                 published=False,
             )
+
+        if prepare_agent_context is not None:
+            runtime_context = prepare_agent_context(runtime_context)
 
         transform_runtime_context = hook_kwargs.get("transform_runtime_context")
         if callable(transform_runtime_context):
