@@ -87,8 +87,8 @@ class TestAgentManagerBackupRetry:
         assert response == "success"
         assert mock_exec.call_count == 1
 
-    def test_rate_limit_triggers_first_backup(self) -> None:
-        """Test that a rate limit on the primary agent automatically switches to the first backup."""
+    def test_rate_limit_retries_primary_before_first_backup(self) -> None:
+        """A rate-limited primary gets three attempts before the first backup."""
         manager = AgentManager()
         config = AgentConfig(
             name="David",
@@ -103,14 +103,19 @@ class TestAgentManagerBackupRetry:
         def side_effect(*args, **kwargs):
             nonlocal call_count
             call_count += 1
-            if call_count == 1:
+            if call_count <= 3:
                 raise self._make_rate_limit_error()
             return self._make_success_response("backup success")
 
-        with patch("cafe.agents.executor.AgentExecutor.execute", side_effect=side_effect):
+        with (
+            patch("cafe.agents.executor.AgentExecutor.execute", side_effect=side_effect),
+            patch("cafe.agents.manager.time.sleep") as sleep,
+        ):
             response, *_ = manager.execute("David", "test prompt", phase_name="develop")
 
         assert response == "backup success"
+        assert call_count == 4
+        assert [call.args[0] for call in sleep.call_args_list] == [30, 120]
 
     def test_muted_output_propagates_to_backup_executor(self) -> None:
         manager = AgentManager(stream_agent_output=False)
@@ -130,7 +135,7 @@ class TestAgentManagerBackupRetry:
             seen_executors.append(executor)
             call_count += 1
             if call_count == 1:
-                raise self._make_rate_limit_error()
+                raise self._make_cli_not_found_error()
             return self._make_success_response("backup success")
 
         with patch.object(
@@ -177,7 +182,7 @@ class TestAgentManagerBackupRetry:
         def side_effect(prompt, *args, **kwargs):
             seen_prompts.append(prompt)
             if len(seen_prompts) == 1:
-                raise self._make_rate_limit_error()
+                raise self._make_cli_not_found_error()
             return self._make_success_response("backup success")
 
         with patch("cafe.agents.executor.AgentExecutor.execute", side_effect=side_effect):
@@ -203,8 +208,8 @@ class TestAgentManagerBackupRetry:
                 backup_clis=[AgentCLI.GEMINI, AgentCLI.COPILOT],
             )
         )
-        primary_error = self._make_rate_limit_error()
-        backup_error = AgentExecutionError("backup rate limit", error_type="rate_limit")
+        primary_error = self._make_cli_not_found_error()
+        backup_error = AgentExecutionError("backup unavailable", error_type="cli_not_found")
         callback_errors = []
         execution_calls = 0
 
@@ -234,7 +239,8 @@ class TestAgentManagerBackupRetry:
         )
 
         with patch(
-            "cafe.agents.executor.AgentExecutor.execute", side_effect=self._make_rate_limit_error()
+            "cafe.agents.executor.AgentExecutor.execute",
+            side_effect=self._make_cli_not_found_error(),
         ) as execute:
             with pytest.raises(AgentExecutionError, match="takeover context unavailable"):
                 manager.execute(
@@ -262,15 +268,21 @@ class TestAgentManagerBackupRetry:
         def side_effect(*args, **kwargs):
             nonlocal call_count
             call_count += 1
-            if call_count <= 2:
+            if call_count == 1:
+                raise self._make_cli_not_found_error()
+            if call_count <= 4:
                 raise self._make_rate_limit_error()
             return self._make_success_response("second backup success")
 
-        with patch("cafe.agents.executor.AgentExecutor.execute", side_effect=side_effect):
+        with (
+            patch("cafe.agents.executor.AgentExecutor.execute", side_effect=side_effect),
+            patch("cafe.agents.manager.time.sleep") as sleep,
+        ):
             response, *_ = manager.execute("David", "test prompt")
 
         assert response == "second backup success"
-        assert call_count == 3
+        assert call_count == 5
+        assert [call.args[0] for call in sleep.call_args_list] == [30, 120]
 
     def test_all_agents_fail_raises_error(self) -> None:
         """Test that AgentExecutionError is raised when all agents fail."""
@@ -283,27 +295,32 @@ class TestAgentManagerBackupRetry:
         manager.register_agent(config)
 
         with patch("cafe.agents.executor.AgentExecutor.execute") as mock_exec:
-            mock_exec.side_effect = self._make_rate_limit_error()
+            mock_exec.side_effect = self._make_cli_not_found_error()
 
             with pytest.raises(AgentExecutionError) as exc_info:
                 manager.execute("David", "test prompt")
 
-        assert exc_info.value.error_type == "rate_limit"
+        assert exc_info.value.error_type == "cli_not_found"
 
-    def test_no_backup_configured_rate_limit_raises_immediately(self) -> None:
-        """Test that rate limit raises immediately when no backup agents are configured."""
+    def test_no_backup_configured_rate_limit_raises_after_three_attempts(self) -> None:
+        """A rate limit is exposed only after three same-CLI attempts."""
         manager = AgentManager()
         config = AgentConfig(name="David", cli=AgentCLI.CLAUDE)  # no backup_clis
         manager.register_agent(config)
 
-        with patch("cafe.agents.executor.AgentExecutor.execute") as mock_exec:
+        with (
+            patch("cafe.agents.executor.AgentExecutor.execute") as mock_exec,
+            patch("cafe.agents.manager.time.sleep") as sleep,
+        ):
             mock_exec.side_effect = self._make_rate_limit_error()
 
             with pytest.raises(AgentExecutionError) as exc_info:
                 manager.execute("David", "test prompt")
 
         assert exc_info.value.error_type == "rate_limit"
-        assert mock_exec.call_count == 1
+        assert mock_exec.call_count == 3
+        assert [call.args[0] for call in sleep.call_args_list] == [30, 120]
+        assert [attempt["attempt"] for attempt in manager.get_failed_attempts()] == [1, 2, 3]
 
     def test_duplicate_cli_in_backup_is_skipped(self) -> None:
         """Test that duplicate CLIs in the backup list are only attempted once."""
@@ -321,7 +338,7 @@ class TestAgentManagerBackupRetry:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                raise self._make_rate_limit_error()
+                raise self._make_cli_not_found_error()
             return self._make_success_response()
 
         with patch("cafe.agents.executor.AgentExecutor.execute", side_effect=side_effect):
@@ -378,7 +395,7 @@ class TestAgentManagerBackupRetry:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                raise AgentExecutionError("rate limit", error_type="rate_limit")
+                raise AgentExecutionError("cli not found", error_type="cli_not_found")
             return AgentResponse(response="ok", token_usage=TokenUsage())
 
         with (
@@ -418,7 +435,7 @@ class TestAgentManagerBackupRetry:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                raise AgentExecutionError("rate limit", error_type="rate_limit")
+                raise AgentExecutionError("cli not found", error_type="cli_not_found")
             return AgentResponse(response="ok", token_usage=TokenUsage())
 
         with (
@@ -447,7 +464,7 @@ class TestAgentManagerBackupRetry:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                raise AgentExecutionError("rate limit", error_type="rate_limit")
+                raise AgentExecutionError("cli not found", error_type="cli_not_found")
             if call_count == 2:
                 raise AgentExecutionError("cli not found", error_type="cli_not_found")
             return AgentResponse(response="copilot success", token_usage=TokenUsage())
