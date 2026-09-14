@@ -27,6 +27,10 @@ workflow:
       questions:
         - id: audience
           prompt: Who is the intended audience?
+  prompt_inputs:
+    - artifacts: [review_feedback]
+      placeholder: correction_source
+      required: false
 ---
 
 # Revise Editorial Brief
@@ -35,7 +39,7 @@ workflow:
 Read your agent file: {agent_file}
 
 ## Instructions
-依審閱或釐清結果更新大綱，維持受眾與論述主軸一致。
+依完整的審閱 correction source 或釐清結果更新大綱，維持受眾與論述主軸一致；保留輸入 Todo item IDs。
 
 ## Output
 Write revised brief to: {output_file}

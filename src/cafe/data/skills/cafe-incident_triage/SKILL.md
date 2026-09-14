@@ -13,6 +13,10 @@ workflow:
       pattern: revision_feedback
       prompt: Provide the incident details needed to continue triage.
       input_schema: feedback
+  prompt_inputs:
+    - artifacts: [incident_recovery, incident_learning]
+      placeholder: correction_source
+      required: false
 ---
 
 # Incident Triage
@@ -21,7 +25,7 @@ workflow:
 Read your agent file: {agent_file}
 
 ## Instructions
-判定優先級、指派與緩解策略，必要時回到偵測步驟補齊資訊。
+判定優先級、指派與緩解策略，必要時回到偵測步驟補齊資訊；收到 correction source 時完整消化其 canonical Todo items 並保留 IDs。
 
 ## Output
 Write triage report to: {output_file}

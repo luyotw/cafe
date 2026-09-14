@@ -13,6 +13,10 @@ workflow:
       pattern: revision_feedback
       prompt: Provide the incident details needed to continue detection.
       input_schema: feedback
+  prompt_inputs:
+    - artifacts: [incident_plan, incident_learning]
+      placeholder: correction_source
+      required: false
 ---
 
 # Incident Detect
@@ -21,7 +25,7 @@ workflow:
 Read your agent file: {agent_file}
 
 ## Instructions
-記錄事件現象、影響範圍、時間線與初步嚴重度，準備交給分類／處置決策。
+記錄事件現象、影響範圍、時間線與初步嚴重度，準備交給分類／處置決策；收到 correction source 時完整消化其 canonical Todo items 並保留 IDs。
 
 ## Output
 Write incident report to: {output_file}

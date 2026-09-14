@@ -38,6 +38,7 @@ steps:
     handoff_label: "Refine research question"
     chat_role: researcher
     assignee_type: agent
+    input_artifacts: [research_notes]
     output_artifact: research_question_brief
     human_tasks:
       - trigger: need_clarification
@@ -58,8 +59,11 @@ steps:
     handoff_label: "Continue evidence collection"
     chat_role: researcher
     assignee_type: agent
-    input_artifacts: [research_question_brief]
+    input_artifacts: [research_question_brief, research_synthesis]
     output_artifact: research_notes
+    behavior:
+      feedback_routes:
+        question: {artifact: research_notes, source_kind: research_notes, todo_source: notes, todo_id_prefix: RNOTE}
     human_tasks:
       - trigger: need_clarification
         task_id: clarification-feedback
@@ -80,8 +84,11 @@ steps:
     handoff_label: "Revise research synthesis"
     chat_role: researcher
     assignee_type: agent
-    input_artifacts: [research_question_brief, research_notes]
+    input_artifacts: [research_question_brief, research_notes, research_report_doc]
     output_artifact: research_synthesis
+    behavior:
+      feedback_routes:
+        collect: {artifact: research_synthesis, source_kind: research_synthesis, todo_source: synthesis, todo_id_prefix: RSYN}
     human_tasks:
       - trigger: need_clarification
         task_id: clarification-feedback
@@ -104,6 +111,9 @@ steps:
     assignee_type: agent
     input_artifacts: [research_question_brief, research_notes, research_synthesis]
     output_artifact: research_report_doc
+    behavior:
+      feedback_routes:
+        synthesize: {artifact: research_report_doc, source_kind: research_report, todo_source: report, todo_id_prefix: RPT}
     human_tasks:
       - trigger: need_clarification
         task_id: clarification-feedback

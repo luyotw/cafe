@@ -8,6 +8,10 @@ workflow:
     reasoning: standard
     risk_domains: [source-fidelity, audience-alignment]
     fallback_strength: equivalent_or_stronger
+  prompt_inputs:
+    - artifacts: [review_feedback]
+      placeholder: correction_source
+      required: false
 ---
 
 # Editorial Review
@@ -16,7 +20,7 @@ workflow:
 Read your agent file: {agent_file}
 
 ## Instructions
-檢視初稿的清晰度、依據與結構；若需修改，提出可執行的修訂方向。
+檢視初稿的清晰度、依據與結構；若需修改，提出可執行的修訂方向。每個回到較早步驟的修訂要求都必須留在輸出中的 canonical `## Todo List`；沒有可執行修訂時只寫 `No actionable work.`。
 
 ## Output
 Write review to: {output_file}

@@ -320,6 +320,41 @@ class InitialInputDeclaration(BaseModel):
 CompletionMode = Literal["status_code", "baton"]
 
 
+class FeedbackRouteDeclaration(BaseModel):
+    """One complete destination-scoped causal correction route."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    artifact: str
+    source_kind: str
+    todo_source: str
+    todo_id_prefix: str
+
+    @field_validator("artifact", "source_kind")
+    @classmethod
+    def _validate_artifact_identifiers(cls, value: str, info: Any) -> str:
+        token = value.strip()
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", token):
+            raise ValueError(f"feedback route {info.field_name} must be a safe identifier")
+        return token
+
+    @field_validator("todo_source")
+    @classmethod
+    def _validate_todo_source(cls, value: str) -> str:
+        token = value.strip()
+        if not re.fullmatch(r"[a-z][a-z0-9_]*", token):
+            raise ValueError("feedback route todo_source must be a lowercase identifier")
+        return token
+
+    @field_validator("todo_id_prefix")
+    @classmethod
+    def _validate_todo_prefix(cls, value: str) -> str:
+        token = value.strip()
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]*", token):
+            raise ValueError("feedback route todo_id_prefix must be an uppercase identifier")
+        return token
+
+
 class StepBehaviorDeclaration(BaseModel):
     """Optional behavior selectors declared by a playbook or one step.
 
@@ -337,6 +372,7 @@ class StepBehaviorDeclaration(BaseModel):
     feedback_source_kind: Optional[str] = None
     feedback_todo_source: Optional[str] = None
     feedback_todo_id_prefix: Optional[str] = None
+    feedback_routes: Optional[Dict[str, FeedbackRouteDeclaration]] = None
     context_providers: Optional[List[str]] = None
     runtime_tool_grants: Optional[List[str]] = None
 
@@ -400,6 +436,12 @@ class StepBehaviorDeclaration(BaseModel):
                 "feedback routing requires target, artifact, source kind, Todo source, "
                 "and Todo ID prefix"
             )
+        if self.feedback_routes is not None:
+            if not self.feedback_routes:
+                raise ValueError("feedback_routes must contain at least one destination")
+            for target in self.feedback_routes:
+                if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", target.strip()):
+                    raise ValueError("feedback route destinations must be safe identifiers")
         return self
 
 
@@ -415,6 +457,7 @@ class EffectiveStepBehavior(BaseModel):
     feedback_source_kind: Optional[str] = None
     feedback_todo_source: Optional[str] = None
     feedback_todo_id_prefix: Optional[str] = None
+    feedback_routes: Optional[Dict[str, FeedbackRouteDeclaration]] = None
     context_providers: List[str] = Field(default_factory=list)
     runtime_tool_grants: List[str] = Field(default_factory=list)
 
@@ -559,6 +602,7 @@ class StepConfig(BaseModel):
     # remains the opt-in isolated scope.
     input_artifacts: Optional[List[str]] = None
     output_artifact: Optional[str] = None
+    workspace_artifact: Optional[str] = None
     initial_input: Optional[InitialInputDeclaration] = None
     template: Optional[str] = None
     allowed_tools: List[str] = Field(default_factory=list)
@@ -621,6 +665,11 @@ class StepConfig(BaseModel):
             raise ValueError("assignee_type=hybrid requires hybrid portion declaration")
         if self.assignee_type == "auto" and self.human_tasks:
             raise ValueError("assignee_type=auto cannot declare human_tasks")
+        if self.workspace_artifact is not None:
+            if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", self.workspace_artifact.strip()):
+                raise ValueError("workspace_artifact must be a safe identifier")
+            if self.output_artifact is None:
+                raise ValueError("workspace_artifact requires output_artifact")
         return self
 
     @field_validator("human_tasks")
@@ -959,8 +1008,51 @@ class PlaybookDefinition(BaseModel):
                 )
             ]
 
+        route_declarations_present = any(
+            resolve_step_behavior(self, step_name).feedback_routes
+            for step_name in self.steps
+        )
+        step_order = {name: index for index, name in enumerate(self.steps)}
+
         for step_name, step in self.steps.items():
             behavior = resolve_step_behavior(self, step_name)
+            routes = behavior.feedback_routes or {}
+            for destination, route in routes.items():
+                if destination not in self.steps:
+                    raise ValueError(
+                        f"steps.{step_name}.feedback route destination {destination!r} "
+                        "is not a declared transition"
+                    )
+                if destination not in (*step.on.values(), *step.allowed_goto):
+                    raise ValueError(
+                        f"steps.{step_name}.feedback route {destination!r} requires "
+                        "a matching transition"
+                    )
+                if step.output_artifact != route.artifact:
+                    raise ValueError(
+                        f"steps.{step_name}.feedback route {destination!r} artifact "
+                        "must match output_artifact"
+                    )
+                destination_step = self.steps[destination]
+                if (
+                    "input_artifacts" in destination_step.model_fields_set
+                    and route.artifact not in (destination_step.input_artifacts or [])
+                ):
+                    raise ValueError(
+                        f"steps.{step_name}.feedback route {destination!r} artifact "
+                        "must be declared in the destination input_artifacts"
+                    )
+            if route_declarations_present:
+                for target in step.on.values():
+                    if (
+                        target in self.steps
+                        and step_order[target] < step_order[step_name]
+                        and target not in routes
+                    ):
+                        raise ValueError(
+                            f"steps.{step_name} backward transition to {target!r} "
+                            "requires a complete feedback route"
+                        )
             target = behavior.feedback_target
             feedback_source_stages = github_pr_feedback_source_stages(step)
             if feedback_source_stages:
@@ -1065,6 +1157,7 @@ def resolve_step_behavior(
         feedback_todo_id_prefix=_behavior_value(
             defaults, override, "feedback_todo_id_prefix", None
         ),
+        feedback_routes=_behavior_value(defaults, override, "feedback_routes", None),
         context_providers=_behavior_value(defaults, override, "context_providers", []),
         runtime_tool_grants=_behavior_value(defaults, override, "runtime_tool_grants", []),
     )
@@ -1602,6 +1695,12 @@ def _validate_feedback_target_prompt_inputs(
             for mapping in skill_loader.get_workflow_contract(skill_name).prompt_inputs
         )
 
+    def receives_causal_artifact(skill_name: str, artifact: str) -> bool:
+        return any(
+            artifact in mapping.artifacts
+            for mapping in skill_loader.get_workflow_contract(skill_name).prompt_inputs
+        )
+
     for step_name, step in model.steps.items():
         behavior = resolve_step_behavior(model, step_name)
         targets: List[tuple[str, str, str]] = []
@@ -1611,6 +1710,14 @@ def _validate_feedback_target_prompt_inputs(
                     "behavior.feedback_target",
                     behavior.feedback_target,
                     behavior.feedback_artifact,
+                )
+            )
+        for target_name, route in (behavior.feedback_routes or {}).items():
+            targets.append(
+                (
+                    "behavior.feedback_routes",
+                    target_name,
+                    route.artifact,
                 )
             )
         for binding in step.human_tasks:
@@ -1634,7 +1741,11 @@ def _validate_feedback_target_prompt_inputs(
             missing = [
                 canonical_skill_name(skill_name)
                 for skill_name in selectors
-                if not receives_feedback_artifact(skill_name, artifact)
+                if not (
+                    receives_causal_artifact(skill_name, artifact)
+                    if source == "behavior.feedback_routes"
+                    else receives_feedback_artifact(skill_name, artifact)
+                )
             ]
             if missing:
                 raise ValueError(

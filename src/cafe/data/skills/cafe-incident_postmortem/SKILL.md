@@ -13,6 +13,10 @@ workflow:
       pattern: revision_feedback
       prompt: Provide the incident details needed to continue the postmortem.
       input_schema: feedback
+  prompt_inputs:
+    - artifacts: [incident_learning]
+      placeholder: correction_source
+      required: false
 ---
 
 # Incident Postmortem
@@ -21,7 +25,7 @@ workflow:
 Read your agent file: {agent_file}
 
 ## Instructions
-整理根因、時間線、學到的教訓與預防措施；若事件仍在演變，回到分類或偵測更新狀態。
+整理根因、時間線、學到的教訓與預防措施；若事件仍在演變，回到分類或偵測更新狀態。若需回到 triage，輸出 canonical correction Todo items。
 
 ## Output
 Write postmortem to: {output_file}

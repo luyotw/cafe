@@ -13,6 +13,10 @@ workflow:
       pattern: revision_feedback
       prompt: Provide the incident details needed to continue mitigation.
       input_schema: feedback
+  prompt_inputs:
+    - artifacts: [incident_recovery]
+      placeholder: correction_source
+      required: false
 ---
 
 # Incident Mitigate
@@ -21,7 +25,7 @@ workflow:
 Read your agent file: {agent_file}
 
 ## Instructions
-執行緩解措施、驗證服務恢復，並記錄變更與回滾點；狀況變更時可回到分類或偵測。
+執行緩解措施、驗證服務恢復，並記錄變更與回滾點；狀況變更時可回到分類或偵測。若需回到 triage，輸出 canonical correction Todo items。
 
 ## Output
 Write mitigation log to: {output_file}

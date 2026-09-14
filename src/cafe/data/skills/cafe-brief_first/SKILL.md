@@ -27,6 +27,10 @@ workflow:
       questions:
         - id: audience
           prompt: Who is the intended audience?
+  prompt_inputs:
+    - artifacts: [review_feedback]
+      placeholder: correction_source
+      required: false
 ---
 
 # Editorial Brief
@@ -35,7 +39,7 @@ workflow:
 Read your agent file: {agent_file}
 
 ## Instructions
-將需求整理成清楚的內容大綱：受眾、角度、需補強的資訊與驗收重點。
+將需求或完整的審閱 correction source 整理成清楚的內容大綱：受眾、角度、需補強的資訊與驗收重點；保留輸入 Todo item IDs。
 
 ## Output
 Write brief to: {output_file}

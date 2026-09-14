@@ -13,6 +13,10 @@ workflow:
       pattern: revision_feedback
       prompt: Provide the clarification needed to refine the research question.
       input_schema: feedback
+  prompt_inputs:
+    - artifacts: [research_notes]
+      placeholder: correction_source
+      required: false
 ---
 
 # Research Question
@@ -21,7 +25,7 @@ workflow:
 Read your agent file: {agent_file}
 
 ## Instructions
-把主題收斂成可驗證的研究問題：範圍、成功定義、已知限制與待釐清假設。
+把主題收斂成可驗證的研究問題：範圍、成功定義、已知限制與待釐清假設；若收到 correction source，完整消化其 canonical Todo items 並保留 IDs。
 
 ## Output
 Write research question to: {output_file}

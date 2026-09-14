@@ -13,6 +13,10 @@ workflow:
       pattern: revision_feedback
       prompt: Provide the clarification needed to continue synthesis.
       input_schema: feedback
+  prompt_inputs:
+    - artifacts: [research_report_doc]
+      placeholder: correction_source
+      required: false
 ---
 
 # Research Synthesize
@@ -21,7 +25,7 @@ workflow:
 Read your agent file: {agent_file}
 
 ## Instructions
-整合多來源的發現，指出共識、歧異與尚待驗證之處，形成可寫入報告的論點骨架。
+整合多來源的發現，指出共識、歧異與尚待驗證之處，形成可寫入報告的論點骨架；收到 correction source 時完整消化其 canonical Todo items 並保留 IDs。
 
 ## Output
 Write synthesis to: {output_file}

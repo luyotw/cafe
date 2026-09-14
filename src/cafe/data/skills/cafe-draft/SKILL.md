@@ -13,6 +13,10 @@ workflow:
       pattern: revision_feedback
       prompt: Provide the clarification needed to continue drafting.
       input_schema: feedback
+  prompt_inputs:
+    - artifacts: [review_feedback]
+      placeholder: correction_source
+      required: false
 ---
 
 # Draft Article
@@ -21,7 +25,7 @@ workflow:
 Read your agent file: {agent_file}
 
 ## Instructions
-依大綱撰寫初稿：結構清楚、論述具體、符合讀者情境。
+依大綱或完整的審閱 correction source 撰寫初稿：結構清楚、論述具體、符合讀者情境；保留輸入 Todo item IDs。
 
 ## Output
 Write draft to: {output_file}

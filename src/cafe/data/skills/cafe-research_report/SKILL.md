@@ -13,6 +13,10 @@ workflow:
       pattern: revision_feedback
       prompt: Provide the clarification needed to complete the report.
       input_schema: feedback
+  prompt_inputs:
+    - artifacts: [research_report_doc]
+      placeholder: correction_source
+      required: false
 ---
 
 # Research Report
@@ -21,7 +25,7 @@ workflow:
 Read your agent file: {agent_file}
 
 ## Instructions
-依讀者需求撰寫報告：結論、證據、限制與後續建議；格式以 Markdown 為主。
+依讀者需求撰寫報告：結論、證據、限制與後續建議；格式以 Markdown 為主。若需回到 synthesize，輸出 canonical correction Todo items。
 
 ## Output
 Write report to: {output_file}

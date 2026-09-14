@@ -13,6 +13,10 @@ workflow:
       pattern: revision_feedback
       prompt: Provide the clarification needed to continue evidence collection.
       input_schema: feedback
+  prompt_inputs:
+    - artifacts: [research_synthesis]
+      placeholder: correction_source
+      required: false
 ---
 
 # Research Collect
@@ -21,7 +25,7 @@ workflow:
 Read your agent file: {agent_file}
 
 ## Instructions
-蒐集與整理資料來源，建立可追溯的筆記與引用，標註可信度與缺口。
+蒐集與整理資料來源，建立可追溯的筆記與引用，標註可信度與缺口；收到 correction source 時完整消化其 canonical Todo items 並保留 IDs。
 
 ## Output
 Write collected sources to: {output_file}

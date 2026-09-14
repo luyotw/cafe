@@ -44,6 +44,7 @@ steps:
     handoff_label: "Revise editorial brief"
     chat_role: editor
     assignee_type: agent
+    input_artifacts: [review_feedback]
     output_artifact: brief
     human_tasks:
       - trigger: confirm_output
@@ -71,7 +72,7 @@ steps:
     handoff_label: "Continue manuscript draft"
     chat_role: writer
     assignee_type: agent
-    input_artifacts: [brief]
+    input_artifacts: [brief, review_feedback]
     output_artifact: manuscript
     human_tasks:
       - trigger: need_clarification
@@ -94,6 +95,10 @@ steps:
     assignee_type: agent
     input_artifacts: [brief, manuscript]
     output_artifact: review_feedback
+    behavior:
+      feedback_routes:
+        brief: {artifact: review_feedback, source_kind: editorial_review, todo_source: review, todo_id_prefix: REV}
+        draft: {artifact: review_feedback, source_kind: editorial_review, todo_source: review, todo_id_prefix: REV}
     valid_intents:
       - confirmed
       - needs_changes
