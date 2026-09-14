@@ -7089,6 +7089,15 @@ workflow:
     ):
         assert executor._validate_projected_todo_completion(checklist)
 
+    with patch(
+        "cafe.utils.checklist_validator.check_verification_receipt",
+        return_value=SimpleNamespace(valid=False, receipt=None),
+    ):
+        passed, detail = executor._validate_projected_todo_completion_detail(checklist)
+    assert passed is False
+    assert "cafe verification run --output-file" in detail
+    assert "--scope targeted -- <test command>" in detail
+
     valid_output = output.read_text(encoding="utf-8")
     output.write_text("## Todo Progress\n\n- malformed ledger\n", encoding="utf-8")
     passed, detail = executor._validate_projected_todo_completion_detail(checklist)
