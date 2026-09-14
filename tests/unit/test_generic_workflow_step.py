@@ -6785,6 +6785,48 @@ def test_completion_contract_failure_retries_same_producer(tmp_path: Path) -> No
     ]
 
 
+def test_projected_todo_failure_retries_with_detail_and_revalidates(
+    tmp_path: Path,
+) -> None:
+    phase_dir = tmp_path / ".cafe" / "issues" / "consumer-retry" / "develop"
+    iteration_dir = phase_dir / "iteration_001"
+    iteration_dir.mkdir(parents=True)
+    checklist = iteration_dir / "checklist.md"
+    checklist.write_text("[x] `BLK-001` — fixed\n", encoding="utf-8")
+    (iteration_dir / "iteration.json").write_text(
+        json.dumps({"response": "confirmed", "streaming_log": []}),
+        encoding="utf-8",
+    )
+    manager = FakeAgentManager("confirmed")
+    executor = _minimal_spec_executor(tmp_path, agent_manager=manager)
+    executor.phase_dir = phase_dir
+    executor.phase_name = "develop"
+    executor.iteration = 1
+    validations = []
+
+    def validate(_checklist_path):
+        validations.append(True)
+        if len(validations) == 1:
+            return False, "Todo ledger evidence is incomplete for BLK-001"
+        return True, ""
+
+    executor._validate_projected_todo_completion_detail = validate
+
+    _, status, passed = executor._validate_and_retry_checklist_completion(
+        agent_name="David",
+        prompt="prompt",
+        user_input="",
+        valid_intents=[PhaseStatusCode.CONFIRMED],
+        max_retries=1,
+    )
+
+    assert passed is True
+    assert status == PhaseStatusCode.CONFIRMED
+    assert manager.execute_call_count == 1
+    assert "Todo ledger evidence is incomplete for BLK-001" in manager.prompts[0]
+    assert len(validations) == 2
+
+
 def test_manual_handoff_retries_malformed_todo_before_consumer(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -7046,6 +7088,13 @@ workflow:
         ),
     ):
         assert executor._validate_projected_todo_completion(checklist)
+
+    valid_output = output.read_text(encoding="utf-8")
+    output.write_text("## Todo Progress\n\n- malformed ledger\n", encoding="utf-8")
+    passed, detail = executor._validate_projected_todo_completion_detail(checklist)
+    assert passed is False
+    assert "Todo ledger item set does not match the authoritative set" in detail
+    output.write_text(valid_output, encoding="utf-8")
 
     ledger.path.write_text('{"version": 1, "entries": []}\n', encoding="utf-8")
     assert not executor._validate_projected_todo_completion(checklist)

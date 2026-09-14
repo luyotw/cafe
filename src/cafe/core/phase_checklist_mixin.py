@@ -100,19 +100,28 @@ class PhaseChecklistMixin:
                     checklist_path=checklist_path,
                 )
 
+        validation_detail = ""
         if (
             validate_checklist_completion
             and result.is_complete
             and hasattr(self, "_validate_projected_todo_completion")
         ):
-            if not self._validate_projected_todo_completion(checklist_path):
+            detailed_validator = getattr(
+                self,
+                "_validate_projected_todo_completion_detail",
+                None,
+            )
+            if callable(detailed_validator):
+                projected_passed, validation_detail = detailed_validator(checklist_path)
+            else:
+                projected_passed = self._validate_projected_todo_completion(checklist_path)
+            if not projected_passed:
                 result = ChecklistValidationResult(
                     is_complete=False,
                     unchecked_count=0,
                     checklist_path=checklist_path,
                 )
 
-        validation_detail = ""
         if result.is_complete and additional_validation is not None:
             additional_passed, validation_detail = additional_validation(
                 completion_response,
@@ -231,6 +240,31 @@ Do NOT return a status code until ALL checklist items are marked as complete [x]
                 )
 
                 validation_detail = ""
+                if (
+                    validate_checklist_completion
+                    and retry_result.is_complete
+                    and hasattr(self, "_validate_projected_todo_completion")
+                ):
+                    detailed_validator = getattr(
+                        self,
+                        "_validate_projected_todo_completion_detail",
+                        None,
+                    )
+                    if callable(detailed_validator):
+                        projected_passed, validation_detail = detailed_validator(
+                            checklist_path
+                        )
+                    else:
+                        projected_passed = self._validate_projected_todo_completion(
+                            checklist_path
+                        )
+                    if not projected_passed:
+                        retry_result = ChecklistValidationResult(
+                            is_complete=False,
+                            unchecked_count=0,
+                            checklist_path=checklist_path,
+                        )
+
                 if retry_result.is_complete and additional_validation is not None:
                     additional_passed, validation_detail = additional_validation(
                         retry_response,
