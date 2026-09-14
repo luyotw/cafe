@@ -1232,6 +1232,11 @@ def agent_sync() -> None:
 def chat_with_agent(
     ctx: typer.Context,
     role: str = typer.Argument(..., help="Playbook-declared role"),
+    phase: Optional[str] = typer.Option(
+        None,
+        "--phase",
+        help="Use the session for this playbook phase",
+    ),
     prompt: Optional[str] = typer.Option(
         None,
         "--prompt",
@@ -1249,6 +1254,7 @@ def chat_with_agent(
     \b
     Examples:
         cafe chat developer
+        cafe chat developer --phase pr
         cafe chat developer -p "Summarize the current implementation"
         cafe chat qa
         cafe chat researcher
@@ -1260,9 +1266,12 @@ def chat_with_agent(
         console.print(f"[red]Error: Invalid role '{role}'. Must be one of: {', '.join(valid_roles)}[/red]")
         raise typer.Exit(1)
 
-    if prompt is None:
-        raise typer.Exit(launch_chat_session(role, issue_name))
-    raise typer.Exit(launch_chat_session(role, issue_name, prompt=prompt))
+    launch_kwargs = {}
+    if phase is not None:
+        launch_kwargs["phase_name"] = phase
+    if prompt is not None:
+        launch_kwargs["prompt"] = prompt
+    raise typer.Exit(launch_chat_session(role, issue_name, **launch_kwargs))
 
 
 def _load_issue_playbook_roles(issue_name: str) -> list[str]:

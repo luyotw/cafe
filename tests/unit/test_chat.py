@@ -10,13 +10,15 @@ import pytest
 from cafe.agents.cli import ClaudeCLI, CodexCLI, CopilotCLI, CursorCLI, GeminiCLI
 from cafe.agents.executor import AgentExecutionError
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
-from cafe.core.types import AgentCLI, AgentConfig
+from cafe.core.types import AgentCLI, AgentConfig, SessionData
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
 from cafe.ui.chat import (
     _load_latest_role_iteration_cli,
+    _load_latest_role_session,
     _prepare_chat_environment,
     _prepare_chat_handoff_state,
+    _resolve_configured_chat_session,
     get_chat_next_step_path,
     launch_chat_session,
 )
@@ -32,9 +34,7 @@ def mock_chat_environment():
 @pytest.fixture(autouse=True)
 def isolate_global_catalog(tmp_path, monkeypatch):
     """Keep unit tests away from the user-owned global catalog and its lock."""
-    monkeypatch.setattr(
-        "cafe.utils.config.get_global_cafe_dir", lambda: tmp_path / "global"
-    )
+    monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: tmp_path / "global")
 
 
 @pytest.fixture(autouse=True)
@@ -44,11 +44,16 @@ def mock_phase_config_boundary_for_legacy_chat_fixtures(monkeypatch):
 
     real_loader = chat._load_chat_role_config
 
-    def load_config(config_manager, role, issue_dir=None):
+    def load_config(config_manager, role, issue_dir=None, phase_name=None):
         configured = config_manager.get(f"agents.{role}", None)
         if configured is not None:
             return configured
-        return real_loader(config_manager, role, issue_dir=issue_dir)
+        return real_loader(
+            config_manager,
+            role,
+            issue_dir=issue_dir,
+            phase_name=phase_name,
+        )
 
     monkeypatch.setattr(chat, "_load_chat_role_config", load_config)
     yield monkeypatch
@@ -79,9 +84,7 @@ class TestLaunchChatSession:
     """Tests for launch_chat_session()."""
 
     @pytest.fixture(autouse=True)
-    def isolate_launcher_workspace(
-        self, tmp_path, monkeypatch, mock_chat_catalog_reads
-    ):
+    def isolate_launcher_workspace(self, tmp_path, monkeypatch, mock_chat_catalog_reads):
         """Keep launcher tests local and independent from catalog traversal."""
         monkeypatch.chdir(tmp_path)
 
@@ -403,6 +406,7 @@ class TestLaunchChatSession:
             "issue123",
         )
 
+
 def test_prepare_chat_environment_installs_chat_skills_only() -> None:
     with (
         patch("cafe.ui.chat.SkillLoader.discover"),
@@ -414,12 +418,8 @@ def test_prepare_chat_environment_installs_chat_skills_only() -> None:
                 "skills": {
                     "chat": {
                         "shared": ["chat-base"],
-                        "roles": {
-                            "developer": {"mode": "extend", "skills": ["chat-role"]}
-                        },
-                        "steps": {
-                            "develop": {"mode": "replace", "skills": ["chat-step"]}
-                        },
+                        "roles": {"developer": {"mode": "extend", "skills": ["chat-role"]}},
+                        "steps": {"develop": {"mode": "replace", "skills": ["chat-step"]}},
                     }
                 }
             },
@@ -543,13 +543,124 @@ def test_latest_role_iteration_cli_infers_codex_for_phase_chain_metadata(
         role_config={
             "name": "David",
             "clis": [
-                    {"cli": "claude", "model": "sonnet"},
-                    {"cli": "codex", "model": "gpt-5.3-codex"},
+                {"cli": "claude", "model": "sonnet"},
+                {"cli": "codex", "model": "gpt-5.3-codex"},
             ],
         },
     )
 
     assert result == ("codex", "gpt-5.3-codex")
+
+
+def test_latest_role_session_uses_most_recent_matching_phase(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue123"
+    sessions_dir = issue_dir / "sessions"
+    sessions_dir.mkdir(parents=True)
+    sessions = {
+        "David_codex_develop.json": {
+            "agent_name": "David",
+            "cli": "codex",
+            "session_id": "develop-session",
+            "created_at": "2026-09-14T10:00:00",
+            "last_used_at": "2026-09-14T11:00:00",
+            "phase_name": "develop",
+        },
+        "David_cursor-agent_pr.json": {
+            "agent_name": "David",
+            "cli": "cursor-agent",
+            "session_id": "pr-session",
+            "created_at": "2026-09-14T12:00:00",
+            "last_used_at": "2026-09-14T13:00:00",
+            "phase_name": "pr",
+        },
+        "Richard_codex_review.json": {
+            "agent_name": "Richard",
+            "cli": "codex",
+            "session_id": "review-session",
+            "created_at": "2026-09-14T14:00:00",
+            "last_used_at": "2026-09-14T15:00:00",
+            "phase_name": "review",
+        },
+    }
+    for name, payload in sessions.items():
+        (sessions_dir / name).write_text(json.dumps(payload), encoding="utf-8")
+    playbook = {
+        "steps": {
+            "develop": {"role": "developer"},
+            "review": {"role": "reviewer"},
+            "pr": {"role": "developer"},
+        }
+    }
+
+    latest = _load_latest_role_session(
+        issue_dir,
+        role="developer",
+        playbook=playbook,
+    )
+    develop = _load_latest_role_session(
+        issue_dir,
+        role="developer",
+        playbook=playbook,
+        phase_name="develop",
+    )
+
+    assert latest is not None
+    assert latest.phase_name == "pr"
+    assert latest.session_id == "pr-session"
+    assert develop is not None
+    assert develop.session_id == "develop-session"
+
+
+def test_phase_chat_discards_session_for_cli_removed_from_current_chain() -> None:
+    stale_session = SessionData(
+        agent_name="David",
+        cli=AgentCLI.CURSOR,
+        session_id="cursor-pr-session",
+        created_at="2026-09-14T12:00:00",
+        last_used_at="2026-09-14T13:00:00",
+        phase_name="pr",
+    )
+
+    cli, model, session_id = _resolve_configured_chat_session(
+        {
+            "name": "David",
+            "role": "developer",
+            "clis": [{"cli": "codex", "model": "gpt-5.6-luna"}],
+        },
+        phase_name="pr",
+        session=stale_session,
+    )
+
+    assert (cli, model, session_id) == ("codex", "gpt-5.6-luna", None)
+
+
+def test_phase_chat_uses_current_model_with_matching_phase_session() -> None:
+    existing_session = SessionData(
+        agent_name="David",
+        cli=AgentCLI.CODEX,
+        session_id="codex-pr-session",
+        created_at="2026-09-14T12:00:00",
+        last_used_at="2026-09-14T13:00:00",
+        phase_name="pr",
+    )
+
+    cli, model, session_id = _resolve_configured_chat_session(
+        {
+            "name": "David",
+            "role": "developer",
+            "clis": [{"cli": "codex", "model": "gpt-5.6-luna"}],
+        },
+        phase_name="pr",
+        session=existing_session,
+    )
+
+    assert (cli, model, session_id) == (
+        "codex",
+        "gpt-5.6-luna",
+        "codex-pr-session",
+    )
 
 
 def test_launch_chat_session_prepares_chat_handoff_directory(
