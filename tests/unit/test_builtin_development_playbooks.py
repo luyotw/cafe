@@ -72,10 +72,25 @@ def test_every_builtin_pr_requires_local_review_before_done() -> None:
         assert "workflow_complete" not in pr.on
         assert local_review.trigger == "confirm_output"
         assert local_review.outcomes == {
-            "fix_now": "develop",
+            "fix_now": "pr",
             "create_follow_up": "_done",
             "continue_without_issue": "_done",
         }
+
+
+def test_every_builtin_pr_curates_corrective_feedback_before_development() -> None:
+    """Corrective sources re-enter their declared PR curator, not Develop."""
+    loader = PlaybookLoader()
+
+    for playbook_id in DEVELOPMENT_PLAYBOOKS:
+        pr = loader.load_model(playbook_id, strict=True).model.steps["pr"]
+        local_review = next(task for task in pr.human_tasks if task.task_id == "local-review")
+
+        assert pr.behavior.feedback_target == "pr"
+        assert pr.behavior.feedback_artifact == "workflow_feedback"
+        assert "workflow_feedback" in pr.input_artifacts
+        assert local_review.outcomes["fix_now"] == "pr"
+        assert pr.on["manual_handoff"] == "develop"
 
 
 def test_cafe_pr_routes_completed_artifacts_to_local_review() -> None:
@@ -87,6 +102,9 @@ def test_cafe_pr_routes_completed_artifacts_to_local_review() -> None:
     assert "宣告 `confirm_output` 時交給 `user` review" in skill
     assert "只有宣告 `workflow_complete→done` 時才直接完成" in skill
     assert "不得選擇未宣告的路由" in skill
+    assert "workflow_feedback_file" in skill
+    assert "current corrective cycle" in skill
+    assert "`manual_handoff`" in skill
     assert "Follow-up Proposals" in skill
     assert "不會自動建立 GitHub issue" in skill
     assert "decision applies to every open FUP" in skill
@@ -296,7 +314,7 @@ def test_builtin_pr_feedback_routes_declare_portable_todo_metadata(
     playbook = PlaybookLoader().load_model(playbook_id, strict=True).model
     behavior = resolve_step_behavior(playbook, "pr")
 
-    assert behavior.feedback_target == "develop"
+    assert behavior.feedback_target == "pr"
     assert behavior.feedback_artifact == "workflow_feedback"
     assert behavior.feedback_source_kind == "github_pr"
     assert behavior.feedback_todo_source == "pr_comment"
