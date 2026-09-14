@@ -325,6 +325,22 @@ def test_builtin_pr_feedback_routes_declare_portable_todo_metadata(
     assert binding.feedback_delivery.todo_id_prefix == "WF"
 
 
+@pytest.mark.parametrize(
+    "playbook_id",
+    ["standard", "standard-qa", "direct", "direct-qa", "hotfix", "simple", "tdd", "tdd-qa"],
+)
+def test_builtin_develop_publishes_workspace_and_consumers_declare_it(
+    playbook_id: str,
+) -> None:
+    playbook = PlaybookLoader().load_model(playbook_id, strict=True).model
+
+    develop = playbook.steps["develop"]
+    assert develop.workspace_artifact == "workspace"
+    for step_name in ("review", "qa", "pr"):
+        if step_name in playbook.steps:
+            assert "workspace" in playbook.steps[step_name].input_artifacts
+
+
 @pytest.mark.parametrize("playbook_id", ["standard-qa", "tdd-qa"])
 def test_qa_variants_share_one_bounded_acceptance_phase(playbook_id: str) -> None:
     playbook = PlaybookLoader().load_model(playbook_id, strict=True).model
@@ -376,7 +392,7 @@ def test_qa_feedback_is_exposed_by_every_correction_and_publication_skill() -> N
         if not mapping.required
     }
     assert required == {"code"}
-    assert optional == {"spec", "plan", "review_feedback"}
+    assert optional == {"spec", "plan", "review_feedback", "workspace"}
 
     pr_contract = loader.get_workflow_contract("cafe-pr")
     resolved = resolve_prompt_inputs(

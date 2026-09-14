@@ -76,6 +76,7 @@ steps:
     assignee_type: agent
     input_artifacts: [spec, qa_feedback, workflow_feedback]
     output_artifact: code
+    workspace_artifact: workspace
     human_tasks:
       - trigger: need_clarification
         task_id: clarification-feedback
@@ -101,7 +102,7 @@ steps:
     skill: cafe-qa
     role: qa
     assignee_type: agent
-    input_artifacts: [spec, code]
+    input_artifacts: [spec, code, workspace]
     output_artifact: qa_feedback
     human_tasks:
       - trigger: need_clarification
@@ -126,7 +127,7 @@ steps:
     skill: cafe-pr
     role: developer
     assignee_type: agent
-    input_artifacts: [spec, code, qa_feedback, workflow_feedback]
+    input_artifacts: [spec, code, workspace, qa_feedback, workflow_feedback]
     output_artifact: pr_result
     behavior:
       completion: baton

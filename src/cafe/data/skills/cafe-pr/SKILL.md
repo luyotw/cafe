@@ -50,6 +50,9 @@ workflow:
     - artifacts: [code]
       placeholder: develop_file
       required: false
+    - artifacts: [workspace]
+      placeholder: workspace_file
+      required: false
     - artifacts: [qa_feedback, review_feedback]
       placeholder: feedback_file
       required: false
@@ -90,6 +93,9 @@ Read your agent file: {agent_file}
 ## Commits
 {commits}
 
+## Verified workspace
+Use the declared workspace input when it is supplied by the workflow runtime.
+
 ## Available scripts
 
 - **`scripts/sync_pr.sh`** — Push branch, create/update GitHub PR, and (when enabled) post completed todo list comment
@@ -109,6 +115,8 @@ the workflow is `local-only`, while `true` means the host must publish before
 the review task can expose a verified PR URL.
 
 ## Instructions
+
+- When `workspace_file` is supplied, use it as the authoritative Git changed-file and verification-receipt identity for the prepared PR content.
 
 ### Corrective feedback curation mode
 當 `workflow_feedback_file` 有本輪回饋，或 `Current user input for this iteration` 包含 PR review comments 時，這是 PR iteration 2：

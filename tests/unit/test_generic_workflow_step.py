@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 from types import MethodType, SimpleNamespace
@@ -20,6 +21,7 @@ from cafe.core.blackboard import (
     HandoffIntent,
     HandoffOwner,
 )
+from cafe.core.git import GitOperations
 from cafe.core.hooks import HookResult
 from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.human_tasks import agent_execution_interrupted_human_task
@@ -32,12 +34,15 @@ from cafe.core.status_codes import PhaseStatusCode
 from cafe.core.todo import parse_todo_list, workflow_feedback_todo_items
 from cafe.core.types import AgentCLI, AgentConfig, AgentResponse, CliEntry, TokenUsage
 from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
+from cafe.core.workspace_artifact import build_workspace_artifact, verify_workspace_artifact
 from cafe.phases.generic_phase import GenericPhase, GenericPhaseExecution
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
 from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
 from cafe.utils.phase_config import PhaseStepModelResolution
+from cafe.verification import run_verification
 
 
 @pytest.fixture(autouse=True)
@@ -6164,6 +6169,249 @@ def test_causal_todo_uses_inbound_transition_after_start_override(tmp_path: Path
         {"review_feedback": entry}, state, playbook=_causal_todo_playbook()
     )
     assert resolved["causal_todo"] is entry
+
+
+def test_declared_feedback_route_preserves_custom_source_and_todo_identity(tmp_path: Path) -> None:
+    source = tmp_path / "review.md"
+    source.write_text(
+        "## Todo List\n"
+        "- [ ] `REV-017` — Source: `editorial_review` — Work: fix — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+    state = BlackboardStore(tmp_path / "issue").load_or_create("receiver")
+    state.events.append(
+        EventEntry(
+            timestamp="2026-01-01T00:00:00Z",
+            step="producer",
+            event_type="transition",
+            message="",
+            data={"from": "producer", "to": "receiver"},
+        )
+    )
+    entry = ArtifactEntry(
+        name="review_doc",
+        kind=ArtifactKind.DOCUMENT,
+        version=3,
+        updated_by="producer",
+        path=str(source),
+    )
+
+    playbook = {
+        "steps": {
+            "producer": {
+                "output_artifact": "review_doc",
+                "behavior": {
+                    "feedback_routes": {
+                        "receiver": {
+                            "artifact": "review_doc",
+                            "source_kind": "editorial_review",
+                            "todo_source": "editorial_review",
+                            "todo_id_prefix": "REV",
+                        }
+                    }
+                },
+            },
+            "receiver": {},
+        }
+    }
+    resolved = GenericWorkflowStepExecutor._add_causal_todo_artifact(
+        {"review_doc": entry}, state, playbook=playbook
+    )
+
+    projection = resolved["causal_todo"]
+    assert projection.artifact == "review_doc"
+    assert projection.source == "editorial_review"
+    assert [item.item_id for item in projection.items] == ["REV-017"]
+
+
+def test_declared_feedback_route_falls_back_to_latest_complete_iteration(tmp_path: Path) -> None:
+    phase_dir = tmp_path / "issue" / "producer"
+    old_dir = phase_dir / "iteration_001"
+    current_dir = phase_dir / "iteration_002"
+    old_dir.mkdir(parents=True)
+    current_dir.mkdir(parents=True)
+    old_output = old_dir / "output.md"
+    old_output.write_text(
+        "## Todo List\n"
+        "- [ ] `REV-001` — Source: `editorial_review` — Work: old — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+    current_output = current_dir / "output.md"
+    current_output.write_text("## Todo List\n- [ ] malformed\n", encoding="utf-8")
+    state = BlackboardStore(tmp_path / "issue").load_or_create("receiver")
+    state.events.append(
+        EventEntry(
+            timestamp="2026-01-01T00:00:00Z",
+            step="producer",
+            event_type="transition",
+            message="",
+            data={"from": "producer", "to": "receiver"},
+        )
+    )
+    current = ArtifactEntry(
+        name="review_doc",
+        kind=ArtifactKind.DOCUMENT,
+        version=2,
+        updated_by="producer",
+        path=str(current_output),
+    )
+
+    playbook = {
+        "steps": {
+            "producer": {
+                "output_artifact": "review_doc",
+                "behavior": {
+                    "feedback_routes": {
+                        "receiver": {
+                            "artifact": "review_doc",
+                            "source_kind": "editorial_review",
+                            "todo_source": "editorial_review",
+                            "todo_id_prefix": "REV",
+                        }
+                    }
+                },
+            },
+            "receiver": {},
+        }
+    }
+    resolved = GenericWorkflowStepExecutor._add_causal_todo_artifact(
+        {"review_doc": current}, state, playbook=playbook
+    )
+
+    projection = resolved["causal_todo"]
+    assert projection.path == old_output
+    assert [item.item_id for item in projection.items] == ["REV-001"]
+    assert projection.version == 1
+
+
+def test_workspace_companion_uses_custom_names_and_runtime_storage(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True)
+    (repo / ".gitignore").write_text(".cafe/\n", encoding="utf-8")
+    (repo / "tracked.txt").write_text("before\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, check=True, capture_output=True)
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    (repo / "tracked.txt").write_text("after\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "change"], cwd=repo, check=True, capture_output=True)
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    output = repo / ".cafe/issues/custom/develop/iteration_001/output.md"
+    output.parent.mkdir(parents=True)
+    run_verification(
+        output_file=output,
+        command=[sys.executable, "-c", "print('workspace')"],
+        scope="targeted",
+        cwd=repo,
+    )
+    issue_dir = repo / ".cafe/issues/custom"
+    (issue_dir / "issue.yaml").parent.mkdir(parents=True, exist_ok=True)
+    (issue_dir / "issue.yaml").write_text(f"base_branch: {base}\n", encoding="utf-8")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="custom",
+        playbook={"steps": {}},
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("done"),
+        git_ops=GitOperations(str(repo)),
+        role_agent_map={"developer": "David"},
+    )
+    executor.iteration = 1
+    state = BlackboardStore(issue_dir).load_or_create("develop")
+    workspace_path, metadata = executor._publish_workspace_artifact(
+        step_name="develop",
+        step_def={"output_artifact": "summary_doc", "workspace_artifact": "verified_snapshot"},
+        output_file=output,
+        blackboard_state=state,
+    )
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook={"playbook": {"id": "custom"}, "steps": {"develop": {}}},
+        executor=object(),
+    )
+    runtime._store_artifacts(
+        {"summary_doc": str(output), "verified_snapshot": workspace_path},
+        {"verified_snapshot": metadata},
+    )
+
+    stored = runtime.blackboard.artifacts["verified_snapshot"]
+    assert stored.kind == ArtifactKind.WORKSPACE
+    assert stored.name == "verified_snapshot"
+    assert stored.base_sha == base
+    assert stored.head_sha == head
+    assert verify_workspace_artifact(
+        json.loads(Path(workspace_path).read_text(encoding="utf-8")), repo=repo
+    ).valid
+
+
+def test_workspace_consumer_rejects_workspace_from_another_repository(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    other = tmp_path / "other"
+    for path in (repo, other):
+        path.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=path, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=path, check=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=path, check=True)
+        (path / ".gitignore").write_text(".cafe/\n", encoding="utf-8")
+        (path / "tracked.txt").write_text("content\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=path, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "initial"],
+            cwd=path,
+            check=True,
+            capture_output=True,
+        )
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=other, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    output = other / ".cafe/issues/other/develop/iteration_001/output.md"
+    output.parent.mkdir(parents=True)
+    run_verification(
+        output_file=output,
+        command=[sys.executable, "-c", "print('workspace')"],
+        scope="targeted",
+        cwd=other,
+    )
+    workspace = build_workspace_artifact(
+        repo=other,
+        name="verified_snapshot",
+        version=1,
+        base_sha=head,
+        head_sha=head,
+        receipt_outputs=[output],
+    )
+    workspace_path = repo / ".cafe/issues/custom/develop/iteration_001/workspace.json"
+    workspace_path.parent.mkdir(parents=True)
+    workspace_path.write_text(json.dumps(workspace.to_dict()), encoding="utf-8")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=repo / ".cafe/issues/custom",
+        issue_name="custom",
+        playbook={"steps": {}},
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("done"),
+        git_ops=GitOperations(str(repo)),
+        role_agent_map={"developer": "David"},
+    )
+    entry = ArtifactEntry(
+        name="verified_snapshot",
+        kind=ArtifactKind.WORKSPACE,
+        version=1,
+        updated_by="develop",
+        path=str(workspace_path),
+        base_sha=workspace.base_sha,
+        head_sha=workspace.head_sha,
+    )
+    with pytest.raises(ValueError, match="stale or contradictory"):
+        executor._validate_workspace_inputs({"verified_snapshot": entry})
 
 
 def test_causal_todo_normalizes_pending_and_delivered_workflow_feedback(tmp_path: Path) -> None:

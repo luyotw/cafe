@@ -1253,9 +1253,27 @@ class BlackboardStore:
         latest_step = initial_step
         latest_timestamp = ""
 
-        for artifact_file in sorted(self.issue_dir.glob("*/iteration_*/artifact.json")):
+        artifact_files = [
+            *self.issue_dir.glob("*/iteration_*/artifact.json"),
+            *self.issue_dir.glob("*/iteration_*/workspace.json"),
+        ]
+        for artifact_file in sorted(artifact_files):
             raw = json.loads(artifact_file.read_text(encoding="utf-8"))
-            entry = ArtifactEntry.from_dict(raw)
+            if artifact_file.name == "workspace.json":
+                from cafe.core.workspace_artifact import WorkspaceArtifact
+
+                workspace = WorkspaceArtifact.from_dict(raw)
+                entry = ArtifactEntry(
+                    name=workspace.name,
+                    kind=ArtifactKind.WORKSPACE,
+                    version=workspace.version,
+                    updated_by=artifact_file.parent.parent.name,
+                    path=str(artifact_file),
+                    base_sha=workspace.base_sha,
+                    head_sha=workspace.head_sha,
+                )
+            else:
+                entry = ArtifactEntry.from_dict(raw)
             current = state.artifacts.get(entry.name)
             if current is None or entry.version >= current.version:
                 state.artifacts[entry.name] = entry

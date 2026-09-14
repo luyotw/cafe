@@ -70,6 +70,7 @@ steps:
     assignee_type: agent
     input_artifacts: [review_feedback, pr_result, workflow_feedback]
     output_artifact: code
+    workspace_artifact: workspace
     human_tasks:
       - trigger: need_clarification
         task_id: clarification-feedback
@@ -94,7 +95,7 @@ steps:
     behavior:
       runtime_tool_grants: [web_research, git_inspection]
     assignee_type: agent
-    input_artifacts: [code, workflow_feedback]
+    input_artifacts: [code, workspace, workflow_feedback]
     output_artifact: review_feedback
     human_tasks:
       - trigger: need_clarification
@@ -119,7 +120,7 @@ steps:
     skill: cafe-pr
     role: developer
     assignee_type: agent
-    input_artifacts: [code, review_feedback, workflow_feedback]
+    input_artifacts: [code, workspace, review_feedback, workflow_feedback]
     output_artifact: pr_result
     behavior:
       completion: baton

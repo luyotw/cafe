@@ -24,6 +24,8 @@ from cafe.core.automatic_steps import (
     default_automatic_executor_registry,
 )
 from cafe.core.blackboard import (
+    ArtifactEntry,
+    ArtifactKind,
     BlackboardState,
     BlackboardStore,
     HandoffContract,
@@ -185,6 +187,7 @@ class StepIterationFrame:
     artifacts: Dict[str, str]
     explicit_status_code: Optional[str]
     auto_continue: bool
+    artifact_metadata: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     pending_feedback: tuple[str, ...] = ()
     feedback_batch_provided: bool = False
     feedback_batch_error: str | None = None
@@ -2178,7 +2181,7 @@ class BlackboardWorkflowRuntime:
         )
         if checklist_rejection is not None:
             return checklist_rejection
-        self._store_artifacts(frame.artifacts)
+        self._store_artifacts(frame.artifacts, frame.artifact_metadata)
         if "portion" in target:
             cursor["portion"] = target["portion"]
             self.blackboard.ownership_cursor = cursor
@@ -2421,6 +2424,7 @@ class BlackboardWorkflowRuntime:
             execution_result=execution_result,
             response=response,
             artifacts=artifacts,
+            artifact_metadata=dict(getattr(execution_result, "artifact_metadata", {}) or {}),
             explicit_status_code=explicit_status_code,
             auto_continue=auto_continue,
             pending_feedback=pending_feedback,
@@ -2706,9 +2710,32 @@ class BlackboardWorkflowRuntime:
             detail=reason,
         )
 
-    def _store_artifacts(self, artifacts: Dict[str, str]) -> None:
+    def _store_artifacts(
+        self,
+        artifacts: Dict[str, str],
+        metadata: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> None:
         for key, value in artifacts.items():
-            self.blackboard_store.set_artifact(self.blackboard, key, value)
+            record = (metadata or {}).get(key)
+            if not isinstance(record, dict) or record.get("kind") != "workspace":
+                self.blackboard_store.set_artifact(self.blackboard, key, value)
+                continue
+            previous = self.blackboard.artifacts.get(key)
+            version = record.get("version")
+            if not isinstance(version, int) or version < 1:
+                version = previous.version + 1 if previous else 1
+            self.blackboard_store.put_artifact(
+                self.blackboard,
+                ArtifactEntry(
+                    name=key,
+                    kind=ArtifactKind.WORKSPACE,
+                    version=version,
+                    updated_by=str(record.get("updated_by", self.blackboard.current_step)),
+                    path=value,
+                    base_sha=str(record["base_sha"]),
+                    head_sha=str(record["head_sha"]),
+                ),
+            )
 
     def _record_step_completion(
         self,
@@ -4288,7 +4315,7 @@ class BlackboardWorkflowRuntime:
                     _baton_retry_extra_prompt = self._baton_rejected_prompt(br)
             else:
                 raise RuntimeError(f"Step '{current_step}' did not produce a valid baton")
-            self._store_artifacts(frame.artifacts)
+            self._store_artifacts(frame.artifacts, frame.artifact_metadata)
             last_status_code = status_code
             self._record_step_completion(
                 event_type=completion_event_type,
@@ -4618,7 +4645,7 @@ class BlackboardWorkflowRuntime:
                 )
                 if checklist_rejection is not None:
                     return checklist_rejection
-                self._store_artifacts(frame.artifacts)
+                self._store_artifacts(frame.artifacts, frame.artifact_metadata)
                 try:
                     post_contract = self._load_step_handoff_contract(current_step=current_step)
                     status_code_obj, goto_target, valid_codes = self._parse_legacy_status(

@@ -111,6 +111,7 @@ steps:
     assignee_type: agent
     input_artifacts: [spec, plan, review_feedback, pr_result, workflow_feedback]
     output_artifact: code
+    workspace_artifact: workspace
     behavior:
       completion: status_code
     human_tasks:
@@ -141,7 +142,7 @@ steps:
     handoff_label: "Run review again"
     chat_role: reviewer
     assignee_type: agent
-    input_artifacts: [spec, plan, code, workflow_feedback]
+    input_artifacts: [spec, plan, code, workspace, workflow_feedback]
     output_artifact: review_feedback
     behavior:
       completion: status_code
@@ -171,7 +172,7 @@ steps:
     handoff_label: "Refresh PR output"
     chat_role: developer
     assignee_type: agent
-    input_artifacts: [spec, plan, code, review_feedback, workflow_feedback]
+    input_artifacts: [spec, plan, code, workspace, review_feedback, workflow_feedback]
     output_artifact: pr_result
     behavior:
       completion: baton

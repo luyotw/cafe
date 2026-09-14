@@ -79,6 +79,12 @@ from cafe.core.workflow_feedback import (
     feedback_todo_mappings,
 )
 from cafe.core.workflow_models import BatonRejected, StepExecutionResult
+from cafe.core.workspace_artifact import (
+    WorkspaceArtifact,
+    WorkspaceArtifactError,
+    build_workspace_artifact,
+    verify_workspace_artifact,
+)
 from cafe.phases.generic_phase import GenericPhase
 from cafe.skills.checklist_composer import (
     compose_declared_checklist,
@@ -643,6 +649,7 @@ class GenericWorkflowStepExecutor(Phase):
 
         output_key = str(step_def.get("output_artifact", step_name))
         artifacts: Dict[str, str] = {}
+        artifact_metadata: Dict[str, Dict[str, Any]] = {}
         if execution.artifact_ready and not checklist_validation_failed and output_file.exists():
             # Context packets are an optional runtime view.  Their structural
             # eligibility is resolved at the consuming edge, where any failure
@@ -655,6 +662,17 @@ class GenericWorkflowStepExecutor(Phase):
                 output_path=output_path,
                 updated_by=step_name,
             )
+            workspace = self._publish_workspace_artifact(
+                step_name=step_name,
+                step_def=step_def,
+                output_file=output_file,
+                blackboard_state=blackboard_state,
+            )
+            if workspace is not None:
+                workspace_path, workspace_metadata = workspace
+                workspace_key = str(step_def["workspace_artifact"])
+                artifacts[workspace_key] = workspace_path
+                artifact_metadata[workspace_key] = workspace_metadata
 
         # READY_FOR_REVIEW / CONFIRM_OUTPUT / NEED_CLARIFICATION always
         # hand off to the user step.  In interactive mode the user sees
@@ -741,6 +759,7 @@ class GenericWorkflowStepExecutor(Phase):
             agent_invoked=agent_was_invoked,
             events=events,
             feedback_source_identities=feedback_batch_source_identities,
+            artifact_metadata=artifact_metadata,
         )
 
     def _persist_agent_invocation_marker(
@@ -1576,14 +1595,19 @@ class GenericWorkflowStepExecutor(Phase):
         skill_name = self._resolve_skill_name(step_def, self.iteration)
         contract = self._get_skill_loader().get_workflow_contract(skill_name)
         input_artifacts = self._step_input_artifacts(step_def, blackboard_state)
+        self._validate_workspace_inputs(input_artifacts)
         causal_projections = [
             section.todo_projection
             for variant in (contract.checklist.variants if contract.checklist else ())
             for section in variant.sections
             if section.todo_projection and section.todo_projection.causal
         ]
-        if causal_projections:
-            causal_artifact = causal_projections[0].artifact
+        declared_route_artifact = self._declared_feedback_route_artifact(step_name)
+        if causal_projections or declared_route_artifact is not None:
+            causal_artifact = (
+                causal_projections[0].artifact if causal_projections else declared_route_artifact
+            )
+            assert causal_artifact is not None
             input_artifacts = self._add_causal_todo_artifact(
                 input_artifacts,
                 blackboard_state,
@@ -1683,6 +1707,41 @@ class GenericWorkflowStepExecutor(Phase):
 
         return context
 
+    def _validate_workspace_inputs(self, artifacts: Mapping[str, Any]) -> None:
+        """Reject stale current-contract workspace companions before agent launch."""
+        active_repo = Path(getattr(self.git_ops, "repo_path", Path.cwd())).resolve()
+        for name, entry in artifacts.items():
+            if getattr(entry, "kind", None) != ArtifactKind.WORKSPACE:
+                continue
+            path = Path(str(getattr(entry, "path", entry)))
+            try:
+                workspace = WorkspaceArtifact.from_dict(
+                    json.loads(path.read_text(encoding="utf-8"))
+                )
+            except (OSError, UnicodeError, json.JSONDecodeError, WorkspaceArtifactError) as exc:
+                raise ValueError(
+                    f"workspace artifact {name!r} is missing or malformed; refresh it"
+                ) from exc
+            checked = verify_workspace_artifact(
+                workspace,
+                repo=active_repo,
+            )
+            if not checked.valid:
+                detail = "; ".join(checked.reasons)
+                raise ValueError(
+                    f"workspace artifact {name!r} is stale or contradictory: {detail}; "
+                    "publish a fresh workspace snapshot"
+                )
+
+    def _declared_feedback_route_artifact(self, destination: str) -> Optional[str]:
+        """Return the artifact declared for the persisted destination edge."""
+        for producer_name in (self.playbook.get("steps", {}) or {}):
+            routes = resolve_step_behavior(self.playbook, str(producer_name)).feedback_routes or {}
+            route = routes.get(destination)
+            if route is not None:
+                return str(route.artifact)
+        return None
+
     @staticmethod
     def _step_input_artifacts(
         step_def: Dict[str, Any], blackboard_state: BlackboardState
@@ -1757,6 +1816,7 @@ class GenericWorkflowStepExecutor(Phase):
         canonical_name = canonical_skill_name(skill_name)
         contract = self._get_skill_loader().get_workflow_contract(skill_name)
         input_artifacts = self._step_input_artifacts(step_def, blackboard_state)
+        self._validate_workspace_inputs(input_artifacts)
         declares_causal_todo = bool(
             contract.checklist
             and any(
@@ -1774,7 +1834,9 @@ class GenericWorkflowStepExecutor(Phase):
             ),
             None,
         )
-        if declares_causal_todo:
+        declared_route_artifact = self._declared_feedback_route_artifact(step_name)
+        if declares_causal_todo or declared_route_artifact is not None:
+            causal_artifact = causal_artifact or declared_route_artifact
             assert causal_artifact is not None
             input_artifacts = self._add_causal_todo_artifact(
                 input_artifacts,
@@ -1914,6 +1976,83 @@ class GenericWorkflowStepExecutor(Phase):
         producer = steps.get(from_step, {})
         direct_artifact = producer.get("output_artifact") if isinstance(producer, Mapping) else None
         selected = artifacts.get(direct_artifact) if isinstance(direct_artifact, str) else None
+
+        # Current correction declarations are resolved from the persisted
+        # sender/destination edge before any legacy feedback inference runs.
+        current_behavior = resolve_step_behavior(playbook_data, from_step) if from_step else None
+        declared_route = (
+            (current_behavior.feedback_routes or {}).get(state.current_step)
+            if current_behavior is not None
+            else None
+        )
+        if declared_route is not None:
+            route_artifact = str(declared_route.artifact)
+            selected = artifacts.get(route_artifact)
+            if selected is None:
+                raise ValueError(
+                    f"Correction Todo source {route_artifact!r} is missing for "
+                    f"the persisted edge {from_step!r}->{state.current_step!r}"
+                )
+            if getattr(selected, "updated_by", from_step) != from_step:
+                raise ValueError(
+                    "Correction Todo source ownership conflicts with the persisted edge"
+                )
+            prefix = f"{declared_route.todo_id_prefix}-"
+            selected_path = Path(str(getattr(selected, "path", selected)))
+            candidates: list[tuple[int, Path, str]] = [
+                (int(getattr(selected, "version", 0) or 0), selected_path, from_step or "")
+            ]
+            phase_dir = selected_path.parent.parent
+            if phase_dir.is_dir():
+                for iteration_dir in phase_dir.glob("iteration_*"):
+                    output_path = iteration_dir / "output.md"
+                    if output_path == selected_path or not output_path.is_file():
+                        continue
+                    version = 0
+                    owner = from_step or ""
+                    artifact_record = iteration_dir / "artifact.json"
+                    try:
+                        raw_record = json.loads(artifact_record.read_text(encoding="utf-8"))
+                    except (OSError, UnicodeError, json.JSONDecodeError):
+                        raw_record = {}
+                    if isinstance(raw_record, Mapping):
+                        raw_version = raw_record.get("version")
+                        if isinstance(raw_version, int) and raw_version > 0:
+                            version = raw_version
+                        if isinstance(raw_record.get("updated_by"), str):
+                            owner = str(raw_record["updated_by"])
+                    if version == 0:
+                        try:
+                            version = int(iteration_dir.name.removeprefix("iteration_"))
+                        except ValueError:
+                            continue
+                    candidates.append((version, output_path, owner))
+            for _version, candidate_path, owner in sorted(
+                candidates, key=lambda item: (item[0], str(item[1])), reverse=True
+            ):
+                if owner != from_step or not candidate_path.is_file():
+                    continue
+                try:
+                    items = parse_todo_list(
+                        candidate_path.read_text(encoding="utf-8"),
+                        expected_source=str(declared_route.todo_source),
+                    )
+                except (OSError, UnicodeError, TodoContractError):
+                    continue
+                if any(not item.item_id.startswith(prefix) for item in items):
+                    continue
+                resolved = dict(artifacts)
+                resolved[causal_artifact] = TodoSourceArtifact(
+                    artifact=route_artifact,
+                    source=str(declared_route.todo_source),
+                    path=candidate_path,
+                    version=_version or getattr(selected, "version", None),
+                    items=items,
+                )
+                return resolved
+            raise ValueError(
+                "Correction Todo source is incomplete or malformed; publish a complete source"
+            )
 
         routes: list[dict[str, str]] = []
         for producer_name, raw_step in steps.items():
@@ -2166,6 +2305,55 @@ class GenericWorkflowStepExecutor(Phase):
         if template_file is not None:
             context["template_file"] = template_file
 
+    def _publish_workspace_artifact(
+        self,
+        *,
+        step_name: str,
+        step_def: Dict[str, Any],
+        output_file: Path,
+        blackboard_state: BlackboardState,
+    ) -> tuple[str, dict[str, Any]] | None:
+        """Publish the one declared workspace companion from verified state."""
+        workspace_name = step_def.get("workspace_artifact")
+        if not isinstance(workspace_name, str) or not workspace_name.strip():
+            return None
+        receipt_path = output_file.parent / "verification.json"
+        if not receipt_path.is_file():
+            raise ValueError(
+                f"Step {step_name!r} declared workspace_artifact {workspace_name!r}, "
+                "but its verification receipt is missing"
+            )
+        repo = Path(getattr(self.git_ops, "repo_path", Path.cwd())).resolve()
+        base_ref = self._get_issue_config_value(self.issue_dir / "issue.yaml", "base_branch")
+        if not base_ref:
+            base_ref = self.git_ops.get_default_base_branch()
+        head_sha = self.git_ops.run_git("rev-parse", "HEAD")
+        previous = blackboard_state.artifacts.get(workspace_name)
+        version = previous.version + 1 if previous else 1
+        try:
+            workspace = build_workspace_artifact(
+                repo=repo,
+                name=workspace_name,
+                version=version,
+                base_sha=str(base_ref),
+                head_sha=head_sha,
+                receipt_outputs=[output_file],
+            )
+        except WorkspaceArtifactError as exc:
+            raise ValueError(f"workspace artifact {workspace_name!r} is invalid: {exc}") from exc
+        workspace_path = output_file.parent / "workspace.json"
+        workspace_path.write_text(
+            json.dumps(workspace.to_dict(), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        return str(workspace_path), {
+            "kind": "workspace",
+            "version": workspace.version,
+            "base_sha": workspace.base_sha,
+            "head_sha": workspace.head_sha,
+            "updated_by": step_name,
+        }
+
     def _write_artifact_record(
         self,
         *,
@@ -2176,7 +2364,7 @@ class GenericWorkflowStepExecutor(Phase):
     ) -> None:
         previous = blackboard_state.artifacts.get(output_key)
         version = previous.version + 1 if previous else 1
-        kind = ArtifactKind.WORKSPACE if output_key == "code" else ArtifactKind.DOCUMENT
+        kind = ArtifactKind.DOCUMENT
         artifact = ArtifactEntry(
             name=output_key,
             kind=kind,

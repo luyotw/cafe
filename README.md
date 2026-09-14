@@ -259,6 +259,9 @@ operations from CAFE.
 | Phase chain | Ordered primary and fallback CLI/model entries for one agent step |
 | Worktree | An isolated Git checkout for one issue's code and workflow state |
 
+Artifact naming, verified workspace companions, correction routes, and receipt
+binding are documented in [Artifact contracts](docs/artifact-contracts.md).
+
 Custom playbooks should express ownership boundaries as top-level steps.
 `assignee_type: hybrid` is deprecated; see
 [Migrating hybrid workflow steps](docs/hybrid-workflow-migration.md).
