@@ -68,6 +68,7 @@ from cafe.core.status_codes import (
     step_on_declares,
     transition_map_key,
 )
+from cafe.core.todo import TodoContractError, parse_todo_list, workflow_feedback_todo_items
 from cafe.core.workflow_feedback import WorkflowFeedbackLedger
 from cafe.core.workflow_models import (
     BatonRejected,
@@ -2303,7 +2304,6 @@ class BlackboardWorkflowRuntime:
             },
         )
         feedback_ledger = WorkflowFeedbackLedger(self.issue_dir)
-        pending_feedback = feedback_ledger.pending(target_step=current_step)
 
         try:
             execute_kwargs = {
@@ -2383,6 +2383,10 @@ class BlackboardWorkflowRuntime:
         response, artifacts, explicit_status_code, auto_continue = self._normalize_execution_result(
             execution_result
         )
+        # Prepare-input hooks can discover feedback during this invocation.
+        # Capture only after they and the agent have both completed so the
+        # eventual delivery commit covers the exact curated input set.
+        pending_feedback = feedback_ledger.pending(target_step=current_step)
         return StepIterationFrame(
             execution_result=execution_result,
             response=response,
@@ -2392,32 +2396,150 @@ class BlackboardWorkflowRuntime:
             pending_feedback=tuple(entry.source_identity for entry in pending_feedback),
         )
 
+    def _feedback_todo_mappings(self, *, current_step: str) -> dict[str, tuple[str, str]]:
+        """Resolve declared source-kind Todo mappings for one curator step."""
+        mappings: dict[str, tuple[str, str]] = {}
+
+        def add_mapping(source_kind: object, todo_source: object, id_prefix: object) -> None:
+            if not all(
+                isinstance(value, str) and value.strip()
+                for value in (source_kind, todo_source, id_prefix)
+            ):
+                return
+            normalized = (str(todo_source), str(id_prefix))
+            existing = mappings.setdefault(str(source_kind), normalized)
+            if existing != normalized:
+                raise TodoContractError("workflow feedback Todo mapping is ambiguous")
+
+        for producer_name, raw_step in self.steps.items():
+            if not isinstance(raw_step, Mapping):
+                continue
+            behavior = resolve_step_behavior(self.playbook, str(producer_name))
+            if behavior.feedback_target == current_step:
+                add_mapping(
+                    behavior.feedback_source_kind,
+                    behavior.feedback_todo_source,
+                    behavior.feedback_todo_id_prefix,
+                )
+            for binding in raw_step.get("human_tasks", ()) or ():
+                if not isinstance(binding, Mapping):
+                    continue
+                outcomes = binding.get("outcomes", {})
+                targets = [
+                    *(outcomes.values() if isinstance(outcomes, Mapping) else ()),
+                    *(binding.get("allowed_targets", ()) or ()),
+                ]
+                delivery = binding.get("feedback_delivery")
+                if current_step not in targets or not isinstance(delivery, Mapping):
+                    continue
+                add_mapping(
+                    delivery.get("source_kind"),
+                    delivery.get("todo_source"),
+                    delivery.get("todo_id_prefix"),
+                )
+        return mappings
+
     def _commit_delivered_feedback(
         self,
         *,
         current_step: str,
         frame: StepIterationFrame,
-    ) -> None:
-        """Consume captured feedback only after the agent's handoff is durable."""
-        if not frame.pending_feedback or not getattr(frame.execution_result, "agent_invoked", False):
-            return
+    ) -> str | None:
+        """Consume only a valid canonical curation after a durable handoff.
+
+        Returns a rejection reason when a declared curator produced an output
+        that cannot prove one deterministic Todo row per pending source.
+        """
+        if not frame.pending_feedback or not getattr(
+            frame.execution_result, "agent_invoked", False
+        ):
+            return None
         output_artifact = self.steps.get(current_step, {}).get("output_artifact")
-        if isinstance(output_artifact, str) and output_artifact not in frame.artifacts:
-            return
+        if not isinstance(output_artifact, str) or output_artifact not in frame.artifacts:
+            return "the declared curated artifact is missing"
+        mappings = self._feedback_todo_mappings(current_step=current_step)
+        if not mappings:
+            # Playbooks without the correction declarations retain their
+            # historical consume-after-handoff behavior.
+            delivered_feedback = WorkflowFeedbackLedger(self.issue_dir).consume_delivered(
+                frame.pending_feedback
+            )
+            if not delivered_feedback:
+                return None
+            self.blackboard_store.record_event(
+                self.blackboard,
+                "workflow_feedback_delivered",
+                {
+                    "step": current_step,
+                    "source_identities": [entry.source_identity for entry in delivered_feedback],
+                },
+            )
+            return None
+        try:
+            expected_items = workflow_feedback_todo_items(
+                WorkflowFeedbackLedger(self.issue_dir).path,
+                target_step=current_step,
+                source_by_kind={kind: values[0] for kind, values in mappings.items()},
+                id_prefix_by_kind={kind: values[1] for kind, values in mappings.items()},
+                source_identities=frame.pending_feedback,
+            )
+            output_path = Path(frame.artifacts[output_artifact])
+            actual_items = parse_todo_list(output_path.read_text(encoding="utf-8"))
+        except (OSError, TodoContractError) as exc:
+            return f"the curated Todo List is invalid: {exc}"
+        expected_rows = {(item.item_id, item.source) for item in expected_items}
+        actual_rows = {(item.item_id, item.source) for item in actual_items}
+        if len(actual_rows) != len(actual_items) or actual_rows != expected_rows:
+            return "the curated Todo List does not cover the pending source identities"
         delivered_feedback = WorkflowFeedbackLedger(self.issue_dir).consume_delivered(
             frame.pending_feedback
         )
         if not delivered_feedback:
-            return
+            return None
         self.blackboard_store.record_event(
             self.blackboard,
             "workflow_feedback_delivered",
             {
                 "step": current_step,
-                "source_identities": [
-                    entry.source_identity for entry in delivered_feedback
-                ],
+                "source_identities": [entry.source_identity for entry in delivered_feedback],
             },
+        )
+        return None
+
+    def _reject_feedback_delivery(
+        self,
+        *,
+        current_step: str,
+        runtime: str,
+        reason: str,
+    ) -> PlaybookRunResult:
+        """Keep invalid curation pending instead of exposing it to a consumer."""
+        status_code = "INVALID_FEEDBACK_DELIVERY"
+        self.blackboard_store.update_handoff_contract(
+            self.blackboard,
+            from_step=current_step,
+            to_owner=HandoffOwner.AGENT,
+            to_step=current_step,
+            intent=HandoffIntent.AWAIT_AGENT,
+            status_code=status_code,
+            source="workflow.feedback_delivery_validation",
+        )
+        self.blackboard_store.record_event(
+            self.blackboard,
+            "workflow_feedback_delivery_rejected",
+            {
+                "step": current_step,
+                "status_code": status_code,
+                "reason": reason,
+                "runtime": runtime,
+            },
+        )
+        self.blackboard_store.set_current_step(self.blackboard, current_step)
+        return PlaybookRunResult(
+            final_step=current_step,
+            final_status_code=status_code,
+            completed=False,
+            detail=reason,
         )
 
     def _store_artifacts(self, artifacts: Dict[str, str]) -> None:
@@ -3711,10 +3833,16 @@ class BlackboardWorkflowRuntime:
                         completed=False,
                     )
 
-            self._commit_delivered_feedback(
+            feedback_delivery_rejection = self._commit_delivered_feedback(
                 current_step=current_step,
                 frame=frame,
             )
+            if feedback_delivery_rejection is not None:
+                return self._reject_feedback_delivery(
+                    current_step=current_step,
+                    runtime=runtime_label,
+                    reason=feedback_delivery_rejection,
+                )
 
             if next_step == "done":
                 return self._emit_complete(

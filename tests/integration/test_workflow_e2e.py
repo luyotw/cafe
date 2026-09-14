@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
 from typing import List, Optional
@@ -514,6 +515,20 @@ def test_default_requested_changes_follow_declared_loop_without_publish_authorit
             encoding="utf-8",
         )
         if step_name == "pr":
+            output = iteration_dir / "output.md"
+            pending = WorkflowFeedbackLedger(issue_dir).pending(target_step="pr")
+            if pending:
+                rows = ["## Todo List"]
+                for entry in pending:
+                    item_id = f"WF-{sha256(entry.source_identity.encode('utf-8')).hexdigest()[:12].upper()}"
+                    rows.append(
+                        f"- [ ] `{item_id}` — Source: `workflow_feedback` — "
+                        f"Work: Address {entry.content} — Closure: verified — "
+                        "Evidence: targeted test"
+                    )
+                output.write_text("\n".join(rows) + "\n", encoding="utf-8")
+            else:
+                output.write_text("## Todo List\n\nNo actionable work.\n", encoding="utf-8")
             if executed_steps.count("pr") == 1:
                 BlackboardStore(issue_dir).update_handoff_contract(
                     _state,
@@ -528,7 +543,7 @@ def test_default_requested_changes_follow_declared_loop_without_publish_authorit
                 _write_pr_done_baton(issue_dir)
             return StepExecutionResult(
                 response="confirmed",
-                artifacts={"pr_result": "pr/output.md"},
+                artifacts={"pr_result": str(output)},
                 status_code="confirmed",
                 agent_invoked=True,
                 events=[
