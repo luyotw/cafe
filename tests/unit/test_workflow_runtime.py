@@ -5448,6 +5448,88 @@ def test_recovery_terminalizes_resolved_preparation_before_later_delivery(
     assert calls == ["curator", "curator", "consumer"]
 
 
+def test_recovery_rejects_missing_new_preparation_after_terminal_delivery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A terminal earlier operation cannot authorize a later curator handoff."""
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "recover-after-terminal-delivery"
+    ledger = WorkflowFeedbackLedger(issue_dir)
+    _created, first = ledger.record(
+        source_identity="external:recovery:first-terminal-delivery",
+        source_kind="external_note",
+        target_step="curator",
+        content="Deliver this first source exactly once.",
+    )
+    calls: list[str] = []
+
+    initial = _recovery_fault_curation_runtime(issue_dir=issue_dir, calls=calls).run(
+        start_step="curator", max_transitions=2
+    )
+
+    assert initial.completed is True
+    assert calls == ["curator", "consumer"]
+    state = BlackboardStore(issue_dir).load_or_create("curator")
+    delivered_events = [
+        event for event in state.events if event.event_type == "workflow_feedback_delivered"
+    ]
+    assert delivered_events[-1].data["source_identities"] == [first.source_identity]
+
+    _created, interrupted_feedback = ledger.record(
+        source_identity="external:recovery:missing-after-terminal",
+        source_kind="external_note",
+        target_step="curator",
+        content="Require a distinct preparation for this later handoff.",
+    )
+    interrupted = _recovery_fault_curation_runtime(issue_dir=issue_dir, calls=calls)
+
+    def crash_before_preparation(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("simulated later pre-preparation crash")
+
+    monkeypatch.setattr(interrupted, "_prepare_feedback_delivery", crash_before_preparation)
+    with pytest.raises(RuntimeError, match="later pre-preparation"):
+        interrupted.run(start_step="curator", max_transitions=2)
+    assert calls == ["curator", "consumer", "curator"]
+    assert ledger.reconcile_resolved({interrupted_feedback.source_identity}) == 1
+
+    resumed = _recovery_fault_curation_runtime(issue_dir=issue_dir, calls=calls)
+    rejected = resumed.run(max_transitions=2)
+
+    assert rejected.final_status_code == "INVALID_FEEDBACK_DELIVERY"
+    assert calls == ["curator", "consumer", "curator"]
+    state = BlackboardStore(issue_dir).load_or_create("curator")
+    failures = [
+        event for event in state.events if event.event_type == "step_reconciliation_failed"
+    ]
+    assert "feedback_delivery_artifact" in failures[-1].data["missing_evidence"]
+
+    _created, later = ledger.record(
+        source_identity="external:recovery:independent-after-rejection",
+        source_kind="external_note",
+        target_step="curator",
+        content="Deliver this later independent source once.",
+    )
+    delivered = _recovery_fault_curation_runtime(issue_dir=issue_dir, calls=calls).run(
+        start_step="curator", max_transitions=2
+    )
+
+    assert delivered.completed is True
+    assert calls == ["curator", "consumer", "curator", "curator", "consumer"]
+    state = BlackboardStore(issue_dir).load_or_create("curator")
+    delivered_events = [
+        event for event in state.events if event.event_type == "workflow_feedback_delivered"
+    ]
+    assert delivered_events[-1].data["source_identities"] == [later.source_identity]
+
+    clean = _recovery_fault_curation_runtime(issue_dir=issue_dir, calls=calls).run(
+        max_transitions=2
+    )
+
+    assert clean.completed is True
+    assert calls == ["curator", "consumer", "curator", "curator", "consumer"]
+
+
 def test_runtime_rejects_plain_text_baton_written_by_pr_agent(tmp_path: Path) -> None:
     """Issue #386: a plain step-name baton is never normalized at the PR boundary."""
     issue_dir = tmp_path / ".cafe" / "issues" / "legacy-pr-handoff"

@@ -9,7 +9,7 @@ from __future__ import annotations
 import inspect
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional
@@ -4022,7 +4022,29 @@ class BlackboardWorkflowRuntime:
             isinstance(delivery_id, str)
             and delivery_id in self._feedback_delivery_terminal_ids()
         ):
-            return None
+            validation_contract = contract
+            target = prepared.get("target")
+            if (
+                isinstance(target, Mapping)
+                and target.get("to_owner") == contract.to_owner.value
+                and target.get("to_step") == contract.to_step
+                and target.get("intent") == HandoffIntent.MANUAL_HANDOFF.value
+                and contract.intent == HandoffIntent.AWAIT_AGENT
+                and self.blackboard.current_step == contract.to_step
+            ):
+                # A committed transition normalizes the producer's outbound
+                # manual handoff to await_agent without creating a new delivery.
+                validation_contract = replace(
+                    contract, intent=HandoffIntent.MANUAL_HANDOFF
+                )
+            validated, _missing = self._validate_feedback_delivery_recovery(
+                current_step=current_step,
+                contract=validation_contract,
+                iteration_dir=self._latest_iteration_dir(current_step),
+                delivery_id=delivery_id,
+            )
+            if validated is not None:
+                return None
         return current_step, delivery_id if isinstance(delivery_id, str) else None
 
     def _try_reconcile_pending_feedback_delivery(self) -> Optional[PlaybookRunResult]:
