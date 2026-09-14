@@ -68,6 +68,7 @@ from cafe.core.todo import (
     MAX_TODO_ITEMS,
     TodoContractError,
     TodoSourceArtifact,
+    parse_todo_list,
     projection_todo_items,
     workflow_feedback_matching_identities,
     workflow_feedback_todo_items,
@@ -574,12 +575,32 @@ class GenericWorkflowStepExecutor(Phase):
             iteration_dir=iteration_dir,
             agent_invoked=agent_was_invoked,
         )
-        checklist_validation_failed = False
-        if agent_was_invoked and self._output_requires_contract_validation(
+        auto_continue = any(
+            self._event_allows_auto_continue(event)
+            for event in execution.events
+            if isinstance(event, dict)
+        )
+        checklist_validation_required = self._output_requires_contract_validation(
             step_name=step_name,
             status_code=status_code,
             baton_path=portion_baton_path or baton_path,
             hybrid_portion=is_hybrid_portion,
+        )
+        initial_outbound_validation = (True, "", False)
+        if agent_was_invoked:
+            initial_outbound_validation = self._validate_outbound_causal_todo(
+                step_name=step_name,
+                step_def=step_def,
+                blackboard_state=blackboard_state,
+                output_file=output_file,
+                response=response,
+                status_code=status_code,
+                auto_continue=auto_continue,
+            )
+        outbound_validation_required = initial_outbound_validation[2]
+        checklist_validation_failed = False
+        if agent_was_invoked and (
+            checklist_validation_required or outbound_validation_required
         ):
             resolved_user_input = self._get_resolved_iteration_user_input(step_name)
 
@@ -591,6 +612,20 @@ class GenericWorkflowStepExecutor(Phase):
                     valid_intents=valid_intents,
                     allowed_tools=allowed_tools,
                     max_retries=3,
+                    completion_response=response,
+                    completion_status=status_code,
+                    validate_checklist_completion=checklist_validation_required,
+                    additional_validation=lambda current_response, current_status: (
+                        self._validate_outbound_causal_todo(
+                            step_name=step_name,
+                            step_def=step_def,
+                            blackboard_state=blackboard_state,
+                            output_file=output_file,
+                            response=current_response,
+                            status_code=current_status,
+                            auto_continue=auto_continue,
+                        )[:2]
+                    ),
                 )
 
             response, validated_status, validation_passed = (
@@ -621,11 +656,6 @@ class GenericWorkflowStepExecutor(Phase):
                 updated_by=step_name,
             )
 
-        auto_continue = any(
-            self._event_allows_auto_continue(event)
-            for event in execution.events
-            if isinstance(event, dict)
-        )
         # READY_FOR_REVIEW / CONFIRM_OUTPUT / NEED_CLARIFICATION always
         # hand off to the user step.  In interactive mode the user sees
         # output and confirm/modify options via _handle_user_phase.  In
@@ -2159,6 +2189,122 @@ class GenericWorkflowStepExecutor(Phase):
             json.dumps(artifact.to_dict(), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+
+    def _validate_outbound_causal_todo(
+        self,
+        *,
+        step_name: str,
+        step_def: Dict[str, Any],
+        blackboard_state: BlackboardState,
+        output_file: Path,
+        response: str,
+        status_code: Optional[PhaseStatusCode],
+        auto_continue: bool,
+    ) -> tuple[bool, str, bool]:
+        """Validate a producer artifact before a declared causal Todo handoff."""
+        if step_def.get("hybrid_portion"):
+            return True, "", False
+
+        target: Optional[str] = None
+        baton_path = self.issue_dir / "next_step.txt"
+        if self._agent_wrote_baton(step_name, step_def):
+            payload = json.loads(baton_path.read_text(encoding="utf-8"))
+            handoff = HandoffContract.from_dict_with_current_step(
+                payload,
+                current_step=step_name,
+            )
+            if handoff.to_owner == HandoffOwner.AGENT:
+                target = handoff.to_step
+        elif status_code is not None:
+            pauses_for_user = not auto_continue and status_code in {
+                PhaseStatusCode.READY_FOR_REVIEW,
+                PhaseStatusCode.CONFIRM_OUTPUT,
+                PhaseStatusCode.ALIGNMENT_CHECKPOINT,
+                PhaseStatusCode.NEED_CLARIFICATION,
+                PhaseStatusCode.NEED_PERMISSION,
+            }
+            no_changes_pauses = status_code == PhaseStatusCode.NO_CHANGES_NEEDED and (
+                self.interactive
+                or self._declared_human_task_id(step_def, "no_changes_needed") is not None
+            )
+            if status_code == PhaseStatusCode.NO_CHANGES_NEEDED:
+                transitions = step_def.get("on", {})
+                candidate = (
+                    transitions.get("no_changes_needed")
+                    if isinstance(transitions, dict)
+                    else None
+                )
+                if (
+                    not no_changes_pauses
+                    and candidate != "user"
+                    and candidate in self.playbook.get("steps", {})
+                ):
+                    target = str(candidate)
+            elif not pauses_for_user:
+                target = self._resolve_next_step_for_status(
+                    step_name=step_name,
+                    step_def=step_def,
+                    response=response,
+                    status_code=status_code,
+                )
+
+        steps = self.playbook.get("steps", {})
+        target_def = steps.get(target) if isinstance(steps, Mapping) else None
+        if not isinstance(target_def, dict):
+            return True, "", False
+
+        output_key = str(step_def.get("output_artifact", step_name))
+        input_artifacts = target_def.get("input_artifacts")
+        if input_artifacts is not None and output_key not in input_artifacts:
+            return True, "", False
+
+        target_iteration = self._get_next_iteration_number(
+            target,
+            self.issue_dir / target,
+        )
+        target_skill = self._resolve_skill_name(target_def, target_iteration)
+        target_contract = self._get_skill_loader().get_workflow_contract(target_skill)
+        if target_contract.checklist is None:
+            return True, "", False
+
+        prospective_artifacts = self._step_input_artifacts(target_def, blackboard_state)
+        prospective_artifacts[output_key] = output_file
+        causal_alias = next(
+            (
+                section.todo_projection.artifact
+                for variant in target_contract.checklist.variants
+                for section in variant.sections
+                if section.todo_projection and section.todo_projection.causal
+            ),
+            None,
+        )
+        if causal_alias is None:
+            return True, "", False
+        prospective_artifacts[causal_alias] = output_file
+        active_variant = select_checklist_variant(
+            target_contract,
+            step=target,
+            iteration=target_iteration,
+            artifacts=prospective_artifacts,
+            feedback=True,
+        )
+        if not any(
+            section.todo_projection and section.todo_projection.causal
+            for section in active_variant.sections
+        ):
+            return True, "", False
+
+        try:
+            parse_todo_list(output_file.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, TodoContractError) as exc:
+            return (
+                False,
+                f"The Todo List handed from {step_name!r} to {target!r} is invalid: {exc}. "
+                "Use canonical rows with Source, Work, Closure, and Evidence fields, or "
+                "the exact marker 'No actionable work.'.",
+                True,
+            )
+        return True, "", True
 
     def _output_requires_contract_validation(
         self,

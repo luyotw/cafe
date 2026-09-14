@@ -6533,6 +6533,361 @@ def test_causal_todo_local_review_human_task_precedes_direct_pr_fallback(
     assert [item.work for item in resolved.items] == ["fix the user's selected PR concern"]
 
 
+def test_outbound_causal_todo_is_validated_from_declarative_topology(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "outbound-todo"
+    skill_dir = tmp_path / ".cafe" / "skills" / "repair-kit"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: repair-kit
+description: custom correction consumer
+workflow:
+  checklist:
+    variants:
+      - when: {step: repair_shop, feedback: true}
+        sections:
+          - {todo_projection: {artifact: active_work, causal: true}}
+      - when: {}
+        sections:
+          - {reference: fallback.md}
+    include_role_guidance: false
+---
+
+# Repair kit
+""",
+        encoding="utf-8",
+    )
+    references = skill_dir / "references"
+    references.mkdir()
+    (references / "fallback.md").write_text("[ ] fallback\n", encoding="utf-8")
+    plain_skill_dir = tmp_path / ".cafe" / "skills" / "plain-kit"
+    plain_references = plain_skill_dir / "references"
+    plain_references.mkdir(parents=True)
+    (plain_skill_dir / "SKILL.md").write_text(
+        """---
+name: plain-kit
+description: non-causal consumer
+workflow:
+  checklist:
+    variants:
+      - when: {feedback: false}
+        sections:
+          - {reference: fallback.md}
+    include_role_guidance: false
+---
+
+# Plain kit
+""",
+        encoding="utf-8",
+    )
+    (plain_references / "fallback.md").write_text("[ ] fallback\n", encoding="utf-8")
+    loader = SkillLoader(project_root=tmp_path, global_root=tmp_path / "global")
+    loader.discover()
+    playbook = {
+        "playbook": {"id": "custom-topology"},
+        "steps": {
+            "inspector": {
+                "output_artifact": "findings",
+                "allowed_goto": ["repair_shop"],
+            },
+            "repair_shop": {
+                "skill": "repair-kit",
+            },
+            "quiet_shop": {
+                "skill": "repair-kit",
+                "input_artifacts": ["findings"],
+            },
+            "plain_shop": {
+                "skill": "plain-kit",
+                "input_artifacts": ["findings"],
+            },
+        },
+    }
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="outbound-todo",
+        playbook=playbook,
+        generic_phase=GenericPhase(loader),
+        agent_manager=FakeAgentManager(""),
+        git_ops=FakeGitOperations(),
+        role_agent_map={},
+    )
+    state = BlackboardStore(issue_dir).load_or_create("inspector")
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    (issue_dir / "next_step.txt").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "from_step": "inspector",
+                "to_owner": "agent",
+                "to_step": "repair_shop",
+                "intent": "await_agent",
+            }
+        ),
+        encoding="utf-8",
+    )
+    output = issue_dir / "inspector" / "iteration_001" / "output.md"
+    output.parent.mkdir(parents=True)
+    output.write_text(
+        "## Todo List\n"
+        "- [ ] `BLK-001` — Source: `review` — Root cause: broken — "
+        "Closure: fixed — Evidence: test\n",
+        encoding="utf-8",
+    )
+
+    passed, detail, required = executor._validate_outbound_causal_todo(
+        step_name="inspector",
+        step_def=playbook["steps"]["inspector"],
+        blackboard_state=state,
+        output_file=output,
+        response="",
+        status_code=None,
+        auto_continue=False,
+    )
+
+    assert passed is False
+    assert required is True
+    assert "inspector" in detail
+    assert "repair_shop" in detail
+
+    output.write_text(
+        "## Todo List\n"
+        "- [ ] `BLK-001` — Source: `review` — Work: fix broken wiring — "
+        "Closure: fixed — Evidence: test\n",
+        encoding="utf-8",
+    )
+    assert executor._validate_outbound_causal_todo(
+        step_name="inspector",
+        step_def=playbook["steps"]["inspector"],
+        blackboard_state=state,
+        output_file=output,
+        response="",
+        status_code=None,
+        auto_continue=False,
+    ) == (True, "", True)
+
+    output.write_text(
+        "## Todo List\n"
+        "- [ ] `BLK-001` — Source: `review` — Root cause: broken — "
+        "Closure: fixed — Evidence: test\n",
+        encoding="utf-8",
+    )
+    (issue_dir / "next_step.txt").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "from_step": "inspector",
+                "to_owner": "agent",
+                "to_step": "quiet_shop",
+                "intent": "await_agent",
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert executor._validate_outbound_causal_todo(
+        step_name="inspector",
+        step_def=playbook["steps"]["inspector"],
+        blackboard_state=state,
+        output_file=output,
+        response="",
+        status_code=None,
+        auto_continue=False,
+    ) == (True, "", False)
+
+    (issue_dir / "next_step.txt").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "from_step": "inspector",
+                "to_owner": "agent",
+                "to_step": "plain_shop",
+                "intent": "await_agent",
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert executor._validate_outbound_causal_todo(
+        step_name="inspector",
+        step_def=playbook["steps"]["inspector"],
+        blackboard_state=state,
+        output_file=output,
+        response="",
+        status_code=None,
+        auto_continue=False,
+    ) == (True, "", False)
+
+    (issue_dir / "next_step.txt").unlink()
+    no_changes_step = {
+        **playbook["steps"]["inspector"],
+        "on": {"default": "repair_shop"},
+    }
+    assert executor._validate_outbound_causal_todo(
+        step_name="inspector",
+        step_def=no_changes_step,
+        blackboard_state=state,
+        output_file=output,
+        response="GOTO: repair_shop",
+        status_code=PhaseStatusCode.NO_CHANGES_NEEDED,
+        auto_continue=False,
+    ) == (True, "", False)
+
+
+def test_completion_contract_failure_retries_same_producer(tmp_path: Path) -> None:
+    phase_dir = tmp_path / ".cafe" / "issues" / "producer-retry" / "review"
+    iteration_dir = phase_dir / "iteration_001"
+    iteration_dir.mkdir(parents=True)
+    checklist = iteration_dir / "checklist.md"
+    checklist.write_text("[x] reviewed\n", encoding="utf-8")
+    (iteration_dir / "iteration.json").write_text(
+        json.dumps({"response": "confirmed", "streaming_log": []}),
+        encoding="utf-8",
+    )
+    manager = FakeAgentManager("confirmed")
+    executor = _minimal_spec_executor(tmp_path, agent_manager=manager)
+    executor.phase_dir = phase_dir
+    executor.phase_name = "review"
+    executor.iteration = 1
+    validations = []
+
+    def validate(response, status):
+        validations.append((response, status))
+        if len(validations) == 1:
+            return False, "malformed causal Todo"
+        return True, ""
+
+    _, status, passed = executor._validate_and_retry_checklist_completion(
+        agent_name="Roger",
+        prompt="prompt",
+        user_input="",
+        valid_intents=[PhaseStatusCode.CONFIRMED],
+        max_retries=1,
+        completion_response="initial response",
+        completion_status=PhaseStatusCode.NEEDS_CHANGES,
+        additional_validation=validate,
+    )
+
+    assert passed is True
+    assert status == PhaseStatusCode.CONFIRMED
+    assert manager.execute_call_count == 1
+    assert "malformed causal Todo" in manager.prompts[0]
+    assert validations == [
+        ("initial response", PhaseStatusCode.NEEDS_CHANGES),
+        ("confirmed", PhaseStatusCode.CONFIRMED),
+    ]
+
+
+def test_manual_handoff_retries_malformed_todo_before_consumer(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "manual-todo-retry"
+    producer_skill = tmp_path / ".cafe" / "skills" / "inspection"
+    producer_references = producer_skill / "references"
+    producer_references.mkdir(parents=True)
+    (producer_skill / "SKILL.md").write_text(
+        """---
+name: inspection
+description: produce findings
+workflow:
+  checklist:
+    variants:
+      - when: {}
+        sections:
+          - {reference: execution.md}
+    include_role_guidance: false
+---
+
+# Inspection
+""",
+        encoding="utf-8",
+    )
+    (producer_references / "execution.md").write_text("[ ] inspect\n", encoding="utf-8")
+    consumer_skill = tmp_path / ".cafe" / "skills" / "repair"
+    consumer_skill.mkdir(parents=True)
+    (consumer_skill / "SKILL.md").write_text(
+        """---
+name: repair
+description: consume findings
+workflow:
+  checklist:
+    variants:
+      - when: {feedback: true}
+        sections:
+          - {todo_projection: {artifact: active_work, causal: true}}
+    include_role_guidance: false
+---
+
+# Repair
+""",
+        encoding="utf-8",
+    )
+    loader = SkillLoader(project_root=tmp_path, global_root=tmp_path / "global")
+    loader.discover()
+    playbook = {
+        "playbook": {"id": "manual-todo-retry"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "inspection": {
+                "skill": "inspection",
+                "role": "developer",
+                "output_artifact": "findings",
+                "behavior": {"completion": "baton"},
+                "allowed_tools": ["Read", "Write"],
+                "on": {"manual_handoff": "repair"},
+            },
+            "repair": {
+                "skill": "repair",
+                "input_artifacts": ["findings"],
+            },
+        },
+    }
+
+    def write_attempt(*, streaming_output_file=None, **_kwargs) -> None:
+        iteration_dir = issue_dir / "inspection" / "iteration_001"
+        (iteration_dir / "checklist.md").write_text("[x] inspect\n", encoding="utf-8")
+        field = "Work" if manager.execute_call_count == 2 else "Root cause"
+        (iteration_dir / "output.md").write_text(
+            "## Todo List\n"
+            f"- [ ] `BLK-001` — Source: `review` — {field}: fix wiring — "
+            "Closure: fixed — Evidence: test\n",
+            encoding="utf-8",
+        )
+        (issue_dir / "next_step.txt").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "from_step": "inspection",
+                    "to_owner": "agent",
+                    "to_step": "repair",
+                    "intent": "manual_handoff",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    manager = FakeAgentManager(["needs_changes", "needs_changes"], on_execute=write_attempt)
+    state = BlackboardStore(issue_dir).load_or_create("inspection")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="manual-todo-retry",
+        playbook=playbook,
+        generic_phase=GenericPhase(loader),
+        agent_manager=manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+
+    result = executor.execute_step("inspection", playbook["steps"]["inspection"], state)
+
+    assert manager.execute_call_count == 2
+    assert "phase completion contract failed" in manager.prompts[1]
+    assert result.artifact_ready is True
+    assert "findings" in result.artifacts
+    assert "— Work: fix wiring —" in Path(result.artifacts["findings"]).read_text(
+        encoding="utf-8"
+    )
+
+
 def test_custom_topology_generation_and_completion_pin_causal_source(
     tmp_path: Path,
 ) -> None:
