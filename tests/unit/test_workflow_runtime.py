@@ -5075,6 +5075,162 @@ def test_recovery_rejects_stale_artifact_evidence_before_consumer_use(
     assert calls == ["curator"]
 
 
+def test_recovery_rejects_same_version_artifact_replacement_before_consumer_use(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Recovery rejects bytes that no longer match the prepared delivery."""
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "recover-replaced-feedback-evidence"
+    ledger = WorkflowFeedbackLedger(issue_dir)
+    identities = ["external:recovery:original", "external:recovery:replacement"]
+    for identity in identities:
+        ledger.record(
+            source_identity=identity,
+            source_kind="external_note",
+            target_step="curator",
+            content=f"Protect {identity} from artifact replacement.",
+        )
+    calls: list[str] = []
+    interrupted = _recovery_fault_curation_runtime(issue_dir=issue_dir, calls=calls)
+
+    def crash_before_settlement(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("simulated artifact-replacement crash")
+
+    monkeypatch.setattr(interrupted, "_commit_delivered_feedback", crash_before_settlement)
+    with pytest.raises(RuntimeError, match="artifact-replacement"):
+        interrupted.run(start_step="curator", max_transitions=2)
+
+    output = issue_dir / "curator" / "iteration_001" / "output.md"
+    _curated_feedback_output(output, [identities[1]])
+    resumed = _recovery_fault_curation_runtime(issue_dir=issue_dir, calls=calls)
+    result = resumed.run(max_transitions=2)
+
+    assert result.final_status_code == "INVALID_FEEDBACK_DELIVERY"
+    assert calls == ["curator"]
+    assert [entry.source_identity for entry in ledger.pending(target_step="curator")] == identities
+    state = BlackboardStore(issue_dir).load_or_create("curator")
+    prepared = [
+        event for event in state.events if event.event_type == "workflow_feedback_delivery_prepared"
+    ]
+    rejected = [
+        event for event in state.events if event.event_type == "workflow_feedback_delivery_rejected"
+    ]
+    assert len(prepared) == 1
+    assert prepared[0].data["artifact"]["sha256"]
+    assert rejected[-1].data["delivery_id"] == prepared[0].data["delivery_id"]
+    failures = [
+        event for event in state.events if event.event_type == "step_reconciliation_failed"
+    ]
+    assert "feedback_delivery_artifact_content" in failures[-1].data["missing_evidence"]
+    assert not any(event.event_type == "workflow_feedback_delivered" for event in state.events)
+
+
+def test_rejected_feedback_delivery_does_not_replay_after_later_success(
+    tmp_path: Path,
+) -> None:
+    """An invalid delivery is terminal before a later successful correction run."""
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "rejected-feedback-delivery-replay"
+    ledger = WorkflowFeedbackLedger(issue_dir)
+    identity = "external:recovery:terminal-rejection"
+    ledger.record(
+        source_identity=identity,
+        source_kind="external_note",
+        target_step="curator",
+        content="Do not revive this rejected delivery.",
+    )
+    output = issue_dir / "curator" / "iteration_001" / "output.md"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.parent.joinpath("checklist.md").write_text("[x] complete\n", encoding="utf-8")
+    output.parent.joinpath("iteration.json").write_text(
+        json.dumps({"iteration": 1, "step_name": "curator"}), encoding="utf-8"
+    )
+    attempts = ["invalid", "valid"]
+    calls: list[str] = []
+
+    def executor(step_name: str, _step: dict, _state: object) -> StepExecutionResult:
+        calls.append(step_name)
+        if step_name == "consumer":
+            _write_baton(
+                issue_dir,
+                from_step="consumer",
+                to_owner="done",
+                to_step="done",
+                intent="workflow_complete",
+            )
+            return StepExecutionResult(response="consumed", artifacts={})
+        assert step_name == "curator"
+        attempt = attempts.pop(0)
+        _curated_feedback_output(
+            output,
+            ["external:recovery:wrong"] if attempt == "invalid" else [identity],
+        )
+        _write_baton(
+            issue_dir,
+            from_step="curator",
+            to_owner="agent",
+            to_step="consumer",
+            intent="manual_handoff",
+        )
+        return StepExecutionResult(
+            response=attempt,
+            artifacts={"curated_result": str(output)},
+            agent_invoked=True,
+            feedback_source_identities=(identity,),
+        )
+
+    first = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_feedback_curation_playbook(),
+        executor=executor,
+    ).run(start_step="curator", max_transitions=2)
+
+    assert first.final_status_code == "INVALID_FEEDBACK_DELIVERY"
+    assert calls == ["curator"]
+    state = BlackboardStore(issue_dir).load_or_create("curator")
+    prepared = [
+        event for event in state.events if event.event_type == "workflow_feedback_delivery_prepared"
+    ]
+    rejected = [
+        event for event in state.events if event.event_type == "workflow_feedback_delivery_rejected"
+    ]
+    assert len(prepared) == len(rejected) == 1
+    assert rejected[0].data["delivery_id"] == prepared[0].data["delivery_id"]
+
+    second = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_feedback_curation_playbook(),
+        executor=executor,
+    ).run(start_step="curator", max_transitions=2)
+
+    assert second.completed is True
+    assert calls == ["curator", "curator", "consumer"]
+    assert ledger.pending(target_step="curator") == []
+    state = BlackboardStore(issue_dir).load_or_create("curator")
+    prepared = [
+        event for event in state.events if event.event_type == "workflow_feedback_delivery_prepared"
+    ]
+    delivered = [
+        event for event in state.events if event.event_type == "workflow_feedback_delivered"
+    ]
+    assert len(prepared) == 2
+    assert len(delivered) == 1
+    assert delivered[0].data["delivery_id"] == prepared[1].data["delivery_id"]
+    assert state.current_step == "done"
+
+    third = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_feedback_curation_playbook(),
+        executor=executor,
+    ).run(max_transitions=2)
+
+    assert third.completed is True
+    assert calls == ["curator", "curator", "consumer"]
+    assert BlackboardStore(issue_dir).load_or_create("curator").current_step == "done"
+
+
 def test_runtime_rejects_plain_text_baton_written_by_pr_agent(tmp_path: Path) -> None:
     """Issue #386: a plain step-name baton is never normalized at the PR boundary."""
     issue_dir = tmp_path / ".cafe" / "issues" / "legacy-pr-handoff"

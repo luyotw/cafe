@@ -53,7 +53,7 @@ from cafe.core.human_tasks import (
     agent_execution_interrupted_human_task,
     resolve_step_human_task,
 )
-from cafe.core.packet_io import atomic_write_bytes
+from cafe.core.packet_io import atomic_write_bytes, sha256_bytes
 from cafe.core.playbook import (
     playbook_requests_capability,
     resolve_step_attempt_limit,
@@ -2468,6 +2468,10 @@ class BlackboardWorkflowRuntime:
         ):
             return None
         try:
+            artifact_bytes = Path(artifact.path).read_bytes()
+        except OSError:
+            return None
+        try:
             relative_iteration_dir = iteration_dir.resolve().relative_to(self.issue_dir.resolve())
             iteration_number = int(iteration_dir.name.removeprefix("iteration_"))
         except ValueError:
@@ -2482,6 +2486,8 @@ class BlackboardWorkflowRuntime:
                 "path": artifact.path,
                 "version": artifact.version,
                 "updated_by": artifact.updated_by,
+                "bytes": len(artifact_bytes),
+                "sha256": sha256_bytes(artifact_bytes),
             },
             "iteration": {
                 "directory": str(relative_iteration_dir),
@@ -2508,12 +2514,50 @@ class BlackboardWorkflowRuntime:
             for event in self.blackboard.events
         )
 
+    def _feedback_delivery_terminal_event_exists(self, delivery_id: str) -> bool:
+        """Return whether a durable delivery has already reached one terminal state."""
+        return any(
+            event.event_type
+            in {"workflow_feedback_delivered", "workflow_feedback_delivery_rejected"}
+            and event.data.get("delivery_id") == delivery_id
+            for event in self.blackboard.events
+        )
+
+    def _record_feedback_delivery_rejection(
+        self,
+        *,
+        current_step: str,
+        runtime: str,
+        reason: str,
+        delivery_id: str | None = None,
+        source_identities: list[str] | None = None,
+    ) -> None:
+        """Terminalize one prepared operation without consuming its sources."""
+        if delivery_id is not None and self._feedback_delivery_terminal_event_exists(delivery_id):
+            return
+        payload: dict[str, Any] = {
+            "step": current_step,
+            "status_code": "INVALID_FEEDBACK_DELIVERY",
+            "reason": reason,
+            "runtime": runtime,
+        }
+        if delivery_id is not None:
+            payload["delivery_id"] = delivery_id
+        if source_identities is not None:
+            payload["source_identities"] = list(source_identities)
+        self.blackboard_store.record_event(
+            self.blackboard,
+            "workflow_feedback_delivery_rejected",
+            payload,
+        )
+
     def _commit_delivered_feedback(
         self,
         *,
         current_step: str,
         frame: StepIterationFrame,
         delivery_id: str | None = None,
+        expected_artifact_sha256: str | None = None,
     ) -> str | None:
         """Consume only a valid canonical curation after a durable handoff.
 
@@ -2560,8 +2604,14 @@ class BlackboardWorkflowRuntime:
                 source_identities=frame.pending_feedback,
             )
             output_path = Path(frame.artifacts[output_artifact])
-            actual_items = parse_todo_list(output_path.read_text(encoding="utf-8"))
-        except (OSError, TodoContractError) as exc:
+            artifact_bytes = output_path.read_bytes()
+            if (
+                expected_artifact_sha256 is not None
+                and sha256_bytes(artifact_bytes) != expected_artifact_sha256
+            ):
+                return "the curated artifact changed after feedback delivery preparation"
+            actual_items = parse_todo_list(artifact_bytes.decode("utf-8"))
+        except (OSError, UnicodeDecodeError, TodoContractError) as exc:
             return f"the curated Todo List is invalid: {exc}"
         expected_rows = {(item.item_id, item.source) for item in expected_items}
         actual_rows = {(item.item_id, item.source) for item in actual_items}
@@ -2624,6 +2674,7 @@ class BlackboardWorkflowRuntime:
         current_step: str,
         runtime: str,
         reason: str,
+        delivery: Mapping[str, Any] | None = None,
     ) -> PlaybookRunResult:
         """Keep invalid curation pending instead of exposing it to a consumer."""
         status_code = "INVALID_FEEDBACK_DELIVERY"
@@ -2636,15 +2687,16 @@ class BlackboardWorkflowRuntime:
             status_code=status_code,
             source="workflow.feedback_delivery_validation",
         )
-        self.blackboard_store.record_event(
-            self.blackboard,
-            "workflow_feedback_delivery_rejected",
-            {
-                "step": current_step,
-                "status_code": status_code,
-                "reason": reason,
-                "runtime": runtime,
-            },
+        delivery_id = delivery.get("delivery_id") if isinstance(delivery, Mapping) else None
+        source_identities = (
+            delivery.get("source_identities") if isinstance(delivery, Mapping) else None
+        )
+        self._record_feedback_delivery_rejection(
+            current_step=current_step,
+            runtime=runtime,
+            reason=reason,
+            delivery_id=delivery_id if isinstance(delivery_id, str) else None,
+            source_identities=source_identities if isinstance(source_identities, list) else None,
         )
         self.blackboard_store.set_current_step(self.blackboard, current_step)
         return PlaybookRunResult(
@@ -3365,6 +3417,7 @@ class BlackboardWorkflowRuntime:
         current_step: str,
         contract: HandoffContract | None,
         iteration_dir: Path | None,
+        delivery_id: str | None = None,
     ) -> tuple[dict[str, Any] | None, list[str]]:
         """Validate the durable batch/artifact/operation binding for restart."""
         if not self._feedback_todo_mappings(current_step=current_step):
@@ -3378,7 +3431,17 @@ class BlackboardWorkflowRuntime:
         ]
         if not prepared:
             return None, ["feedback_delivery_prepared"]
-        delivery = prepared[-1]
+        if delivery_id is None:
+            delivery = prepared[-1]
+        else:
+            matching = [
+                candidate
+                for candidate in prepared
+                if candidate.get("delivery_id") == delivery_id
+            ]
+            if len(matching) != 1:
+                return None, ["feedback_delivery_operation"]
+            delivery = matching[0]
         missing: list[str] = []
         delivery_id = delivery.get("delivery_id")
         operation = delivery.get("operation")
@@ -3426,6 +3489,25 @@ class BlackboardWorkflowRuntime:
             or artifact.get("updated_by") != current_step
         ):
             missing.append("feedback_delivery_artifact")
+        elif (
+            not isinstance(artifact.get("bytes"), int)
+            or isinstance(artifact.get("bytes"), bool)
+            or artifact.get("bytes") < 0
+            or not isinstance(artifact.get("sha256"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", artifact.get("sha256")) is None
+        ):
+            missing.append("feedback_delivery_artifact_content")
+        else:
+            try:
+                artifact_bytes = Path(current_artifact.path).read_bytes()
+            except OSError:
+                missing.append("feedback_delivery_artifact_content")
+            else:
+                if (
+                    len(artifact_bytes) != artifact.get("bytes")
+                    or sha256_bytes(artifact_bytes) != artifact.get("sha256")
+                ):
+                    missing.append("feedback_delivery_artifact_content")
 
         iteration = delivery.get("iteration")
         try:
@@ -3475,10 +3557,12 @@ class BlackboardWorkflowRuntime:
         artifact_name = artifact.get("name")
         artifact_path = artifact.get("path")
         delivery_id = delivery.get("delivery_id")
+        artifact_sha256 = artifact.get("sha256")
         if (
             not isinstance(artifact_name, str)
             or not isinstance(artifact_path, str)
             or not isinstance(delivery_id, str)
+            or not isinstance(artifact_sha256, str)
         ):
             return "the persisted feedback delivery evidence is invalid"
         frame = StepIterationFrame(
@@ -3498,6 +3582,7 @@ class BlackboardWorkflowRuntime:
             current_step=current_step,
             frame=frame,
             delivery_id=delivery_id,
+            expected_artifact_sha256=artifact_sha256,
         )
 
     def _validate_reconciled_handoff(
@@ -3505,6 +3590,7 @@ class BlackboardWorkflowRuntime:
         *,
         current_step: str,
         iteration_dir_override: Optional[Path] = None,
+        feedback_delivery_id: str | None = None,
     ) -> HandoffReconciliationResult:
         missing: list[str] = []
         validated: list[str] = []
@@ -3576,6 +3662,7 @@ class BlackboardWorkflowRuntime:
             current_step=current_step,
             contract=contract,
             iteration_dir=iteration_dir,
+            delivery_id=feedback_delivery_id,
         )
         if delivery is not None:
             feedback_delivery = delivery
@@ -3741,6 +3828,7 @@ class BlackboardWorkflowRuntime:
         current_step: str,
         runtime: str,
         reason: str,
+        feedback_delivery_id: str | None = None,
     ) -> Optional[PlaybookRunResult]:
         if reason in {"interrupted", "keyboard_interrupt", "publish_error"}:
             return None
@@ -3749,7 +3837,22 @@ class BlackboardWorkflowRuntime:
         ):
             return None
 
-        result = self._validate_reconciled_handoff(current_step=current_step)
+        selected_delivery_id = feedback_delivery_id
+        if selected_delivery_id is None:
+            selected_delivery = self._latest_unreconciled_feedback_delivery(
+                current_step=current_step
+            )
+            selected_delivery_id = (
+                selected_delivery.get("delivery_id")
+                if isinstance(selected_delivery, Mapping)
+                else None
+            )
+        result = self._validate_reconciled_handoff(
+            current_step=current_step,
+            feedback_delivery_id=(
+                selected_delivery_id if isinstance(selected_delivery_id, str) else None
+            ),
+        )
 
         if not result.reconciled:
             self._record_reconciliation_failed(
@@ -3761,6 +3864,16 @@ class BlackboardWorkflowRuntime:
                 evidence.startswith("feedback_delivery_")
                 for evidence in result.missing_evidence
             ):
+                self._record_feedback_delivery_rejection(
+                    current_step=current_step,
+                    runtime=runtime,
+                    reason="feedback_delivery_recovery_failed",
+                    delivery_id=(
+                        selected_delivery_id
+                        if isinstance(selected_delivery_id, str)
+                        else None
+                    ),
+                )
                 self._restore_interrupted_step_handoff(
                     current_step=current_step,
                     reason="feedback_delivery_recovery_failed",
@@ -3777,6 +3890,13 @@ class BlackboardWorkflowRuntime:
                     current_step=current_step,
                     runtime=runtime,
                     missing_evidence=[feedback_delivery_rejection],
+                )
+                self._record_feedback_delivery_rejection(
+                    current_step=current_step,
+                    runtime=runtime,
+                    reason=feedback_delivery_rejection,
+                    delivery_id=delivery_id,
+                    source_identities=result.feedback_delivery["source_identities"],
                 )
                 self._restore_interrupted_step_handoff(
                     current_step=current_step,
@@ -3818,14 +3938,21 @@ class BlackboardWorkflowRuntime:
             return step, reason
         return None
 
-    def _latest_unreconciled_feedback_delivery_step(self) -> Optional[str]:
-        """Return a durable non-empty delivery that has no terminal audit event."""
-        delivered_ids = {
+    def _feedback_delivery_terminal_ids(self) -> set[str]:
+        """Return delivery identities with a durable delivered or rejected outcome."""
+        return {
             event.data.get("delivery_id")
             for event in self.blackboard.events
-            if event.event_type == "workflow_feedback_delivered"
+            if event.event_type
+            in {"workflow_feedback_delivered", "workflow_feedback_delivery_rejected"}
             and isinstance(event.data.get("delivery_id"), str)
         }
+
+    def _latest_unreconciled_feedback_delivery(
+        self, *, current_step: str | None = None
+    ) -> dict[str, Any] | None:
+        """Return the exact newest non-terminal prepared delivery, if any."""
+        terminal_ids = self._feedback_delivery_terminal_ids()
         for event in reversed(self.blackboard.events):
             if event.event_type != "workflow_feedback_delivery_prepared":
                 continue
@@ -3834,23 +3961,36 @@ class BlackboardWorkflowRuntime:
             step = event.data.get("step")
             if (
                 isinstance(delivery_id, str)
-                and delivery_id not in delivered_ids
+                and delivery_id not in terminal_ids
                 and isinstance(source_identities, list)
                 and source_identities
                 and isinstance(step, str)
                 and step in self.steps
+                and (current_step is None or step == current_step)
             ):
-                return step
+                return event.data
         return None
 
     def _try_reconcile_pending_feedback_delivery(self) -> Optional[PlaybookRunResult]:
-        step = self._latest_unreconciled_feedback_delivery_step()
-        if step is None:
+        delivery = self._latest_unreconciled_feedback_delivery()
+        if delivery is None:
             return None
-        return self._try_reconcile_interrupted_step(
+        step = delivery.get("step")
+        delivery_id = delivery.get("delivery_id")
+        if not isinstance(step, str) or not isinstance(delivery_id, str):
+            return None
+        reconciled = self._try_reconcile_interrupted_step(
             current_step=step,
             runtime="feedback_delivery_recovery",
             reason="feedback_delivery_pending",
+            feedback_delivery_id=delivery_id,
+        )
+        if reconciled is not None:
+            return reconciled
+        return PlaybookRunResult(
+            final_step=step,
+            final_status_code="INVALID_FEEDBACK_DELIVERY",
+            completed=False,
         )
 
     def _try_resume_reconcile_interrupted_handoff(
@@ -4178,11 +4318,29 @@ class BlackboardWorkflowRuntime:
                 frame=frame,
                 contract=contract,
             )
+            if (
+                feedback_delivery is None
+                and getattr(frame.execution_result, "agent_invoked", False)
+                and frame.feedback_batch_error is None
+                and frame.feedback_batch_provided
+                and frame.pending_feedback
+                and self._feedback_todo_mappings(current_step=current_step)
+            ):
+                return self._reject_feedback_delivery(
+                    current_step=current_step,
+                    runtime=runtime_label,
+                    reason="the curated artifact identity could not be durably recorded",
+                )
             feedback_delivery_rejection = self._commit_delivered_feedback(
                 current_step=current_step,
                 frame=frame,
                 delivery_id=(
                     str(feedback_delivery["delivery_id"])
+                    if feedback_delivery is not None
+                    else None
+                ),
+                expected_artifact_sha256=(
+                    str(feedback_delivery["artifact"]["sha256"])
                     if feedback_delivery is not None
                     else None
                 ),
@@ -4192,6 +4350,7 @@ class BlackboardWorkflowRuntime:
                     current_step=current_step,
                     runtime=runtime_label,
                     reason=feedback_delivery_rejection,
+                    delivery=feedback_delivery,
                 )
 
             if next_step == "done":
@@ -4788,7 +4947,11 @@ class BlackboardWorkflowRuntime:
         recovered_feedback_delivery = self._try_reconcile_pending_feedback_delivery()
         if (
             recovered_feedback_delivery is not None
-            and self.blackboard.current_step not in self.steps
+            and (
+                self.blackboard.current_step not in self.steps
+                or recovered_feedback_delivery.final_status_code
+                == "INVALID_FEEDBACK_DELIVERY"
+            )
         ):
             return self._finalize_observed_result(recovered_feedback_delivery)
         recovered_transition = (
