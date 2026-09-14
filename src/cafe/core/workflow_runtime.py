@@ -3881,6 +3881,7 @@ class BlackboardWorkflowRuntime:
             return None
 
         if result.feedback_delivery is not None:
+            delivery_id = result.feedback_delivery["delivery_id"]
             feedback_delivery_rejection = self._reconcile_feedback_delivery(
                 current_step=current_step,
                 delivery=result.feedback_delivery,
@@ -3903,7 +3904,6 @@ class BlackboardWorkflowRuntime:
                     reason="feedback_delivery_recovery_failed",
                 )
                 return None
-            delivery_id = result.feedback_delivery["delivery_id"]
             if not any(
                 event.event_type == "workflow_feedback_delivery_reconciled"
                 and event.data.get("delivery_id") == delivery_id
@@ -3971,14 +3971,70 @@ class BlackboardWorkflowRuntime:
                 return event.data
         return None
 
+    def _latest_feedback_delivery_preparation(
+        self, *, current_step: str
+    ) -> dict[str, Any] | None:
+        """Return the newest prepared record for one curator without trusting it."""
+        for event in reversed(self.blackboard.events):
+            if (
+                event.event_type == "workflow_feedback_delivery_prepared"
+                and isinstance(event.data, dict)
+                and event.data.get("step") == current_step
+            ):
+                return event.data
+        return None
+
+    def _feedback_delivery_handoff_candidate(self) -> tuple[str, str | None] | None:
+        """Find an uncommitted curator handoff that must have delivery evidence."""
+        try:
+            contract = self.blackboard_store.load_handoff_contract(
+                self.blackboard,
+                allowed_steps=list(self.steps.keys()),
+            )
+        except Exception:
+            return None
+        current_step = contract.from_step
+        if (
+            contract.to_owner != HandoffOwner.AGENT
+            or not isinstance(current_step, str)
+            or current_step not in self.steps
+            or contract.to_step == current_step
+            or not self._feedback_todo_mappings(current_step=current_step)
+        ):
+            return None
+        output_artifact = self.steps[current_step].get("output_artifact")
+        artifact = (
+            self.blackboard.artifacts.get(output_artifact)
+            if isinstance(output_artifact, str)
+            else None
+        )
+        if artifact is None or artifact.updated_by != current_step:
+            return None
+        if not WorkflowFeedbackLedger(self.issue_dir).pending(target_step=current_step):
+            return None
+        prepared = self._latest_feedback_delivery_preparation(current_step=current_step)
+        if prepared is None:
+            return current_step, None
+        delivery_id = prepared.get("delivery_id")
+        if (
+            isinstance(delivery_id, str)
+            and delivery_id in self._feedback_delivery_terminal_ids()
+        ):
+            return None
+        return current_step, delivery_id if isinstance(delivery_id, str) else None
+
     def _try_reconcile_pending_feedback_delivery(self) -> Optional[PlaybookRunResult]:
         delivery = self._latest_unreconciled_feedback_delivery()
-        if delivery is None:
-            return None
-        step = delivery.get("step")
-        delivery_id = delivery.get("delivery_id")
-        if not isinstance(step, str) or not isinstance(delivery_id, str):
-            return None
+        if delivery is not None:
+            step = delivery.get("step")
+            delivery_id = delivery.get("delivery_id")
+            if not isinstance(step, str) or not isinstance(delivery_id, str):
+                return None
+        else:
+            candidate = self._feedback_delivery_handoff_candidate()
+            if candidate is None:
+                return None
+            step, delivery_id = candidate
         reconciled = self._try_reconcile_interrupted_step(
             current_step=step,
             runtime="feedback_delivery_recovery",
