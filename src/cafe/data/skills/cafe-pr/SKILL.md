@@ -110,11 +110,13 @@ the review task can expose a verified PR URL.
 
 ## Instructions
 
-### PR review comments mode
-如果 `Current user input for this iteration` 內是 PR review comments：
-- 只把明確路由為 `fix_now` 的 comments 整理到 `## Todo List`，最多 100 列，格式為 ``- [ ] `PR-NNN` — Source: `pr_comment` — Work: ... — Closure: ... — Evidence: ...``；沒有 `fix_now` comments 時只寫 canonical marker `No actionable work.`，不得留下空白區段；ordinary PR body、`## Test Plan` 與未決 Follow-up Proposal 不得匯入
-- 只把 todo list 寫到輸出檔，不要混入原始 PR comments
-- 把 next-step baton 寫成 `develop`
+### Corrective feedback curation mode
+當 `workflow_feedback_file` 有本輪回饋，或 `Current user input for this iteration` 包含 PR review comments 時，這是 PR iteration 2：
+
+- `workflow_feedback_file` 與 review comments 都是 PR agent 的 source context，不是 Develop 的工作清單；只處理本輪宣告要送到本 step 的 unresolved corrective input。resolved、stale、重複觀測、ordinary PR body、`## Test Plan`、資訊性討論與未決 Follow-up Proposal 都不得匯入。
+- 將 current corrective cycle 的每個適用 source 整理為輸出檔中唯一的 `## Todo List`（最多 100 列）；使用已宣告的 Todo source 與 ID prefix，保持 source identity 的一對一對應，不得用相同文字合併兩個不同 source。沒有適用 source 時只能寫 canonical marker `No actionable work.`，不得留下空白區段。
+- Todo rows 必須符合 ``- [ ] `<id>` — Source: `<source>` — Work: ... — Closure: ... — Evidence: ...``；只把整理後的 Todo List 寫到輸出檔，不要混入原始 PR comments 或 raw HumanTask feedback。
+- 完成 curation 後，依本輪注入的 `{step_transitions}` 寫入宣告的 `manual_handoff`；不得硬編碼 step 名稱、跳過 curator，或選擇未宣告的路由。
 
 ### PR content mode
 其他情況（沒有 PR review comments）：

@@ -495,11 +495,13 @@ def test_default_requested_changes_follow_declared_loop_without_publish_authorit
         source="integration",
     )
 
-    assert result.target == "develop"
-    assert [entry.target_step for entry in WorkflowFeedbackLedger(issue_dir).pending()] == [
-        "develop"
-    ]
-    _use_local_terminal_pr(playbook)
+    assert result.target == "pr"
+    assert [entry.target_step for entry in WorkflowFeedbackLedger(issue_dir).pending()] == ["pr"]
+    pr = playbook["steps"]["pr"]
+    pr["capability_requests"] = []
+    pr["behavior"]["publish_confirmation"] = False
+    pr["on"].pop("confirm_output", None)
+    pr["on"]["workflow_complete"] = "_done"
 
     executed_steps: list[str] = []
 
@@ -512,11 +514,23 @@ def test_default_requested_changes_follow_declared_loop_without_publish_authorit
             encoding="utf-8",
         )
         if step_name == "pr":
-            _write_pr_done_baton(issue_dir)
+            if executed_steps.count("pr") == 1:
+                BlackboardStore(issue_dir).update_handoff_contract(
+                    _state,
+                    from_step="pr",
+                    to_owner=HandoffOwner.AGENT,
+                    to_step="develop",
+                    intent=HandoffIntent.MANUAL_HANDOFF,
+                    status_code="confirmed",
+                    source="test.executor",
+                )
+            else:
+                _write_pr_done_baton(issue_dir)
             return StepExecutionResult(
                 response="confirmed",
                 artifacts={"pr_result": "pr/output.md"},
                 status_code="confirmed",
+                agent_invoked=True,
                 events=[
                     {
                         "type": "capability_receipt",
@@ -544,7 +558,9 @@ def test_default_requested_changes_follow_declared_loop_without_publish_authorit
 
     assert workflow_result.completed is True
     assert workflow_result.final_step == "pr"
-    assert executed_steps == ["develop", "review", "pr"]
+    assert executed_steps[:2] == ["pr", "develop"]
+    assert "review" in executed_steps
+    assert executed_steps[-1] == "pr"
     assert WorkflowFeedbackLedger(issue_dir).pending() == []
 
 

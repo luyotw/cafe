@@ -4211,6 +4211,119 @@ def test_runtime_chains_pr_need_changes_through_develop_to_review(tmp_path: Path
     assert any(e.data.get("to") == "review" for e in transitions)
 
 
+def test_runtime_keeps_feedback_pending_until_curator_writes_an_outbound_handoff(
+    tmp_path: Path,
+) -> None:
+    """A retried curator cannot consume input before its handoff is durable."""
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "pending-curation"
+    ledger = WorkflowFeedbackLedger(issue_dir)
+    _created, feedback = ledger.record(
+        source_identity="github-pr:42:comment-7",
+        source_kind="github_pr",
+        target_step="curator",
+        content="Keep this source pending until curation commits.",
+    )
+    playbook = {
+        "playbook": {"id": "pending-curation"},
+        "steps": {
+            "curator": {
+                "skill": "phase",
+                "role": "developer",
+                "assignee_type": "agent",
+                "output_artifact": "curated_result",
+                "behavior": {"completion": "baton"},
+                "on": {"manual_handoff": "consumer"},
+            },
+            "consumer": {
+                "skill": "phase",
+                "role": "developer",
+                "assignee_type": "agent",
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("curator", playbook_id="pending-curation")
+    store.update_handoff_contract(
+        state,
+        from_step="curator",
+        to_owner=HandoffOwner.AGENT,
+        to_step="curator",
+        intent=HandoffIntent.AWAIT_AGENT,
+        source="test.setup",
+    )
+
+    def executor(_step_name: str, _step: dict, _state: object) -> StepExecutionResult:
+        return StepExecutionResult(
+            response="retry",
+            artifacts={"curated_result": "curator/output.md"},
+            status_code="confirmed",
+            agent_invoked=True,
+        )
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    ).run(start_step="curator", max_transitions=1)
+
+    assert result.completed is False
+    assert ledger.pending(target_step="curator") == [feedback]
+
+
+def test_runtime_requires_the_declared_curated_artifact_before_consuming_feedback(
+    tmp_path: Path,
+) -> None:
+    """A handoff cannot make an unpersisted curated result look delivered."""
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+    from cafe.core.workflow_runtime import StepIterationFrame
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "missing-curated-artifact"
+    ledger = WorkflowFeedbackLedger(issue_dir)
+    _created, feedback = ledger.record(
+        source_identity="github-pr:42:comment-8",
+        source_kind="github_pr",
+        target_step="curator",
+        content="Do not consume an artifactless curation attempt.",
+    )
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook={
+            "playbook": {"id": "missing-curated-artifact"},
+            "steps": {
+                "curator": {
+                    "skill": "phase",
+                    "role": "developer",
+                    "output_artifact": "curated_result",
+                    "on": {"manual_handoff": "consumer"},
+                },
+                "consumer": {"skill": "phase", "role": "developer"},
+            },
+        },
+        executor=lambda *_args, **_kwargs: None,
+    )
+
+    runtime._commit_delivered_feedback(
+        current_step="curator",
+        frame=StepIterationFrame(
+            execution_result=StepExecutionResult(
+                response="curated",
+                artifacts={},
+                agent_invoked=True,
+            ),
+            response="curated",
+            artifacts={},
+            explicit_status_code=None,
+            auto_continue=False,
+            pending_feedback=(feedback.source_identity,),
+        ),
+    )
+
+    assert ledger.pending(target_step="curator") == [feedback]
+
+
 def test_runtime_rejects_plain_text_baton_written_by_pr_agent(tmp_path: Path) -> None:
     """Issue #386: a plain step-name baton is never normalized at the PR boundary."""
     issue_dir = tmp_path / ".cafe" / "issues" / "legacy-pr-handoff"

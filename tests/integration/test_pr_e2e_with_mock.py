@@ -289,10 +289,12 @@ def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(
     issue_dir = tmp_path / ".cafe" / "issues" / "pr-feedback"
     issue_dir.mkdir(parents=True)
     (issue_dir / "issue.yaml").write_text(
-        "pr:\n  auto_create: true\n",
+        "{}\n",
         encoding="utf-8",
     )
     playbook = _load_default_playbook()
+    playbook["steps"]["pr"]["capability_requests"] = []
+    playbook["steps"]["pr"]["behavior"]["publish_confirmation"] = False
     store = BlackboardStore(issue_dir)
     state = store.load_or_create("pr", playbook_id="standard")
 
@@ -349,9 +351,9 @@ def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(
             playbook_data=playbook,
             git_ops=phase.git_ops,
         )
-        == "develop"
+        == "pr"
     )
-    assert len(ledger.pending(target_step="develop")) == 2
+    assert len(ledger.pending(target_step="pr")) == 2
     phase.git_ops.get_current_branch.assert_not_called()
 
     class PauseBeforeAgent:
@@ -401,7 +403,14 @@ def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(
                 )
             output = iteration_dir / "output.md"
             output.write_text(
-                "## Todo Progress\n\n" + "\n\n".join(entries) + "\n",
+                "## Todo List\n"
+                "- [ ] `PRC-1` — Source: `pr_comment` — Work: Curate the first boundary — "
+                "Closure: addressed — Evidence: targeted pytest\n"
+                "- [ ] `PRC-2` — Source: `pr_comment` — Work: Curate the second boundary — "
+                "Closure: addressed — Evidence: targeted pytest\n\n"
+                "## Todo Progress\n\n"
+                + "\n\n".join(entries)
+                + "\n",
                 encoding="utf-8",
             )
             assert run_verification(
@@ -410,9 +419,22 @@ def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(
                 scope="targeted",
                 cwd=tmp_path,
             )[0] == 0
+            _write_baton(
+                issue_dir,
+                from_step="pr",
+                to_owner=HandoffOwner.AGENT,
+                to_step="develop",
+                intent=HandoffIntent.MANUAL_HANDOFF,
+            )
             return "await_agent", TokenUsage(), [], [], [], None
 
     class GitOperations:
+        def ensure_remote_base_ancestor(self, *_args, **_kwargs) -> None:
+            return None
+
+        def get_commits_between(self, *_args, **_kwargs) -> list[object]:
+            return []
+
         def get_default_base_branch(self) -> str:
             return "main"
 
@@ -437,30 +459,6 @@ def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(
             ),
         )
 
-    paused_playbook = json.loads(json.dumps(playbook))
-    paused_playbook["steps"]["develop"]["hooks"] = {"before_execute": ["PauseBeforeAgent"]}
-    paused_manager = AgentManager()
-    paused_executor = GenericWorkflowStepExecutor(
-        issue_dir=issue_dir,
-        issue_name="pr-feedback",
-        playbook=paused_playbook,
-        generic_phase=build_phase(paused=True),
-        agent_manager=paused_manager,
-        git_ops=GitOperations(),
-        role_agent_map={"developer": "David"},
-    )
-    BlackboardWorkflowRuntime(
-        issue_dir=issue_dir,
-        playbook=paused_playbook,
-        executor=paused_executor.execute_step,
-    ).run(start_step="develop", single_step=True)
-
-    assert paused_manager.prompts == []
-    assert [entry.content for entry in ledger.pending(target_step="develop")] == [
-        "Handle the first boundary.",
-        "Handle the second boundary.",
-    ]
-
     delivery_manager = AgentManager()
     delivery_executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
@@ -471,13 +469,13 @@ def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(
         git_ops=GitOperations(),
         role_agent_map={"developer": "David"},
     )
-    BlackboardWorkflowRuntime(
+    runtime_result = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
         playbook=playbook,
         executor=delivery_executor.execute_step,
-    ).run(start_step="develop", single_step=True)
+    ).run(start_step="pr", single_step=True)
 
-    assert len(delivery_manager.prompts) == 1
+    assert len(delivery_manager.prompts) == 1, runtime_result
     assert "workflow_feedback_file=" in delivery_manager.prompts[0]
     assert "artifacts/workflow_feedback.json" in delivery_manager.prompts[0]
-    assert ledger.pending(target_step="develop") == []
+    assert ledger.pending(target_step="pr") == []

@@ -175,6 +175,7 @@ class StepIterationFrame:
     artifacts: Dict[str, str]
     explicit_status_code: Optional[str]
     auto_continue: bool
+    pending_feedback: tuple[str, ...] = ()
 
 
 @dataclass
@@ -2329,22 +2330,6 @@ class BlackboardWorkflowRuntime:
                 self.blackboard,
                 **execute_kwargs,
             )
-            delivered_feedback = []
-            if getattr(execution_result, "agent_invoked", False):
-                delivered_feedback = feedback_ledger.consume_delivered(
-                    entry.source_identity for entry in pending_feedback
-                )
-            if delivered_feedback:
-                self.blackboard_store.record_event(
-                    self.blackboard,
-                    "workflow_feedback_delivered",
-                    {
-                        "step": current_step,
-                        "source_identities": [
-                            entry.source_identity for entry in delivered_feedback
-                        ],
-                    },
-                )
         except KeyboardInterrupt:
             self.blackboard_store.record_event(
                 self.blackboard,
@@ -2404,6 +2389,35 @@ class BlackboardWorkflowRuntime:
             artifacts=artifacts,
             explicit_status_code=explicit_status_code,
             auto_continue=auto_continue,
+            pending_feedback=tuple(entry.source_identity for entry in pending_feedback),
+        )
+
+    def _commit_delivered_feedback(
+        self,
+        *,
+        current_step: str,
+        frame: StepIterationFrame,
+    ) -> None:
+        """Consume captured feedback only after the agent's handoff is durable."""
+        if not frame.pending_feedback or not getattr(frame.execution_result, "agent_invoked", False):
+            return
+        output_artifact = self.steps.get(current_step, {}).get("output_artifact")
+        if isinstance(output_artifact, str) and output_artifact not in frame.artifacts:
+            return
+        delivered_feedback = WorkflowFeedbackLedger(self.issue_dir).consume_delivered(
+            frame.pending_feedback
+        )
+        if not delivered_feedback:
+            return
+        self.blackboard_store.record_event(
+            self.blackboard,
+            "workflow_feedback_delivered",
+            {
+                "step": current_step,
+                "source_identities": [
+                    entry.source_identity for entry in delivered_feedback
+                ],
+            },
         )
 
     def _store_artifacts(self, artifacts: Dict[str, str]) -> None:
@@ -3696,6 +3710,11 @@ class BlackboardWorkflowRuntime:
                         final_status_code="MISSING_CAPABILITY_RECEIPT",
                         completed=False,
                     )
+
+            self._commit_delivered_feedback(
+                current_step=current_step,
+                frame=frame,
+            )
 
             if next_step == "done":
                 return self._emit_complete(
