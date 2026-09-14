@@ -123,6 +123,27 @@ def test_driver_defers_release_check_until_workflow_completion() -> None:
     assert "Defer any in-workflow request until the workflow is complete" in text
 
 
+def test_driver_projects_missing_confirmed_user_context_through_declared_inputs() -> None:
+    skill = _read_skill_resource("SKILL.md")
+    running = _read_skill_resource("references/running_workflow.md")
+    handoffs = _read_skill_resource("references/handoffs_and_alignment.md")
+    normalized = " ".join((skill + running + handoffs).split())
+
+    assert "Project confirmed user context into agent input" in running
+    assert "This applies to every playbook" in normalized
+    assert "not already visible through declared artifacts" in normalized
+    assert "declared schema **and semantic purpose**" in running
+    assert "workflow `--user-input`" in running
+    assert "current command and target step support it" in normalized
+    assert "Never replace a task-required answer" in normalized
+    assert "use `--start-step` just to carry context" in normalized
+    assert "not delivery to another iteration or step" in normalized
+    assert "Supplemental context cannot replace required artifacts, ownership, review" in running
+    assert "permission/capability grants only through their exact declared boundary" in normalized
+    assert "relevant current user-confirmed direction" in handoffs
+    assert "Exclude inferred, superseded, unrelated, secret, credential" in running
+
+
 def _kickoff_formatter_command(
     strategic_context: Path,
     *extra_args: str,

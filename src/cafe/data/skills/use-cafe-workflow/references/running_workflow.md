@@ -113,6 +113,29 @@ continuity. The callback remains an ordinary driver and uses only existing
 kickoff authority: confirmation contract, mandatory HumanTask stops, reactive
 user handoffs, and mandate. It cannot change confirmed models.
 
+## Project confirmed user context into agent input
+
+Before any agent step, derive its inputs from the effective graph and project
+one bounded delta only for facts that are user-confirmed in the current turn,
+a completed HumanTask, or the current Driver contract; belong to this workflow;
+remain current and relevant; and are not already visible through declared
+artifacts, iteration input, or durable task results. This applies to every
+playbook. Preserve exact wording when paraphrase could alter meaning.
+
+Use a routing HumanTask only within its declared schema **and semantic purpose**;
+correction feedback includes missing confirmed direction with the findings and
+acceptance conditions. Otherwise use workflow `--user-input` only when the
+current command and target step support it. Never replace a task-required
+answer, use `--start-step` just to carry context, or edit artifacts, blackboard,
+or baton state. If no legal input path exists, retain the pause and report it.
+
+`cafe chat` is discussion evidence, not delivery to another iteration or step.
+Supplemental context cannot replace required artifacts, ownership, review, or
+authorization. Exclude inferred, superseded, unrelated, secret, credential, or
+cross-task content; handle existing permission/capability grants only through
+their exact declared boundary. Mandatory and `user_required` answers still need
+the explicit user-facing relay, and callbacks may use only already durable facts.
+
 The callback receives only an asynchronous durable-event notice. It must
 re-check `cafe status`/`cafe show`; a notice can be stale. It may diagnose and
 perform actions already authorized by the kickoff. It cannot wait for, collect,
@@ -304,7 +327,9 @@ the unique active declared correction outcome. First verify that it requires
 feedback, declares `correction: true`, and routes to a non-advancing correction
 continuation. If zero or multiple outcomes qualify, fail closed for
 user/playbook clarification. Submit `cafe task complete ... --no-resume --json` with
-consolidated findings, reached consensus, and acceptance conditions; then verify
+consolidated findings, reached consensus, and acceptance conditions, plus any
+relevant current user-confirmed direction missing from the target's declared
+inputs; then verify
 the durable task result and correction continuation before resuming in the
 configured mode. Only the resumed runtime materializes and executes the next
 formal iteration. Inspect its durable input, delta, and output only at the next

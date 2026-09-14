@@ -152,7 +152,7 @@ Use this outcome-sensitive authority matrix after due review/chat consensus:
 
 | Active outcome | Driver authority |
 | --- | --- |
-| Unique active declared correction outcome requiring feedback, marked `correction: true`, and routing to a non-advancing correction continuation | Driver may submit only that derived outcome, with consolidated findings, consensus, and acceptance conditions, to create the formal correction iteration. Zero or multiple eligible outcomes fail closed for user/playbook clarification. |
+| Unique active declared correction outcome requiring feedback, marked `correction: true`, and routing to a non-advancing correction continuation | Driver may submit only that derived outcome, with consolidated findings, consensus, acceptance conditions, and any relevant current user-confirmed direction missing from the target's declared inputs, to create the formal correction iteration. Zero or multiple eligible outcomes fail closed for user/playbook clarification. |
 | `user_required` or mandatory confirmation gate advancing `confirm` | user_required and mandatory confirmation gates keep advancing `confirm` user-owned. |
 | Clean `driver_confirmable` confirmation | driver_confirmable clean confirm remains driver-permitted after independent review. |
 | `driver_confirmable` clarification within the confirmed contract and existing authority | Driver may submit the schema-valid answer with a concise contract basis; multiple authorized technical choices may use repository precedent, smaller footprint, and reversibility. |
