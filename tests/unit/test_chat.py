@@ -224,17 +224,26 @@ class TestLaunchChatSession:
 
         agent_manager = self._make_agent_manager("David", "claude", session_id=None)
         executor = agent_manager.get_agent.return_value
-        executor.execute.return_value = MagicMock(
-            response="One-shot response",
-            session_id="session-new",
-        )
+
+        def execute_with_stream(*args, **kwargs):
+            print("One-shot progress")
+            print("One-shot response")
+            return MagicMock(
+                response="One-shot response",
+                streaming_log=["One-shot progress", "One-shot response"],
+                session_id="session-new",
+            )
+
+        executor.execute.side_effect = execute_with_stream
         mock_agent_manager_cls.return_value = agent_manager
 
         result = launch_chat_session("developer", "issue123", prompt="Status?")
 
         assert result == 0
-        assert "One-shot response" in capsys.readouterr().out
-        assert executor.stream_output is False
+        output = capsys.readouterr().out
+        assert "One-shot progress" in output
+        assert output.count("One-shot response") == 1
+        assert executor.stream_output is True
         executor.execute.assert_called_once_with(
             "Status?",
             environment_overrides={
@@ -247,6 +256,36 @@ class TestLaunchChatSession:
         agent_manager.session_manager.save_session.assert_called_once_with(
             "David", AgentCLI.CLAUDE, "session-new", "issue123"
         )
+        assert all(call.args[0][0] == "git" for call in mock_run.call_args_list)
+
+    @patch("cafe.ui.chat.subprocess.run")
+    @patch("cafe.ui.chat.ConfigManager")
+    @patch("cafe.ui.chat.AgentManager")
+    def test_chat_prompt_prints_final_response_when_stream_has_no_text(
+        self,
+        mock_agent_manager_cls,
+        mock_config_manager_cls,
+        mock_run,
+        capsys,
+    ):
+        mock_config = MagicMock()
+        mock_config.get.return_value = {"name": "David", "cli": "claude"}
+        mock_config_manager_cls.return_value = mock_config
+
+        agent_manager = self._make_agent_manager("David", "claude", session_id=None)
+        executor = agent_manager.get_agent.return_value
+        executor.execute.return_value = MagicMock(
+            response="Result-only response",
+            streaming_log=["", "  "],
+            session_id="session-new",
+        )
+        mock_agent_manager_cls.return_value = agent_manager
+
+        result = launch_chat_session("developer", "issue123", prompt="Status?")
+
+        assert result == 0
+        assert capsys.readouterr().out.count("Result-only response") == 1
+        assert executor.stream_output is True
         assert all(call.args[0][0] == "git" for call in mock_run.call_args_list)
 
     @patch("cafe.ui.chat.ConfigManager")
