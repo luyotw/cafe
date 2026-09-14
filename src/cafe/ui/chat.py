@@ -660,7 +660,7 @@ def launch_chat_session(
             chat_env[str(key)] = str(value)
 
     if prompt is not None:
-        executor.stream_output = False
+        executor.stream_output = True
         try:
             response = executor.execute(prompt, environment_overrides=chat_env)
         except AgentExecutionError as exc:
@@ -684,7 +684,12 @@ def launch_chat_session(
                     response.session_id,
                     issue_name,
                 )
-        print(response.response)
+        streamed_text = any(
+            isinstance(fragment, str) and fragment.strip()
+            for fragment in (response.streaming_log or ())
+        )
+        if not streamed_text and response.response:
+            print(response.response)
         _warn_if_chat_handoff_missing(issue_dir, _current_step, _valid_steps)
         return 0
 
