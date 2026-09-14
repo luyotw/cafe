@@ -37,14 +37,34 @@ def _required_bool(value: Any, *, field: str) -> bool:
     return value
 
 
-def _validate_lifecycle(*, actionable: bool, consumed: bool, resolved: bool) -> None:
+def _default_disposition(*, actionable: bool, consumed: bool, resolved: bool) -> str:
+    if actionable:
+        return "pending"
+    if resolved:
+        return "resolved"
+    if consumed:
+        return "delivered"
+    return "pending"
+
+
+def _validate_lifecycle(
+    *, actionable: bool, consumed: bool, resolved: bool, disposition: str
+) -> None:
     _required_bool(actionable, field="actionable")
     _required_bool(consumed, field="consumed")
     _required_bool(resolved, field="resolved")
+    if disposition not in {"pending", "delivered", "excluded", "resolved"}:
+        raise WorkflowFeedbackError("workflow feedback disposition is invalid")
     if actionable and (consumed or resolved):
         raise WorkflowFeedbackError("consumed or resolved feedback cannot be actionable")
     if not actionable and not consumed and not resolved:
         raise WorkflowFeedbackError("inactive feedback must be consumed or resolved")
+    if actionable and disposition != "pending":
+        raise WorkflowFeedbackError("actionable feedback must be pending")
+    if resolved and disposition != "resolved":
+        raise WorkflowFeedbackError("resolved feedback must have the resolved disposition")
+    if consumed and not resolved and disposition not in {"delivered", "excluded"}:
+        raise WorkflowFeedbackError("consumed feedback must have a terminal disposition")
 
 
 @dataclass(frozen=True)
@@ -60,12 +80,24 @@ class WorkflowFeedbackEntry:
     resolved: bool
     created_at: str
     updated_at: str
+    disposition: str | None = None
 
     def __post_init__(self) -> None:
+        if self.disposition is None:
+            object.__setattr__(
+                self,
+                "disposition",
+                _default_disposition(
+                    actionable=self.actionable,
+                    consumed=self.consumed,
+                    resolved=self.resolved,
+                ),
+            )
         _validate_lifecycle(
             actionable=self.actionable,
             consumed=self.consumed,
             resolved=self.resolved,
+            disposition=self.disposition,
         )
 
     @classmethod
@@ -89,6 +121,7 @@ class WorkflowFeedbackEntry:
             resolved=_required_bool(resolved, field="resolved"),
             created_at=timestamp,
             updated_at=timestamp,
+            disposition="pending",
         )
 
     @classmethod
@@ -106,6 +139,11 @@ class WorkflowFeedbackEntry:
                 resolved=_required_bool(raw["resolved"], field="resolved"),
                 created_at=_required(raw["created_at"], field="created_at"),
                 updated_at=_required(raw["updated_at"], field="updated_at"),
+                disposition=(
+                    _required(raw["disposition"], field="disposition")
+                    if "disposition" in raw
+                    else None
+                ),
             )
         except KeyError as exc:
             raise WorkflowFeedbackError(f"workflow feedback entry misses {exc.args[0]}") from exc
@@ -177,6 +215,7 @@ class WorkflowFeedbackLedger:
                         **asdict(entry),
                         "actionable": False,
                         "resolved": True,
+                        "disposition": "resolved",
                         "updated_at": _now(),
                     }
                 )
@@ -202,6 +241,7 @@ class WorkflowFeedbackLedger:
                         **asdict(entry),
                         "actionable": False,
                         "consumed": True,
+                        "disposition": "delivered",
                         "updated_at": _now(),
                     }
                 )
@@ -235,6 +275,7 @@ class WorkflowFeedbackLedger:
                     **asdict(entry),
                     "actionable": False,
                     "consumed": True,
+                    "disposition": "delivered",
                     "updated_at": _now(),
                 }
             )
@@ -244,6 +285,61 @@ class WorkflowFeedbackLedger:
         ]
         self._store(updated)
         return delivered
+
+    def settle_reviewed(
+        self,
+        delivered_identities: Iterable[str],
+        excluded_identities: Iterable[str],
+    ) -> tuple[list[WorkflowFeedbackEntry], list[WorkflowFeedbackEntry]]:
+        """Atomically persist the terminal disposition of one reviewed batch."""
+        delivered_order = tuple(
+            dict.fromkeys(
+                _required(identity, field="source_identity")
+                for identity in delivered_identities
+            )
+        )
+        excluded_order = tuple(
+            dict.fromkeys(
+                _required(identity, field="source_identity")
+                for identity in excluded_identities
+            )
+        )
+        delivered = set(delivered_order)
+        excluded = set(excluded_order)
+        if delivered & excluded:
+            raise WorkflowFeedbackError("reviewed feedback dispositions overlap")
+        settled = delivered | excluded
+        if not settled:
+            return [], []
+        entries = self.load()
+        actionable = {
+            entry.source_identity: entry
+            for entry in entries
+            if entry.source_identity in settled and entry.actionable
+        }
+        if set(actionable) != settled:
+            return [], []
+        updated = [
+            WorkflowFeedbackEntry(
+                **{
+                    **asdict(entry),
+                    "actionable": False,
+                    "consumed": True,
+                    "disposition": (
+                        "delivered" if entry.source_identity in delivered else "excluded"
+                    ),
+                    "updated_at": _now(),
+                }
+            )
+            if entry.source_identity in settled
+            else entry
+            for entry in entries
+        ]
+        self._store(updated)
+        return (
+            [actionable[identity] for identity in delivered_order],
+            [actionable[identity] for identity in excluded_order],
+        )
 
     def consume_pending_for_target(self, target_step: str) -> list[WorkflowFeedbackEntry]:
         """Complete an explicitly requested delivery for every pending target item."""

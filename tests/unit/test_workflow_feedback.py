@@ -80,6 +80,32 @@ def test_ledger_deduplicates_cross_form_consumed_and_resolved_items(tmp_path) ->
     assert ledger.pending(target_step="develop") == []
 
 
+def test_ledger_persists_distinct_delivered_and_excluded_dispositions(tmp_path) -> None:
+    """UT-002 — terminal curation decisions remain distinguishable after reload."""
+    ledger = WorkflowFeedbackLedger(tmp_path / "issue-348")
+    _created, delivered = ledger.record(
+        source_identity="github-pr:348:comment-delivered",
+        source_kind="github_pr",
+        target_step="develop",
+        content="Correct a concrete defect.",
+    )
+    _created, excluded = ledger.record(
+        source_identity="github-pr:348:comment-excluded",
+        source_kind="github_pr",
+        target_step="develop",
+        content="Looks good.",
+    )
+
+    assert ledger.settle_reviewed(
+        [delivered.source_identity], [excluded.source_identity]
+    ) == ([delivered], [excluded])
+
+    reloaded = {entry.source_identity: entry for entry in ledger.load()}
+    assert reloaded[delivered.source_identity].disposition == "delivered"
+    assert reloaded[excluded.source_identity].disposition == "excluded"
+    assert ledger.pending(target_step="develop") == []
+
+
 @pytest.mark.parametrize(
     "lifecycle",
     [

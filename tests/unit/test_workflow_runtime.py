@@ -4430,10 +4430,10 @@ def test_runtime_commits_feedback_discovered_during_current_curator_invocation(
     assert state.artifacts["curated_result"].path == str(output)
 
 
-def test_runtime_rejects_incomplete_curated_feedback_without_consuming_sources(
+def test_runtime_records_excluded_feedback_without_widening_the_curated_handoff(
     tmp_path: Path,
 ) -> None:
-    """A missing canonical row cannot hand off or consume an uncovered source."""
+    """Curation records an exclusion but hands the consumer only represented work."""
     from cafe.core.workflow_feedback import WorkflowFeedbackLedger
 
     issue_dir = tmp_path / ".cafe" / "issues" / "incomplete-curation"
@@ -4480,16 +4480,26 @@ def test_runtime_rejects_incomplete_curated_feedback_without_consuming_sources(
         executor=executor,
     ).run(start_step="curator", max_transitions=2)
 
-    assert result.final_step == "curator"
-    assert result.final_status_code == "INVALID_FEEDBACK_DELIVERY"
-    assert [entry.source_identity for entry in ledger.pending(target_step="curator")] == identities
+    assert result.final_step == "consumer"
+    assert ledger.pending(target_step="curator") == []
+    entries = {entry.source_identity: entry for entry in ledger.load()}
+    assert entries[identities[0]].disposition == "delivered"
+    assert entries[identities[1]].disposition == "excluded"
     state = BlackboardStore(issue_dir).load_or_create("curator")
-    assert not [event for event in state.events if event.event_type == "transition"]
+    delivered = [
+        event for event in state.events if event.event_type == "workflow_feedback_delivered"
+    ]
+    assert delivered[-1].data == {
+        "step": "curator",
+        "source_identities": [identities[0]],
+        "excluded_source_identities": [identities[1]],
+        "deferred_source_identities": [],
+    }
 
 
 @pytest.mark.parametrize(
     "invalid_output",
-    ["empty", "extra", "nondeterministic", "malformed", "duplicate"],
+    ["extra", "nondeterministic", "malformed", "duplicate"],
 )
 def test_runtime_rejects_noncanonical_curated_feedback_without_consuming_sources(
     tmp_path: Path, invalid_output: str
@@ -4520,9 +4530,7 @@ def test_runtime_rejects_noncanonical_curated_feedback_without_consuming_sources
             )
             return StepExecutionResult(response="consumed", artifacts={})
         assert step_name == "curator"
-        if invalid_output == "empty":
-            output.write_text("## Todo List\n\nNo actionable work.\n", encoding="utf-8")
-        elif invalid_output == "extra":
+        if invalid_output == "extra":
             _curated_feedback_output(output, [identity, "external:review:stale"])
         elif invalid_output == "nondeterministic":
             output.write_text(
@@ -4563,10 +4571,80 @@ def test_runtime_rejects_noncanonical_curated_feedback_without_consuming_sources
     assert [entry.source_identity for entry in ledger.pending(target_step="curator")] == [identity]
 
 
-def test_runtime_rejects_over_budget_curated_feedback_without_consuming_sources(
+def test_runtime_accepts_canonical_empty_as_a_durable_exclusion_and_replay_is_idempotent(
     tmp_path: Path,
 ) -> None:
-    """A 101-source cycle stays recoverable when its artifact has only 100 rows."""
+    """An informational source reaches the consumer as canonical empty work once."""
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "empty-curation"
+    ledger = WorkflowFeedbackLedger(issue_dir)
+    identity = "external:review:informational"
+    ledger.record(
+        source_identity=identity,
+        source_kind="external_note",
+        target_step="curator",
+        content="Looks good to me.",
+    )
+    output = issue_dir / "curator" / "iteration_001" / "output.md"
+    output.parent.mkdir(parents=True)
+    calls: list[str] = []
+
+    def executor(step_name: str, _step: dict, _state: object) -> StepExecutionResult:
+        calls.append(step_name)
+        if step_name == "consumer":
+            _write_baton(
+                issue_dir,
+                from_step="consumer",
+                to_owner="done",
+                to_step="done",
+                intent="workflow_complete",
+            )
+            return StepExecutionResult(response="consumed", artifacts={})
+        assert step_name == "curator"
+        output.write_text("## Todo List\n\nNo actionable work.\n", encoding="utf-8")
+        _write_baton(
+            issue_dir,
+            from_step="curator",
+            to_owner="agent",
+            to_step="consumer",
+            intent="manual_handoff",
+        )
+        return StepExecutionResult(
+            response="empty curation",
+            artifacts={"curated_result": str(output)},
+            agent_invoked=True,
+        )
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_feedback_curation_playbook(),
+        executor=executor,
+    )
+    first = runtime.run(start_step="curator", max_transitions=2)
+    replay = runtime.run(start_step="curator", max_transitions=2)
+
+    assert first.final_step == "consumer"
+    assert replay.final_step == "consumer"
+    assert calls == ["curator", "consumer", "curator", "consumer"]
+    entry = ledger.load()[0]
+    assert entry.disposition == "excluded"
+    assert ledger.pending(target_step="curator") == []
+    delivered = [
+        event
+        for event in BlackboardStore(issue_dir).load_or_create("curator").events
+        if event.event_type == "workflow_feedback_delivered"
+    ]
+    assert len(delivered) == 1
+    assert delivered[0].data["source_identities"] == []
+    assert delivered[0].data["excluded_source_identities"] == [identity]
+    assert delivered[0].data["deferred_source_identities"] == []
+
+
+def test_runtime_delivers_over_budget_feedback_in_two_bounded_curation_cycles(
+    tmp_path: Path,
+) -> None:
+    """A 101-source cycle makes bounded, lossless progress to its consumer."""
     from cafe.core.workflow_feedback import WorkflowFeedbackLedger
 
     issue_dir = tmp_path / ".cafe" / "issues" / "over-budget-curation"
@@ -4581,8 +4659,10 @@ def test_runtime_rejects_over_budget_curated_feedback_without_consuming_sources(
         )
     output = issue_dir / "curator" / "iteration_001" / "output.md"
     output.parent.mkdir(parents=True)
+    calls: list[str] = []
 
     def executor(step_name: str, _step: dict, _state: object) -> StepExecutionResult:
+        calls.append(step_name)
         if step_name == "consumer":
             _write_baton(
                 issue_dir,
@@ -4593,7 +4673,8 @@ def test_runtime_rejects_over_budget_curated_feedback_without_consuming_sources(
             )
             return StepExecutionResult(response="consumed", artifacts={})
         assert step_name == "curator"
-        _curated_feedback_output(output, identities[:100])
+        pending = [entry.source_identity for entry in ledger.pending(target_step="curator")]
+        _curated_feedback_output(output, pending[:100])
         _write_baton(
             issue_dir,
             from_step="curator",
@@ -4607,14 +4688,31 @@ def test_runtime_rejects_over_budget_curated_feedback_without_consuming_sources(
             agent_invoked=True,
         )
 
-    result = BlackboardWorkflowRuntime(
+    runtime = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
         playbook=_feedback_curation_playbook(),
         executor=executor,
-    ).run(start_step="curator", max_transitions=2)
+    )
+    first = runtime.run(start_step="curator", max_transitions=2)
+    second = runtime.run(start_step="curator", max_transitions=2)
 
-    assert result.final_status_code == "INVALID_FEEDBACK_DELIVERY"
-    assert [entry.source_identity for entry in ledger.pending(target_step="curator")] == identities
+    assert first.final_step == "consumer"
+    assert second.final_step == "consumer"
+    assert calls == ["curator", "consumer", "curator", "consumer"]
+    assert ledger.pending(target_step="curator") == []
+    delivered = [
+        event
+        for event in BlackboardStore(issue_dir).load_or_create("curator").events
+        if event.event_type == "workflow_feedback_delivered"
+    ]
+    assert [event.data["source_identities"] for event in delivered] == [
+        identities[:100],
+        identities[100:],
+    ]
+    assert [event.data["deferred_source_identities"] for event in delivered] == [
+        identities[100:],
+        [],
+    ]
 
 
 def test_runtime_rejects_plain_text_baton_written_by_pr_agent(tmp_path: Path) -> None:

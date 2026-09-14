@@ -148,6 +148,8 @@ def workflow_feedback_todo_items(
     if not isinstance(entries, list):
         raise TodoContractError("workflow feedback Todo source has an invalid shape")
     identities = set(source_identities) if source_identities is not None else None
+    if identities == set():
+        return ()
     from cafe.core.workflow_feedback import WorkflowFeedbackEntry, WorkflowFeedbackError
 
     selected: list[WorkflowFeedbackEntry] = []

@@ -6122,7 +6122,7 @@ def test_causal_todo_normalizes_pending_and_delivered_workflow_feedback(tmp_path
     assert delivered.items == pending.items
 
 
-@pytest.mark.parametrize("source_identities", [[], [None], [""], ["same", "same"]])
+@pytest.mark.parametrize("source_identities", [[None], [""], ["same", "same"]])
 def test_causal_todo_rejects_invalid_delivered_identities_without_widening(
     tmp_path: Path, source_identities: list[object]
 ) -> None:
@@ -6180,6 +6180,64 @@ def test_causal_todo_rejects_invalid_delivered_identities_without_widening(
         GenericWorkflowStepExecutor._add_causal_todo_artifact(
             artifacts, state, playbook=_causal_todo_playbook()
         )
+
+
+def test_causal_todo_accepts_canonical_empty_delivery_without_raw_feedback(tmp_path: Path) -> None:
+    """An exclusion-only correction keeps the producer's canonical empty artifact."""
+    issue_dir = tmp_path / "issue"
+    ledger = WorkflowFeedbackLedger(issue_dir)
+    ledger.record(
+        source_identity="github-pr:10:informational",
+        source_kind="github_pr",
+        target_step="develop",
+        content="Looks good.",
+    )
+    direct_path = tmp_path / "pr.md"
+    direct_path.write_text("## Todo List\n\nNo actionable work.\n", encoding="utf-8")
+    state = BlackboardStore(issue_dir).load_or_create("develop")
+    state.events.extend(
+        [
+            EventEntry(
+                timestamp="2026-01-01T00:00:00Z",
+                step="pr",
+                event_type="transition",
+                message="",
+                data={"from": "pr", "to": "develop"},
+            ),
+            EventEntry(
+                timestamp="2026-01-01T00:00:01Z",
+                step="develop",
+                event_type="workflow_feedback_delivered",
+                message="",
+                data={
+                    "source_identities": [],
+                    "excluded_source_identities": ["github-pr:10:informational"],
+                },
+            ),
+        ]
+    )
+    pr_result = ArtifactEntry(
+        name="pr_result",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="pr",
+        path=str(direct_path),
+    )
+    workflow = ArtifactEntry(
+        name="workflow_feedback",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="feedback_hook",
+        path=str(ledger.path),
+    )
+
+    resolved = GenericWorkflowStepExecutor._add_causal_todo_artifact(
+        {"pr_result": pr_result, "workflow_feedback": workflow},
+        state,
+        playbook=_causal_todo_playbook(),
+    )
+
+    assert resolved["causal_todo"] is pr_result
 
 
 def test_causal_todo_preserves_multiple_delivered_identities(tmp_path: Path) -> None:

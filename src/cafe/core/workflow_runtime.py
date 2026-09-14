@@ -68,7 +68,12 @@ from cafe.core.status_codes import (
     step_on_declares,
     transition_map_key,
 )
-from cafe.core.todo import TodoContractError, parse_todo_list, workflow_feedback_todo_items
+from cafe.core.todo import (
+    MAX_TODO_ITEMS,
+    TodoContractError,
+    parse_todo_list,
+    workflow_feedback_todo_items,
+)
 from cafe.core.workflow_feedback import WorkflowFeedbackLedger
 from cafe.core.workflow_models import (
     BatonRejected,
@@ -2393,7 +2398,9 @@ class BlackboardWorkflowRuntime:
             artifacts=artifacts,
             explicit_status_code=explicit_status_code,
             auto_continue=auto_continue,
-            pending_feedback=tuple(entry.source_identity for entry in pending_feedback),
+            pending_feedback=tuple(
+                entry.source_identity for entry in pending_feedback[:MAX_TODO_ITEMS]
+            ),
         )
 
     def _feedback_todo_mappings(self, *, current_step: str) -> dict[str, tuple[str, str]]:
@@ -2448,7 +2455,7 @@ class BlackboardWorkflowRuntime:
         """Consume only a valid canonical curation after a durable handoff.
 
         Returns a rejection reason when a declared curator produced an output
-        that cannot prove one deterministic Todo row per pending source.
+        that cannot prove each represented row is deterministic source work.
         """
         if not frame.pending_feedback or not getattr(
             frame.execution_result, "agent_invoked", False
@@ -2489,19 +2496,51 @@ class BlackboardWorkflowRuntime:
             return f"the curated Todo List is invalid: {exc}"
         expected_rows = {(item.item_id, item.source) for item in expected_items}
         actual_rows = {(item.item_id, item.source) for item in actual_items}
-        if len(actual_rows) != len(actual_items) or actual_rows != expected_rows:
-            return "the curated Todo List does not cover the pending source identities"
-        delivered_feedback = WorkflowFeedbackLedger(self.issue_dir).consume_delivered(
-            frame.pending_feedback
+        if len(actual_rows) != len(actual_items) or not actual_rows.issubset(expected_rows):
+            return "the curated Todo List has an invalid feedback source identity"
+        expected_identity_by_row = {
+            (item.item_id, item.source): identity
+            for identity, item in zip(frame.pending_feedback, expected_items)
+        }
+        if (
+            len(expected_rows) != len(expected_items)
+            or len(expected_identity_by_row) != len(expected_items)
+        ):
+            return "the curated Todo List has ambiguous feedback source identities"
+        represented_identity_set = {
+            expected_identity_by_row[row] for row in actual_rows
+        }
+        represented_identities = tuple(
+            identity
+            for identity in frame.pending_feedback
+            if identity in represented_identity_set
         )
-        if not delivered_feedback:
-            return None
+        excluded_identities = tuple(
+            identity for identity in frame.pending_feedback if identity not in represented_identities
+        )
+        feedback_ledger = WorkflowFeedbackLedger(self.issue_dir)
+        delivered_feedback, excluded_feedback = feedback_ledger.settle_reviewed(
+            represented_identities,
+            excluded_identities,
+        )
+        if (
+            len(delivered_feedback) != len(represented_identities)
+            or len(excluded_feedback) != len(excluded_identities)
+        ):
+            return "the curated feedback lifecycle changed before delivery committed"
+        deferred_feedback = feedback_ledger.pending(target_step=current_step)
         self.blackboard_store.record_event(
             self.blackboard,
             "workflow_feedback_delivered",
             {
                 "step": current_step,
                 "source_identities": [entry.source_identity for entry in delivered_feedback],
+                "excluded_source_identities": [
+                    entry.source_identity for entry in excluded_feedback
+                ],
+                "deferred_source_identities": [
+                    entry.source_identity for entry in deferred_feedback
+                ],
             },
         )
         return None

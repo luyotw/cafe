@@ -1908,7 +1908,6 @@ class GenericWorkflowStepExecutor(Phase):
                 raw = event.data.get("source_identities")
                 if (
                     not isinstance(raw, list)
-                    or not raw
                     or any(not isinstance(item, str) or not item for item in raw)
                     or len(set(raw)) != len(raw)
                 ):
