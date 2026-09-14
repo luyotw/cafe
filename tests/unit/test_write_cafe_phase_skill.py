@@ -19,9 +19,9 @@ def test_write_cafe_phase_repairs_only_its_declarative_layer() -> None:
     assert "return a CAFE core-defect diagnosis" in normalized_skill
     assert "Do not edit driver/meta skills such as `use-cafe-workflow`" in normalized_skill
     assert "This skill is not a general CAFE self-modifier" in normalized_skill
-    assert "Driver diagnosis 與 declarative repair 邊界" in spec
-    assert "不要建立隱含的 `write-cafe-driver` fallback" in normalized_spec
-    assert "沒有 user 明確授權不得 自動 create、comment 或 close issue" in normalized_spec
+    assert "Frontmatter and Repair Boundary" in spec
+    assert "create an implicit `write-cafe-driver` fallback" in normalized_spec
+    assert "External issue creation, comments, or closing require explicit user authorization" in normalized_spec
     assert "playbook `skills.workflow`" in spec
     assert "playbook `skills.chat`" in spec
     assert "workflow.execution_profile" in skill
@@ -36,8 +36,8 @@ def test_write_cafe_phase_requires_confirmed_supporting_skill_selection() -> Non
     normalized_skill = " ".join(skill.split())
 
     native = spec.index("**CLI-native Skill**")
-    open_source = spec.index("**開源 Skill**")
-    self_authored = spec.index("**自行撰寫**")
+    open_source = spec.index("**Open-source Skill**")
+    self_authored = spec.index("**Self-authored**")
 
     assert native < open_source < self_authored
     assert "## Supporting Skill Selection" in skill
@@ -50,21 +50,19 @@ def test_write_cafe_phase_requires_confirmed_supporting_skill_selection() -> Non
     assert "authoring time" in normalized_skill
     assert "Do not make workflow execution search the network" in normalized_skill
     normalized_spec = " ".join(spec.split())
-    assert "對每個預定支援的 agent CLI **分別、獨立**" in normalized_spec
-    assert "沒有合適方案時，該 CLI 才進入開源層" in normalized_spec
-    assert "沒有合適方案時，該 CLI 才進入自行撰寫層" in normalized_spec
-    assert "只有該 CLI 的原生與開源兩層都已完成評估" in normalized_spec
-    assert "某個 CLI 已找到原生候選，不會阻止其他尚未解決的 CLI" in normalized_spec
-    assert "先完成覆蓋所有目標 CLI 的 proposed selection matrix" in normalized_spec
-    assert "決定使用哪一個方案前" in normalized_spec
+    assert "Evaluate each target CLI independently" in normalized_spec
+    assert "only for unresolved CLIs" in normalized_spec
+    assert "only after native and open-source options are unsuitable" in normalized_spec
+    assert "Prepare one proposed selection matrix covering every target CLI" in normalized_spec
+    assert "before adopting, installing, vendoring, or writing" in normalized_spec
     assert (
-        "等待 user 明確確認後，才可採用原生 Skill、安裝或 vendor 開源內容，或開始撰寫"
+        "obtain explicit user confirmation before adopting, installing, vendoring, or writing"
         in normalized_spec
     )
-    assert "Runtime 只負責安裝、啟用與執行已固定的 Skill 組合" in normalized_spec
-    assert "不搜尋網路、不下載 mutable latest、不猜測替代品" in normalized_spec
-    assert "不得在 phase runtime 自動拉取" in normalized_spec
-    assert "只將該 CLI 進入下一層，更新整份 matrix 並重新取得確認" in normalized_spec
+    assert "Runtime does not search the network, download mutable latest content, or guess substitutes" in normalized_spec
+    assert "Runtime resolves shared skills" in normalized_spec
+    assert "does not search the network" in normalized_spec
+    assert "update the complete matrix and ask again" in normalized_spec
 
 
 def test_write_cafe_phase_requires_interrupt_safe_batch_progress() -> None:
@@ -99,28 +97,20 @@ def test_write_cafe_phase_requires_interrupt_safe_batch_progress() -> None:
     assert "new or changed gates reopen" in normalized_skill
     assert "do not add an internal infinite retry loop" in normalized_skill
 
-    assert "## 17. 可中斷與大量工作 phase 的 checkpoint/resume contract" in spec
-    assert "簡單、單一、可快速原子完成的 phase 不必硬加 ledger" in normalized_spec
-    assert "大量工作預設最多損失 1 個 target" in normalized_spec
-    assert "`{output_file}` 不是無條件預設" in normalized_spec
-    assert "output 是 exact-shape" in normalized_spec
-    assert "單一 Git HEAD 不足以代表 dirty 或 target-specific inputs" in normalized_spec
-    assert "只有 stage dependency fingerprint 相同" in normalized_spec
-    assert "impact 無法證明" in normalized_spec
-    assert "`finalized` digest receipt" in normalized_spec
-    assert "Separate ledger 對完整 final artifact bytes 計算 digest" in normalized_spec
-    assert "embedded ledger 對排除 ledger 與 finalization metadata" in normalized_spec
-    assert "algorithm、scope 與 scope/projection schema version" in normalized_spec
-    assert "不得對含 digest 欄位的整個檔案做自我參照 hash" in normalized_spec
-    assert "依 receipt 記錄的 algorithm 與 scope/projection version 重算" in normalized_spec
-    assert "phase agent 不得因已產生 final artifact 就移除或覆寫唯一 ledger" in normalized_spec
-    assert "post-success runtime/host hook 或 retention policy" in normalized_spec
-    assert "外層 repair agent 不手改 generated issue artifacts" in normalized_spec
-    assert "沒有明確 receipt 的 consumer review" in normalized_spec
-    assert "新增或變更項目會以未完成 gate 出現" in normalized_spec
-    assert "完整內容完全相同的 completed item" in normalized_spec
-    assert "runtime 會重新安裝 resolved skill" in normalized_spec
-    assert "active `SKILL.md`" in normalized_spec
+    assert "## 17. Interruptible and Batch Phase Checkpoint/Resume Contract" in spec
+    assert "A simple atomic phase does not need a ledger" in normalized_spec
+    assert "default interruption budget is at most one target" in normalized_spec
+    assert "If the output is exact-shape, public" in normalized_spec
+    assert "dependency fingerprints including dirty/untracked content" in normalized_spec
+    assert "Trust a completed stage only when the fingerprint" in normalized_spec
+    assert "otherwise reopen all dependent rows" in normalized_spec
+    assert "a finalized digest receipt" in normalized_spec
+    assert "Do not hash a file that contains its own digest field" in normalized_spec
+    assert "scope/projection version" in normalized_spec
+    assert "cleanup belongs to a post-success hook or retention policy" in normalized_spec
+    assert "migrate only deterministic local evidence" in normalized_spec
+    assert "leave review, approval, push, import, or publication pending" in normalized_spec
+    assert "Critical resume behavior belongs in the active `SKILL.md`" in normalized_spec
 
 
 def test_write_cafe_phase_requires_topology_neutral_todo_routing() -> None:
@@ -133,12 +123,9 @@ def test_write_cafe_phase_requires_topology_neutral_todo_routing() -> None:
     assert "`feedback_todo_source`" in normalized_skill
     assert "`feedback_todo_id_prefix`" in normalized_skill
     assert "generic runtime must not infer" in normalized_skill
-    assert "artifact/source 可使用自訂名稱" in normalized_spec
-    assert "HumanTask 則宣告對應的 `feedback_delivery` 欄位" in normalized_spec
-    assert (
-        "generic runtime 不得從內建 phase、role、artifact、source 或 playbook 名稱推斷"
-        in normalized_spec
-    )
+    assert "custom artifact" in normalized_spec
+    assert "stable ID prefix" in normalized_spec
+    assert "Never infer correction mode from destination, artifact name" in normalized_spec
 
 
 def test_write_cafe_phase_keeps_incoming_plans_immutable() -> None:
@@ -148,7 +135,7 @@ def test_write_cafe_phase_keeps_incoming_plans_immutable() -> None:
     assert "runtime `checklist.md` owns the derived gates" in skill
     assert "consumer `{output_file}` owns the only mutable per-item ledger" in skill
     assert "execution phase marks those same items `- [x]`" not in skill
-    assert "accepted `{plan_file}` 是不可變來源" in spec
-    assert "consumer `{output_file}` 的 `## Todo Progress`" in spec
-    assert "execute 直接更新 `[ ]` → `[x]`" not in spec
-    assert "incoming plan 的 checkbox 仍由本 phase 原地更新" not in spec
+    assert "The accepted `{plan_file}` is immutable input" in spec
+    assert "its `{output_file}` `## Todo Progress` ledger" in spec
+    assert "marks the incoming plan's checkboxes" not in spec
+    assert "incoming plan remains immutable" in spec or "immutable incoming" in spec

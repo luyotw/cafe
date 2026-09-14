@@ -239,6 +239,7 @@ class ArtifactEntry:
     head_sha: Optional[str] = None
     content_sha256: Optional[str] = None
     todo_identities: Optional[Dict[str, str]] = None
+    todo_work_identities: Optional[Dict[str, str]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
@@ -261,6 +262,14 @@ class ArtifactEntry:
             todo_identities=(
                 {str(key): str(value) for key, value in data["todo_identities"].items()}
                 if isinstance(data.get("todo_identities"), dict)
+                else None
+            ),
+            todo_work_identities=(
+                {
+                    str(key): str(value)
+                    for key, value in data["todo_work_identities"].items()
+                }
+                if isinstance(data.get("todo_work_identities"), dict)
                 else None
             ),
         )
@@ -1277,7 +1286,10 @@ class BlackboardStore:
                     version=workspace.version,
                     updated_by=workspace.producer_step or artifact_file.parent.parent.name,
                     path=str(artifact_file),
-                    updated_at=workspace.updated_at or _now_iso(),
+                    # A legacy workspace without ordering metadata is not a
+                    # newly published artifact.  Never promote it above a
+                    # later, timestamped artifact by inventing "now" here.
+                    updated_at=workspace.updated_at,
                     base_sha=workspace.base_sha,
                     head_sha=workspace.head_sha,
                 )
@@ -1286,7 +1298,7 @@ class BlackboardStore:
             current = state.artifacts.get(entry.name)
             if current is None or entry.version >= current.version:
                 state.artifacts[entry.name] = entry
-            if entry.updated_at >= latest_timestamp:
+            if entry.updated_at and entry.updated_at >= latest_timestamp:
                 latest_timestamp = entry.updated_at
                 latest_step = artifact_file.parent.parent.name
 

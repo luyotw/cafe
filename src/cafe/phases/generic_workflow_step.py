@@ -109,6 +109,28 @@ from cafe.utils.git_utils import get_git_toplevel, get_repo_root, to_cwd_relativ
 from cafe.utils.phase_config import load_phase_step_model
 
 
+def _plan_work_identity(item: Any) -> str:
+    """Hash the retained work payload without making the mutable ID part of it."""
+    return hashlib.sha256(
+        "\x1f".join((str(item.source), " ".join(str(item.work).split()))).encode("utf-8")
+    ).hexdigest()
+
+
+def _plan_work_tokens(item: Any) -> set[str]:
+    return {
+        token.lower()
+        for token in " ".join(str(item.work).split()).split()
+        if token.strip(".,:;()[]{}")
+    }
+
+
+def _is_related_plan_revision(previous: Any, current: Any) -> bool:
+    """Permit wording revisions while rejecting an unrelated ID reuse."""
+    previous_tokens = _plan_work_tokens(previous)
+    current_tokens = _plan_work_tokens(current)
+    return bool(previous_tokens & current_tokens)
+
+
 def align_pr_baton_after_execution(
     *,
     issue_dir: Path,
@@ -553,6 +575,9 @@ class GenericWorkflowStepExecutor(Phase):
             checklist_file=checklist_file,
             questions_xml_file=questions_xml_file,
             prepare_agent_context=prepare_agent_context,
+            execution_guard=lambda: self._validate_workspace_inputs(
+                self._step_input_artifacts(step_def, blackboard_state), step_def=step_def
+            ),
             hook_context={
                 "phase": self,
                 "step_name": step_name,
@@ -2060,6 +2085,45 @@ class GenericWorkflowStepExecutor(Phase):
                     "Correction Todo source ownership conflicts with the persisted edge"
                 )
             prefix = f"{declared_route.todo_id_prefix}-"
+            authorized_artifact = (
+                transition.data.get("source_artifact")
+                if transition is not None and isinstance(transition.data, Mapping)
+                else None
+            )
+            if authorized_artifact is not None and not isinstance(authorized_artifact, Mapping):
+                raise ValueError("Persisted correction handoff has an invalid source artifact")
+            authorized_name = (
+                str(authorized_artifact.get("name"))
+                if isinstance(authorized_artifact, Mapping)
+                and authorized_artifact.get("name") is not None
+                else None
+            )
+            authorized_version = (
+                authorized_artifact.get("version")
+                if isinstance(authorized_artifact, Mapping)
+                else None
+            )
+            authorized_path = (
+                Path(str(authorized_artifact.get("path"))).resolve()
+                if isinstance(authorized_artifact, Mapping)
+                and authorized_artifact.get("path")
+                else None
+            )
+            authorized_digest = (
+                str(authorized_artifact.get("content_sha256"))
+                if isinstance(authorized_artifact, Mapping)
+                and authorized_artifact.get("content_sha256")
+                else None
+            )
+            if authorized_artifact is not None and (
+                authorized_name != route_artifact
+                or not isinstance(authorized_version, int)
+                or not authorized_path
+                or not authorized_digest
+            ):
+                raise ValueError(
+                    "Persisted correction handoff does not bind a complete source artifact"
+                )
             selected_path = Path(str(getattr(selected, "path", selected)))
             candidates: list[tuple[int, Path, str]] = []
             phase_dir = selected_path.parent.parent
@@ -2083,6 +2147,13 @@ class GenericWorkflowStepExecutor(Phase):
                     or not record.content_sha256
                     or not output_path.is_file()
                     or output_path.stat().st_size > 256 * 1024
+                ):
+                    continue
+                if authorized_artifact is not None and (
+                    record.name != authorized_name
+                    or record.version != authorized_version
+                    or Path(record.path).resolve() != authorized_path
+                    or record.content_sha256 != authorized_digest
                 ):
                     continue
                 digest = hashlib.sha256(output_path.read_bytes()).hexdigest()
@@ -2496,6 +2567,7 @@ class GenericWorkflowStepExecutor(Phase):
         kind = ArtifactKind.DOCUMENT
         output_bytes = Path(output_path).read_bytes()
         todo_identities: Optional[dict[str, str]] = None
+        todo_work_identities: Optional[dict[str, str]] = None
         content = output_bytes.decode("utf-8")
         if "## Todo List" in content:
             try:
@@ -2512,29 +2584,65 @@ class GenericWorkflowStepExecutor(Phase):
                     ).hexdigest()
                     for item in plan_items
                 }
+                todo_work_identities = {
+                    _plan_work_identity(item): item.item_id for item in plan_items
+                }
                 previous_identities = getattr(previous, "todo_identities", None) if previous else None
-                if previous_identities is None and previous is not None:
+                previous_work_identities = (
+                    getattr(previous, "todo_work_identities", None) if previous else None
+                )
+                previous_items: tuple[Any, ...] = ()
+                if previous is not None:
                     try:
                         previous_items = parse_todo_list(
                             Path(previous.path).read_text(encoding="utf-8")
                         )
-                        validate_todo_identities(previous_items, tuple(plan_items))
-                        previous_identities = {
-                            item.item_id: hashlib.sha256(
-                                "\x1f".join(
-                                    (item.source, item.item_id, " ".join(item.work.split()))
-                                ).encode("utf-8")
-                            ).hexdigest()
-                            for item in previous_items
-                            if item.source == "plan"
-                        }
+                        previous_plan_items = tuple(
+                            item for item in previous_items if item.source == "plan"
+                        )
+                        if previous_identities is None:
+                            previous_identities = {
+                                item.item_id: hashlib.sha256(
+                                    "\x1f".join(
+                                        (item.source, item.item_id, " ".join(item.work.split()))
+                                    ).encode("utf-8")
+                                ).hexdigest()
+                                for item in previous_plan_items
+                            }
+                        if previous_work_identities is None:
+                            previous_work_identities = {
+                                _plan_work_identity(item): item.item_id
+                                for item in previous_plan_items
+                            }
                     except (OSError, UnicodeError, TodoContractError):
                         previous_identities = None
+                        previous_work_identities = None
                 if previous_identities:
-                    for item_id, identity in todo_identities.items():
-                        if item_id in previous_identities and previous_identities[item_id] != identity:
+                    previous_by_id = {
+                        item.item_id: item
+                        for item in previous_items
+                        if item.source == "plan"
+                    }
+                    current_by_id = {item.item_id: item for item in plan_items}
+                    for item in plan_items:
+                        prior_id = (
+                            previous_work_identities.get(_plan_work_identity(item))
+                            if previous_work_identities
+                            else None
+                        )
+                        if prior_id is not None and prior_id != item.item_id:
                             raise ValueError(
-                                f"plan Todo identity {item_id!r} was reassigned; retain the existing ID"
+                                f"plan Todo identity {prior_id!r} was moved to {item.item_id!r}; retain the existing ID"
+                            )
+                        prior_item = previous_by_id.get(item.item_id)
+                        if (
+                            prior_item is not None
+                            and previous_identities.get(item.item_id)
+                            != todo_identities.get(item.item_id)
+                            and not _is_related_plan_revision(prior_item, item)
+                        ):
+                            raise ValueError(
+                                f"plan Todo identity {item.item_id!r} was reassigned; retain the existing ID"
                             )
         artifact = ArtifactEntry(
             name=output_key,
@@ -2544,6 +2652,7 @@ class GenericWorkflowStepExecutor(Phase):
             path=output_path,
             content_sha256=hashlib.sha256(output_bytes).hexdigest(),
             todo_identities=todo_identities,
+            todo_work_identities=todo_work_identities,
         )
         artifact_path = self._get_iteration_dir(self.iteration) / "artifact.json"
         temporary = artifact_path.with_name(f".{artifact_path.name}.{os.getpid()}.tmp")

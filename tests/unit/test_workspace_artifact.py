@@ -162,3 +162,42 @@ def test_workspace_receipt_rejects_symlink_escape(tmp_path: Path) -> None:
     checked = verify_workspace_artifact(escaped, repo=repo)
     assert checked.valid is False
     assert any("symlink" in reason or "escapes" in reason for reason in checked.reasons)
+
+
+def test_workspace_publication_rejects_adjacent_receipt_symlink(tmp_path: Path) -> None:
+    repo, base, head = _repo(tmp_path)
+    receipt = _receipt(repo)
+    canonical = receipt.parent / "verification.json"
+    target = tmp_path / "receipt-target.json"
+    target.write_bytes(canonical.read_bytes())
+    canonical.unlink()
+    canonical.symlink_to(target)
+
+    with pytest.raises(WorkspaceArtifactError, match="symlink"):
+        build_workspace_artifact(
+            repo=repo,
+            name="snapshot",
+            version=1,
+            base_sha=base,
+            head_sha=head,
+            receipt_outputs=[receipt],
+        )
+
+
+def test_workspace_publication_rejects_invalid_receipt_scope(tmp_path: Path) -> None:
+    repo, base, head = _repo(tmp_path)
+    receipt = _receipt(repo)
+    receipt_file = receipt.parent / "verification.json"
+    raw = json.loads(receipt_file.read_text(encoding="utf-8"))
+    raw["scope"] = "unsupported"
+    receipt_file.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(WorkspaceArtifactError, match="scope"):
+        build_workspace_artifact(
+            repo=repo,
+            name="snapshot",
+            version=1,
+            base_sha=base,
+            head_sha=head,
+            receipt_outputs=[receipt],
+        )

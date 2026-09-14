@@ -71,4 +71,4 @@ Read your agent file: {agent_file}
 Write QA report to: {output_file}
 
 ## Handoff
-- 依照本輪結果寫入 next-step baton；blackboard 由 runtime 更新。
+- Write the next-step baton for this result; the runtime updates the blackboard.

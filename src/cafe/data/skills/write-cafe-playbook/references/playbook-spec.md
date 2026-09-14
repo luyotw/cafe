@@ -2,28 +2,6 @@
 
 Use this reference while designing or validating a CAFE playbook. The runtime schema remains authoritative in `src/cafe/core/playbook.py`.
 
-## Authoritative en-US artifact-contract addendum
-
-When this reference conflicts with an older example, use this addendum and the runtime schema.
-
-- Declare each backward correction route on its producing step with `feedback_routes` keyed by
-  destination. The route must name the producer output artifact, source kind, Todo source, and
-  stable ID prefix. The destination must list that artifact and expose a causal Todo projection.
-- Route resolution uses the persisted sender/destination edge, including dynamic
-  `allowed_goto` targets. Do not infer correction mode from the destination, artifact name, chat,
-  baton summaries, or session memory. Strict validation must reject incomplete or ambiguous
-  route declarations.
-- A current workspace is one declared companion beside the summary artifact. Use
-  `workspace_artifact` on the producer and `workspace_input_artifact` on current consumers; the
-  latter must also be listed in `input_artifacts`. Summary and workspace names must differ.
-- Current workspace records are schema-versioned, atomically written, bound to repository state,
-  and verified through repository-relative `verification.json` receipts. Reusing an unchanged
-  verified snapshot must preserve its version. Legacy v0.2 mixed records are accepted only by
-  their bounded compatibility adapter and are not current verification.
-- Plan and correction Todo sources use one canonical `## Todo List`, at most 100 items, stable
-  identities, and the exact intentional-empty marker `No actionable work.`. Consumers write
-  progress only to their own output artifact under `## Todo Progress`.
-
 ## 1. Location And Identity
 
 | Scope | Path | Use |
@@ -143,6 +121,30 @@ the complete contract, inspect it with `cafe playbook show <id>`, and run
 contract and every other warning are resolved.
 
 ## 3. Step Fields
+
+### Current artifact contract
+
+- Declare each backward correction route on its producing step with
+  `feedback_routes` keyed by destination. Each route names the producer output
+  artifact, source kind, Todo source, and stable ID prefix; the destination
+  lists the artifact and exposes one causal Todo projection.
+- Resolve routes from the persisted sender/destination edge, including dynamic
+  `allowed_goto` targets. Never infer correction mode from destination, artifact
+  name, chat, baton summaries, or session memory. Strict validation rejects
+  incomplete or ambiguous declarations.
+- A current workspace is one declared companion beside the summary. The
+  producer uses `workspace_artifact`; current consumers use
+  `workspace_input_artifact`, and that key must also appear in
+  `input_artifacts`. Summary and workspace names must differ.
+- Workspace records are schema-versioned, atomically written, bound to
+  repository state, and verified with repository-relative nonsymlink
+  `verification.json` receipts. An unchanged verified snapshot keeps its
+  version. Legacy v0.2 mixed records remain bounded compatibility data and are
+  not current verification.
+- Plan and correction sources use one canonical `## Todo List` of at most 100
+  items, stable identities, and the exact intentional-empty marker
+  `No actionable work.`. Consumers write progress only to their own output
+  under `## Todo Progress`.
 
 | Field | Rule |
 | --- | --- |
@@ -321,6 +323,12 @@ Use a self-loop when the user is reviewing the current phase's output:
 - Use a backward route only when a previously confirmed source of truth is invalidated, not for ordinary tuning.
 
 ## 6. Artifact Matrix
+
+Current steps keep the singular `output_artifact` as the primary output. At
+most one optional declared workspace companion may be published. Ordinary
+`artifact.json` behavior remains unchanged, and a workspace is registered as a
+declared artifact rather than an implicit sidecar. Consumer inputs must name
+the summary, workspace, or both explicitly.
 
 Build this table before writing YAML:
 

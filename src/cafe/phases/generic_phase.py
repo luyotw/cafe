@@ -368,6 +368,7 @@ class GenericPhase:
         questions_xml_file: Optional[Path] = None,
         hook_context: Optional[Dict[str, Any]] = None,
         prepare_agent_context: Optional[Callable[[Dict[str, str]], Dict[str, str]]] = None,
+        execution_guard: Optional[Callable[[], None]] = None,
         max_retries: int = 3,
     ) -> GenericPhaseExecution:
         runtime_context = dict(context or {})
@@ -376,6 +377,8 @@ class GenericPhase:
         hook_kwargs = dict(hook_context or {})
         hook_kwargs["shared_skill_invocations"] = list(shared_skill_invocations or [])
 
+        if execution_guard is not None:
+            execution_guard()
         before = self._run_hook_stage(
             "before_execute",
             step_def=step_def,
@@ -397,6 +400,8 @@ class GenericPhase:
                 published=False,
             )
 
+        if execution_guard is not None:
+            execution_guard()
         prepared = self._run_hook_stage(
             "prepare_input",
             step_def=step_def,
@@ -431,6 +436,8 @@ class GenericPhase:
         agent_invoked = False
         attempt = 0
         while True:
+            if execution_guard is not None:
+                execution_guard()
             prompt = self.build_prompt(
                 skill_name=skill_name,
                 skill_invocation=skill_invocation,
@@ -446,6 +453,8 @@ class GenericPhase:
             response = agent_executor(prompt)
             agent_invoked = True
 
+            if execution_guard is not None:
+                execution_guard()
             after = self._run_hook_stage(
                 "after_execute",
                 step_def=step_def,
@@ -481,6 +490,8 @@ class GenericPhase:
 
         published = False
         if artifact_ready:
+            if execution_guard is not None:
+                execution_guard()
             publish = self._run_hook_stage(
                 "publish_output",
                 step_def=step_def,

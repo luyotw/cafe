@@ -461,6 +461,22 @@ def test_execute_short_circuits_when_before_execute_stops(tmp_path: Path) -> Non
     assert result.events == [{"type": "stopped"}]
 
 
+def test_execute_guard_runs_at_each_agent_and_hook_boundary(tmp_path: Path) -> None:
+    phase = GenericPhase(_setup_loader(tmp_path))
+    checks: list[str] = []
+
+    result = phase.execute(
+        skill_name="cafe-plan",
+        skill_invocation="/plan",
+        step_def={"valid_intents": ["confirmed"]},
+        agent_executor=lambda prompt: "confirmed",
+        execution_guard=lambda: checks.append("guard"),
+    )
+
+    assert result.agent_invoked is True
+    assert len(checks) >= 4
+
+
 def test_execute_runs_prepare_input_and_after_execute_retry(tmp_path: Path) -> None:
     RetryHook._called = False
     phase = GenericPhase(

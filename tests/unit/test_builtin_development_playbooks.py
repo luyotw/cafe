@@ -98,17 +98,17 @@ def test_cafe_pr_routes_completed_artifacts_to_local_review() -> None:
         Path(__file__).parents[2] / "src" / "cafe" / "data" / "skills" / "cafe-pr" / "SKILL.md"
     ).read_text(encoding="utf-8")
 
-    assert "依本輪注入的 `{step_transitions}`" in skill
-    assert "宣告 `confirm_output` 時交給 `user` review" in skill
-    assert "只有宣告 `workflow_complete→done` 時才直接完成" in skill
-    assert "不得選擇未宣告的路由" in skill
+    assert "injected `{step_transitions}`" in skill
+    assert "Route `confirm_output` to `user`" in skill
+    assert "complete directly only when `workflow_complete→done` is declared" in skill
+    assert "select an undeclared route" in skill
     assert "workflow_feedback_file" in skill
     assert "current corrective cycle" in skill
     assert "`manual_handoff`" in skill
     assert "Follow-up Proposals" in skill
-    assert "不會自動建立 GitHub issue" in skill
+    assert "does not create a GitHub issue automatically" in skill
     assert "decision applies to every open FUP" in skill
-    assert "不支援逐項混合處置" in skill
+    assert "per-proposal mixed disposition is not supported" in skill
 
     policy = next(
         task
@@ -135,11 +135,11 @@ def test_cafe_review_convergence_contract_preserves_critical_blockers() -> None:
         encoding="utf-8"
     )
 
-    assert "第 1–3 輪是 discovery mode" in skill
-    assert "第 4 輪起是 convergence mode" in skill
+    assert "Rounds 1–3 are discovery mode" in skill
+    assert "From round 4" in skill
     assert "confidence bucket" in skill
     assert "`Impact: Critical`" in skill
-    assert "不得重開 correction loop" in skill
+    assert "remain blocking" in skill
     assert "unresolved existing blocker lineage" in convergence
     assert "regression causally introduced by the current correction" in convergence
     assert "newly evidenced `Impact: Critical`" in convergence

@@ -2716,10 +2716,20 @@ class BlackboardWorkflowRuntime:
         artifacts: Dict[str, str],
         metadata: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> None:
+        staged: list[ArtifactEntry] = []
         for key, value in artifacts.items():
             record = (metadata or {}).get(key)
             if not isinstance(record, dict) or record.get("kind") != "workspace":
-                self.blackboard_store.set_artifact(self.blackboard, key, value)
+                previous = self.blackboard.artifacts.get(key)
+                staged.append(
+                    ArtifactEntry(
+                        name=key,
+                        kind=previous.kind if previous else ArtifactKind.DOCUMENT,
+                        version=previous.version + 1 if previous else 1,
+                        updated_by=self.blackboard.current_step,
+                        path=value,
+                    )
+                )
                 continue
             previous = self.blackboard.artifacts.get(key)
             version = record.get("version")
@@ -2734,8 +2744,7 @@ class BlackboardWorkflowRuntime:
                 raise ValueError(f"workspace artifact {key!r} is unreadable") from exc
             if workspace.name != key or workspace.version != version:
                 raise ValueError(f"workspace artifact {key!r} metadata is contradictory")
-            self.blackboard_store.put_artifact(
-                self.blackboard,
+            staged.append(
                 ArtifactEntry(
                     name=key,
                     kind=ArtifactKind.WORKSPACE,
@@ -2747,6 +2756,13 @@ class BlackboardWorkflowRuntime:
                     head_sha=workspace.head_sha,
                 ),
             )
+        # Publish the summary and its optional workspace companion together.
+        # Consumers must never observe a blackboard containing only half of a
+        # declared output pair.
+        for entry in staged:
+            self.blackboard.artifacts[entry.name] = entry
+        if staged:
+            self.blackboard_store.save(self.blackboard)
 
     def _record_step_completion(
         self,
@@ -3303,18 +3319,27 @@ class BlackboardWorkflowRuntime:
             if isinstance(transition_intent, HandoffIntent)
             else transition_intent
         )
+        source_artifact: dict[str, Any] | None = None
+        output_artifact = self.steps.get(current_step, {}).get("output_artifact")
+        if isinstance(output_artifact, str):
+            entry = self.blackboard.artifacts.get(output_artifact)
+            if entry is not None:
+                source_artifact = entry.to_dict()
+        transition_data: dict[str, Any] = {
+            "transition_id": transition_id,
+            "from": current_step,
+            "to": next_step,
+            "status_code": status_code,
+            "source": source,
+            "runtime": runtime,
+            "transition_intent": raw_transition_intent,
+        }
+        if source_artifact is not None:
+            transition_data["source_artifact"] = source_artifact
         self.blackboard_store.record_event(
             self.blackboard,
             "transition",
-            {
-                "transition_id": transition_id,
-                "from": current_step,
-                "to": next_step,
-                "status_code": status_code,
-                "source": source,
-                "runtime": runtime,
-                "transition_intent": raw_transition_intent,
-            },
+            transition_data,
         )
         self._reset_step_attempts_after_successful_advance(
             current_step=current_step,

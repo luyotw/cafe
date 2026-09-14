@@ -59,7 +59,7 @@ steps:
     output_artifact: incident_plan
     behavior:
       feedback_routes:
-        detect: {artifact: incident_plan, source_kind: incident_plan, todo_source: plan, todo_id_prefix: IPLAN}
+        detect: {artifact: incident_plan, source_kind: incident_plan, todo_source: plan, todo_id_prefix: PLAN}
     human_tasks:
       - trigger: need_clarification
         task_id: clarification-feedback

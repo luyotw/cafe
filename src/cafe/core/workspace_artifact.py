@@ -10,7 +10,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from cafe.verification.receipt import check_verification_receipt
+from cafe.verification.receipt import (
+    VALID_SCOPES,
+    VerificationReceiptError,
+    check_verification_receipt,
+)
 
 WORKSPACE_SCHEMA_VERSION = 1
 _SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -111,6 +115,10 @@ def _receipt_path(value: Path, *, root: Path) -> Path:
         raise WorkspaceArtifactError(
             "workspace receipt input must be an in-repository output.md or verification.json"
         )
+    if receipt.is_symlink() or any(
+        parent.is_symlink() for parent in receipt.parents if parent != Path(".")
+    ):
+        raise WorkspaceArtifactError("workspace verification receipt must not use a symlink")
     try:
         receipt.resolve().relative_to(root)
     except ValueError as exc:
@@ -303,7 +311,18 @@ def build_workspace_artifact(
         scope = payload.get("scope") if isinstance(payload, dict) else None
         if not isinstance(scope, str) or not scope:
             raise WorkspaceArtifactError("workspace verification receipt scope is missing")
-        checked = check_verification_receipt(output_file=output, required_scope=scope, cwd=root)
+        if scope not in VALID_SCOPES:
+            raise WorkspaceArtifactError(
+                f"workspace verification receipt scope is invalid: {scope!r}"
+            )
+        try:
+            checked = check_verification_receipt(
+                output_file=output, required_scope=scope, cwd=root
+            )
+        except VerificationReceiptError as exc:
+            raise WorkspaceArtifactError(
+                "workspace verification receipt could not be validated"
+            ) from exc
         if not checked.valid or checked.receipt is None:
             raise WorkspaceArtifactError("workspace verification receipt is invalid or stale")
         recorded_head = checked.receipt.get("git", {}).get("head")

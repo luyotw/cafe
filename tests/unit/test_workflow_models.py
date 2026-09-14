@@ -554,6 +554,50 @@ def test_workspace_rebuild_preserves_durable_latest_step_order(tmp_path: Path) -
     assert rebuilt.artifacts["workspace"].updated_at == "2026-05-14T10:00:00+08:00"
 
 
+def test_workspace_rebuild_without_ordering_metadata_cannot_outrank_later_artifact(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / "issue-rebuild-legacy-order"
+    workspace_iteration = issue_dir / "develop" / "iteration_001"
+    workspace_iteration.mkdir(parents=True)
+    (workspace_iteration / "workspace.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "name": "workspace",
+                "version": 1,
+                "repository": str(tmp_path),
+                "base_sha": "a" * 40,
+                "head_sha": "b" * 40,
+                "changed_files": [],
+                "receipts": [],
+                "producer_step": "develop",
+            }
+        ),
+        encoding="utf-8",
+    )
+    review_iteration = issue_dir / "review" / "iteration_001"
+    review_iteration.mkdir(parents=True)
+    (review_iteration / "artifact.json").write_text(
+        json.dumps(
+            {
+                "name": "review_feedback",
+                "kind": "document",
+                "version": 1,
+                "updated_by": "review",
+                "updated_at": "2026-05-14T11:00:00+08:00",
+                "path": "review/iteration_001/output.md",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rebuilt = BlackboardStore(issue_dir).rebuild_from_iterations(initial_step="develop")
+
+    assert rebuilt.current_step == "review"
+    assert rebuilt.artifacts["workspace"].updated_at == ""
+
+
 class TestLegacyBatonFormatsAreRejected:
     """Issue #386: legacy baton text shapes must fail clearly, never route.
 

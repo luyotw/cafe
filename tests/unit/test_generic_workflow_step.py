@@ -6370,6 +6370,82 @@ def test_declared_feedback_route_falls_back_to_latest_complete_iteration(tmp_pat
     assert projection.version == 1
 
 
+def test_declared_feedback_route_stays_bound_to_handed_off_artifact_version(
+    tmp_path: Path,
+) -> None:
+    phase_dir = tmp_path / "issue" / "producer"
+    old_dir = phase_dir / "iteration_001"
+    current_dir = phase_dir / "iteration_002"
+    old_dir.mkdir(parents=True)
+    current_dir.mkdir(parents=True)
+    old_output = old_dir / "output.md"
+    old_output.write_text(
+        "## Todo List\n"
+        "- [ ] `REV-001` — Source: `editorial_review` — Work: handed off — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+    old_record = ArtifactEntry(
+        name="review_doc", kind=ArtifactKind.DOCUMENT, version=1, updated_by="producer",
+        path=str(old_output), content_sha256=hashlib.sha256(old_output.read_bytes()).hexdigest(),
+    )
+    (old_dir / "artifact.json").write_text(json.dumps(old_record.to_dict()), encoding="utf-8")
+    current_output = current_dir / "output.md"
+    current_output.write_text(
+        "## Todo List\n"
+        "- [ ] `REV-002` — Source: `editorial_review` — Work: later — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+    current_record = ArtifactEntry(
+        name="review_doc", kind=ArtifactKind.DOCUMENT, version=2, updated_by="producer",
+        path=str(current_output), content_sha256=hashlib.sha256(current_output.read_bytes()).hexdigest(),
+    )
+    (current_dir / "artifact.json").write_text(
+        json.dumps(current_record.to_dict()), encoding="utf-8"
+    )
+    state = BlackboardStore(tmp_path / "issue").load_or_create("receiver")
+    state.events.append(
+        EventEntry(
+            timestamp="2026-01-01T00:00:00Z",
+            step="producer",
+            event_type="transition",
+            message="",
+            data={
+                "from": "producer",
+                "to": "receiver",
+                "source_artifact": old_record.to_dict(),
+            },
+        )
+    )
+    playbook = {
+        "steps": {
+            "producer": {
+                "output_artifact": "review_doc",
+                "behavior": {
+                    "feedback_routes": {
+                        "receiver": {
+                            "artifact": "review_doc",
+                            "source_kind": "editorial_review",
+                            "todo_source": "editorial_review",
+                            "todo_id_prefix": "REV",
+                        }
+                    }
+                },
+            },
+            "receiver": {},
+        }
+    }
+    resolved = GenericWorkflowStepExecutor._add_causal_todo_artifact(
+        {"review_doc": current_record}, state, playbook=playbook
+    )
+
+    projection = resolved["causal_todo"]
+    assert projection.path == old_output
+    assert projection.version == 1
+    assert [item.item_id for item in projection.items] == ["REV-001"]
+
+
 def test_workspace_companion_uses_custom_names_and_runtime_storage(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -6492,6 +6568,39 @@ def test_plan_publication_rejects_reuse_of_an_existing_id_for_unrelated_work(
             output_path=str(new_output),
             updated_by="plan",
         )
+
+
+def test_plan_publication_allows_related_same_id_revision(tmp_path: Path) -> None:
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_dir = tmp_path / "issue" / "plan"
+    executor.iteration = 2
+    old_output = tmp_path / "issue" / "plan" / "iteration_001" / "output.md"
+    old_output.parent.mkdir(parents=True)
+    old_output.write_text(
+        "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: improve parser — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+    state = BlackboardStore(tmp_path / "issue").load_or_create("plan")
+    state.artifacts["plan"] = ArtifactEntry(
+        name="plan", kind=ArtifactKind.DOCUMENT, version=1, updated_by="plan",
+        path=str(old_output),
+    )
+    new_output = tmp_path / "issue" / "plan" / "iteration_002" / "output.md"
+    new_output.parent.mkdir(parents=True)
+    new_output.write_text(
+        "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: improve parser with stricter errors — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+
+    record = executor._write_artifact_record(
+        blackboard_state=state,
+        output_key="plan",
+        output_path=str(new_output),
+        updated_by="plan",
+    )
+    assert record.todo_work_identities
 
 
 def test_workspace_consumer_rejects_workspace_from_another_repository(tmp_path: Path) -> None:
