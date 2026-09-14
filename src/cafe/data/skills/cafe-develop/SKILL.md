@@ -1,7 +1,7 @@
 ---
 name: cafe-develop
 description: "依計畫進行程式開發與測試"
-version: 1.11.0
+version: 1.10.0
 workflow:
   execution_profile:
     workload: implementation
@@ -29,14 +29,14 @@ workflow:
       prompt: Provide the permission decision or access details needed to continue development.
       input_schema: feedback
   prompt_inputs:
-    - artifacts: [spec, requirements]
+    - artifacts: [spec]
       placeholder: spec_file
       required: false
       load_policy:
         - when: {feedback: true}
           mode: packet
           contract_kind: spec
-    - artifacts: [spec, requirements]
+    - artifacts: [spec]
       placeholder: spec_file_path
       required: false
       load_policy:
@@ -93,7 +93,7 @@ workflow:
 Read your agent file: {agent_file}
 
 ## Context
-- Use the workflow inputs listed in the runtime context. When a requirements source or plan is supplied, treat it as authoritative for this run.
+- Use the workflow inputs listed in the runtime context. When a specification or plan is supplied, treat it as authoritative for this run.
 
 ## Instructions
 - `## Todo Progress` 的 completed item 必須使用可驗證 evidence contract：每項最多 32 個 `Files` 與 8 個 `Commit`；`Files` 列出 backtick 包住的 repo-relative tracked paths，且至少一個 test path 必須由同一項的 targeted command 執行；`Commit` 列出涵蓋這些檔案且可解析的完整 backtick SHA；`Targeted evidence` 使用 ``command=`...`; exit=0; head=`<完整 HEAD SHA>` ``，並須完全匹配本 iteration 的有效 `targeted` verification receipt，不得自行宣稱執行結果。確實沒有 repository change 時，`Files` 寫 `N/A (no repository changes)`、`Commit` 寫 `N/A (no repository changes): <reason>`，且只在 tracked worktree clean 時有效。不得使用自由文字或杜撰的檔案、commit、測試結果。

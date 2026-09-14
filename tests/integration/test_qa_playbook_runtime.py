@@ -58,35 +58,6 @@ def test_qa_happy_path_reaches_pr(tmp_path: Path, name: str) -> None:
     assert calls == ["review", "qa", "pr"]
 
 
-def test_direct_qa_full_path_preserves_requirements_for_review_and_qa(tmp_path: Path) -> None:
-    issue_dir = tmp_path / "direct-qa-full-path"
-    requirements = issue_dir / "initial_input" / "requirements.md"
-    requirements.parent.mkdir(parents=True)
-    requirements.write_text("Keep the requested behavior intact.\n", encoding="utf-8")
-    store = BlackboardStore(issue_dir)
-    state = store.load_or_create("develop", playbook_id="direct-qa")
-    store.set_artifact(state, "requirements", str(requirements))
-    calls: list[str] = []
-
-    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
-        calls.append(step_name)
-        if step_name in {"develop", "review", "qa", "pr"}:
-            assert "requirements" in step_def["input_artifacts"]
-            assert getattr(state, "artifacts")["requirements"].path == str(requirements)
-        if step_name == "pr":
-            _finish_pr(issue_dir)
-        return StepExecutionResult(response="confirmed", artifacts={}, status_code="confirmed")
-
-    result = BlackboardWorkflowRuntime(
-        issue_dir=issue_dir,
-        playbook=_runtime_playbook("direct-qa"),
-        executor=executor,
-    ).run(start_step="develop")
-
-    assert result.completed is True
-    assert calls == ["develop", "review", "qa", "pr"]
-
-
 @pytest.mark.parametrize("origin", ["review", "qa", "pr"])
 def test_every_correction_repeats_develop_review_and_qa(
     tmp_path: Path, origin: str

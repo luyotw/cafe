@@ -743,7 +743,7 @@ def test_prepare_builtin_pr_skill_omits_unavailable_contexts(tmp_path: Path) -> 
     installed = (project_root / ".codex" / "skills" / "cafe-pr" / "SKILL.md").read_text(
         encoding="utf-8"
     )
-    assert "Requirements Source:" not in installed
+    assert "Requirements Specification:" not in installed
     assert "Implementation Plan:" not in installed
     assert "{spec_file}" not in installed
     assert "{plan_file}" not in installed
@@ -786,7 +786,7 @@ def test_prepare_builtin_qa_skill_omits_unavailable_optional_contexts(
         skill_name="cafe-qa",
         agent_cli=AgentCLI.CODEX,
         context={
-            "requirements_file": "spec.md",
+            "spec_file": "spec.md",
             "develop_file": "code.md",
             "plan_file": "plan.md",
             "review_file": "review.md",
@@ -794,7 +794,7 @@ def test_prepare_builtin_qa_skill_omits_unavailable_optional_contexts(
     )
 
     installed = installed_path.read_text(encoding="utf-8")
-    assert "Requirements Source: spec.md" in installed
+    assert "Requirements Specification: spec.md" in installed
     assert "Implementation Plan: plan.md" in installed
     assert "Review Result: review.md" in installed
 

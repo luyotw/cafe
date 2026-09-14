@@ -820,7 +820,7 @@ def test_short_builtin_playbook_checklists_compose_with_declared_artifact_scope(
     assert "{spec_file}" not in content
     assert "{plan_file}" not in content
     if "spec" not in scope:
-        assert "Read the requirements source" not in content
+        assert "Read the requirements specification" not in content
     if "plan" not in scope:
         assert "Read the implementation plan" not in content
     if "review_feedback" in available_artifacts:

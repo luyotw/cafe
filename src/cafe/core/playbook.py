@@ -279,12 +279,9 @@ class InitialInputBinding(BaseModel):
     @field_validator("artifact")
     @classmethod
     def _validate_artifact(cls, value: Optional[str]) -> Optional[str]:
-        if value is None:
-            return None
-        token = value.strip()
-        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", token):
-            raise ValueError("initial_input.bind.artifact must be a safe identifier")
-        return token
+        if value is not None and not value.strip():
+            raise ValueError("initial_input.bind.artifact must not be empty")
+        return value
 
     @model_validator(mode="after")
     def _require_a_target(self) -> "InitialInputBinding":
@@ -1381,6 +1378,12 @@ def _validate_initial_input_declarations(model: PlaybookDefinition, *, source: s
             raise ValueError(
                 f"{field_path}.providers declares {missing[0]!r}, which has no trusted "
                 "host implementation"
+            )
+        artifact = declaration.bind.artifact
+        if artifact is not None and artifact != step.output_artifact:
+            raise ValueError(
+                f"{field_path}.bind.artifact {artifact!r} must match output_artifact "
+                f"{step.output_artifact!r}"
             )
         if "InitialInputProviderResolver" not in step.hooks.prepare_input:
             raise ValueError(

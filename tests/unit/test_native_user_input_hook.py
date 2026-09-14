@@ -9,7 +9,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from cafe.core.blackboard import BlackboardStore
 from cafe.core.capabilities import pr_synced_event_from_receipt
 from cafe.core.git import GitOperations
 from cafe.core.hooks.native import (
@@ -711,52 +710,6 @@ def test_initial_input_provider_delivers_prefilled_manual_text_to_custom_entry_s
     assert result.events == [
         {"type": "initial_input_resolved", "step": "intake", "provider": "manual_text"}
     ]
-
-
-def test_initial_input_provider_persists_distinct_source_artifact_once(
-    tmp_path: Path,
-) -> None:
-    phase = _FakePhase(phase_dir=tmp_path / "issue" / "develop", iteration=1)
-    output_file = phase._get_iteration_dir(1) / "output.md"
-    state = BlackboardStore(phase.issue_dir).load_or_create("develop")
-    step_def = {
-        "output_artifact": "code",
-        "initial_input": {
-            "providers": ["manual_text"],
-            "bind": {"artifact": "requirements", "prompt_context": "user_input"},
-        },
-    }
-
-    first = InitialInputProviderResolver().run(
-        stage="prepare_input",
-        phase=phase,
-        step_name="develop",
-        step_def=step_def,
-        output_file=output_file,
-        blackboard_state=state,
-        context={"user_input": "Preserve the original acceptance boundary."},
-    )
-    second = InitialInputProviderResolver().run(
-        stage="prepare_input",
-        phase=phase,
-        step_name="develop",
-        step_def=step_def,
-        output_file=output_file,
-        blackboard_state=state,
-        context={"user_input": "Do not overwrite the source."},
-    )
-
-    source = phase.issue_dir / "initial_input" / "requirements.md"
-    assert source.read_text(encoding="utf-8") == "Preserve the original acceptance boundary.\n"
-    assert state.artifacts["requirements"].path == str(source)
-    assert state.artifacts["requirements"].version == 1
-    assert first.context_updates == {
-        "user_input": "Preserve the original acceptance boundary."
-    }
-    assert second.context_updates == {
-        "user_input": "Preserve the original acceptance boundary."
-    }
-    assert not output_file.exists()
 
 
 def test_initial_input_provider_skips_resume_and_existing_artifact(tmp_path: Path) -> None:

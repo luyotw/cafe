@@ -1052,6 +1052,14 @@ steps:
         (
             """
     initial_input:
+      providers: [manual_text]
+      bind: {artifact: unrelated}
+""",
+            "bind.artifact",
+        ),
+        (
+            """
+    initial_input:
       providers: [manual_text, manual_text]
       bind: {artifact: intake_brief}
 """,
@@ -1134,41 +1142,6 @@ commands:
 
     with pytest.raises(ValueError, match="initial_input.bind.artifact"):
         loader.load_model("empty-artifact")
-
-
-def test_initial_input_rejects_unsafe_artifact_binding_before_execution(tmp_path: Path) -> None:
-    builtin_root = tmp_path / "builtin"
-    _write_skill(builtin_root / "skills", "intake")
-    _write_playbook(
-        builtin_root / "playbooks",
-        "unsafe-artifact",
-        """
-playbook: {id: unsafe-artifact}
-entry_point: intake
-steps:
-  intake:
-    role: pm
-    skill: intake
-    output_artifact: intake_brief
-    initial_input:
-      providers: [manual_text]
-      bind: {artifact: ../requirements}
-    hooks:
-      prepare_input: [InitialInputProviderResolver]
-    on: {await_agent: _done}
-commands:
-  prepare:
-    prompt_for_spec_plan_config: false
-""",
-    )
-    loader = PlaybookLoader(
-        project_root=tmp_path / "project",
-        global_root=tmp_path / "global",
-        builtin_root=builtin_root,
-    )
-
-    with pytest.raises(ValueError, match="initial_input.bind.artifact"):
-        loader.load_model("unsafe-artifact")
 
 
 def test_initial_input_rejects_non_entry_or_unimplemented_provider(
@@ -1304,7 +1277,7 @@ def test_builtin_entry_steps_use_declared_initial_input_resolver(
 
 @pytest.mark.parametrize(
     ("playbook_name", "bound_artifact"),
-    [("direct", None), ("direct-qa", "requirements")],
+    [("direct", None), ("direct-qa", None)],
 )
 def test_builtin_direct_entry_steps_bind_initial_input_to_prompt_context(
     playbook_name: str, bound_artifact: str | None, tmp_path: Path

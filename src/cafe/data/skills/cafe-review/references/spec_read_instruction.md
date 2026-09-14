@@ -1,1 +1,1 @@
-[ ] Read the requirements source {spec_file}
+[ ] Read the requirements specification {spec_file}

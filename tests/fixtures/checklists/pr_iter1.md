@@ -1,7 +1,7 @@
 ## Checklist
 
 [ ] Read src/cafe/data/agents/developer/Nick.md to understand your role and native language
-[ ] Read the requirements source .cafe/issues/test/spec/iteration_001/output.md
+[ ] Read the requirements specification .cafe/issues/test/spec/iteration_001/output.md
 [ ] Read the implementation plan .cafe/issues/test/plan/iteration_001/output.md
 [ ] Review all commits in the current branch
 [ ] Edit .cafe/issues/test/pr/iteration_001/output.md to fill in PR title and description (NOT in your response)

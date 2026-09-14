@@ -414,15 +414,10 @@ steps:
 
 `initial_input` is permitted only on `entry_point`. Providers must be unique and
 implemented by CAFE's trusted host registry; this release supplies only
-`manual_text` and `github_issue`. `bind` may name a safe artifact identifier,
-`user_input` prompt context, or both. When the artifact equals the step's
-`output_artifact`, the resolver seeds that output for legacy intake behavior.
-Otherwise it writes the immutable source under
-`.cafe/issues/<issue>/initial_input/<artifact>.md`, registers it before agent
-execution, and never overwrites an existing non-empty source. Downstream steps
-must declare that artifact in `input_artifacts`. Validation fails before agent
-execution for unsupported providers, non-entry declarations, missing bindings,
-or unsafe destinations.
+`manual_text` and `github_issue`. `bind` must name an artifact equal to this
+step's `output_artifact`, `user_input` prompt context, or both. Validation fails
+before agent execution for unsupported providers, non-entry declarations, missing
+bindings, or invalid destinations.
 
 Prepare persists a canonical `initial_input` block in `issue.yaml` using the
 stable field IDs `input_method` and `github_issue_id`; those fields may write to
