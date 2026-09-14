@@ -8,7 +8,7 @@ import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from cafe.verification.receipt import check_verification_receipt
 
@@ -145,7 +145,11 @@ class WorkspaceArtifact:
         head_sha = raw.get("head_sha")
         if not isinstance(name, str) or not name.strip():
             raise WorkspaceArtifactError("workspace name is missing")
-        if isinstance(record_version, bool) or not isinstance(record_version, int) or record_version < 1:
+        if (
+            isinstance(record_version, bool)
+            or not isinstance(record_version, int)
+            or record_version < 1
+        ):
             raise WorkspaceArtifactError("workspace version must be a positive integer")
         if not isinstance(repository, str) or not repository.strip():
             raise WorkspaceArtifactError("workspace repository is missing")
@@ -184,7 +188,9 @@ def _normalize_changed_files(value: Any) -> tuple[dict[str, str], ...]:
                 raise WorkspaceArtifactError("workspace rename entry is incomplete")
             record["old_path"] = old_path
         normalized.append(record)
-    canonical = tuple(sorted(normalized, key=lambda entry: (entry["path"], entry.get("old_path", ""))))
+    canonical = tuple(
+        sorted(normalized, key=lambda entry: (entry["path"], entry.get("old_path", "")))
+    )
     if len({json.dumps(item, sort_keys=True) for item in canonical}) != len(canonical):
         raise WorkspaceArtifactError("workspace changed-file entries must be unique")
     return canonical
@@ -337,4 +343,3 @@ def verify_workspace_artifact(
         return WorkspaceVerification(not reasons, tuple(reasons))
     except WorkspaceArtifactError as exc:
         return WorkspaceVerification(False, (str(exc),))
-
