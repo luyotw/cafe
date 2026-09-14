@@ -4491,12 +4491,13 @@ def test_runtime_records_excluded_feedback_without_widening_the_curated_handoff(
     delivered = [
         event for event in state.events if event.event_type == "workflow_feedback_delivered"
     ]
-    assert delivered[-1].data == {
+    assert {key: value for key, value in delivered[-1].data.items() if key != "delivery_id"} == {
         "step": "curator",
         "source_identities": [identities[0]],
         "excluded_source_identities": [identities[1]],
         "deferred_source_identities": [],
     }
+    assert delivered[-1].data["delivery_id"]
 
 
 @pytest.mark.parametrize(
@@ -4864,6 +4865,214 @@ def test_runtime_settles_the_exact_agent_selected_bounded_batch(
     assert second.final_step == "consumer"
     assert calls == ["curator", "consumer", "curator", "consumer"]
     assert ledger.pending(target_step="curator") == []
+
+
+def _recovery_fault_curation_runtime(
+    *,
+    issue_dir: Path,
+    calls: list[str],
+) -> BlackboardWorkflowRuntime:
+    """Build one production runtime whose curator writes durable handoff evidence."""
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+
+    output = issue_dir / "curator" / "iteration_001" / "output.md"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.parent.joinpath("checklist.md").write_text("[x] complete\n", encoding="utf-8")
+    output.parent.joinpath("iteration.json").write_text(
+        json.dumps({"iteration": 1, "step_name": "curator"}), encoding="utf-8"
+    )
+
+    def executor(step_name: str, _step: dict, _state: object) -> StepExecutionResult:
+        calls.append(step_name)
+        if step_name == "consumer":
+            _write_baton(
+                issue_dir,
+                from_step="consumer",
+                to_owner="done",
+                to_step="done",
+                intent="workflow_complete",
+            )
+            return StepExecutionResult(response="consumed", artifacts={})
+        assert step_name == "curator"
+        pending = WorkflowFeedbackLedger(issue_dir).pending(target_step="curator")
+        _curated_feedback_output(output, [entry.source_identity for entry in pending])
+        _write_baton(
+            issue_dir,
+            from_step="curator",
+            to_owner="agent",
+            to_step="consumer",
+            intent="manual_handoff",
+        )
+        return StepExecutionResult(
+            response="curated",
+            artifacts={"curated_result": str(output)},
+            agent_invoked=True,
+            feedback_source_identities=tuple(entry.source_identity for entry in pending),
+        )
+
+    return BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_feedback_curation_playbook(),
+        executor=executor,
+    )
+
+
+def test_recovery_settles_the_persisted_batch_before_running_its_consumer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pre-settlement crash resumes the same delivery before consumer use."""
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "recover-before-feedback-settlement"
+    ledger = WorkflowFeedbackLedger(issue_dir)
+    _created, feedback = ledger.record(
+        source_identity="external:recovery:before",
+        source_kind="external_note",
+        target_step="curator",
+        content="Preserve this reviewed source across the fault.",
+    )
+    calls: list[str] = []
+    interrupted = _recovery_fault_curation_runtime(
+        issue_dir=issue_dir, calls=calls
+    )
+
+    def crash_before_settlement(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("simulated pre-settlement crash")
+
+    monkeypatch.setattr(interrupted, "_commit_delivered_feedback", crash_before_settlement)
+    with pytest.raises(RuntimeError, match="pre-settlement"):
+        interrupted.run(start_step="curator", max_transitions=2)
+
+    assert calls == ["curator"]
+    assert ledger.pending(target_step="curator") == [feedback]
+
+    resumed = _recovery_fault_curation_runtime(issue_dir=issue_dir, calls=calls)
+    result = resumed.run(max_transitions=2)
+
+    assert result.completed is True
+    assert calls == ["curator", "consumer"]
+    assert ledger.pending(target_step="curator") == []
+    state = BlackboardStore(issue_dir).load_or_create("curator")
+    prepared = [
+        event for event in state.events if event.event_type == "workflow_feedback_delivery_prepared"
+    ]
+    delivered = [
+        event for event in state.events if event.event_type == "workflow_feedback_delivered"
+    ]
+    assert len(prepared) == 1
+    assert prepared[0].data["source_identities"] == [feedback.source_identity]
+    assert prepared[0].data["artifact"]["version"] == state.artifacts["curated_result"].version
+    assert prepared[0].data["target"] == {
+        "to_owner": "agent",
+        "to_step": "consumer",
+        "intent": "manual_handoff",
+    }
+    assert len(delivered) == 1
+    assert delivered[0].data["delivery_id"] == prepared[0].data["delivery_id"]
+    assert any(event.event_type == "workflow_feedback_delivery_reconciled" for event in state.events)
+
+
+def test_recovery_reconciles_an_already_settled_batch_without_duplicate_consumer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A post-settlement crash records the same delivery once on restart."""
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "recover-after-feedback-settlement"
+    ledger = WorkflowFeedbackLedger(issue_dir)
+    _created, feedback = ledger.record(
+        source_identity="external:recovery:after",
+        source_kind="external_note",
+        target_step="curator",
+        content="Do not duplicate this settled source after restart.",
+    )
+    calls: list[str] = []
+    interrupted = _recovery_fault_curation_runtime(
+        issue_dir=issue_dir, calls=calls
+    )
+    settle_reviewed = WorkflowFeedbackLedger.settle_reviewed
+
+    def crash_after_settlement(
+        self: WorkflowFeedbackLedger, *args: object, **kwargs: object
+    ) -> object:
+        settled = settle_reviewed(self, *args, **kwargs)
+        raise RuntimeError("simulated post-settlement crash")
+
+    monkeypatch.setattr(WorkflowFeedbackLedger, "settle_reviewed", crash_after_settlement)
+    with pytest.raises(RuntimeError, match="post-settlement"):
+        interrupted.run(start_step="curator", max_transitions=2)
+    monkeypatch.setattr(WorkflowFeedbackLedger, "settle_reviewed", settle_reviewed)
+
+    assert calls == ["curator"]
+    assert ledger.pending(target_step="curator") == []
+
+    resumed = _recovery_fault_curation_runtime(issue_dir=issue_dir, calls=calls)
+    result = resumed.run(max_transitions=2)
+
+    assert result.completed is True
+    assert calls == ["curator", "consumer"]
+    state = BlackboardStore(issue_dir).load_or_create("curator")
+    prepared = [
+        event for event in state.events if event.event_type == "workflow_feedback_delivery_prepared"
+    ]
+    delivered = [
+        event for event in state.events if event.event_type == "workflow_feedback_delivered"
+    ]
+    assert len(prepared) == 1
+    assert len(delivered) == 1
+    assert delivered[0].data["delivery_id"] == prepared[0].data["delivery_id"]
+    assert delivered[0].data["source_identities"] == [feedback.source_identity]
+
+
+def test_recovery_rejects_stale_artifact_evidence_before_consumer_use(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A changed artifact version cannot authorize a recorded feedback delivery."""
+    from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "recover-stale-feedback-evidence"
+    ledger = WorkflowFeedbackLedger(issue_dir)
+    _created, feedback = ledger.record(
+        source_identity="external:recovery:stale",
+        source_kind="external_note",
+        target_step="curator",
+        content="Reject stale recovery evidence.",
+    )
+    calls: list[str] = []
+    interrupted = _recovery_fault_curation_runtime(issue_dir=issue_dir, calls=calls)
+
+    def crash_before_settlement(*_args: object, **_kwargs: object) -> None:
+        interrupted.blackboard_store.record_event(
+            interrupted.blackboard,
+            "step_interrupted",
+            {"step": "curator", "reason": "recovery_fault"},
+        )
+        raise RuntimeError("simulated stale-evidence crash")
+
+    monkeypatch.setattr(interrupted, "_commit_delivered_feedback", crash_before_settlement)
+    with pytest.raises(RuntimeError, match="stale-evidence"):
+        interrupted.run(start_step="curator", max_transitions=2)
+
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("curator")
+    store.set_artifact(state, "curated_result", state.artifacts["curated_result"].path)
+    resumed = _recovery_fault_curation_runtime(issue_dir=issue_dir, calls=calls)
+
+    assert (
+        resumed._try_reconcile_interrupted_step(
+            current_step="curator", runtime="test", reason="recovery_fault"
+        )
+        is None
+    )
+    assert ledger.pending(target_step="curator") == [feedback]
+    recovered = BlackboardStore(issue_dir).load_or_create("curator")
+    assert recovered.handoff_contract is not None
+    assert recovered.handoff_contract.to_step == "curator"
+    failures = [
+        event for event in recovered.events if event.event_type == "step_reconciliation_failed"
+    ]
+    assert "feedback_delivery_artifact" in failures[-1].data["missing_evidence"]
+    assert calls == ["curator"]
 
 
 def test_runtime_rejects_plain_text_baton_written_by_pr_agent(tmp_path: Path) -> None:

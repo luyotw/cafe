@@ -392,6 +392,57 @@ class WorkflowFeedbackLedger:
             [actionable[identity] for identity in excluded_order],
         )
 
+    def settle_or_reconcile_reviewed(
+        self,
+        delivered_identities: Iterable[str],
+        excluded_identities: Iterable[str],
+    ) -> tuple[list[WorkflowFeedbackEntry], list[WorkflowFeedbackEntry]]:
+        """Settle one batch or prove an interrupted identical settlement completed.
+
+        A successful settlement may reach durable storage before the runtime can
+        append its corresponding audit event.  Recovery may therefore replay
+        the exact decision, but never a partial, differently classified, or
+        unknown lifecycle state.
+        """
+        delivered_order = tuple(
+            dict.fromkeys(
+                _required(identity, field="source_identity")
+                for identity in delivered_identities
+            )
+        )
+        excluded_order = tuple(
+            dict.fromkeys(
+                _required(identity, field="source_identity")
+                for identity in excluded_identities
+            )
+        )
+        delivered = set(delivered_order)
+        excluded = set(excluded_order)
+        if delivered & excluded:
+            raise WorkflowFeedbackError("reviewed feedback dispositions overlap")
+        settled = delivered | excluded
+        if not settled:
+            return [], []
+        entries = {
+            entry.source_identity: entry
+            for entry in self.load()
+            if entry.source_identity in settled
+        }
+        if set(entries) != settled:
+            return [], []
+        if all(entry.actionable for entry in entries.values()):
+            return self.settle_reviewed(delivered_order, excluded_order)
+        if any(entry.actionable or not entry.consumed for entry in entries.values()):
+            return [], []
+        if any(
+            entries[identity].disposition != "delivered" for identity in delivered_order
+        ) or any(entries[identity].disposition != "excluded" for identity in excluded_order):
+            return [], []
+        return (
+            [entries[identity] for identity in delivered_order],
+            [entries[identity] for identity in excluded_order],
+        )
+
     def consume_pending_for_target(self, target_step: str) -> list[WorkflowFeedbackEntry]:
         """Complete an explicitly requested delivery for every pending target item."""
         target = _required(target_step, field="target_step")
