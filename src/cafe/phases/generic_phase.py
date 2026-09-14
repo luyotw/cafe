@@ -377,8 +377,20 @@ class GenericPhase:
         hook_kwargs = dict(hook_context or {})
         hook_kwargs["shared_skill_invocations"] = list(shared_skill_invocations or [])
 
-        if execution_guard is not None:
-            execution_guard()
+        def guard_stable_boundary() -> None:
+            """Require two consecutive checks before a side-effecting boundary.
+
+            Workspace verification is a check-to-use contract.  The second
+            immediate check closes the small interval in which a guard itself
+            observes or causes a replacement before a hook or agent begins.
+            Hooks are checked again after they return so a replacement during a
+            hook cannot flow into the next boundary.
+            """
+            if execution_guard is not None:
+                execution_guard()
+                execution_guard()
+
+        guard_stable_boundary()
         before = self._run_hook_stage(
             "before_execute",
             step_def=step_def,
@@ -389,6 +401,7 @@ class GenericPhase:
         runtime_context.update(before.context_updates)
         events.extend(before.events)
         artifact_ready = artifact_ready and before.artifact_ready
+        guard_stable_boundary()
         if not before.continue_pipeline:
             return GenericPhaseExecution(
                 response="",
@@ -400,8 +413,7 @@ class GenericPhase:
                 published=False,
             )
 
-        if execution_guard is not None:
-            execution_guard()
+        guard_stable_boundary()
         prepared = self._run_hook_stage(
             "prepare_input",
             step_def=step_def,
@@ -412,6 +424,7 @@ class GenericPhase:
         runtime_context.update(prepared.context_updates)
         events.extend(prepared.events)
         artifact_ready = artifact_ready and prepared.artifact_ready
+        guard_stable_boundary()
         if not prepared.continue_pipeline:
             return GenericPhaseExecution(
                 response="",
@@ -424,11 +437,15 @@ class GenericPhase:
             )
 
         if prepare_agent_context is not None:
+            guard_stable_boundary()
             runtime_context = prepare_agent_context(runtime_context)
+            guard_stable_boundary()
 
         transform_runtime_context = hook_kwargs.get("transform_runtime_context")
         if callable(transform_runtime_context):
+            guard_stable_boundary()
             runtime_context = transform_runtime_context(runtime_context)
+            guard_stable_boundary()
 
         response = ""
         status_code: Optional[PhaseStatusCode] = None
@@ -436,8 +453,7 @@ class GenericPhase:
         agent_invoked = False
         attempt = 0
         while True:
-            if execution_guard is not None:
-                execution_guard()
+            guard_stable_boundary()
             prompt = self.build_prompt(
                 skill_name=skill_name,
                 skill_invocation=skill_invocation,
@@ -453,8 +469,7 @@ class GenericPhase:
             response = agent_executor(prompt)
             agent_invoked = True
 
-            if execution_guard is not None:
-                execution_guard()
+            guard_stable_boundary()
             after = self._run_hook_stage(
                 "after_execute",
                 step_def=step_def,
@@ -468,6 +483,7 @@ class GenericPhase:
             runtime_context.update(after.context_updates)
             events.extend(after.events)
             artifact_ready = artifact_ready and after.artifact_ready
+            guard_stable_boundary()
             if after.override_status_code is not None:
                 status_code = after.override_status_code
             if not after.continue_pipeline:
@@ -490,8 +506,7 @@ class GenericPhase:
 
         published = False
         if artifact_ready:
-            if execution_guard is not None:
-                execution_guard()
+            guard_stable_boundary()
             publish = self._run_hook_stage(
                 "publish_output",
                 step_def=step_def,
@@ -505,6 +520,7 @@ class GenericPhase:
             runtime_context.update(publish.context_updates)
             events.extend(publish.events)
             published = publish.continue_pipeline
+            guard_stable_boundary()
             if publish.override_status_code is not None:
                 status_code = publish.override_status_code
 

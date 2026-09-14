@@ -117,10 +117,17 @@ def _plan_work_identity(item: Any) -> str:
 
 
 def _plan_work_tokens(item: Any) -> set[str]:
+    generic_tokens = {
+        "a", "an", "and", "build", "change", "complete", "create", "define",
+        "deliver", "ensure", "for", "from", "implement", "in", "make", "of",
+        "on", "preserve", "provide", "run", "supply", "test", "tests", "the",
+        "to", "update", "use", "with", "work", "write",
+    }
     return {
         token.lower()
         for token in " ".join(str(item.work).split()).split()
         if token.strip(".,:;()[]{}")
+        and token.lower().strip(".,:;()[]{}") not in generic_tokens
     }
 
 
@@ -690,6 +697,11 @@ class GenericWorkflowStepExecutor(Phase):
                 output_path=output_path,
                 updated_by=step_name,
             )
+            # Carry the complete producer record into the runtime publication
+            # boundary.  The transition emitted after publication must bind
+            # the same content digest and Todo identities that were written to
+            # the iteration artifact record.
+            artifact_metadata[output_key] = summary_record.to_dict()
             workspace = self._publish_workspace_artifact(
                 step_name=step_name,
                 step_def=step_def,
@@ -2115,7 +2127,11 @@ class GenericWorkflowStepExecutor(Phase):
                 and authorized_artifact.get("content_sha256")
                 else None
             )
-            if authorized_artifact is not None and (
+            if authorized_artifact is None:
+                raise ValueError(
+                    "Persisted correction handoff is missing its bound source artifact"
+                )
+            if (
                 authorized_name != route_artifact
                 or not isinstance(authorized_version, int)
                 or not authorized_path
@@ -2633,6 +2649,19 @@ class GenericWorkflowStepExecutor(Phase):
                         if prior_id is not None and prior_id != item.item_id:
                             raise ValueError(
                                 f"plan Todo identity {prior_id!r} was moved to {item.item_id!r}; retain the existing ID"
+                            )
+                        related_prior_items = [
+                            prior_item
+                            for prior_item in previous_by_id.values()
+                            if _is_related_plan_revision(prior_item, item)
+                        ]
+                        if (
+                            item.item_id not in previous_by_id
+                            and len(related_prior_items) == 1
+                            and related_prior_items[0].item_id != item.item_id
+                        ):
+                            raise ValueError(
+                                f"plan Todo identity {related_prior_items[0].item_id!r} was moved to {item.item_id!r}; retain the existing ID"
                             )
                         prior_item = previous_by_id.get(item.item_id)
                         if (

@@ -77,6 +77,88 @@ Supporting-skill selection is authoring-time work. Runtime does not search the
 network, download mutable latest content, or guess substitutes. External issue
 creation, comments, or closing require explicit user authorization.
 
+### Workflow metadata contract
+
+Phase skills may declare provider-neutral workflow metadata in frontmatter.
+Runtime-owned files, blackboard state, routing, and external side effects stay
+outside this block. A declaration describes what the skill needs to execute;
+it does not select a provider or model.
+
+```yaml
+workflow:
+  execution_profile:
+    workload: research
+    reasoning: high
+    risk_domains: [source-quality, conflicting-evidence]
+    fallback_strength: equivalent_or_stronger
+  required_tools:
+    - "Bash(cafe verification check:*)"
+  prompt_inputs:
+    - artifacts: [research_notes]
+      placeholder: evidence_file
+      required: true
+  prompt_references:
+    optional_evidence_instruction: optional_evidence_instruction.md
+  checklist:
+    context_references:
+      xml_questions_instruction: xml_questions_instruction.md
+    variants:
+      - when: {iteration: 1}
+        sections: [{reference: execution_first.md}]
+      - when: {artifact_present: [editor_feedback]}
+        sections: [{reference: execution_feedback.md}]
+    include_role_guidance: true
+    compact_agent_guidance: false
+  output_templates:
+    catalog: research-report
+```
+
+Every phase skill declares `workflow.execution_profile`. The workload is one
+of `general`, `requirements`, `planning`, `implementation`, `review`,
+`publication`, `operations`, `research`, or `content`; reasoning is `routine`,
+`standard`, or `high`; risk domains are unique stable tokens; and fallback
+strength is `equivalent` or `equivalent_or_stronger`. When a selector has
+multiple variants, aggregate every variant before runtime execution.
+
+`required_tools` lists only tools that the normal path cannot execute without.
+Every playbook step selecting the skill must grant them through `allowed_tools`.
+An exact grant or an intentionally broader grant satisfies the declaration;
+optional diagnostics do not belong in this list.
+
+### Human-task policy contract
+
+When a phase may pause for a person, declare its reusable policy under
+`workflow.human_tasks`. The playbook binds that policy to a trigger and owns
+routing; the skill owns wording and answer validation; runtime owns files,
+state, and baton mutation.
+
+```yaml
+workflow:
+  human_tasks:
+    - id: output-review
+      pattern: confirm_output
+      prompt: Review the result and choose how to continue.
+      input_schema: decision
+      decisions:
+        - id: confirm
+          label: Confirm and continue
+        - id: revise
+          label: Request revision
+          requires_feedback: true
+          correction: true
+```
+
+Valid policy patterns and schemas are `confirm_output`/`decision`,
+`answer_questions`/`answers`, `revision_feedback`/`feedback`,
+`no_changes_needed`/`decision`, and `select_next_step`/`target`. A decision
+with `requires_feedback: true` requires feedback but does not define routing;
+`correction: true` marks a repair choice that remains routable while the
+current output is invalid. A decision with `requires_target: true` must bind
+declared `allowed_targets`. Answer policies may use inline questions or
+`questions_from_xml: true`; target policies declare `allowed_targets`.
+Optional feedback is the only use of `required: false`. Keep policy IDs
+stable, and use `correction_guidance` for actionable invalid-input messages.
+
 ## 4. Phase Skill Structure
 
 Use this order and omit sections that do not apply:
@@ -124,6 +206,17 @@ not support conditionals or expressions. Runtime-owned placeholders include:
 New artifact placeholders require a metadata and contract update. Do not add a
 skill-name branch to `generic_workflow_step.py`.
 
+Prompt inputs resolve candidates in listed order. A required input stops before
+agent invocation and reports the missing placeholder and candidate artifacts;
+an absent optional input is omitted. Prompt references name files under
+`references/` and render only when every placeholder in that reference is
+available. Checklist references remain under `references/`; variants are
+evaluated in declaration order using bounded iteration, artifact-presence, or
+feedback selectors. Role guidance is opt-in, and compact guidance does not
+silently add a separator. A template catalog belongs to the owning skill's
+`assets/templates/` directory; `auto` exposes the catalog without selecting a
+file.
+
 ## 6. Handoff and Confirmation
 
 The baton mechanism, JSON schema, legal values, and examples live only in
@@ -136,6 +229,21 @@ playbook `on.confirm_output` transition. The confirmation-gates command is the
 source of truth for assignable versus mandatory gates. Clarification,
 permission, and alignment checkpoints are reactive interruptions, not planned
 kickoff gates.
+
+The phase skill must route a normal approval to `user`, while the playbook
+binding supplies the matching `on.confirm_output` transition. A mandatory
+HumanTask binding with `feedback_delivery` is user-owned and is not a driver
+kickoff candidate. A reusable `revise` decision may require feedback and a
+target; the playbook must authorize every target. If the binding is absent or
+ambiguous, pause with a configuration error instead of guessing a continuation.
+
+If a phase has a prerequisite decision before its final output, keep both
+stages together only when they share ownership, artifact lifecycle, and final
+approval. Persist durable stage evidence, mark provisional output as
+unconfirmed, and keep it unreachable from downstream execution until
+`confirm_output`. A HumanTask prompt must contain the decision context and
+validation rules. Split the phase when ownership, artifacts, gates, reuse, or
+downstream reachability differ.
 
 If a phase has multiple stages with one owner and one final artifact, keep the
 stages in one step only when durable stage evidence, resume rules, and a
@@ -194,6 +302,13 @@ Skill content does not embed a playbook binding. The playbook step declares the
 skill, role, input artifacts, output artifact, tools, hooks, and transitions.
 If a phase has planned approval, the step declares `on.confirm_output`; run
 `cafe playbook confirmation-gates <id>` after changing a planned gate.
+
+The playbook is also the source of truth for the selected skill, role, input
+and output artifacts, tools, hooks, and transitions. Do not encode a playbook
+binding in a skill or duplicate a playbook graph in a phase document. After
+adding, removing, or splitting a planned gate, run
+`cafe playbook confirmation-gates <id>` and report that existing issue stop
+contracts may need reconfirmation.
 
 ## 13. Acceptance Checklist
 

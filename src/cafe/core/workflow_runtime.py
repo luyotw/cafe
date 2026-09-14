@@ -2719,7 +2719,49 @@ class BlackboardWorkflowRuntime:
         staged: list[ArtifactEntry] = []
         for key, value in artifacts.items():
             record = (metadata or {}).get(key)
-            if not isinstance(record, dict) or record.get("kind") != "workspace":
+            if isinstance(record, dict) and record.get("kind") != "workspace":
+                if record.get("name") not in {None, key}:
+                    raise ValueError(f"artifact {key!r} metadata has a contradictory name")
+                previous = self.blackboard.artifacts.get(key)
+                version = record.get("version")
+                if not isinstance(version, int) or version < 1:
+                    version = previous.version + 1 if previous else 1
+                try:
+                    kind = ArtifactKind(str(record.get("kind", ArtifactKind.DOCUMENT.value)))
+                except ValueError as exc:
+                    raise ValueError(f"artifact {key!r} metadata has an invalid kind") from exc
+                path = Path(value)
+                try:
+                    content_sha256 = sha256_bytes(path.read_bytes())
+                except OSError as exc:
+                    raise ValueError(f"artifact {key!r} is unreadable") from exc
+                declared_digest = record.get("content_sha256")
+                if declared_digest and declared_digest != content_sha256:
+                    raise ValueError(f"artifact {key!r} content digest is contradictory")
+                entry_kwargs: dict[str, Any] = {
+                    "name": key,
+                    "kind": kind,
+                    "version": version,
+                    "updated_by": str(record.get("updated_by", self.blackboard.current_step)),
+                    "path": value,
+                    "summary": str(record.get("summary", "")),
+                    "content_sha256": content_sha256,
+                    "todo_identities": (
+                        {str(k): str(v) for k, v in record["todo_identities"].items()}
+                        if isinstance(record.get("todo_identities"), dict)
+                        else None
+                    ),
+                    "todo_work_identities": (
+                        {str(k): str(v) for k, v in record["todo_work_identities"].items()}
+                        if isinstance(record.get("todo_work_identities"), dict)
+                        else None
+                    ),
+                }
+                if record.get("updated_at"):
+                    entry_kwargs["updated_at"] = str(record["updated_at"])
+                staged.append(ArtifactEntry(**entry_kwargs))
+                continue
+            if not isinstance(record, dict):
                 previous = self.blackboard.artifacts.get(key)
                 staged.append(
                     ArtifactEntry(
@@ -2728,6 +2770,9 @@ class BlackboardWorkflowRuntime:
                         version=previous.version + 1 if previous else 1,
                         updated_by=self.blackboard.current_step,
                         path=value,
+                        content_sha256=(
+                            sha256_bytes(Path(value).read_bytes()) if Path(value).is_file() else None
+                        ),
                     )
                 )
                 continue

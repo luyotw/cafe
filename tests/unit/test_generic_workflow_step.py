@@ -3756,7 +3756,11 @@ def test_correction_checklist_uses_declared_inbound_producer_not_history(
             step="inspection",
             event_type="transition",
             message="",
-            data={"from": "inspection", "to": "repair_shop"},
+            data={
+                "from": "inspection",
+                "to": "repair_shop",
+                "source_artifact": state.artifacts["findings"].to_dict(),
+            },
         )
     )
 
@@ -6266,6 +6270,7 @@ def test_declared_feedback_route_preserves_custom_source_and_todo_identity(tmp_p
     (source.parent / "artifact.json").write_text(
         json.dumps(entry.to_dict()), encoding="utf-8"
     )
+    state.events[-1].data["source_artifact"] = entry.to_dict()
 
     playbook = {
         "steps": {
@@ -6295,7 +6300,7 @@ def test_declared_feedback_route_preserves_custom_source_and_todo_identity(tmp_p
     assert [item.item_id for item in projection.items] == ["REV-017"]
 
 
-def test_declared_feedback_route_falls_back_to_latest_complete_iteration(tmp_path: Path) -> None:
+def test_declared_feedback_route_rejects_an_unbound_transition(tmp_path: Path) -> None:
     phase_dir = tmp_path / "issue" / "producer"
     old_dir = phase_dir / "iteration_001"
     current_dir = phase_dir / "iteration_002"
@@ -6360,14 +6365,10 @@ def test_declared_feedback_route_falls_back_to_latest_complete_iteration(tmp_pat
             "receiver": {},
         }
     }
-    resolved = GenericWorkflowStepExecutor._add_causal_todo_artifact(
-        {"review_doc": current}, state, playbook=playbook
-    )
-
-    projection = resolved["causal_todo"]
-    assert projection.path == old_output
-    assert [item.item_id for item in projection.items] == ["REV-001"]
-    assert projection.version == 1
+    with pytest.raises(ValueError, match="missing its bound source artifact"):
+        GenericWorkflowStepExecutor._add_causal_todo_artifact(
+            {"review_doc": current}, state, playbook=playbook
+        )
 
 
 def test_declared_feedback_route_stays_bound_to_handed_off_artifact_version(
@@ -6570,6 +6571,41 @@ def test_plan_publication_rejects_reuse_of_an_existing_id_for_unrelated_work(
         )
 
 
+def test_plan_publication_rejects_unrelated_work_sharing_only_a_generic_token(
+    tmp_path: Path,
+) -> None:
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_dir = tmp_path / "issue" / "plan"
+    executor.iteration = 2
+    old_output = tmp_path / "issue" / "plan" / "iteration_001" / "output.md"
+    old_output.parent.mkdir(parents=True)
+    old_output.write_text(
+        "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: update parser — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+    state = BlackboardStore(tmp_path / "issue").load_or_create("plan")
+    state.artifacts["plan"] = ArtifactEntry(
+        name="plan", kind=ArtifactKind.DOCUMENT, version=1, updated_by="plan",
+        path=str(old_output),
+    )
+    new_output = tmp_path / "issue" / "plan" / "iteration_002" / "output.md"
+    new_output.parent.mkdir(parents=True)
+    new_output.write_text(
+        "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: update service — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="PLAN-001"):
+        executor._write_artifact_record(
+            blackboard_state=state,
+            output_key="plan",
+            output_path=str(new_output),
+            updated_by="plan",
+        )
+
+
 def test_plan_publication_allows_related_same_id_revision(tmp_path: Path) -> None:
     executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
     executor.phase_dir = tmp_path / "issue" / "plan"
@@ -6601,6 +6637,39 @@ def test_plan_publication_allows_related_same_id_revision(tmp_path: Path) -> Non
         updated_by="plan",
     )
     assert record.todo_work_identities
+
+
+def test_plan_publication_rejects_a_related_revision_moved_to_a_new_id(tmp_path: Path) -> None:
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_dir = tmp_path / "issue" / "plan"
+    executor.iteration = 2
+    old_output = tmp_path / "issue" / "plan" / "iteration_001" / "output.md"
+    old_output.parent.mkdir(parents=True)
+    old_output.write_text(
+        "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: improve parser — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+    state = BlackboardStore(tmp_path / "issue").load_or_create("plan")
+    state.artifacts["plan"] = ArtifactEntry(
+        name="plan", kind=ArtifactKind.DOCUMENT, version=1, updated_by="plan",
+        path=str(old_output),
+    )
+    new_output = tmp_path / "issue" / "plan" / "iteration_002" / "output.md"
+    new_output.parent.mkdir(parents=True)
+    new_output.write_text(
+        "## Todo List\n- [ ] `PLAN-002` — Source: `plan` — Work: improve parser with stricter errors — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="PLAN-001.*PLAN-002"):
+        executor._write_artifact_record(
+            blackboard_state=state,
+            output_key="plan",
+            output_path=str(new_output),
+            updated_by="plan",
+        )
 
 
 def test_workspace_consumer_rejects_workspace_from_another_repository(tmp_path: Path) -> None:

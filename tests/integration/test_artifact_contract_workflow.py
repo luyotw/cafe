@@ -49,6 +49,69 @@ def _write_route_artifact(
     return entry, output
 
 
+def _publish_route_through_runtime(
+    issue_dir: Path,
+    *,
+    playbook: dict,
+    producer: str,
+    destination: str,
+    artifact_name: str,
+    source: str,
+    prefix: str,
+) -> tuple[ArtifactEntry, Path]:
+    """Publish one producer output through the same runtime seams as a step."""
+    producer_dir = issue_dir / producer
+    iteration_dir = producer_dir / "iteration_001"
+    iteration_dir.mkdir(parents=True)
+    output = iteration_dir / "output.md"
+    output.write_text(
+        "## Todo List\n"
+        f"- [ ] `{prefix}-001` — Source: `{source}` — Work: preserve identity — "
+        "Closure: verified — Evidence: targeted route test\n",
+        encoding="utf-8",
+    )
+
+    publisher = GenericWorkflowStepExecutor.__new__(GenericWorkflowStepExecutor)
+    publisher.phase_dir = producer_dir
+    publisher.iteration = 1
+    publisher.phase_name = producer
+    initial = BlackboardStore(issue_dir).load_or_create(producer, playbook_id=playbook["playbook"]["id"])
+    entry = publisher._write_artifact_record(
+        blackboard_state=initial,
+        output_key=artifact_name,
+        output_path=str(output),
+        updated_by=producer,
+    )
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=object(),
+    )
+    runtime.blackboard.current_step = producer
+    runtime._store_artifacts(
+        {artifact_name: str(output)},
+        {artifact_name: entry.to_dict()},
+    )
+    runtime._emit_transition(
+        current_step=producer,
+        next_step=destination,
+        status_code="await_agent",
+        source="integration.production_path",
+        runtime="test",
+    )
+    persisted = BlackboardStore(issue_dir).load_or_create(
+        destination,
+        playbook_id=playbook["playbook"]["id"],
+    )
+    assert persisted.artifacts[artifact_name].content_sha256 == entry.content_sha256
+    assert any(
+        event.event_type == "transition"
+        and event.data.get("source_artifact", {}).get("content_sha256") == entry.content_sha256
+        for event in persisted.events
+    )
+    return entry, output
+
+
 @pytest.mark.parametrize("playbook_name", DOMAIN_ROUTES)
 def test_every_declared_domain_route_survives_persisted_process_resume(
     tmp_path: Path, playbook_name: str
@@ -64,34 +127,23 @@ def test_every_declared_domain_route_survives_persisted_process_resume(
 
     for index, (producer, destination, route) in enumerate(routes):
         issue_dir = tmp_path / playbook_name / str(index)
-        entry, output = _write_route_artifact(
+        entry, output = _publish_route_through_runtime(
             issue_dir,
+            playbook=playbook,
             producer=producer,
+            destination=destination,
             artifact_name=route.artifact,
             source=route.todo_source,
             prefix=route.todo_id_prefix,
         )
-        store = BlackboardStore(issue_dir)
-        state = store.load_or_create(destination, playbook_id=playbook_name)
-        state.handoff_contract = None
-        state.events.append(
-            EventEntry(
-                timestamp="2026-06-01T00:00:00+00:00",
-                step=producer,
-                event_type="transition",
-                message="persisted route",
-                data={
-                    "from": producer,
-                    "to": destination,
-                    "source_artifact": entry.to_dict(),
-                },
-            )
+        restarted = BlackboardStore(issue_dir).load_or_create(
+            destination,
+            playbook_id=playbook_name,
         )
-        store.save(state)
-        restarted = store.load_or_create(destination, playbook_id=playbook_name)
-        restarted.handoff_contract = None
         resolved = GenericWorkflowStepExecutor._add_causal_todo_artifact(
-            {route.artifact: entry}, restarted, playbook=playbook
+            {route.artifact: restarted.artifacts[route.artifact]},
+            restarted,
+            playbook=playbook,
         )
 
         projection = resolved["causal_todo"]

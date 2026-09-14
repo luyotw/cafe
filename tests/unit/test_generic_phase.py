@@ -477,6 +477,35 @@ def test_execute_guard_runs_at_each_agent_and_hook_boundary(tmp_path: Path) -> N
     assert len(checks) >= 4
 
 
+def test_execute_stability_guard_rejects_replacement_before_first_hook(
+    tmp_path: Path,
+) -> None:
+    calls: list[str] = []
+    phase = GenericPhase(_setup_loader(tmp_path), hook_registry={"StopHook": StopHook})
+    guard_calls = 0
+
+    def guard() -> None:
+        nonlocal guard_calls
+        guard_calls += 1
+        if guard_calls == 2:
+            raise ValueError("workspace changed during the check-to-use interval")
+
+    with pytest.raises(ValueError, match="check-to-use interval"):
+        phase.execute(
+            skill_name="cafe-plan",
+            skill_invocation="/plan",
+            step_def={
+                "hooks": {"before_execute": ["StopHook"]},
+                "valid_intents": ["need_clarification"],
+            },
+            agent_executor=lambda _prompt: calls.append("agent") or "confirmed",
+            execution_guard=guard,
+        )
+
+    assert calls == []
+    assert guard_calls == 2
+
+
 def test_execute_runs_prepare_input_and_after_execute_retry(tmp_path: Path) -> None:
     RetryHook._called = False
     phase = GenericPhase(
