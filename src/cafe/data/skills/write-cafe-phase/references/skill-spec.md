@@ -46,6 +46,15 @@ context in their names.
 - A skill directory contains only `SKILL.md`, `references/`, `scripts/`, and
   `assets/`.
 
+Internal skills always use the `cafe-` prefix. The runtime installs them into
+the worktree-local native skill directory, installed without renaming them, so the
+playbook name, prompt invocation, installation directory, and CLI invocation
+remain identical. External driver and meta skills do not use that prefix, but
+their names must carry clear CAFE context. Custom playbook skills belong in
+`.cafe/skills/` beside the versioned playbook; global skills are for deliberate
+cross-project reuse. Do not use generic or deprecated names such as `review`
+or `draft` for a custom skill.
+
 ## 3. Frontmatter and Repair Boundary
 
 Use frontmatter like this:
@@ -189,6 +198,21 @@ Every phase skill has `## Role` and `## Handoff`. `## Context` lists only
 declared inputs. `## Output` contains the fixed output path instruction. Route
 decisions belong in `## Instructions`; shared baton schema does not.
 
+Use these exact structural lines in a phase skill unless the section is not
+applicable:
+
+```markdown
+## Role
+Read your agent file: {agent_file}
+
+## Handoff
+Write next-step baton for this result; the runtime updates the blackboard.
+```
+
+The role and handoff lines are part of the authoring contract, not decorative
+copy. A phase may add role-specific instructions below them, but it must not
+replace or paraphrase these activation and ownership boundaries.
+
 ## 5. Placeholder Contract
 
 Placeholders are literal text substitutions performed at activation. They do
@@ -214,8 +238,10 @@ available. Checklist references remain under `references/`; variants are
 evaluated in declaration order using bounded iteration, artifact-presence, or
 feedback selectors. Role guidance is opt-in, and compact guidance does not
 silently add a separator. A template catalog belongs to the owning skill's
-`assets/templates/` directory; `auto` exposes the catalog without selecting a
-file.
+`assets/templates/` directory. The selected issue template is read from
+`<step>.template` in `issue.yaml`; `auto` exposes the catalog without selecting
+a file. Do not infer a template from a phase name, artifact name, or iteration
+number.
 
 ## 6. Handoff and Confirmation
 
@@ -268,11 +294,16 @@ resume; it must not infer a domain stage from an iteration number.
 ## 9. References and Scripts
 
 References contain details that are needed only under a declared condition.
-`execution_steps_*` files are ordered procedures. `basic_principles.md` holds
-always-on repository rules and is projected into `## Basic Principles` when
-enabled. Skill scripts are deterministic and rerunnable; progress and errors
-use stderr and structured results use stdout. Remote mutation runs through a
-host-side hook, while the agent prepares local artifacts.
+`SKILL.md` must say exactly when to open each reference; an unreferenced file
+is not an active instruction. `execution_steps_*` files are ordered
+procedures. `basic_principles.md` holds always-on repository rules and is
+projected into `## Basic Principles` when enabled. References and scripts have
+explicit activation conditions. Scripts must declare their activation
+condition, required inputs, and output or receipt contract. A script catalog
+is not activated merely because the file exists. Skill scripts are
+deterministic and rerunnable; progress and errors use stderr and structured
+results use stdout. Remote mutation runs through a host-side hook, while the
+agent prepares local artifacts.
 
 ## 10. Chat Skill Structure
 

@@ -144,3 +144,18 @@ def test_write_cafe_phase_keeps_incoming_plans_immutable() -> None:
     assert "its `{output_file}` `## Todo Progress` ledger" in spec
     assert "marks the incoming plan's checkboxes" not in spec
     assert "incoming plan remains immutable" in spec or "immutable incoming" in spec
+
+
+def test_write_cafe_phase_preserves_the_complete_structural_authoring_contract() -> None:
+    spec = (SKILL_ROOT / "references" / "skill-spec.md").read_text(encoding="utf-8")
+    normalized = " ".join(spec.split())
+
+    assert "Read your agent file: {agent_file}" in spec
+    assert "Write next-step baton for this result; the runtime updates the blackboard." in spec
+    assert "Internal skills always use the `cafe-` prefix" in normalized
+    assert "installed without renaming" in normalized
+    assert "Custom playbook skills belong in `.cafe/skills/`" in normalized
+    assert "The selected issue template is read from `<step>.template` in `issue.yaml`" in normalized
+    assert "`SKILL.md` must say exactly when to open each reference" in normalized
+    assert "Scripts must declare their activation condition" in normalized
+    assert "A script catalog is not activated merely because the file exists" in normalized

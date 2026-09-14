@@ -6,6 +6,7 @@ import errno
 import hashlib
 import json
 import os
+import re
 import shutil
 import stat
 import tempfile
@@ -82,6 +83,7 @@ from cafe.core.workflow_feedback import (
     feedback_todo_mappings,
 )
 from cafe.core.workflow_models import BatonRejected, StepExecutionResult
+from cafe.core.workspace_lock import workspace_execution_lock
 from cafe.core.workspace_artifact import (
     WorkspaceArtifact,
     WorkspaceArtifactError,
@@ -123,19 +125,43 @@ def _plan_work_tokens(item: Any) -> set[str]:
         "on", "preserve", "provide", "run", "supply", "test", "tests", "the",
         "to", "update", "use", "with", "work", "write",
     }
-    return {
-        token.lower()
-        for token in " ".join(str(item.work).split()).split()
-        if token.strip(".,:;()[]{}")
-        and token.lower().strip(".,:;()[]{}") not in generic_tokens
+    semantic_aliases = {
+        "parse": "parse",
+        "parser": "parse",
+        "parsers": "parse",
+        "parsing": "parse",
+        "syntax": "parse",
+        "diagnostic": "error",
+        "diagnostics": "error",
+        "error": "error",
+        "errors": "error",
+        "failure": "error",
+        "failures": "error",
+        "document": "docs",
+        "documentation": "docs",
+        "docs": "docs",
+        "validate": "validation",
+        "validation": "validation",
+        "validations": "validation",
     }
+    result: set[str] = set()
+    for raw_token in " ".join(str(item.work).split()).split():
+        token = raw_token.lower().strip(".,:;()[]{}")
+        if not token or token in generic_tokens:
+            continue
+        token = re.sub(r"(?<=\w)s$", "", token)
+        result.add(semantic_aliases.get(token, token))
+    return result
 
 
 def _is_related_plan_revision(previous: Any, current: Any) -> bool:
     """Permit wording revisions while rejecting an unrelated ID reuse."""
     previous_tokens = _plan_work_tokens(previous)
     current_tokens = _plan_work_tokens(current)
-    return bool(previous_tokens & current_tokens)
+    # One shared domain word (for example, ``service``) is not enough to
+    # prove retained work.  Require two independent anchors after applying
+    # only the small, deterministic vocabulary of equivalent plan terms.
+    return len(previous_tokens & current_tokens) >= 2
 
 
 def align_pr_baton_after_execution(
@@ -584,6 +610,9 @@ class GenericWorkflowStepExecutor(Phase):
             prepare_agent_context=prepare_agent_context,
             execution_guard=lambda: self._validate_workspace_inputs(
                 self._step_input_artifacts(step_def, blackboard_state), step_def=step_def
+            ),
+            execution_lease=lambda: workspace_execution_lock(
+                Path(getattr(self.git_ops, "repo_path", Path.cwd()))
             ),
             hook_context={
                 "phase": self,
@@ -2482,6 +2511,25 @@ class GenericWorkflowStepExecutor(Phase):
             context["template_file"] = template_file
 
     def _publish_workspace_artifact(
+        self,
+        *,
+        step_name: str,
+        step_def: Dict[str, Any],
+        output_file: Path,
+        blackboard_state: BlackboardState,
+        updated_at: Optional[str] = None,
+    ) -> tuple[str, dict[str, Any]] | None:
+        repo = Path(getattr(self.git_ops, "repo_path", Path.cwd())).resolve()
+        with workspace_execution_lock(repo):
+            return self._publish_workspace_artifact_under_lock(
+                step_name=step_name,
+                step_def=step_def,
+                output_file=output_file,
+                blackboard_state=blackboard_state,
+                updated_at=updated_at,
+            )
+
+    def _publish_workspace_artifact_under_lock(
         self,
         *,
         step_name: str,

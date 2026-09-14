@@ -369,6 +369,58 @@ class GenericPhase:
         hook_context: Optional[Dict[str, Any]] = None,
         prepare_agent_context: Optional[Callable[[Dict[str, str]], Dict[str, str]]] = None,
         execution_guard: Optional[Callable[[], None]] = None,
+        execution_lease: Optional[Callable[[], Any]] = None,
+        max_retries: int = 3,
+    ) -> GenericPhaseExecution:
+        """Execute one phase while holding the caller's workspace-use lease."""
+        if execution_lease is None:
+            return self._execute(
+                skill_name=skill_name,
+                step_def=step_def,
+                agent_executor=agent_executor,
+                skill_invocation=skill_invocation,
+                shared_skill_invocations=shared_skill_invocations,
+                context=context,
+                output_file=output_file,
+                checklist_file=checklist_file,
+                questions_xml_file=questions_xml_file,
+                hook_context=hook_context,
+                prepare_agent_context=prepare_agent_context,
+                execution_guard=execution_guard,
+                max_retries=max_retries,
+            )
+        with execution_lease():
+            return self._execute(
+                skill_name=skill_name,
+                step_def=step_def,
+                agent_executor=agent_executor,
+                skill_invocation=skill_invocation,
+                shared_skill_invocations=shared_skill_invocations,
+                context=context,
+                output_file=output_file,
+                checklist_file=checklist_file,
+                questions_xml_file=questions_xml_file,
+                hook_context=hook_context,
+                prepare_agent_context=prepare_agent_context,
+                execution_guard=execution_guard,
+                max_retries=max_retries,
+            )
+
+    def _execute(
+        self,
+        *,
+        skill_name: str,
+        step_def: Dict[str, Any],
+        agent_executor: AgentExecutor,
+        skill_invocation: str,
+        shared_skill_invocations: Optional[List[str]] = None,
+        context: Optional[Dict[str, str]] = None,
+        output_file: Optional[Path] = None,
+        checklist_file: Optional[Path] = None,
+        questions_xml_file: Optional[Path] = None,
+        hook_context: Optional[Dict[str, Any]] = None,
+        prepare_agent_context: Optional[Callable[[Dict[str, str]], Dict[str, str]]] = None,
+        execution_guard: Optional[Callable[[], None]] = None,
         max_retries: int = 3,
     ) -> GenericPhaseExecution:
         runtime_context = dict(context or {})
@@ -389,6 +441,8 @@ class GenericPhase:
             if execution_guard is not None:
                 execution_guard()
                 execution_guard()
+
+        hook_kwargs["_execution_guard"] = guard_stable_boundary
 
         guard_stable_boundary()
         before = self._run_hook_stage(
@@ -568,6 +622,9 @@ class GenericPhase:
         aggregate = HookResult()
 
         for hook_entry in hook_entries:
+            before_use_guard = kwargs.get("_execution_guard")
+            if callable(before_use_guard):
+                before_use_guard()
             result: HookResult
             if hook_entry is self._CONFIRMED_ARTIFACT_SYNC_HOOK:
                 result = self._run_confirmed_artifact_sync_hook(
