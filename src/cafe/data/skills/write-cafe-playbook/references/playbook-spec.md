@@ -2,6 +2,28 @@
 
 Use this reference while designing or validating a CAFE playbook. The runtime schema remains authoritative in `src/cafe/core/playbook.py`.
 
+## Authoritative en-US artifact-contract addendum
+
+When this reference conflicts with an older example, use this addendum and the runtime schema.
+
+- Declare each backward correction route on its producing step with `feedback_routes` keyed by
+  destination. The route must name the producer output artifact, source kind, Todo source, and
+  stable ID prefix. The destination must list that artifact and expose a causal Todo projection.
+- Route resolution uses the persisted sender/destination edge, including dynamic
+  `allowed_goto` targets. Do not infer correction mode from the destination, artifact name, chat,
+  baton summaries, or session memory. Strict validation must reject incomplete or ambiguous
+  route declarations.
+- A current workspace is one declared companion beside the summary artifact. Use
+  `workspace_artifact` on the producer and `workspace_input_artifact` on current consumers; the
+  latter must also be listed in `input_artifacts`. Summary and workspace names must differ.
+- Current workspace records are schema-versioned, atomically written, bound to repository state,
+  and verified through repository-relative `verification.json` receipts. Reusing an unchanged
+  verified snapshot must preserve its version. Legacy v0.2 mixed records are accepted only by
+  their bounded compatibility adapter and are not current verification.
+- Plan and correction Todo sources use one canonical `## Todo List`, at most 100 items, stable
+  identities, and the exact intentional-empty marker `No actionable work.`. Consumers write
+  progress only to their own output artifact under `## Todo Progress`.
+
 ## 1. Location And Identity
 
 | Scope | Path | Use |

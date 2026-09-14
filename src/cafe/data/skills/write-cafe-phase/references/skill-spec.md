@@ -379,9 +379,9 @@ approval，也不列入 kickoff 可分派的 confirmation contract。最終 outp
 ## 11. 語言慣例
 
 - 段落標題與結構詞一律英文（`## Role`、`## Instructions`、`## Handoff`）。
-- Instructions 內文跟隨該 playbook 領域的既有慣例：軟體與非軟體 phase skill 為中文；
-  shared / chat / meta skill 為英文。
-- 同一 skill 內不要中英夾雜換行風格；引用他 skill 的 section 名保持原文。
+- All authoritative instructions created or changed by the issue must use en-US.
+- Do not mix languages within one authoritative skill. Preserve quoted section names only when
+  they are structured identifiers such as `## Role` or `## Handoff`.
 
 ## 12. 新增 phase skill 時的 playbook 綁定
 
@@ -411,6 +411,29 @@ skill 文件內不要假設只有某一條 playbook 會用它。
 - [ ] 若 planned gate set 有變更，已執行 `cafe playbook confirmation-gates <id>` 並回報 issue contract 需要重新確認
 - [ ] 多 target、長時間、live API、subagent 或反覆 review phase 已依 §17 定義與 output/downstream/publish contract 相容的 durable progress owner、per-target/stage dependency fingerprints、bounded unit、evidence-backed resume 與 final sweep；沒有把 runtime checklist 當 per-target ledger
 - [ ] 若修正要套用既有 iteration，critical resume algorithm 位於 `SKILL.md`，而非只新增 `execution_steps_*`；已說明舊 `checklist.md` 不會重建，且 migration 不會把未有 receipt 的 review/approval 猜成完成
+
+## 18. Current artifact contract (authoritative en-US addendum)
+
+The following rules override older examples in this reference when they conflict.
+
+- A backward correction route is selected only from the persisted sender/destination edge. A
+  destination-wide search must never turn an ordinary forward handoff into correction mode.
+- Every producer route declares one source artifact, source kind, Todo source, and ID prefix;
+  the producer publishes a recorded artifact identity, version, and content digest before handoff.
+  The consumer projects only that source and closes the same stable item identities.
+- A consumer may use a causal alias such as `{artifact: active_work, causal: true}`. The alias is
+  resolved at the persisted edge and must not be reconstructed from chat, baton summaries, or
+  session memory. Historical fallback is bounded and accepts only recorded, complete, untampered
+  artifacts.
+- A current workspace companion is distinct from the summary document. Its repository-relative
+  `verification.json`, base, head, changed-file set, name, and version must agree with the
+  declared blackboard entry. Missing or stale current companions fail closed; legacy mixed
+  `code` records remain readable only through the bounded v0.2 adapter.
+- Workspace publication is atomic and reuses the existing version when the verified snapshot and
+  receipt bindings are unchanged. Ordering metadata must survive rebuild and process restart.
+- Consumer `## Todo Progress` is phase-owned. It must contain one canonical entry per projected
+  source item, with source fingerprint, repository-relative files, full commit SHA, current
+  targeted receipt command, and current HEAD. The accepted source artifact remains immutable.
 
 ## 14. Plan → Execute phase pair 的 artifact contract
 

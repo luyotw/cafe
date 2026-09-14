@@ -1,6 +1,6 @@
 ---
 name: cafe-incident_postmortem
-description: 事後檢討與行動項目（維運應變流程）
+description: Produce an incident postmortem and prevention actions
 version: 1.1.0
 workflow:
   execution_profile:
@@ -14,9 +14,17 @@ workflow:
       prompt: Provide the incident details needed to continue the postmortem.
       input_schema: feedback
   prompt_inputs:
-    - artifacts: [incident_learning]
+    - artifacts: [incident_learning, causal_todo]
       placeholder: correction_source
       required: false
+  checklist:
+    variants:
+      - when: {feedback: true}
+        sections:
+          - todo_projection: {artifact: causal_todo, causal: true}
+      - when: {}
+        sections:
+          - reference: correction_contract.md
 ---
 
 # Incident Postmortem
@@ -25,10 +33,10 @@ workflow:
 Read your agent file: {agent_file}
 
 ## Instructions
-整理根因、時間線、學到的教訓與預防措施；若事件仍在演變，回到分類或偵測更新狀態。若需回到 triage，輸出 canonical correction Todo items。
+Document root cause, timeline, lessons, and prevention actions. If the incident is still evolving, return to triage or detection with updated state. When returning to triage, emit canonical correction Todo items.
 
 ## Output
 Write postmortem to: {output_file}
 
 ## Handoff
-- 依照本輪結果寫入 next-step baton；blackboard 由 runtime 更新。
+- Write the next-step baton for this result; the runtime updates the blackboard.

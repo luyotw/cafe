@@ -603,6 +603,7 @@ class StepConfig(BaseModel):
     input_artifacts: Optional[List[str]] = None
     output_artifact: Optional[str] = None
     workspace_artifact: Optional[str] = None
+    workspace_input_artifact: Optional[str] = None
     initial_input: Optional[InitialInputDeclaration] = None
     template: Optional[str] = None
     allowed_tools: List[str] = Field(default_factory=list)
@@ -670,6 +671,19 @@ class StepConfig(BaseModel):
                 raise ValueError("workspace_artifact must be a safe identifier")
             if self.output_artifact is None:
                 raise ValueError("workspace_artifact requires output_artifact")
+            if self.workspace_artifact == self.output_artifact:
+                raise ValueError("workspace_artifact must differ from output_artifact")
+        if self.workspace_input_artifact is not None:
+            if not re.fullmatch(
+                r"[A-Za-z][A-Za-z0-9_-]*", self.workspace_input_artifact.strip()
+            ):
+                raise ValueError("workspace_input_artifact must be a safe identifier")
+            if self.input_artifacts is None or self.workspace_input_artifact not in self.input_artifacts:
+                raise ValueError(
+                    "workspace_input_artifact must be listed in input_artifacts"
+                )
+            if self.output_artifact == self.workspace_input_artifact:
+                raise ValueError("workspace_input_artifact must differ from output_artifact")
         return self
 
     @field_validator("human_tasks")
@@ -1043,7 +1057,7 @@ class PlaybookDefinition(BaseModel):
                         "must be declared in the destination input_artifacts"
                     )
             if route_declarations_present:
-                for target in step.on.values():
+                for target in (*step.on.values(), *step.allowed_goto):
                     if (
                         target in self.steps
                         and step_order[target] < step_order[step_name]

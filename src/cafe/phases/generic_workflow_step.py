@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import errno
+import hashlib
 import json
 import os
 import shutil
 import stat
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
@@ -70,6 +72,7 @@ from cafe.core.todo import (
     TodoSourceArtifact,
     parse_todo_list,
     projection_todo_items,
+    validate_todo_identities,
     workflow_feedback_matching_identities,
     workflow_feedback_todo_items,
 )
@@ -656,7 +659,7 @@ class GenericWorkflowStepExecutor(Phase):
             # safely selects the complete authoritative artifact.
             output_path = str(output_file)
             artifacts[output_key] = output_path
-            self._write_artifact_record(
+            summary_record = self._write_artifact_record(
                 blackboard_state=blackboard_state,
                 output_key=output_key,
                 output_path=output_path,
@@ -667,6 +670,7 @@ class GenericWorkflowStepExecutor(Phase):
                 step_def=step_def,
                 output_file=output_file,
                 blackboard_state=blackboard_state,
+                updated_at=summary_record.updated_at,
             )
             if workspace is not None:
                 workspace_path, workspace_metadata = workspace
@@ -1595,18 +1599,18 @@ class GenericWorkflowStepExecutor(Phase):
         skill_name = self._resolve_skill_name(step_def, self.iteration)
         contract = self._get_skill_loader().get_workflow_contract(skill_name)
         input_artifacts = self._step_input_artifacts(step_def, blackboard_state)
-        self._validate_workspace_inputs(input_artifacts)
+        self._validate_workspace_inputs(input_artifacts, step_def=step_def)
         causal_projections = [
             section.todo_projection
             for variant in (contract.checklist.variants if contract.checklist else ())
             for section in variant.sections
             if section.todo_projection and section.todo_projection.causal
         ]
-        declared_route_artifact = self._declared_feedback_route_artifact(step_name)
-        if causal_projections or declared_route_artifact is not None:
-            causal_artifact = (
-                causal_projections[0].artifact if causal_projections else declared_route_artifact
-            )
+        inbound_route = self._persisted_inbound_feedback_route(
+            step_name, blackboard_state
+        )
+        if causal_projections or inbound_route is not None:
+            causal_artifact = causal_projections[0].artifact if causal_projections else inbound_route.artifact
             assert causal_artifact is not None
             input_artifacts = self._add_causal_todo_artifact(
                 input_artifacts,
@@ -1707,13 +1711,36 @@ class GenericWorkflowStepExecutor(Phase):
 
         return context
 
-    def _validate_workspace_inputs(self, artifacts: Mapping[str, Any]) -> None:
+    def _validate_workspace_inputs(
+        self, artifacts: Mapping[str, Any], *, step_def: Optional[Mapping[str, Any]] = None
+    ) -> None:
         """Reject stale current-contract workspace companions before agent launch."""
         active_repo = Path(getattr(self.git_ops, "repo_path", Path.cwd())).resolve()
+        required_name = (
+            step_def.get("workspace_input_artifact") if step_def is not None else None
+        )
+        if isinstance(required_name, str):
+            required_entry = artifacts.get(required_name)
+            if required_entry is None:
+                raise ValueError(
+                    f"required workspace artifact {required_name!r} is missing; refresh the workspace"
+                )
+            if getattr(required_entry, "kind", None) != ArtifactKind.WORKSPACE:
+                raise ValueError(
+                    f"required workspace artifact {required_name!r} has the wrong kind"
+                )
+        summary_name = (
+            step_def.get("output_artifact") if step_def is not None else None
+        )
         for name, entry in artifacts.items():
             if getattr(entry, "kind", None) != ArtifactKind.WORKSPACE:
                 continue
             path = Path(str(getattr(entry, "path", entry)))
+            if not isinstance(required_name, str) and path.name != "workspace.json":
+                # Bounded v0.2 adapter: a mixed code/workspace record remains
+                # readable for legacy consumers, but is never certified as a
+                # current verified workspace.
+                continue
             try:
                 workspace = WorkspaceArtifact.from_dict(
                     json.loads(path.read_text(encoding="utf-8"))
@@ -1722,6 +1749,18 @@ class GenericWorkflowStepExecutor(Phase):
                 raise ValueError(
                     f"workspace artifact {name!r} is missing or malformed; refresh it"
                 ) from exc
+            if workspace.name != name or getattr(entry, "name", name) != workspace.name:
+                raise ValueError(
+                    f"workspace artifact {name!r} has contradictory logical identity"
+                )
+            if summary_name is not None and name == summary_name:
+                raise ValueError("workspace artifact must be distinct from the summary artifact")
+            if getattr(entry, "version", workspace.version) != workspace.version:
+                raise ValueError(f"workspace artifact {name!r} version is contradictory")
+            if getattr(entry, "base_sha", workspace.base_sha) != workspace.base_sha:
+                raise ValueError(f"workspace artifact {name!r} base SHA is contradictory")
+            if getattr(entry, "head_sha", workspace.head_sha) != workspace.head_sha:
+                raise ValueError(f"workspace artifact {name!r} head SHA is contradictory")
             checked = verify_workspace_artifact(
                 workspace,
                 repo=active_repo,
@@ -1741,6 +1780,29 @@ class GenericWorkflowStepExecutor(Phase):
             if route is not None:
                 return str(route.artifact)
         return None
+
+    def _persisted_inbound_feedback_route(
+        self, destination: str, state: BlackboardState
+    ) -> Any:
+        """Resolve a correction route only from the recorded sender/destination edge."""
+        transition = next(
+            (
+                event
+                for event in reversed(state.events)
+                if event.event_type == "transition"
+                and event.data.get("to") == destination
+            ),
+            None,
+        )
+        from_step = str(transition.data.get("from")) if transition is not None else None
+        if state.handoff_contract is not None:
+            candidate = state.handoff_contract.from_step
+            if candidate and candidate != destination:
+                from_step = candidate
+        if not from_step:
+            return None
+        behavior = resolve_step_behavior(self.playbook, from_step)
+        return (behavior.feedback_routes or {}).get(destination)
 
     @staticmethod
     def _step_input_artifacts(
@@ -1816,7 +1878,7 @@ class GenericWorkflowStepExecutor(Phase):
         canonical_name = canonical_skill_name(skill_name)
         contract = self._get_skill_loader().get_workflow_contract(skill_name)
         input_artifacts = self._step_input_artifacts(step_def, blackboard_state)
-        self._validate_workspace_inputs(input_artifacts)
+        self._validate_workspace_inputs(input_artifacts, step_def=step_def)
         declares_causal_todo = bool(
             contract.checklist
             and any(
@@ -1834,9 +1896,9 @@ class GenericWorkflowStepExecutor(Phase):
             ),
             None,
         )
-        declared_route_artifact = self._declared_feedback_route_artifact(step_name)
-        if declares_causal_todo or declared_route_artifact is not None:
-            causal_artifact = causal_artifact or declared_route_artifact
+        inbound_route = self._persisted_inbound_feedback_route(step_name, blackboard_state)
+        if declares_causal_todo or inbound_route is not None:
+            causal_artifact = causal_artifact or inbound_route.artifact
             assert causal_artifact is not None
             input_artifacts = self._add_causal_todo_artifact(
                 input_artifacts,
@@ -1999,38 +2061,38 @@ class GenericWorkflowStepExecutor(Phase):
                 )
             prefix = f"{declared_route.todo_id_prefix}-"
             selected_path = Path(str(getattr(selected, "path", selected)))
-            candidates: list[tuple[int, Path, str]] = [
-                (int(getattr(selected, "version", 0) or 0), selected_path, from_step or "")
-            ]
+            candidates: list[tuple[int, Path, str]] = []
             phase_dir = selected_path.parent.parent
-            if phase_dir.is_dir():
-                for iteration_dir in phase_dir.glob("iteration_*"):
-                    output_path = iteration_dir / "output.md"
-                    if output_path == selected_path or not output_path.is_file():
-                        continue
-                    version = 0
-                    owner = from_step or ""
-                    artifact_record = iteration_dir / "artifact.json"
-                    try:
-                        raw_record = json.loads(artifact_record.read_text(encoding="utf-8"))
-                    except (OSError, UnicodeError, json.JSONDecodeError):
-                        raw_record = {}
-                    if isinstance(raw_record, Mapping):
-                        raw_version = raw_record.get("version")
-                        if isinstance(raw_version, int) and raw_version > 0:
-                            version = raw_version
-                        if isinstance(raw_record.get("updated_by"), str):
-                            owner = str(raw_record["updated_by"])
-                    if version == 0:
-                        try:
-                            version = int(iteration_dir.name.removeprefix("iteration_"))
-                        except ValueError:
-                            continue
-                    candidates.append((version, output_path, owner))
+            iteration_dirs = (
+                sorted(phase_dir.glob("iteration_*"), reverse=True)
+                if phase_dir.is_dir()
+                else []
+            )
+            for iteration_dir in iteration_dirs[:32]:
+                artifact_record = iteration_dir / "artifact.json"
+                output_path = iteration_dir / "output.md"
+                try:
+                    raw_record = json.loads(artifact_record.read_text(encoding="utf-8"))
+                    record = ArtifactEntry.from_dict(raw_record)
+                except (OSError, UnicodeError, json.JSONDecodeError, KeyError, ValueError):
+                    continue
+                if (
+                    record.name != route_artifact
+                    or record.updated_by != from_step
+                    or Path(record.path).resolve() != output_path.resolve()
+                    or not record.content_sha256
+                    or not output_path.is_file()
+                    or output_path.stat().st_size > 256 * 1024
+                ):
+                    continue
+                digest = hashlib.sha256(output_path.read_bytes()).hexdigest()
+                if digest != record.content_sha256:
+                    continue
+                candidates.append((record.version, output_path, record.updated_by))
             for _version, candidate_path, owner in sorted(
                 candidates, key=lambda item: (item[0], str(item[1])), reverse=True
             ):
-                if owner != from_step or not candidate_path.is_file():
+                if owner != from_step:
                     continue
                 try:
                     items = parse_todo_list(
@@ -2218,6 +2280,33 @@ class GenericWorkflowStepExecutor(Phase):
             raise ValueError("Correction Todo provenance is unsupported")
         if selected is None:
             return artifacts
+        producer_config = steps.get(from_step, {}) if from_step else {}
+        backward_targets = set(
+            producer_config.get("allowed_goto", [])
+            if isinstance(producer_config, Mapping)
+            else []
+        )
+        if isinstance(producer_config, Mapping):
+            for binding in producer_config.get("human_tasks", ()) or ():
+                if isinstance(binding, Mapping):
+                    backward_targets.update(
+                        target
+                        for target in [
+                            *(binding.get("outcomes", {}) or {}).values(),
+                            *(binding.get("allowed_targets", ()) or ()),
+                        ]
+                        if target != "_done"
+                    )
+        if (
+            current_behavior is None
+            or (
+                current_behavior.feedback_target != state.current_step
+                and state.current_step not in backward_targets
+            )
+        ):
+            # A normal forward handoff may carry the producer's document, but it
+            # is not a correction source and must not activate correction mode.
+            return artifacts
         resolved = dict(artifacts)
         resolved[causal_artifact] = selected
         return resolved
@@ -2312,11 +2401,15 @@ class GenericWorkflowStepExecutor(Phase):
         step_def: Dict[str, Any],
         output_file: Path,
         blackboard_state: BlackboardState,
+        updated_at: Optional[str] = None,
     ) -> tuple[str, dict[str, Any]] | None:
         """Publish the one declared workspace companion from verified state."""
         workspace_name = step_def.get("workspace_artifact")
         if not isinstance(workspace_name, str) or not workspace_name.strip():
             return None
+        summary_name = str(step_def.get("output_artifact", step_name))
+        if workspace_name == summary_name:
+            raise ValueError("workspace artifact must be distinct from the summary artifact")
         receipt_path = output_file.parent / "verification.json"
         if not receipt_path.is_file():
             raise ValueError(
@@ -2328,30 +2421,66 @@ class GenericWorkflowStepExecutor(Phase):
         if not base_ref:
             base_ref = self.git_ops.get_default_base_branch()
         head_sha = self.git_ops.run_git("rev-parse", "HEAD")
-        previous = blackboard_state.artifacts.get(workspace_name)
-        version = previous.version + 1 if previous else 1
         try:
-            workspace = build_workspace_artifact(
+            candidate = build_workspace_artifact(
                 repo=repo,
                 name=workspace_name,
-                version=version,
+                version=1,
                 base_sha=str(base_ref),
                 head_sha=head_sha,
                 receipt_outputs=[output_file],
+                updated_at=updated_at or datetime.now(timezone.utc).isoformat(),
+                producer_step=step_name,
             )
         except WorkspaceArtifactError as exc:
             raise ValueError(f"workspace artifact {workspace_name!r} is invalid: {exc}") from exc
-        workspace_path = output_file.parent / "workspace.json"
-        workspace_path.write_text(
-            json.dumps(workspace.to_dict(), ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
+        previous = blackboard_state.artifacts.get(workspace_name)
+        previous_workspace: Optional[WorkspaceArtifact] = None
+        if previous is not None:
+            try:
+                previous_workspace = WorkspaceArtifact.from_dict(
+                    json.loads(Path(previous.path).read_text(encoding="utf-8"))
+                )
+            except (OSError, UnicodeError, json.JSONDecodeError, WorkspaceArtifactError):
+                previous_workspace = None
+        same_snapshot = previous_workspace is not None and (
+            previous_workspace.name == candidate.name
+            and previous_workspace.repository == candidate.repository
+            and previous_workspace.base_sha == candidate.base_sha
+            and previous_workspace.head_sha == candidate.head_sha
+            and previous_workspace.changed_files == candidate.changed_files
+            and previous_workspace.receipts == candidate.receipts
         )
+        version = previous.version if same_snapshot and previous is not None else (
+            previous.version + 1 if previous else 1
+        )
+        workspace = WorkspaceArtifact(
+            name=candidate.name,
+            version=version,
+            repository=candidate.repository,
+            base_sha=candidate.base_sha,
+            head_sha=candidate.head_sha,
+            changed_files=candidate.changed_files,
+            receipts=candidate.receipts,
+            schema_version=candidate.schema_version,
+            updated_at=candidate.updated_at,
+            producer_step=candidate.producer_step,
+        )
+        workspace_path = output_file.parent / "workspace.json"
+        temporary = workspace_path.with_name(f".{workspace_path.name}.{os.getpid()}.tmp")
+        temporary.write_text(
+            json.dumps(workspace.to_dict(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        os.replace(temporary, workspace_path)
         return str(workspace_path), {
             "kind": "workspace",
+            "name": workspace.name,
             "version": workspace.version,
             "base_sha": workspace.base_sha,
             "head_sha": workspace.head_sha,
             "updated_by": step_name,
+            "updated_at": workspace.updated_at,
+            "producer_step": workspace.producer_step,
         }
 
     def _write_artifact_record(
@@ -2361,22 +2490,68 @@ class GenericWorkflowStepExecutor(Phase):
         output_key: str,
         output_path: str,
         updated_by: str,
-    ) -> None:
+    ) -> ArtifactEntry:
         previous = blackboard_state.artifacts.get(output_key)
         version = previous.version + 1 if previous else 1
         kind = ArtifactKind.DOCUMENT
+        output_bytes = Path(output_path).read_bytes()
+        todo_identities: Optional[dict[str, str]] = None
+        content = output_bytes.decode("utf-8")
+        if "## Todo List" in content:
+            try:
+                todo_items = parse_todo_list(content)
+            except TodoContractError as exc:
+                raise ValueError(f"artifact {output_key!r} has an invalid Todo List") from exc
+            plan_items = [item for item in todo_items if item.source == "plan"]
+            if plan_items:
+                todo_identities = {
+                    item.item_id: hashlib.sha256(
+                        "\x1f".join(
+                            (item.source, item.item_id, " ".join(item.work.split()))
+                        ).encode("utf-8")
+                    ).hexdigest()
+                    for item in plan_items
+                }
+                previous_identities = getattr(previous, "todo_identities", None) if previous else None
+                if previous_identities is None and previous is not None:
+                    try:
+                        previous_items = parse_todo_list(
+                            Path(previous.path).read_text(encoding="utf-8")
+                        )
+                        validate_todo_identities(previous_items, tuple(plan_items))
+                        previous_identities = {
+                            item.item_id: hashlib.sha256(
+                                "\x1f".join(
+                                    (item.source, item.item_id, " ".join(item.work.split()))
+                                ).encode("utf-8")
+                            ).hexdigest()
+                            for item in previous_items
+                            if item.source == "plan"
+                        }
+                    except (OSError, UnicodeError, TodoContractError):
+                        previous_identities = None
+                if previous_identities:
+                    for item_id, identity in todo_identities.items():
+                        if item_id in previous_identities and previous_identities[item_id] != identity:
+                            raise ValueError(
+                                f"plan Todo identity {item_id!r} was reassigned; retain the existing ID"
+                            )
         artifact = ArtifactEntry(
             name=output_key,
             kind=kind,
             version=version,
             updated_by=updated_by,
             path=output_path,
+            content_sha256=hashlib.sha256(output_bytes).hexdigest(),
+            todo_identities=todo_identities,
         )
         artifact_path = self._get_iteration_dir(self.iteration) / "artifact.json"
-        artifact_path.write_text(
-            json.dumps(artifact.to_dict(), ensure_ascii=False, indent=2),
-            encoding="utf-8",
+        temporary = artifact_path.with_name(f".{artifact_path.name}.{os.getpid()}.tmp")
+        temporary.write_text(
+            json.dumps(artifact.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
         )
+        os.replace(temporary, artifact_path)
+        return artifact
 
     def _validate_outbound_causal_todo(
         self,
@@ -2446,6 +2621,25 @@ class GenericWorkflowStepExecutor(Phase):
         if input_artifacts is not None and output_key not in input_artifacts:
             return True, "", False
 
+        producer_behavior = resolve_step_behavior(self.playbook, step_name)
+        route = (producer_behavior.feedback_routes or {}).get(target)
+        if route is not None:
+            try:
+                routed_items = parse_todo_list(
+                    output_file.read_text(encoding="utf-8"),
+                    expected_source=str(route.todo_source),
+                )
+                prefix = f"{route.todo_id_prefix}-"
+                if any(not item.item_id.startswith(prefix) for item in routed_items):
+                    raise TodoContractError("Todo item ID does not match the declared route prefix")
+            except (OSError, UnicodeError, TodoContractError) as exc:
+                return (
+                    False,
+                    f"The correction Todo source for {step_name!r}->{target!r} is invalid: {exc}. "
+                    "Publish one complete canonical source before handoff.",
+                    True,
+                )
+
         target_iteration = self._get_next_iteration_number(
             target,
             self.issue_dir / target,
@@ -2453,7 +2647,7 @@ class GenericWorkflowStepExecutor(Phase):
         target_skill = self._resolve_skill_name(target_def, target_iteration)
         target_contract = self._get_skill_loader().get_workflow_contract(target_skill)
         if target_contract.checklist is None:
-            return True, "", False
+            return True, "", route is not None
 
         prospective_artifacts = self._step_input_artifacts(target_def, blackboard_state)
         prospective_artifacts[output_key] = output_file

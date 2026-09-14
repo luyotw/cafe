@@ -87,6 +87,7 @@ from cafe.core.workflow_models import (
     StepExecutionResult,
     StepInterrupted,
 )
+from cafe.core.workspace_artifact import WorkspaceArtifact, WorkspaceArtifactError
 from cafe.utils.checklist_validator import completion_requires_checklist, validate_checklist
 
 STATUS_TOKEN_PATTERN = re.compile(r"\bCAFE_[A-Z0-9_]+\b")
@@ -2724,6 +2725,15 @@ class BlackboardWorkflowRuntime:
             version = record.get("version")
             if not isinstance(version, int) or version < 1:
                 version = previous.version + 1 if previous else 1
+            workspace_path = Path(value)
+            try:
+                workspace = WorkspaceArtifact.from_dict(
+                    json.loads(workspace_path.read_text(encoding="utf-8"))
+                )
+            except (OSError, UnicodeError, json.JSONDecodeError, WorkspaceArtifactError) as exc:
+                raise ValueError(f"workspace artifact {key!r} is unreadable") from exc
+            if workspace.name != key or workspace.version != version:
+                raise ValueError(f"workspace artifact {key!r} metadata is contradictory")
             self.blackboard_store.put_artifact(
                 self.blackboard,
                 ArtifactEntry(
@@ -2732,8 +2742,9 @@ class BlackboardWorkflowRuntime:
                     version=version,
                     updated_by=str(record.get("updated_by", self.blackboard.current_step)),
                     path=value,
-                    base_sha=str(record["base_sha"]),
-                    head_sha=str(record["head_sha"]),
+                    updated_at=str(record.get("updated_at") or workspace.updated_at),
+                    base_sha=workspace.base_sha,
+                    head_sha=workspace.head_sha,
                 ),
             )
 

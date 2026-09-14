@@ -1,6 +1,7 @@
 """Tests for direct workflow step execution."""
 
 import json
+import hashlib
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -3693,7 +3694,20 @@ def test_correction_checklist_uses_declared_inbound_producer_not_history(
         "playbook": {"id": "default"},
         "roles": {"developer": {"default_agent": "David"}},
         "steps": {
-            "inspection": {"output_artifact": "findings"},
+            "inspection": {
+                "output_artifact": "findings",
+                "allowed_goto": ["repair_shop"],
+                "behavior": {
+                    "feedback_routes": {
+                        "repair_shop": {
+                            "artifact": "findings",
+                            "source_kind": "bespoke",
+                            "todo_source": "bespoke",
+                            "todo_id_prefix": "FIX",
+                        }
+                    }
+                },
+            },
             "publisher": {"output_artifact": "publication"},
             "repair_shop": {
                 "skill": "develop",
@@ -3724,6 +3738,10 @@ def test_correction_checklist_uses_declared_inbound_producer_not_history(
         version=1,
         updated_by="inspection",
         path=str(findings_file),
+        content_sha256=hashlib.sha256(findings_file.read_bytes()).hexdigest(),
+    )
+    (findings_file.parent / "artifact.json").write_text(
+        json.dumps(state.artifacts["findings"].to_dict()), encoding="utf-8"
     )
     state.artifacts["publication"] = ArtifactEntry(
         name="publication",
@@ -6095,7 +6113,7 @@ def _causal_todo_playbook() -> dict:
     return {
         "steps": {
             "plan": {"output_artifact": "plan"},
-            "review": {"output_artifact": "review_feedback"},
+            "review": {"output_artifact": "review_feedback", "allowed_goto": ["develop"]},
             "qa": {"output_artifact": "qa_feedback"},
             "pr": {
                 "output_artifact": "pr_result",
@@ -6154,7 +6172,7 @@ def test_causal_todo_uses_inbound_transition_after_start_override(tmp_path: Path
         to_owner=HandoffOwner.AGENT,
         to_step="develop",
         intent=HandoffIntent.AWAIT_AGENT,
-        from_step="develop",
+        from_step="review",
         source="workflow.start_step_override",
     )
     entry = ArtifactEntry(
@@ -6171,8 +6189,56 @@ def test_causal_todo_uses_inbound_transition_after_start_override(tmp_path: Path
     assert resolved["causal_todo"] is entry
 
 
+def test_correction_route_requires_the_persisted_sender_edge(tmp_path: Path) -> None:
+    executor = GenericWorkflowStepExecutor.__new__(GenericWorkflowStepExecutor)
+    executor.playbook = {
+        "steps": {
+            "detect": {"output_artifact": "incident_signal"},
+            "mitigate": {
+                "output_artifact": "incident_recovery",
+                "behavior": {
+                    "feedback_routes": {
+                        "triage": {
+                            "artifact": "incident_recovery",
+                            "source_kind": "incident_recovery",
+                            "todo_source": "recovery",
+                            "todo_id_prefix": "IREC",
+                        }
+                    }
+                },
+            },
+            "triage": {},
+        }
+    }
+    state = BlackboardStore(tmp_path / "issue").load_or_create("triage")
+    state.events.append(
+        EventEntry(
+            timestamp="2026-01-01T00:00:00Z",
+            step="detect",
+            event_type="transition",
+            message="",
+            data={"from": "detect", "to": "triage"},
+        )
+    )
+    assert executor._persisted_inbound_feedback_route("triage", state) is None
+
+    state.events.append(
+        EventEntry(
+            timestamp="2026-01-01T00:00:01Z",
+            step="mitigate",
+            event_type="transition",
+            message="",
+            data={"from": "mitigate", "to": "triage"},
+        )
+    )
+    route = executor._persisted_inbound_feedback_route("triage", state)
+    assert route is not None
+    assert route.artifact == "incident_recovery"
+
+
 def test_declared_feedback_route_preserves_custom_source_and_todo_identity(tmp_path: Path) -> None:
-    source = tmp_path / "review.md"
+    source = tmp_path / "issue" / "producer" / "iteration_003" / "output.md"
+    source.parent.mkdir(parents=True)
     source.write_text(
         "## Todo List\n"
         "- [ ] `REV-017` — Source: `editorial_review` — Work: fix — "
@@ -6195,6 +6261,10 @@ def test_declared_feedback_route_preserves_custom_source_and_todo_identity(tmp_p
         version=3,
         updated_by="producer",
         path=str(source),
+        content_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+    )
+    (source.parent / "artifact.json").write_text(
+        json.dumps(entry.to_dict()), encoding="utf-8"
     )
 
     playbook = {
@@ -6238,8 +6308,22 @@ def test_declared_feedback_route_falls_back_to_latest_complete_iteration(tmp_pat
         "Closure: done — Evidence: test\n",
         encoding="utf-8",
     )
+    old_record = ArtifactEntry(
+        name="review_doc", kind=ArtifactKind.DOCUMENT, version=1, updated_by="producer",
+        path=str(old_output),
+        content_sha256=hashlib.sha256(old_output.read_bytes()).hexdigest(),
+    )
+    (old_dir / "artifact.json").write_text(json.dumps(old_record.to_dict()), encoding="utf-8")
     current_output = current_dir / "output.md"
     current_output.write_text("## Todo List\n- [ ] malformed\n", encoding="utf-8")
+    current_record = ArtifactEntry(
+        name="review_doc", kind=ArtifactKind.DOCUMENT, version=2, updated_by="producer",
+        path=str(current_output),
+        content_sha256=hashlib.sha256(current_output.read_bytes()).hexdigest(),
+    )
+    (current_dir / "artifact.json").write_text(
+        json.dumps(current_record.to_dict()), encoding="utf-8"
+    )
     state = BlackboardStore(tmp_path / "issue").load_or_create("receiver")
     state.events.append(
         EventEntry(
@@ -6342,6 +6426,14 @@ def test_workspace_companion_uses_custom_names_and_runtime_storage(tmp_path: Pat
         {"summary_doc": str(output), "verified_snapshot": workspace_path},
         {"verified_snapshot": metadata},
     )
+    repeated_path, repeated_metadata = executor._publish_workspace_artifact(
+        step_name="develop",
+        step_def={"output_artifact": "summary_doc", "workspace_artifact": "verified_snapshot"},
+        output_file=output,
+        blackboard_state=runtime.blackboard,
+    )
+    assert repeated_path == workspace_path
+    assert repeated_metadata["version"] == metadata["version"]
 
     stored = runtime.blackboard.artifacts["verified_snapshot"]
     assert stored.kind == ArtifactKind.WORKSPACE
@@ -6351,6 +6443,55 @@ def test_workspace_companion_uses_custom_names_and_runtime_storage(tmp_path: Pat
     assert verify_workspace_artifact(
         json.loads(Path(workspace_path).read_text(encoding="utf-8")), repo=repo
     ).valid
+
+
+def test_current_workspace_consumer_fails_closed_when_companion_is_missing(tmp_path: Path) -> None:
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    with pytest.raises(ValueError, match="required workspace artifact"):
+        executor._validate_workspace_inputs(
+            {},
+            step_def={
+                "output_artifact": "review_feedback",
+                "workspace_input_artifact": "verified_snapshot",
+            },
+        )
+
+
+def test_plan_publication_rejects_reuse_of_an_existing_id_for_unrelated_work(
+    tmp_path: Path,
+) -> None:
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_dir = tmp_path / "issue" / "plan"
+    executor.iteration = 2
+    old_output = tmp_path / "issue" / "plan" / "iteration_001" / "output.md"
+    old_output.parent.mkdir(parents=True)
+    old_output.write_text(
+        "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: build parser — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+    state = BlackboardStore(tmp_path / "issue").load_or_create("plan")
+    state.artifacts["plan"] = ArtifactEntry(
+        name="plan",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="plan",
+        path=str(old_output),
+    )
+    new_output = tmp_path / "issue" / "plan" / "iteration_002" / "output.md"
+    new_output.parent.mkdir(parents=True)
+    new_output.write_text(
+        "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: deploy service — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="PLAN-001"):
+        executor._write_artifact_record(
+            blackboard_state=state,
+            output_key="plan",
+            output_path=str(new_output),
+            updated_by="plan",
+        )
 
 
 def test_workspace_consumer_rejects_workspace_from_another_repository(tmp_path: Path) -> None:
@@ -6720,7 +6861,7 @@ def test_causal_todo_normal_plan_entry_ignores_feedback_history(tmp_path: Path) 
         state,
         playbook=_causal_todo_playbook(),
     )
-    assert resolved["causal_todo"] is plan_entry
+    assert "causal_todo" not in resolved
 
 
 def test_causal_todo_local_review_human_task_precedes_direct_pr_fallback(

@@ -1,6 +1,6 @@
 playbook:
   id: incident
-  name: "Incident Response Workflow（偵測 → 分類 → 緩解 → 事後檢討）"
+  name: "Incident Response Workflow (detect -> triage -> mitigate -> postmortem)"
   conversation_locale: en-US
   applicability:
     summary: "Operational incident response for active impact, mitigation, and accountable follow-up."
@@ -22,7 +22,7 @@ skills:
 
 roles:
   ops:
-    description: "值班／維運應變"
+    description: "Operational incident response"
     default_agent: "Casey"
     default_cli: "claude"
 

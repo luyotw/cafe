@@ -139,6 +139,7 @@ steps:
     chat_role: reviewer
     assignee_type: agent
     input_artifacts: [spec, plan, code, workspace, workflow_feedback]
+    workspace_input_artifact: workspace
     output_artifact: review_feedback
     human_tasks:
       - trigger: need_clarification
@@ -166,6 +167,7 @@ steps:
     chat_role: developer
     assignee_type: agent
     input_artifacts: [spec, plan, code, workspace, review_feedback, workflow_feedback]
+    workspace_input_artifact: workspace
     output_artifact: pr_result
     behavior:
       completion: baton

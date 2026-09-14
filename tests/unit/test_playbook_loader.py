@@ -165,6 +165,13 @@ def test_feedback_route_requires_a_real_transition_and_matching_output() -> None
         PlaybookDefinition.model_validate(mismatched_output)
 
 
+def test_backward_allowed_goto_requires_a_complete_feedback_route() -> None:
+    playbook = _route_playbook()
+    playbook["steps"]["receiver"]["allowed_goto"] = ["producer"]
+    with pytest.raises(ValueError, match="backward transition.*producer"):
+        PlaybookDefinition.model_validate(playbook)
+
+
 def test_step_can_declare_one_arbitrary_named_workspace_companion() -> None:
     step = StepConfig.model_validate(
         {
@@ -178,6 +185,19 @@ def test_step_can_declare_one_arbitrary_named_workspace_companion() -> None:
 
     assert step.output_artifact == "summary_doc"
     assert step.workspace_artifact == "verified_snapshot"
+
+
+def test_workspace_companion_cannot_collide_with_summary() -> None:
+    with pytest.raises(ValueError, match="differ from output_artifact"):
+        StepConfig.model_validate(
+            {
+                "skill": "developer",
+                "role": "developer",
+                "output_artifact": "summary_doc",
+                "workspace_artifact": "summary_doc",
+                "on": {},
+            }
+        )
 
 
 @pytest.mark.parametrize(

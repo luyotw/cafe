@@ -116,3 +116,49 @@ def test_workspace_snapshot_rejects_reversed_or_unsupported_records(tmp_path: Pa
 
     with pytest.raises(WorkspaceArtifactError, match="schema"):
         WorkspaceArtifact.from_dict({"schema_version": 99})
+
+
+def test_workspace_receipts_are_repository_relative_verification_json(tmp_path: Path) -> None:
+    repo, base, head = _repo(tmp_path)
+    receipt = _receipt(repo)
+    artifact = build_workspace_artifact(
+        repo=repo,
+        name="snapshot",
+        version=1,
+        base_sha=base,
+        head_sha=head,
+        receipt_outputs=[receipt],
+    )
+
+    raw = artifact.to_dict()
+    raw["receipts"][0]["path"] = "../outside.json"
+    with pytest.raises(WorkspaceArtifactError, match="receipt"):
+        WorkspaceArtifact.from_dict(raw)
+
+    raw = artifact.to_dict()
+    raw["receipts"][0]["path"] = "other.json"
+    with pytest.raises(WorkspaceArtifactError, match="verification.json"):
+        WorkspaceArtifact.from_dict(raw)
+
+
+def test_workspace_receipt_rejects_symlink_escape(tmp_path: Path) -> None:
+    repo, base, head = _repo(tmp_path)
+    receipt = _receipt(repo)
+    outside = tmp_path / "outside.json"
+    outside.write_text((receipt.parent / "verification.json").read_text(), encoding="utf-8")
+    link = repo / ".cafe" / "escaped"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(outside)
+    raw = build_workspace_artifact(
+        repo=repo,
+        name="snapshot",
+        version=1,
+        base_sha=base,
+        head_sha=head,
+        receipt_outputs=[receipt],
+    ).to_dict()
+    raw["receipts"][0]["path"] = ".cafe/escaped/verification.json"
+    escaped = WorkspaceArtifact.from_dict(raw)
+    checked = verify_workspace_artifact(escaped, repo=repo)
+    assert checked.valid is False
+    assert any("symlink" in reason or "escapes" in reason for reason in checked.reasons)

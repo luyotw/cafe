@@ -1,6 +1,6 @@
 ---
 name: cafe-brief_first
-description: 建立初版內容大綱與撰稿需求（編輯流程）
+description: Create an initial editorial brief and drafting requirements
 version: 1.1.0
 workflow:
   execution_profile:
@@ -28,9 +28,17 @@ workflow:
         - id: audience
           prompt: Who is the intended audience?
   prompt_inputs:
-    - artifacts: [review_feedback]
+    - artifacts: [review_feedback, causal_todo]
       placeholder: correction_source
       required: false
+  checklist:
+    variants:
+      - when: {feedback: true}
+        sections:
+          - todo_projection: {artifact: causal_todo, causal: true}
+      - when: {}
+        sections:
+          - reference: correction_contract.md
 ---
 
 # Editorial Brief
@@ -39,10 +47,10 @@ workflow:
 Read your agent file: {agent_file}
 
 ## Instructions
-將需求或完整的審閱 correction source 整理成清楚的內容大綱：受眾、角度、需補強的資訊與驗收重點；保留輸入 Todo item IDs。
+Turn the request or complete editorial correction source into a clear brief covering audience, angle, missing information, and acceptance points. Preserve every incoming Todo item ID.
 
 ## Output
 Write brief to: {output_file}
 
 ## Handoff
-- 依照本輪結果寫入 next-step baton；blackboard 由 runtime 更新。
+- Write the next-step baton for this result; the runtime updates the blackboard.

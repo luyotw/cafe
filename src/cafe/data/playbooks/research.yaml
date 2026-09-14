@@ -1,6 +1,6 @@
 playbook:
   id: research
-  name: "Research Workflow（問題 → 搜尋整理 → 綜合 → 報告）"
+  name: "Research Workflow (question -> collect -> synthesize -> report)"
   conversation_locale: en-US
   applicability:
     summary: "Evidence-led investigation for an open question that needs a sourced conclusion."
@@ -22,7 +22,7 @@ skills:
 
 roles:
   researcher:
-    description: "研究／分析人員"
+    description: "Research and analysis"
     default_agent: "Morgan"
     default_cli: "claude"
 

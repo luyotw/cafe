@@ -1,6 +1,6 @@
 playbook:
   id: editorial
-  name: "Editorial Workflow（撰稿 → 審閱 → 發佈）"
+  name: "Editorial Workflow (brief -> draft -> review -> publish)"
   conversation_locale: en-US
   applicability:
     summary: "Editorial production for a confirmed publication outcome and audience."
@@ -22,11 +22,11 @@ skills:
 
 roles:
   editor:
-    description: "內容編輯／審閱"
+    description: "Editorial planning and review"
     default_agent: "Roger"
     default_cli: "gemini"
   writer:
-    description: "撰稿者"
+    description: "Editorial drafting"
     default_agent: "David"
     default_cli: "claude"
 

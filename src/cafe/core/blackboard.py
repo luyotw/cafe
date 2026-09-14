@@ -237,6 +237,8 @@ class ArtifactEntry:
     summary: str = ""
     base_sha: Optional[str] = None
     head_sha: Optional[str] = None
+    content_sha256: Optional[str] = None
+    todo_identities: Optional[Dict[str, str]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
@@ -255,6 +257,12 @@ class ArtifactEntry:
             summary=str(data.get("summary", "")),
             base_sha=data.get("base_sha"),
             head_sha=data.get("head_sha"),
+            content_sha256=data.get("content_sha256"),
+            todo_identities=(
+                {str(key): str(value) for key, value in data["todo_identities"].items()}
+                if isinstance(data.get("todo_identities"), dict)
+                else None
+            ),
         )
 
 
@@ -1267,8 +1275,9 @@ class BlackboardStore:
                     name=workspace.name,
                     kind=ArtifactKind.WORKSPACE,
                     version=workspace.version,
-                    updated_by=artifact_file.parent.parent.name,
+                    updated_by=workspace.producer_step or artifact_file.parent.parent.name,
                     path=str(artifact_file),
+                    updated_at=workspace.updated_at or _now_iso(),
                     base_sha=workspace.base_sha,
                     head_sha=workspace.head_sha,
                 )

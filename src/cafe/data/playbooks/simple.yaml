@@ -103,6 +103,7 @@ steps:
     role: qa
     assignee_type: agent
     input_artifacts: [spec, code, workspace]
+    workspace_input_artifact: workspace
     output_artifact: qa_feedback
     human_tasks:
       - trigger: need_clarification
@@ -128,6 +129,7 @@ steps:
     role: developer
     assignee_type: agent
     input_artifacts: [spec, code, workspace, qa_feedback, workflow_feedback]
+    workspace_input_artifact: workspace
     output_artifact: pr_result
     behavior:
       completion: baton

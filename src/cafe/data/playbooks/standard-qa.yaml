@@ -90,6 +90,7 @@ steps:
     role: reviewer
     assignee_type: agent
     input_artifacts: [spec, plan, code, workspace, qa_feedback, workflow_feedback]
+    workspace_input_artifact: workspace
     output_artifact: review_feedback
     behavior: {runtime_tool_grants: [git_inspection]}
     human_tasks:
@@ -109,6 +110,7 @@ steps:
     role: qa
     assignee_type: agent
     input_artifacts: [spec, plan, code, workspace, review_feedback]
+    workspace_input_artifact: workspace
     output_artifact: qa_feedback
     human_tasks:
       - {trigger: need_clarification, task_id: clarification-feedback, outcomes: {submit: qa}}
@@ -125,6 +127,7 @@ steps:
     role: developer
     assignee_type: agent
     input_artifacts: [spec, plan, code, workspace, review_feedback, qa_feedback, workflow_feedback]
+    workspace_input_artifact: workspace
     output_artifact: pr_result
     behavior:
       completion: baton

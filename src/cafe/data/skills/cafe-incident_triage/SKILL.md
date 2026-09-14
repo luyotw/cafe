@@ -1,6 +1,6 @@
 ---
 name: cafe-incident_triage
-description: 分類與處置決策（維運應變流程）
+description: Classify incidents and choose response actions
 version: 1.1.0
 workflow:
   execution_profile:
@@ -14,9 +14,17 @@ workflow:
       prompt: Provide the incident details needed to continue triage.
       input_schema: feedback
   prompt_inputs:
-    - artifacts: [incident_recovery, incident_learning]
+    - artifacts: [incident_recovery, incident_learning, causal_todo]
       placeholder: correction_source
       required: false
+  checklist:
+    variants:
+      - when: {feedback: true}
+        sections:
+          - todo_projection: {artifact: causal_todo, causal: true}
+      - when: {}
+        sections:
+          - reference: correction_contract.md
 ---
 
 # Incident Triage
@@ -25,10 +33,10 @@ workflow:
 Read your agent file: {agent_file}
 
 ## Instructions
-判定優先級、指派與緩解策略，必要時回到偵測步驟補齊資訊；收到 correction source 時完整消化其 canonical Todo items 並保留 IDs。
+Set priority, ownership, and mitigation strategy, returning to detection when information is incomplete. When a correction source is supplied, consume every canonical Todo item and preserve its ID.
 
 ## Output
 Write triage report to: {output_file}
 
 ## Handoff
-- 依照本輪結果寫入 next-step baton；blackboard 由 runtime 更新。
+- Write the next-step baton for this result; the runtime updates the blackboard.

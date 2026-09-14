@@ -96,6 +96,7 @@ steps:
       runtime_tool_grants: [web_research, git_inspection]
     assignee_type: agent
     input_artifacts: [code, workspace, workflow_feedback]
+    workspace_input_artifact: workspace
     output_artifact: review_feedback
     human_tasks:
       - trigger: need_clarification
@@ -121,6 +122,7 @@ steps:
     role: developer
     assignee_type: agent
     input_artifacts: [code, workspace, review_feedback, workflow_feedback]
+    workspace_input_artifact: workspace
     output_artifact: pr_result
     behavior:
       completion: baton
