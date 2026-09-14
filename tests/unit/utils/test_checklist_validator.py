@@ -1,6 +1,7 @@
 """Unit tests for checklist_validator module."""
 
 import subprocess
+import sys
 from unittest.mock import patch
 
 import pytest
@@ -204,6 +205,57 @@ def test_projected_todo_evidence_is_bound_to_repository_state(tmp_path):
     assert validate_projected_todos(checklist, output, (item,), repo_root=tmp_path)
 
 
+def test_projected_todo_evidence_accepts_non_pytest_runner(tmp_path):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "config", "user.email", "test@example.com"], check=True
+    )
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "Test"], check=True)
+    source_file = tmp_path / "src" / "Feature.php"
+    test_file = tmp_path / "tests" / "integration" / "FeatureTest.php"
+    runner = tmp_path / "vendor" / "bin" / "phpunit"
+    source_file.parent.mkdir()
+    test_file.parent.mkdir(parents=True)
+    runner.parent.mkdir(parents=True)
+    source_file.write_text("<?php\n", encoding="utf-8")
+    test_file.write_text("<?php\n", encoding="utf-8")
+    runner.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    runner.chmod(0o755)
+    (tmp_path / ".gitignore").write_text(
+        "checklist.md\noutput.md\nverification.json\nverification.log\n", encoding="utf-8"
+    )
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "Add feature"], check=True)
+    head = subprocess.check_output(
+        ["git", "-C", str(tmp_path), "rev-parse", "HEAD"], text=True
+    ).strip()
+    item = parse_todo_list(
+        "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: x — Closure: y — Evidence: z\n"
+    )[0]
+    checklist = tmp_path / "checklist.md"
+    output = tmp_path / "output.md"
+    command = [
+        "./vendor/bin/phpunit",
+        "--no-coverage",
+        "tests/integration/FeatureTest.php",
+    ]
+    checklist.write_text(item.checklist_row().replace("[ ]", "[x]") + "\n")
+    output.write_text(
+        "## Todo Progress\n\n### PLAN-001\n- Status: completed\n"
+        f"- Source fingerprint: `{item.fingerprint}`\n"
+        "- Files: `src/Feature.php`, `tests/integration/FeatureTest.php`\n"
+        f"- Commit: `{head}`\n"
+        f"- Targeted evidence: command=`{' '.join(command)}`; exit=0; head=`{head}`\n"
+        "- Remaining work: None.\n- Next action: Review.\n"
+    )
+    assert (
+        run_verification(output_file=output, command=command, scope="targeted", cwd=tmp_path)[0]
+        == 0
+    )
+
+    assert validate_projected_todos(checklist, output, (item,), repo_root=tmp_path) == []
+
+
 def test_projected_todo_accepts_only_verifiable_no_change_evidence(tmp_path):
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     subprocess.run(
@@ -211,8 +263,10 @@ def test_projected_todo_accepts_only_verifiable_no_change_evidence(tmp_path):
     )
     subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "Test"], check=True)
     test_file = tmp_path / "tests" / "test_noop.py"
+    readme_file = tmp_path / "README.md"
     test_file.parent.mkdir()
     test_file.write_text("def test_noop(): assert True\n")
+    readme_file.write_text("not a test\n")
     (tmp_path / ".gitignore").write_text(
         "checklist.md\noutput.md\nverification.json\nverification.log\n.pytest_cache/\n__pycache__/\n"
     )
@@ -252,6 +306,33 @@ def test_projected_todo_accepts_only_verifiable_no_change_evidence(tmp_path):
         )
     )
     assert validate_projected_todos(checklist, output, (item,), repo_root=tmp_path) == []
+    unrelated = [sys.executable, "-c", "pass", "README.md"]
+    assert (
+        run_verification(
+            output_file=output,
+            command=unrelated,
+            scope="targeted",
+            cwd=tmp_path,
+        )[0]
+        == 0
+    )
+    output.write_text(
+        output.read_text().replace(
+            "pytest -q tests/test_noop.py::test_noop", " ".join(unrelated)
+        )
+    )
+    assert validate_projected_todos(checklist, output, (item,), repo_root=tmp_path)
+    focused = ["pytest", "-q", "tests/test_noop.py::test_noop"]
+    assert (
+        run_verification(
+            output_file=output,
+            command=focused,
+            scope="targeted",
+            cwd=tmp_path,
+        )[0]
+        == 0
+    )
+    output.write_text(output.read_text().replace(" ".join(unrelated), " ".join(focused)))
     test_file.write_text("def test_noop(): assert False\n")
     assert validate_projected_todos(checklist, output, (item,), repo_root=tmp_path)
 
