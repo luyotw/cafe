@@ -5097,7 +5097,10 @@ def test_exact_fallback_session_is_persisted_and_resumed_by_next_correction(
             session_id="fallback-gemini",
         )
 
-    with patch("cafe.agents.executor.AgentExecutor.execute", execute):
+    with (
+        patch("cafe.agents.executor.AgentExecutor.execute", execute),
+        patch("cafe.agents.manager.time.sleep") as sleep,
+    ):
         executor._execute_agent_iteration(
             agent_name="Roger",
             prompt="continue correction",
@@ -5112,7 +5115,13 @@ def test_exact_fallback_session_is_persisted_and_resumed_by_next_correction(
     iteration_data = json.loads(
         (executor.phase_dir / "iteration_002" / "iteration.json").read_text(encoding="utf-8")
     )
-    assert attempts == [(AgentCLI.CODEX, "prior-codex"), (AgentCLI.GEMINI, None)]
+    assert attempts == [
+        (AgentCLI.CODEX, "prior-codex"),
+        (AgentCLI.CODEX, "prior-codex"),
+        (AgentCLI.CODEX, "prior-codex"),
+        (AgentCLI.GEMINI, None),
+    ]
+    assert [call.args[0] for call in sleep.call_args_list] == [30, 120]
     assert iteration_data["cli"] == "gemini"
     assert iteration_data["session_id"] == "fallback-gemini"
 

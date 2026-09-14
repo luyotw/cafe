@@ -8,11 +8,7 @@ from pathlib import Path
 from typing import Mapping
 
 from cafe.core.todo import MAX_TODO_ITEMS, TodoItem
-from cafe.verification.receipt import (
-    FOCUSED_SELECTOR_PATTERN,
-    _pytest_argument_index,
-    check_verification_receipt,
-)
+from cafe.verification.receipt import check_verification_receipt
 
 _PROJECTED = re.compile(
     r"^\[(?P<state>[ xX])\] `(?P<id>[^`]+)` — (?P<work>.+) "
@@ -241,6 +237,26 @@ def _git(repo_root: Path, *args: str) -> subprocess.CompletedProcess[str]:
         )
 
 
+def _command_file_arguments(command: list[str], root: Path) -> set[str]:
+    """Return existing repo-relative files passed to a verification command."""
+    paths: set[str] = set()
+    for argument in command[1:]:
+        if argument.startswith("-"):
+            continue
+        value = argument.split("::", 1)[0]
+        candidate_path = Path(value)
+        if candidate_path.is_absolute() or ".." in candidate_path.parts:
+            continue
+        candidate = (root / candidate_path).resolve()
+        try:
+            relative = candidate.relative_to(root)
+        except ValueError:
+            continue
+        if candidate.is_file():
+            paths.add(relative.as_posix())
+    return paths
+
+
 def validate_todo_evidence_set(
     evidence: Mapping[str, Mapping[str, str]],
     repo_root: Path,
@@ -378,19 +394,11 @@ def validate_todo_evidence_set(
                 f"Todo ledger targeted evidence has no matching recorded result for {item_id}"
             )
             continue
-        pytest_index = _pytest_argument_index(command)
-        selectors = (
-            [part for part in command[pytest_index + 1 :] if not part.startswith("-")]
-            if pytest_index is not None
-            else []
-        )
-        bases = [selector.split("::", 1)[0] for selector in selectors]
+        command_files = _command_file_arguments(command, root)
+        command_tests = {path for path in command_files if path.startswith("tests/")}
         claimed_tests = {path for path in paths if path.startswith("tests/")}
-        if (
-            not selectors
-            or any(not FOCUSED_SELECTOR_PATTERN.fullmatch(selector) for selector in selectors)
-            or any(not (root / base).is_file() for base in bases)
-            or (not no_changes and not claimed_tests.intersection(bases))
+        if not command_tests or (
+            not no_changes and not claimed_tests.intersection(command_tests)
         ):
             errors[item_id].append(f"Todo ledger targeted evidence is unrelated for {item_id}")
     return errors
