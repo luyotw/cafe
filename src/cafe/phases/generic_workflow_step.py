@@ -2336,14 +2336,21 @@ class GenericWorkflowStepExecutor(Phase):
 
     def _validate_projected_todo_completion(self, checklist_path: Path) -> bool:
         """Re-resolve declared Todo sources before accepting phase completion."""
+        passed, _detail = self._validate_projected_todo_completion_detail(checklist_path)
+        return passed
+
+    def _validate_projected_todo_completion_detail(
+        self, checklist_path: Path
+    ) -> tuple[bool, str]:
+        """Return actionable projected Todo validation detail for agent retries."""
         if self.phase_name not in self.playbook.get("steps", {}):
-            return True
+            return True, ""
         skill_name = self._resolve_skill_name(
             self.playbook["steps"][self.phase_name], self.iteration
         )
         contract = self._get_skill_loader().get_workflow_contract(skill_name)
         if contract.checklist is None:
-            return True
+            return True, ""
         state = BlackboardStore(self.issue_dir).load_or_create(self.phase_name)
         artifacts = self._step_input_artifacts(self.playbook["steps"][self.phase_name], state)
         causal_artifact = next(
@@ -2364,7 +2371,7 @@ class GenericWorkflowStepExecutor(Phase):
                     causal_artifact=causal_artifact,
                 )
             except ValueError:
-                return False
+                return False, "The causal Todo artifact could not be resolved."
         feedback = bool(causal_artifact and artifacts.get(causal_artifact))
         variant = select_checklist_variant(
             contract,
@@ -2380,7 +2387,10 @@ class GenericWorkflowStepExecutor(Phase):
                 continue
             entry = artifacts.get(section.todo_projection.artifact)
             if entry is None:
-                return False
+                return (
+                    False,
+                    f"The projected Todo artifact {section.todo_projection.artifact!r} is missing.",
+                )
             try:
                 items = projection_todo_items(entry, expected_source=section.todo_projection.source)
                 expected.extend(items)
@@ -2400,17 +2410,20 @@ class GenericWorkflowStepExecutor(Phase):
                     }
                 )
             except (OSError, ValueError):
-                return False
+                return False, "The authoritative projected Todo source is invalid."
         output_path = self._get_versioned_file_path(self.phase_name, self.iteration, self.phase_dir)
         pinned = self._load_todo_projection_snapshot(output_path.parent)
         if pinned != current_projections:
-            return False
-        return not validate_projected_todos(
+            return False, "The projected Todo snapshot is stale."
+        errors = validate_projected_todos(
             checklist_path,
             output_path,
             tuple(expected),
             repo_root=get_git_toplevel(),
         )
+        if errors:
+            return False, "Projected Todo completion failed:\n- " + "\n- ".join(errors)
+        return True, ""
 
     def _validate_produced_packet_contracts(
         self, *, producer_step: str, artifact_name: str, output_file: Path
