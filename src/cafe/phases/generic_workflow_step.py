@@ -2422,7 +2422,27 @@ class GenericWorkflowStepExecutor(Phase):
             repo_root=get_git_toplevel(),
         )
         if errors:
-            return False, "Projected Todo completion failed:\n- " + "\n- ".join(errors)
+            templates = []
+            for item in expected:
+                templates.append(
+                    f"### {item.item_id}\n"
+                    "- Status: completed\n"
+                    f"- Source fingerprint: `{item.fingerprint}`\n"
+                    "- Files: `<repo-relative path>`\n"
+                    "- Commit: `<full 40-character commit SHA>`\n"
+                    "- Targeted evidence: command=`<command>`; exit=0; "
+                    "head=`<full current HEAD SHA>`\n"
+                    "- Remaining work: None.\n"
+                    "- Next action: Review."
+                )
+            return (
+                False,
+                "Projected Todo completion failed:\n- "
+                + "\n- ".join(errors)
+                + "\n\nUse exactly one '## Todo Progress' section with this canonical "
+                "entry shape for each authoritative item:\n\n"
+                + "\n\n".join(templates),
+            )
         return True, ""
 
     def _validate_produced_packet_contracts(
