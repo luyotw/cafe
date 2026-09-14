@@ -7094,6 +7094,9 @@ workflow:
     passed, detail = executor._validate_projected_todo_completion_detail(checklist)
     assert passed is False
     assert "Todo ledger item set does not match the authoritative set" in detail
+    assert f"### {item.item_id}" in detail
+    assert f"- Source fingerprint: `{item.fingerprint}`" in detail
+    assert "- Commit: `<full 40-character commit SHA>`" in detail
     output.write_text(valid_output, encoding="utf-8")
 
     ledger.path.write_text('{"version": 1, "entries": []}\n', encoding="utf-8")
