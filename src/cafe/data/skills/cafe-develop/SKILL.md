@@ -1,7 +1,7 @@
 ---
 name: cafe-develop
 description: "依計畫進行程式開發與測試"
-version: 1.10.0
+version: 1.10.1
 workflow:
   execution_profile:
     workload: implementation
@@ -79,10 +79,14 @@ workflow:
           - reference: execution_steps_correction.md
           - todo_projection: {artifact: causal_todo, causal: true}
           - optional_checklist: basic_principles.md
-      - when: {}
+      - when: {artifact_present: [plan]}
         sections:
           - reference: execution_steps_normal.md
           - todo_projection: {artifact: plan, source: plan}
+          - optional_checklist: basic_principles.md
+      - when: {}
+        sections:
+          - reference: execution_steps_normal.md
           - optional_checklist: basic_principles.md
     include_role_guidance: true
 ---
