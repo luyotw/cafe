@@ -96,7 +96,7 @@ Read your agent file: {agent_file}
 - Use the workflow inputs listed in the runtime context. When a specification or plan is supplied, treat it as authoritative for this run.
 
 ## Instructions
-- `## Todo Progress` 的 completed item 必須使用可驗證 evidence contract：每項最多 32 個 `Files` 與 8 個 `Commit`；`Files` 列出 backtick 包住的 repo-relative tracked paths，且至少一個 test path 必須由同一項的 targeted command 執行；`Commit` 列出涵蓋這些檔案且可解析的完整 backtick SHA；`Targeted evidence` 使用 ``command=`...`; exit=0; head=`<完整 HEAD SHA>` ``，並須完全匹配本 iteration 的有效 `targeted` verification receipt，不得自行宣稱執行結果。確實沒有 repository change 時，`Files` 寫 `N/A (no repository changes)`、`Commit` 寫 `N/A (no repository changes): <reason>`，且只在 tracked worktree clean 時有效。不得使用自由文字或杜撰的檔案、commit、測試結果。
+- `## Todo Progress` 的 completed item 必須使用可驗證 evidence contract：先以 `cafe verification run --output-file {output_file} --scope targeted -- <test command>` 執行框架不限的 targeted command 並產生本 iteration receipt；每項最多 32 個 `Files` 與 8 個 `Commit`；`Files` 列出 backtick 包住的 repo-relative tracked paths，且至少一個 test path 必須由同一項的 targeted command 執行；`Commit` 列出涵蓋這些檔案且可解析的完整 backtick SHA；`Targeted evidence` 使用 ``command=`...`; exit=0; head=`<完整 HEAD SHA>` ``，並須完全匹配該 receipt，不得自行宣稱執行結果。確實沒有 repository change 時，`Files` 寫 `N/A (no repository changes)`、`Commit` 寫 `N/A (no repository changes): <reason>`，且只在 tracked worktree clean 時有效。不得使用自由文字或杜撰的檔案、commit、測試結果。
 - 依目前 workflow 已提供的需求與計畫逐項完成；若此 workflow 未提供 spec 或 plan，依使用者輸入與 review feedback 完成範圍內修正
 - 先補測試再改程式
 - 第一次探索只做一輪：讀一次已提供的 spec、plan 與 feedback，再針對可用 Test List 與預計修改點搜尋程式碼；未出現新證據時不得重讀同一檔案或重跑相同的搜尋、`git status`、`git diff`

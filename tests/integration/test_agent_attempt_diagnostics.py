@@ -159,9 +159,12 @@ def test_fallback_success_preserves_primary_attempts_in_iteration_record(tmp_pat
         error_type="cli_unavailable",
     )
 
-    with patch(
-        "cafe.agents.executor.AgentExecutor.execute",
-        side_effect=[transient, transient, _success("fallback output")],
+    with (
+        patch(
+            "cafe.agents.executor.AgentExecutor.execute",
+            side_effect=[transient, transient, transient, _success("fallback output")],
+        ),
+        patch("cafe.agents.manager.time.sleep"),
     ):
         _run_iteration(executor)
 
@@ -172,6 +175,7 @@ def test_fallback_success_preserves_primary_attempts_in_iteration_record(tmp_pat
     assert [(item["cli"], item["attempt"]) for item in record["failed_attempts"]] == [
         ("claude", 1),
         ("claude", 2),
+        ("claude", 3),
     ]
     assert "raw-primary-secret" not in iteration_path.read_text(encoding="utf-8")
 
@@ -188,10 +192,14 @@ def test_all_failed_journey_persists_sanitized_history_without_raw_secrets(tmp_p
         error_type="rate_limit",
     )
 
-    with patch(
-        "cafe.agents.executor.AgentExecutor.execute",
-        side_effect=[primary_error, primary_error, fallback_error],
-    ), pytest.raises(CriticalPhaseError):
+    with (
+        patch(
+            "cafe.agents.executor.AgentExecutor.execute",
+            side_effect=[primary_error] * 3 + [fallback_error] * 3,
+        ),
+        patch("cafe.agents.manager.time.sleep"),
+        pytest.raises(CriticalPhaseError),
+    ):
         _run_iteration(executor)
 
     iteration_path = executor.phase_dir / "iteration_001" / "iteration.json"
@@ -200,7 +208,10 @@ def test_all_failed_journey_persists_sanitized_history_without_raw_secrets(tmp_p
     assert [(item["cli"], item["attempt"]) for item in iteration_record["failed_attempts"]] == [
         ("claude", 1),
         ("claude", 2),
+        ("claude", 3),
         ("gemini", 1),
+        ("gemini", 2),
+        ("gemini", 3),
     ]
     assert error_path.exists()
     persisted_text = (
@@ -229,14 +240,19 @@ def test_real_stream_error_path_redacts_durable_streaming_log(tmp_path: Path) ->
         '"text":"Failed to authenticate: HTTP 403; socket connection was closed unexpectedly; '
         'token=raw-primary-secret"}]}}\n'
     )
-    fallback_process = _stream_error_process(
-        '{"type":"error","message":"rate limit; token=raw-fallback-secret"}\n'
-    )
+    fallback_processes = [
+        _stream_error_process(
+            '{"type":"error","message":"rate limit; token=raw-fallback-secret"}\n'
+        )
+        for _ in range(3)
+    ]
 
-    with patch(
-        "subprocess.Popen",
-        side_effect=[primary_process, fallback_process],
-    ), patch("sys.platform", "win32"), pytest.raises(CriticalPhaseError):
+    with (
+        patch("subprocess.Popen", side_effect=[primary_process, *fallback_processes]),
+        patch("cafe.agents.manager.time.sleep"),
+        patch("sys.platform", "win32"),
+        pytest.raises(CriticalPhaseError),
+    ):
         _run_iteration(executor)
 
     streaming_path = executor.phase_dir / "iteration_001" / "streaming.jsonl"
@@ -256,10 +272,11 @@ def test_real_stream_socket_close_retries_primary_before_fallback(tmp_path: Path
     )
     retry_process = _stream_success_process("retry output")
 
-    with patch(
-        "subprocess.Popen",
-        side_effect=[disconnected_process, retry_process],
-    ) as popen, patch("sys.platform", "win32"):
+    with (
+        patch("subprocess.Popen", side_effect=[disconnected_process, retry_process]) as popen,
+        patch("cafe.agents.manager.time.sleep"),
+        patch("sys.platform", "win32"),
+    ):
         _run_iteration(executor)
 
     iteration_path = executor.phase_dir / "iteration_001" / "iteration.json"

@@ -10,7 +10,7 @@ from cafe.agents.executor import AgentExecutionError
 from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.playbook import resolve_playbook_skills
-from cafe.core.types import AgentCLI, AgentConfig, CliEntry
+from cafe.core.types import AgentCLI, AgentConfig, CliEntry, SessionData
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
@@ -57,12 +57,15 @@ def get_chat_next_step_path(issue_dir: Path) -> Path:
 
 
 def _load_chat_role_config(
-    config_manager: ConfigManager, role: str, issue_dir: Optional[Path] = None
+    config_manager: ConfigManager,
+    role: str,
+    issue_dir: Optional[Path] = None,
+    phase_name: Optional[str] = None,
 ) -> Optional[dict]:
-    """Load the active step's sole execution chain from phases.yaml."""
+    """Load one step's execution chain from phases.yaml."""
     if issue_dir is None:
         return None
-    execution_step = _load_chat_execution_step(issue_dir)
+    execution_step = phase_name or _load_chat_execution_step(issue_dir)
     resolution = load_phase_step_model(
         step_name=execution_step,
         local_path=get_git_toplevel() / ".cafe" / "phases.yaml",
@@ -75,6 +78,83 @@ def _load_chat_role_config(
         "role": resolution.role or role,
         "clis": [{"cli": cli, "model": model} for cli, model in resolution.clis],
     }
+
+
+def _playbook_role_steps(playbook: dict, role: str) -> set[str]:
+    """Return playbook steps owned by ``role``."""
+    steps = playbook.get("steps", {})
+    if not isinstance(steps, dict):
+        return set()
+    return {
+        step_name
+        for step_name, step_def in steps.items()
+        if isinstance(step_name, str)
+        and isinstance(step_def, dict)
+        and step_def.get("role") == role
+    }
+
+
+def _validate_chat_phase(playbook: dict, role: str, phase_name: str) -> None:
+    """Require an explicit phase to exist and belong to the requested role."""
+    steps = playbook.get("steps", {})
+    step_def = steps.get(phase_name) if isinstance(steps, dict) else None
+    if not isinstance(step_def, dict):
+        raise ValueError(f"unknown playbook phase '{phase_name}'")
+    phase_role = step_def.get("role")
+    if phase_role != role:
+        raise ValueError(
+            f"playbook phase '{phase_name}' belongs to role '{phase_role}', not '{role}'"
+        )
+
+
+def _load_latest_role_session(
+    issue_dir: Path,
+    *,
+    role: str,
+    playbook: dict,
+    phase_name: Optional[str] = None,
+) -> Optional[SessionData]:
+    """Load the most recently used phase session for a playbook role."""
+    role_steps = _playbook_role_steps(playbook, role)
+    if phase_name is not None:
+        role_steps &= {phase_name}
+    if not role_steps:
+        return None
+
+    candidates: list[SessionData] = []
+    for session_file in (issue_dir / "sessions").glob("*.json"):
+        try:
+            raw = json.loads(session_file.read_text(encoding="utf-8"))
+            session = SessionData(**raw)
+        except (OSError, json.JSONDecodeError, ValueError):
+            continue
+        if session.phase_name in role_steps:
+            candidates.append(session)
+
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: item.last_used_at.timestamp())
+
+
+def _resolve_configured_chat_session(
+    role_config: dict,
+    *,
+    phase_name: str,
+    session: Optional[SessionData],
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """Resolve current phase authority and reuse only a still-configured session."""
+    configured = _configured_cli_values(role_config)
+    agent_name = role_config.get("name")
+    if session is not None and session.agent_name == agent_name and session.cli.value in configured:
+        cli = session.cli.value
+        return (
+            cli,
+            _configured_model_for_cli(role_config, cli, phase_name),
+            session.session_id,
+        )
+
+    cli, model = _resolve_primary_chat_cli(role_config)
+    return cli, model, None
 
 
 def _load_chat_execution_step(issue_dir: Path) -> str:
@@ -198,6 +278,7 @@ def _load_active_chat_cli(
 
     recorded_chain = record.get("chain")
     if isinstance(recorded_chain, list):
+
         def _extract_cli_value(item):
             if isinstance(item, dict):
                 return item.get("cli")
@@ -439,6 +520,7 @@ def launch_chat_session(
     role: str,
     issue_name: str,
     *,
+    phase_name: Optional[str] = None,
     chat_mode: Optional[str] = None,
     extra_env: Optional[dict[str, str]] = None,
     initial_prompt: Optional[str] = None,
@@ -454,6 +536,8 @@ def launch_chat_session(
     Args:
         role: Agent role declared by the active workflow step.
         issue_name: Current issue name (used to load issue-specific session)
+        phase_name: Optional playbook phase whose session should be used. When
+            omitted, the most recently used phase session for ``role`` wins.
         initial_prompt: Optional first message to send when the interactive CLI supports it.
         prompt: Optional one-shot message. When set, print the response and exit.
     """
@@ -463,6 +547,8 @@ def launch_chat_session(
     try:
         _current_step, _valid_steps, playbook_id = _load_chat_workflow_context(issue_dir)
         chat_playbook = PlaybookLoader(project_root=Path.cwd()).load(playbook_id)
+        if phase_name is not None:
+            _validate_chat_phase(chat_playbook, role, phase_name)
     except Exception as exc:
         print(
             f"\n⚠️  Chat cannot start because playbook validation failed for "
@@ -470,10 +556,28 @@ def launch_chat_session(
         )
         return 1
 
+    selected_session = _load_latest_role_session(
+        issue_dir,
+        role=role,
+        playbook=chat_playbook,
+        phase_name=phase_name,
+    )
+    execution_step = (
+        phase_name
+        or (selected_session.phase_name if selected_session is not None else None)
+        or _load_chat_execution_step(issue_dir)
+    )
+    phase_routing = phase_name is not None or selected_session is not None
+
     # Load configuration
     config_manager = ConfigManager()
     try:
-        agent_config = _load_chat_role_config(config_manager, role, issue_dir=issue_dir)
+        agent_config = _load_chat_role_config(
+            config_manager,
+            role,
+            issue_dir=issue_dir,
+            phase_name=execution_step,
+        )
     except Exception as exc:
         print(
             f"\n⚠️  Chat cannot start because phase configuration failed for "
@@ -486,12 +590,20 @@ def launch_chat_session(
         return 0
 
     agent_name = agent_config.get("name")
-    agent_cli_str, agent_model = _resolve_chat_cli(
-        issue_dir,
-        role=role,
-        agent_name=agent_name,
-        role_config=agent_config,
-    )
+    if phase_routing:
+        agent_cli_str, agent_model, selected_session_id = _resolve_configured_chat_session(
+            agent_config,
+            phase_name=execution_step,
+            session=selected_session,
+        )
+    else:
+        agent_cli_str, agent_model = _resolve_chat_cli(
+            issue_dir,
+            role=role,
+            agent_name=agent_name,
+            role_config=agent_config,
+        )
+        selected_session_id = None
 
     if not agent_name or not agent_cli_str:
         print(f"\n⚠️  Invalid agent configuration for role '{role}'. Skipping chat.\n")
@@ -519,6 +631,9 @@ def launch_chat_session(
     except Exception as e:
         print(f"\n⚠️  Failed to get agent '{agent_name}': {e}. Skipping chat.\n")
         return 0
+    if phase_routing:
+        # Phase-routed chat must not inherit a generic session from another step.
+        executor.config.session_id = selected_session_id
     cli_strategy = executor._get_cli_strategy()
 
     _current_step, _valid_steps, _playbook_id = _prepare_chat_handoff_state(issue_dir)
@@ -526,7 +641,7 @@ def launch_chat_session(
         agent_cli=agent_cli,
         playbook=chat_playbook,
         role=role,
-        step_name=_current_step,
+        step_name=execution_step,
     )
     chat_env = {
         "CAFE_ISSUE_NAME": issue_name,
@@ -534,6 +649,8 @@ def launch_chat_session(
         "CAFE_CHAT_CURRENT_STEP": _current_step,
         "CAFE_CHAT_PLAYBOOK_ID": _playbook_id,
     }
+    if phase_routing:
+        chat_env["CAFE_CHAT_PHASE"] = execution_step
     if initial_prompt:
         chat_env["CAFE_CHAT_INITIAL_PROMPT"] = initial_prompt
     if chat_mode:
@@ -543,7 +660,7 @@ def launch_chat_session(
             chat_env[str(key)] = str(value)
 
     if prompt is not None:
-        executor.stream_output = False
+        executor.stream_output = True
         try:
             response = executor.execute(prompt, environment_overrides=chat_env)
         except AgentExecutionError as exc:
@@ -552,13 +669,27 @@ def launch_chat_session(
             return 1
 
         if response.session_id:
-            agent_manager.session_manager.save_session(
-                agent_name,
-                agent_cli,
-                response.session_id,
-                issue_name,
-            )
-        print(response.response)
+            if phase_routing:
+                agent_manager.session_manager.save_session(
+                    agent_name,
+                    agent_cli,
+                    response.session_id,
+                    issue_name,
+                    execution_step,
+                )
+            else:
+                agent_manager.session_manager.save_session(
+                    agent_name,
+                    agent_cli,
+                    response.session_id,
+                    issue_name,
+                )
+        streamed_text = any(
+            isinstance(fragment, str) and fragment.strip()
+            for fragment in (response.streaming_log or ())
+        )
+        if not streamed_text and response.response:
+            print(response.response)
         _warn_if_chat_handoff_missing(issue_dir, _current_step, _valid_steps)
         return 0
 
@@ -586,12 +717,21 @@ def launch_chat_session(
         resolved_session_id = session_id or _extract_latest_codex_session_id(codex_history_start_ts)
         if resolved_session_id:
             executor.config.session_id = resolved_session_id
-            agent_manager.session_manager.save_session(
-                agent_name,
-                agent_cli,
-                resolved_session_id,
-                issue_name,
-            )
+            if phase_routing:
+                agent_manager.session_manager.save_session(
+                    agent_name,
+                    agent_cli,
+                    resolved_session_id,
+                    issue_name,
+                    execution_step,
+                )
+            else:
+                agent_manager.session_manager.save_session(
+                    agent_name,
+                    agent_cli,
+                    resolved_session_id,
+                    issue_name,
+                )
 
     if result.returncode != 0:
         return _handle_chat_launch_failure(agent_cli, result)

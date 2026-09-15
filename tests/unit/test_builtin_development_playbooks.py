@@ -72,10 +72,25 @@ def test_every_builtin_pr_requires_local_review_before_done() -> None:
         assert "workflow_complete" not in pr.on
         assert local_review.trigger == "confirm_output"
         assert local_review.outcomes == {
-            "fix_now": "develop",
+            "fix_now": "pr",
             "create_follow_up": "_done",
             "continue_without_issue": "_done",
         }
+
+
+def test_every_builtin_pr_curates_corrective_feedback_before_development() -> None:
+    """Corrective sources re-enter their declared PR curator, not Develop."""
+    loader = PlaybookLoader()
+
+    for playbook_id in DEVELOPMENT_PLAYBOOKS:
+        pr = loader.load_model(playbook_id, strict=True).model.steps["pr"]
+        local_review = next(task for task in pr.human_tasks if task.task_id == "local-review")
+
+        assert pr.behavior.feedback_target == "pr"
+        assert pr.behavior.feedback_artifact == "workflow_feedback"
+        assert "workflow_feedback" in pr.input_artifacts
+        assert local_review.outcomes["fix_now"] == "pr"
+        assert pr.on["manual_handoff"] == "develop"
 
 
 def test_cafe_pr_routes_completed_artifacts_to_local_review() -> None:
@@ -83,14 +98,17 @@ def test_cafe_pr_routes_completed_artifacts_to_local_review() -> None:
         Path(__file__).parents[2] / "src" / "cafe" / "data" / "skills" / "cafe-pr" / "SKILL.md"
     ).read_text(encoding="utf-8")
 
-    assert "依本輪注入的 `{step_transitions}`" in skill
-    assert "宣告 `confirm_output` 時交給 `user` review" in skill
-    assert "只有宣告 `workflow_complete→done` 時才直接完成" in skill
-    assert "不得選擇未宣告的路由" in skill
+    assert "injected `{step_transitions}`" in skill
+    assert "Route `confirm_output` to `user`" in skill
+    assert "complete directly only when `workflow_complete→done` is declared" in skill
+    assert "select an undeclared route" in skill
+    assert "workflow_feedback_file" in skill
+    assert "current corrective cycle" in skill
+    assert "`manual_handoff`" in skill
     assert "Follow-up Proposals" in skill
-    assert "不會自動建立 GitHub issue" in skill
+    assert "does not create a GitHub issue automatically" in skill
     assert "decision applies to every open FUP" in skill
-    assert "不支援逐項混合處置" in skill
+    assert "per-proposal mixed disposition is not supported" in skill
 
     policy = next(
         task
@@ -117,11 +135,11 @@ def test_cafe_review_convergence_contract_preserves_critical_blockers() -> None:
         encoding="utf-8"
     )
 
-    assert "第 1–3 輪是 discovery mode" in skill
-    assert "第 4 輪起是 convergence mode" in skill
+    assert "Rounds 1–3 are discovery mode" in skill
+    assert "From round 4" in skill
     assert "confidence bucket" in skill
     assert "`Impact: Critical`" in skill
-    assert "不得重開 correction loop" in skill
+    assert "remain blocking" in skill
     assert "unresolved existing blocker lineage" in convergence
     assert "regression causally introduced by the current correction" in convergence
     assert "newly evidenced `Impact: Critical`" in convergence
@@ -216,6 +234,18 @@ def test_solution_alignment_stays_inside_the_plan_step(playbook_id: str) -> None
     assert clarification.outcomes == {"submit": "plan"}
 
 
+def test_plan_steps_declare_the_prior_identity_authority_and_skill_input() -> None:
+    loader = PlaybookLoader()
+    contract = SkillLoader().get_workflow_contract("cafe-plan")
+    prior_input = next(item for item in contract.prompt_inputs if item.placeholder == "prior_plan_file")
+    assert prior_input.artifacts == ("plan",)
+    assert prior_input.required is False
+    for playbook_id in ("standard", "standard-qa", "tdd", "tdd-qa"):
+        plan = loader.load_model(playbook_id, strict=True).model.steps["plan"]
+        assert plan.todo_identity_input_artifact == "plan"
+        assert plan.input_artifacts == ["spec", "plan"]
+
+
 def test_every_builtin_develop_step_binds_the_generic_permission_task() -> None:
     """Test List 5: permission requests reuse one policy and always resume develop."""
     policy = next(
@@ -296,7 +326,7 @@ def test_builtin_pr_feedback_routes_declare_portable_todo_metadata(
     playbook = PlaybookLoader().load_model(playbook_id, strict=True).model
     behavior = resolve_step_behavior(playbook, "pr")
 
-    assert behavior.feedback_target == "develop"
+    assert behavior.feedback_target == "pr"
     assert behavior.feedback_artifact == "workflow_feedback"
     assert behavior.feedback_source_kind == "github_pr"
     assert behavior.feedback_todo_source == "pr_comment"
@@ -305,6 +335,22 @@ def test_builtin_pr_feedback_routes_declare_portable_todo_metadata(
     assert binding.feedback_delivery is not None
     assert binding.feedback_delivery.todo_source == "workflow_feedback"
     assert binding.feedback_delivery.todo_id_prefix == "WF"
+
+
+@pytest.mark.parametrize(
+    "playbook_id",
+    ["standard", "standard-qa", "direct", "direct-qa", "hotfix", "simple", "tdd", "tdd-qa"],
+)
+def test_builtin_develop_publishes_workspace_and_consumers_declare_it(
+    playbook_id: str,
+) -> None:
+    playbook = PlaybookLoader().load_model(playbook_id, strict=True).model
+
+    develop = playbook.steps["develop"]
+    assert develop.workspace_artifact == "workspace"
+    for step_name in ("review", "qa", "pr"):
+        if step_name in playbook.steps:
+            assert "workspace" in playbook.steps[step_name].input_artifacts
 
 
 @pytest.mark.parametrize("playbook_id", ["standard-qa", "tdd-qa"])
@@ -358,7 +404,7 @@ def test_qa_feedback_is_exposed_by_every_correction_and_publication_skill() -> N
         if not mapping.required
     }
     assert required == {"code"}
-    assert optional == {"spec", "plan", "review_feedback"}
+    assert optional == {"spec", "plan", "review_feedback", "workspace"}
 
     pr_contract = loader.get_workflow_contract("cafe-pr")
     resolved = resolve_prompt_inputs(

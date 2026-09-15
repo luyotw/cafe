@@ -29,6 +29,9 @@ workflow:
     - artifacts: [code]
       placeholder: develop_file
       required: true
+    - artifacts: [workspace]
+      placeholder: workspace_file
+      required: false
     - artifacts: [plan]
       placeholder: plan_file
       required: false
@@ -54,6 +57,7 @@ Read your agent file: {agent_file}
 
 ## Instructions
 - Perform black-box acceptance against the requested behavior. When a requirements specification is provided, treat it as the acceptance source of truth; otherwise derive the behavior from the development summary and verify it against the changed product.
+- When `workspace_file` is supplied, verify its Git head, changed-file set, and receipts before accepting the development summary as current.
 - When an implementation plan is provided, exercise its Test List; otherwise derive observable scenarios from the available requirements and acceptance evidence.
 - When a review result is provided, prioritize its identified risks and confirm that unresolved findings do not escape acceptance.
 - Exercise every applicable acceptance criterion using observable scenarios or commands; do not infer a pass from code inspection alone.
@@ -67,4 +71,4 @@ Read your agent file: {agent_file}
 Write QA report to: {output_file}
 
 ## Handoff
-- 依照本輪結果寫入 next-step baton；blackboard 由 runtime 更新。
+- Write the next-step baton for this result; the runtime updates the blackboard.

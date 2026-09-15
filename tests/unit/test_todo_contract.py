@@ -1,6 +1,7 @@
 """Invariant tests for the canonical workflow Todo grammar."""
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -8,7 +9,9 @@ import pytest
 from cafe.core.todo import (
     TodoContractError,
     parse_todo_list,
+    parse_todo_identity_continuity,
     resolve_todo_source,
+    validate_todo_identities,
     workflow_feedback_todo_items,
 )
 
@@ -48,8 +51,72 @@ def test_todo_fingerprint_changes_when_any_closure_requirement_changes() -> None
     assert first.fingerprint != changed.fingerprint
 
 
+def test_todo_identity_continuity_parses_explicit_prior_work_fingerprints() -> None:
+    content = (
+        "## Todo List\n"
+        + _item()
+        + "\n\n## Todo Identity Continuity\n"
+        "- `PLAN-001` — Previous work fingerprint: `"
+        + "a" * 64
+        + "`\n"
+    )
+
+    assert parse_todo_identity_continuity(content) == {"PLAN-001": "a" * 64}
+
+
+def test_todo_identity_continuity_rejects_duplicate_or_malformed_rows() -> None:
+    with pytest.raises(TodoContractError):
+        parse_todo_identity_continuity(
+            "## Todo List\n"
+            + _item()
+            + "\n\n## Todo Identity Continuity\n"
+            "- `PLAN-001` — Previous work fingerprint: `short`\n"
+        )
+
+
 def test_todo_parser_accepts_only_the_canonical_intentionally_empty_marker() -> None:
     assert parse_todo_list("## Todo List\nNo actionable work.\n") == ()
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "# Todo List\n" + _item(),
+        "## Todo List\n- [ ] `TASK-001` — Source: `plan` — Work: build — Closure: done — Evidence: test",
+        "## Todo List\n- [ ] `PLAN-1` — Source: `plan` — Work: build — Closure: done — Evidence: test",
+        "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work:  — Closure: done — Evidence: test",
+        "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: build — Closure:  — Evidence: test",
+        "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: build — Closure: done — Evidence:  ",
+    ],
+)
+def test_todo_parser_rejects_noncanonical_heading_ids_and_empty_fields(content: str) -> None:
+    with pytest.raises(TodoContractError):
+        parse_todo_list(content)
+
+
+def test_todo_item_identity_validation_preserves_revisions_and_rejects_reassignment() -> None:
+    original = parse_todo_list("## Todo List\n" + _item())[0]
+    revised = parse_todo_list(
+        "## Todo List\n"
+        "- [ ] `PLAN-001` — Source: `plan` — Work: improve parser — "
+        "Closure: parser accepts valid input — Evidence: targeted pytest"
+    )[0]
+    added = parse_todo_list(
+        "## Todo List\n"
+        "- [ ] `PLAN-001` — Source: `plan` — Work: improve parser — "
+        "Closure: parser accepts valid input — Evidence: targeted pytest\n"
+        "- [ ] `PLAN-002` — Source: `plan` — Work: add docs — "
+        "Closure: docs explain the contract — Evidence: docs review"
+    )
+    validate_todo_identities((original,), (revised,))
+    validate_todo_identities((original,), added)
+    reassigned = parse_todo_list(
+        "## Todo List\n"
+        "- [ ] `PLAN-001` — Source: `plan` — Work: unrelated work — "
+        "Closure: another condition — Evidence: another test"
+    )[0]
+    with pytest.raises(TodoContractError, match="identity"):
+        validate_todo_identities((original,), (reassigned,), retained=("PLAN-001",))
 
 
 def test_todo_parser_accepts_a_declared_custom_source() -> None:
@@ -67,6 +134,18 @@ def test_every_builtin_todo_producer_declares_the_empty_marker() -> None:
         guidance = (skills / name / "SKILL.md").read_text(encoding="utf-8")
         assert "No actionable work." in guidance
         assert "100" in guidance
+
+
+def test_every_bundled_plan_template_has_one_canonical_todo_ledger() -> None:
+    template_dir = Path("src/cafe/data/skills/cafe-plan/assets/templates")
+    for name in ("default", "bug", "simple"):
+        items = parse_todo_list((template_dir / f"{name}.md").read_text(encoding="utf-8"))
+        if name == "simple":
+            assert items == ()
+        else:
+            assert items
+            assert all(item.source == "plan" for item in items)
+            assert all(re.match(r"PLAN-\d{3}", item.item_id) for item in items)
 
 
 def test_todo_parser_rejects_limit_plus_one_items() -> None:

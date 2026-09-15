@@ -1,6 +1,6 @@
 ---
 name: cafe-brief_revise
-description: 依回饋修訂內容大綱（編輯流程）
+description: Revise an editorial brief from declared correction feedback
 version: 1.1.0
 workflow:
   execution_profile:
@@ -27,6 +27,18 @@ workflow:
       questions:
         - id: audience
           prompt: Who is the intended audience?
+  prompt_inputs:
+    - artifacts: [review_feedback, causal_todo]
+      placeholder: correction_source
+      required: false
+  checklist:
+    variants:
+      - when: {feedback: true}
+        sections:
+          - todo_projection: {artifact: causal_todo, causal: true}
+      - when: {}
+        sections:
+          - reference: correction_contract.md
 ---
 
 # Revise Editorial Brief
@@ -35,10 +47,10 @@ workflow:
 Read your agent file: {agent_file}
 
 ## Instructions
-依審閱或釐清結果更新大綱，維持受眾與論述主軸一致。
+Update the brief from the complete editorial correction source or clarification results while preserving the audience and argument. Preserve every incoming Todo item ID.
 
 ## Output
 Write revised brief to: {output_file}
 
 ## Handoff
-- 依照本輪結果寫入 next-step baton；blackboard 由 runtime 更新。
+- Write the next-step baton for this result; the runtime updates the blackboard.

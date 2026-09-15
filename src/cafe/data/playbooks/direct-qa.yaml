@@ -58,6 +58,7 @@ steps:
     assignee_type: agent
     input_artifacts: [review_feedback, qa_feedback, pr_result, workflow_feedback]
     output_artifact: code
+    workspace_artifact: workspace
     initial_input:
       providers: [manual_text, github_issue]
       bind:
@@ -77,7 +78,8 @@ steps:
     skill: cafe-review
     role: reviewer
     assignee_type: agent
-    input_artifacts: [code, qa_feedback, workflow_feedback]
+    input_artifacts: [code, workspace, qa_feedback, workflow_feedback]
+    workspace_input_artifact: workspace
     output_artifact: review_feedback
     behavior: {runtime_tool_grants: [git_inspection]}
     human_tasks:
@@ -96,7 +98,8 @@ steps:
     skill: cafe-qa
     role: qa
     assignee_type: agent
-    input_artifacts: [code, review_feedback]
+    input_artifacts: [code, workspace, review_feedback]
+    workspace_input_artifact: workspace
     output_artifact: qa_feedback
     human_tasks:
       - {trigger: need_clarification, task_id: clarification-feedback, outcomes: {submit: qa}}
@@ -112,12 +115,13 @@ steps:
     skill: cafe-pr
     role: developer
     assignee_type: agent
-    input_artifacts: [code, review_feedback, qa_feedback, workflow_feedback]
+    input_artifacts: [code, workspace, review_feedback, qa_feedback, workflow_feedback]
+    workspace_input_artifact: workspace
     output_artifact: pr_result
     behavior:
       completion: baton
       publish_confirmation: true
-      feedback_target: develop
+      feedback_target: pr
       feedback_artifact: workflow_feedback
       feedback_source_kind: github_pr
       feedback_todo_source: pr_comment
@@ -132,7 +136,7 @@ steps:
     human_tasks:
       - trigger: confirm_output
         task_id: local-review
-        outcomes: {fix_now: develop, create_follow_up: _done, continue_without_issue: _done}
+        outcomes: {fix_now: pr, create_follow_up: _done, continue_without_issue: _done}
         feedback_delivery: {artifact: workflow_feedback, source_kind: local_review, todo_source: workflow_feedback, todo_id_prefix: WF}
     "on": {confirm_output: pr, need_permission: pr, manual_handoff: develop}
 

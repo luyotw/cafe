@@ -113,6 +113,29 @@ continuity. The callback remains an ordinary driver and uses only existing
 kickoff authority: confirmation contract, mandatory HumanTask stops, reactive
 user handoffs, and mandate. It cannot change confirmed models.
 
+## Project confirmed user context into agent input
+
+Before any agent step, derive its inputs from the effective graph and project
+one bounded delta only for facts that are user-confirmed in the current turn,
+a completed HumanTask, or the current Driver contract; belong to this workflow;
+remain current and relevant; and are not already visible through declared
+artifacts, iteration input, or durable task results. This applies to every
+playbook. Preserve exact wording when paraphrase could alter meaning.
+
+Use a routing HumanTask only within its declared schema **and semantic purpose**;
+correction feedback includes missing confirmed direction with the findings and
+acceptance conditions. Otherwise use workflow `--user-input` only when the
+current command and target step support it. Never replace a task-required
+answer, use `--start-step` just to carry context, or edit artifacts, blackboard,
+or baton state. If no legal input path exists, retain the pause and report it.
+
+`cafe chat` is discussion evidence, not delivery to another iteration or step.
+Supplemental context cannot replace required artifacts, ownership, review, or
+authorization. Exclude inferred, superseded, unrelated, secret, credential, or
+cross-task content; handle existing permission/capability grants only through
+their exact declared boundary. Mandatory and `user_required` answers still need
+the explicit user-facing relay, and callbacks may use only already durable facts.
+
 The callback receives only an asynchronous durable-event notice. It must
 re-check `cafe status`/`cafe show`; a notice can be stale. It may diagnose and
 perform actions already authorized by the kickoff. It cannot wait for, collect,
@@ -295,17 +318,13 @@ closed. The Driver must not truncate, split, or silently omit findings or
 evidence to fit a limit; retain the pause and obtain the applicable user-owned
 scope decision before a new full review can form a compliant batch.
 
-A host-tool yield with an execution handle and no output means the original
-`cafe chat` process is still running, not that it succeeded, failed, or failed
-to answer. Continue that exact process through the host tool's normal wait or
-continuation operation and count the 120 seconds cumulatively from the original
-start. Do not launch another `cafe chat` while the original process is live.
-Only a normally completed command with the agent's actual response can satisfy
-the consensus exchange. If the handle becomes unusable, the process exits
-without a usable response, or the cumulative limit expires, retain the workflow
-pause and classify the attempt as ambiguous. Verify that the original process
-has ended before the one safe retry allowed for an unconfirmed or transient
-failure; never infer or reconstruct the missing response.
+A host-tool yield or empty output with a live execution handle is not a
+completed `cafe chat`. Continue waiting on the same process for up to 120
+seconds cumulatively; never launch a duplicate chat or infer a missing response.
+Only a completed process with a usable agent response satisfies the exchange.
+If the process ends without one, the handle is lost, or the limit expires,
+retain the pause and classify the result as ambiguous. Verify termination before
+the single safe retry.
 
 Findings, chat attempts, disagreements, and rebuttals do not create an
 iteration. Independently verify a rebuttal against the same unchanged artifact.
@@ -316,7 +335,9 @@ the unique active declared correction outcome. First verify that it requires
 feedback, declares `correction: true`, and routes to a non-advancing correction
 continuation. If zero or multiple outcomes qualify, fail closed for
 user/playbook clarification. Submit `cafe task complete ... --no-resume --json` with
-consolidated findings, reached consensus, and acceptance conditions; then verify
+consolidated findings, reached consensus, and acceptance conditions, plus any
+relevant current user-confirmed direction missing from the target's declared
+inputs; then verify
 the durable task result and correction continuation before resuming in the
 configured mode. Only the resumed runtime materializes and executes the next
 formal iteration. Inspect its durable input, delta, and output only at the next

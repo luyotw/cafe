@@ -116,7 +116,7 @@ def _build_repo_entrypoint_mismatch_message(
 
     repo_root, expected_cli, actual_cli = mismatch
 
-    python_bin = Path(sys.executable).resolve()
+    python_bin = Path(sys.executable).absolute()
     return textwrap.dedent(
         f"""
         Error: `cafe` is running from a different installation than this checkout.
@@ -156,7 +156,7 @@ def _resolve_repo_entrypoint_mismatch(
 
 def _build_repo_entrypoint_reexec_command(repo_root: Path) -> list[str]:
     """Build a command that runs the CLI from the detected checkout."""
-    return [str(Path(sys.executable).resolve()), "-m", "cafe.ui.cli", *sys.argv[1:]]
+    return [str(Path(sys.executable).absolute()), "-m", "cafe.ui.cli", *sys.argv[1:]]
 
 
 def _build_repo_entrypoint_reexec_env(repo_root: Path) -> dict[str, str]:
@@ -1232,6 +1232,11 @@ def agent_sync() -> None:
 def chat_with_agent(
     ctx: typer.Context,
     role: str = typer.Argument(..., help="Playbook-declared role"),
+    phase: Optional[str] = typer.Option(
+        None,
+        "--phase",
+        help="Use the session for this playbook phase",
+    ),
     prompt: Optional[str] = typer.Option(
         None,
         "--prompt",
@@ -1249,6 +1254,7 @@ def chat_with_agent(
     \b
     Examples:
         cafe chat developer
+        cafe chat developer --phase pr
         cafe chat developer -p "Summarize the current implementation"
         cafe chat qa
         cafe chat researcher
@@ -1260,9 +1266,12 @@ def chat_with_agent(
         console.print(f"[red]Error: Invalid role '{role}'. Must be one of: {', '.join(valid_roles)}[/red]")
         raise typer.Exit(1)
 
-    if prompt is None:
-        raise typer.Exit(launch_chat_session(role, issue_name))
-    raise typer.Exit(launch_chat_session(role, issue_name, prompt=prompt))
+    launch_kwargs = {}
+    if phase is not None:
+        launch_kwargs["phase_name"] = phase
+    if prompt is not None:
+        launch_kwargs["prompt"] = prompt
+    raise typer.Exit(launch_chat_session(role, issue_name, **launch_kwargs))
 
 
 def _load_issue_playbook_roles(issue_name: str) -> list[str]:

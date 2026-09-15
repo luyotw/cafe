@@ -92,3 +92,7 @@ _(If N or M is 0, one sentence explains why.)_
 Copy the wording of the DoD items from the spec's Acceptance Criteria section (lines marked with `✅ **DoD:**`) and verify each one.
 - [ ] The reported bug no longer reproduces
 - [ ] No regressions in existing functionality
+
+## Todo List
+
+- [ ] `PLAN-001` — Source: `plan` — Work: Reproduce and repair the reported defect — Closure: the bug scenario and regression journey pass — Evidence: targeted regression tests

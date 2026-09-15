@@ -1,7 +1,9 @@
 """Tests for direct workflow step execution."""
 
 import json
+import hashlib
 import subprocess
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 from types import MethodType, SimpleNamespace
@@ -20,6 +22,7 @@ from cafe.core.blackboard import (
     HandoffIntent,
     HandoffOwner,
 )
+from cafe.core.git import GitOperations
 from cafe.core.hooks import HookResult
 from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.human_tasks import agent_execution_interrupted_human_task
@@ -29,15 +32,18 @@ from cafe.core.session_continuation import (
     SessionContinuationPolicy,
 )
 from cafe.core.status_codes import PhaseStatusCode
-from cafe.core.todo import parse_todo_list, workflow_feedback_todo_items
+from cafe.core.todo import plan_work_fingerprint, parse_todo_list, workflow_feedback_todo_items
 from cafe.core.types import AgentCLI, AgentConfig, AgentResponse, CliEntry, TokenUsage
 from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
+from cafe.core.workspace_artifact import build_workspace_artifact, verify_workspace_artifact
 from cafe.phases.generic_phase import GenericPhase, GenericPhaseExecution
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
 from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
 from cafe.utils.phase_config import PhaseStepModelResolution
+from cafe.verification import run_verification
 
 
 @pytest.fixture(autouse=True)
@@ -3688,7 +3694,20 @@ def test_correction_checklist_uses_declared_inbound_producer_not_history(
         "playbook": {"id": "default"},
         "roles": {"developer": {"default_agent": "David"}},
         "steps": {
-            "inspection": {"output_artifact": "findings"},
+            "inspection": {
+                "output_artifact": "findings",
+                "allowed_goto": ["repair_shop"],
+                "behavior": {
+                    "feedback_routes": {
+                        "repair_shop": {
+                            "artifact": "findings",
+                            "source_kind": "bespoke",
+                            "todo_source": "bespoke",
+                            "todo_id_prefix": "FIX",
+                        }
+                    }
+                },
+            },
             "publisher": {"output_artifact": "publication"},
             "repair_shop": {
                 "skill": "develop",
@@ -3719,6 +3738,10 @@ def test_correction_checklist_uses_declared_inbound_producer_not_history(
         version=1,
         updated_by="inspection",
         path=str(findings_file),
+        content_sha256=hashlib.sha256(findings_file.read_bytes()).hexdigest(),
+    )
+    (findings_file.parent / "artifact.json").write_text(
+        json.dumps(state.artifacts["findings"].to_dict()), encoding="utf-8"
     )
     state.artifacts["publication"] = ArtifactEntry(
         name="publication",
@@ -3733,7 +3756,11 @@ def test_correction_checklist_uses_declared_inbound_producer_not_history(
             step="inspection",
             event_type="transition",
             message="",
-            data={"from": "inspection", "to": "repair_shop"},
+            data={
+                "from": "inspection",
+                "to": "repair_shop",
+                "source_artifact": state.artifacts["findings"].to_dict(),
+            },
         )
     )
 
@@ -3779,6 +3806,96 @@ workflow:
     assert "inspection/iteration_001/output.md" in checklist
     assert "publisher/iteration_001/output.md" not in checklist
     assert parse_todo_list(findings_file.read_text(encoding="utf-8"))[0].fingerprint in checklist
+
+
+def test_curator_pins_feedback_batch_after_preparation_before_agent_prompt(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The executor gives the agent one immutable source set, not the live ledger."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-curated-batch"
+    playbook = {
+        "playbook": {"id": "feedback-curation"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "curator": {
+                "skill": "pr",
+                "role": "developer",
+                "output_artifact": "curated_result",
+                "allowed_tools": ["Read"],
+                "behavior": {
+                    "completion": "baton",
+                    "feedback_target": "curator",
+                    "feedback_artifact": "workflow_feedback",
+                    "feedback_source_kind": "external_note",
+                    "feedback_todo_source": "review_note",
+                    "feedback_todo_id_prefix": "REV",
+                },
+                "on": {"manual_handoff": "consumer"},
+            },
+            "consumer": {"skill": "develop", "role": "developer"},
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("curator")
+    ledger = WorkflowFeedbackLedger(issue_dir)
+    _created, prepared = ledger.record(
+        source_identity="review:508:prepared",
+        source_kind="external_note",
+        target_step="curator",
+        content="Prepared before the agent prompt.",
+    )
+    generic_phase = _build_loader(tmp_path)
+
+    def curate_and_record_late(*, prompt: str, streaming_output_file: str, **_kwargs) -> None:
+        iteration_dir = Path(streaming_output_file).parent
+        snapshot = iteration_dir / "workflow_feedback_batch.json"
+        assert snapshot.is_file()
+        assert "./" + str(snapshot.relative_to(tmp_path)) in prompt
+        payload = json.loads(snapshot.read_text(encoding="utf-8"))
+        assert [entry["source_identity"] for entry in payload["entries"]] == [
+            prepared.source_identity
+        ]
+        iteration_dir.joinpath("checklist.md").write_text(
+            "[x] completed by test agent\n", encoding="utf-8"
+        )
+        _created, late = ledger.record(
+            source_identity="review:508:late",
+            source_kind="external_note",
+            target_step="curator",
+            content="Arrived after the agent context was pinned.",
+        )
+        (issue_dir / "next_step.txt").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "to_owner": "agent",
+                    "to_step": "consumer",
+                    "intent": "manual_handoff",
+                }
+            ),
+            encoding="utf-8",
+        )
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-curated-batch",
+        playbook=playbook,
+        generic_phase=generic_phase,
+        agent_manager=FakeAgentManager("curated", on_execute=curate_and_record_late),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+
+    result = executor.execute_step("curator", playbook["steps"]["curator"], state)
+
+    assert result.feedback_source_identities == (prepared.source_identity,)
+    snapshot = issue_dir / "curator" / "iteration_001" / "workflow_feedback_batch.json"
+    payload = json.loads(snapshot.read_text(encoding="utf-8"))
+    assert [entry["source_identity"] for entry in payload["entries"]] == [prepared.source_identity]
+    assert [entry.source_identity for entry in ledger.pending(target_step="curator")] == [
+        prepared.source_identity,
+        "review:508:late",
+    ]
 
 
 def test_workflow_refreshes_declared_checklist_on_interrupted_resume(
@@ -4248,6 +4365,14 @@ def _minimal_spec_executor(
         agent_manager=agent_manager,
         git_ops=FakeGitOperations(),
         role_agent_map={"pm": "Roger"},
+    )
+
+
+def _plan_continuity(item_id: str, work: str) -> str:
+    fingerprint = plan_work_fingerprint(work)
+    return (
+        "\n\n## Todo Identity Continuity\n"
+        f"- `{item_id}` — Previous work fingerprint: `{fingerprint}`\n"
     )
 
 
@@ -5007,7 +5132,10 @@ def test_exact_fallback_session_is_persisted_and_resumed_by_next_correction(
             session_id="fallback-gemini",
         )
 
-    with patch("cafe.agents.executor.AgentExecutor.execute", execute):
+    with (
+        patch("cafe.agents.executor.AgentExecutor.execute", execute),
+        patch("cafe.agents.manager.time.sleep") as sleep,
+    ):
         executor._execute_agent_iteration(
             agent_name="Roger",
             prompt="continue correction",
@@ -5022,7 +5150,13 @@ def test_exact_fallback_session_is_persisted_and_resumed_by_next_correction(
     iteration_data = json.loads(
         (executor.phase_dir / "iteration_002" / "iteration.json").read_text(encoding="utf-8")
     )
-    assert attempts == [(AgentCLI.CODEX, "prior-codex"), (AgentCLI.GEMINI, None)]
+    assert attempts == [
+        (AgentCLI.CODEX, "prior-codex"),
+        (AgentCLI.CODEX, "prior-codex"),
+        (AgentCLI.CODEX, "prior-codex"),
+        (AgentCLI.GEMINI, None),
+    ]
+    assert [call.args[0] for call in sleep.call_args_list] == [30, 120]
     assert iteration_data["cli"] == "gemini"
     assert iteration_data["session_id"] == "fallback-gemini"
 
@@ -5991,7 +6125,7 @@ def _causal_todo_playbook() -> dict:
     return {
         "steps": {
             "plan": {"output_artifact": "plan"},
-            "review": {"output_artifact": "review_feedback"},
+            "review": {"output_artifact": "review_feedback", "allowed_goto": ["develop"]},
             "qa": {"output_artifact": "qa_feedback"},
             "pr": {
                 "output_artifact": "pr_result",
@@ -6050,7 +6184,7 @@ def test_causal_todo_uses_inbound_transition_after_start_override(tmp_path: Path
         to_owner=HandoffOwner.AGENT,
         to_step="develop",
         intent=HandoffIntent.AWAIT_AGENT,
-        from_step="develop",
+        from_step="review",
         source="workflow.start_step_override",
     )
     entry = ArtifactEntry(
@@ -6065,6 +6199,1144 @@ def test_causal_todo_uses_inbound_transition_after_start_override(tmp_path: Path
         {"review_feedback": entry}, state, playbook=_causal_todo_playbook()
     )
     assert resolved["causal_todo"] is entry
+
+
+def test_correction_route_requires_the_persisted_sender_edge(tmp_path: Path) -> None:
+    executor = GenericWorkflowStepExecutor.__new__(GenericWorkflowStepExecutor)
+    executor.playbook = {
+        "steps": {
+            "detect": {"output_artifact": "incident_signal"},
+            "mitigate": {
+                "output_artifact": "incident_recovery",
+                "behavior": {
+                    "feedback_routes": {
+                        "triage": {
+                            "artifact": "incident_recovery",
+                            "source_kind": "incident_recovery",
+                            "todo_source": "recovery",
+                            "todo_id_prefix": "IREC",
+                        }
+                    }
+                },
+            },
+            "triage": {},
+        }
+    }
+    state = BlackboardStore(tmp_path / "issue").load_or_create("triage")
+    state.events.append(
+        EventEntry(
+            timestamp="2026-01-01T00:00:00Z",
+            step="detect",
+            event_type="transition",
+            message="",
+            data={"from": "detect", "to": "triage"},
+        )
+    )
+    assert executor._persisted_inbound_feedback_route("triage", state) is None
+
+    state.events.append(
+        EventEntry(
+            timestamp="2026-01-01T00:00:01Z",
+            step="mitigate",
+            event_type="transition",
+            message="",
+            data={"from": "mitigate", "to": "triage"},
+        )
+    )
+    route = executor._persisted_inbound_feedback_route("triage", state)
+    assert route is not None
+    assert route.artifact == "incident_recovery"
+
+
+def test_declared_feedback_route_preserves_custom_source_and_todo_identity(tmp_path: Path) -> None:
+    source = tmp_path / "issue" / "producer" / "iteration_003" / "output.md"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        "## Todo List\n"
+        "- [ ] `REV-017` — Source: `editorial_review` — Work: fix — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+    state = BlackboardStore(tmp_path / "issue").load_or_create("receiver")
+    state.events.append(
+        EventEntry(
+            timestamp="2026-01-01T00:00:00Z",
+            step="producer",
+            event_type="transition",
+            message="",
+            data={"from": "producer", "to": "receiver"},
+        )
+    )
+    entry = ArtifactEntry(
+        name="review_doc",
+        kind=ArtifactKind.DOCUMENT,
+        version=3,
+        updated_by="producer",
+        path=str(source),
+        content_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+    )
+    (source.parent / "artifact.json").write_text(
+        json.dumps(entry.to_dict()), encoding="utf-8"
+    )
+    state.events[-1].data["source_artifact"] = entry.to_dict()
+
+    playbook = {
+        "steps": {
+            "producer": {
+                "output_artifact": "review_doc",
+                "behavior": {
+                    "feedback_routes": {
+                        "receiver": {
+                            "artifact": "review_doc",
+                            "source_kind": "editorial_review",
+                            "todo_source": "editorial_review",
+                            "todo_id_prefix": "REV",
+                        }
+                    }
+                },
+            },
+            "receiver": {},
+        }
+    }
+    resolved = GenericWorkflowStepExecutor._add_causal_todo_artifact(
+        {"review_doc": entry}, state, playbook=playbook
+    )
+
+    projection = resolved["causal_todo"]
+    assert projection.artifact == "review_doc"
+    assert projection.source == "editorial_review"
+    assert [item.item_id for item in projection.items] == ["REV-017"]
+
+
+def test_declared_feedback_route_rejects_an_unbound_transition(tmp_path: Path) -> None:
+    phase_dir = tmp_path / "issue" / "producer"
+    old_dir = phase_dir / "iteration_001"
+    current_dir = phase_dir / "iteration_002"
+    old_dir.mkdir(parents=True)
+    current_dir.mkdir(parents=True)
+    old_output = old_dir / "output.md"
+    old_output.write_text(
+        "## Todo List\n"
+        "- [ ] `REV-001` — Source: `editorial_review` — Work: old — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+    old_record = ArtifactEntry(
+        name="review_doc", kind=ArtifactKind.DOCUMENT, version=1, updated_by="producer",
+        path=str(old_output),
+        content_sha256=hashlib.sha256(old_output.read_bytes()).hexdigest(),
+    )
+    (old_dir / "artifact.json").write_text(json.dumps(old_record.to_dict()), encoding="utf-8")
+    current_output = current_dir / "output.md"
+    current_output.write_text("## Todo List\n- [ ] malformed\n", encoding="utf-8")
+    current_record = ArtifactEntry(
+        name="review_doc", kind=ArtifactKind.DOCUMENT, version=2, updated_by="producer",
+        path=str(current_output),
+        content_sha256=hashlib.sha256(current_output.read_bytes()).hexdigest(),
+    )
+    (current_dir / "artifact.json").write_text(
+        json.dumps(current_record.to_dict()), encoding="utf-8"
+    )
+    state = BlackboardStore(tmp_path / "issue").load_or_create("receiver")
+    state.events.append(
+        EventEntry(
+            timestamp="2026-01-01T00:00:00Z",
+            step="producer",
+            event_type="transition",
+            message="",
+            data={"from": "producer", "to": "receiver"},
+        )
+    )
+    current = ArtifactEntry(
+        name="review_doc",
+        kind=ArtifactKind.DOCUMENT,
+        version=2,
+        updated_by="producer",
+        path=str(current_output),
+    )
+
+    playbook = {
+        "steps": {
+            "producer": {
+                "output_artifact": "review_doc",
+                "behavior": {
+                    "feedback_routes": {
+                        "receiver": {
+                            "artifact": "review_doc",
+                            "source_kind": "editorial_review",
+                            "todo_source": "editorial_review",
+                            "todo_id_prefix": "REV",
+                        }
+                    }
+                },
+            },
+            "receiver": {},
+        }
+    }
+    with pytest.raises(ValueError, match="missing its bound source artifact"):
+        GenericWorkflowStepExecutor._add_causal_todo_artifact(
+            {"review_doc": current}, state, playbook=playbook
+        )
+
+
+def test_declared_feedback_route_stays_bound_to_handed_off_artifact_version(
+    tmp_path: Path,
+) -> None:
+    phase_dir = tmp_path / "issue" / "producer"
+    old_dir = phase_dir / "iteration_001"
+    current_dir = phase_dir / "iteration_002"
+    old_dir.mkdir(parents=True)
+    current_dir.mkdir(parents=True)
+    old_output = old_dir / "output.md"
+    old_output.write_text(
+        "## Todo List\n"
+        "- [ ] `REV-001` — Source: `editorial_review` — Work: handed off — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+    old_record = ArtifactEntry(
+        name="review_doc", kind=ArtifactKind.DOCUMENT, version=1, updated_by="producer",
+        path=str(old_output), content_sha256=hashlib.sha256(old_output.read_bytes()).hexdigest(),
+    )
+    (old_dir / "artifact.json").write_text(json.dumps(old_record.to_dict()), encoding="utf-8")
+    current_output = current_dir / "output.md"
+    current_output.write_text(
+        "## Todo List\n"
+        "- [ ] `REV-002` — Source: `editorial_review` — Work: later — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+    current_record = ArtifactEntry(
+        name="review_doc", kind=ArtifactKind.DOCUMENT, version=2, updated_by="producer",
+        path=str(current_output), content_sha256=hashlib.sha256(current_output.read_bytes()).hexdigest(),
+    )
+    (current_dir / "artifact.json").write_text(
+        json.dumps(current_record.to_dict()), encoding="utf-8"
+    )
+    state = BlackboardStore(tmp_path / "issue").load_or_create("receiver")
+    state.events.append(
+        EventEntry(
+            timestamp="2026-01-01T00:00:00Z",
+            step="producer",
+            event_type="transition",
+            message="",
+            data={
+                "from": "producer",
+                "to": "receiver",
+                "source_artifact": old_record.to_dict(),
+            },
+        )
+    )
+    playbook = {
+        "steps": {
+            "producer": {
+                "output_artifact": "review_doc",
+                "behavior": {
+                    "feedback_routes": {
+                        "receiver": {
+                            "artifact": "review_doc",
+                            "source_kind": "editorial_review",
+                            "todo_source": "editorial_review",
+                            "todo_id_prefix": "REV",
+                        }
+                    }
+                },
+            },
+            "receiver": {},
+        }
+    }
+    resolved = GenericWorkflowStepExecutor._add_causal_todo_artifact(
+        {"review_doc": current_record}, state, playbook=playbook
+    )
+
+    projection = resolved["causal_todo"]
+    assert projection.path == old_output
+    assert projection.version == 1
+    assert [item.item_id for item in projection.items] == ["REV-001"]
+
+
+def test_workspace_companion_uses_custom_names_and_runtime_storage(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True)
+    (repo / ".gitignore").write_text(".cafe/\n", encoding="utf-8")
+    (repo / "tracked.txt").write_text("before\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, check=True, capture_output=True)
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    (repo / "tracked.txt").write_text("after\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "change"], cwd=repo, check=True, capture_output=True)
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    output = repo / ".cafe/issues/custom/develop/iteration_001/output.md"
+    output.parent.mkdir(parents=True)
+    run_verification(
+        output_file=output,
+        command=[sys.executable, "-c", "print('workspace')"],
+        scope="targeted",
+        cwd=repo,
+    )
+    issue_dir = repo / ".cafe/issues/custom"
+    (issue_dir / "issue.yaml").parent.mkdir(parents=True, exist_ok=True)
+    (issue_dir / "issue.yaml").write_text(f"base_branch: {base}\n", encoding="utf-8")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="custom",
+        playbook={"steps": {}},
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("done"),
+        git_ops=GitOperations(str(repo)),
+        role_agent_map={"developer": "David"},
+    )
+    executor.iteration = 1
+    state = BlackboardStore(issue_dir).load_or_create("develop")
+    workspace_path, metadata = executor._publish_workspace_artifact(
+        step_name="develop",
+        step_def={"output_artifact": "summary_doc", "workspace_artifact": "verified_snapshot"},
+        output_file=output,
+        blackboard_state=state,
+    )
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook={"playbook": {"id": "custom"}, "steps": {"develop": {}}},
+        executor=object(),
+    )
+    runtime._store_artifacts(
+        {"summary_doc": str(output), "verified_snapshot": workspace_path},
+        {"verified_snapshot": metadata},
+    )
+    repeated_path, repeated_metadata = executor._publish_workspace_artifact(
+        step_name="develop",
+        step_def={"output_artifact": "summary_doc", "workspace_artifact": "verified_snapshot"},
+        output_file=output,
+        blackboard_state=runtime.blackboard,
+    )
+    assert repeated_path == workspace_path
+    assert repeated_metadata["version"] == metadata["version"]
+
+    stored = runtime.blackboard.artifacts["verified_snapshot"]
+    assert stored.kind == ArtifactKind.WORKSPACE
+    assert stored.name == "verified_snapshot"
+    assert stored.base_sha == base
+    assert stored.head_sha == head
+    assert verify_workspace_artifact(
+        json.loads(Path(workspace_path).read_text(encoding="utf-8")), repo=repo
+    ).valid
+
+
+def test_current_workspace_consumer_fails_closed_when_companion_is_missing(tmp_path: Path) -> None:
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    with pytest.raises(ValueError, match="required workspace artifact"):
+        executor._validate_workspace_inputs(
+            {},
+            step_def={
+                "output_artifact": "review_feedback",
+                "workspace_input_artifact": "verified_snapshot",
+            },
+        )
+
+
+def test_missing_workspace_companion_recovers_from_declared_verified_producer(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True)
+    (repo / ".gitignore").write_text(".cafe/\n", encoding="utf-8")
+    (repo / "tracked.txt").write_text("before\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, check=True, capture_output=True)
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    (repo / "tracked.txt").write_text("after\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "change"], cwd=repo, check=True, capture_output=True)
+
+    issue_dir = repo / ".cafe/issues/custom"
+    output = issue_dir / "emit" / "iteration_001" / "output.md"
+    output.parent.mkdir(parents=True)
+    output.write_text("verified producer summary\n", encoding="utf-8")
+    run_verification(
+        output_file=output,
+        command=[sys.executable, "-c", "print('workspace rollout')"],
+        scope="targeted",
+        cwd=repo,
+    )
+    (issue_dir / "issue.yaml").write_text(f"base_branch: {base}\n", encoding="utf-8")
+    playbook = {
+        "steps": {
+            "emit": {
+                "output_artifact": "evidence_bundle",
+                "workspace_artifact": "verified_state",
+            },
+            "consume": {
+                "input_artifacts": ["evidence_bundle", "verified_state"],
+                "workspace_input_artifact": "verified_state",
+            },
+        }
+    }
+    state = BlackboardStore(issue_dir).load_or_create("consume")
+    state.artifacts["evidence_bundle"] = ArtifactEntry(
+        name="evidence_bundle",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="emit",
+        path=str(output),
+    )
+    BlackboardStore(issue_dir).save(state)
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="custom",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("confirmed"),
+        git_ops=GitOperations(str(repo)),
+        role_agent_map={},
+    )
+
+    executor._recover_declared_workspace_input(
+        step_def=playbook["steps"]["consume"],
+        blackboard_state=state,
+    )
+
+    recovered = state.artifacts["verified_state"]
+    assert recovered.kind == ArtifactKind.WORKSPACE
+    assert recovered.updated_by == "emit"
+    executor._validate_workspace_inputs(
+        executor._step_input_artifacts(playbook["steps"]["consume"], state),
+        step_def=playbook["steps"]["consume"],
+    )
+
+
+def test_plan_publication_allows_a_no_shared_vocabulary_revision_with_same_id(
+    tmp_path: Path,
+) -> None:
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_dir = tmp_path / "issue" / "plan"
+    executor.iteration = 2
+    old_output = tmp_path / "issue" / "plan" / "iteration_001" / "output.md"
+    old_output.parent.mkdir(parents=True)
+    old_output.write_text(
+        "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: build parser — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+    state = BlackboardStore(tmp_path / "issue").load_or_create("plan")
+    state.artifacts["plan"] = ArtifactEntry(
+        name="plan",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="plan",
+        path=str(old_output),
+    )
+    new_output = tmp_path / "issue" / "plan" / "iteration_002" / "output.md"
+    new_output.parent.mkdir(parents=True)
+    new_output.write_text(
+        "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: deploy service — "
+        "Closure: done — Evidence: test"
+        + _plan_continuity("PLAN-001", "build parser"),
+        encoding="utf-8",
+    )
+    record = executor._write_artifact_record(
+        blackboard_state=state,
+        output_key="plan",
+        output_path=str(new_output),
+        updated_by="plan",
+    )
+    assert record.todo_identities is not None
+
+
+def test_plan_identity_input_materializes_legacy_metadata_for_the_plan_author(
+    tmp_path: Path,
+) -> None:
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.generic_phase = GenericPhase(SkillLoader())
+    executor.phase_dir = tmp_path / "issue" / "plan"
+    executor.iteration = 2
+    old_output = executor.phase_dir / "iteration_001" / "output.md"
+    old_output.parent.mkdir(parents=True)
+    old_output.write_text(
+        "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: build parser — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+    old_record = ArtifactEntry(
+        name="plan",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="plan",
+        path=str(old_output),
+        content_sha256=hashlib.sha256(old_output.read_bytes()).hexdigest(),
+    )
+    (old_output.parent / "artifact.json").write_text(
+        json.dumps(old_record.to_dict()), encoding="utf-8"
+    )
+    state = BlackboardStore(tmp_path / "issue").load_or_create("plan")
+    spec_output = tmp_path / "issue" / "spec" / "iteration_001" / "output.md"
+    spec_output.parent.mkdir(parents=True)
+    spec_output.write_text("requirements\n", encoding="utf-8")
+    state.artifacts["spec"] = ArtifactEntry(
+        name="spec",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="spec",
+        path=str(spec_output),
+    )
+    state.artifacts["plan"] = old_record
+
+    output_file = executor.phase_dir / "iteration_002" / "output.md"
+    context = executor._build_context(
+        step_name="plan",
+        step_def={
+            "skill": "cafe-plan",
+            "role": "developer",
+            "input_artifacts": ["spec", "plan"],
+            "output_artifact": "plan",
+            "todo_identity_input_artifact": "plan",
+        },
+        blackboard_state=state,
+        agent_name="David",
+        output_file=output_file,
+    )
+
+    persisted = json.loads((old_output.parent / "artifact.json").read_text(encoding="utf-8"))
+    assert persisted["todo_work_identities"] == {
+        plan_work_fingerprint("build parser"): "PLAN-001"
+    }
+    assert context["prior_plan_file"].endswith("plan/iteration_001/output.md")
+
+
+def test_plan_identity_input_fails_closed_on_malformed_prior_authority(tmp_path: Path) -> None:
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_dir = tmp_path / "issue" / "plan"
+    executor.iteration = 2
+    old_output = executor.phase_dir / "iteration_001" / "output.md"
+    old_output.parent.mkdir(parents=True)
+    old_output.write_text("## Todo List\n- [ ] malformed\n", encoding="utf-8")
+    old_record = ArtifactEntry(
+        name="plan",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="plan",
+        path=str(old_output),
+    )
+    state = BlackboardStore(tmp_path / "issue").load_or_create("plan")
+    state.artifacts["plan"] = old_record
+
+    with pytest.raises(ValueError, match="prior plan Todo authority"):
+        executor._build_context(
+            step_name="plan",
+            step_def={
+                "skill": "cafe-plan",
+                "role": "developer",
+                "input_artifacts": ["plan"],
+                "output_artifact": "plan",
+                "todo_identity_input_artifact": "plan",
+            },
+            blackboard_state=state,
+            agent_name="David",
+            output_file=executor.phase_dir / "iteration_002" / "output.md",
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("name", "different-plan", "name"),
+        ("kind", "workspace", "kind"),
+        ("version", 99, "version"),
+        ("updated_by", "review", "owner"),
+        ("path", "other/output.md", "path"),
+        ("content_sha256", "0" * 64, "content digest"),
+        ("todo_work_identities", {"0" * 64: "PLAN-002"}, "identity metadata"),
+    ],
+)
+def test_plan_identity_input_rejects_contradictory_populated_record_fields(
+    tmp_path: Path,
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.generic_phase = GenericPhase(SkillLoader())
+    executor.phase_dir = tmp_path / "issue" / "plan"
+    executor.iteration = 2
+    old_output = executor.phase_dir / "iteration_001" / "output.md"
+    old_output.parent.mkdir(parents=True)
+    old_output.write_text(
+        "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: build parser — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+    old_record = ArtifactEntry(
+        name="plan",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="plan",
+        path=str(old_output),
+        content_sha256=hashlib.sha256(old_output.read_bytes()).hexdigest(),
+    )
+    record_data = {
+        key: item for key, item in old_record.to_dict().items() if item is not None
+    }
+    record_data[field] = value
+    (old_output.parent / "artifact.json").write_text(
+        json.dumps(record_data), encoding="utf-8"
+    )
+    original_record_data = dict(record_data)
+    state = BlackboardStore(tmp_path / "issue").load_or_create("plan")
+    spec_output = tmp_path / "issue" / "spec" / "iteration_001" / "output.md"
+    spec_output.parent.mkdir(parents=True)
+    spec_output.write_text("requirements\n", encoding="utf-8")
+    state.artifacts["spec"] = ArtifactEntry(
+        name="spec",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="spec",
+        path=str(spec_output),
+    )
+    state.artifacts["plan"] = old_record
+
+    with pytest.raises(ValueError, match=message):
+        executor._build_context(
+            step_name="plan",
+            step_def={
+                "skill": "cafe-plan",
+                "role": "developer",
+                "input_artifacts": ["spec", "plan"],
+                "output_artifact": "plan",
+                "todo_identity_input_artifact": "plan",
+            },
+            blackboard_state=state,
+            agent_name="David",
+            output_file=executor.phase_dir / "iteration_002" / "output.md",
+        )
+    persisted = json.loads((old_output.parent / "artifact.json").read_text(encoding="utf-8"))
+    assert persisted == original_record_data
+
+
+def _plan_identity_authority_fixture(
+    tmp_path: Path,
+    *,
+    prior_overrides: dict[str, object] | None = None,
+) -> tuple[GenericWorkflowStepExecutor, object, Path, Path, dict[str, object]]:
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.generic_phase = GenericPhase(SkillLoader())
+    executor.phase_dir = tmp_path / "issue" / "plan"
+    executor.iteration = 2
+    old_output = executor.phase_dir / "iteration_001" / "output.md"
+    old_output.parent.mkdir(parents=True)
+    old_output.write_text(
+        "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: build parser — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+    prior_values: dict[str, object] = {
+        "name": "plan",
+        "kind": ArtifactKind.DOCUMENT,
+        "version": 1,
+        "updated_by": "plan",
+        "path": str(old_output),
+        "content_sha256": hashlib.sha256(old_output.read_bytes()).hexdigest(),
+    }
+    prior_values.update(prior_overrides or {})
+    old_record = ArtifactEntry(**prior_values)
+    record_path = old_output.parent / "artifact.json"
+    record_data = {
+        "name": "plan",
+        "kind": ArtifactKind.DOCUMENT.value,
+        "version": 1,
+        "updated_by": "plan",
+        "path": str(old_output),
+        "content_sha256": hashlib.sha256(old_output.read_bytes()).hexdigest(),
+    }
+    record_path.write_text(json.dumps(record_data), encoding="utf-8")
+    state = BlackboardStore(tmp_path / "issue").load_or_create("plan")
+    state.artifacts["plan"] = old_record
+    return executor, state, old_output, record_path, record_data
+
+
+@pytest.mark.parametrize("field", ["name", "kind", "version", "updated_by", "path"])
+def test_plan_identity_input_rejects_missing_selected_mandatory_identity(
+    tmp_path: Path, field: str
+) -> None:
+    missing = {field: None}
+    executor, state, _old_output, record_path, record_data = _plan_identity_authority_fixture(
+        tmp_path, prior_overrides=missing
+    )
+
+    with pytest.raises(ValueError, match="mandatory selected artifact"):
+        executor._build_context(
+            step_name="plan",
+            step_def={
+                "skill": "cafe-plan",
+                "role": "developer",
+                "input_artifacts": ["plan"],
+                "output_artifact": "plan",
+                "todo_identity_input_artifact": "plan",
+            },
+            blackboard_state=state,
+            agent_name="David",
+            output_file=executor.phase_dir / "iteration_002" / "output.md",
+        )
+    assert json.loads(record_path.read_text(encoding="utf-8")) == record_data
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("name", "other-plan"),
+        ("kind", ArtifactKind.WORKSPACE),
+        ("version", 0),
+        ("updated_by", ""),
+        ("path", ""),
+    ],
+)
+def test_plan_identity_input_rejects_malformed_selected_mandatory_identity(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    executor, state, _old_output, record_path, record_data = _plan_identity_authority_fixture(
+        tmp_path, prior_overrides={field: value}
+    )
+
+    with pytest.raises(ValueError, match="mandatory selected artifact"):
+        executor._build_context(
+            step_name="plan",
+            step_def={
+                "skill": "cafe-plan",
+                "role": "developer",
+                "input_artifacts": ["plan"],
+                "output_artifact": "plan",
+                "todo_identity_input_artifact": "plan",
+            },
+            blackboard_state=state,
+            agent_name="David",
+            output_file=executor.phase_dir / "iteration_002" / "output.md",
+        )
+    assert json.loads(record_path.read_text(encoding="utf-8")) == record_data
+
+
+@pytest.mark.parametrize("field", ["name", "kind", "version", "updated_by", "path"])
+def test_plan_identity_input_rejects_missing_sibling_mandatory_identity(
+    tmp_path: Path, field: str
+) -> None:
+    executor, state, _old_output, record_path, record_data = _plan_identity_authority_fixture(
+        tmp_path
+    )
+    record_data.pop(field)
+    record_path.write_text(json.dumps(record_data), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="mandatory artifact"):
+        executor._build_context(
+            step_name="plan",
+            step_def={
+                "skill": "cafe-plan",
+                "role": "developer",
+                "input_artifacts": ["plan"],
+                "output_artifact": "plan",
+                "todo_identity_input_artifact": "plan",
+            },
+            blackboard_state=state,
+            agent_name="David",
+            output_file=executor.phase_dir / "iteration_002" / "output.md",
+        )
+    assert json.loads(record_path.read_text(encoding="utf-8")) == record_data
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("name", ""),
+        ("kind", []),
+        ("version", 0),
+        ("updated_by", ""),
+        ("path", []),
+    ],
+)
+def test_plan_identity_input_rejects_empty_or_malformed_sibling_mandatory_identity(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    executor, state, _old_output, record_path, record_data = _plan_identity_authority_fixture(
+        tmp_path
+    )
+    record_data[field] = value
+    record_path.write_text(json.dumps(record_data), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="mandatory artifact"):
+        executor._build_context(
+            step_name="plan",
+            step_def={
+                "skill": "cafe-plan",
+                "role": "developer",
+                "input_artifacts": ["plan"],
+                "output_artifact": "plan",
+                "todo_identity_input_artifact": "plan",
+            },
+            blackboard_state=state,
+            agent_name="David",
+            output_file=executor.phase_dir / "iteration_002" / "output.md",
+        )
+    assert json.loads(record_path.read_text(encoding="utf-8")) == record_data
+
+
+def test_plan_publication_fails_closed_when_prior_authority_is_unreadable(
+    tmp_path: Path,
+) -> None:
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_dir = tmp_path / "issue" / "plan"
+    executor.iteration = 2
+    state = BlackboardStore(tmp_path / "issue").load_or_create("plan")
+    state.artifacts["plan"] = ArtifactEntry(
+        name="plan",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="plan",
+        path=str(executor.phase_dir / "iteration_001" / "output.md"),
+    )
+    new_output = executor.phase_dir / "iteration_002" / "output.md"
+    new_output.parent.mkdir(parents=True)
+    new_output.write_text(
+        "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: build parser — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="prior plan Todo authority"):
+        executor._write_artifact_record(
+            blackboard_state=state,
+            output_key="plan",
+            output_path=str(new_output),
+            updated_by="plan",
+        )
+
+
+def test_plan_publication_allows_new_id_for_shared_domain_vocabulary(
+    tmp_path: Path,
+) -> None:
+    """A new explicit ID is not inferred as a moved item by shared wording."""
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_dir = tmp_path / "issue" / "plan"
+    executor.iteration = 2
+    old_output = tmp_path / "issue" / "plan" / "iteration_001" / "output.md"
+    old_output.parent.mkdir(parents=True)
+    old_output.write_text(
+        "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: build parser service — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+    state = BlackboardStore(tmp_path / "issue").load_or_create("plan")
+    state.artifacts["plan"] = ArtifactEntry(
+        name="plan", kind=ArtifactKind.DOCUMENT, version=1, updated_by="plan",
+        path=str(old_output),
+    )
+    new_output = tmp_path / "issue" / "plan" / "iteration_002" / "output.md"
+    new_output.parent.mkdir(parents=True)
+    new_output.write_text(
+        "## Todo List\n- [ ] `PLAN-002` — Source: `plan` — Work: improve parser service — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+
+    record = executor._write_artifact_record(
+        blackboard_state=state,
+        output_key="plan",
+        output_path=str(new_output),
+        updated_by="plan",
+    )
+    assert set(record.todo_identities or {}) == {"PLAN-002"}
+
+
+def test_plan_publication_rejects_unrelated_work_sharing_only_a_generic_token(
+    tmp_path: Path,
+) -> None:
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_dir = tmp_path / "issue" / "plan"
+    executor.iteration = 2
+    old_output = tmp_path / "issue" / "plan" / "iteration_001" / "output.md"
+    old_output.parent.mkdir(parents=True)
+    old_output.write_text(
+        "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: update parser — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+    state = BlackboardStore(tmp_path / "issue").load_or_create("plan")
+    state.artifacts["plan"] = ArtifactEntry(
+        name="plan", kind=ArtifactKind.DOCUMENT, version=1, updated_by="plan",
+        path=str(old_output),
+    )
+    new_output = tmp_path / "issue" / "plan" / "iteration_002" / "output.md"
+    new_output.parent.mkdir(parents=True)
+    new_output.write_text(
+        "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: update service — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="continuity"):
+        executor._write_artifact_record(
+            blackboard_state=state,
+            output_key="plan",
+            output_path=str(new_output),
+            updated_by="plan",
+        )
+
+
+def test_plan_publication_allows_related_same_id_revision(tmp_path: Path) -> None:
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_dir = tmp_path / "issue" / "plan"
+    executor.iteration = 2
+    old_output = tmp_path / "issue" / "plan" / "iteration_001" / "output.md"
+    old_output.parent.mkdir(parents=True)
+    old_output.write_text(
+        "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: improve parser — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+    state = BlackboardStore(tmp_path / "issue").load_or_create("plan")
+    state.artifacts["plan"] = ArtifactEntry(
+        name="plan", kind=ArtifactKind.DOCUMENT, version=1, updated_by="plan",
+        path=str(old_output),
+    )
+    new_output = tmp_path / "issue" / "plan" / "iteration_002" / "output.md"
+    new_output.parent.mkdir(parents=True)
+    new_output.write_text(
+        "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: improve parser with stricter errors — "
+        "Closure: done — Evidence: test"
+        + _plan_continuity("PLAN-001", "improve parser"),
+        encoding="utf-8",
+    )
+
+    record = executor._write_artifact_record(
+        blackboard_state=state,
+        output_key="plan",
+        output_path=str(new_output),
+        updated_by="plan",
+    )
+    assert record.todo_work_identities
+
+
+def test_plan_publication_allows_semantic_same_id_revision(tmp_path: Path) -> None:
+    """Retain an ID when a plan revision uses equivalent domain wording."""
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_dir = tmp_path / "issue" / "plan"
+    executor.iteration = 2
+    old_output = tmp_path / "issue" / "plan" / "iteration_001" / "output.md"
+    old_output.parent.mkdir(parents=True)
+    old_output.write_text(
+        "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: parser diagnostics — "
+        "Closure: verified — Evidence: targeted test\n",
+        encoding="utf-8",
+    )
+    state = BlackboardStore(tmp_path / "issue").load_or_create("plan")
+    state.artifacts["plan"] = ArtifactEntry(
+        name="plan", kind=ArtifactKind.DOCUMENT, version=1, updated_by="plan",
+        path=str(old_output),
+    )
+    new_output = tmp_path / "issue" / "plan" / "iteration_002" / "output.md"
+    new_output.parent.mkdir(parents=True)
+    new_output.write_text(
+        "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: syntax errors — "
+        "Closure: verified — Evidence: targeted test"
+        + _plan_continuity("PLAN-001", "parser diagnostics"),
+        encoding="utf-8",
+    )
+
+    record = executor._write_artifact_record(
+        blackboard_state=state,
+        output_key="plan",
+        output_path=str(new_output),
+        updated_by="plan",
+    )
+
+    assert record.todo_work_identities
+
+
+def test_plan_publication_rejects_displaced_work_during_reorder_add_and_delete(
+    tmp_path: Path,
+) -> None:
+    """Reordering, adding, and deleting rows does not infer ID movement."""
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_dir = tmp_path / "issue" / "plan"
+    executor.iteration = 2
+    old_output = tmp_path / "issue" / "plan" / "iteration_001" / "output.md"
+    old_output.parent.mkdir(parents=True)
+    old_output.write_text(
+        "## Todo List\n"
+        "- [ ] `PLAN-001` — Source: `plan` — Work: build parser service — "
+        "Closure: done — Evidence: test\n"
+        "- [ ] `PLAN-002` — Source: `plan` — Work: document validation — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+    state = BlackboardStore(tmp_path / "issue").load_or_create("plan")
+    state.artifacts["plan"] = ArtifactEntry(
+        name="plan", kind=ArtifactKind.DOCUMENT, version=1, updated_by="plan",
+        path=str(old_output),
+    )
+    new_output = tmp_path / "issue" / "plan" / "iteration_002" / "output.md"
+    new_output.parent.mkdir(parents=True)
+    new_output.write_text(
+        "## Todo List\n"
+        "- [ ] `PLAN-003` — Source: `plan` — Work: improve parser service — "
+        "Closure: done — Evidence: test\n"
+        "- [ ] `PLAN-001` — Source: `plan` — Work: migrate invoices — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="PLAN-001"):
+        executor._write_artifact_record(
+            blackboard_state=state,
+            output_key="plan",
+            output_path=str(new_output),
+            updated_by="plan",
+        )
+
+
+def test_plan_publication_keeps_explicit_ids_through_safe_reorder_add_and_delete(
+    tmp_path: Path,
+) -> None:
+    """A real reorder/add/delete keeps the explicit IDs when work is retained."""
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_dir = tmp_path / "issue" / "plan"
+    executor.iteration = 2
+    old_output = tmp_path / "issue" / "plan" / "iteration_001" / "output.md"
+    old_output.parent.mkdir(parents=True)
+    old_output.write_text(
+        "## Todo List\n"
+        "- [ ] `PLAN-001` — Source: `plan` — Work: build parser service — "
+        "Closure: done — Evidence: test\n"
+        "- [ ] `PLAN-002` — Source: `plan` — Work: document validation — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+    state = BlackboardStore(tmp_path / "issue").load_or_create("plan")
+    state.artifacts["plan"] = ArtifactEntry(
+        name="plan", kind=ArtifactKind.DOCUMENT, version=1, updated_by="plan",
+        path=str(old_output),
+    )
+    new_output = tmp_path / "issue" / "plan" / "iteration_002" / "output.md"
+    new_output.parent.mkdir(parents=True)
+    new_output.write_text(
+        "## Todo List\n"
+        "- [ ] `PLAN-003` — Source: `plan` — Work: write release notes — "
+        "Closure: done — Evidence: test\n"
+        "- [ ] `PLAN-001` — Source: `plan` — Work: build parser service — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+
+    record = executor._write_artifact_record(
+        blackboard_state=state,
+        output_key="plan",
+        output_path=str(new_output),
+        updated_by="plan",
+    )
+
+    assert list(record.todo_identities or {}) == ["PLAN-003", "PLAN-001"]
+
+
+def test_plan_publication_rejects_a_related_revision_moved_to_a_new_id(tmp_path: Path) -> None:
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_dir = tmp_path / "issue" / "plan"
+    executor.iteration = 2
+    old_output = tmp_path / "issue" / "plan" / "iteration_001" / "output.md"
+    old_output.parent.mkdir(parents=True)
+    old_output.write_text(
+        "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: improve parser — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+    state = BlackboardStore(tmp_path / "issue").load_or_create("plan")
+    state.artifacts["plan"] = ArtifactEntry(
+        name="plan", kind=ArtifactKind.DOCUMENT, version=1, updated_by="plan",
+        path=str(old_output),
+    )
+    new_output = tmp_path / "issue" / "plan" / "iteration_002" / "output.md"
+    new_output.parent.mkdir(parents=True)
+    new_output.write_text(
+        "## Todo List\n- [ ] `PLAN-002` — Source: `plan` — Work: improve parser — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="PLAN-001.*PLAN-002"):
+        executor._write_artifact_record(
+            blackboard_state=state,
+            output_key="plan",
+            output_path=str(new_output),
+            updated_by="plan",
+        )
+
+
+def test_workspace_consumer_rejects_workspace_from_another_repository(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    other = tmp_path / "other"
+    for path in (repo, other):
+        path.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=path, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=path, check=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=path, check=True)
+        (path / ".gitignore").write_text(".cafe/\n", encoding="utf-8")
+        (path / "tracked.txt").write_text("content\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=path, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "initial"],
+            cwd=path,
+            check=True,
+            capture_output=True,
+        )
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=other, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    output = other / ".cafe/issues/other/develop/iteration_001/output.md"
+    output.parent.mkdir(parents=True)
+    run_verification(
+        output_file=output,
+        command=[sys.executable, "-c", "print('workspace')"],
+        scope="targeted",
+        cwd=other,
+    )
+    workspace = build_workspace_artifact(
+        repo=other,
+        name="verified_snapshot",
+        version=1,
+        base_sha=head,
+        head_sha=head,
+        receipt_outputs=[output],
+    )
+    workspace_path = repo / ".cafe/issues/custom/develop/iteration_001/workspace.json"
+    workspace_path.parent.mkdir(parents=True)
+    workspace_path.write_text(json.dumps(workspace.to_dict()), encoding="utf-8")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=repo / ".cafe/issues/custom",
+        issue_name="custom",
+        playbook={"steps": {}},
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("done"),
+        git_ops=GitOperations(str(repo)),
+        role_agent_map={"developer": "David"},
+    )
+    entry = ArtifactEntry(
+        name="verified_snapshot",
+        kind=ArtifactKind.WORKSPACE,
+        version=1,
+        updated_by="develop",
+        path=str(workspace_path),
+        base_sha=workspace.base_sha,
+        head_sha=workspace.head_sha,
+    )
+    with pytest.raises(ValueError, match="stale or contradictory"):
+        executor._validate_workspace_inputs({"verified_snapshot": entry})
 
 
 def test_causal_todo_normalizes_pending_and_delivered_workflow_feedback(tmp_path: Path) -> None:
@@ -6122,7 +7394,7 @@ def test_causal_todo_normalizes_pending_and_delivered_workflow_feedback(tmp_path
     assert delivered.items == pending.items
 
 
-@pytest.mark.parametrize("source_identities", [[], [None], [""], ["same", "same"]])
+@pytest.mark.parametrize("source_identities", [[None], [""], ["same", "same"]])
 def test_causal_todo_rejects_invalid_delivered_identities_without_widening(
     tmp_path: Path, source_identities: list[object]
 ) -> None:
@@ -6180,6 +7452,64 @@ def test_causal_todo_rejects_invalid_delivered_identities_without_widening(
         GenericWorkflowStepExecutor._add_causal_todo_artifact(
             artifacts, state, playbook=_causal_todo_playbook()
         )
+
+
+def test_causal_todo_accepts_canonical_empty_delivery_without_raw_feedback(tmp_path: Path) -> None:
+    """An exclusion-only correction keeps the producer's canonical empty artifact."""
+    issue_dir = tmp_path / "issue"
+    ledger = WorkflowFeedbackLedger(issue_dir)
+    ledger.record(
+        source_identity="github-pr:10:informational",
+        source_kind="github_pr",
+        target_step="develop",
+        content="Looks good.",
+    )
+    direct_path = tmp_path / "pr.md"
+    direct_path.write_text("## Todo List\n\nNo actionable work.\n", encoding="utf-8")
+    state = BlackboardStore(issue_dir).load_or_create("develop")
+    state.events.extend(
+        [
+            EventEntry(
+                timestamp="2026-01-01T00:00:00Z",
+                step="pr",
+                event_type="transition",
+                message="",
+                data={"from": "pr", "to": "develop"},
+            ),
+            EventEntry(
+                timestamp="2026-01-01T00:00:01Z",
+                step="develop",
+                event_type="workflow_feedback_delivered",
+                message="",
+                data={
+                    "source_identities": [],
+                    "excluded_source_identities": ["github-pr:10:informational"],
+                },
+            ),
+        ]
+    )
+    pr_result = ArtifactEntry(
+        name="pr_result",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="pr",
+        path=str(direct_path),
+    )
+    workflow = ArtifactEntry(
+        name="workflow_feedback",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="feedback_hook",
+        path=str(ledger.path),
+    )
+
+    resolved = GenericWorkflowStepExecutor._add_causal_todo_artifact(
+        {"pr_result": pr_result, "workflow_feedback": workflow},
+        state,
+        playbook=_causal_todo_playbook(),
+    )
+
+    assert resolved["causal_todo"] is pr_result
 
 
 def test_causal_todo_preserves_multiple_delivered_identities(tmp_path: Path) -> None:
@@ -6315,7 +7645,7 @@ def test_causal_todo_normal_plan_entry_ignores_feedback_history(tmp_path: Path) 
         state,
         playbook=_causal_todo_playbook(),
     )
-    assert resolved["causal_todo"] is plan_entry
+    assert "causal_todo" not in resolved
 
 
 def test_causal_todo_local_review_human_task_precedes_direct_pr_fallback(
@@ -6383,6 +7713,403 @@ def test_causal_todo_local_review_human_task_precedes_direct_pr_fallback(
         playbook=_causal_todo_playbook(),
     )["causal_todo"]
     assert [item.work for item in resolved.items] == ["fix the user's selected PR concern"]
+
+
+def test_outbound_causal_todo_is_validated_from_declarative_topology(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "outbound-todo"
+    skill_dir = tmp_path / ".cafe" / "skills" / "repair-kit"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: repair-kit
+description: custom correction consumer
+workflow:
+  checklist:
+    variants:
+      - when: {step: repair_shop, feedback: true}
+        sections:
+          - {todo_projection: {artifact: active_work, causal: true}}
+      - when: {}
+        sections:
+          - {reference: fallback.md}
+    include_role_guidance: false
+---
+
+# Repair kit
+""",
+        encoding="utf-8",
+    )
+    references = skill_dir / "references"
+    references.mkdir()
+    (references / "fallback.md").write_text("[ ] fallback\n", encoding="utf-8")
+    plain_skill_dir = tmp_path / ".cafe" / "skills" / "plain-kit"
+    plain_references = plain_skill_dir / "references"
+    plain_references.mkdir(parents=True)
+    (plain_skill_dir / "SKILL.md").write_text(
+        """---
+name: plain-kit
+description: non-causal consumer
+workflow:
+  checklist:
+    variants:
+      - when: {feedback: false}
+        sections:
+          - {reference: fallback.md}
+    include_role_guidance: false
+---
+
+# Plain kit
+""",
+        encoding="utf-8",
+    )
+    (plain_references / "fallback.md").write_text("[ ] fallback\n", encoding="utf-8")
+    loader = SkillLoader(project_root=tmp_path, global_root=tmp_path / "global")
+    loader.discover()
+    playbook = {
+        "playbook": {"id": "custom-topology"},
+        "steps": {
+            "inspector": {
+                "output_artifact": "findings",
+                "allowed_goto": ["repair_shop"],
+            },
+            "repair_shop": {
+                "skill": "repair-kit",
+            },
+            "quiet_shop": {
+                "skill": "repair-kit",
+                "input_artifacts": ["findings"],
+            },
+            "plain_shop": {
+                "skill": "plain-kit",
+                "input_artifacts": ["findings"],
+            },
+        },
+    }
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="outbound-todo",
+        playbook=playbook,
+        generic_phase=GenericPhase(loader),
+        agent_manager=FakeAgentManager(""),
+        git_ops=FakeGitOperations(),
+        role_agent_map={},
+    )
+    state = BlackboardStore(issue_dir).load_or_create("inspector")
+    issue_dir.mkdir(parents=True, exist_ok=True)
+    (issue_dir / "next_step.txt").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "from_step": "inspector",
+                "to_owner": "agent",
+                "to_step": "repair_shop",
+                "intent": "await_agent",
+            }
+        ),
+        encoding="utf-8",
+    )
+    output = issue_dir / "inspector" / "iteration_001" / "output.md"
+    output.parent.mkdir(parents=True)
+    output.write_text(
+        "## Todo List\n"
+        "- [ ] `BLK-001` — Source: `review` — Root cause: broken — "
+        "Closure: fixed — Evidence: test\n",
+        encoding="utf-8",
+    )
+
+    passed, detail, required = executor._validate_outbound_causal_todo(
+        step_name="inspector",
+        step_def=playbook["steps"]["inspector"],
+        blackboard_state=state,
+        output_file=output,
+        response="",
+        status_code=None,
+        auto_continue=False,
+    )
+
+    assert passed is False
+    assert required is True
+    assert "inspector" in detail
+    assert "repair_shop" in detail
+
+    output.write_text(
+        "## Todo List\n"
+        "- [ ] `BLK-001` — Source: `review` — Work: fix broken wiring — "
+        "Closure: fixed — Evidence: test\n",
+        encoding="utf-8",
+    )
+    assert executor._validate_outbound_causal_todo(
+        step_name="inspector",
+        step_def=playbook["steps"]["inspector"],
+        blackboard_state=state,
+        output_file=output,
+        response="",
+        status_code=None,
+        auto_continue=False,
+    ) == (True, "", True)
+
+    output.write_text(
+        "## Todo List\n"
+        "- [ ] `BLK-001` — Source: `review` — Root cause: broken — "
+        "Closure: fixed — Evidence: test\n",
+        encoding="utf-8",
+    )
+    (issue_dir / "next_step.txt").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "from_step": "inspector",
+                "to_owner": "agent",
+                "to_step": "quiet_shop",
+                "intent": "await_agent",
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert executor._validate_outbound_causal_todo(
+        step_name="inspector",
+        step_def=playbook["steps"]["inspector"],
+        blackboard_state=state,
+        output_file=output,
+        response="",
+        status_code=None,
+        auto_continue=False,
+    ) == (True, "", False)
+
+    (issue_dir / "next_step.txt").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "from_step": "inspector",
+                "to_owner": "agent",
+                "to_step": "plain_shop",
+                "intent": "await_agent",
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert executor._validate_outbound_causal_todo(
+        step_name="inspector",
+        step_def=playbook["steps"]["inspector"],
+        blackboard_state=state,
+        output_file=output,
+        response="",
+        status_code=None,
+        auto_continue=False,
+    ) == (True, "", False)
+
+    (issue_dir / "next_step.txt").unlink()
+    no_changes_step = {
+        **playbook["steps"]["inspector"],
+        "on": {"default": "repair_shop"},
+    }
+    assert executor._validate_outbound_causal_todo(
+        step_name="inspector",
+        step_def=no_changes_step,
+        blackboard_state=state,
+        output_file=output,
+        response="GOTO: repair_shop",
+        status_code=PhaseStatusCode.NO_CHANGES_NEEDED,
+        auto_continue=False,
+    ) == (True, "", False)
+
+
+def test_completion_contract_failure_retries_same_producer(tmp_path: Path) -> None:
+    phase_dir = tmp_path / ".cafe" / "issues" / "producer-retry" / "review"
+    iteration_dir = phase_dir / "iteration_001"
+    iteration_dir.mkdir(parents=True)
+    checklist = iteration_dir / "checklist.md"
+    checklist.write_text("[x] reviewed\n", encoding="utf-8")
+    (iteration_dir / "iteration.json").write_text(
+        json.dumps({"response": "confirmed", "streaming_log": []}),
+        encoding="utf-8",
+    )
+    manager = FakeAgentManager("confirmed")
+    executor = _minimal_spec_executor(tmp_path, agent_manager=manager)
+    executor.phase_dir = phase_dir
+    executor.phase_name = "review"
+    executor.iteration = 1
+    validations = []
+
+    def validate(response, status):
+        validations.append((response, status))
+        if len(validations) == 1:
+            return False, "malformed causal Todo"
+        return True, ""
+
+    _, status, passed = executor._validate_and_retry_checklist_completion(
+        agent_name="Roger",
+        prompt="prompt",
+        user_input="",
+        valid_intents=[PhaseStatusCode.CONFIRMED],
+        max_retries=1,
+        completion_response="initial response",
+        completion_status=PhaseStatusCode.NEEDS_CHANGES,
+        additional_validation=validate,
+    )
+
+    assert passed is True
+    assert status == PhaseStatusCode.CONFIRMED
+    assert manager.execute_call_count == 1
+    assert "malformed causal Todo" in manager.prompts[0]
+    assert validations == [
+        ("initial response", PhaseStatusCode.NEEDS_CHANGES),
+        ("confirmed", PhaseStatusCode.CONFIRMED),
+    ]
+
+
+def test_projected_todo_failure_retries_with_detail_and_revalidates(
+    tmp_path: Path,
+) -> None:
+    phase_dir = tmp_path / ".cafe" / "issues" / "consumer-retry" / "develop"
+    iteration_dir = phase_dir / "iteration_001"
+    iteration_dir.mkdir(parents=True)
+    checklist = iteration_dir / "checklist.md"
+    checklist.write_text("[x] `BLK-001` — fixed\n", encoding="utf-8")
+    (iteration_dir / "iteration.json").write_text(
+        json.dumps({"response": "confirmed", "streaming_log": []}),
+        encoding="utf-8",
+    )
+    manager = FakeAgentManager("confirmed")
+    executor = _minimal_spec_executor(tmp_path, agent_manager=manager)
+    executor.phase_dir = phase_dir
+    executor.phase_name = "develop"
+    executor.iteration = 1
+    validations = []
+
+    def validate(_checklist_path):
+        validations.append(True)
+        if len(validations) == 1:
+            return False, "Todo ledger evidence is incomplete for BLK-001"
+        return True, ""
+
+    executor._validate_projected_todo_completion_detail = validate
+
+    _, status, passed = executor._validate_and_retry_checklist_completion(
+        agent_name="David",
+        prompt="prompt",
+        user_input="",
+        valid_intents=[PhaseStatusCode.CONFIRMED],
+        max_retries=1,
+    )
+
+    assert passed is True
+    assert status == PhaseStatusCode.CONFIRMED
+    assert manager.execute_call_count == 1
+    assert "Todo ledger evidence is incomplete for BLK-001" in manager.prompts[0]
+    assert len(validations) == 2
+
+
+def test_manual_handoff_retries_malformed_todo_before_consumer(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "manual-todo-retry"
+    producer_skill = tmp_path / ".cafe" / "skills" / "inspection"
+    producer_references = producer_skill / "references"
+    producer_references.mkdir(parents=True)
+    (producer_skill / "SKILL.md").write_text(
+        """---
+name: inspection
+description: produce findings
+workflow:
+  checklist:
+    variants:
+      - when: {}
+        sections:
+          - {reference: execution.md}
+    include_role_guidance: false
+---
+
+# Inspection
+""",
+        encoding="utf-8",
+    )
+    (producer_references / "execution.md").write_text("[ ] inspect\n", encoding="utf-8")
+    consumer_skill = tmp_path / ".cafe" / "skills" / "repair"
+    consumer_skill.mkdir(parents=True)
+    (consumer_skill / "SKILL.md").write_text(
+        """---
+name: repair
+description: consume findings
+workflow:
+  checklist:
+    variants:
+      - when: {feedback: true}
+        sections:
+          - {todo_projection: {artifact: active_work, causal: true}}
+    include_role_guidance: false
+---
+
+# Repair
+""",
+        encoding="utf-8",
+    )
+    loader = SkillLoader(project_root=tmp_path, global_root=tmp_path / "global")
+    loader.discover()
+    playbook = {
+        "playbook": {"id": "manual-todo-retry"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "steps": {
+            "inspection": {
+                "skill": "inspection",
+                "role": "developer",
+                "output_artifact": "findings",
+                "behavior": {"completion": "baton"},
+                "allowed_tools": ["Read", "Write"],
+                "on": {"manual_handoff": "repair"},
+            },
+            "repair": {
+                "skill": "repair",
+                "input_artifacts": ["findings"],
+            },
+        },
+    }
+
+    def write_attempt(*, streaming_output_file=None, **_kwargs) -> None:
+        iteration_dir = issue_dir / "inspection" / "iteration_001"
+        (iteration_dir / "checklist.md").write_text("[x] inspect\n", encoding="utf-8")
+        field = "Work" if manager.execute_call_count == 2 else "Root cause"
+        (iteration_dir / "output.md").write_text(
+            "## Todo List\n"
+            f"- [ ] `BLK-001` — Source: `review` — {field}: fix wiring — "
+            "Closure: fixed — Evidence: test\n",
+            encoding="utf-8",
+        )
+        (issue_dir / "next_step.txt").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "from_step": "inspection",
+                    "to_owner": "agent",
+                    "to_step": "repair",
+                    "intent": "manual_handoff",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    manager = FakeAgentManager(["needs_changes", "needs_changes"], on_execute=write_attempt)
+    state = BlackboardStore(issue_dir).load_or_create("inspection")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="manual-todo-retry",
+        playbook=playbook,
+        generic_phase=GenericPhase(loader),
+        agent_manager=manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+
+    result = executor.execute_step("inspection", playbook["steps"]["inspection"], state)
+
+    assert manager.execute_call_count == 2
+    assert "phase completion contract failed" in manager.prompts[1]
+    assert result.artifact_ready is True
+    assert "findings" in result.artifacts
+    assert "— Work: fix wiring —" in Path(result.artifacts["findings"]).read_text(
+        encoding="utf-8"
+    )
 
 
 def test_custom_topology_generation_and_completion_pin_causal_source(
@@ -6534,6 +8261,25 @@ workflow:
         ),
     ):
         assert executor._validate_projected_todo_completion(checklist)
+
+    with patch(
+        "cafe.utils.checklist_validator.check_verification_receipt",
+        return_value=SimpleNamespace(valid=False, receipt=None),
+    ):
+        passed, detail = executor._validate_projected_todo_completion_detail(checklist)
+    assert passed is False
+    assert "cafe verification run --output-file" in detail
+    assert "--scope targeted -- <test command>" in detail
+
+    valid_output = output.read_text(encoding="utf-8")
+    output.write_text("## Todo Progress\n\n- malformed ledger\n", encoding="utf-8")
+    passed, detail = executor._validate_projected_todo_completion_detail(checklist)
+    assert passed is False
+    assert "Todo ledger item set does not match the authoritative set" in detail
+    assert f"### {item.item_id}" in detail
+    assert f"- Source fingerprint: `{item.fingerprint}`" in detail
+    assert "- Commit: `<full 40-character commit SHA>`" in detail
+    output.write_text(valid_output, encoding="utf-8")
 
     ledger.path.write_text('{"version": 1, "entries": []}\n', encoding="utf-8")
     assert not executor._validate_projected_todo_completion(checklist)

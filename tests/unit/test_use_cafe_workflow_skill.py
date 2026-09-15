@@ -123,6 +123,27 @@ def test_driver_defers_release_check_until_workflow_completion() -> None:
     assert "Defer any in-workflow request until the workflow is complete" in text
 
 
+def test_driver_projects_missing_confirmed_user_context_through_declared_inputs() -> None:
+    skill = _read_skill_resource("SKILL.md")
+    running = _read_skill_resource("references/running_workflow.md")
+    handoffs = _read_skill_resource("references/handoffs_and_alignment.md")
+    normalized = " ".join((skill + running + handoffs).split())
+
+    assert "Project confirmed user context into agent input" in running
+    assert "This applies to every playbook" in normalized
+    assert "not already visible through declared artifacts" in normalized
+    assert "declared schema **and semantic purpose**" in running
+    assert "workflow `--user-input`" in running
+    assert "current command and target step support it" in normalized
+    assert "Never replace a task-required answer" in normalized
+    assert "use `--start-step` just to carry context" in normalized
+    assert "not delivery to another iteration or step" in normalized
+    assert "Supplemental context cannot replace required artifacts, ownership, review" in running
+    assert "permission/capability grants only through their exact declared boundary" in normalized
+    assert "relevant current user-confirmed direction" in handoffs
+    assert "Exclude inferred, superseded, unrelated, secret, credential" in running
+
+
 def _kickoff_formatter_command(
     strategic_context: Path,
     *extra_args: str,
@@ -1989,6 +2010,24 @@ def test_preflight_cache_can_invalidate_candidate_evidence(tmp_path: Path, monke
     assert miss.returncode == 3
 
 
+def test_preflight_cache_preserves_accepted_model_identifier_when_only_case_differs(
+    tmp_path: Path,
+) -> None:
+    module = _load_script_module(
+        SKILL_ROOT / "scripts" / "preflight_cache.py",
+        "preflight_cache_model_identifier",
+    )
+
+    assert module._canonical_resolved_model(
+        requested_model="auto",
+        reported_model="Auto",
+    ) == "auto"
+    assert module._canonical_resolved_model(
+        requested_model="floating-alias",
+        reported_model="canonical-model-v1",
+    ) == "canonical-model-v1"
+
+
 def test_preflight_cache_runs_and_reuses_cafe_fallback_smoke(tmp_path: Path) -> None:
     cache_file = tmp_path / "preflight.json"
     args = (
@@ -2940,12 +2979,12 @@ def test_proactive_review_chat_continues_the_same_live_execution() -> None:
     normalized = " ".join((skill + running).split()).lower()
 
     for required in (
-        "continue that exact process through the host tool's normal wait or continuation operation",
-        "do not launch another `cafe chat` while the original process is live",
-        "count the 120 seconds cumulatively from the original start",
-        "only a normally completed command with the agent's actual response",
-        "verify that the original process has ended before the one safe retry",
-        "never infer or reconstruct the missing response",
+        "live execution handle is not a completed `cafe chat`",
+        "continue waiting on the same process for up to 120 seconds cumulatively",
+        "never launch a duplicate chat or infer a missing response",
+        "only a completed process with a usable agent response satisfies the exchange",
+        "retain the pause and classify the result as ambiguous",
+        "verify termination before the single safe retry",
     ):
         assert required in normalized
 

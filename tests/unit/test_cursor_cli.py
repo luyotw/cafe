@@ -66,6 +66,17 @@ class TestCursorCLIBuildCommand:
         # 應該有 --force
         assert "--force" in cmd
 
+    def test_build_command_trusts_workspace_without_force_for_empty_scope(
+        self, cursor_config
+    ):
+        """決策專用的空工具範圍可非互動執行，但不自動核准工具。"""
+        cli = CursorCLI(cursor_config)
+
+        cmd = cli.build_command("test prompt", allowed_tools=[])
+
+        assert "--trust" in cmd
+        assert "--force" not in cmd
+
     def test_build_command_ignores_allowed_directories(self, cursor_config):
         """測試 Cursor 忽略 allowed_directories 參數."""
         cli = CursorCLI(cursor_config)

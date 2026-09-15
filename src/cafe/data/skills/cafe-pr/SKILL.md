@@ -1,6 +1,6 @@
 ---
 name: cafe-pr
-description: "整理提交內容並產出 pull request 標題與描述"
+description: "Prepare the local pull request title and description for publication"
 version: 1.4.1
 workflow:
   execution_profile:
@@ -50,6 +50,9 @@ workflow:
     - artifacts: [code]
       placeholder: develop_file
       required: false
+    - artifacts: [workspace]
+      placeholder: workspace_file
+      required: false
     - artifacts: [qa_feedback, review_feedback]
       placeholder: feedback_file
       required: false
@@ -90,6 +93,9 @@ Read your agent file: {agent_file}
 ## Commits
 {commits}
 
+## Verified workspace
+Use the declared workspace input when it is supplied by the workflow runtime.
+
 ## Available scripts
 
 - **`scripts/sync_pr.sh`** — Push branch, create/update GitHub PR, and (when enabled) post completed todo list comment
@@ -110,43 +116,47 @@ the review task can expose a verified PR URL.
 
 ## Instructions
 
-### PR review comments mode
-如果 `Current user input for this iteration` 內是 PR review comments：
-- 只把明確路由為 `fix_now` 的 comments 整理到 `## Todo List`，最多 100 列，格式為 ``- [ ] `PR-NNN` — Source: `pr_comment` — Work: ... — Closure: ... — Evidence: ...``；沒有 `fix_now` comments 時只寫 canonical marker `No actionable work.`，不得留下空白區段；ordinary PR body、`## Test Plan` 與未決 Follow-up Proposal 不得匯入
-- 只把 todo list 寫到輸出檔，不要混入原始 PR comments
-- 把 next-step baton 寫成 `develop`
+- When `workspace_file` is supplied, use it as the authoritative Git changed-file and verification-receipt identity for the prepared PR content.
+
+### Corrective feedback curation mode
+When `workflow_feedback_file` contains feedback for this cycle, or `Current user input for this iteration` contains PR review comments, this is PR iteration 2:
+
+ - When runtime provides `workflow_feedback_batch_file`, it is the only immutable source context for this cycle. Select Todo items only from that batch; later items remain for a later cycle. Otherwise, `workflow_feedback_file` and review comments are PR-agent context, not a Develop worklist. Process only unresolved corrective input declared for this step; do not import resolved, stale, duplicate, informational, ordinary PR-body, `## Test Plan`, or open follow-up proposal text.
+ - Normalize each applicable source from the current corrective cycle into the output's one `## Todo List` of at most 100 rows. Use the declared Todo source and ID prefix, preserve one-to-one source identity, and never merge distinct sources because their text matches. Use only `No actionable work.` when there is no applicable source.
+ - Todo rows must use ``- [ ] `<id>` — Source: `<source>` — Work: ... — Closure: ... — Evidence: ...``. Write only the normalized list; do not include raw PR comments or HumanTask feedback.
+ - After curation, write the declared `manual_handoff` using injected `{step_transitions}`. Do not hardcode step names, skip the curator, or select an undeclared route.
 
 ### PR content mode
-其他情況（沒有 PR review comments）：
+Otherwise (there are no PR review comments):
 
-1. 閱讀本 workflow 提供的需求規格、實作計畫與目前分支上的 commits
-2. 編輯 `{output_file}`，產出 PR title 與 description：
-   - Title 必須放在第一行 `#` 標題，精簡清楚，不超過 80 字元
-   - Body 維持 `Summary`、`Changes`、`Test Plan`、`Follow-up Proposals` 結構
-   - 從 workflow input 明確列出的 `review_feedback_file` 中，複製最新 review feedback `## Follow-up Proposals` 內每個 `status: open` 的穩定 `FUP-NNN` ID、impact、confidence、evidence 摘要與 draft issue title/body；不得改寫 ID 或自行新增 proposal
-   - 沒有 open proposal 時明寫 `None`；有 proposal 時明寫 PR HumanTask 的單一選擇會套用全部 open `FUP-NNN`，不支援逐項混合處置，而 `create_follow_up` 只記錄 user 要求，不會自動建立 GitHub issue
-3. 不要直接呼叫 GitHub connector、GitHub API、`gh pr create`，也不要自行執行 `scripts/sync_pr.sh`
-4. 不要查詢或等待遠端 branch/PR；遠端 publish 是 agent 回傳後才由 host-side hook 執行
-5. 完成本地 PR artifact 與 checklist 後，依本輪注入的 `{step_transitions}` 選擇 next-step baton：宣告 `confirm_output` 時交給 `user` review；只有宣告 `workflow_complete→done` 時才直接完成；不得選擇未宣告的路由，也不得代替 user 處置 follow-up proposal
-6. 當 `pr.auto_create: true` 時，CAFE host-side hook 會在有效 handoff 進入人工 review 或完成前執行 `scripts/sync_pr.sh --output {output_file}`，依 `issue.yaml` 的 `base_branch` 自動加上 `--base`；只有本次成功且通過 output contract 的結果可產生 `pr_synced` evidence 與 review task 的 verified PR URL
-7. 當 `pr.auto_create: false` 時，workflow 是 `local-only`：hook 不發布、不沿用舊 URL，review task 明示 `Publication mode: local-only. No PR URL exists.`
-8. 當 `{step_transitions}` 宣告 `confirm_output` 時，只有綁定 HumanTask 的核准結果可以完成 workflow；PR agent 不得改寫成 `done` 或 `workflow_complete`
+1. Read the requirements, implementation plan, and current branch commits supplied by the workflow.
+2. Edit `{output_file}` with a PR title and description:
+   - Put a concise title, no longer than 80 characters, on the first `#` line.
+   - Keep the `Summary`, `Changes`, `Test Plan`, and `Follow-up Proposals` structure.
+   - Copy each `status: open` `FUP-NNN` ID, impact, confidence, evidence summary, and draft issue title/body from the declared `review_feedback_file`; do not rewrite IDs or invent proposals.
+   - Write `None` when there are no open proposals. Otherwise state that one PR HumanTask choice applies to all open `FUP-NNN` items; `create_follow_up` records the request and does not create a GitHub issue automatically.
+3. Do not call a GitHub connector or API, `gh pr create`, or `scripts/sync_pr.sh` directly.
+4. Do not query or wait for a remote branch or PR; the host-side hook publishes after the agent returns.
+5. After the local PR artifact and checklist are complete, choose the next baton from injected `{step_transitions}`. Route `confirm_output` to `user`; complete directly only when `workflow_complete→done` is declared. Do not handle a follow-up proposal on the user's behalf.
+6. When `pr.auto_create: true`, the host-side hook runs `scripts/sync_pr.sh --output {output_file}` before human review or completion, adding `--base` from `issue.yaml`. Only a successful result passing the output contract may produce `pr_synced` evidence and a verified PR URL.
+7. When `pr.auto_create: false`, the workflow is `local-only`: the hook does not publish or reuse an old URL, and the review task states `Publication mode: local-only. No PR URL exists.`
+8. When `{step_transitions}` declares `confirm_output`, only the bound HumanTask approval may complete the workflow; the PR agent must not rewrite it as `done` or `workflow_complete`.
 
 ### Publication authority
-- PR 內容與發布只依本 phase 和 `cafe.pr.publish` capability 契約處理；kickoff 問題、選項和 prepare 參數由 capability manifest 的 `setup_questions` 宣告。
-- 建立或更新 PR、審查通過、workflow 完成，都不代表獲准 merge 或關閉 issue；本 phase 不執行這些操作。
-- Merge 必須是另有明確授權的 integration 工作；不要因使用者說「剩下的做完」就自行執行。
+- PR content and publication follow this phase and the `cafe.pr.publish` capability contract; kickoff questions, options, and prepare parameters come from the capability manifest's `setup_questions`.
+- Creating or updating a PR, review approval, and workflow completion do not authorize merge or issue closure; this phase does not perform those actions.
+- Merge is separately authorized integration work; do not infer permission from a request to finish the remaining work.
 
 ### Gotchas
-- Script 的 progress/error 輸出在 stderr，JSON result 在 stdout
-- PR 已存在時 script 會 update（idempotent），不會重複建立
-- 發布失敗、permission denied 或成功 receipt 缺少 URL 時，不得建立看似成功的 `local-review` handoff；approval resume 與直接成功使用同一個 validated `pr_synced` evidence contract
-- 對外網路、GitHub 憑證、push/create/update PR 都由 host-side hook 處理，避免 agent sandbox 阻擋
-- 如果遠端 branch/PR 尚不存在，這是 hook 執行前的正常狀態，不是 PR phase 未完成
-- 不要在回應中重述 PR 內容；用 blackboard 與 next-step baton 表達 handoff。
+- Scripts write progress and errors to stderr and structured JSON to stdout.
+- An existing PR is updated idempotently rather than recreated.
+- Publication failure, permission denial, or a successful receipt without a URL must not create a false `local-review` handoff; approval resume and direct success use the same validated `pr_synced` evidence contract.
+- Host-side hooks handle external network access, GitHub credentials, and push/create/update operations.
+- A missing remote branch or PR is normal before the hook runs and does not mean the PR phase is incomplete.
+- Do not restate PR content in the response; use the blackboard and next-step baton for handoff.
 
 ## Output
 Write PR content to: {output_file}
 
 ## Handoff
-- 依照本輪結果寫入 next-step baton；blackboard 由 runtime 更新。
+- Write the next-step baton for this result; the runtime updates the blackboard.

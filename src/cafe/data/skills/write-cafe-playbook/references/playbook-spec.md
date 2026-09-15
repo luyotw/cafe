@@ -122,6 +122,30 @@ contract and every other warning are resolved.
 
 ## 3. Step Fields
 
+### Current artifact contract
+
+- Declare each backward correction route on its producing step with
+  `feedback_routes` keyed by destination. Each route names the producer output
+  artifact, source kind, Todo source, and stable ID prefix; the destination
+  lists the artifact and exposes one causal Todo projection.
+- Resolve routes from the persisted sender/destination edge, including dynamic
+  `allowed_goto` targets. Never infer correction mode from destination, artifact
+  name, chat, baton summaries, or session memory. Strict validation rejects
+  incomplete or ambiguous declarations.
+- A current workspace is one declared companion beside the summary. The
+  producer uses `workspace_artifact`; current consumers use
+  `workspace_input_artifact`, and that key must also appear in
+  `input_artifacts`. Summary and workspace names must differ.
+- Workspace records are schema-versioned, atomically written, bound to
+  repository state, and verified with repository-relative nonsymlink
+  `verification.json` receipts. An unchanged verified snapshot keeps its
+  version. Legacy v0.2 mixed records remain bounded compatibility data and are
+  not current verification.
+- Plan and correction sources use one canonical `## Todo List` of at most 100
+  items, stable identities, and the exact intentional-empty marker
+  `No actionable work.`. Consumers write progress only to their own output
+  under `## Todo Progress`.
+
 | Field | Rule |
 | --- | --- |
 | `type` | Usually `skill`; use `subflow` only when an actual subflow exists |
@@ -130,6 +154,7 @@ contract and every other warning are resolved.
 | `assignee_type` | `agent` (or a v0.2-compatible omission), `human`, `auto`, or `hybrid` |
 | `input_artifacts` | Artifact keys already produced by earlier or conditional paths |
 | `output_artifact` | The key registered when `{output_file}` exists |
+| `todo_identity_input_artifact` | Optional declared prior Todo authority for a plan revision; it must also appear in `input_artifacts`, and the runtime verifies or materializes its durable Work fingerprints before the author runs |
 | `initial_input` | Entry-step-only trusted input providers and explicit artifact/prompt bindings |
 | `template` | Optional default selected from the step skill's declared output-template catalog |
 | `valid_intents` | Supported `PhaseStatusCode` tokens the phase may return |
@@ -299,6 +324,12 @@ Use a self-loop when the user is reviewing the current phase's output:
 - Use a backward route only when a previously confirmed source of truth is invalidated, not for ordinary tuning.
 
 ## 6. Artifact Matrix
+
+Current steps keep the singular `output_artifact` as the primary output. At
+most one optional declared workspace companion may be published. Ordinary
+`artifact.json` behavior remains unchanged, and a workspace is registered as a
+declared artifact rather than an implicit sidecar. Consumer inputs must name
+the summary, workspace, or both explicitly.
 
 Build this table before writing YAML:
 

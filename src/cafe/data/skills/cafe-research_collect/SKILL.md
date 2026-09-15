@@ -1,6 +1,6 @@
 ---
 name: cafe-research_collect
-description: 搜尋、整理與記錄來源（非軟體研究流程）
+description: Collect, organize, and record research sources
 version: 1.1.0
 workflow:
   execution_profile:
@@ -13,6 +13,18 @@ workflow:
       pattern: revision_feedback
       prompt: Provide the clarification needed to continue evidence collection.
       input_schema: feedback
+  prompt_inputs:
+    - artifacts: [research_synthesis, causal_todo]
+      placeholder: correction_source
+      required: false
+  checklist:
+    variants:
+      - when: {feedback: true}
+        sections:
+          - todo_projection: {artifact: causal_todo, causal: true}
+      - when: {}
+        sections:
+          - reference: correction_contract.md
 ---
 
 # Research Collect
@@ -21,10 +33,10 @@ workflow:
 Read your agent file: {agent_file}
 
 ## Instructions
-蒐集與整理資料來源，建立可追溯的筆記與引用，標註可信度與缺口。
+Collect and organize sources into traceable notes and citations, marking credibility and gaps. When a correction source is supplied, consume every canonical Todo item and preserve its ID.
 
 ## Output
 Write collected sources to: {output_file}
 
 ## Handoff
-- 依照本輪結果寫入 next-step baton；blackboard 由 runtime 更新。
+- Write the next-step baton for this result; the runtime updates the blackboard.

@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path
 from threading import Event, Thread
 
@@ -11,6 +12,7 @@ from cafe.catalogs.resolver import global_catalog_lock
 from cafe.core.hooks import HookResult
 from cafe.core.status_codes import PhaseStatusCode
 from cafe.core.types import AgentCLI
+from cafe.core.workspace_lock import workspace_execution_lock
 from cafe.phases.generic_phase import GenericPhase
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
@@ -459,6 +461,110 @@ def test_execute_short_circuits_when_before_execute_stops(tmp_path: Path) -> Non
     assert calls == []
     assert result.status_code == PhaseStatusCode.NEED_CLARIFICATION
     assert result.events == [{"type": "stopped"}]
+
+
+def test_execute_guard_runs_at_each_agent_and_hook_boundary(tmp_path: Path) -> None:
+    phase = GenericPhase(_setup_loader(tmp_path))
+    checks: list[str] = []
+
+    result = phase.execute(
+        skill_name="cafe-plan",
+        skill_invocation="/plan",
+        step_def={"valid_intents": ["confirmed"]},
+        agent_executor=lambda prompt: "confirmed",
+        execution_guard=lambda: checks.append("guard"),
+    )
+
+    assert result.agent_invoked is True
+    assert len(checks) >= 4
+
+
+def test_execute_holds_workspace_lease_across_agent_and_host_hooks(tmp_path: Path) -> None:
+    """A workspace writer cannot interleave between validation and use."""
+    writer_entered = Event()
+    release_writer = Event()
+    observed: list[str] = []
+    writer_threads: list[Thread] = []
+
+    @contextmanager
+    def workspace_lease():
+        with workspace_execution_lock(tmp_path):
+            observed.append("lease-enter")
+            yield
+            observed.append("lease-exit")
+
+    class LeaseAwareHook:
+        def run(self, **_kwargs):
+            assert not writer_entered.is_set()
+            observed.append("hook")
+            return HookResult()
+
+    def writer() -> None:
+        with workspace_execution_lock(tmp_path):
+            writer_entered.set()
+            release_writer.wait(timeout=5)
+
+    phase = GenericPhase(_setup_loader(tmp_path), hook_registry={"LeaseAwareHook": LeaseAwareHook})
+
+    def agent(_prompt: str) -> str:
+        thread = Thread(target=writer)
+        thread.start()
+        writer_threads.append(thread)
+        assert not writer_entered.wait(timeout=0.2)
+        observed.append("agent")
+        release_writer.set()
+        return "confirmed"
+
+    result = phase.execute(
+        skill_name="cafe-plan",
+        skill_invocation="/plan",
+        step_def={
+            "hooks": {"after_execute": ["LeaseAwareHook"]},
+            "valid_intents": ["confirmed"],
+        },
+        agent_executor=agent,
+        execution_lease=workspace_lease,
+    )
+
+    assert result.agent_invoked is True
+    assert observed[0] == "lease-enter"
+    assert observed[-1] == "lease-exit"
+    assert observed.index("agent") < observed.index("hook")
+    assert writer_entered.wait(timeout=5)
+    for thread in writer_threads:
+        thread.join(timeout=5)
+
+    with workspace_execution_lock(tmp_path):
+        assert (tmp_path / ".cafe" / "workspace-use.lock").is_file()
+
+
+def test_execute_stability_guard_rejects_replacement_before_first_hook(
+    tmp_path: Path,
+) -> None:
+    calls: list[str] = []
+    phase = GenericPhase(_setup_loader(tmp_path), hook_registry={"StopHook": StopHook})
+    guard_calls = 0
+
+    def guard() -> None:
+        nonlocal guard_calls
+        guard_calls += 1
+        if guard_calls == 2:
+            raise ValueError("workspace changed during the check-to-use interval")
+
+    with pytest.raises(ValueError, match="check-to-use interval"):
+        phase.execute(
+            skill_name="cafe-plan",
+            skill_invocation="/plan",
+            step_def={
+                "hooks": {"before_execute": ["StopHook"]},
+                "valid_intents": ["need_clarification"],
+            },
+            agent_executor=lambda _prompt: calls.append("agent") or "confirmed",
+            execution_guard=guard,
+        )
+
+    assert calls == []
+    assert guard_calls == 2
 
 
 def test_execute_runs_prepare_input_and_after_execute_retry(tmp_path: Path) -> None:

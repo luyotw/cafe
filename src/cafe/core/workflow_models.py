@@ -17,6 +17,8 @@ class StepExecutionResult:
     artifact_ready: bool = True
     agent_invoked: bool = False
     events: list[dict[str, Any]] = field(default_factory=list)
+    feedback_source_identities: tuple[str, ...] | None = None
+    artifact_metadata: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass

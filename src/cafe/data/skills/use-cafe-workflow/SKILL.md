@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including bounded diagnosis and declarative repair when the workflow behaves incorrectly.
-metadata: {version: 1.51.1}
+metadata: {version: 1.52.0}
 ---
 
 # Use CAFE Workflow
@@ -54,7 +54,7 @@ If more than one situation applies, read every listed reference before acting; d
 - Confirm a complete versioned Delivery Contract in the same kickoff before `cafe prepare`: outcome, full scope, acceptance/evidence, implementation direction, constraints, permitted variations and deviation triggers. Keep hard invariants limited to explicit user requirements and externally meaningful behavior. Put unresolved internal mechanisms and reasonable technical choices in `allowed_variations` so ordinary implementation decisions do not reopen the contract. Store it only in `driver/contract.json`. At existing eligible output gates, follow the evidence comparison in `references/handoffs_and_alignment.md`; a smaller implementation must preserve all requirements. Never add a gate or assume particular step/artifact names.
 - Treat planned output confirmation, reactive user handoffs, and semantic
   alignment as separate decisions; default `need_clarification` to bounded
-  `driver_confirmable` handling under `handoffs_and_alignment.md`.
+  `driver_confirmable` handling under `handoffs_and_alignment.md`. Before agent execution, durably project any missing, relevant, current user-confirmed context through the playbook-neutral path in `references/running_workflow.md`; `cafe chat` is not phase input.
 - Make every user-owned handoff self-contained in conversation: assume no terminal, repository, or artifact access; state where the workflow paused, why it needs the user, every option with its practical consequence, and a plain-language reply example. Add evidence, scope, risk, next-phase, model, or external-effect details only when they materially affect the decision. Bare confirmation, link-only, and raw-artifact-dump handoffs are invalid.
 - On a later user-facing turn, inspect durable state first. If a user-owned task is still pending and no adequate handoff has appeared in the current conversation, answer the user's immediate question briefly and append the same compact task summary. Do not repeat an adequate handoff unless the task or options changed or the user asks.
 - Historical callback attempts retain their recorded session IDs but do not pin future callbacks to that session. When repairing a confirmed misrouted callback, preserve the event history and update only the current primary session binding.

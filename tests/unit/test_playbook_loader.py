@@ -6,7 +6,12 @@ import pytest
 import yaml
 
 from cafe.core.human_tasks import HumanTaskCompletion
-from cafe.core.playbook import PlaybookDefinition, StepConfig, resolve_playbook_skills
+from cafe.core.playbook import (
+    PlaybookDefinition,
+    StepConfig,
+    resolve_playbook_skills,
+    resolve_step_behavior,
+)
 from cafe.playbooks.loader import PlaybookLoader, apply_issue_playbook_overrides
 from cafe.skills.loader import SkillLoader
 from cafe.ui.human_tasks import (
@@ -110,6 +115,89 @@ def test_step_corrections_resume_sessions_by_default() -> None:
     step = StepConfig.model_validate({"skill": "phase", "role": "reviewer", "on": {}})
 
     assert step.correction_session == "resume"
+
+
+def _route_playbook(*, route_target: str = "receiver", route_overrides: dict | None = None) -> dict:
+    route = {
+        "artifact": "review_doc",
+        "source_kind": "editorial_review",
+        "todo_source": "review",
+        "todo_id_prefix": "REV",
+    }
+    if route_overrides:
+        route.update(route_overrides)
+    return {
+        "playbook": {"id": "custom-route"},
+        "steps": {
+            "producer": {
+                "skill": "source-skill",
+                "role": "writer",
+                "output_artifact": "review_doc",
+                "behavior": {"feedback_routes": {route_target: route}},
+                "on": {"manual_handoff": route_target},
+            },
+            "receiver": {
+                "skill": "receiver-skill",
+                "role": "writer",
+                "input_artifacts": ["review_doc"],
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+
+
+def test_destination_keyed_feedback_routes_are_name_neutral() -> None:
+    model = PlaybookDefinition.model_validate(_route_playbook())
+
+    behavior = resolve_step_behavior(model, "producer")
+
+    assert behavior.feedback_routes is not None
+    assert behavior.feedback_routes["receiver"].artifact == "review_doc"
+
+
+def test_feedback_route_requires_a_real_transition_and_matching_output() -> None:
+    missing_edge = _route_playbook(route_target="other")
+    with pytest.raises(ValueError, match="feedback route.*transition"):
+        PlaybookDefinition.model_validate(missing_edge)
+
+    mismatched_output = _route_playbook(route_overrides={"artifact": "other_doc"})
+    with pytest.raises(ValueError, match="feedback route.*output_artifact"):
+        PlaybookDefinition.model_validate(mismatched_output)
+
+
+def test_backward_allowed_goto_requires_a_complete_feedback_route() -> None:
+    playbook = _route_playbook()
+    playbook["steps"]["receiver"]["allowed_goto"] = ["producer"]
+    with pytest.raises(ValueError, match="backward transition.*producer"):
+        PlaybookDefinition.model_validate(playbook)
+
+
+def test_step_can_declare_one_arbitrary_named_workspace_companion() -> None:
+    step = StepConfig.model_validate(
+        {
+            "skill": "developer",
+            "role": "developer",
+            "output_artifact": "summary_doc",
+            "workspace_artifact": "verified_snapshot",
+            "on": {},
+        }
+    )
+
+    assert step.output_artifact == "summary_doc"
+    assert step.workspace_artifact == "verified_snapshot"
+
+
+def test_workspace_companion_cannot_collide_with_summary() -> None:
+    with pytest.raises(ValueError, match="differ from output_artifact"):
+        StepConfig.model_validate(
+            {
+                "skill": "developer",
+                "role": "developer",
+                "output_artifact": "summary_doc",
+                "workspace_artifact": "summary_doc",
+                "on": {},
+            }
+        )
 
 
 @pytest.mark.parametrize(
