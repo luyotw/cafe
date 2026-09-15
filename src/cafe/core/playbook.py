@@ -602,6 +602,7 @@ class StepConfig(BaseModel):
     # remains the opt-in isolated scope.
     input_artifacts: Optional[List[str]] = None
     output_artifact: Optional[str] = None
+    todo_identity_input_artifact: Optional[str] = None
     workspace_artifact: Optional[str] = None
     workspace_input_artifact: Optional[str] = None
     initial_input: Optional[InitialInputDeclaration] = None
@@ -649,6 +650,18 @@ class StepConfig(BaseModel):
     def _validate_input_artifact_scope(self) -> "StepConfig":
         if "input_artifacts" in self.model_fields_set and self.input_artifacts is None:
             raise ValueError("input_artifacts must be a list when specified")
+        if self.todo_identity_input_artifact is not None:
+            if not re.fullmatch(
+                r"[A-Za-z][A-Za-z0-9_-]*", self.todo_identity_input_artifact.strip()
+            ):
+                raise ValueError("todo_identity_input_artifact must be a safe identifier")
+            if (
+                self.input_artifacts is None
+                or self.todo_identity_input_artifact not in self.input_artifacts
+            ):
+                raise ValueError(
+                    "todo_identity_input_artifact must be listed in input_artifacts"
+                )
         if self.automatic is not None and self.assignee_type != "auto":
             raise ValueError("automatic requires matching assignee_type=auto")
         if self.hybrid is not None and self.assignee_type != "hybrid":

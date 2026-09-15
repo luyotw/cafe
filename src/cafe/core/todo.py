@@ -61,6 +61,17 @@ class TodoSourceArtifact:
     items: tuple[TodoItem, ...] | None = None
 
 
+def plan_work_fingerprint(work: str) -> str:
+    """Return the canonical identity for a PLAN item's Work text.
+
+    The identity is independent of the mutable PLAN identifier and uses one
+    exact normalized payload so plan authors and runtime validators share the
+    same durable continuity contract.
+    """
+    normalized_work = " ".join(str(work).split())
+    return sha256(("plan\x1f" + normalized_work).encode("utf-8")).hexdigest()
+
+
 def resolve_todo_source(
     *,
     artifact: str,

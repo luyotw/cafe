@@ -56,8 +56,9 @@ steps:
     skill: cafe-plan
     role: developer
     assignee_type: agent
-    input_artifacts: [spec]
+    input_artifacts: [spec, plan]
     output_artifact: plan
+    todo_identity_input_artifact: plan
     human_tasks:
       - {trigger: initial, task_id: development-guide}
       - {trigger: confirm_output, task_id: output-review, outcomes: {confirm: develop, revise: plan}}

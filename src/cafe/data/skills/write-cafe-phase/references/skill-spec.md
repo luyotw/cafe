@@ -486,6 +486,11 @@ This section is authoritative for current artifact normalization.
 - A plan revision may retain an ID, unchanged retained work may not move to a
   new ID, and unrelated work may not reuse an existing ID. Progress belongs in
   the consumer output, not in the immutable plan.
+- When a plan skill revises retained Work, its declared prior-plan input and
+  sibling `artifact.json` supply the durable `todo_work_identities` map. The
+  fingerprint is SHA-256 of `plan\x1f` followed by Work with internal whitespace
+  collapsed to one space. Missing, malformed, or contradictory prior authority
+  fails closed before the plan author runs.
 - Validate every changed authoritative skill and playbook in strict mode and
   record targeted runtime evidence for all declared domain routes, custom names,
   process restart, and v0.2 compatibility.

@@ -154,6 +154,7 @@ contract and every other warning are resolved.
 | `assignee_type` | `agent` (or a v0.2-compatible omission), `human`, `auto`, or `hybrid` |
 | `input_artifacts` | Artifact keys already produced by earlier or conditional paths |
 | `output_artifact` | The key registered when `{output_file}` exists |
+| `todo_identity_input_artifact` | Optional declared prior Todo authority for a plan revision; it must also appear in `input_artifacts`, and the runtime verifies or materializes its durable Work fingerprints before the author runs |
 | `initial_input` | Entry-step-only trusted input providers and explicit artifact/prompt bindings |
 | `template` | Optional default selected from the step skill's declared output-template catalog |
 | `valid_intents` | Supported `PhaseStatusCode` tokens the phase may return |

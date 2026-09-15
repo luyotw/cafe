@@ -71,6 +71,7 @@ from cafe.core.todo import (
     MAX_TODO_ITEMS,
     TodoContractError,
     TodoSourceArtifact,
+    plan_work_fingerprint,
     parse_todo_identity_continuity,
     parse_todo_list,
     projection_todo_items,
@@ -114,9 +115,7 @@ from cafe.utils.phase_config import load_phase_step_model
 
 def _plan_work_identity(item: Any) -> str:
     """Hash the retained work payload without making the mutable ID part of it."""
-    return hashlib.sha256(
-        "\x1f".join((str(item.source), " ".join(str(item.work).split()))).encode("utf-8")
-    ).hexdigest()
+    return plan_work_fingerprint(str(item.work))
 
 
 def align_pr_baton_after_execution(
@@ -834,6 +833,10 @@ class GenericWorkflowStepExecutor(Phase):
             self._resolve_skill_name(step_def, self.iteration)
         )
         input_artifacts = self._step_input_artifacts(step_def, blackboard_state)
+        self._prepare_todo_identity_input(
+            step_def=step_def,
+            input_artifacts=input_artifacts,
+        )
         causal_artifact = next(
             (
                 section.todo_projection.artifact
@@ -1628,6 +1631,10 @@ class GenericWorkflowStepExecutor(Phase):
         skill_name = self._resolve_skill_name(step_def, self.iteration)
         contract = self._get_skill_loader().get_workflow_contract(skill_name)
         input_artifacts = self._step_input_artifacts(step_def, blackboard_state)
+        self._prepare_todo_identity_input(
+            step_def=step_def,
+            input_artifacts=input_artifacts,
+        )
         self._validate_workspace_inputs(input_artifacts, step_def=step_def)
         causal_projections = [
             section.todo_projection
@@ -1906,6 +1913,89 @@ class GenericWorkflowStepExecutor(Phase):
             return None
         behavior = resolve_step_behavior(self.playbook, from_step)
         return (behavior.feedback_routes or {}).get(destination)
+
+    @staticmethod
+    def _prepare_todo_identity_input(
+        *,
+        step_def: Dict[str, Any],
+        input_artifacts: Dict[str, Any],
+    ) -> None:
+        """Materialize and verify the declared prior PLAN identity authority."""
+        artifact_name = step_def.get("todo_identity_input_artifact")
+        if not isinstance(artifact_name, str) or not artifact_name.strip():
+            return
+        prior = input_artifacts.get(artifact_name)
+        if prior is None:
+            return
+        prior_path = Path(str(getattr(prior, "path", prior)))
+        try:
+            content = prior_path.read_text(encoding="utf-8")
+            prior_items = parse_todo_list(content)
+        except (OSError, UnicodeError, TodoContractError) as exc:
+            raise ValueError(
+                f"prior plan Todo authority {artifact_name!r} is unreadable or invalid; "
+                "restore the authoritative prior plan before continuing"
+            ) from exc
+        if any(item.source != "plan" for item in prior_items):
+            raise ValueError(
+                f"prior plan Todo authority {artifact_name!r} contains a non-plan item; "
+                "restore the authoritative prior plan before continuing"
+            )
+        expected = {
+            plan_work_fingerprint(item.work): item.item_id
+            for item in prior_items
+        }
+        persisted = getattr(prior, "todo_work_identities", None)
+        persisted_map = (
+            {str(key): str(value) for key, value in persisted.items()}
+            if isinstance(persisted, dict)
+            else None
+        )
+        record_path = prior_path.parent / "artifact.json"
+        try:
+            record = json.loads(record_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                f"prior plan Todo authority {artifact_name!r} has no readable artifact record; "
+                "restore artifact.json before continuing"
+            ) from exc
+        if not isinstance(record, dict):
+            raise ValueError(
+                f"prior plan Todo authority {artifact_name!r} has an invalid artifact record; "
+                "restore artifact.json before continuing"
+            )
+        recorded_path = record.get("path")
+        if recorded_path and Path(str(recorded_path)).resolve() != prior_path.resolve():
+            raise ValueError(
+                f"prior plan Todo authority {artifact_name!r} has a contradictory artifact path; "
+                "restore artifact.json before continuing"
+            )
+        recorded = record.get("todo_work_identities")
+        recorded_map = (
+            {str(key): str(value) for key, value in recorded.items()}
+            if isinstance(recorded, dict)
+            else None
+        )
+        if recorded is not None and recorded_map is None:
+            raise ValueError(
+                f"prior plan Todo authority {artifact_name!r} has malformed identity metadata; "
+                "restore artifact.json before continuing"
+            )
+        for candidate in (persisted_map, recorded_map):
+            if candidate is not None and candidate != expected:
+                raise ValueError(
+                    f"prior plan Todo authority {artifact_name!r} has contradictory identity metadata; "
+                    "restore the authoritative prior plan before continuing"
+                )
+        if recorded_map is None:
+            record["todo_work_identities"] = expected
+            temporary = record_path.with_name(f".{record_path.name}.{os.getpid()}.tmp")
+            temporary.write_text(
+                json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+            )
+            os.replace(temporary, record_path)
+        if hasattr(prior, "todo_work_identities"):
+            prior.todo_work_identities = expected
 
     @staticmethod
     def _step_input_artifacts(
@@ -2701,13 +2791,32 @@ class GenericWorkflowStepExecutor(Phase):
                         previous_plan_items = tuple(
                             item for item in previous_items if item.source == "plan"
                         )
-                        if previous_work_identities is None:
+                        derived_previous_work_identities = {
+                            _plan_work_identity(item): item.item_id
+                            for item in previous_plan_items
+                        }
+                        if previous_work_identities is not None:
+                            if not isinstance(previous_work_identities, dict):
+                                raise ValueError(
+                                    "prior plan Todo authority has malformed identity metadata; "
+                                    "restore the authoritative prior plan before continuing"
+                                )
                             previous_work_identities = {
-                                _plan_work_identity(item): item.item_id
-                                for item in previous_plan_items
+                                str(key): str(value)
+                                for key, value in previous_work_identities.items()
                             }
-                    except (OSError, UnicodeError, TodoContractError):
-                        previous_work_identities = None
+                            if previous_work_identities != derived_previous_work_identities:
+                                raise ValueError(
+                                    "prior plan Todo authority has contradictory identity metadata; "
+                                    "restore the authoritative prior plan before continuing"
+                                )
+                        else:
+                            previous_work_identities = derived_previous_work_identities
+                    except (OSError, UnicodeError, TodoContractError) as exc:
+                        raise ValueError(
+                            "prior plan Todo authority is unreadable or invalid; "
+                            "restore the authoritative prior plan before continuing"
+                        ) from exc
                 if previous_work_identities:
                     # PLAN-NNN is the durable authoring contract.  Unchanged
                     # work may be reordered, while a changed retained item must

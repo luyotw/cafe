@@ -80,8 +80,9 @@ steps:
     handoff_label: "Revise implementation plan"
     chat_role: developer
     assignee_type: agent
-    input_artifacts: [spec]
+    input_artifacts: [spec, plan]
     output_artifact: plan
+    todo_identity_input_artifact: plan
     behavior:
       completion: status_code
     human_tasks:

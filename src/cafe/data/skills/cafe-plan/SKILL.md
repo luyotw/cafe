@@ -37,6 +37,9 @@ workflow:
     - artifacts: [spec]
       placeholder: spec_file_path
       required: true
+    - artifacts: [plan]
+      placeholder: prior_plan_file
+      required: false
   checklist:
     context_references:
       xml_questions_instruction: xml_questions_instruction.md
@@ -109,6 +112,7 @@ Read your agent file: {agent_file}
 - Detailed Plan 階段才依規格拆解實作步驟，先列測試，再列實作
 - Detailed Plan 的可執行工作只放在 `## Todo List`，最多 100 列；每列使用 ``- [ ] `PLAN-NNN` — Source: `plan` — Work: ... — Closure: ... — Evidence: ...``；ID 唯一穩定，欄位皆不可為空，其他 checkbox 不代表 Develop work。確定沒有可執行項目時，區段必須只寫 canonical marker `No actionable work.`，不得留下空白區段。
 - 若修訂既有 `PLAN-NNN` 的 Work 文字，保留原 ID 並在 Todo List 後加入 `## Todo Identity Continuity`；每列使用 ``- `PLAN-NNN` — Previous work fingerprint: `<sha256>` `` 指向上一版同一 Work 的持久 fingerprint。未改變的 Work、重排、新增與刪除不需此段落。
+- When `prior_plan_file` is present in the workflow inputs, read that authoritative prior plan and its sibling `artifact.json` before revising Work. Copy the exact `todo_work_identities` fingerprint for a changed retained ID into `Todo Identity Continuity`; do not invent or recompute a different value. The runtime materializes this metadata for legacy prior plans and stops before the agent on unreadable or contradictory authority.
 - 嚴格遵守 TDD，避免直接寫程式碼
 - 選定執行或部署架構前，除非 repo、規格或本輪對話已有明確證據，否則預設 user
   不熟悉主機、網路與雲端維運。先透過 `questions.xml` 用生活化問題確認會在哪些裝置與

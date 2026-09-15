@@ -234,6 +234,18 @@ def test_solution_alignment_stays_inside_the_plan_step(playbook_id: str) -> None
     assert clarification.outcomes == {"submit": "plan"}
 
 
+def test_plan_steps_declare_the_prior_identity_authority_and_skill_input() -> None:
+    loader = PlaybookLoader()
+    contract = SkillLoader().get_workflow_contract("cafe-plan")
+    prior_input = next(item for item in contract.prompt_inputs if item.placeholder == "prior_plan_file")
+    assert prior_input.artifacts == ("plan",)
+    assert prior_input.required is False
+    for playbook_id in ("standard", "standard-qa", "tdd", "tdd-qa"):
+        plan = loader.load_model(playbook_id, strict=True).model.steps["plan"]
+        assert plan.todo_identity_input_artifact == "plan"
+        assert plan.input_artifacts == ["spec", "plan"]
+
+
 def test_every_builtin_develop_step_binds_the_generic_permission_task() -> None:
     """Test List 5: permission requests reuse one policy and always resume develop."""
     policy = next(

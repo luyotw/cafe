@@ -32,7 +32,7 @@ from cafe.core.session_continuation import (
     SessionContinuationPolicy,
 )
 from cafe.core.status_codes import PhaseStatusCode
-from cafe.core.todo import parse_todo_list, workflow_feedback_todo_items
+from cafe.core.todo import plan_work_fingerprint, parse_todo_list, workflow_feedback_todo_items
 from cafe.core.types import AgentCLI, AgentConfig, AgentResponse, CliEntry, TokenUsage
 from cafe.core.workflow_feedback import WorkflowFeedbackLedger
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
@@ -4369,9 +4369,7 @@ def _minimal_spec_executor(
 
 
 def _plan_continuity(item_id: str, work: str) -> str:
-    fingerprint = hashlib.sha256(
-        ("plan\x1f" + " ".join(work.split())).encode("utf-8")
-    ).hexdigest()
+    fingerprint = plan_work_fingerprint(work)
     return (
         "\n\n## Todo Identity Continuity\n"
         f"- `{item_id}` — Previous work fingerprint: `{fingerprint}`\n"
@@ -6655,6 +6653,130 @@ def test_plan_publication_allows_a_no_shared_vocabulary_revision_with_same_id(
         updated_by="plan",
     )
     assert record.todo_identities is not None
+
+
+def test_plan_identity_input_materializes_legacy_metadata_for_the_plan_author(
+    tmp_path: Path,
+) -> None:
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.generic_phase = GenericPhase(SkillLoader())
+    executor.phase_dir = tmp_path / "issue" / "plan"
+    executor.iteration = 2
+    old_output = executor.phase_dir / "iteration_001" / "output.md"
+    old_output.parent.mkdir(parents=True)
+    old_output.write_text(
+        "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: build parser — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+    old_record = ArtifactEntry(
+        name="plan",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="plan",
+        path=str(old_output),
+        content_sha256=hashlib.sha256(old_output.read_bytes()).hexdigest(),
+    )
+    (old_output.parent / "artifact.json").write_text(
+        json.dumps(old_record.to_dict()), encoding="utf-8"
+    )
+    state = BlackboardStore(tmp_path / "issue").load_or_create("plan")
+    spec_output = tmp_path / "issue" / "spec" / "iteration_001" / "output.md"
+    spec_output.parent.mkdir(parents=True)
+    spec_output.write_text("requirements\n", encoding="utf-8")
+    state.artifacts["spec"] = ArtifactEntry(
+        name="spec",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="spec",
+        path=str(spec_output),
+    )
+    state.artifacts["plan"] = old_record
+
+    output_file = executor.phase_dir / "iteration_002" / "output.md"
+    context = executor._build_context(
+        step_name="plan",
+        step_def={
+            "skill": "cafe-plan",
+            "role": "developer",
+            "input_artifacts": ["spec", "plan"],
+            "output_artifact": "plan",
+            "todo_identity_input_artifact": "plan",
+        },
+        blackboard_state=state,
+        agent_name="David",
+        output_file=output_file,
+    )
+
+    persisted = json.loads((old_output.parent / "artifact.json").read_text(encoding="utf-8"))
+    assert persisted["todo_work_identities"] == {
+        plan_work_fingerprint("build parser"): "PLAN-001"
+    }
+    assert context["prior_plan_file"].endswith("plan/iteration_001/output.md")
+
+
+def test_plan_identity_input_fails_closed_on_malformed_prior_authority(tmp_path: Path) -> None:
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_dir = tmp_path / "issue" / "plan"
+    executor.iteration = 2
+    old_output = executor.phase_dir / "iteration_001" / "output.md"
+    old_output.parent.mkdir(parents=True)
+    old_output.write_text("## Todo List\n- [ ] malformed\n", encoding="utf-8")
+    old_record = ArtifactEntry(
+        name="plan",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="plan",
+        path=str(old_output),
+    )
+    state = BlackboardStore(tmp_path / "issue").load_or_create("plan")
+    state.artifacts["plan"] = old_record
+
+    with pytest.raises(ValueError, match="prior plan Todo authority"):
+        executor._build_context(
+            step_name="plan",
+            step_def={
+                "skill": "cafe-plan",
+                "role": "developer",
+                "input_artifacts": ["plan"],
+                "output_artifact": "plan",
+                "todo_identity_input_artifact": "plan",
+            },
+            blackboard_state=state,
+            agent_name="David",
+            output_file=executor.phase_dir / "iteration_002" / "output.md",
+        )
+
+
+def test_plan_publication_fails_closed_when_prior_authority_is_unreadable(
+    tmp_path: Path,
+) -> None:
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_dir = tmp_path / "issue" / "plan"
+    executor.iteration = 2
+    state = BlackboardStore(tmp_path / "issue").load_or_create("plan")
+    state.artifacts["plan"] = ArtifactEntry(
+        name="plan",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="plan",
+        path=str(executor.phase_dir / "iteration_001" / "output.md"),
+    )
+    new_output = executor.phase_dir / "iteration_002" / "output.md"
+    new_output.parent.mkdir(parents=True)
+    new_output.write_text(
+        "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: build parser — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="prior plan Todo authority"):
+        executor._write_artifact_record(
+            blackboard_state=state,
+            output_key="plan",
+            output_path=str(new_output),
+            updated_by="plan",
+        )
 
 
 def test_plan_publication_allows_new_id_for_shared_domain_vocabulary(
