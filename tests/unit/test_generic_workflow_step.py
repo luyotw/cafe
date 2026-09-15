@@ -6785,7 +6785,7 @@ def test_plan_publication_allows_semantic_same_id_revision(tmp_path: Path) -> No
     assert record.todo_work_identities
 
 
-def test_plan_publication_keeps_explicit_ids_through_reorder_add_and_delete(
+def test_plan_publication_rejects_displaced_work_during_reorder_add_and_delete(
     tmp_path: Path,
 ) -> None:
     """Reordering, adding, and deleting rows does not infer ID movement."""
@@ -6814,6 +6814,48 @@ def test_plan_publication_keeps_explicit_ids_through_reorder_add_and_delete(
         "- [ ] `PLAN-003` — Source: `plan` — Work: improve parser service — "
         "Closure: done — Evidence: test\n"
         "- [ ] `PLAN-001` — Source: `plan` — Work: migrate invoices — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="PLAN-001"):
+        executor._write_artifact_record(
+            blackboard_state=state,
+            output_key="plan",
+            output_path=str(new_output),
+            updated_by="plan",
+        )
+
+
+def test_plan_publication_keeps_explicit_ids_through_safe_reorder_add_and_delete(
+    tmp_path: Path,
+) -> None:
+    """A real reorder/add/delete keeps the explicit IDs when work is retained."""
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_dir = tmp_path / "issue" / "plan"
+    executor.iteration = 2
+    old_output = tmp_path / "issue" / "plan" / "iteration_001" / "output.md"
+    old_output.parent.mkdir(parents=True)
+    old_output.write_text(
+        "## Todo List\n"
+        "- [ ] `PLAN-001` — Source: `plan` — Work: build parser service — "
+        "Closure: done — Evidence: test\n"
+        "- [ ] `PLAN-002` — Source: `plan` — Work: document validation — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+    state = BlackboardStore(tmp_path / "issue").load_or_create("plan")
+    state.artifacts["plan"] = ArtifactEntry(
+        name="plan", kind=ArtifactKind.DOCUMENT, version=1, updated_by="plan",
+        path=str(old_output),
+    )
+    new_output = tmp_path / "issue" / "plan" / "iteration_002" / "output.md"
+    new_output.parent.mkdir(parents=True)
+    new_output.write_text(
+        "## Todo List\n"
+        "- [ ] `PLAN-003` — Source: `plan` — Work: write release notes — "
+        "Closure: done — Evidence: test\n"
+        "- [ ] `PLAN-001` — Source: `plan` — Work: build parser service — "
         "Closure: done — Evidence: test\n",
         encoding="utf-8",
     )

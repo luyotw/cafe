@@ -118,6 +118,26 @@ def _plan_work_identity(item: Any) -> str:
     ).hexdigest()
 
 
+def _plan_work_anchors(item: Any) -> set[str]:
+    """Return bounded anchors used only to detect displaced prior work."""
+    generic = {
+        "a", "an", "and", "build", "change", "complete", "create", "define",
+        "deliver", "ensure", "for", "from", "implement", "in", "make", "of",
+        "on", "preserve", "provide", "run", "supply", "test", "tests", "the",
+        "to", "update", "use", "with", "work", "write",
+    }
+    return {
+        token.lower()
+        for token in re.findall(r"[A-Za-z0-9]+", " ".join(str(item.work).split()))
+        if token.lower() not in generic
+    }
+
+
+def _plan_work_is_displaced(previous: Any, current: Any) -> bool:
+    """Detect a changed ID whose former work appears in a newly added row."""
+    return len(_plan_work_anchors(previous) & _plan_work_anchors(current)) >= 2
+
+
 def align_pr_baton_after_execution(
     *,
     issue_dir: Path,
@@ -2708,9 +2728,13 @@ class GenericWorkflowStepExecutor(Phase):
                         previous_work_identities = None
                 if previous_work_identities:
                     # PLAN-NNN is the durable authoring contract.  Wording,
-                    # ordering, and vocabulary are mutable; only an exact
-                    # persisted work fingerprint may prove that unchanged
-                    # work moved to a different ID.
+                    # ordering, and vocabulary are mutable.  An exact persisted
+                    # work fingerprint, or a changed row whose former work is
+                    # displaced into a newly added row, proves an ID move.
+                    previous_by_id = {
+                        item.item_id: item for item in previous_items if item.source == "plan"
+                    }
+                    current_ids = {item.item_id for item in plan_items}
                     for item in plan_items:
                         prior_id = (
                             previous_work_identities.get(_plan_work_identity(item))
@@ -2721,6 +2745,21 @@ class GenericWorkflowStepExecutor(Phase):
                             raise ValueError(
                                 f"plan Todo identity {prior_id!r} was moved to {item.item_id!r}; retain the existing ID"
                             )
+                        prior_item = previous_by_id.get(item.item_id)
+                        if prior_item is not None and (
+                            prior_item.fingerprint != item.fingerprint
+                        ):
+                            displaced = any(
+                                candidate.item_id not in previous_by_id
+                                and candidate.item_id != item.item_id
+                                and _plan_work_is_displaced(prior_item, candidate)
+                                for candidate in plan_items
+                                if candidate.item_id in current_ids
+                            )
+                            if displaced:
+                                raise ValueError(
+                                    f"plan Todo identity {item.item_id!r} was reassigned; retain the existing ID"
+                                )
         artifact = ArtifactEntry(
             name=output_key,
             kind=kind,

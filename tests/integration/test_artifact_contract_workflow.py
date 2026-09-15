@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -27,6 +28,31 @@ from cafe.verification import run_verification
 
 
 DOMAIN_ROUTES = ("editorial", "research", "incident")
+
+
+def _run_runtime_worker(repo: Path, worker: str, args: list[str]) -> dict:
+    """Run one workflow leg in a fresh interpreter and return its result."""
+    project_root = Path(__file__).resolve().parents[2]
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = os.pathsep.join(
+        path for path in (str(project_root), environment.get("PYTHONPATH", "")) if path
+    )
+    code = (
+        "import sys\n"
+        "from tests.integration.artifact_contract_runtime_workers import "
+        f"{worker}\n"
+        f"{worker}(*sys.argv[1:])\n"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", code, *args],
+        cwd=repo,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    return json.loads(completed.stdout.strip().splitlines()[-1])
 
 
 def _write_route_artifact(
@@ -271,60 +297,6 @@ def test_custom_named_step_publication_handoff_restart_and_consumer_preparation(
             "## Handoff\nWrite next-step baton for this result; the runtime updates the blackboard.\n",
             encoding="utf-8",
         )
-    loader = SkillLoader(
-        project_root=repo,
-        global_root=tmp_path / "global",
-        builtin_root=builtin_root,
-    )
-    loader.discover()
-    phase = GenericPhase(
-        loader,
-        skill_bridge=NativeSkillBridge(
-            loader, project_root=repo, home_dir=tmp_path / "home"
-        ),
-    )
-
-    class ProductionAgent:
-        def __init__(self) -> None:
-            self.agent = SimpleNamespace(
-                config=SimpleNamespace(cli=AgentCLI.CODEX, session_id="custom-session", model=None)
-            )
-            self.calls = 0
-
-        def get_agent(self, _name: str) -> SimpleNamespace:
-            return self.agent
-
-        def execute(self, _name: str, _prompt: str, *, streaming_output_file=None, **_kwargs):
-            self.calls += 1
-            assert streaming_output_file is not None
-            iteration_dir = Path(streaming_output_file).parent
-            output = iteration_dir / "output.md"
-            if self.calls == 1:
-                output.write_text(
-                    "## Todo List\n"
-                    "- [ ] `CUST-001` — Source: `custom_review` — Work: preserve custom route — "
-                    "Closure: consumed after restart — Evidence: production journey\n",
-                    encoding="utf-8",
-                )
-            else:
-                output.write_text("# Consumer result\n", encoding="utf-8")
-            run_verification(
-                output_file=output,
-                command=[sys.executable, "-c", "print('custom journey')"],
-                scope="targeted",
-                cwd=repo,
-            )
-            checklist = iteration_dir / "checklist.md"
-            checklist.write_text(
-                "\n".join(
-                    line.replace("[ ]", "[x]", 1) if line.startswith("[ ]") else line
-                    for line in checklist.read_text(encoding="utf-8").splitlines()
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-            return "await_agent", TokenUsage(), [], [], [], None
-
     playbook_definition = {
         "playbook": {"id": "custom-contract"},
         "skills": {"workflow": {"shared": []}, "chat": {"shared": []}},
@@ -377,44 +349,30 @@ def test_custom_named_step_publication_handoff_restart_and_consumer_preparation(
         builtin_root=builtin_root,
     ).load("custom-contract", strict=True)
     issue_dir = repo / ".cafe" / "issues" / "custom-contract"
-    store = BlackboardStore(issue_dir)
-    state = store.load_or_create("emit", playbook_id="custom-contract")
-    manager = ProductionAgent()
-    executor = GenericWorkflowStepExecutor(
-        issue_dir=issue_dir,
-        issue_name="custom-contract",
-        playbook=playbook,
-        generic_phase=phase,
-        agent_manager=manager,
-        git_ops=GitOperations(repo),
-        role_agent_map={"producer": "custom-agent"},
+    first = _run_runtime_worker(
+        repo,
+        "run_custom_runtime_process",
+        [str(repo), str(issue_dir), str(builtin_root), str(tmp_path / "global"), "emit"],
     )
-    produced = executor.execute_step("emit", playbook["steps"]["emit"], state)
-    assert set(produced.artifacts) == {"evidence_bundle", "verified_state"}
-
-    runtime = BlackboardWorkflowRuntime(
-        issue_dir=issue_dir, playbook=playbook, executor=executor
-    )
-    runtime.blackboard = state
-    runtime._store_artifacts(produced.artifacts, produced.artifact_metadata)
-    runtime._emit_transition(
-        current_step="emit",
-        next_step="consume",
-        status_code="await_agent",
-        source="integration.custom_production_path",
-        runtime="test",
+    second = _run_runtime_worker(
+        repo,
+        "run_custom_runtime_process",
+        [str(repo), str(issue_dir), str(builtin_root), str(tmp_path / "global"), "consume"],
     )
 
-    restarted = BlackboardWorkflowRuntime(
-        issue_dir=issue_dir, playbook=playbook, executor=executor
+    assert first["completed"] is False
+    assert first["final_step"] == "emit"
+    assert first["calls"] == 1
+    assert second["completed"] is True
+    assert second["final_step"] == "consume"
+    assert second["calls"] == 1
+    consumer_state = BlackboardStore(issue_dir).load_or_create(
+        "consume", playbook_id="custom-contract"
     )
-    consumer_state = restarted.blackboard
-    consumed = executor.execute_step("consume", playbook["steps"]["consume"], consumer_state)
-
-    assert consumed.agent_invoked is True
-    assert manager.calls == 2
     assert consumer_state.artifacts["verified_state"].kind == ArtifactKind.WORKSPACE
-    assert consumer_state.events[-1].event_type in {"handoff_contract", "transition", "decision"}
+    assert consumer_state.events[-1].event_type in {
+        "handoff_contract", "transition", "decision", "workflow_completed"
+    }
 
 
 def test_bounded_v02_mixed_code_record_rebuilds_and_restarts_for_legacy_consumer(
@@ -465,8 +423,8 @@ def test_bounded_v02_mixed_code_record_rebuilds_and_restarts_for_legacy_consumer
                         "role": "operator",
                         "input_artifacts": ["code"],
                         "output_artifact": "review_feedback",
-                        "valid_intents": ["need_clarification"],
-                        "on": {"need_clarification": "_done"},
+                        "valid_intents": ["await_agent"],
+                        "on": {"await_agent": "_done"},
                     }
                 },
             },
@@ -513,65 +471,21 @@ def test_bounded_v02_mixed_code_record_rebuilds_and_restarts_for_legacy_consumer
         builtin_root=builtin_root,
     )
     playbook = loader.load("legacy-contract")
-    phase = GenericPhase(
-        SkillLoader(
-            project_root=repo,
-            global_root=tmp_path / "global",
-            builtin_root=builtin_root,
-        )
+    resumed = _run_runtime_worker(
+        repo,
+        "run_legacy_runtime_process",
+        [str(repo), str(issue_dir), str(builtin_root), str(tmp_path / "global")],
     )
 
-    class LegacyAgent:
-        def __init__(self) -> None:
-            self.agent = SimpleNamespace(
-                config=SimpleNamespace(cli=AgentCLI.CODEX, session_id="legacy-session", model=None)
-            )
-            self.calls = 0
-
-        def get_agent(self, _name: str) -> SimpleNamespace:
-            return self.agent
-
-        def execute(self, _name: str, _prompt: str, *, streaming_output_file=None, **_kwargs):
-            self.calls += 1
-            output_file = Path(streaming_output_file).parent / "output.md"
-            output_file.write_text("# Resumed legacy consumer\n", encoding="utf-8")
-            checklist = output_file.parent / "checklist.md"
-            if checklist.exists():
-                checklist.write_text(
-                    checklist.read_text(encoding="utf-8").replace("[ ]", "[x]"),
-                    encoding="utf-8",
-                )
-            return "need_clarification", TokenUsage(), [], [], [], None
-
-    legacy_agent = LegacyAgent()
-    first_restart = BlackboardWorkflowRuntime(
-        issue_dir=issue_dir, playbook=playbook, executor=legacy_agent
+    resumed_state = BlackboardStore(issue_dir).load_or_create(
+        "review", playbook_id="legacy-contract"
     )
-    second_restart = BlackboardWorkflowRuntime(
-        issue_dir=issue_dir, playbook=playbook, executor=legacy_agent
-    )
-    executor = GenericWorkflowStepExecutor(
-        issue_dir=issue_dir,
-        issue_name="legacy-contract",
-        playbook=playbook,
-        generic_phase=phase,
-        agent_manager=legacy_agent,
-        git_ops=GitOperations(repo),
-        role_agent_map={"operator": "legacy-consumer-agent"},
-    )
-    inputs = executor._step_input_artifacts(
-        playbook["steps"]["review"], second_restart.blackboard
-    )
-    consumed = executor.execute_step(
-        "review", playbook["steps"]["review"], second_restart.blackboard
-    )
-
-    assert first_restart.blackboard.artifacts["code"].summary == "legacy development summary"
-    assert inputs["code"].kind == ArtifactKind.WORKSPACE
+    assert resumed_state.artifacts["code"].summary == "legacy development summary"
     assert "workspace_input_artifact" not in playbook["steps"]["review"]
-    assert consumed.agent_invoked is True
+    assert resumed["completed"] is True
+    assert resumed["final_step"] == "review"
+    assert resumed["calls"] == 1
     assert (issue_dir / "review" / "iteration_001" / "output.md").exists()
-    assert legacy_agent.calls == 1
     assert not (issue_dir / "develop" / "iteration_001" / "workspace.json").exists()
 
 
