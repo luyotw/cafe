@@ -8,10 +8,10 @@ sanitized logs, and installed CAFE version.
 
 First apply `supervision_and_recovery.md`. Enter diagnosis only when its
 non-intervention envelope has been left and the selected disposition requires
-classification of incorrect or ambiguous behavior. When the Driver sees the
-same failure return after one user-authorized retry, use the supervision
-reference's consultation boundary before recommending another retry. Treat a
-materially different visible failure as a new incident.
+classification of incorrect or ambiguous behavior. When the same failure keeps
+returning without a concrete reason another retry will differ, use the
+supervision reference's consultation boundary before recommending another
+retry. Treat a materially different visible failure as a new incident.
 
 ## Classification checklist
 

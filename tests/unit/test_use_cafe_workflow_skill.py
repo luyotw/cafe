@@ -2604,10 +2604,15 @@ def test_phase_agent_retry_stays_user_owned_and_bounded() -> None:
         in normalized
     )
     assert "Present every declared recovery option and practical consequence" in normalized
-    assert "recommend at most one bounded retry under the unchanged contract" in normalized
+    assert "recommend a retry under the unchanged contract" in normalized
     assert "Do not submit the choice for the user" in normalized
-    assert "The same phase-agent failure returns after one user-authorized retry" in normalized
-    assert '`cafe chat <role> --phase <step> -p "<bounded diagnostic question>"`' in normalized
+    assert "There is no fixed retry count" in normalized
+    assert "a concrete reason to expect a different result" in normalized
+    assert "except a phase-agent recovery choice handled by priorities 6 and 8" in normalized
+    assert "The same phase-agent failure keeps returning" in normalized
+    assert "Read-only diagnosis: explain the current failure" in normalized
+    assert "Do not edit files, artifacts, tasks, baton, blackboard, or workflow state" in normalized
+    assert "do not run commands that change state" in normalized
     assert "A materially different visible failure is a new incident" in normalized
 
 

@@ -340,7 +340,7 @@ seconds cumulatively; never launch a duplicate chat or infer a missing response.
 Only a completed process with a usable agent response satisfies the exchange.
 If the process ends without one, the handle is lost, or the limit expires,
 retain the pause and classify the result as ambiguous. Verify termination before
-the single safe retry.
+the single safe retry of this chat exchange.
 
 Findings, chat attempts, disagreements, and rebuttals do not create an
 iteration. Independently verify a rebuttal against the same unchanged artifact.
