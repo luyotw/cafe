@@ -6609,7 +6609,7 @@ def test_missing_workspace_companion_recovers_from_declared_verified_producer(
     )
 
 
-def test_plan_publication_rejects_reuse_of_an_existing_id_for_unrelated_work(
+def test_plan_publication_allows_a_no_shared_vocabulary_revision_with_same_id(
     tmp_path: Path,
 ) -> None:
     executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
@@ -6637,16 +6637,52 @@ def test_plan_publication_rejects_reuse_of_an_existing_id_for_unrelated_work(
         "Closure: done — Evidence: test\n",
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="PLAN-001"):
-        executor._write_artifact_record(
-            blackboard_state=state,
-            output_key="plan",
-            output_path=str(new_output),
-            updated_by="plan",
-        )
+    record = executor._write_artifact_record(
+        blackboard_state=state,
+        output_key="plan",
+        output_path=str(new_output),
+        updated_by="plan",
+    )
+    assert record.todo_identities is not None
 
 
-def test_plan_publication_rejects_unrelated_work_sharing_only_a_generic_token(
+def test_plan_publication_allows_new_id_for_shared_domain_vocabulary(
+    tmp_path: Path,
+) -> None:
+    """A new explicit ID is not inferred as a moved item by shared wording."""
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_dir = tmp_path / "issue" / "plan"
+    executor.iteration = 2
+    old_output = tmp_path / "issue" / "plan" / "iteration_001" / "output.md"
+    old_output.parent.mkdir(parents=True)
+    old_output.write_text(
+        "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: build parser service — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+    state = BlackboardStore(tmp_path / "issue").load_or_create("plan")
+    state.artifacts["plan"] = ArtifactEntry(
+        name="plan", kind=ArtifactKind.DOCUMENT, version=1, updated_by="plan",
+        path=str(old_output),
+    )
+    new_output = tmp_path / "issue" / "plan" / "iteration_002" / "output.md"
+    new_output.parent.mkdir(parents=True)
+    new_output.write_text(
+        "## Todo List\n- [ ] `PLAN-002` — Source: `plan` — Work: improve parser service — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+
+    record = executor._write_artifact_record(
+        blackboard_state=state,
+        output_key="plan",
+        output_path=str(new_output),
+        updated_by="plan",
+    )
+    assert set(record.todo_identities or {}) == {"PLAN-002"}
+
+
+def test_plan_publication_allows_unrelated_work_sharing_only_a_generic_token(
     tmp_path: Path,
 ) -> None:
     executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
@@ -6672,13 +6708,13 @@ def test_plan_publication_rejects_unrelated_work_sharing_only_a_generic_token(
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="PLAN-001"):
-        executor._write_artifact_record(
-            blackboard_state=state,
-            output_key="plan",
-            output_path=str(new_output),
-            updated_by="plan",
-        )
+    record = executor._write_artifact_record(
+        blackboard_state=state,
+        output_key="plan",
+        output_path=str(new_output),
+        updated_by="plan",
+    )
+    assert record.todo_identities is not None
 
 
 def test_plan_publication_allows_related_same_id_revision(tmp_path: Path) -> None:
@@ -6749,6 +6785,49 @@ def test_plan_publication_allows_semantic_same_id_revision(tmp_path: Path) -> No
     assert record.todo_work_identities
 
 
+def test_plan_publication_keeps_explicit_ids_through_reorder_add_and_delete(
+    tmp_path: Path,
+) -> None:
+    """Reordering, adding, and deleting rows does not infer ID movement."""
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_dir = tmp_path / "issue" / "plan"
+    executor.iteration = 2
+    old_output = tmp_path / "issue" / "plan" / "iteration_001" / "output.md"
+    old_output.parent.mkdir(parents=True)
+    old_output.write_text(
+        "## Todo List\n"
+        "- [ ] `PLAN-001` — Source: `plan` — Work: build parser service — "
+        "Closure: done — Evidence: test\n"
+        "- [ ] `PLAN-002` — Source: `plan` — Work: document validation — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+    state = BlackboardStore(tmp_path / "issue").load_or_create("plan")
+    state.artifacts["plan"] = ArtifactEntry(
+        name="plan", kind=ArtifactKind.DOCUMENT, version=1, updated_by="plan",
+        path=str(old_output),
+    )
+    new_output = tmp_path / "issue" / "plan" / "iteration_002" / "output.md"
+    new_output.parent.mkdir(parents=True)
+    new_output.write_text(
+        "## Todo List\n"
+        "- [ ] `PLAN-003` — Source: `plan` — Work: improve parser service — "
+        "Closure: done — Evidence: test\n"
+        "- [ ] `PLAN-001` — Source: `plan` — Work: migrate invoices — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+
+    record = executor._write_artifact_record(
+        blackboard_state=state,
+        output_key="plan",
+        output_path=str(new_output),
+        updated_by="plan",
+    )
+
+    assert list(record.todo_identities or {}) == ["PLAN-003", "PLAN-001"]
+
+
 def test_plan_publication_rejects_a_related_revision_moved_to_a_new_id(tmp_path: Path) -> None:
     executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
     executor.phase_dir = tmp_path / "issue" / "plan"
@@ -6768,7 +6847,7 @@ def test_plan_publication_rejects_a_related_revision_moved_to_a_new_id(tmp_path:
     new_output = tmp_path / "issue" / "plan" / "iteration_002" / "output.md"
     new_output.parent.mkdir(parents=True)
     new_output.write_text(
-        "## Todo List\n- [ ] `PLAN-002` — Source: `plan` — Work: improve parser with stricter errors — "
+        "## Todo List\n- [ ] `PLAN-002` — Source: `plan` — Work: improve parser — "
         "Closure: done — Evidence: test\n",
         encoding="utf-8",
     )

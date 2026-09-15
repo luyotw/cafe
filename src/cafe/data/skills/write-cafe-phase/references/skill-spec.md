@@ -55,6 +55,10 @@ their names must carry clear CAFE context. Custom playbook skills belong in
 cross-project reuse. Do not use generic or deprecated names such as `review`
 or `draft` for a custom skill.
 
+Phase skills use `snake_case` after the `cafe-` prefix, while shared and chat
+skills use `kebab-case`. External driver and meta skills remain unprefixed but
+must carry clear CAFE context.
+
 ## 3. Frontmatter and Repair Boundary
 
 Use frontmatter like this:
@@ -64,6 +68,9 @@ name: <directory-name>
 description: "When this skill should be used"
 version: 1.0.0
 ```
+
+Frontmatter is stripped during activation; keep executable instructions in the
+body rather than in frontmatter.
 
 The description states when to use the skill, not a list of everything it
 contains. Runtime metadata must remain provider-neutral execution-requirement metadata: do not name a CLI
@@ -191,7 +198,7 @@ Use this order and omit sections that do not apply:
 Write <artifact> to: {output_file}
 
 ## Handoff
-Write the next-step baton for this result; the runtime updates the blackboard.
+Write next-step baton for this result; the runtime updates the blackboard.
 ```
 
 Every phase skill has `## Role` and `## Handoff`. `## Context` lists only

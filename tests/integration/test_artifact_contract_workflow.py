@@ -10,12 +10,14 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardStore, EventEntry
 from cafe.core.git import GitOperations
 from cafe.core.playbook import resolve_step_behavior
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.core.types import AgentCLI, TokenUsage
+from cafe.core.workspace_artifact import build_workspace_artifact
 from cafe.phases.generic_phase import GenericPhase
 from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
 from cafe.playbooks.loader import PlaybookLoader
@@ -253,9 +255,20 @@ def test_custom_named_step_publication_handoff_restart_and_consumer_preparation(
         skill_dir = builtin_root / "skills" / skill_name
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text(
-            f"---\nname: {skill_name}\ndescription: test\n---\n\n"
+            f"---\nname: {skill_name}\ndescription: test\nversion: 1.0.0\n"
+            "workflow:\n"
+            "  execution_profile:\n"
+            "    workload: implementation\n"
+            "    reasoning: standard\n"
+            "    risk_domains: [workflow]\n"
+            "    fallback_strength: equivalent_or_stronger\n"
+            "  prompt_inputs:\n"
+            "    - artifacts: [evidence_bundle]\n"
+            "      placeholder: custom_evidence\n"
+            "      required: false\n"
+            "---\n\n"
             "## Role\nRun the declared custom workflow step.\n\n"
-            "## Handoff\nWrite the result for the next declared step.\n",
+            "## Handoff\nWrite next-step baton for this result; the runtime updates the blackboard.\n",
             encoding="utf-8",
         )
     loader = SkillLoader(
@@ -310,10 +323,12 @@ def test_custom_named_step_publication_handoff_restart_and_consumer_preparation(
                 + "\n",
                 encoding="utf-8",
             )
-            return "confirmed", TokenUsage(), [], [], [], None
+            return "await_agent", TokenUsage(), [], [], [], None
 
-    playbook = {
+    playbook_definition = {
         "playbook": {"id": "custom-contract"},
+        "skills": {"workflow": {"shared": []}, "chat": {"shared": []}},
+        "commands": {"prepare": {"prompt_for_spec_plan_config": False}},
         "roles": {"producer": {"default_agent": "custom-agent"}},
         "steps": {
             "emit": {
@@ -321,7 +336,7 @@ def test_custom_named_step_publication_handoff_restart_and_consumer_preparation(
                 "role": "producer",
                 "output_artifact": "evidence_bundle",
                 "workspace_artifact": "verified_state",
-                "valid_intents": ["confirmed"],
+                "valid_intents": ["await_agent"],
                 "behavior": {
                     "feedback_routes": {
                         "consume": {
@@ -332,7 +347,7 @@ def test_custom_named_step_publication_handoff_restart_and_consumer_preparation(
                         }
                     }
                 },
-                "on": {"confirmed": "consume"},
+                "on": {"await_agent": "consume"},
             },
             "consume": {
                 "skill": "custom-consumer",
@@ -340,11 +355,27 @@ def test_custom_named_step_publication_handoff_restart_and_consumer_preparation(
                 "input_artifacts": ["evidence_bundle", "verified_state"],
                 "workspace_input_artifact": "verified_state",
                 "output_artifact": "consumer_result",
-                "valid_intents": ["confirmed"],
-                "on": {"confirmed": "_done"},
+                "valid_intents": ["await_agent"],
+                "on": {"await_agent": "_done"},
             },
         },
     }
+    playbook_definition["playbook"]["applicability"] = {
+        "summary": "custom artifact contract journey",
+        "use_when": ["testing custom workflow contracts"],
+        "avoid_when": ["testing built-in workflow names"],
+    }
+    (repo / ".cafe" / "playbooks" / "custom-contract.yaml").parent.mkdir(
+        parents=True, exist_ok=True
+    )
+    (repo / ".cafe" / "playbooks" / "custom-contract.yaml").write_text(
+        yaml.safe_dump(playbook_definition, sort_keys=False), encoding="utf-8"
+    )
+    playbook = PlaybookLoader(
+        project_root=repo,
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    ).load("custom-contract", strict=True)
     issue_dir = repo / ".cafe" / "issues" / "custom-contract"
     store = BlackboardStore(issue_dir)
     state = store.load_or_create("emit", playbook_id="custom-contract")
@@ -369,7 +400,7 @@ def test_custom_named_step_publication_handoff_restart_and_consumer_preparation(
     runtime._emit_transition(
         current_step="emit",
         next_step="consume",
-        status_code="confirmed",
+        status_code="await_agent",
         source="integration.custom_production_path",
         runtime="test",
     )
@@ -387,10 +418,64 @@ def test_custom_named_step_publication_handoff_restart_and_consumer_preparation(
 
 
 def test_bounded_v02_mixed_code_record_rebuilds_and_restarts_for_legacy_consumer(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Legacy mixed records remain readable without current-workspace certification."""
-    issue_dir = tmp_path / ".cafe" / "issues" / "legacy-contract"
+    """Legacy records load through declared files and execute a restarted consumer."""
+    repo = tmp_path / "legacy-repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True)
+    (repo / ".gitignore").write_text(".cafe/\n", encoding="utf-8")
+    (repo / ".cafe").mkdir()
+    (repo / ".cafe" / "phases.yaml").write_text(
+        "review:\n  name: legacy-consumer-agent\n  clis:\n    - cli: codex\n      model: test-model\n",
+        encoding="utf-8",
+    )
+    agent_dir = repo / ".cafe" / "agents" / "operator"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "legacy-consumer-agent.md").write_text(
+        "---\nname: legacy-consumer-agent\ndescription: legacy test agent\n---\n\nConsume the legacy record.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(repo)
+    (repo / "tracked.txt").write_text("legacy\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "legacy base"], cwd=repo, check=True, capture_output=True)
+
+    builtin_root = tmp_path / "builtin"
+    skill_dir = builtin_root / "skills" / "legacy-consumer"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: legacy-consumer\ndescription: legacy consumer\nversion: 1.0.0\n---\n\n"
+        "## Role\nConsume the legacy artifact.\n\n"
+        "## Handoff\nWrite next-step baton for this result; the runtime updates the blackboard.\n",
+        encoding="utf-8",
+    )
+    playbook_dir = repo / ".cafe" / "playbooks"
+    playbook_dir.mkdir(parents=True)
+    (playbook_dir / "legacy-contract.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "playbook": {"id": "legacy-contract"},
+                "roles": {"operator": {"default_agent": "legacy-consumer-agent"}},
+                "steps": {
+                    "review": {
+                        "skill": "legacy-consumer",
+                        "role": "operator",
+                        "input_artifacts": ["code"],
+                        "output_artifact": "review_feedback",
+                        "valid_intents": ["need_clarification"],
+                        "on": {"need_clarification": "_done"},
+                    }
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    issue_dir = repo / ".cafe" / "issues" / "legacy-contract"
     iteration_dir = issue_dir / "develop" / "iteration_001"
     iteration_dir.mkdir(parents=True)
     output = iteration_dir / "output.md"
@@ -414,27 +499,226 @@ def test_bounded_v02_mixed_code_record_rebuilds_and_restarts_for_legacy_consumer
     rebuilt = store.rebuild_from_iterations(initial_step="review")
     assert rebuilt.artifacts["code"].kind == ArtifactKind.WORKSPACE
     assert rebuilt.artifacts["code"].path.endswith("develop/iteration_001/output.md")
+    store.save(rebuilt)
+    (issue_dir / "next_step.txt").write_text(
+        json.dumps(
+            {"version": 1, "to_owner": "agent", "to_step": "review", "intent": "await_agent"}
+        ),
+        encoding="utf-8",
+    )
 
-    playbook = {
-        "playbook": {"id": "legacy-contract"},
-        "steps": {
-            "review": {
-                "input_artifacts": ["code"],
-                "output_artifact": "review_feedback",
-            }
-        },
-    }
+    loader = PlaybookLoader(
+        project_root=repo,
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+    playbook = loader.load("legacy-contract")
+    phase = GenericPhase(
+        SkillLoader(
+            project_root=repo,
+            global_root=tmp_path / "global",
+            builtin_root=builtin_root,
+        )
+    )
+
+    class LegacyAgent:
+        def __init__(self) -> None:
+            self.agent = SimpleNamespace(
+                config=SimpleNamespace(cli=AgentCLI.CODEX, session_id="legacy-session", model=None)
+            )
+            self.calls = 0
+
+        def get_agent(self, _name: str) -> SimpleNamespace:
+            return self.agent
+
+        def execute(self, _name: str, _prompt: str, *, streaming_output_file=None, **_kwargs):
+            self.calls += 1
+            output_file = Path(streaming_output_file).parent / "output.md"
+            output_file.write_text("# Resumed legacy consumer\n", encoding="utf-8")
+            checklist = output_file.parent / "checklist.md"
+            if checklist.exists():
+                checklist.write_text(
+                    checklist.read_text(encoding="utf-8").replace("[ ]", "[x]"),
+                    encoding="utf-8",
+                )
+            return "need_clarification", TokenUsage(), [], [], [], None
+
+    legacy_agent = LegacyAgent()
     first_restart = BlackboardWorkflowRuntime(
-        issue_dir=issue_dir, playbook=playbook, executor=object()
+        issue_dir=issue_dir, playbook=playbook, executor=legacy_agent
     )
     second_restart = BlackboardWorkflowRuntime(
-        issue_dir=issue_dir, playbook=playbook, executor=object()
+        issue_dir=issue_dir, playbook=playbook, executor=legacy_agent
     )
-    executor = GenericWorkflowStepExecutor.__new__(GenericWorkflowStepExecutor)
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="legacy-contract",
+        playbook=playbook,
+        generic_phase=phase,
+        agent_manager=legacy_agent,
+        git_ops=GitOperations(repo),
+        role_agent_map={"operator": "legacy-consumer-agent"},
+    )
     inputs = executor._step_input_artifacts(
         playbook["steps"]["review"], second_restart.blackboard
+    )
+    consumed = executor.execute_step(
+        "review", playbook["steps"]["review"], second_restart.blackboard
     )
 
     assert first_restart.blackboard.artifacts["code"].summary == "legacy development summary"
     assert inputs["code"].kind == ArtifactKind.WORKSPACE
     assert "workspace_input_artifact" not in playbook["steps"]["review"]
+    assert consumed.agent_invoked is True
+    assert (issue_dir / "review" / "iteration_001" / "output.md").exists()
+    assert legacy_agent.calls == 1
+    assert not (issue_dir / "develop" / "iteration_001" / "workspace.json").exists()
+
+
+def test_post_use_workspace_mismatch_prevents_all_publication_boundaries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A post-agent mismatch prevents artifacts, handoff, and transition acceptance."""
+    repo = tmp_path / "post-use-repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True)
+    (repo / ".gitignore").write_text(".cafe/\n", encoding="utf-8")
+    (repo / ".cafe").mkdir()
+    (repo / ".cafe" / "phases.yaml").write_text(
+        "consume:\n  name: contaminator\n  clis:\n    - cli: codex\n      model: test-model\n",
+        encoding="utf-8",
+    )
+    builtin_root = tmp_path / "builtin"
+    skill_dir = builtin_root / "skills" / "post-use-consumer"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: post-use-consumer\ndescription: post-use test consumer\nversion: 1.0.0\n"
+        "workflow:\n"
+        "  execution_profile:\n"
+        "    workload: implementation\n"
+        "    reasoning: standard\n"
+        "    risk_domains: [workspace]\n"
+        "    fallback_strength: equivalent_or_stronger\n"
+        "---\n\n"
+        "## Role\nRun the consumer.\n\n"
+        "## Handoff\nWrite next-step baton for this result; the runtime updates the blackboard.\n",
+        encoding="utf-8",
+    )
+    agent_dir = repo / ".cafe" / "agents" / "consumer"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "contaminator.md").write_text(
+        "---\nname: contaminator\ndescription: post-use test agent\n---\n\nRun the consumer.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(repo)
+    (repo / "tracked.txt").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, capture_output=True)
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    (repo / "tracked.txt").write_text("current\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "current"], cwd=repo, check=True, capture_output=True)
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+    issue_dir = repo / ".cafe" / "issues" / "post-use"
+    receipt_output = issue_dir / "receipt" / "iteration_001" / "output.md"
+    receipt_output.parent.mkdir(parents=True)
+    run_verification(
+        output_file=receipt_output,
+        command=[sys.executable, "-c", "print('post-use baseline')"],
+        scope="targeted",
+        cwd=repo,
+    )
+    workspace = build_workspace_artifact(
+        repo=repo,
+        name="verified_state",
+        version=1,
+        base_sha=base,
+        head_sha=head,
+        receipt_outputs=[receipt_output],
+        producer_step="producer",
+    )
+    producer_workspace = issue_dir / "producer" / "iteration_001" / "workspace.json"
+    producer_workspace.parent.mkdir(parents=True)
+    producer_workspace.write_text(json.dumps(workspace.to_dict()), encoding="utf-8")
+    state = BlackboardStore(issue_dir).load_or_create("consume", playbook_id="post-use")
+    state.artifacts["verified_state"] = ArtifactEntry(
+        name="verified_state",
+        kind=ArtifactKind.WORKSPACE,
+        version=1,
+        updated_by="producer",
+        path=str(producer_workspace),
+        base_sha=base,
+        head_sha=head,
+    )
+    BlackboardStore(issue_dir).save(state)
+    initial_handoff = (
+        state.handoff_contract.to_dict()
+        if state.handoff_contract is not None
+        else None
+    )
+
+    class ContaminatingAgent:
+        def __init__(self) -> None:
+            self.agent = SimpleNamespace(
+                config=SimpleNamespace(cli=AgentCLI.CODEX, session_id="post-use", model=None)
+            )
+
+        def get_agent(self, _name: str) -> SimpleNamespace:
+            return self.agent
+
+        def execute(self, _name: str, _prompt: str, *, streaming_output_file=None, **_kwargs):
+            output_file = Path(streaming_output_file).parent / "output.md"
+            output_file.write_text("# contaminated result\n", encoding="utf-8")
+            (repo / "tracked.txt").write_text("contaminated\n", encoding="utf-8")
+            return "await_agent", TokenUsage(), [], [], [], None
+
+    playbook = {
+        "playbook": {"id": "post-use"},
+        "roles": {"consumer": {"default_agent": "contaminator"}},
+        "steps": {
+            "consume": {
+                "skill": "post-use-consumer",
+                "role": "consumer",
+                "input_artifacts": ["verified_state"],
+                "workspace_input_artifact": "verified_state",
+                "valid_intents": ["await_agent"],
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="post-use",
+        playbook=playbook,
+        generic_phase=GenericPhase(
+            SkillLoader(
+                project_root=repo,
+                global_root=tmp_path / "global",
+                builtin_root=builtin_root,
+            )
+        ),
+        agent_manager=ContaminatingAgent(),
+        git_ops=GitOperations(repo),
+        role_agent_map={"consumer": "contaminator"},
+    )
+
+    with pytest.raises(ValueError, match="workspace"):
+        executor.execute_step("consume", playbook["steps"]["consume"], state)
+
+    iteration_dir = issue_dir / "consume" / "iteration_001"
+    assert not (iteration_dir / "artifact.json").exists()
+    assert not (iteration_dir / "workspace.json").exists()
+    persisted = BlackboardStore(issue_dir).load_or_create("consume", playbook_id="post-use")
+    assert not any(event.event_type == "transition" for event in persisted.events)
+    assert (
+        persisted.handoff_contract.to_dict()
+        if persisted.handoff_contract is not None
+        else None
+    ) == initial_handoff

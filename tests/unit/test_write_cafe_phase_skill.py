@@ -153,8 +153,12 @@ def test_write_cafe_phase_preserves_the_complete_structural_authoring_contract()
     assert "Read your agent file: {agent_file}" in spec
     assert "Write next-step baton for this result; the runtime updates the blackboard." in spec
     assert "Internal skills always use the `cafe-` prefix" in normalized
+    assert "Phase skills use `snake_case`" in normalized
+    assert "shared and chat skills use `kebab-case`" in normalized
     assert "installed without renaming" in normalized
     assert "Custom playbook skills belong in `.cafe/skills/`" in normalized
+    assert "Frontmatter is stripped during activation" in normalized
+    assert spec.count("Write next-step baton for this result; the runtime updates the blackboard.") == 2
     assert "The selected issue template is read from `<step>.template` in `issue.yaml`" in normalized
     assert "`SKILL.md` must say exactly when to open each reference" in normalized
     assert "Scripts must declare their activation condition" in normalized

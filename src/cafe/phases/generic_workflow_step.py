@@ -118,52 +118,6 @@ def _plan_work_identity(item: Any) -> str:
     ).hexdigest()
 
 
-def _plan_work_tokens(item: Any) -> set[str]:
-    generic_tokens = {
-        "a", "an", "and", "build", "change", "complete", "create", "define",
-        "deliver", "ensure", "for", "from", "implement", "in", "make", "of",
-        "on", "preserve", "provide", "run", "supply", "test", "tests", "the",
-        "to", "update", "use", "with", "work", "write",
-    }
-    semantic_aliases = {
-        "parse": "parse",
-        "parser": "parse",
-        "parsers": "parse",
-        "parsing": "parse",
-        "syntax": "parse",
-        "diagnostic": "error",
-        "diagnostics": "error",
-        "error": "error",
-        "errors": "error",
-        "failure": "error",
-        "failures": "error",
-        "document": "docs",
-        "documentation": "docs",
-        "docs": "docs",
-        "validate": "validation",
-        "validation": "validation",
-        "validations": "validation",
-    }
-    result: set[str] = set()
-    for raw_token in " ".join(str(item.work).split()).split():
-        token = raw_token.lower().strip(".,:;()[]{}")
-        if not token or token in generic_tokens:
-            continue
-        token = re.sub(r"(?<=\w)s$", "", token)
-        result.add(semantic_aliases.get(token, token))
-    return result
-
-
-def _is_related_plan_revision(previous: Any, current: Any) -> bool:
-    """Permit wording revisions while rejecting an unrelated ID reuse."""
-    previous_tokens = _plan_work_tokens(previous)
-    current_tokens = _plan_work_tokens(current)
-    # One shared domain word (for example, ``service``) is not enough to
-    # prove retained work.  Require two independent anchors after applying
-    # only the small, deterministic vocabulary of equivalent plan terms.
-    return len(previous_tokens & current_tokens) >= 2
-
-
 def align_pr_baton_after_execution(
     *,
     issue_dir: Path,
@@ -2733,7 +2687,6 @@ class GenericWorkflowStepExecutor(Phase):
                 todo_work_identities = {
                     _plan_work_identity(item): item.item_id for item in plan_items
                 }
-                previous_identities = getattr(previous, "todo_identities", None) if previous else None
                 previous_work_identities = (
                     getattr(previous, "todo_work_identities", None) if previous else None
                 )
@@ -2746,30 +2699,18 @@ class GenericWorkflowStepExecutor(Phase):
                         previous_plan_items = tuple(
                             item for item in previous_items if item.source == "plan"
                         )
-                        if previous_identities is None:
-                            previous_identities = {
-                                item.item_id: hashlib.sha256(
-                                    "\x1f".join(
-                                        (item.source, item.item_id, " ".join(item.work.split()))
-                                    ).encode("utf-8")
-                                ).hexdigest()
-                                for item in previous_plan_items
-                            }
                         if previous_work_identities is None:
                             previous_work_identities = {
                                 _plan_work_identity(item): item.item_id
                                 for item in previous_plan_items
                             }
                     except (OSError, UnicodeError, TodoContractError):
-                        previous_identities = None
                         previous_work_identities = None
-                if previous_identities:
-                    previous_by_id = {
-                        item.item_id: item
-                        for item in previous_items
-                        if item.source == "plan"
-                    }
-                    current_by_id = {item.item_id: item for item in plan_items}
+                if previous_work_identities:
+                    # PLAN-NNN is the durable authoring contract.  Wording,
+                    # ordering, and vocabulary are mutable; only an exact
+                    # persisted work fingerprint may prove that unchanged
+                    # work moved to a different ID.
                     for item in plan_items:
                         prior_id = (
                             previous_work_identities.get(_plan_work_identity(item))
@@ -2779,29 +2720,6 @@ class GenericWorkflowStepExecutor(Phase):
                         if prior_id is not None and prior_id != item.item_id:
                             raise ValueError(
                                 f"plan Todo identity {prior_id!r} was moved to {item.item_id!r}; retain the existing ID"
-                            )
-                        related_prior_items = [
-                            prior_item
-                            for prior_item in previous_by_id.values()
-                            if _is_related_plan_revision(prior_item, item)
-                        ]
-                        if (
-                            item.item_id not in previous_by_id
-                            and len(related_prior_items) == 1
-                            and related_prior_items[0].item_id != item.item_id
-                        ):
-                            raise ValueError(
-                                f"plan Todo identity {related_prior_items[0].item_id!r} was moved to {item.item_id!r}; retain the existing ID"
-                            )
-                        prior_item = previous_by_id.get(item.item_id)
-                        if (
-                            prior_item is not None
-                            and previous_identities.get(item.item_id)
-                            != todo_identities.get(item.item_id)
-                            and not _is_related_plan_revision(prior_item, item)
-                        ):
-                            raise ValueError(
-                                f"plan Todo identity {item.item_id!r} was reassigned; retain the existing ID"
                             )
         artifact = ArtifactEntry(
             name=output_key,
