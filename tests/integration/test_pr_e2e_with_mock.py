@@ -291,6 +291,7 @@ def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(
     playbook = _load_default_playbook()
     playbook["steps"]["pr"]["capability_requests"] = []
     playbook["steps"]["pr"]["behavior"]["publish_confirmation"] = False
+    playbook["steps"]["pr"].pop("workspace_input_artifact", None)
     ledger = WorkflowFeedbackLedger(issue_dir)
 
     class AgentManager:

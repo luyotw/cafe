@@ -318,6 +318,14 @@ closed. The Driver must not truncate, split, or silently omit findings or
 evidence to fit a limit; retain the pause and obtain the applicable user-owned
 scope decision before a new full review can form a compliant batch.
 
+A host-tool yield or empty output with a live execution handle is not a
+completed `cafe chat`. Continue waiting on the same process for up to 120
+seconds cumulatively; never launch a duplicate chat or infer a missing response.
+Only a completed process with a usable agent response satisfies the exchange.
+If the process ends without one, the handle is lost, or the limit expires,
+retain the pause and classify the result as ambiguous. Verify termination before
+the single safe retry.
+
 Findings, chat attempts, disagreements, and rebuttals do not create an
 iteration. Independently verify a rebuttal against the same unchanged artifact.
 An accepted finding without a durable correction remains blocking. If the
