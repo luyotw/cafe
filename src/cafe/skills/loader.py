@@ -9,7 +9,12 @@ from typing import Dict, List, Optional
 
 import yaml
 
-from cafe.catalogs.resolver import CatalogKind, CatalogResolver, global_catalog_lock
+from cafe.catalogs.resolver import (
+    CatalogEntry,
+    CatalogKind,
+    CatalogResolver,
+    global_catalog_lock,
+)
 from cafe.skills.contracts import SkillWorkflowContract
 from cafe.skills.exceptions import SkillDiscoveryError
 
@@ -138,41 +143,53 @@ class SkillLoader:
     def _discover_unlocked(self, *, strict: bool = False) -> List[SkillCatalogEntry]:
         catalog: Dict[str, SkillCatalogEntry] = {}
         for resolved in self.resolver.entries([CatalogKind.PHASE]):
-            skill_dir = resolved.path
-            skill_file = skill_dir / "SKILL.md"
-            metadata = self._read_skill_frontmatter(skill_file)
-            name = str(metadata.get("name", skill_dir.name))
-            description = str(metadata.get("description", "")).strip()
-            warning = None
-
-            if name != skill_dir.name:
-                mismatch = (
-                    f"Skill frontmatter name '{name}' does not match folder '{skill_dir.name}'"
-                )
-                if resolved.source == "builtin" or strict:
-                    raise ValueError(mismatch)
-                warning = mismatch
-            elif resolved.source != "builtin" and skill_dir.name in _SKILL_ALIASES:
-                warning = (
-                    f"Skill '{skill_dir.name}' uses a deprecated builtin name; "
-                    f"rename it to '{_SKILL_ALIASES[skill_dir.name]}' to override the builtin, "
-                    "or pick a distinct name"
-                )
-
-            catalog[skill_dir.name] = SkillCatalogEntry(
-                name=skill_dir.name,
-                description=description,
-                directory=skill_dir,
-                source=resolved.source,
-                warning=warning,
-            )
+            entry = self._entry_from_resolved(resolved, strict=strict)
+            catalog[entry.name] = entry
 
         self._catalog = catalog
         return sorted(catalog.values(), key=lambda item: item.name)
 
-    def _ensure_catalog(self) -> None:
-        if not self._catalog:
-            self.discover()
+    def _entry_from_resolved(
+        self, resolved: CatalogEntry, *, strict: bool = False
+    ) -> SkillCatalogEntry:
+        skill_dir = resolved.path
+        metadata = self._read_skill_frontmatter(skill_dir / "SKILL.md")
+        name = str(metadata.get("name", skill_dir.name))
+        description = str(metadata.get("description", "")).strip()
+        warning = None
+
+        if name != skill_dir.name:
+            mismatch = f"Skill frontmatter name '{name}' does not match folder '{skill_dir.name}'"
+            if resolved.source == "builtin" or strict:
+                raise ValueError(mismatch)
+            warning = mismatch
+        elif resolved.source != "builtin" and skill_dir.name in _SKILL_ALIASES:
+            warning = (
+                f"Skill '{skill_dir.name}' uses a deprecated builtin name; "
+                f"rename it to '{_SKILL_ALIASES[skill_dir.name]}' to override the builtin, "
+                "or pick a distinct name"
+            )
+
+        return SkillCatalogEntry(
+            name=skill_dir.name,
+            description=description,
+            directory=skill_dir,
+            source=resolved.source,
+            warning=warning,
+        )
+
+    def _resolve_entry(self, name: str) -> SkillCatalogEntry:
+        try:
+            resolved = self.resolver.resolve(CatalogKind.PHASE, name)
+        except FileNotFoundError:
+            canonical_name = self._resolve_alias(name)
+            if canonical_name is None:
+                raise SkillDiscoveryError(name) from None
+            try:
+                resolved = self.resolver.resolve(CatalogKind.PHASE, canonical_name)
+            except FileNotFoundError:
+                raise SkillDiscoveryError(name) from None
+        return self._entry_from_resolved(resolved)
 
     def get_skill_dir(self, name: str) -> Path:
         return self.get_skill_entry(name).directory
@@ -180,16 +197,7 @@ class SkillLoader:
     def get_skill_entry(self, name: str) -> SkillCatalogEntry:
         """Return the resolved skill and its discovery trust source."""
         with global_catalog_lock(self.global_root):
-            self._discover_unlocked()
-            return self._get_skill_entry_unlocked(name)
-
-    def _get_skill_entry_unlocked(self, name: str) -> SkillCatalogEntry:
-        if name in self._catalog:
-            return self._catalog[name]
-        resolved = self._resolve_alias(name)
-        if resolved is not None and resolved in self._catalog:
-            return self._catalog[resolved]
-        raise SkillDiscoveryError(name)
+            return self._resolve_entry(name)
 
     @staticmethod
     def _resolve_alias(name: str) -> Optional[str]:
@@ -207,8 +215,7 @@ class SkillLoader:
     def activate(self, name: str, context: Optional[Dict[str, str]] = None) -> str:
         """Load full skill content and replace placeholders."""
         with global_catalog_lock(self.global_root):
-            self._discover_unlocked()
-            skill_dir = self._get_skill_entry_unlocked(name).directory
+            skill_dir = self._resolve_entry(name).directory
             skill_file = skill_dir / "SKILL.md"
             text = skill_file.read_text(encoding="utf-8")
 
@@ -226,8 +233,7 @@ class SkillLoader:
     def get_workflow_contract(self, name: str) -> SkillWorkflowContract:
         """Load and validate optional workflow metadata from the resolved skill."""
         with global_catalog_lock(self.global_root):
-            self._discover_unlocked()
-            skill_dir = self._get_skill_entry_unlocked(name).directory
+            skill_dir = self._resolve_entry(name).directory
             metadata = self._read_skill_frontmatter(skill_dir / "SKILL.md")
             raw_contract = metadata.get("workflow", {})
             try:
@@ -264,8 +270,7 @@ class SkillLoader:
     def get_reference(self, name: str, ref: str) -> str:
         """Read one reference file under skill references directory."""
         with global_catalog_lock(self.global_root):
-            self._discover_unlocked()
-            skill_dir = self._get_skill_entry_unlocked(name).directory
+            skill_dir = self._resolve_entry(name).directory
             ref_file = (skill_dir / "references" / ref).resolve()
             refs_dir = (skill_dir / "references").resolve()
             if not str(ref_file).startswith(str(refs_dir)):

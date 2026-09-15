@@ -1,5 +1,6 @@
 """Tests for skill loader."""
 
+import shutil
 from pathlib import Path
 from unittest.mock import patch
 
@@ -7,6 +8,7 @@ import pytest
 
 from cafe.catalogs.resolver import CatalogKind, CatalogResolver, CatalogValidationError
 from cafe.core.types import AgentCLI
+from cafe.skills.contracts import SkillWorkflowContract
 from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.skills.importer import import_skills
 from cafe.skills.loader import SkillLoader, canonical_skill_name
@@ -97,6 +99,82 @@ def test_activate_replaces_placeholders(tmp_path: Path) -> None:
 
     text = loader.activate("spec_first", context={"name": "World"})
     assert "Hello World" in text
+
+
+def test_lookups_resolve_only_the_requested_skill_and_follow_precedence_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    builtin = tmp_path / "builtin" / "skills"
+    global_skills = tmp_path / "global" / "skills"
+    project_root = tmp_path / "project"
+    _write_skill(builtin, "plan")
+    references = builtin / "plan" / "references"
+    references.mkdir()
+    (references / "guide.md").write_text("builtin guide\n", encoding="utf-8")
+    loader = SkillLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+    monkeypatch.setattr(
+        loader,
+        "_discover_unlocked",
+        lambda **_kwargs: pytest.fail("single-skill lookup must not scan the full catalog"),
+    )
+
+    assert loader.get_skill_entry("plan").source == "builtin"
+    assert "# plan" in loader.activate("plan")
+    assert loader.get_workflow_contract("plan") == SkillWorkflowContract()
+    assert loader.get_reference("plan", "guide.md") == "builtin guide\n"
+
+    _write_skill(global_skills, "plan")
+    assert loader.get_skill_entry("plan").source == "global"
+
+    _write_skill(project_root / ".cafe" / "skills", "plan")
+    assert loader.get_skill_entry("plan").source == "project"
+
+    shutil.rmtree(project_root / ".cafe" / "skills" / "plan")
+    assert loader.get_skill_entry("plan").source == "global"
+
+    shutil.rmtree(global_skills / "plan")
+    assert loader.get_skill_entry("plan").source == "builtin"
+
+
+def test_lookup_prefers_a_late_exact_override_to_a_deprecated_alias(tmp_path: Path) -> None:
+    builtin = tmp_path / "builtin" / "skills"
+    project_skills = tmp_path / "project" / ".cafe" / "skills"
+    _write_skill(builtin, "cafe-plan")
+    loader = SkillLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+
+    assert "# cafe-plan" in loader.activate("plan")
+
+    _write_skill(project_skills, "plan")
+    assert loader.get_skill_entry("plan").source == "project"
+    assert "# plan" in loader.activate("plan")
+
+
+def test_lookup_revalidates_replaced_catalog_entry(tmp_path: Path) -> None:
+    global_skills = tmp_path / "global" / "skills"
+    _write_skill(global_skills, "plan")
+    loader = SkillLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+
+    assert loader.get_skill_entry("plan").source == "global"
+
+    shutil.rmtree(global_skills / "plan")
+    external = tmp_path / "external"
+    _write_skill(external, "plan")
+    (global_skills / "plan").symlink_to(external / "plan", target_is_directory=True)
+
+    with pytest.raises(CatalogValidationError, match="escapes entry authority"):
+        loader.activate("plan")
 
 
 def test_prompt_only_workflow_rejects_missing_reference(tmp_path: Path) -> None:
