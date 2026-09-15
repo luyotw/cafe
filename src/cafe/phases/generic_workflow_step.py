@@ -373,6 +373,14 @@ class GenericWorkflowStepExecutor(Phase):
         self.phase_dir = self.issue_dir / step_name
         self.phase_dir.mkdir(parents=True, exist_ok=True)
 
+        # A playbook rollout can introduce a workspace companion after its
+        # producer already completed. Recover only from the producer named by
+        # the declarations and a receipt proving the active workspace.
+        self._recover_declared_workspace_input(
+            step_def=step_def,
+            blackboard_state=blackboard_state,
+        )
+
         self.iteration = self._get_next_iteration_number(step_name, self.phase_dir)
         self._resolved_iteration_user_input = None
         self._session_recovery = None
@@ -1837,6 +1845,80 @@ class GenericWorkflowStepExecutor(Phase):
                     f"workspace artifact {name!r} is stale or contradictory: {detail}; "
                     "publish a fresh workspace snapshot"
                 )
+
+    def _recover_declared_workspace_input(
+        self,
+        *,
+        step_def: Mapping[str, Any],
+        blackboard_state: BlackboardState,
+    ) -> None:
+        """Rebuild a missing companion after a declarative workspace rollout."""
+        required_name = step_def.get("workspace_input_artifact")
+        if not isinstance(required_name, str) or required_name in blackboard_state.artifacts:
+            return
+
+        candidates: list[tuple[str, Mapping[str, Any], ArtifactEntry]] = []
+        steps = self.playbook.get("steps", {})
+        if not isinstance(steps, Mapping):
+            return
+        for producer_name, producer_def in steps.items():
+            if not isinstance(producer_def, Mapping):
+                continue
+            if producer_def.get("workspace_artifact") != required_name:
+                continue
+            summary_name = str(producer_def.get("output_artifact", producer_name))
+            summary = blackboard_state.artifacts.get(summary_name)
+            if summary is not None and summary.updated_by == str(producer_name):
+                candidates.append((str(producer_name), producer_def, summary))
+        if len(candidates) != 1:
+            return
+
+        producer_name, producer_def, summary = candidates[0]
+        repo = Path(getattr(self.git_ops, "repo_path", Path.cwd())).resolve()
+        output_file = Path(summary.path)
+        if not output_file.is_absolute():
+            output_file = repo / output_file
+        try:
+            output_file = output_file.resolve(strict=True)
+            relative = output_file.relative_to(self.issue_dir.resolve())
+        except (OSError, ValueError) as exc:
+            raise ValueError(
+                f"cannot recover required workspace artifact {required_name!r}: "
+                "the declared producer output is outside the issue"
+            ) from exc
+        if (
+            len(relative.parts) != 3
+            or relative.parts[0] != producer_name
+            or re.fullmatch(r"iteration_[0-9]+", relative.parts[1]) is None
+            or relative.parts[2] != "output.md"
+        ):
+            raise ValueError(
+                f"cannot recover required workspace artifact {required_name!r}: "
+                "the declared producer output path is not canonical"
+            )
+
+        with workspace_execution_lock(repo):
+            recovered = self._publish_workspace_artifact_under_lock(
+                step_name=producer_name,
+                step_def=dict(producer_def),
+                output_file=output_file,
+                blackboard_state=blackboard_state,
+                updated_at=summary.updated_at,
+            )
+            if recovered is None:
+                return
+            workspace_path, metadata = recovered
+            blackboard_state.artifacts[required_name] = ArtifactEntry(
+                name=required_name,
+                kind=ArtifactKind.WORKSPACE,
+                version=int(metadata["version"]),
+                updated_by=producer_name,
+                path=workspace_path,
+                updated_at=str(metadata["updated_at"]),
+                base_sha=str(metadata["base_sha"]),
+                head_sha=str(metadata["head_sha"]),
+            )
+            BlackboardStore(self.issue_dir).save(blackboard_state)
 
     def _declared_feedback_route_artifact(self, destination: str) -> Optional[str]:
         """Return the artifact declared for the persisted destination edge."""

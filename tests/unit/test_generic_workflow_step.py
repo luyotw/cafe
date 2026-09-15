@@ -6534,6 +6534,81 @@ def test_current_workspace_consumer_fails_closed_when_companion_is_missing(tmp_p
         )
 
 
+def test_missing_workspace_companion_recovers_from_declared_verified_producer(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True)
+    (repo / ".gitignore").write_text(".cafe/\n", encoding="utf-8")
+    (repo / "tracked.txt").write_text("before\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, check=True, capture_output=True)
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    (repo / "tracked.txt").write_text("after\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "change"], cwd=repo, check=True, capture_output=True)
+
+    issue_dir = repo / ".cafe/issues/custom"
+    output = issue_dir / "emit" / "iteration_001" / "output.md"
+    output.parent.mkdir(parents=True)
+    output.write_text("verified producer summary\n", encoding="utf-8")
+    run_verification(
+        output_file=output,
+        command=[sys.executable, "-c", "print('workspace rollout')"],
+        scope="targeted",
+        cwd=repo,
+    )
+    (issue_dir / "issue.yaml").write_text(f"base_branch: {base}\n", encoding="utf-8")
+    playbook = {
+        "steps": {
+            "emit": {
+                "output_artifact": "evidence_bundle",
+                "workspace_artifact": "verified_state",
+            },
+            "consume": {
+                "input_artifacts": ["evidence_bundle", "verified_state"],
+                "workspace_input_artifact": "verified_state",
+            },
+        }
+    }
+    state = BlackboardStore(issue_dir).load_or_create("consume")
+    state.artifacts["evidence_bundle"] = ArtifactEntry(
+        name="evidence_bundle",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="emit",
+        path=str(output),
+    )
+    BlackboardStore(issue_dir).save(state)
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="custom",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("confirmed"),
+        git_ops=GitOperations(str(repo)),
+        role_agent_map={},
+    )
+
+    executor._recover_declared_workspace_input(
+        step_def=playbook["steps"]["consume"],
+        blackboard_state=state,
+    )
+
+    recovered = state.artifacts["verified_state"]
+    assert recovered.kind == ArtifactKind.WORKSPACE
+    assert recovered.updated_by == "emit"
+    executor._validate_workspace_inputs(
+        executor._step_input_artifacts(playbook["steps"]["consume"], state),
+        step_def=playbook["steps"]["consume"],
+    )
+
+
 def test_plan_publication_rejects_reuse_of_an_existing_id_for_unrelated_work(
     tmp_path: Path,
 ) -> None:
