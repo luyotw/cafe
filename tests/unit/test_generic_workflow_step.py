@@ -6824,6 +6824,170 @@ def test_plan_identity_input_rejects_contradictory_populated_record_fields(
     assert persisted == original_record_data
 
 
+def _plan_identity_authority_fixture(
+    tmp_path: Path,
+    *,
+    prior_overrides: dict[str, object] | None = None,
+) -> tuple[GenericWorkflowStepExecutor, object, Path, Path, dict[str, object]]:
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.generic_phase = GenericPhase(SkillLoader())
+    executor.phase_dir = tmp_path / "issue" / "plan"
+    executor.iteration = 2
+    old_output = executor.phase_dir / "iteration_001" / "output.md"
+    old_output.parent.mkdir(parents=True)
+    old_output.write_text(
+        "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: build parser — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+    prior_values: dict[str, object] = {
+        "name": "plan",
+        "kind": ArtifactKind.DOCUMENT,
+        "version": 1,
+        "updated_by": "plan",
+        "path": str(old_output),
+        "content_sha256": hashlib.sha256(old_output.read_bytes()).hexdigest(),
+    }
+    prior_values.update(prior_overrides or {})
+    old_record = ArtifactEntry(**prior_values)
+    record_path = old_output.parent / "artifact.json"
+    record_data = {
+        "name": "plan",
+        "kind": ArtifactKind.DOCUMENT.value,
+        "version": 1,
+        "updated_by": "plan",
+        "path": str(old_output),
+        "content_sha256": hashlib.sha256(old_output.read_bytes()).hexdigest(),
+    }
+    record_path.write_text(json.dumps(record_data), encoding="utf-8")
+    state = BlackboardStore(tmp_path / "issue").load_or_create("plan")
+    state.artifacts["plan"] = old_record
+    return executor, state, old_output, record_path, record_data
+
+
+@pytest.mark.parametrize("field", ["name", "kind", "version", "updated_by", "path"])
+def test_plan_identity_input_rejects_missing_selected_mandatory_identity(
+    tmp_path: Path, field: str
+) -> None:
+    missing = {field: None}
+    executor, state, _old_output, record_path, record_data = _plan_identity_authority_fixture(
+        tmp_path, prior_overrides=missing
+    )
+
+    with pytest.raises(ValueError, match="mandatory selected artifact"):
+        executor._build_context(
+            step_name="plan",
+            step_def={
+                "skill": "cafe-plan",
+                "role": "developer",
+                "input_artifacts": ["plan"],
+                "output_artifact": "plan",
+                "todo_identity_input_artifact": "plan",
+            },
+            blackboard_state=state,
+            agent_name="David",
+            output_file=executor.phase_dir / "iteration_002" / "output.md",
+        )
+    assert json.loads(record_path.read_text(encoding="utf-8")) == record_data
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("name", "other-plan"),
+        ("kind", ArtifactKind.WORKSPACE),
+        ("version", 0),
+        ("updated_by", ""),
+        ("path", ""),
+    ],
+)
+def test_plan_identity_input_rejects_malformed_selected_mandatory_identity(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    executor, state, _old_output, record_path, record_data = _plan_identity_authority_fixture(
+        tmp_path, prior_overrides={field: value}
+    )
+
+    with pytest.raises(ValueError, match="mandatory selected artifact"):
+        executor._build_context(
+            step_name="plan",
+            step_def={
+                "skill": "cafe-plan",
+                "role": "developer",
+                "input_artifacts": ["plan"],
+                "output_artifact": "plan",
+                "todo_identity_input_artifact": "plan",
+            },
+            blackboard_state=state,
+            agent_name="David",
+            output_file=executor.phase_dir / "iteration_002" / "output.md",
+        )
+    assert json.loads(record_path.read_text(encoding="utf-8")) == record_data
+
+
+@pytest.mark.parametrize("field", ["name", "kind", "version", "updated_by", "path"])
+def test_plan_identity_input_rejects_missing_sibling_mandatory_identity(
+    tmp_path: Path, field: str
+) -> None:
+    executor, state, _old_output, record_path, record_data = _plan_identity_authority_fixture(
+        tmp_path
+    )
+    record_data.pop(field)
+    record_path.write_text(json.dumps(record_data), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="mandatory artifact"):
+        executor._build_context(
+            step_name="plan",
+            step_def={
+                "skill": "cafe-plan",
+                "role": "developer",
+                "input_artifacts": ["plan"],
+                "output_artifact": "plan",
+                "todo_identity_input_artifact": "plan",
+            },
+            blackboard_state=state,
+            agent_name="David",
+            output_file=executor.phase_dir / "iteration_002" / "output.md",
+        )
+    assert json.loads(record_path.read_text(encoding="utf-8")) == record_data
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("name", ""),
+        ("kind", []),
+        ("version", 0),
+        ("updated_by", ""),
+        ("path", []),
+    ],
+)
+def test_plan_identity_input_rejects_empty_or_malformed_sibling_mandatory_identity(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    executor, state, _old_output, record_path, record_data = _plan_identity_authority_fixture(
+        tmp_path
+    )
+    record_data[field] = value
+    record_path.write_text(json.dumps(record_data), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="mandatory artifact"):
+        executor._build_context(
+            step_name="plan",
+            step_def={
+                "skill": "cafe-plan",
+                "role": "developer",
+                "input_artifacts": ["plan"],
+                "output_artifact": "plan",
+                "todo_identity_input_artifact": "plan",
+            },
+            blackboard_state=state,
+            agent_name="David",
+            output_file=executor.phase_dir / "iteration_002" / "output.md",
+        )
+    assert json.loads(record_path.read_text(encoding="utf-8")) == record_data
+
+
 def test_plan_publication_fails_closed_when_prior_authority_is_unreadable(
     tmp_path: Path,
 ) -> None:

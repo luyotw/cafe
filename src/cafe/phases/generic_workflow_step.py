@@ -1927,7 +1927,28 @@ class GenericWorkflowStepExecutor(Phase):
         prior = input_artifacts.get(artifact_name)
         if prior is None:
             return
-        prior_path = Path(str(getattr(prior, "path", prior)))
+        def invalid_selected(field: str) -> ValueError:
+            return ValueError(
+                f"prior plan Todo authority {artifact_name!r} has an invalid mandatory "
+                f"selected artifact {field}; restore the authoritative prior plan before continuing"
+            )
+
+        prior_name = getattr(prior, "name", None)
+        if not isinstance(prior_name, str) or not prior_name.strip() or prior_name != artifact_name:
+            raise invalid_selected("name")
+        prior_kind = getattr(prior, "kind", None)
+        if prior_kind is not ArtifactKind.DOCUMENT:
+            raise invalid_selected("kind")
+        prior_version = getattr(prior, "version", None)
+        if type(prior_version) is not int or prior_version <= 0:
+            raise invalid_selected("version")
+        prior_owner = getattr(prior, "updated_by", None)
+        if not isinstance(prior_owner, str) or not prior_owner.strip():
+            raise invalid_selected("owner")
+        prior_path_value = getattr(prior, "path", None)
+        if not isinstance(prior_path_value, str) or not prior_path_value.strip():
+            raise invalid_selected("path")
+        prior_path = Path(prior_path_value)
         try:
             prior_bytes = prior_path.read_bytes()
             content = prior_bytes.decode("utf-8")
@@ -2002,29 +2023,41 @@ class GenericWorkflowStepExecutor(Phase):
                 "restore artifact.json before continuing"
             )
 
-        def require_record_field(field: str, expected_value: Any, label: str) -> None:
-            value = record.get(field)
-            if value is not None and value != expected_value:
-                raise ValueError(
-                    f"prior plan Todo authority {artifact_name!r} has a contradictory "
-                    f"artifact {label}; restore artifact.json before continuing"
-                )
+        def invalid_record(field: str) -> ValueError:
+            return ValueError(
+                f"prior plan Todo authority {artifact_name!r} has an invalid mandatory "
+                f"artifact {field}; restore artifact.json before continuing"
+            )
 
-        require_record_field("name", getattr(prior, "name", artifact_name), "name")
-        prior_kind = getattr(prior, "kind", ArtifactKind.DOCUMENT)
-        require_record_field(
-            "kind",
-            prior_kind.value if isinstance(prior_kind, ArtifactKind) else str(prior_kind),
-            "kind",
-        )
-        require_record_field("version", getattr(prior, "version", None), "version")
-        require_record_field("updated_by", getattr(prior, "updated_by", None), "owner")
-        require_record_field("content_sha256", actual_content_sha256, "content digest")
+        recorded_name = record.get("name")
+        if (
+            not isinstance(recorded_name, str)
+            or not recorded_name.strip()
+            or recorded_name != artifact_name
+        ):
+            raise invalid_record("name")
+        if record.get("kind") != ArtifactKind.DOCUMENT.value:
+            raise invalid_record("kind")
+        recorded_version = record.get("version")
+        if type(recorded_version) is not int or recorded_version <= 0:
+            raise invalid_record("version")
+        if recorded_version != prior_version:
+            raise invalid_record("version")
+        recorded_owner = record.get("updated_by")
+        if not isinstance(recorded_owner, str) or not recorded_owner.strip():
+            raise invalid_record("owner")
+        if recorded_owner != prior_owner:
+            raise invalid_record("owner")
         recorded_path = record.get("path")
-        if recorded_path and Path(str(recorded_path)).resolve() != prior_path.resolve():
+        if not isinstance(recorded_path, str) or not recorded_path.strip():
+            raise invalid_record("path")
+        if Path(recorded_path).resolve() != prior_path.resolve():
+            raise invalid_record("path")
+        recorded_digest = record.get("content_sha256")
+        if recorded_digest is not None and recorded_digest != actual_content_sha256:
             raise ValueError(
-                f"prior plan Todo authority {artifact_name!r} has a contradictory artifact path; "
-                "restore artifact.json before continuing"
+                f"prior plan Todo authority {artifact_name!r} has a contradictory "
+                "content digest; restore artifact.json before continuing"
             )
         recorded = record.get("todo_work_identities")
         recorded_map = normalized_mapping(recorded, field="work")
