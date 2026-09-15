@@ -280,21 +280,37 @@ def test_custom_named_step_publication_handoff_restart_and_consumer_preparation(
     for skill_name in ("custom-producer", "custom-consumer"):
         skill_dir = builtin_root / "skills" / skill_name
         skill_dir.mkdir(parents=True)
-        (skill_dir / "SKILL.md").write_text(
-            f"---\nname: {skill_name}\ndescription: test\nversion: 1.0.0\n"
-            "workflow:\n"
-            "  execution_profile:\n"
-            "    workload: implementation\n"
-            "    reasoning: standard\n"
-            "    risk_domains: [workflow]\n"
-            "    fallback_strength: equivalent_or_stronger\n"
+        prompt_inputs = (
             "  prompt_inputs:\n"
+            "    - artifacts: [evidence_bundle]\n"
+            "      placeholder: custom_document\n"
+            "      required: true\n"
+            "    - artifacts: [evidence_bundle]\n"
+            "      placeholder: custom_correction\n"
+            "      required: true\n"
+            "    - artifacts: [verified_state]\n"
+            "      placeholder: custom_workspace\n"
+            "      required: true\n"
+            if skill_name == "custom-consumer"
+            else "  prompt_inputs:\n"
             "    - artifacts: [evidence_bundle]\n"
             "      placeholder: custom_evidence\n"
             "      required: false\n"
-            "---\n\n"
-            "## Role\nRun the declared custom workflow step.\n\n"
-            "## Handoff\nWrite next-step baton for this result; the runtime updates the blackboard.\n",
+        )
+        (skill_dir / "SKILL.md").write_text(
+            (
+                f"---\nname: {skill_name}\ndescription: test\nversion: 1.0.0\n"
+                "workflow:\n"
+                "  execution_profile:\n"
+                "    workload: implementation\n"
+                "    reasoning: standard\n"
+                "    risk_domains: [workflow]\n"
+                "    fallback_strength: equivalent_or_stronger\n"
+                + prompt_inputs
+                + "---\n\n"
+                "## Role\nRun the declared custom workflow step.\n\n"
+                "## Handoff\nWrite next-step baton for this result; the runtime updates the blackboard.\n"
+            ),
             encoding="utf-8",
         )
     playbook_definition = {
@@ -405,7 +421,13 @@ def test_bounded_v02_mixed_code_record_rebuilds_and_restarts_for_legacy_consumer
     skill_dir = builtin_root / "skills" / "legacy-consumer"
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text(
-        "---\nname: legacy-consumer\ndescription: legacy consumer\nversion: 1.0.0\n---\n\n"
+        "---\nname: legacy-consumer\ndescription: legacy consumer\nversion: 1.0.0\n"
+        "workflow:\n"
+        "  prompt_inputs:\n"
+        "    - artifacts: [code]\n"
+        "      placeholder: legacy_artifact\n"
+        "      required: true\n"
+        "---\n\n"
         "## Role\nConsume the legacy artifact.\n\n"
         "## Handoff\nWrite next-step baton for this result; the runtime updates the blackboard.\n",
         encoding="utf-8",

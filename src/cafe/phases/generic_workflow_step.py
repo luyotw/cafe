@@ -71,6 +71,7 @@ from cafe.core.todo import (
     MAX_TODO_ITEMS,
     TodoContractError,
     TodoSourceArtifact,
+    parse_todo_identity_continuity,
     parse_todo_list,
     projection_todo_items,
     validate_todo_identities,
@@ -116,26 +117,6 @@ def _plan_work_identity(item: Any) -> str:
     return hashlib.sha256(
         "\x1f".join((str(item.source), " ".join(str(item.work).split()))).encode("utf-8")
     ).hexdigest()
-
-
-def _plan_work_anchors(item: Any) -> set[str]:
-    """Return bounded anchors used only to detect displaced prior work."""
-    generic = {
-        "a", "an", "and", "build", "change", "complete", "create", "define",
-        "deliver", "ensure", "for", "from", "implement", "in", "make", "of",
-        "on", "preserve", "provide", "run", "supply", "test", "tests", "the",
-        "to", "update", "use", "with", "work", "write",
-    }
-    return {
-        token.lower()
-        for token in re.findall(r"[A-Za-z0-9]+", " ".join(str(item.work).split()))
-        if token.lower() not in generic
-    }
-
-
-def _plan_work_is_displaced(previous: Any, current: Any) -> bool:
-    """Detect a changed ID whose former work appears in a newly added row."""
-    return len(_plan_work_anchors(previous) & _plan_work_anchors(current)) >= 2
 
 
 def align_pr_baton_after_execution(
@@ -2692,6 +2673,7 @@ class GenericWorkflowStepExecutor(Phase):
         if "## Todo List" in content:
             try:
                 todo_items = parse_todo_list(content)
+                continuity_proofs = parse_todo_identity_continuity(content)
             except TodoContractError as exc:
                 raise ValueError(f"artifact {output_key!r} has an invalid Todo List") from exc
             plan_items = [item for item in todo_items if item.source == "plan"]
@@ -2727,14 +2709,12 @@ class GenericWorkflowStepExecutor(Phase):
                     except (OSError, UnicodeError, TodoContractError):
                         previous_work_identities = None
                 if previous_work_identities:
-                    # PLAN-NNN is the durable authoring contract.  Wording,
-                    # ordering, and vocabulary are mutable.  An exact persisted
-                    # work fingerprint, or a changed row whose former work is
-                    # displaced into a newly added row, proves an ID move.
+                    # PLAN-NNN is the durable authoring contract.  Unchanged
+                    # work may be reordered, while a changed retained item must
+                    # carry an explicit proof against its persisted work hash.
                     previous_by_id = {
                         item.item_id: item for item in previous_items if item.source == "plan"
                     }
-                    current_ids = {item.item_id for item in plan_items}
                     for item in plan_items:
                         prior_id = (
                             previous_work_identities.get(_plan_work_identity(item))
@@ -2747,18 +2727,14 @@ class GenericWorkflowStepExecutor(Phase):
                             )
                         prior_item = previous_by_id.get(item.item_id)
                         if prior_item is not None and (
-                            prior_item.fingerprint != item.fingerprint
+                            _plan_work_identity(prior_item) != _plan_work_identity(item)
                         ):
-                            displaced = any(
-                                candidate.item_id not in previous_by_id
-                                and candidate.item_id != item.item_id
-                                and _plan_work_is_displaced(prior_item, candidate)
-                                for candidate in plan_items
-                                if candidate.item_id in current_ids
-                            )
-                            if displaced:
+                            if continuity_proofs.get(item.item_id) != _plan_work_identity(
+                                prior_item
+                            ):
                                 raise ValueError(
-                                    f"plan Todo identity {item.item_id!r} was reassigned; retain the existing ID"
+                                    f"plan Todo identity {item.item_id!r} changed work without a continuity proof; "
+                                    "retain the existing ID or declare the prior work fingerprint"
                                 )
         artifact = ArtifactEntry(
             name=output_key,

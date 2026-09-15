@@ -4368,6 +4368,16 @@ def _minimal_spec_executor(
     )
 
 
+def _plan_continuity(item_id: str, work: str) -> str:
+    fingerprint = hashlib.sha256(
+        ("plan\x1f" + " ".join(work.split())).encode("utf-8")
+    ).hexdigest()
+    return (
+        "\n\n## Todo Identity Continuity\n"
+        f"- `{item_id}` — Previous work fingerprint: `{fingerprint}`\n"
+    )
+
+
 def test_resolve_iteration_user_input_first_start_unchanged(tmp_path: Path) -> None:
     executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
     executor.phase_dir = tmp_path / ".cafe" / "issues" / "issue-resume-input" / "spec"
@@ -6634,7 +6644,8 @@ def test_plan_publication_allows_a_no_shared_vocabulary_revision_with_same_id(
     new_output.parent.mkdir(parents=True)
     new_output.write_text(
         "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: deploy service — "
-        "Closure: done — Evidence: test\n",
+        "Closure: done — Evidence: test"
+        + _plan_continuity("PLAN-001", "build parser"),
         encoding="utf-8",
     )
     record = executor._write_artifact_record(
@@ -6682,7 +6693,7 @@ def test_plan_publication_allows_new_id_for_shared_domain_vocabulary(
     assert set(record.todo_identities or {}) == {"PLAN-002"}
 
 
-def test_plan_publication_allows_unrelated_work_sharing_only_a_generic_token(
+def test_plan_publication_rejects_unrelated_work_sharing_only_a_generic_token(
     tmp_path: Path,
 ) -> None:
     executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
@@ -6708,13 +6719,13 @@ def test_plan_publication_allows_unrelated_work_sharing_only_a_generic_token(
         encoding="utf-8",
     )
 
-    record = executor._write_artifact_record(
-        blackboard_state=state,
-        output_key="plan",
-        output_path=str(new_output),
-        updated_by="plan",
-    )
-    assert record.todo_identities is not None
+    with pytest.raises(ValueError, match="continuity"):
+        executor._write_artifact_record(
+            blackboard_state=state,
+            output_key="plan",
+            output_path=str(new_output),
+            updated_by="plan",
+        )
 
 
 def test_plan_publication_allows_related_same_id_revision(tmp_path: Path) -> None:
@@ -6737,7 +6748,8 @@ def test_plan_publication_allows_related_same_id_revision(tmp_path: Path) -> Non
     new_output.parent.mkdir(parents=True)
     new_output.write_text(
         "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: improve parser with stricter errors — "
-        "Closure: done — Evidence: test\n",
+        "Closure: done — Evidence: test"
+        + _plan_continuity("PLAN-001", "improve parser"),
         encoding="utf-8",
     )
 
@@ -6771,7 +6783,8 @@ def test_plan_publication_allows_semantic_same_id_revision(tmp_path: Path) -> No
     new_output.parent.mkdir(parents=True)
     new_output.write_text(
         "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: syntax errors — "
-        "Closure: verified — Evidence: targeted test\n",
+        "Closure: verified — Evidence: targeted test"
+        + _plan_continuity("PLAN-001", "parser diagnostics"),
         encoding="utf-8",
     )
 

@@ -44,6 +44,19 @@ class _CustomProductionAgent:
     def get_agent(self, _name: str) -> SimpleNamespace:
         return self.agent
 
+    def _workflow_inputs(self, skill_name: str) -> dict[str, Path]:
+        skill_file = self.repo / ".codex" / "skills" / skill_name / "SKILL.md"
+        lines = skill_file.read_text(encoding="utf-8").splitlines()
+        inputs: dict[str, Path] = {}
+        for line in lines:
+            if not line.startswith("- ") or ": " not in line:
+                continue
+            placeholder, raw_path = line[2:].split(": ", 1)
+            if placeholder.startswith("custom_"):
+                path = Path(raw_path.strip())
+                inputs[placeholder] = path if path.is_absolute() else self.repo / path
+        return inputs
+
     def execute(self, _name: str, _prompt: str, *, streaming_output_file=None, **_kwargs):
         self.calls += 1
         if streaming_output_file is None:
@@ -59,6 +72,22 @@ class _CustomProductionAgent:
                 encoding="utf-8",
             )
         else:
+            inputs = self._workflow_inputs("custom-consumer")
+            expected = {"custom_document", "custom_correction", "custom_workspace"}
+            if set(inputs) != expected:
+                raise AssertionError(f"declared consumer inputs were not installed: {sorted(inputs)}")
+            document = inputs["custom_document"]
+            correction = inputs["custom_correction"]
+            workspace = inputs["custom_workspace"]
+            if not document.is_file() or not correction.is_file() or not workspace.is_file():
+                raise AssertionError("the consumer received an unreadable declared input")
+            if "CUST-001" not in document.read_text(encoding="utf-8"):
+                raise AssertionError("the consumer did not receive the document contents")
+            if "CUST-001" not in correction.read_text(encoding="utf-8"):
+                raise AssertionError("the consumer did not receive the correction contents")
+            workspace_record = json.loads(workspace.read_text(encoding="utf-8"))
+            if workspace_record.get("name") != "verified_state":
+                raise AssertionError("the consumer did not receive the verified workspace")
             output.write_text("# Consumer result\n", encoding="utf-8")
         run_verification(
             output_file=output,
@@ -78,28 +107,57 @@ class _CustomProductionAgent:
         return "await_agent", TokenUsage(), [], [], [], None
 
 
-def _legacy_runtime_executor(issue_dir: Path):
-    calls = {"count": 0}
+class _LegacyProductionAgent:
+    def __init__(self, repo: Path, issue_dir: Path) -> None:
+        self.repo = repo
+        self.issue_dir = issue_dir
+        self.agent = SimpleNamespace(
+            config=SimpleNamespace(cli=AgentCLI.CODEX, session_id="legacy-session", model=None)
+        )
+        self.calls = 0
 
-    def execute(step_name: str, _step_def: dict, _state: object, **_kwargs) -> StepExecutionResult:
-        calls["count"] += 1
-        iteration_dir = issue_dir / step_name / "iteration_001"
-        iteration_dir.mkdir(parents=True, exist_ok=True)
+    def get_agent(self, _name: str) -> SimpleNamespace:
+        return self.agent
+
+    def execute(self, _name: str, _prompt: str, *, streaming_output_file=None, **_kwargs):
+        self.calls += 1
+        if streaming_output_file is None:
+            raise AssertionError("the production runtime must provide an output path")
+        skill_file = self.repo / ".codex" / "skills" / "legacy-consumer" / "SKILL.md"
+        inputs = {
+            placeholder: Path(raw_path.strip())
+            for placeholder, raw_path in (
+                line[2:].split(": ", 1)
+                for line in skill_file.read_text(encoding="utf-8").splitlines()
+                if line.startswith("- legacy_") and ": " in line
+            )
+        }
+        artifact = inputs.get("legacy_artifact")
+        if artifact is None:
+            raise AssertionError("the legacy skill did not receive its declared artifact")
+        if not artifact.is_absolute():
+            artifact = self.issue_dir / artifact
+        if artifact.read_text(encoding="utf-8") != "legacy development summary\n":
+            raise AssertionError("the legacy consumer did not receive the persisted artifact")
+        iteration_dir = Path(streaming_output_file).parent
         output = iteration_dir / "output.md"
         output.write_text("# Resumed legacy consumer\n", encoding="utf-8")
-        (iteration_dir / "checklist.md").write_text(
-            "## Execution Steps Checklist\n\n"
-            "[x] Resume the legacy consumer through the public runtime\n",
+        run_verification(
+            output_file=output,
+            command=[sys.executable, "-c", "print('legacy consumer')"],
+            scope="targeted",
+            cwd=self.repo,
+        )
+        checklist = iteration_dir / "checklist.md"
+        checklist.write_text(
+            "\n".join(
+                line.replace("[ ]", "[x]", 1) if line.startswith("[ ]") else line
+                for line in checklist.read_text(encoding="utf-8").splitlines()
+            )
+            + "\n",
             encoding="utf-8",
         )
-        return StepExecutionResult(
-            response="await_agent",
-            artifacts={str(_step_def.get("output_artifact", step_name)): str(output)},
-            status_code="await_agent",
-            agent_invoked=True,
-        )
-
-    return execute, calls
+        return "await_agent", TokenUsage(), [], [], [], None
 
 
 def _generic_runtime_executor(
@@ -183,8 +241,17 @@ def run_legacy_runtime_process(
     playbook = PlaybookLoader(
         project_root=repo, global_root=global_root, builtin_root=builtin_root
     ).load("legacy-contract")
-    execute, calls = _legacy_runtime_executor(issue_dir)
+    manager = _LegacyProductionAgent(repo, issue_dir)
+    execute, _executor = _generic_runtime_executor(
+        repo=repo,
+        issue_dir=issue_dir,
+        playbook=playbook,
+        builtin_root=builtin_root,
+        global_root=global_root,
+        agent_manager=manager,
+        role_agent_map={"operator": "legacy-consumer-agent"},
+    )
     result = BlackboardWorkflowRuntime(
         issue_dir=issue_dir, playbook=playbook, executor=execute
     ).run()
-    _runtime_result(result, calls=calls["count"])
+    _runtime_result(result, calls=manager.calls)

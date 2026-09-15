@@ -9,6 +9,7 @@ import pytest
 from cafe.core.todo import (
     TodoContractError,
     parse_todo_list,
+    parse_todo_identity_continuity,
     resolve_todo_source,
     validate_todo_identities,
     workflow_feedback_todo_items,
@@ -48,6 +49,29 @@ def test_todo_fingerprint_changes_when_any_closure_requirement_changes() -> None
     first = parse_todo_list("## Todo List\n" + _item())[0]
     changed = parse_todo_list("## Todo List\n" + _item("implement parser"))[0]
     assert first.fingerprint != changed.fingerprint
+
+
+def test_todo_identity_continuity_parses_explicit_prior_work_fingerprints() -> None:
+    content = (
+        "## Todo List\n"
+        + _item()
+        + "\n\n## Todo Identity Continuity\n"
+        "- `PLAN-001` — Previous work fingerprint: `"
+        + "a" * 64
+        + "`\n"
+    )
+
+    assert parse_todo_identity_continuity(content) == {"PLAN-001": "a" * 64}
+
+
+def test_todo_identity_continuity_rejects_duplicate_or_malformed_rows() -> None:
+    with pytest.raises(TodoContractError):
+        parse_todo_identity_continuity(
+            "## Todo List\n"
+            + _item()
+            + "\n\n## Todo Identity Continuity\n"
+            "- `PLAN-001` — Previous work fingerprint: `short`\n"
+        )
 
 
 def test_todo_parser_accepts_only_the_canonical_intentionally_empty_marker() -> None:

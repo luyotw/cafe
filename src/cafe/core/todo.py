@@ -14,6 +14,10 @@ MAX_TODO_ITEMS = 100
 _HEADING = re.compile(r"^##\s+Todo List\s*$")
 _ANY_HEADING = re.compile(r"^#{1,6}\s+")
 _INTENTIONALLY_EMPTY = "No actionable work."
+_IDENTITY_HEADING = re.compile(r"^##\s+Todo Identity Continuity\s*$")
+_IDENTITY_ITEM = re.compile(
+    r"^- `(?P<id>PLAN-\d{3})`\s+— Previous work fingerprint: `(?P<fingerprint>[0-9a-f]{64})`\s*$"
+)
 _ITEM = re.compile(
     r"^- \[(?P<checked>[ xX])\] `(?P<id>[A-Za-z][A-Za-z0-9_-]*)`\s+— "
     r"Source: `(?P<source>[a-z_]+)`\s+— Work: (?P<work>.+?)\s+— "
@@ -140,6 +144,36 @@ def parse_todo_list(
         if len(items) > MAX_TODO_ITEMS:
             raise TodoContractError(f"Todo List exceeds {MAX_TODO_ITEMS} items")
     return tuple(items)
+
+
+def parse_todo_identity_continuity(content: str) -> dict[str, str]:
+    """Parse optional explicit continuity proofs for revised PLAN work."""
+    lines = content.splitlines()
+    headings = [index for index, line in enumerate(lines) if _IDENTITY_HEADING.match(line.strip())]
+    if not headings:
+        return {}
+    if len(headings) != 1:
+        raise TodoContractError(
+            "artifact must contain at most one '## Todo Identity Continuity' section"
+        )
+    section: list[str] = []
+    for line in lines[headings[0] + 1 :]:
+        if _ANY_HEADING.match(line):
+            break
+        section.append(line)
+    meaningful = [line.strip() for line in section if line.strip()]
+    if not meaningful:
+        raise TodoContractError("Todo Identity Continuity must declare at least one proof")
+    proofs: dict[str, str] = {}
+    for line in meaningful:
+        match = _IDENTITY_ITEM.fullmatch(line)
+        if match is None:
+            raise TodoContractError("Todo Identity Continuity contains a malformed proof")
+        item_id = match.group("id")
+        if item_id in proofs:
+            raise TodoContractError(f"duplicate Todo identity continuity proof: {item_id}")
+        proofs[item_id] = match.group("fingerprint")
+    return proofs
 
 
 def validate_todo_identities(
