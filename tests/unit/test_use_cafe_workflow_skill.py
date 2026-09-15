@@ -117,10 +117,13 @@ def _read_skill_resource(path: str) -> str:
 
 
 def test_driver_defers_release_check_until_workflow_completion() -> None:
-    text = _read_skill_resource("SKILL.md")
+    skill = _read_skill_resource("SKILL.md")
+    running = _read_skill_resource("references/running_workflow.md")
+    normalized_running = " ".join(running.split())
 
-    assert "Driver must never execute `release-check` while a workflow is active" in text
-    assert "Defer any in-workflow request until the workflow is complete" in text
+    assert "references/running_workflow.md" in skill
+    assert "Driver must never execute `release-check` while a workflow is active" in running
+    assert "Defer an in-workflow request until the workflow is complete" in normalized_running
 
 
 def test_driver_projects_missing_confirmed_user_context_through_declared_inputs() -> None:
@@ -315,8 +318,12 @@ def test_driver_update_preflight_requires_a_user_decision_before_prepare() -> No
     normalized_kickoff = " ".join(kickoff.split())
     normalized_running = " ".join(running.split())
 
-    assert "user-owned runtime-update decision before invoking non-interactive `cafe prepare`" in skill
+    assert "references/project_global_skill_sync.md" in skill
     assert "## Driver-managed runtime-update decision" in reference
+    assert (
+        "Before a user-facing Driver invokes `cafe prepare --no-interactive`"
+        in normalized_reference
+    )
     assert "show the installed and latest versions" in normalized_reference
     assert "explicitly ask the user whether to update" in normalized_reference
     assert "Only explicit acceptance may apply the exact comparison token" in normalized_reference
@@ -867,8 +874,8 @@ def test_use_cafe_workflow_keeps_playbook_selection_issue_owned() -> None:
     normalized_strategic = " ".join(strategic.split())
     normalized_kickoff = " ".join(kickoff.split())
 
-    assert "Keep playbook selection issue-owned" in normalized_skill
-    assert "Never write or update a playbook default" in normalized_skill
+    assert "Select a playbook" in normalized_skill
+    assert "`references/playbook_selection.md`" in normalized_skill
     assert "are not playbook-selection sources" in normalized_selection
     assert (
         "legacy `settings.playbook`, top-level `playbook`, or `playbook_id`" in normalized_selection
@@ -916,8 +923,8 @@ def test_driver_selection_is_evidence_based_across_every_effective_candidate() -
     assert "closest rejected candidates" in normalized
     assert "speculative future work" in normalized
     assert "ask the user for an explicit decision" in normalized
-    assert "every effective candidate" in normalized_skill
-    assert "applicability" in normalized_skill
+    assert "Select a playbook" in normalized_skill
+    assert "`references/playbook_selection.md`" in normalized_skill
 
 
 def test_kickoff_contract_formatter_lists_all_phases_and_confirmation_owners(
@@ -2552,6 +2559,81 @@ def test_use_cafe_workflow_bounds_diagnosis_and_repairs_only_declarative_layers(
     assert "unconfirmed or transient failures" in normalized
 
 
+def test_bounded_diagnosis_cannot_bypass_user_owned_tasks_or_action_authority() -> None:
+    reference = _read_skill_resource("references/diagnosis_and_repair.md")
+    normalized = " ".join(reference.split())
+
+    assert "Reproduce read-only" in normalized
+    assert "no user-owned task is pending" in normalized
+    assert (
+        "existing explicit action-specific authority covers that exact diagnostic execution"
+        in normalized
+    )
+    assert "existing legal task, input, correction, or authorization path" in normalized
+    assert "explicit action-specific authority permits it" in normalized
+    assert "the user has been informed" not in normalized
+
+
+def test_inside_non_intervention_envelope_requires_passive_supervision() -> None:
+    skill = _read_skill_resource("SKILL.md")
+    supervision = _read_skill_resource("references/supervision_and_recovery.md")
+    normalized = " ".join(supervision.split())
+
+    assert "Supervise active work" in skill
+    assert "`references/supervision_and_recovery.md`" in skill
+    assert (
+        "Driver remains passive while every applicable condition is demonstrably true" in normalized
+    )
+    for forbidden in (
+        "invoke `cafe chat` to watch progress",
+        "inspect implementation code or diffs",
+        "run phase work",
+        "restart/resume/select a step",
+        "mutate tasks/artifacts/blackboard/baton/model/authority",
+        "add a review or confirmation gate",
+    ):
+        assert forbidden in normalized
+
+
+def test_phase_agent_retry_stays_user_owned_and_bounded() -> None:
+    supervision = _read_skill_resource("references/supervision_and_recovery.md")
+    normalized = " ".join(supervision.split())
+
+    assert (
+        "`agent-execution-interrupted` remains a user-owned recovery-choice HumanTask"
+        in normalized
+    )
+    assert "Present every declared recovery option and practical consequence" in normalized
+    assert "recommend a retry under the unchanged contract" in normalized
+    assert "Do not submit the choice for the user" in normalized
+    assert "There is no fixed retry count" in normalized
+    assert "a concrete reason to expect a different result" in normalized
+    assert "except a phase-agent recovery choice handled by priorities 6 and 8" in normalized
+    assert "The same phase-agent failure keeps returning" in normalized
+    assert "Read-only diagnosis: explain the current failure" in normalized
+    assert "Do not edit files, artifacts, tasks, baton, blackboard, or workflow state" in normalized
+    assert "do not run commands that change state" in normalized
+    assert "A materially different visible failure is a new incident" in normalized
+
+
+def test_recovery_inspection_and_callback_policy_are_mode_neutral() -> None:
+    supervision = _read_skill_resource("references/supervision_and_recovery.md")
+    running = _read_skill_resource("references/running_workflow.md")
+    normalized_supervision = " ".join(supervision.split())
+    normalized_running = " ".join(running.split())
+
+    assert (
+        "Existing CAFE status, task, handoff, process, and output surfaces"
+        in normalized_supervision
+    )
+    assert "do not require or create a failure fingerprint" in normalized_supervision
+    assert "Do not use a string-similarity threshold" in normalized_supervision
+    assert "The callback receives only an asynchronous durable-event notice" in normalized_running
+    assert "re-check `cafe status`/`cafe show`; a notice can be stale" in normalized_running
+    assert "cannot wait for, collect, infer, or choose a user answer" in normalized_running
+    assert "callbacks may use only already durable facts" in normalized_running
+
+
 def test_use_cafe_workflow_prefers_user_conversation_locale() -> None:
     skill = _read_skill_resource("SKILL.md")
     reference = _read_skill_resource("references/kickoff.md")
@@ -2585,7 +2667,7 @@ def test_use_cafe_workflow_defines_phase_scoped_proactive_driver_review() -> Non
     normalized = " ".join((skill + kickoff + running + handoffs).split())
 
     assert "Default every assignable scheduled confirmation gate" in normalized
-    assert "Phases without such a pause are ineligible" in normalized
+    assert "Normalize ineligible phases internally to `not_required`" in normalized
     assert "`proactive_review.phase_decisions` projection" in running
     assert "existing scheduled confirmation pause" in normalized
     assert "current Driver performs the review directly" in normalized
@@ -2853,7 +2935,7 @@ def test_proactive_review_consensus_uses_formal_correction_and_user_owned_confir
         "requirement or boundary",
         "concise evidence",
         "accept or rebut each finding",
-        "`cafe chat <role> -p`",
+        '`cafe chat <role> --phase <step> -p "<bounded findings batch>"`',
         "existing responsible phase-agent session",
         "Chat must not edit the current phase output",
         "chat response is discussion evidence, not workflow authority",
@@ -2905,7 +2987,7 @@ def test_proactive_review_derives_correction_routing_from_the_active_human_task(
         "requires feedback",
         "`correction: true`",
         "non-advancing correction continuation",
-        "zero or multiple eligible correction outcomes",
+        "zero or multiple eligible outcomes",
         "fail closed for user/playbook clarification",
         "regardless of outcome, phase, or target names",
     ):
@@ -3240,7 +3322,8 @@ def test_use_cafe_workflow_requires_confirmed_repository_content_locale() -> Non
     normalized_skill = " ".join(skill.split())
     normalized = " ".join(reference.split())
 
-    assert "repository content locale used by documentation and code comments" in normalized_skill
+    assert "Render, prepare, or reconfirm a kickoff" in normalized_skill
+    assert "`references/kickoff.md`" in normalized_skill
     assert "## Repository content locale checklist" in reference
     assert "Before `cafe init` or any other repository mutation" in normalized
     assert "explicitly ask the user to confirm `repository_content_locale`" in normalized
@@ -3266,13 +3349,13 @@ def test_use_cafe_workflow_defines_event_driven_mode_and_model_authority() -> No
     normalized_skill = " ".join(skill.split())
 
     assert "references/model_selection.md" in skill
-    assert "attached with positive polling" in normalized_skill
-    assert "event-driven" in skill
-    assert "fallback entry requires one explicit exact model" in normalized_skill
-    assert "cafe workflow --execute --mute-agent-output" in skill
+    assert "attached with a positive `poll_interval_seconds`" in normalized_kickoff
+    assert "event-driven" in normalized_kickoff
+    assert "Every later entry is a forward-only fallback with an exact model" in normalized_kickoff
+    assert "cafe workflow --execute --mute-agent-output" in running
     assert "scripts/validate_driver_entry.py" in running
     assert "does not inspect `issue.yaml`, phase chains, or capability choices" in running
-    assert "manual diagnostic `--single-step`" in normalized_skill
+    assert "Use `--single-step` only for manual, bounded diagnosis" in normalized_running
     assert "callbacks are best effort" in normalized_running
     assert "No ordinary operating mode uses it" in normalized_running
     assert "--on-workflow-event builtin:use-cafe-workflow:workflow_event_callback" in running
@@ -3280,7 +3363,7 @@ def test_use_cafe_workflow_defines_event_driven_mode_and_model_authority() -> No
     assert "`codex queue`" in running
     assert "--advancement" not in normalized_running
     assert "--delegated-availability" not in normalized_running
-    assert "persisted baton without forcing `--start-step`" in skill
+    assert "Resume the persisted baton" in normalized_running
     assert "Attached polling starts after the full confirmed interval" in normalized_running
     assert "exactly one operating mode" in normalized_kickoff
     assert "Do not put the mode, CLI, model, session" in normalized_kickoff
@@ -3326,7 +3409,8 @@ def test_use_cafe_workflow_keeps_human_task_completion_in_the_interactive_driver
     handoffs = _read_skill_resource("references/handoffs_and_alignment.md")
     normalized_running = " ".join(running.split())
 
-    assert "user-facing driver turn" in skill
+    assert "HumanTask" in skill
+    assert "`references/handoffs_and_alignment.md`" in skill
     assert "cafe task complete <task-id> --result '<json>' --no-resume --json" in running
     assert (
         "Direct `cafe task complete` users retain its normal automatic foreground-resume"
@@ -3346,8 +3430,8 @@ def test_use_cafe_workflow_makes_user_handoffs_self_contained() -> None:
     skill = _read_skill_resource("SKILL.md")
     handoffs = _read_skill_resource("references/handoffs_and_alignment.md")
 
-    assert "self-contained in conversation" in skill
-    assert "no terminal" in skill
+    assert "Handle a HumanTask" in skill
+    assert "`references/handoffs_and_alignment.md`" in skill
     assert "## Present a self-contained user decision" in handoffs
     assert "Render every current question in the conversation" in handoffs
     assert "Never ask the user to open `questions.xml`" in handoffs
@@ -3393,7 +3477,8 @@ def test_driver_can_propose_a_user_approved_bounded_direct_closeout() -> None:
     running = _read_skill_resource("references/running_workflow.md")
     normalized = " ".join(reference.split())
 
-    assert "user-approved bounded closeout route" in skill
+    assert "Consider direct closeout" in skill
+    assert "`references/completion_and_authority.md`" in skill
     assert "## Offer a bounded direct closeout instead of rerunning" in reference
     assert "the workflow is paused" in normalized
     assert "no phase agent, background worker, or callback is running" in normalized
@@ -3420,7 +3505,8 @@ def test_driver_proactively_guides_cafe_lifecycle_cleanup_in_plain_language() ->
     reference = _read_skill_resource("references/completion_and_authority.md")
     normalized = " ".join(reference.split())
 
-    assert "guiding applicable lifecycle cleanup" in skill
+    assert "handle follow-up work" in skill
+    assert "`references/completion_and_authority.md`" in skill
     assert "inspect the completed issue's remaining lifecycle state read-only" in normalized
     assert "actual mode-specific effects in the user's language" in normalized
     assert "must not need to know or name `cafe close`" in normalized
@@ -3435,7 +3521,8 @@ class TestPollingContract:
         kickoff = " ".join(_read_skill_resource("references/kickoff.md").split())
         running = " ".join(_read_skill_resource("references/running_workflow.md").split())
 
-        assert "In attached mode, honor the full positive poll cadence" in skill
+        assert "references/running_workflow.md" in skill
+        assert "Poll only at the confirmed positive interval" in running
         assert "there is no shorter startup or warm-up cadence" in kickoff
         assert "The first proactive inspection is due only after that full interval" in running
         assert "Continue a single deferred wait for the remaining interval instead" in running

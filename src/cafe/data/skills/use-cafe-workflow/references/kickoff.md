@@ -93,11 +93,11 @@ obtain explicit user confirmation of:
 - mandate preset, axes, levels, and out-of-mandate list;
 - issue nature, scale, and risk factors;
 - the effective proactive-review decision for every agent or hybrid phase with
-  an existing scheduled confirmation pause: assignable gates default to
-  `required` with `driver_confirmable`, mandatory gates default to `required`
-  while remaining user-owned, and direct user overrides take precedence;
-  ineligible phases are normalized internally to `not_required` and require no
-  kickoff choice;
+  an existing scheduled confirmation pause. Default every assignable scheduled
+  confirmation gate to `driver_confirmable` with proactive review `required`;
+  default mandatory gates to `required` while they remain user-owned, and let
+  direct user overrides take precedence. Normalize ineligible phases internally
+  to `not_required`; they require no kickoff choice;
 - the exact ordered CLI/model chain for every phase, containing one primary and
   zero or more explicitly confirmed fallbacks;
 - exactly one operating mode: attached with a positive `poll_interval_seconds`,
@@ -108,6 +108,11 @@ obtain explicit user confirmation of:
   user; there is no fixed fallback limit. Event-driven's ordered binding is a
   confirmed field of the sole Driver contract, never `driver/config.yaml`;
 - worktree choice and path when using a worktree.
+
+For a new workflow, use event-driven as the proposed default unless the user
+explicitly chooses another mode or an existing confirmed issue contract already
+fixes it. Render the proposed mode with the complete kickoff for confirmation;
+a default is not confirmation or execution authority.
 
 Resolve effective `steps.*.capability_requests` against the package-owned
 capability registry. Render each manifest's `setup_questions`: its prompt,
@@ -244,7 +249,7 @@ scheduled candidates. `manual_handoff` is routing, not a planned confirmation
 gate. Alignment is a proactive driver decision governed by mandate. Record the
 reactive policy in the kickoff:
 
-- `need_clarification`: `driver_confirmable` by default. The Driver may answer
+- Default `need_clarification` to bounded `driver_confirmable` handling. The Driver may answer
   only when the complete answer stays within the confirmed Delivery Contract,
   its existing authority or `allowed_variations`, and triggers no deviation;
   otherwise it remains user-owned;
@@ -284,7 +289,8 @@ permission or an external-effect approval from product scope. Always preserve:
 > integrations.
 
 Keep this contract specific about the result and flexible about how agents
-reach it. Treat only explicit user requirements, safety or permission
+reach it. Put reasonable technical choices in `allowed_variations`. Treat only
+explicit user requirements, safety or permission
 boundaries, external side effects, compatibility promises, and user-visible
 behavior as hard invariants. Put anticipated internal choices such as data
 shape, thresholds, retry details, helper structure, and equivalent technical
