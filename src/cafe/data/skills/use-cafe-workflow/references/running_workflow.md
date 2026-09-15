@@ -295,6 +295,18 @@ closed. The Driver must not truncate, split, or silently omit findings or
 evidence to fit a limit; retain the pause and obtain the applicable user-owned
 scope decision before a new full review can form a compliant batch.
 
+A host-tool yield with an execution handle and no output means the original
+`cafe chat` process is still running, not that it succeeded, failed, or failed
+to answer. Continue that exact process through the host tool's normal wait or
+continuation operation and count the 120 seconds cumulatively from the original
+start. Do not launch another `cafe chat` while the original process is live.
+Only a normally completed command with the agent's actual response can satisfy
+the consensus exchange. If the handle becomes unusable, the process exits
+without a usable response, or the cumulative limit expires, retain the workflow
+pause and classify the attempt as ambiguous. Verify that the original process
+has ended before the one safe retry allowed for an unconfirmed or transient
+failure; never infer or reconstruct the missing response.
+
 Findings, chat attempts, disagreements, and rebuttals do not create an
 iteration. Independently verify a rebuttal against the same unchanged artifact.
 An accepted finding without a durable correction remains blocking. If the

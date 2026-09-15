@@ -2934,6 +2934,22 @@ def test_proactive_review_execution_limits_are_driver_policy_only() -> None:
     assert "ordinary user-initiated chat behavior remains unchanged" in normalized
 
 
+def test_proactive_review_chat_continues_the_same_live_execution() -> None:
+    skill = _read_skill_resource("SKILL.md")
+    running = _read_skill_resource("references/running_workflow.md")
+    normalized = " ".join((skill + running).split()).lower()
+
+    for required in (
+        "continue that exact process through the host tool's normal wait or continuation operation",
+        "do not launch another `cafe chat` while the original process is live",
+        "count the 120 seconds cumulatively from the original start",
+        "only a normally completed command with the agent's actual response",
+        "verify that the original process has ended before the one safe retry",
+        "never infer or reconstruct the missing response",
+    ):
+        assert required in normalized
+
+
 def test_proactive_review_authority_precedence_has_no_blanket_callback_or_route_bypass() -> None:
     running = _read_skill_resource("references/running_workflow.md")
     handoffs = _read_skill_resource("references/handoffs_and_alignment.md")
