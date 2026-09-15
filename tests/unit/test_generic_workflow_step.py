@@ -6748,6 +6748,82 @@ def test_plan_identity_input_fails_closed_on_malformed_prior_authority(tmp_path:
         )
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("name", "different-plan", "name"),
+        ("kind", "workspace", "kind"),
+        ("version", 99, "version"),
+        ("updated_by", "review", "owner"),
+        ("path", "other/output.md", "path"),
+        ("content_sha256", "0" * 64, "content digest"),
+        ("todo_work_identities", {"0" * 64: "PLAN-002"}, "identity metadata"),
+    ],
+)
+def test_plan_identity_input_rejects_contradictory_populated_record_fields(
+    tmp_path: Path,
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.generic_phase = GenericPhase(SkillLoader())
+    executor.phase_dir = tmp_path / "issue" / "plan"
+    executor.iteration = 2
+    old_output = executor.phase_dir / "iteration_001" / "output.md"
+    old_output.parent.mkdir(parents=True)
+    old_output.write_text(
+        "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: build parser — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+    old_record = ArtifactEntry(
+        name="plan",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="plan",
+        path=str(old_output),
+        content_sha256=hashlib.sha256(old_output.read_bytes()).hexdigest(),
+    )
+    record_data = {
+        key: item for key, item in old_record.to_dict().items() if item is not None
+    }
+    record_data[field] = value
+    (old_output.parent / "artifact.json").write_text(
+        json.dumps(record_data), encoding="utf-8"
+    )
+    original_record_data = dict(record_data)
+    state = BlackboardStore(tmp_path / "issue").load_or_create("plan")
+    spec_output = tmp_path / "issue" / "spec" / "iteration_001" / "output.md"
+    spec_output.parent.mkdir(parents=True)
+    spec_output.write_text("requirements\n", encoding="utf-8")
+    state.artifacts["spec"] = ArtifactEntry(
+        name="spec",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="spec",
+        path=str(spec_output),
+    )
+    state.artifacts["plan"] = old_record
+
+    with pytest.raises(ValueError, match=message):
+        executor._build_context(
+            step_name="plan",
+            step_def={
+                "skill": "cafe-plan",
+                "role": "developer",
+                "input_artifacts": ["spec", "plan"],
+                "output_artifact": "plan",
+                "todo_identity_input_artifact": "plan",
+            },
+            blackboard_state=state,
+            agent_name="David",
+            output_file=executor.phase_dir / "iteration_002" / "output.md",
+        )
+    persisted = json.loads((old_output.parent / "artifact.json").read_text(encoding="utf-8"))
+    assert persisted == original_record_data
+
+
 def test_plan_publication_fails_closed_when_prior_authority_is_unreadable(
     tmp_path: Path,
 ) -> None:

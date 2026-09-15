@@ -1929,7 +1929,8 @@ class GenericWorkflowStepExecutor(Phase):
             return
         prior_path = Path(str(getattr(prior, "path", prior)))
         try:
-            content = prior_path.read_text(encoding="utf-8")
+            prior_bytes = prior_path.read_bytes()
+            content = prior_bytes.decode("utf-8")
             prior_items = parse_todo_list(content)
         except (OSError, UnicodeError, TodoContractError) as exc:
             raise ValueError(
@@ -1945,12 +1946,48 @@ class GenericWorkflowStepExecutor(Phase):
             plan_work_fingerprint(item.work): item.item_id
             for item in prior_items
         }
+        expected_todo = {
+            item.item_id: hashlib.sha256(
+                "\x1f".join(
+                    (item.source, item.item_id, " ".join(item.work.split()))
+                ).encode("utf-8")
+            ).hexdigest()
+            for item in prior_items
+        }
+        actual_content_sha256 = hashlib.sha256(prior_bytes).hexdigest()
+
+        def normalized_mapping(value: Any, *, field: str) -> Optional[dict[str, str]]:
+            if value is None:
+                return None
+            if not isinstance(value, dict):
+                raise ValueError(
+                    f"prior plan Todo authority {artifact_name!r} has malformed "
+                    f"{field} identity metadata; restore artifact.json before continuing"
+                )
+            return {str(key): str(item) for key, item in value.items()}
+
+        persisted_content_sha256 = getattr(prior, "content_sha256", None)
+        if (
+            persisted_content_sha256 is not None
+            and persisted_content_sha256 != actual_content_sha256
+        ):
+            raise ValueError(
+                f"prior plan Todo authority {artifact_name!r} has a contradictory "
+                "content digest; restore the authoritative prior plan before continuing"
+            )
         persisted = getattr(prior, "todo_work_identities", None)
-        persisted_map = (
-            {str(key): str(value) for key, value in persisted.items()}
-            if isinstance(persisted, dict)
-            else None
-        )
+        persisted_map = normalized_mapping(persisted, field="work")
+        persisted_todo = getattr(prior, "todo_identities", None)
+        persisted_todo_map = normalized_mapping(persisted_todo, field="Todo")
+        for candidate, expected_map in (
+            (persisted_map, expected),
+            (persisted_todo_map, expected_todo),
+        ):
+            if candidate is not None and candidate != expected_map:
+                raise ValueError(
+                    f"prior plan Todo authority {artifact_name!r} has contradictory "
+                    "identity metadata; restore the authoritative prior plan before continuing"
+                )
         record_path = prior_path.parent / "artifact.json"
         try:
             record = json.loads(record_path.read_text(encoding="utf-8"))
@@ -1964,6 +2001,25 @@ class GenericWorkflowStepExecutor(Phase):
                 f"prior plan Todo authority {artifact_name!r} has an invalid artifact record; "
                 "restore artifact.json before continuing"
             )
+
+        def require_record_field(field: str, expected_value: Any, label: str) -> None:
+            value = record.get(field)
+            if value is not None and value != expected_value:
+                raise ValueError(
+                    f"prior plan Todo authority {artifact_name!r} has a contradictory "
+                    f"artifact {label}; restore artifact.json before continuing"
+                )
+
+        require_record_field("name", getattr(prior, "name", artifact_name), "name")
+        prior_kind = getattr(prior, "kind", ArtifactKind.DOCUMENT)
+        require_record_field(
+            "kind",
+            prior_kind.value if isinstance(prior_kind, ArtifactKind) else str(prior_kind),
+            "kind",
+        )
+        require_record_field("version", getattr(prior, "version", None), "version")
+        require_record_field("updated_by", getattr(prior, "updated_by", None), "owner")
+        require_record_field("content_sha256", actual_content_sha256, "content digest")
         recorded_path = record.get("path")
         if recorded_path and Path(str(recorded_path)).resolve() != prior_path.resolve():
             raise ValueError(
@@ -1971,18 +2027,14 @@ class GenericWorkflowStepExecutor(Phase):
                 "restore artifact.json before continuing"
             )
         recorded = record.get("todo_work_identities")
-        recorded_map = (
-            {str(key): str(value) for key, value in recorded.items()}
-            if isinstance(recorded, dict)
-            else None
-        )
-        if recorded is not None and recorded_map is None:
-            raise ValueError(
-                f"prior plan Todo authority {artifact_name!r} has malformed identity metadata; "
-                "restore artifact.json before continuing"
-            )
-        for candidate in (persisted_map, recorded_map):
-            if candidate is not None and candidate != expected:
+        recorded_map = normalized_mapping(recorded, field="work")
+        recorded_todo = record.get("todo_identities")
+        recorded_todo_map = normalized_mapping(recorded_todo, field="Todo")
+        for candidate, expected_map in (
+            (recorded_map, expected),
+            (recorded_todo_map, expected_todo),
+        ):
+            if candidate is not None and candidate != expected_map:
                 raise ValueError(
                     f"prior plan Todo authority {artifact_name!r} has contradictory identity metadata; "
                     "restore the authoritative prior plan before continuing"
