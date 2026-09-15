@@ -19,7 +19,14 @@ capability, including its own confirmation and verified-result contract.
 Neither graph acquires additional steps when it reaches `done`. Closeout
 assistance remains separate from its terminal state.
 
+If process ownership or completion evidence is uncertain, return to the
+non-intervention envelope in `supervision_and_recovery.md`; do not infer a
+terminal state from liveness, filesystem progress, or agent prose.
+
 ## Offer a bounded direct closeout instead of rerunning
+
+This is a user-approved bounded direct-closeout route, not an ordinary Driver
+power.
 
 Before restarting or resuming workflow execution late in the work, check whether
 the deliverable is already substantially complete and the only remaining work is
@@ -73,8 +80,10 @@ resuming.
 ## Proactively assist with closeout
 
 Do this whenever the playbook completes; do not wait for the user to ask what
-comes next. Derive closeout from the actual deliverables, confirmed user goal,
-existing artifacts/receipts, and current instructions. Use bounded read-only
+comes next. Include guiding applicable lifecycle cleanup when it is relevant,
+without treating cleanup as pre-authorized. Derive closeout from the actual
+deliverables, confirmed user goal, existing artifacts/receipts, and current
+instructions. Use bounded read-only
 checks where needed; do not query unrelated services or apply a fixed shipping
 checklist to every playbook.
 

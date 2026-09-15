@@ -4,6 +4,10 @@ Read this reference after kickoff and whenever starting, resuming, inspecting,
 or retrying ordinary workflow work. Read `model_selection.md` before the first
 execution and whenever agent work remains.
 
+For active supervision, interruption classification, or recovery, read
+`supervision_and_recovery.md`. Its non-intervention envelope decides whether
+the Driver remains passive before the ordinary commands below are considered.
+
 Before every start or resume, follow `project_global_skill_sync.md`: validate
 the persisted runtime/catalog preflight against fresh read-only checks. A
 changed comparison token triggers the reference's bounded semantic comparison,
@@ -15,6 +19,10 @@ the reminder script runs only while rendering a complete new or stale kickoff
 contract. Reconfirm kickoff only for a material difference found by the semantic
 comparison. Verified metadata-only churn may continue, while uncertain
 differences fail closed.
+
+The Driver must never execute `release-check` while a workflow is active. Defer
+an in-workflow request until the workflow is complete; the user may run it
+before release.
 
 For Driver-managed preparation, resolve the user-facing runtime-update decision
 from `project_global_skill_sync.md` before invoking `cafe prepare
@@ -97,6 +105,13 @@ the event and all attempts for existing explicit recovery; it does not roll
 back completed phase work or block normal phase advancement. A cross-provider
 takeover is transport-local and does not merge conversations or promise that
 the initiating conversation continues elsewhere.
+
+Historical callback attempts retain their recorded session IDs and do not pin
+the current primary binding. Only during an explicitly authorized repair of a
+confirmed misrouted callback, preserve every event and attempt record and update
+only the current primary entry's session binding. This is a repair constraint,
+not a public rebind command or general permission to edit dispatch state; when
+no existing legal repair path applies, retain the pause.
 
 Inspect this state without acquiring a callback lock or modifying any driver
 file:
@@ -302,7 +317,8 @@ environment mechanism.
 The Driver must complete all applicable review passes before producing one
 bounded findings batch. It names the reviewed phase and role, the exact current artifact
 identity, every observable blocker, its requirement or boundary, and concise
-evidence. Deliver that one batch through `cafe chat <role> -p` to the existing
+evidence. Deliver that one batch through
+`cafe chat <role> --phase <step> -p "<bounded findings batch>"` to the existing
 responsible phase-agent session. Ask the agent to accept or rebut each finding.
 Chat must not edit the current phase output: the prompt is discussion only,
 and the chat response is discussion evidence, not workflow authority.
