@@ -45,6 +45,25 @@ def test_todo_parser_rejects_malformed_or_ambiguous_authoritative_work(content: 
         parse_todo_list(content)
 
 
+def test_todo_parser_reports_the_malformed_section_line() -> None:
+    content = "## Todo List\n" + _item() + "\nTrailing prose is not a Todo row.\n"
+
+    with pytest.raises(TodoContractError, match=r"malformed item at line 3"):
+        parse_todo_list(content)
+
+
+def test_todo_parser_stops_the_section_at_a_new_heading() -> None:
+    content = (
+        "## Todo List\n"
+        + _item()
+        + "\n\n## Implementation Notes\nTrailing prose belongs to the notes.\n"
+    )
+
+    items = parse_todo_list(content)
+
+    assert [item.item_id for item in items] == ["PLAN-001"]
+
+
 def test_todo_fingerprint_changes_when_any_closure_requirement_changes() -> None:
     first = parse_todo_list("## Todo List\n" + _item())[0]
     changed = parse_todo_list("## Todo List\n" + _item("implement parser"))[0]

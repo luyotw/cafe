@@ -3626,6 +3626,143 @@ def _write_plan_prereq_artifacts(issue_dir: Path) -> None:
     (spec_dir / "iteration.json").write_text('{"iteration": 1}', encoding="utf-8")
 
 
+def _write_plan_confirmation_baton(issue_dir: Path) -> None:
+    (issue_dir / "next_step.txt").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "from_step": "plan",
+                "to_owner": "user",
+                "to_step": "user",
+                "intent": "confirm_output",
+                "status_code": "ready_for_review",
+                "source": "agent",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _plan_todo_output(*, trailing_prose: bool) -> str:
+    content = (
+        "# Plan\n\n"
+        "## Todo List\n"
+        "- [ ] `PLAN-001` — Source: `plan` — Work: implement parser — "
+        "Closure: tests pass — Evidence: targeted pytest\n"
+    )
+    if trailing_prose:
+        return content + "This trailing prose is malformed.\n"
+    return content + "\n## Implementation Notes\nThis prose is outside the Todo section.\n"
+
+
+def test_plan_malformed_todo_retries_before_confirming(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-plan-todo-retry"
+    _write_plan_prereq_artifacts(issue_dir)
+    playbook = _plan_step_playbook()
+    state = BlackboardStore(issue_dir).load_or_create("plan")
+    iteration_dir = issue_dir / "plan" / "iteration_001"
+
+    manager: FakeAgentManager
+
+    def write_plan_attempt(**_kwargs: object) -> None:
+        iteration_dir.mkdir(parents=True, exist_ok=True)
+        (iteration_dir / "checklist.md").write_text("[x] completed\n", encoding="utf-8")
+        (iteration_dir / "output.md").write_text(
+            _plan_todo_output(trailing_prose=manager.execute_call_count == 1),
+            encoding="utf-8",
+        )
+        _write_plan_confirmation_baton(issue_dir)
+
+    manager = FakeAgentManager(
+        ["ready_for_review", "ready_for_review"],
+        on_execute=write_plan_attempt,
+    )
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-plan-todo-retry",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+        interactive=False,
+    )
+
+    result = executor.execute_step("plan", playbook["steps"]["plan"], state)
+
+    assert manager.execute_call_count == 2
+    assert result.artifact_ready is True
+    assert set(result.artifacts) == {"plan"}
+    assert not any(event["type"] == "checklist_validation_failed" for event in result.events)
+    assert "malformed item at line 5" in manager.prompts[1]
+    assert "## Implementation Notes" in (iteration_dir / "output.md").read_text(
+        encoding="utf-8"
+    )
+    reloaded = BlackboardStore(issue_dir).load_or_create("plan")
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.to_owner == HandoffOwner.USER
+    assert reloaded.handoff_contract.intent == HandoffIntent.CONFIRM_OUTPUT
+
+
+def test_plan_malformed_todo_exhaustion_resets_confirmation_baton(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-plan-todo-invalid"
+    _write_plan_prereq_artifacts(issue_dir)
+    playbook = _plan_step_playbook()
+    state = BlackboardStore(issue_dir).load_or_create("plan")
+    iteration_dir = issue_dir / "plan" / "iteration_001"
+
+    def write_invalid_plan(**_kwargs: object) -> None:
+        iteration_dir.mkdir(parents=True, exist_ok=True)
+        (iteration_dir / "checklist.md").write_text("[x] completed\n", encoding="utf-8")
+        (iteration_dir / "output.md").write_text(
+            _plan_todo_output(trailing_prose=True),
+            encoding="utf-8",
+        )
+        _write_plan_confirmation_baton(issue_dir)
+
+    manager = FakeAgentManager(
+        ["ready_for_review"] * 4,
+        on_execute=write_invalid_plan,
+    )
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-plan-todo-invalid",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+        interactive=False,
+    )
+
+    result = executor.execute_step("plan", playbook["steps"]["plan"], state)
+
+    assert manager.execute_call_count == 4
+    assert result.artifact_ready is False
+    assert result.artifacts == {}
+    assert any(event["type"] == "checklist_validation_failed" for event in result.events)
+    baton = json.loads((issue_dir / "next_step.txt").read_text(encoding="utf-8"))
+    assert baton == {
+        "version": 1,
+        "to_owner": "agent",
+        "to_step": "plan",
+        "intent": "await_agent",
+    }
+    reloaded = BlackboardStore(issue_dir).load_or_create("plan")
+    assert reloaded.handoff_contract is not None
+    assert reloaded.handoff_contract.to_owner == HandoffOwner.AGENT
+    assert reloaded.handoff_contract.to_step == "plan"
+    assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
+    assert reloaded.handoff_contract.status_code == "CHECKLIST_VALIDATION_FAILED"
+    assert reloaded.handoff_contract.source == "workflow.completion_validation"
+
+
 def test_plan_non_interactive_ready_for_review_hands_off_to_user(
     tmp_path: Path, monkeypatch
 ) -> None:

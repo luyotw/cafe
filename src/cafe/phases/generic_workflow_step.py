@@ -631,10 +631,30 @@ class GenericWorkflowStepExecutor(Phase):
             )
         outbound_validation_required = initial_outbound_validation[2]
         checklist_validation_failed = False
+        produced_todo_validation_failed = False
         if agent_was_invoked and (
             checklist_validation_required or outbound_validation_required
         ):
             resolved_user_input = self._get_resolved_iteration_user_input(step_name)
+
+            def validate_output_contract(
+                current_response: str,
+                current_status: Optional[PhaseStatusCode],
+            ) -> tuple[bool, str]:
+                todo_passed, todo_detail = self._validate_produced_todo_output(
+                    output_file
+                )
+                if not todo_passed:
+                    return False, todo_detail
+                return self._validate_outbound_causal_todo(
+                    step_name=step_name,
+                    step_def=step_def,
+                    blackboard_state=blackboard_state,
+                    output_file=output_file,
+                    response=current_response,
+                    status_code=current_status,
+                    auto_continue=auto_continue,
+                )[:2]
 
             def validate_completion():
                 return self._validate_and_retry_checklist_completion(
@@ -647,17 +667,7 @@ class GenericWorkflowStepExecutor(Phase):
                     completion_response=response,
                     completion_status=status_code,
                     validate_checklist_completion=checklist_validation_required,
-                    additional_validation=lambda current_response, current_status: (
-                        self._validate_outbound_causal_todo(
-                            step_name=step_name,
-                            step_def=step_def,
-                            blackboard_state=blackboard_state,
-                            output_file=output_file,
-                            response=current_response,
-                            status_code=current_status,
-                            auto_continue=auto_continue,
-                        )[:2]
-                    ),
+                    additional_validation=validate_output_contract,
                 )
 
             response, validated_status, validation_passed = (
@@ -672,6 +682,22 @@ class GenericWorkflowStepExecutor(Phase):
             if validation_passed and validated_status is not None:
                 status_code = validated_status
             checklist_validation_failed = not validation_passed
+            if checklist_validation_failed:
+                produced_todo_validation_failed = not self._validate_produced_todo_output(
+                    output_file
+                )[0]
+
+        store = BlackboardStore(self.issue_dir)
+        if produced_todo_validation_failed and not is_hybrid_portion:
+            store.update_handoff_contract(
+                blackboard_state,
+                from_step=step_name,
+                to_owner=HandoffOwner.AGENT,
+                to_step=step_name,
+                intent=HandoffIntent.AWAIT_AGENT,
+                status_code="CHECKLIST_VALIDATION_FAILED",
+                source="workflow.completion_validation",
+            )
 
         output_key = str(step_def.get("output_artifact", step_name))
         artifacts: Dict[str, str] = {}
@@ -724,7 +750,6 @@ class GenericWorkflowStepExecutor(Phase):
                     "iteration": self.iteration,
                 }
             )
-        store = BlackboardStore(self.issue_dir)
         for event in events:
             if event.get("type") != "script_hook":
                 continue
@@ -752,7 +777,11 @@ class GenericWorkflowStepExecutor(Phase):
             if captured:
                 captured_hybrid_baton = captured
 
-        if status_code is not None and not is_hybrid_portion:
+        if (
+            status_code is not None
+            and not is_hybrid_portion
+            and not produced_todo_validation_failed
+        ):
             # If the agent already wrote a valid baton (next_step.txt),
             # skip the status-code-driven baton write so we don't overwrite
             # the agent's explicit handoff.  This is the baton-first path.
@@ -2850,7 +2879,9 @@ class GenericWorkflowStepExecutor(Phase):
                 todo_items = parse_todo_list(content)
                 continuity_proofs = parse_todo_identity_continuity(content)
             except TodoContractError as exc:
-                raise ValueError(f"artifact {output_key!r} has an invalid Todo List") from exc
+                raise ValueError(
+                    f"artifact {output_key!r} has an invalid Todo List: {exc}"
+                ) from exc
             plan_items = [item for item in todo_items if item.source == "plan"]
             if plan_items:
                 todo_identities = {
@@ -3082,6 +3113,28 @@ class GenericWorkflowStepExecutor(Phase):
                 True,
             )
         return True, "", True
+
+    @staticmethod
+    def _validate_produced_todo_output(output_file: Path) -> tuple[bool, str]:
+        """Validate a produced Todo section before accepting its completion baton."""
+        if not output_file.exists():
+            return True, ""
+        try:
+            content = output_file.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            return False, f"The phase output is unreadable: {exc}."
+        if "## Todo List" not in content:
+            return True, ""
+        try:
+            parse_todo_list(content)
+        except TodoContractError as exc:
+            return (
+                False,
+                f"The phase output has an invalid Todo List: {exc}. "
+                "Use canonical rows with Source, Work, Closure, and Evidence fields, or "
+                "the exact marker 'No actionable work.'.",
+            )
+        return True, ""
 
     def _output_requires_contract_validation(
         self,

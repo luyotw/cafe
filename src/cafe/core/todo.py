@@ -116,12 +116,14 @@ def parse_todo_list(
         return ()
     if not meaningful:
         raise TodoContractError("Todo List must declare that it has no actionable work")
-    for line in section:
+    for line_number, line in enumerate(section, start=start + 1):
         if not line.strip():
             continue
         match = _ITEM.fullmatch(line)
         if match is None:
-            raise TodoContractError("Todo List contains a malformed item")
+            raise TodoContractError(
+                f"Todo List contains a malformed item at line {line_number}"
+            )
         source = match.group("source")
         if expected_source is not None and source != expected_source:
             raise TodoContractError(
