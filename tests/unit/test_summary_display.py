@@ -563,8 +563,10 @@ class TestRenderModelSummaryTable:
 
         output = capsys.readouterr().out
         assert "spec - codex - gpt-test" in output
+        assert "  Iterations:    2" in output
         assert "  Input Tokens:  300" in output
         assert "spec - codex - gpt-other" in output
+        assert output.count("  Iterations:    1") == 3
         assert "  Input Tokens:  400" in output
         assert "spec - claude - gpt-test" in output
         assert "  Input Tokens:  500" in output

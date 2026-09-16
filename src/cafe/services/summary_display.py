@@ -284,6 +284,7 @@ class SummaryDisplay:
             # Print simple text table
             for stats in aggregated.values():
                 print(f"\n{stats['phase']} - {stats['cli']} - {stats['model']}")
+                print(f"  Iterations:    {stats['iterations']}")
                 print(f"  Input Tokens:  {self.format_token_count(stats['input_tokens'])}")
                 print(f"  Output Tokens: {self.format_token_count(stats['output_tokens'])}")
                 print(f"  Cache Write:   {self.format_token_count(stats['cache_write_tokens'])}")
@@ -307,6 +308,7 @@ class SummaryDisplay:
         table.add_column("Phase", style="yellow")
         table.add_column("CLI", style="green")
         table.add_column("Model", style="blue")
+        table.add_column("Iterations", style="cyan", justify="right")
         table.add_column("Input Tokens", style="cyan", justify="right")
         table.add_column("Output Tokens", style="cyan", justify="right")
         table.add_column("Cache Write", style="cyan", justify="right")
@@ -320,6 +322,7 @@ class SummaryDisplay:
                 stats["phase"],
                 stats["cli"],
                 stats["model"],
+                str(stats["iterations"]),
                 self.format_token_count(stats["input_tokens"]),
                 self.format_token_count(stats["output_tokens"]),
                 self.format_token_count(stats["cache_write_tokens"]),
@@ -346,6 +349,7 @@ class SummaryDisplay:
                     "phase": phase,
                     "cli": entry.cli,
                     "model": entry.model,
+                    "iterations": 0,
                     "input_tokens": 0,
                     "output_tokens": 0,
                     "cache_write_tokens": 0,
@@ -355,6 +359,7 @@ class SummaryDisplay:
                 }
 
             stats = aggregated[key]
+            stats["iterations"] += 1
             stats["input_tokens"] += entry.input_tokens or 0
             stats["output_tokens"] += entry.output_tokens or 0
             stats["cache_write_tokens"] += entry.cache_write_tokens or 0
