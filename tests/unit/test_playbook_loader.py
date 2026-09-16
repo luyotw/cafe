@@ -820,6 +820,7 @@ steps:
     "playbook_id",
     [
         "direct",
+        "direct-agent-review",
         "direct-qa",
         "simple",
         "standard",
@@ -1365,7 +1366,7 @@ def test_builtin_entry_steps_use_declared_initial_input_resolver(
 
 @pytest.mark.parametrize(
     ("playbook_name", "bound_artifact"),
-    [("direct", None), ("direct-qa", None)],
+    [("direct", None), ("direct-agent-review", None), ("direct-qa", None)],
 )
 def test_builtin_direct_entry_steps_bind_initial_input_to_prompt_context(
     playbook_name: str, bound_artifact: str | None, tmp_path: Path
@@ -2109,6 +2110,7 @@ def test_builtin_playbooks_declare_en_us_conversation_locale(
 
     for playbook_id in (
         "direct",
+        "direct-agent-review",
         "direct-qa",
         "simple",
         "standard",
@@ -2238,6 +2240,7 @@ def test_builtin_user_handoffs_resolve_nonempty_declared_policies(
 
     for playbook_id in (
         "direct",
+        "direct-agent-review",
         "direct-qa",
         "simple",
         "standard",

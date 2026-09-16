@@ -1,0 +1,121 @@
+playbook:
+  id: direct-agent-review
+  name: "Direct Development with Agent Review"
+  conversation_locale: en-US
+  applicability:
+    summary: "Focused implementation with concurrent detail and scope subagent review before PR."
+    use_when:
+      - "The requested behavior and implementation boundary are already confirmed."
+      - "Two focused in-phase reviews are sufficient for the acceptance risk."
+    avoid_when:
+      - "Requirements or solution design still need dedicated specification or planning."
+      - "Acceptance requires an independent QA phase."
+
+behavior:
+  completion: status_code
+
+skills:
+  workflow:
+    shared: [cafe-workflow-common, cafe-github_sync]
+  chat:
+    shared: [cafe-common-chat-handoff, cafe-chat-develop-change, cafe-chat-spec-revision, cafe-chat-plan-revision, cafe-chat-alignment-decision]
+
+roles:
+  developer:
+    description: "Developer"
+    default_agent: "David"
+    default_cli: "claude"
+
+commands:
+  prepare:
+    fields:
+      - id: input_method
+        type: enum
+        label: "Input method"
+        help: "Choose how the direct-development requirements are provided."
+        write: develop.input_method
+        default: manual
+        required: true
+        show_when:
+          github_repo: true
+        choices:
+          - value: manual
+            label: "Manual input"
+          - value: github
+            label: "GitHub issue"
+      - id: github_issue_id
+        type: text
+        label: "GitHub issue ID or URL"
+        write: develop.issue_id
+        normalize: github_issue
+        show_when:
+          issue_id_present: true
+
+steps:
+  develop:
+    type: skill
+    skill: cafe-develop_agent_review
+    role: developer
+    assignee_type: agent
+    input_artifacts: [pr_result, workflow_feedback]
+    output_artifact: code
+    workspace_artifact: workspace
+    initial_input:
+      providers: [manual_text, github_issue]
+      bind:
+        prompt_context: user_input
+    human_tasks:
+      - trigger: need_clarification
+        task_id: clarification-feedback
+        outcomes: {submit: develop}
+      - trigger: need_permission
+        task_id: permission-answers
+        outcomes: {submit: develop}
+      - trigger: no_changes_needed
+        task_id: no-change-decision
+        outcomes: {agree: develop, disagree: develop}
+    allowed_tools: [Read, Edit, Write, Grep, Glob, Bash, Agent, WebFetch, WebSearch]
+    hooks:
+      prepare_input: [InitialInputProviderResolver, UserInputCollector]
+      after_execute: [NoChangesNeededHandler, PermissionRetryHandler]
+    "on":
+      await_agent: pr
+      manual_handoff: develop
+      need_clarification: develop
+      need_permission: develop
+      no_changes_needed: develop
+
+  pr:
+    type: skill
+    skill: cafe-pr
+    role: developer
+    assignee_type: agent
+    input_artifacts: [code, workspace, workflow_feedback]
+    workspace_input_artifact: workspace
+    output_artifact: pr_result
+    behavior:
+      completion: baton
+      publish_confirmation: true
+      feedback_target: pr
+      feedback_artifact: workflow_feedback
+      feedback_source_kind: github_pr
+      feedback_todo_source: pr_comment
+      feedback_todo_id_prefix: PRC
+      context_providers: [git_history, local_review]
+    capability_requests: [cafe.pr.publish]
+    allowed_tools: [Read, Edit, Write, Grep, Glob]
+    allowed_goto: [develop]
+    hooks:
+      prepare_input: [GitHubPRCreator, GitHubPRFeedbackSource, UserInputCollector]
+      publish_output: [GitHubPRCreator, LocalReviewContextProvider, PRLinkOpener]
+    human_tasks:
+      - trigger: confirm_output
+        task_id: local-review
+        outcomes: {fix_now: pr, create_follow_up: _done, continue_without_issue: _done}
+        feedback_delivery: {artifact: workflow_feedback, source_kind: local_review, todo_source: workflow_feedback, todo_id_prefix: WF}
+    "on":
+      confirm_output: pr
+      need_permission: pr
+      manual_handoff: develop
+
+entry_point: develop

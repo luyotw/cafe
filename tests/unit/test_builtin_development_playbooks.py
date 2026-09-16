@@ -14,6 +14,7 @@ pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
 DEVELOPMENT_PLAYBOOKS = {
     "direct",
+    "direct-agent-review",
     "direct-qa",
     "simple",
     "standard",
@@ -207,6 +208,41 @@ def test_direct_is_the_reviewed_no_spec_no_plan_path() -> None:
     assert playbook.steps["review"].max_attempts_per_cycle == 5
 
 
+def test_direct_agent_review_uses_two_in_phase_reviewers_before_pr() -> None:
+    playbook = PlaybookLoader().load_model("direct-agent-review", strict=True).model
+
+    assert playbook.entry_point == "develop"
+    assert list(playbook.steps) == ["develop", "pr"]
+    develop = playbook.steps["develop"]
+    assert develop.skill == "cafe-develop_agent_review"
+    assert "Agent" in develop.allowed_tools
+    assert develop.on["await_agent"] == "pr"
+    assert develop.on["no_changes_needed"] == "develop"
+    no_change = next(task for task in develop.human_tasks if task.trigger == "no_changes_needed")
+    assert no_change.outcomes == {"agree": "develop", "disagree": "develop"}
+
+    skill = (
+        Path(__file__).parents[2]
+        / "src/cafe/data/skills/cafe-develop_agent_review/SKILL.md"
+    ).read_text(encoding="utf-8")
+    assert "剛好兩個原生 subagent" in skill
+    assert "`detail`" in skill
+    assert "`scope`" in skill
+    assert "重新並行啟動" in skill
+    assert "都明確回報 no blocking issues" in skill
+
+    references = (
+        Path(__file__).parents[2]
+        / "src/cafe/data/skills/cafe-develop_agent_review/references"
+    )
+    for name in ("execution_steps_normal.md", "execution_steps_correction.md"):
+        checklist = (references / name).read_text(encoding="utf-8")
+        assert "Launch exactly two native subagents" in checklist
+        assert "reports no blocking issues from both `detail` and `scope`" in checklist
+    correction = (references / "execution_steps_correction.md").read_text(encoding="utf-8")
+    assert "`review`:" not in correction
+
+
 def test_standard_owns_the_established_full_development_graph() -> None:
     playbook = PlaybookLoader().load_model("standard", strict=True).model
 
@@ -318,7 +354,17 @@ def test_existing_hotfix_and_tdd_paths_remain_unchanged() -> None:
 
 @pytest.mark.parametrize(
     "playbook_id",
-    ["standard", "standard-qa", "direct", "direct-qa", "hotfix", "simple", "tdd", "tdd-qa"],
+    [
+        "standard",
+        "standard-qa",
+        "direct",
+        "direct-agent-review",
+        "direct-qa",
+        "hotfix",
+        "simple",
+        "tdd",
+        "tdd-qa",
+    ],
 )
 def test_builtin_pr_feedback_routes_declare_portable_todo_metadata(
     playbook_id: str,
@@ -339,7 +385,17 @@ def test_builtin_pr_feedback_routes_declare_portable_todo_metadata(
 
 @pytest.mark.parametrize(
     "playbook_id",
-    ["standard", "standard-qa", "direct", "direct-qa", "hotfix", "simple", "tdd", "tdd-qa"],
+    [
+        "standard",
+        "standard-qa",
+        "direct",
+        "direct-agent-review",
+        "direct-qa",
+        "hotfix",
+        "simple",
+        "tdd",
+        "tdd-qa",
+    ],
 )
 def test_builtin_develop_publishes_workspace_and_consumers_declare_it(
     playbook_id: str,
