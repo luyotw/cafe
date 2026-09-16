@@ -490,6 +490,87 @@ class TestRenderModelSummaryTable:
         # Should aggregate: 150000 input, 1500 output, 75000 cache_read
         display.render_model_summary_table(entries)
 
+    def test_render_model_summary_table_aggregates_by_phase_cli_and_model(
+        self, capsys, monkeypatch
+    ):
+        """Keep phases separate and split a phase when CLI or model differs."""
+        monkeypatch.setattr("cafe.services.summary_display.RICH_AVAILABLE", False)
+        display = SummaryDisplay()
+        entries = [
+            TimelineEntry(
+                entry_type="iteration",
+                name="Spec 1",
+                phase="spec",
+                start_time=datetime(2026, 1, 31, 10, 0, tzinfo=timezone.utc),
+                end_time=datetime(2026, 1, 31, 10, 5, tzinfo=timezone.utc),
+                status=PhaseStatus.COMPLETED,
+                iteration=1,
+                cli="codex",
+                model="gpt-test",
+                input_tokens=100,
+            ),
+            TimelineEntry(
+                entry_type="iteration",
+                name="Spec 2",
+                phase="spec",
+                start_time=datetime(2026, 1, 31, 10, 5, tzinfo=timezone.utc),
+                end_time=datetime(2026, 1, 31, 10, 10, tzinfo=timezone.utc),
+                status=PhaseStatus.COMPLETED,
+                iteration=2,
+                cli="codex",
+                model="gpt-test",
+                input_tokens=200,
+            ),
+            TimelineEntry(
+                entry_type="iteration",
+                name="Spec 3",
+                phase="spec",
+                start_time=datetime(2026, 1, 31, 10, 10, tzinfo=timezone.utc),
+                end_time=datetime(2026, 1, 31, 10, 15, tzinfo=timezone.utc),
+                status=PhaseStatus.COMPLETED,
+                iteration=3,
+                cli="codex",
+                model="gpt-other",
+                input_tokens=400,
+            ),
+            TimelineEntry(
+                entry_type="iteration",
+                name="Spec 4",
+                phase="spec",
+                start_time=datetime(2026, 1, 31, 10, 15, tzinfo=timezone.utc),
+                end_time=datetime(2026, 1, 31, 10, 20, tzinfo=timezone.utc),
+                status=PhaseStatus.COMPLETED,
+                iteration=4,
+                cli="claude",
+                model="gpt-test",
+                input_tokens=500,
+            ),
+            TimelineEntry(
+                entry_type="iteration",
+                name="Plan 1",
+                phase="plan",
+                start_time=datetime(2026, 1, 31, 10, 20, tzinfo=timezone.utc),
+                end_time=datetime(2026, 1, 31, 10, 25, tzinfo=timezone.utc),
+                status=PhaseStatus.COMPLETED,
+                iteration=1,
+                cli="codex",
+                model="gpt-test",
+                input_tokens=800,
+            ),
+        ]
+
+        display.render_model_summary_table(entries)
+
+        output = capsys.readouterr().out
+        assert "spec - codex - gpt-test" in output
+        assert "  Input Tokens:  300" in output
+        assert "spec - codex - gpt-other" in output
+        assert "  Input Tokens:  400" in output
+        assert "spec - claude - gpt-test" in output
+        assert "  Input Tokens:  500" in output
+        assert "plan - codex - gpt-test" in output
+        assert "  Input Tokens:  800" in output
+
     def test_render_model_summary_table_empty_entries(self):
         """Test rendering with empty entries list"""
         display = SummaryDisplay()

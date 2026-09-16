@@ -266,55 +266,24 @@ class SummaryDisplay:
         console.print(table)
 
     def render_model_summary_table(self, entries: List[TimelineEntry]) -> None:
-        """Render aggregated token usage statistics by model.
+        """Render token usage aggregated by phase, CLI, and model.
 
         Args:
             entries: List of timeline entries to aggregate
         """
+        aggregated = self._aggregate_model_usage(entries)
+
+        if not aggregated:
+            return
+
         if not RICH_AVAILABLE:
             # Fallback - print simple text summary
             print("\n📊 Model Token Usage Summary")
             print("=" * 50)
 
-            # Aggregate token usage by cli-model combination
-            aggregated = {}
-            for entry in entries:
-                if not entry.cli or not entry.model:
-                    continue
-
-                key = f"{entry.cli}-{entry.model}"
-                if key not in aggregated:
-                    aggregated[key] = {
-                        "cli": entry.cli,
-                        "model": entry.model,
-                        "input_tokens": 0,
-                        "output_tokens": 0,
-                        "cache_write_tokens": 0,
-                        "cache_read_tokens": 0,
-                        "reasoning_output_tokens": 0,
-                        "cost_usd": 0.0,
-                    }
-
-                if entry.input_tokens:
-                    aggregated[key]["input_tokens"] += entry.input_tokens
-                if entry.output_tokens:
-                    aggregated[key]["output_tokens"] += entry.output_tokens
-                if entry.cache_write_tokens:
-                    aggregated[key]["cache_write_tokens"] += entry.cache_write_tokens
-                if entry.cache_read_tokens:
-                    aggregated[key]["cache_read_tokens"] += entry.cache_read_tokens
-                if entry.reasoning_output_tokens:
-                    aggregated[key]["reasoning_output_tokens"] += entry.reasoning_output_tokens
-                if entry.cost_usd:
-                    aggregated[key]["cost_usd"] += entry.cost_usd
-
-            if not aggregated:
-                return
-
             # Print simple text table
-            for key in sorted(aggregated.keys()):
-                stats = aggregated[key]
-                print(f"\n{stats['cli']} - {stats['model']}")
+            for stats in aggregated.values():
+                print(f"\n{stats['phase']} - {stats['cli']} - {stats['model']}")
                 print(f"  Input Tokens:  {self.format_token_count(stats['input_tokens'])}")
                 print(f"  Output Tokens: {self.format_token_count(stats['output_tokens'])}")
                 print(f"  Cache Write:   {self.format_token_count(stats['cache_write_tokens'])}")
@@ -327,43 +296,6 @@ class SummaryDisplay:
             print()
             return
 
-        # Aggregate token usage by cli-model combination
-        aggregated = {}
-        for entry in entries:
-            if not entry.cli or not entry.model:
-                continue  # Skip entries without model info
-
-            key = f"{entry.cli}-{entry.model}"
-            if key not in aggregated:
-                aggregated[key] = {
-                    "cli": entry.cli,
-                    "model": entry.model,
-                    "input_tokens": 0,
-                    "output_tokens": 0,
-                    "cache_write_tokens": 0,
-                    "cache_read_tokens": 0,
-                    "reasoning_output_tokens": 0,
-                    "cost_usd": 0.0,
-                }
-
-            # Accumulate token counts and costs
-            if entry.input_tokens:
-                aggregated[key]["input_tokens"] += entry.input_tokens
-            if entry.output_tokens:
-                aggregated[key]["output_tokens"] += entry.output_tokens
-            if entry.cache_write_tokens:
-                aggregated[key]["cache_write_tokens"] += entry.cache_write_tokens
-            if entry.cache_read_tokens:
-                aggregated[key]["cache_read_tokens"] += entry.cache_read_tokens
-            if entry.reasoning_output_tokens:
-                aggregated[key]["reasoning_output_tokens"] += entry.reasoning_output_tokens
-            if entry.cost_usd:
-                aggregated[key]["cost_usd"] += entry.cost_usd
-
-        # If no token data, don't show the table
-        if not aggregated:
-            return
-
         # Create summary table
         table = Table(
             title="📊 Model Token Usage Summary",
@@ -372,6 +304,7 @@ class SummaryDisplay:
         )
 
         # Add columns
+        table.add_column("Phase", style="yellow")
         table.add_column("CLI", style="green")
         table.add_column("Model", style="blue")
         table.add_column("Input Tokens", style="cyan", justify="right")
@@ -382,9 +315,9 @@ class SummaryDisplay:
         table.add_column("Cost (USD)", style="magenta", justify="right")
 
         # Add rows for each model
-        for key in sorted(aggregated.keys()):
-            stats = aggregated[key]
+        for stats in aggregated.values():
             table.add_row(
+                stats["phase"],
                 stats["cli"],
                 stats["model"],
                 self.format_token_count(stats["input_tokens"]),
@@ -398,3 +331,35 @@ class SummaryDisplay:
         # Print summary table
         console.print()
         console.print(table)
+
+    def _aggregate_model_usage(self, entries: List[TimelineEntry]) -> dict:
+        """Aggregate usage without combining separate workflow phases."""
+        aggregated = {}
+        for entry in entries:
+            if not entry.cli or not entry.model:
+                continue
+
+            phase = entry.phase or "--"
+            key = (phase, entry.cli, entry.model)
+            if key not in aggregated:
+                aggregated[key] = {
+                    "phase": phase,
+                    "cli": entry.cli,
+                    "model": entry.model,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cache_write_tokens": 0,
+                    "cache_read_tokens": 0,
+                    "reasoning_output_tokens": 0,
+                    "cost_usd": 0.0,
+                }
+
+            stats = aggregated[key]
+            stats["input_tokens"] += entry.input_tokens or 0
+            stats["output_tokens"] += entry.output_tokens or 0
+            stats["cache_write_tokens"] += entry.cache_write_tokens or 0
+            stats["cache_read_tokens"] += entry.cache_read_tokens or 0
+            stats["reasoning_output_tokens"] += entry.reasoning_output_tokens or 0
+            stats["cost_usd"] += entry.cost_usd or 0.0
+
+        return aggregated
