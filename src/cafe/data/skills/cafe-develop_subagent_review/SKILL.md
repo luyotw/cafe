@@ -1,7 +1,7 @@
 ---
 name: cafe-develop_subagent_review
 description: "依計畫完成程式開發與測試，並以 detail、scope 兩個原生 subagent 完成 PR 前審查"
-version: 1.0.0
+version: 1.0.1
 workflow:
   execution_profile:
     workload: implementation
@@ -81,10 +81,14 @@ workflow:
           - reference: execution_steps_correction.md
           - todo_projection: {artifact: causal_todo, causal: true}
           - optional_checklist: basic_principles.md
-      - when: {}
+      - when: {artifact_present: [plan]}
         sections:
           - reference: execution_steps_normal.md
           - todo_projection: {artifact: plan, source: plan}
+          - optional_checklist: basic_principles.md
+      - when: {}
+        sections:
+          - reference: execution_steps_normal.md
           - optional_checklist: basic_principles.md
     include_role_guidance: true
 ---

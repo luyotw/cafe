@@ -7,6 +7,7 @@ import pytest
 from cafe.core.playbook import resolve_step_behavior
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.playbooks.simulate import analyze_playbook
+from cafe.skills.checklist_composer import select_checklist_variant
 from cafe.skills.contracts import resolve_prompt_inputs
 from cafe.skills.loader import SkillLoader
 
@@ -241,6 +242,26 @@ def test_direct_subagent_review_uses_two_in_phase_reviewers_before_pr() -> None:
         assert "reports no blocking issues from both `detail` and `scope`" in checklist
     correction = (references / "execution_steps_correction.md").read_text(encoding="utf-8")
     assert "`review`:" not in correction
+
+    contract = SkillLoader().get_workflow_contract("cafe-develop_subagent_review")
+    planless = select_checklist_variant(
+        contract,
+        step="develop",
+        iteration=1,
+        artifacts={},
+        feedback=False,
+    )
+    assert all(section.todo_projection is None for section in planless.sections)
+
+    planned = select_checklist_variant(
+        contract,
+        step="develop",
+        iteration=1,
+        artifacts={"plan": object()},
+        feedback=False,
+    )
+    projections = [section.todo_projection for section in planned.sections]
+    assert any(item is not None and item.artifact == "plan" for item in projections)
 
 
 def test_standard_owns_the_established_full_development_graph() -> None:
