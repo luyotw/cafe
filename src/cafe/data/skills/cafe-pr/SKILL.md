@@ -116,7 +116,7 @@ the review task can expose a verified PR URL.
 
 ## Instructions
 
-- When `workspace_file` is supplied, use it as the authoritative Git changed-file and verification-receipt identity for the prepared PR content.
+- When `workspace_file` is supplied, use it as the authoritative Git changed-file identity for the prepared PR content.
 
 ### Corrective feedback curation mode
 When `workflow_feedback_file` contains feedback for this cycle, or `Current user input for this iteration` contains PR review comments, this is PR iteration 2:

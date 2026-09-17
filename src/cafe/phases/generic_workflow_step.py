@@ -328,9 +328,9 @@ class GenericWorkflowStepExecutor(Phase):
         self.phase_dir.mkdir(parents=True, exist_ok=True)
 
         # A playbook rollout can introduce a workspace companion after its
-        # producer already completed. Recover only from the producer named by
-        # the declarations and a receipt proving the active workspace.
-        self._recover_declared_workspace_input(
+        # producer already completed. Refresh it from the one producer named
+        # by the declarations when its committed Git snapshot is stale.
+        self._refresh_declared_workspace_input(
             step_def=step_def,
             blackboard_state=blackboard_state,
         )
@@ -570,8 +570,9 @@ class GenericWorkflowStepExecutor(Phase):
             checklist_file=checklist_file,
             questions_xml_file=questions_xml_file,
             prepare_agent_context=prepare_agent_context,
-            execution_guard=lambda: self._validate_workspace_inputs(
-                self._step_input_artifacts(step_def, blackboard_state), step_def=step_def
+            execution_guard=lambda: self._refresh_and_validate_workspace_inputs(
+                step_def=step_def,
+                blackboard_state=blackboard_state,
             ),
             execution_lease=lambda: workspace_execution_lock(
                 Path(getattr(self.git_ops, "repo_path", Path.cwd()))
@@ -1659,6 +1660,10 @@ class GenericWorkflowStepExecutor(Phase):
 
         skill_name = self._resolve_skill_name(step_def, self.iteration)
         contract = self._get_skill_loader().get_workflow_contract(skill_name)
+        self._refresh_declared_workspace_input(
+            step_def=step_def,
+            blackboard_state=blackboard_state,
+        )
         input_artifacts = self._step_input_artifacts(step_def, blackboard_state)
         self._prepare_todo_identity_input(
             step_def=step_def,
@@ -1804,7 +1809,7 @@ class GenericWorkflowStepExecutor(Phase):
             if not isinstance(required_name, str) and path.name != "workspace.json":
                 # Bounded v0.2 adapter: a mixed code/workspace record remains
                 # readable for legacy consumers, but is never certified as a
-                # current verified workspace.
+                # current Git workspace.
                 continue
             try:
                 workspace = WorkspaceArtifact.from_dict(
@@ -1834,71 +1839,142 @@ class GenericWorkflowStepExecutor(Phase):
                 detail = "; ".join(checked.reasons)
                 raise ValueError(
                     f"workspace artifact {name!r} is stale or contradictory: {detail}; "
-                    "publish a fresh workspace snapshot"
+                    "refresh it or resolve the conflict before retrying"
                 )
 
-    def _recover_declared_workspace_input(
+    def _refresh_declared_workspace_input(
         self,
         *,
         step_def: Mapping[str, Any],
         blackboard_state: BlackboardState,
+        workspace_locked: bool = False,
     ) -> None:
-        """Rebuild a missing companion after a declarative workspace rollout."""
+        """Refresh one stale declared workspace snapshot from clean Git facts.
+
+        A workspace companion is a convenience snapshot for consumers, not a
+        second authentication system. A prior committed snapshot whose only
+        problem is an older HEAD is rebuilt from its declared producer. A dirty
+        worktree, malformed record, identity mismatch, or divergent base
+        remains an actionable conflict and is never overwritten silently.
+        """
         required_name = step_def.get("workspace_input_artifact")
-        if not isinstance(required_name, str) or required_name in blackboard_state.artifacts:
+        if not isinstance(required_name, str) or not required_name.strip():
             return
-
-        candidates: list[tuple[str, Mapping[str, Any], ArtifactEntry]] = []
-        steps = self.playbook.get("steps", {})
-        if not isinstance(steps, Mapping):
-            return
-        for producer_name, producer_def in steps.items():
-            if not isinstance(producer_def, Mapping):
-                continue
-            if producer_def.get("workspace_artifact") != required_name:
-                continue
-            summary_name = str(producer_def.get("output_artifact", producer_name))
-            summary = blackboard_state.artifacts.get(summary_name)
-            if summary is not None and summary.updated_by == str(producer_name):
-                candidates.append((str(producer_name), producer_def, summary))
-        if len(candidates) != 1:
-            return
-
-        producer_name, producer_def, summary = candidates[0]
         repo = Path(getattr(self.git_ops, "repo_path", Path.cwd())).resolve()
-        output_file = Path(summary.path)
-        if not output_file.is_absolute():
-            output_file = repo / output_file
-        try:
-            output_file = output_file.resolve(strict=True)
-            relative = output_file.relative_to(self.issue_dir.resolve())
-        except (OSError, ValueError) as exc:
-            raise ValueError(
-                f"cannot recover required workspace artifact {required_name!r}: "
-                "the declared producer output is outside the issue"
-            ) from exc
-        if (
-            len(relative.parts) != 3
-            or relative.parts[0] != producer_name
-            or re.fullmatch(r"iteration_[0-9]+", relative.parts[1]) is None
-            or relative.parts[2] != "output.md"
-        ):
-            raise ValueError(
-                f"cannot recover required workspace artifact {required_name!r}: "
-                "the declared producer output path is not canonical"
-            )
 
-        with workspace_execution_lock(repo):
-            recovered = self._publish_workspace_artifact_under_lock(
+        def refresh_under_lock() -> None:
+            previous = blackboard_state.artifacts.get(required_name)
+            previous_workspace: WorkspaceArtifact | None = None
+            if previous is not None:
+                if getattr(previous, "kind", None) != ArtifactKind.WORKSPACE:
+                    raise ValueError(
+                        f"workspace artifact {required_name!r} conflicts with its declared kind"
+                    )
+                workspace_path = Path(str(previous.path))
+                if not workspace_path.is_absolute():
+                    workspace_path = repo / workspace_path
+                try:
+                    workspace_path = workspace_path.resolve(strict=True)
+                    workspace_path.relative_to(self.issue_dir.resolve())
+                    previous_workspace = WorkspaceArtifact.from_dict(
+                        json.loads(workspace_path.read_text(encoding="utf-8"))
+                    )
+                except (
+                    OSError,
+                    UnicodeError,
+                    ValueError,
+                    json.JSONDecodeError,
+                    WorkspaceArtifactError,
+                ) as exc:
+                    raise ValueError(
+                        f"workspace artifact {required_name!r} is malformed and cannot be "
+                        "refreshed automatically"
+                    ) from exc
+                if (
+                    getattr(previous, "name", required_name) != required_name
+                    or previous_workspace.name != required_name
+                    or getattr(previous, "version", previous_workspace.version)
+                    != previous_workspace.version
+                    or getattr(previous, "base_sha", previous_workspace.base_sha)
+                    != previous_workspace.base_sha
+                    or getattr(previous, "head_sha", previous_workspace.head_sha)
+                    != previous_workspace.head_sha
+                    or previous_workspace.repository != str(repo)
+                ):
+                    raise ValueError(
+                        f"workspace artifact {required_name!r} has contradictory identity"
+                    )
+                checked = verify_workspace_artifact(previous_workspace, repo=repo)
+                if checked.valid:
+                    return
+                if checked.reasons != ("workspace head is stale",):
+                    detail = "; ".join(checked.reasons)
+                    raise ValueError(
+                        f"workspace artifact {required_name!r} conflicts with the current "
+                        f"workspace: {detail}; resolve the conflict before retrying"
+                    )
+
+            candidates: list[tuple[str, Mapping[str, Any], ArtifactEntry]] = []
+            steps = self.playbook.get("steps", {})
+            if isinstance(steps, Mapping):
+                for producer_name, producer_def in steps.items():
+                    if not isinstance(producer_def, Mapping):
+                        continue
+                    if producer_def.get("workspace_artifact") != required_name:
+                        continue
+                    summary_name = str(producer_def.get("output_artifact", producer_name))
+                    summary = blackboard_state.artifacts.get(summary_name)
+                    if summary is not None and summary.updated_by == str(producer_name):
+                        candidates.append((str(producer_name), producer_def, summary))
+            if len(candidates) != 1:
+                if previous is not None:
+                    reason = "no" if not candidates else "multiple"
+                    raise ValueError(
+                        f"workspace artifact {required_name!r} is stale but has {reason} "
+                        "unambiguous declared producer to refresh it"
+                    )
+                return
+
+            producer_name, producer_def, summary = candidates[0]
+            if previous_workspace is not None and (
+                previous.updated_by != producer_name
+                or previous_workspace.producer_step not in {"", producer_name}
+            ):
+                raise ValueError(
+                    f"workspace artifact {required_name!r} conflicts with its declared producer"
+                )
+            output_file = Path(summary.path)
+            if not output_file.is_absolute():
+                output_file = repo / output_file
+            try:
+                output_file = output_file.resolve(strict=True)
+                relative = output_file.relative_to(self.issue_dir.resolve())
+            except (OSError, ValueError) as exc:
+                raise ValueError(
+                    f"cannot refresh required workspace artifact {required_name!r}: "
+                    "the declared producer output is outside the issue"
+                ) from exc
+            if (
+                len(relative.parts) != 3
+                or relative.parts[0] != producer_name
+                or re.fullmatch(r"iteration_[0-9]+", relative.parts[1]) is None
+                or relative.parts[2] != "output.md"
+            ):
+                raise ValueError(
+                    f"cannot refresh required workspace artifact {required_name!r}: "
+                    "the declared producer output path is not canonical"
+                )
+
+            refreshed = self._publish_workspace_artifact_under_lock(
                 step_name=producer_name,
                 step_def=dict(producer_def),
                 output_file=output_file,
                 blackboard_state=blackboard_state,
                 updated_at=summary.updated_at,
             )
-            if recovered is None:
+            if refreshed is None:
                 return
-            workspace_path, metadata = recovered
+            workspace_path, metadata = refreshed
             blackboard_state.artifacts[required_name] = ArtifactEntry(
                 name=required_name,
                 kind=ArtifactKind.WORKSPACE,
@@ -1910,6 +1986,41 @@ class GenericWorkflowStepExecutor(Phase):
                 head_sha=str(metadata["head_sha"]),
             )
             BlackboardStore(self.issue_dir).save(blackboard_state)
+
+        if workspace_locked:
+            refresh_under_lock()
+        else:
+            with workspace_execution_lock(repo):
+                refresh_under_lock()
+
+    def _recover_declared_workspace_input(
+        self,
+        *,
+        step_def: Mapping[str, Any],
+        blackboard_state: BlackboardState,
+    ) -> None:
+        """Compatibility alias for callers using the former recovery helper."""
+        self._refresh_declared_workspace_input(
+            step_def=step_def,
+            blackboard_state=blackboard_state,
+        )
+
+    def _refresh_and_validate_workspace_inputs(
+        self,
+        *,
+        step_def: Mapping[str, Any],
+        blackboard_state: BlackboardState,
+    ) -> None:
+        """Refresh a stale consumer snapshot while GenericPhase holds its lease."""
+        self._refresh_declared_workspace_input(
+            step_def=step_def,
+            blackboard_state=blackboard_state,
+            workspace_locked=True,
+        )
+        self._validate_workspace_inputs(
+            self._step_input_artifacts(step_def, blackboard_state),
+            step_def=step_def,
+        )
 
     def _declared_feedback_route_artifact(self, destination: str) -> Optional[str]:
         """Return the artifact declared for the persisted destination edge."""
@@ -2779,19 +2890,13 @@ class GenericWorkflowStepExecutor(Phase):
         blackboard_state: BlackboardState,
         updated_at: Optional[str] = None,
     ) -> tuple[str, dict[str, Any]] | None:
-        """Publish the one declared workspace companion from verified state."""
+        """Publish the one declared workspace companion from current Git state."""
         workspace_name = step_def.get("workspace_artifact")
         if not isinstance(workspace_name, str) or not workspace_name.strip():
             return None
         summary_name = str(step_def.get("output_artifact", step_name))
         if workspace_name == summary_name:
             raise ValueError("workspace artifact must be distinct from the summary artifact")
-        receipt_path = output_file.parent / "verification.json"
-        if not receipt_path.is_file():
-            raise ValueError(
-                f"Step {step_name!r} declared workspace_artifact {workspace_name!r}, "
-                "but its verification receipt is missing"
-            )
         repo = Path(getattr(self.git_ops, "repo_path", Path.cwd())).resolve()
         base_ref = self._get_issue_config_value(self.issue_dir / "issue.yaml", "base_branch")
         if not base_ref:
@@ -2804,7 +2909,6 @@ class GenericWorkflowStepExecutor(Phase):
                 version=1,
                 base_sha=str(base_ref),
                 head_sha=head_sha,
-                receipt_outputs=[output_file],
                 updated_at=updated_at or datetime.now(timezone.utc).isoformat(),
                 producer_step=step_name,
             )
@@ -2825,7 +2929,6 @@ class GenericWorkflowStepExecutor(Phase):
             and previous_workspace.base_sha == candidate.base_sha
             and previous_workspace.head_sha == candidate.head_sha
             and previous_workspace.changed_files == candidate.changed_files
-            and previous_workspace.receipts == candidate.receipts
         )
         version = previous.version if same_snapshot and previous is not None else (
             previous.version + 1 if previous else 1
@@ -2837,7 +2940,6 @@ class GenericWorkflowStepExecutor(Phase):
             base_sha=candidate.base_sha,
             head_sha=candidate.head_sha,
             changed_files=candidate.changed_files,
-            receipts=candidate.receipts,
             schema_version=candidate.schema_version,
             updated_at=candidate.updated_at,
             producer_step=candidate.producer_step,

@@ -1,20 +1,13 @@
-"""Declared, schema-versioned identity for a verified Git workspace."""
+"""Declared, schema-versioned identity for a current Git workspace."""
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
-
-from cafe.verification.receipt import (
-    VALID_SCOPES,
-    VerificationReceiptError,
-    check_verification_receipt,
-)
 
 WORKSPACE_SCHEMA_VERSION = 1
 _SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -95,50 +88,14 @@ def _changed_files(repo: Path, base_sha: str, head_sha: str) -> tuple[dict[str, 
     return tuple(sorted(records, key=lambda item: (item["path"], item.get("old_path", ""))))
 
 
-def _receipt_path(value: Path, *, root: Path) -> Path:
-    """Resolve only the canonical receipt adjacent to an in-repository output."""
-    candidate_input = Path(value)
-    if candidate_input.is_symlink() or any(
-        parent.is_symlink() for parent in candidate_input.parents if parent != Path(".")
-    ):
-        raise WorkspaceArtifactError("workspace receipt input must not use a symlink")
-    candidate = candidate_input.resolve()
-    try:
-        candidate.relative_to(root)
-    except ValueError as exc:
-        raise WorkspaceArtifactError("workspace receipt reference is outside the repository") from exc
-    if candidate.name == "verification.json":
-        receipt = candidate
-    elif candidate.name == "output.md":
-        receipt = candidate.parent / "verification.json"
-    else:
-        raise WorkspaceArtifactError(
-            "workspace receipt input must be an in-repository output.md or verification.json"
-        )
-    if receipt.is_symlink() or any(
-        parent.is_symlink() for parent in receipt.parents if parent != Path(".")
-    ):
-        raise WorkspaceArtifactError("workspace verification receipt must not use a symlink")
-    try:
-        receipt.resolve().relative_to(root)
-    except ValueError as exc:
-        raise WorkspaceArtifactError("workspace verification receipt is outside the repository") from exc
-    if receipt.name != "verification.json":
-        raise WorkspaceArtifactError("workspace receipt must be verification.json")
-    return receipt
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 @dataclass(frozen=True)
 class WorkspaceArtifact:
-    """The persisted current-contract workspace companion."""
+    """The persisted current Git-workspace companion.
+
+    Version 1 snapshots previously carried verification-receipt metadata. That
+    metadata is intentionally ignored on read so old records remain refreshable
+    without treating a receipt as a workflow gate.
+    """
 
     name: str
     version: int
@@ -146,7 +103,6 @@ class WorkspaceArtifact:
     base_sha: str
     head_sha: str
     changed_files: tuple[dict[str, str], ...]
-    receipts: tuple[dict[str, str], ...]
     schema_version: int = WORKSPACE_SCHEMA_VERSION
     updated_at: str = ""
     producer_step: str = ""
@@ -160,7 +116,6 @@ class WorkspaceArtifact:
             "base_sha": self.base_sha,
             "head_sha": self.head_sha,
             "changed_files": [dict(item) for item in self.changed_files],
-            "receipts": [dict(item) for item in self.receipts],
             "updated_at": self.updated_at,
             "producer_step": self.producer_step,
         }
@@ -169,10 +124,10 @@ class WorkspaceArtifact:
     def from_dict(cls, raw: Mapping[str, Any]) -> "WorkspaceArtifact":
         if not isinstance(raw, Mapping):
             raise WorkspaceArtifactError("workspace record must be an object")
-        version = raw.get("schema_version")
-        if version != WORKSPACE_SCHEMA_VERSION:
+        schema_version = raw.get("schema_version")
+        if schema_version != WORKSPACE_SCHEMA_VERSION:
             raise WorkspaceArtifactError(
-                f"unsupported workspace schema version: {version!r}"
+                f"unsupported workspace schema version: {schema_version!r}"
             )
         name = raw.get("name")
         record_version = raw.get("version")
@@ -193,8 +148,6 @@ class WorkspaceArtifact:
             raise WorkspaceArtifactError("workspace base_sha has an invalid form")
         if not isinstance(head_sha, str) or not _SHA.fullmatch(head_sha):
             raise WorkspaceArtifactError("workspace head_sha has an invalid form")
-        changed = _normalize_changed_files(raw.get("changed_files"))
-        receipts = _normalize_receipts(raw.get("receipts"))
         updated_at = raw.get("updated_at", "")
         producer_step = raw.get("producer_step", "")
         if not isinstance(updated_at, str) or not isinstance(producer_step, str):
@@ -205,8 +158,7 @@ class WorkspaceArtifact:
             repository=repository,
             base_sha=base_sha,
             head_sha=head_sha,
-            changed_files=changed,
-            receipts=receipts,
+            changed_files=_normalize_changed_files(raw.get("changed_files")),
             updated_at=updated_at,
             producer_step=producer_step,
         )
@@ -238,41 +190,6 @@ def _normalize_changed_files(value: Any) -> tuple[dict[str, str], ...]:
     return canonical
 
 
-def _normalize_receipts(value: Any) -> tuple[dict[str, str], ...]:
-    if not isinstance(value, list):
-        raise WorkspaceArtifactError("workspace receipts must be a list")
-    normalized: list[dict[str, str]] = []
-    for item in value:
-        if not isinstance(item, Mapping):
-            raise WorkspaceArtifactError("workspace receipt entry must be an object")
-        path = item.get("path")
-        digest = item.get("sha256")
-        scope = item.get("scope")
-        head = item.get("head")
-        if (
-            not isinstance(path, str)
-            or not path
-            or not isinstance(digest, str)
-            or not re.fullmatch(r"[0-9a-f]{64}", digest)
-            or not isinstance(scope, str)
-            or not scope
-            or not isinstance(head, str)
-            or not _SHA.fullmatch(head)
-        ):
-            raise WorkspaceArtifactError("workspace receipt entry is invalid")
-        path_value = Path(path)
-        if path_value.is_absolute() or ".." in path_value.parts or path_value.name != "verification.json":
-            raise WorkspaceArtifactError(
-                "workspace receipt path must be a repository-relative verification.json"
-            )
-        normalized.append({"path": path, "sha256": digest, "scope": scope, "head": head})
-    if len({item["path"] for item in normalized}) != len(normalized):
-        raise WorkspaceArtifactError("workspace receipts must be unique")
-    if len({item["sha256"] for item in normalized}) != len(normalized):
-        raise WorkspaceArtifactError("workspace receipts must bind distinct canonical files")
-    return tuple(normalized)
-
-
 def build_workspace_artifact(
     *,
     repo: Path,
@@ -284,7 +201,13 @@ def build_workspace_artifact(
     updated_at: str = "",
     producer_step: str = "",
 ) -> WorkspaceArtifact:
-    """Build a workspace identity exclusively from Git and verified receipts."""
+    """Build a current workspace snapshot from Git facts.
+
+    ``receipt_outputs`` remains an ignored compatibility argument for callers
+    using the former receipt-backed API. A snapshot is refreshed from Git, not
+    authenticated against a verification receipt.
+    """
+    del receipt_outputs
     root = _repo_root(Path(repo))
     resolved_base = _resolve_commit(root, base_sha, field="base")
     resolved_head = _resolve_commit(root, head_sha, field="head")
@@ -300,43 +223,10 @@ def build_workspace_artifact(
         raise WorkspaceArtifactError("workspace name is missing")
     if isinstance(version, bool) or not isinstance(version, int) or version < 1:
         raise WorkspaceArtifactError("workspace version must be a positive integer")
-    receipt_records: list[dict[str, str]] = []
-    for output in receipt_outputs:
-        output = Path(output)
-        receipt_path = _receipt_path(output, root=root)
-        try:
-            payload = json.loads(receipt_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise WorkspaceArtifactError("workspace verification receipt is unreadable") from exc
-        scope = payload.get("scope") if isinstance(payload, dict) else None
-        if not isinstance(scope, str) or not scope:
-            raise WorkspaceArtifactError("workspace verification receipt scope is missing")
-        if scope not in VALID_SCOPES:
-            raise WorkspaceArtifactError(
-                f"workspace verification receipt scope is invalid: {scope!r}"
-            )
-        try:
-            checked = check_verification_receipt(
-                output_file=output, required_scope=scope, cwd=root
-            )
-        except VerificationReceiptError as exc:
-            raise WorkspaceArtifactError(
-                "workspace verification receipt could not be validated"
-            ) from exc
-        if not checked.valid or checked.receipt is None:
-            raise WorkspaceArtifactError("workspace verification receipt is invalid or stale")
-        recorded_head = checked.receipt.get("git", {}).get("head")
-        if recorded_head != resolved_head:
-            raise WorkspaceArtifactError("workspace verification receipt head is stale")
-        relative = receipt_path.relative_to(root).as_posix()
-        receipt_records.append(
-            {
-                "path": relative,
-                "sha256": _sha256(receipt_path),
-                "scope": scope,
-                "head": resolved_head,
-            }
-        )
+    if _git(root, "rev-parse", "HEAD") != resolved_head:
+        raise WorkspaceArtifactError("workspace head changed before snapshot creation")
+    if _git(root, "status", "--porcelain", "--untracked-files=all"):
+        raise WorkspaceArtifactError("workspace worktree is dirty")
     return WorkspaceArtifact(
         name=name,
         version=version,
@@ -344,7 +234,6 @@ def build_workspace_artifact(
         base_sha=resolved_base,
         head_sha=resolved_head,
         changed_files=_changed_files(root, resolved_base, resolved_head),
-        receipts=_normalize_receipts(receipt_records),
         updated_at=updated_at,
         producer_step=producer_step,
     )
@@ -353,7 +242,7 @@ def build_workspace_artifact(
 def verify_workspace_artifact(
     artifact: WorkspaceArtifact | Mapping[str, Any], *, repo: Path
 ) -> WorkspaceVerification:
-    """Verify a workspace record before a current-contract consumer runs."""
+    """Verify a workspace snapshot before a current-contract consumer runs."""
     try:
         current = (
             artifact
@@ -381,48 +270,6 @@ def verify_workspace_artifact(
             reasons.append("workspace worktree is dirty")
         if tuple(current.changed_files) != _changed_files(root, base, head):
             reasons.append("workspace changed-file set does not match Git comparison")
-        seen_paths: set[str] = set()
-        for receipt in current.receipts:
-            relative_receipt = Path(receipt["path"])
-            if (
-                relative_receipt.is_absolute()
-                or ".." in relative_receipt.parts
-                or relative_receipt.name != "verification.json"
-            ):
-                reasons.append(f"workspace receipt path is not canonical: {receipt['path']}")
-                continue
-            receipt_candidate = root / relative_receipt
-            if receipt_candidate.is_symlink() or any(
-                parent.is_symlink() for parent in receipt_candidate.parents if parent != root
-            ):
-                reasons.append(f"workspace receipt must not use a symlink: {receipt['path']}")
-                continue
-            receipt_path = receipt_candidate.resolve()
-            try:
-                receipt_path.relative_to(root)
-            except ValueError:
-                reasons.append(f"workspace receipt escapes repository: {receipt['path']}")
-                continue
-            if receipt["path"] in seen_paths:
-                reasons.append("workspace receipts are duplicated")
-                continue
-            seen_paths.add(receipt["path"])
-            if not receipt_path.is_file() or _sha256(receipt_path) != receipt["sha256"]:
-                reasons.append(f"workspace receipt is missing or stale: {receipt['path']}")
-                continue
-            try:
-                payload = json.loads(receipt_path.read_text(encoding="utf-8"))
-                output_file = receipt_path.parent / "output.md"
-                checked = check_verification_receipt(
-                    output_file=output_file, required_scope=receipt["scope"], cwd=root
-                )
-            except (OSError, json.JSONDecodeError, WorkspaceArtifactError):
-                checked = None
-            if checked is None or not checked.valid:
-                reasons.append(f"workspace receipt is invalid: {receipt['path']}")
-                continue
-            if receipt["head"] != head or payload.get("git", {}).get("head") != head:
-                reasons.append(f"workspace receipt head is stale: {receipt['path']}")
         return WorkspaceVerification(not reasons, tuple(reasons))
     except WorkspaceArtifactError as exc:
         return WorkspaceVerification(False, (str(exc),))

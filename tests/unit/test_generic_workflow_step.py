@@ -6753,6 +6753,37 @@ def test_missing_workspace_companion_recovers_from_declared_verified_producer(
         step_def=playbook["steps"]["consume"],
     )
 
+    initial_version = recovered.version
+    initial_head = recovered.head_sha
+    (repo / "tracked.txt").write_text("refreshed\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "refresh workspace"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+
+    executor._refresh_declared_workspace_input(
+        step_def=playbook["steps"]["consume"],
+        blackboard_state=state,
+    )
+
+    refreshed = state.artifacts["verified_state"]
+    assert refreshed.version == initial_version + 1
+    assert refreshed.head_sha != initial_head
+    executor._validate_workspace_inputs(
+        executor._step_input_artifacts(playbook["steps"]["consume"], state),
+        step_def=playbook["steps"]["consume"],
+    )
+
+    (repo / "tracked.txt").write_text("uncommitted conflict\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="worktree is dirty"):
+        executor._refresh_declared_workspace_input(
+            step_def=playbook["steps"]["consume"],
+            blackboard_state=state,
+        )
+
 
 def test_plan_publication_allows_a_no_shared_vocabulary_revision_with_same_id(
     tmp_path: Path,

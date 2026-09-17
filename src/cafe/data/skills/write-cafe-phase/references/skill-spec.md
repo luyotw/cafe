@@ -482,7 +482,7 @@ This section is authoritative for current artifact normalization.
   receipt. Revalidate it immediately before agent and host-hook use.
 - Preserve ordinary single-entry `artifact.json` behavior. Legacy v0.2 mixed
   `code` records remain readable only through their bounded compatibility
-  adapter and cannot satisfy a current verified workspace requirement.
+  adapter and cannot satisfy a current Git workspace requirement.
 - A plan revision may retain an ID, unchanged retained work may not move to a
   new ID, and unrelated work may not reuse an existing ID. Progress belongs in
   the consumer output, not in the immutable plan.
