@@ -15,8 +15,6 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional
 from uuid import uuid4
 
-import yaml
-
 from cafe.core.active_issue import clear_marker_if_matches
 from cafe.core.automatic_steps import (
     AutomaticExecutionResult,
@@ -57,7 +55,6 @@ from cafe.core.human_tasks import (
 )
 from cafe.core.packet_io import atomic_write_bytes, sha256_bytes
 from cafe.core.playbook import (
-    playbook_requests_capability,
     resolve_step_attempt_limit,
     resolve_step_behavior,
 )
@@ -101,7 +98,6 @@ PAUSE_STATUS_CODES = {
 }
 SLACK_HUMAN_TASK_TIMEOUT_SEC = 5.0
 MAX_GIT_METADATA_BYTES = 8192
-MAX_ISSUE_CONFIG_BYTES = 131072
 
 
 def _read_git_metadata(path: Path) -> str | None:
@@ -439,7 +435,6 @@ class BlackboardWorkflowRuntime:
         self._workflow_event_callback = workflow_event_callback
         self._pending_phase_terminal: Dict[str, Any] | None = None
         self._observed_result_keys: set[tuple[str, str]] = set()
-        self._validated_pr_auto_create: bool | None = None
 
     def _validate_automatic_executor_declarations(self) -> None:
         """Reject unavailable automatic authority before recording a workflow visit."""
@@ -460,70 +455,6 @@ class BlackboardWorkflowRuntime:
                     f"Step '{step_name}' has an invalid automatic executor declaration"
                 )
             self.automatic_registry.validate_inputs(executor_id, inputs)
-
-    def _publication_contract_error(self) -> tuple[str, str] | None:
-        """Validate the generic publication setting for this run."""
-        self._validated_pr_auto_create = None
-        issue_yaml = self.issue_dir / "issue.yaml"
-        config: Mapping[str, Any] = {}
-        if issue_yaml.exists():
-            try:
-                if issue_yaml.stat().st_size > MAX_ISSUE_CONFIG_BYTES:
-                    return (
-                        "invalid_issue_config",
-                        "issue.yaml exceeds the bounded workflow configuration size",
-                    )
-                loaded = yaml.safe_load(issue_yaml.read_text(encoding="utf-8")) or {}
-            except (OSError, UnicodeError, yaml.YAMLError):
-                return ("invalid_issue_config", "issue.yaml could not be read as YAML")
-            if not isinstance(loaded, Mapping):
-                return ("invalid_issue_config", "issue.yaml must contain a mapping")
-            config = loaded
-
-        pr_config = config.get("pr")
-        pr_mapping = pr_config if isinstance(pr_config, Mapping) else {}
-        persisted_present = "auto_create" in pr_mapping
-        has_publication_config = persisted_present or "post_todo_list" in pr_mapping
-        capable = playbook_requests_capability(self.playbook, CAPABILITY_PR_PUBLISH_ID)
-
-        if not capable:
-            if has_publication_config:
-                return (
-                    "inapplicable_publication_config",
-                    "the effective playbook does not request cafe.pr.publish",
-                )
-            return None
-        if not persisted_present:
-            return ("missing_persisted_choice", "pr.auto_create is required")
-        persisted = pr_mapping["auto_create"]
-        if not isinstance(persisted, bool):
-            return ("invalid_persisted_choice", "pr.auto_create must be Boolean")
-        self._validated_pr_auto_create = persisted
-        return None
-
-    def _reject_invalid_publication_contract(
-        self,
-        *,
-        start_step: str | None,
-        error: tuple[str, str],
-    ) -> PlaybookRunResult:
-        reason, detail = error
-        current_step = start_step if start_step in self.steps else self.blackboard.current_step
-        if current_step not in self.steps:
-            current_step = self.start_step
-        self.blackboard_store.record_event(
-            self.blackboard,
-            "workflow_configuration_invalid",
-            {"step": current_step, "reason": reason, "detail": detail},
-        )
-        return self._finalize_observed_result(
-            PlaybookRunResult(
-                final_step=current_step,
-                final_status_code="INVALID_WORKFLOW_CONFIG",
-                completed=False,
-                detail=f"{reason}: {detail}",
-            )
-        )
 
     def _notify_new_human_task(self, task: HumanTask) -> None:
         HumanTaskNotificationDispatcher(
@@ -2062,12 +1993,6 @@ class BlackboardWorkflowRuntime:
             "id": portion_id,
             "instruction": portion.get("instruction", ""),
         }
-        publication_error = self._publication_contract_error()
-        if publication_error is not None:
-            return self._reject_invalid_publication_contract(
-                start_step=current_step,
-                error=publication_error,
-            )
         frame = self._execute_one_iteration(
             current_step=current_step,
             step_def=framed_step,
@@ -2307,7 +2232,6 @@ class BlackboardWorkflowRuntime:
             execute_kwargs = {
                 "extra_prompt": extra_prompt,
                 "same_invocation_retry": same_invocation_retry,
-                "validated_pr_auto_create": self._validated_pr_auto_create,
             }
             try:
                 execute_parameters = inspect.signature(self.executor).parameters
@@ -3113,8 +3037,6 @@ class BlackboardWorkflowRuntime:
             or CAPABILITY_PR_PUBLISH_ID not in self._step_declared_capability_ids(step_def)
         ):
             return prompt
-        if self._validated_pr_auto_create is False:
-            return f"{prompt}\n\nPublication mode: local-only. No PR URL exists."
         pr_url = self._current_pr_url(execution_result)
         if pr_url is None:
             return prompt
@@ -3487,9 +3409,6 @@ class BlackboardWorkflowRuntime:
         missing: list[str] = []
         for capability_id in self._required_capability_ids(current_step):
             if self._capability_receipt_satisfied(execution_result, capability_id):
-                continue
-            if capability_id == CAPABILITY_PR_PUBLISH_ID:
-                missing.append(capability_id)
                 continue
             if self._capability_receipt_recorded(capability_id):
                 continue
@@ -4231,12 +4150,6 @@ class BlackboardWorkflowRuntime:
             except IterationLimitReachedError as exc:
                 return exc.result
             for _baton_attempt in range(3):
-                publication_error = self._publication_contract_error()
-                if publication_error is not None:
-                    return self._reject_invalid_publication_contract(
-                        start_step=current_step,
-                        error=publication_error,
-                    )
                 try:
                     frame = self._execute_one_iteration(
                         current_step=current_step,
@@ -4613,12 +4526,6 @@ class BlackboardWorkflowRuntime:
                 return exc.result
 
             for _baton_attempt in range(3):
-                publication_error = self._publication_contract_error()
-                if publication_error is not None:
-                    return self._reject_invalid_publication_contract(
-                        start_step=current_step,
-                        error=publication_error,
-                    )
                 try:
                     frame = self._execute_one_iteration(
                         current_step=current_step,
@@ -5095,12 +5002,6 @@ class BlackboardWorkflowRuntime:
         start_step: Optional[str] = None,
         single_step: bool = False,
     ) -> PlaybookRunResult:
-        publication_error = self._publication_contract_error()
-        if publication_error is not None:
-            return self._reject_invalid_publication_contract(
-                start_step=start_step,
-                error=publication_error,
-            )
         recovered_feedback_delivery = self._try_reconcile_pending_feedback_delivery()
         if (
             recovered_feedback_delivery is not None

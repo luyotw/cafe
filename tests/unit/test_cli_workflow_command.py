@@ -523,7 +523,7 @@ def test_single_step_uses_the_mode_neutral_core_in_the_foreground(
 
     class FakeExecutor:
         def execute_step(self, step_name, step_def, blackboard_state, **kwargs):
-            captured["validated_pr_auto_create"] = kwargs.get("validated_pr_auto_create")
+            captured["has_validated_pr_auto_create"] = "validated_pr_auto_create" in kwargs
             return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
 
     class CapturingWorkflowHost:
@@ -554,7 +554,7 @@ def test_single_step_uses_the_mode_neutral_core_in_the_foreground(
 
     assert result.exit_code == 0, (result.stdout, result.exception)
     assert captured["hosting"] == "foreground"
-    assert captured["validated_pr_auto_create"] is False
+    assert captured["has_validated_pr_auto_create"] is False
 
 
 @pytest.mark.parametrize(

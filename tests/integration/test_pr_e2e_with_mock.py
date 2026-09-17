@@ -229,7 +229,7 @@ def test_pr_review_handoff_tracks_published_or_local_only_journey(
     if auto_create:
         assert f"Verified PR URL: {verified_url}" in task.prompt
     else:
-        assert "Publication mode: local-only. No PR URL exists." in task.prompt
+        assert "Publication mode:" not in task.prompt
 
 
 @pytest.mark.e2e

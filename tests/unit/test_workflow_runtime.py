@@ -361,7 +361,7 @@ def _publication_contract_playbook(*, capable: bool = True) -> dict[str, object]
 
 
 @pytest.mark.parametrize(
-    ("config", "capable", "reason"),
+    ("config", "capable"),
     [
         (
             {
@@ -369,7 +369,6 @@ def _publication_contract_playbook(*, capable: bool = True) -> dict[str, object]
                 "confirmation_contract": {"pr_auto_create": False},
             },
             True,
-            "missing_persisted_choice",
         ),
         (
             {
@@ -377,7 +376,6 @@ def _publication_contract_playbook(*, capable: bool = True) -> dict[str, object]
                 "pr": {"auto_create": "true"},
             },
             True,
-            "invalid_persisted_choice",
         ),
         (
             {
@@ -385,7 +383,6 @@ def _publication_contract_playbook(*, capable: bool = True) -> dict[str, object]
                 "pr": {"auto_create": False},
             },
             False,
-            "inapplicable_publication_config",
         ),
         (
             {
@@ -393,52 +390,21 @@ def _publication_contract_playbook(*, capable: bool = True) -> dict[str, object]
                 "pr": {"post_todo_list": False},
             },
             False,
-            "inapplicable_publication_config",
         ),
     ],
 )
-def test_runtime_rejects_invalid_publication_contract_before_agent_execution(
+def test_runtime_does_not_gate_pr_configuration(
     tmp_path: Path,
     config: dict[str, object],
     capable: bool,
-    reason: str,
 ) -> None:
-    """Test List 5: startup fails closed on every contract inconsistency."""
-    issue_dir = tmp_path / ".cafe" / "issues" / reason
+    """PR capability settings belong to the capability hook, not workflow core."""
+    issue_dir = tmp_path / ".cafe" / "issues" / "publication-config"
     issue_dir.mkdir(parents=True)
     (issue_dir / "issue.yaml").write_text(
         yaml.safe_dump(config, sort_keys=False),
         encoding="utf-8",
     )
-    calls: list[str] = []
-    runtime = BlackboardWorkflowRuntime(
-        issue_dir=issue_dir,
-        playbook=_publication_contract_playbook(capable=capable),
-        executor=lambda step, *_args, **_kwargs: calls.append(step),
-    )
-
-    result = runtime.run(start_step="build")
-
-    assert result.completed is False
-    assert result.final_status_code == "INVALID_WORKFLOW_CONFIG"
-    assert reason in (result.detail or "")
-    assert calls == []
-    state = BlackboardStore(issue_dir).load_or_create("build")
-    assert any(
-        event.event_type == "workflow_configuration_invalid"
-        and json.loads(event.message).get("reason") == reason
-        for event in state.events
-    )
-
-
-@pytest.mark.parametrize("choice", [True, False])
-def test_runtime_accepts_explicit_publication_setting(
-    tmp_path: Path,
-    choice: bool,
-) -> None:
-    """Test List 5: both Boolean publication modes reach the public executor path."""
-    issue_dir = tmp_path / ".cafe" / "issues" / f"valid-{choice}"
-    _write_publication_contract(issue_dir, persisted=choice)
     calls: list[str] = []
 
     def executor(step: str, *_args: object, **_kwargs: object) -> StepExecutionResult:
@@ -450,33 +416,29 @@ def test_runtime_accepts_explicit_publication_setting(
             to_step="done",
             intent="workflow_complete",
         )
-        events = (
-            [{"type": "pr_synced", "url": "https://github.com/test/repo/pull/467"}]
-            if choice
-            else []
-        )
-        return StepExecutionResult(response="", artifacts={}, events=events)
+        return StepExecutionResult(response="", artifacts={})
 
-    runtime = BlackboardWorkflowRuntime(
+    result = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
-        playbook=_publication_contract_playbook(),
+        playbook=_publication_contract_playbook(capable=capable),
         executor=executor,
-    )
-
-    result = runtime.run(start_step="build")
+    ).run(start_step="build")
 
     assert result.completed is True
     assert calls == ["build"]
+    assert not any(
+        event.event_type == "workflow_configuration_invalid"
+        for event in BlackboardStore(issue_dir).load_or_create("build").events
+    )
 
 
-def test_runtime_reads_publication_contract_at_run_time(tmp_path: Path) -> None:
-    """Test List 5: run validation reads the current sole publication setting."""
-    issue_dir = tmp_path / ".cafe" / "issues" / "changed-before-run"
-    _write_publication_contract(issue_dir, persisted=True)
-    received_choices: list[object] = []
+def test_runtime_does_not_forward_pr_configuration_to_executor(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "runtime-owned-config"
+    _write_publication_contract(issue_dir, persisted=False)
+    received_kwargs: list[dict[str, object]] = []
 
     def executor(step: str, *_args: object, **kwargs: object) -> StepExecutionResult:
-        received_choices.append(kwargs.get("validated_pr_auto_create"))
+        received_kwargs.append(dict(kwargs))
         _write_baton(
             issue_dir,
             from_step=step,
@@ -486,23 +448,17 @@ def test_runtime_reads_publication_contract_at_run_time(tmp_path: Path) -> None:
         )
         return StepExecutionResult(response="", artifacts={})
 
-    runtime = BlackboardWorkflowRuntime(
+    result = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
         playbook=_publication_contract_playbook(),
         executor=executor,
-    )
-    _write_publication_contract(issue_dir, persisted=False)
-
-    result = runtime.run(start_step="build")
+    ).run(start_step="build")
 
     assert result.completed is True
-    assert received_choices == [False]
+    assert "validated_pr_auto_create" not in received_kwargs[0]
 
 
-def test_runtime_revalidates_publication_contract_before_each_agent_execution(
-    tmp_path: Path,
-) -> None:
-    """Test List 5: a between-hop config change fails before the next agent."""
+def test_runtime_continues_after_a_pr_config_change_between_steps(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "changed-between-hops"
     _write_publication_contract(issue_dir, persisted=False)
     playbook = {
@@ -544,11 +500,7 @@ def test_runtime_revalidates_publication_contract_before_each_agent_execution(
             to_step="done",
             intent="workflow_complete",
         )
-        return StepExecutionResult(
-            response="",
-            artifacts={},
-            events=[{"type": "pr_synced", "url": "https://example.test/pull/467"}],
-        )
+        return StepExecutionResult(response="", artifacts={})
 
     result = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
@@ -556,104 +508,16 @@ def test_runtime_revalidates_publication_contract_before_each_agent_execution(
         executor=executor,
     ).run(start_step="review")
 
-    assert result.final_status_code == "INVALID_WORKFLOW_CONFIG"
-    assert "invalid_persisted_choice" in (result.detail or "")
-    assert calls == ["review"]
-
-
-@pytest.mark.parametrize(
-    ("legacy_choice", "persisted"),
-    [(True, False), (False, True)],
-)
-def test_runtime_ignores_legacy_confirmation_publication_choice(
-    tmp_path: Path,
-    legacy_choice: bool,
-    persisted: bool,
-) -> None:
-    """Legacy confirmation data cannot authorize or veto generic publication."""
-    issue_dir = tmp_path / ".cafe" / "issues" / f"legacy-{persisted}"
-    issue_dir.mkdir(parents=True)
-    (issue_dir / "issue.yaml").write_text(
-        yaml.safe_dump(
-            {
-                "playbook_id": "publication-contract",
-                "confirmation_contract": {"pr_auto_create": legacy_choice},
-                "pr": {"auto_create": persisted},
-            },
-            sort_keys=False,
-        ),
-        encoding="utf-8",
-    )
-    received_choices: list[object] = []
-
-    def executor(step: str, *_args: object, **kwargs: object) -> StepExecutionResult:
-        received_choices.append(kwargs.get("validated_pr_auto_create"))
-        _write_baton(
-            issue_dir,
-            from_step=step,
-            to_owner="done",
-            to_step="done",
-            intent="workflow_complete",
-        )
-        events = (
-            [{"type": "pr_synced", "url": "https://example.test/pull/483"}]
-            if persisted
-            else []
-        )
-        return StepExecutionResult(response="", artifacts={}, events=events)
-
-    result = BlackboardWorkflowRuntime(
-        issue_dir=issue_dir,
-        playbook=_publication_contract_playbook(),
-        executor=executor,
-    ).run(start_step="build")
-
     assert result.completed is True
-    assert received_choices == [persisted]
-
-
-def test_non_pr_runtime_ignores_legacy_confirmation_publication_choice(
-    tmp_path: Path,
-) -> None:
-    """A legacy confirmation-only field is not generic PR configuration."""
-    issue_dir = tmp_path / ".cafe" / "issues" / "legacy-non-pr"
-    issue_dir.mkdir(parents=True)
-    (issue_dir / "issue.yaml").write_text(
-        yaml.safe_dump(
-            {
-                "playbook_id": "publication-contract",
-                "confirmation_contract": {"pr_auto_create": True},
-            },
-            sort_keys=False,
-        ),
-        encoding="utf-8",
-    )
-
-    def executor(step: str, *_args: object, **_kwargs: object) -> StepExecutionResult:
-        _write_baton(
-            issue_dir,
-            from_step=step,
-            to_owner="done",
-            to_step="done",
-            intent="workflow_complete",
-        )
-        return StepExecutionResult(response="", artifacts={})
-
-    result = BlackboardWorkflowRuntime(
-        issue_dir=issue_dir,
-        playbook=_publication_contract_playbook(capable=False),
-        executor=executor,
-    ).run(start_step="build")
-
-    assert result.completed is True
+    assert calls == ["review", "publish"]
 
 
 @pytest.mark.parametrize("choice", [True, False])
-def test_local_review_task_reports_the_current_publication_outcome(
+def test_local_review_task_reports_an_emitted_pr_url_only(
     tmp_path: Path,
     choice: bool,
 ) -> None:
-    """Test List 6/7: durable review text matches the explicit workflow mode."""
+    """A PR URL is display data, not a core publication-mode decision."""
     issue_dir = tmp_path / ".cafe" / "issues" / f"review-outcome-{choice}"
     _write_publication_contract(issue_dir, persisted=choice)
     playbook = PlaybookLoader().load("standard")
@@ -691,7 +555,7 @@ def test_local_review_task_reports_the_current_publication_outcome(
     if choice:
         assert f"Verified PR URL: {url}" in task.prompt
     else:
-        assert "Publication mode: local-only. No PR URL exists." in task.prompt
+        assert "Publication mode:" not in task.prompt
         assert "https://github.com/stale/project/pull/1" not in task.prompt
 
 
@@ -6369,10 +6233,10 @@ def test_execute_one_iteration_does_not_retry_an_internal_executor_type_error(
     _write_publication_contract(issue_dir, persisted=False)
     playbook = _simple_playbook()
     playbook["steps"]["spec"]["capability_requests"] = ["cafe.pr.publish"]
-    received_choices: list[object] = []
+    received_pr_config: list[bool] = []
 
     def executor(step_name: str, step_def: dict, state: object, **kwargs) -> StepExecutionResult:
-        received_choices.append(kwargs.get("validated_pr_auto_create"))
+        received_pr_config.append("validated_pr_auto_create" in kwargs)
         raise TypeError("executor implementation failed")
 
     runtime = BlackboardWorkflowRuntime(
@@ -6384,7 +6248,7 @@ def test_execute_one_iteration_does_not_retry_an_internal_executor_type_error(
     result = runtime.run(start_step="spec", max_transitions=5)
 
     assert result.completed is False
-    assert received_choices == [False]
+    assert received_pr_config == [False]
 
 
 # ---------------------------------------------------------------------------
