@@ -370,9 +370,9 @@ steps:
         BlackboardStore(issue_dir)
         .load_handoff_contract(state, allowed_steps=["repair", "release"])
         .to_step
-        == "release"
+        == "repair"
     )
-    assert any(
+    assert not any(
         event.event_type == "workflow_blocked"
         and event.data.get("reason") == "missing_capability_receipt"
         for event in state.events

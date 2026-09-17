@@ -548,12 +548,7 @@ class BlackboardWorkflowRuntime:
 
     @staticmethod
     def _capability_receipt_satisfied(execution_result: Any, capability_id: str) -> bool:
-        """True when a capability left a success receipt.
-
-        ``pr_synced`` remains a legacy success marker for ``cafe.pr.publish``.
-        """
-        if capability_id == CAPABILITY_PR_PUBLISH_ID:
-            return BlackboardWorkflowRuntime._current_pr_url(execution_result) is not None
+        """True when a capability left a success receipt."""
         events = getattr(execution_result, "events", None)
         if not isinstance(events, list):
             return False
@@ -608,8 +603,10 @@ class BlackboardWorkflowRuntime:
     def _required_capability_ids(self, current_step: str) -> list[str]:
         step_def = self.steps.get(current_step, {})
         declared = self._step_declared_capability_ids(step_def)
-        behavior = resolve_step_behavior(self.playbook, current_step)
-        if behavior.publish_confirmation and not self._step_requires_publish_receipt(current_step):
+        if resolve_step_behavior(self.playbook, current_step).publish_confirmation:
+            # Publication is owned by the phase and its host hook.  The core
+            # validates its declared handoff, not a phase-specific remote
+            # receipt before allowing that handoff to proceed.
             return []
         return declared
 
@@ -1425,21 +1422,6 @@ class BlackboardWorkflowRuntime:
         return (
             isinstance(transitions, dict) and transitions.get("manual_handoff") == contract.to_step
         )
-
-    def _step_requires_publish_receipt(self, current_step: str) -> bool:
-        if not resolve_step_behavior(self.playbook, current_step).publish_confirmation:
-            return False
-        issue_yaml = self.issue_dir / "issue.yaml"
-        if not issue_yaml.exists():
-            return False
-        try:
-            import yaml  # type: ignore[import-untyped]
-
-            data = yaml.safe_load(issue_yaml.read_text(encoding="utf-8")) or {}
-        except Exception:
-            return False
-        pr_cfg = data.get("pr") or {}
-        return pr_cfg.get("auto_create", False) is True
 
     def _status_from_contract(self, current_step: str, execution_result: Any) -> str:
         contract = self._load_agent_written_handoff_contract(current_step=current_step)
@@ -3488,11 +3470,6 @@ class BlackboardWorkflowRuntime:
         for event in getattr(self.blackboard, "events", []):
             data = getattr(event, "data", {})
             if (
-                capability_id == CAPABILITY_PR_PUBLISH_ID
-                and getattr(event, "event_type", "") == "pr_synced"
-            ):
-                return True
-            if (
                 getattr(event, "event_type", "") == "capability_receipt"
                 and isinstance(data, dict)
                 and data.get("capability") == capability_id
@@ -4423,53 +4400,48 @@ class BlackboardWorkflowRuntime:
                     completed=False,
                 )
 
-            behavior = resolve_step_behavior(self.playbook, current_step)
-            require_capability_receipts = next_step != "user" or (
-                behavior.publish_confirmation
-                and self._validated_pr_auto_create is True
-            )
+            pending_approval = self._pending_capability_approval(frame.execution_result)
+            if pending_approval is not None:
+                self.blackboard_store.update_handoff_contract(
+                    self.blackboard,
+                    from_step=current_step,
+                    to_owner=HandoffOwner.USER,
+                    to_step="user",
+                    intent=HandoffIntent.MANUAL_HANDOFF,
+                    status_code="CAPABILITY_APPROVAL_PENDING",
+                    source="workflow.capability_approval",
+                )
+                self.blackboard_store.record_event(
+                    self.blackboard,
+                    "capability_approval_requested",
+                    {
+                        "step": current_step,
+                        "capability": pending_approval.get("capability"),
+                        "task_id": pending_approval["task_id"],
+                        "request_fingerprint": pending_approval.get("request_fingerprint"),
+                    },
+                )
+                self.blackboard_store.set_current_step(self.blackboard, "user")
+                self._flush_phase_terminal(
+                    event_type="human_task",
+                    extra={
+                        "task_id": pending_approval["task_id"],
+                        "status_code": "CAPABILITY_APPROVAL_PENDING",
+                    },
+                )
+                return PlaybookRunResult(
+                    final_step=current_step,
+                    final_status_code="CAPABILITY_APPROVAL_PENDING",
+                    completed=False,
+                    detail=str(pending_approval["task_id"]),
+                )
 
-            if require_capability_receipts:
+            if next_step != "user":
                 missing_capabilities = self._missing_capability_receipts(
                     current_step=current_step,
                     execution_result=frame.execution_result,
                 )
                 if missing_capabilities:
-                    pending_approval = self._pending_capability_approval(frame.execution_result)
-                    if pending_approval is not None:
-                        self.blackboard_store.update_handoff_contract(
-                            self.blackboard,
-                            from_step=current_step,
-                            to_owner=HandoffOwner.USER,
-                            to_step="user",
-                            intent=HandoffIntent.MANUAL_HANDOFF,
-                            status_code="CAPABILITY_APPROVAL_PENDING",
-                            source="workflow.capability_approval",
-                        )
-                        self.blackboard_store.record_event(
-                            self.blackboard,
-                            "capability_approval_requested",
-                            {
-                                "step": current_step,
-                                "capability": pending_approval.get("capability"),
-                                "task_id": pending_approval["task_id"],
-                                "request_fingerprint": pending_approval.get("request_fingerprint"),
-                            },
-                        )
-                        self.blackboard_store.set_current_step(self.blackboard, "user")
-                        self._flush_phase_terminal(
-                            event_type="human_task",
-                            extra={
-                                "task_id": pending_approval["task_id"],
-                                "status_code": "CAPABILITY_APPROVAL_PENDING",
-                            },
-                        )
-                        return PlaybookRunResult(
-                            final_step=current_step,
-                            final_status_code="CAPABILITY_APPROVAL_PENDING",
-                            completed=False,
-                            detail=str(pending_approval["task_id"]),
-                        )
                     self.blackboard_store.update_handoff_contract(
                         self.blackboard,
                         from_step=current_step,
@@ -4486,11 +4458,8 @@ class BlackboardWorkflowRuntime:
                             "step": current_step,
                             "status_code": status_code,
                             "reason": "missing_capability_receipt",
-                            "required_event": (
-                                "pr_synced"
-                                if missing_capabilities == [CAPABILITY_PR_PUBLISH_ID]
-                                else "capability_receipt:" + ",".join(missing_capabilities)
-                            ),
+                            "required_event": "capability_receipt:"
+                            + ",".join(missing_capabilities),
                             "missing_capabilities": missing_capabilities,
                         },
                     )

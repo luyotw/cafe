@@ -135,7 +135,7 @@ def _seed_pr_artifacts(issue_dir: Path, *, auto_create: bool = True) -> None:
 
 
 @pytest.mark.e2e
-def test_pr_runtime_rejects_generic_success_receipt_without_verified_url(
+def test_pr_runtime_routes_generic_success_receipt_without_verified_url(
     tmp_path: Path,
 ) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-pr-e2e"
@@ -177,7 +177,8 @@ def test_pr_runtime_rejects_generic_success_receipt_without_verified_url(
 
     assert result.completed is False
     assert result.final_step == "pr"
-    assert result.final_status_code == "MISSING_CAPABILITY_RECEIPT"
+    assert result.final_status_code == "confirmed"
+    assert len(HumanTaskRecordStore(issue_dir).tasks()) == 1
 
 
 @pytest.mark.e2e
