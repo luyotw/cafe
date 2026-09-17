@@ -265,8 +265,8 @@ def test_baton_completion_requires_workflow_complete_for_terminal_transition():
     assert model.steps["publish"].on == {"workflow_complete": "_done"}
 
 
-def test_custom_named_publish_step_uses_declared_baton_and_receipt_contract(tmp_path):
-    """UT-003/UT-004: completion and publish gates have no reserved step name."""
+def test_custom_named_publish_step_uses_declared_baton_without_core_receipt_gate(tmp_path):
+    """UT-003/UT-004: publication does not make a remote receipt a core gate."""
     playbook = _playbook(
         build_behavior={"completion": "baton", "publish_confirmation": True}
     )
@@ -284,7 +284,7 @@ def test_custom_named_publish_step_uses_declared_baton_and_receipt_contract(tmp_
     )
 
     assert runtime._is_baton_driven_step("build") is True
-    assert runtime._required_capability_ids("build") == ["cafe.pr.publish"]
+    assert runtime._required_capability_ids("build") == []
     assert runtime._is_baton_driven_step("verify") is False
 
 

@@ -28,35 +28,61 @@ For Driver-managed preparation, resolve the user-facing runtime-update decision
 from `project_global_skill_sync.md` before invoking `cafe prepare
 --no-interactive`; callbacks never supply this answer.
 
-## Operating modes
+## Required Driver launch entrypoint
 
 The kickoff records one mode; it is a skill operating contract, not a CAFE-core
 policy.
 
-- **attached** runs `cafe workflow --execute --mute-agent-output` in the
-  foreground. Poll only at the confirmed positive interval. An empty terminal
-  yield is transport state, not a reason to inspect early.
-- **unattended** runs the continuous worker in the background. It has no
-  proactive callback; inspect durable state when a user returns.
-- **event-driven** runs that same continuous background worker, adding the
-  trusted builtin callback below. It is not `--single-step`: phases continue
-  normally whether the callback succeeds, fails, or never starts.
-
-For event-driven mode, activate the confirmed Driver contract after
-`cafe prepare`, validate the Driver-only entry, and then launch generic CAFE
-through its existing event callback path:
+Every Driver-managed start and ordinary resume must use the same wrapper:
 
 ```bash
-python3 <skill-dir>/scripts/validate_driver_entry.py \
-  --issue-name <issue> \
-  --issue-dir .cafe/issues/<issue> \
-  --workflow-id <prepared-workflow-id> \
-  --fresh-facts '<fresh-driver-policy-facts-json>'
-
-cafe workflow --issue <issue> --execute --mute-agent-output \
-  --background \
-  --on-workflow-event builtin:use-cafe-workflow:workflow_event_callback
+python3 <skill-dir>/scripts/run_workflow.py \
+  --issue <issue> \
+  --playbook <confirmed-playbook> \
+  --driver-mode <attached|unattended|event-driven> \
+  --fresh-facts '<rebuilt-current-driver-facts-json>'
 ```
+
+`--driver-mode` is an assertion against the confirmed contract. The wrapper
+fails closed for missing, unreadable, stale, or conflicting workflow identity,
+playbook, mode, callback binding, CLI order, or checkout identity. It reads the
+prepared workflow and persisted baton for both start and resume; never add
+`--start-step` for an ordinary resume.
+
+Rebuild `--fresh-facts` from the current bounded runtime and catalog checks as
+an object containing `semantic_facts` and `material_assumptions`; do not copy
+the persisted preflight merely to make it match. The wrapper validates that
+payload through `evaluate_driver_entry` and rejects `material_change` and
+`unknown` before launching any attached, unattended, or event-driven worker.
+Continue only after the existing contract reconfirmation path establishes
+`same_semantics`.
+
+- **attached** launches foreground continuous execution and returns an
+  `action: wait` directive containing the confirmed positive
+  `poll_interval_seconds`. Poll only at the confirmed positive interval. An
+  empty terminal yield is transport state, not a reason to inspect early.
+- **unattended** launches background continuous execution without a callback
+  and returns `action: yield`. That directive is terminal for the current
+  Driver turn; inspect durable state only when the user returns.
+- **event-driven** validates the trusted builtin callback and confirmed ordered
+  Driver CLI chain, launches background continuous execution with the callback,
+  and returns `action: yield`. That directive is terminal for the current
+  Driver turn: do not poll with sleep, `ps`, `write_stdin`, `cafe status`, or
+  `cafe task ls`; wait for a callback wake or user input.
+
+None of the modes uses `--single-step`. The wrapper always supplies `--execute`
+and `--mute-agent-output`, supplies `--background` only for unattended and
+event-driven operation, and supplies the callback only for event-driven mode.
+It never infers HumanTask answers, permissions, `--open-pr`, model or playbook
+changes, `--add-dir`, `--no-verify`, or retry/fresh-session choices.
+The only separately authorized continuation input is `--alignment-input`: it
+requires explicit JSON and is accepted only when the current durable handoff,
+confirmed Driver policy, and latest alignment request all authorize that exact
+decision. It is not a HumanTask answer or a general phase-input channel.
+
+The wrapper also emits stable `CAFE_DRIVER_DIRECTIVE` records for launch
+failure and a durable user-owned boundary. Do not launch through a user-owned
+boundary or infer its answer.
 
 The callback reads the issue-scoped `driver/contract.json` and projects the
 primary CLI plus fallback CLI/model order only in memory. Waking the primary
@@ -69,13 +95,10 @@ only; when a contract exists it is neither read as callback authority nor a
 writer target. The event-driver lifecycle uses no session-file discovery,
 directory diff, sleep, polling, or watcher.
 
-For attached or unattended Driver-managed work, invoke the same validator,
-then start generic CAFE through its ordinary command. The supplied fresh facts are
-the current bounded semantic policy rebuilt by the skill's loaders and the
-current material assumptions; they are not a caller-selected subset. The
-validator does not inspect `issue.yaml`, phase chains, or capability choices. Generic
-CAFE validates and consumes those ordinary inputs under the existing #467
-contract, with identical behavior whether a Driver exists or not.
+The wrapper validates only launch authority and invocation identity. It does
+not become a workflow state inspector or decision engine. After a callback wake
+notice, continue to inspect `cafe status`, `cafe show`, and durable tasks before
+deciding what the Driver may do.
 
 Session acquisition and actual delivery are separate boundaries. Every
 unacquired, unbound entry first runs a provider request exactly equivalent to
@@ -223,9 +246,9 @@ repeat it when the user already has the same task and options unless they ask.
    Treat an uncertain command result as unconfirmed: inspect durable task and
    handoff state before retrying. Repeating the exact normalized response is
    safe and does not resume twice; a different response conflicts.
-4. After durable completion, continue with the confirmed mode: attached starts
-   the foreground continuous workflow; unattended starts the ordinary background
-   worker; event-driven starts the background worker with its trusted callback.
+4. After durable completion, rebuild fresh facts and invoke
+   `scripts/run_workflow.py` with the confirmed issue, playbook, Driver mode,
+   and `--fresh-facts`. The wrapper follows the persisted continuation.
 
 `--no-resume` is an internal driver control that separates durable task
 completion from mode-specific continuation. Direct `cafe task complete` users
@@ -235,19 +258,25 @@ this two-step flow.
 ## Commands and handoffs
 
 - Resolve the current phase from `cafe status` and the structured baton, then
-  use `--start-step` only for initial entry or bounded diagnosis.
-- Resume the persisted baton with `cafe workflow --execute --mute-agent-output`.
-  `cafe make` is valid when direct workflow controls are not required.
+  use the wrapper for every Driver-managed start or resume.
+- Ordinary resume follows the persisted baton and completed durable task. Do
+  not select or reconstruct a step with `--start-step`.
 - Use `--single-step` only for manual, bounded diagnosis. No ordinary operating
   mode uses it.
-- A background invocation cannot carry `--single-step`, `--start-step`, or
-  `--add-dir`. It may stage an exact `--user-input` before spawning the worker.
+- The wrapper has no input that grants user-owned decisions or separately
+  authorized options. Complete those through their existing explicit boundary
+  before invoking the wrapper.
 - For a HumanTask, read `handoffs_and_alignment.md`, resolve the active
   HumanTask and its input schema, including current `human_task_id`, then follow
   **Completing a HumanTask** above. Never turn an unknown or stale task into
   phase input.
   Plain text is valid only for a task that explicitly declares the `feedback`
   schema.
+
+Direct `cafe workflow` invocation is an explicit manual bypass only, never the
+normal Driver path. Use it only when the user explicitly requests that bypass;
+the caller then owns every argument and the wrapper's validation/directive
+contract does not apply.
 
 ## Inspection
 

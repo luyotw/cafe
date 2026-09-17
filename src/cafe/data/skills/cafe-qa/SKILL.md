@@ -57,7 +57,7 @@ Read your agent file: {agent_file}
 
 ## Instructions
 - Perform black-box acceptance against the requested behavior. When a requirements specification is provided, treat it as the acceptance source of truth; otherwise derive the behavior from the development summary and verify it against the changed product.
-- When `workspace_file` is supplied, verify its Git head, changed-file set, and receipts before accepting the development summary as current.
+- When `workspace_file` is supplied, verify its Git head and changed-file set before accepting the development summary as current.
 - When an implementation plan is provided, exercise its Test List; otherwise derive observable scenarios from the available requirements and acceptance evidence.
 - When a review result is provided, prioritize its identified risks and confirm that unresolved findings do not escape acceptance.
 - Exercise every applicable acceptance criterion using observable scenarios or commands; do not infer a pass from code inspection alone.

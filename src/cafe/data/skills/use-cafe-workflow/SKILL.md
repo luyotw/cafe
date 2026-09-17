@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including passive supervision, bounded recovery, and declarative repair when execution leaves its safe operating envelope.
-metadata: {version: 1.53.0}
+metadata: {version: 1.54.1}
 ---
 
 # Use CAFE Workflow
@@ -43,8 +43,9 @@ read the union once; do not preload the rest.
    `cafe prepare`, mutate the repository, or execute a phase before confirmation.
 3. Prepare in the confirmed worktree and persist only through each owning
    contract. Configure phase chains before their first execution.
-4. Start or resume only through `references/running_workflow.md`, under the
-   confirmed operating mode and persisted baton.
+4. Start or resume only through `scripts/run_workflow.py` as specified by
+   `references/running_workflow.md`, under the confirmed operating mode and
+   persisted baton. Never reconstruct the `cafe workflow` arguments from prose.
 5. While work is active, apply the non-intervention envelope in
    `references/supervision_and_recovery.md`. The continuous workflow worker owns
    ordinary advancement.
@@ -60,6 +61,8 @@ read the union once; do not preload the rest.
 - Route every HumanTask through its declared owner and schema. The Driver never
   infers or supplies a user-owned answer; Driver-owned exceptions exist only
   where the confirmed task contract explicitly grants them.
+- Treat a wrapper directive with `action: yield` as terminal for the current
+  Driver turn. Do not poll the background worker after that directive.
 - Follow only the effective graph, confirmed contract, and action-specific
   authority. “Continue” or workflow completion grants no repair, merge, deploy,
   publish, close, delete, cleanup, or other external mutation authority.
