@@ -3352,18 +3352,18 @@ def test_use_cafe_workflow_defines_event_driven_mode_and_model_authority() -> No
     assert "attached with a positive `poll_interval_seconds`" in normalized_kickoff
     assert "event-driven" in normalized_kickoff
     assert "Every later entry is a forward-only fallback with an exact model" in normalized_kickoff
-    assert "cafe workflow --execute --mute-agent-output" in running
-    assert "scripts/validate_driver_entry.py" in running
-    assert "does not inspect `issue.yaml`, phase chains, or capability choices" in running
+    assert "scripts/run_workflow.py" in running
+    assert "always supplies `--execute`" in normalized_running
+    assert "does not become a workflow state inspector or decision engine" in normalized_running
     assert "Use `--single-step` only for manual, bounded diagnosis" in normalized_running
     assert "callbacks are best effort" in normalized_running
     assert "No ordinary operating mode uses it" in normalized_running
-    assert "--on-workflow-event builtin:use-cafe-workflow:workflow_event_callback" in running
+    assert "validates the trusted builtin callback" in normalized_running
     assert "`driver/config.yaml` is a legacy migration input" in running
     assert "`codex queue`" in running
     assert "--advancement" not in normalized_running
     assert "--delegated-availability" not in normalized_running
-    assert "Resume the persisted baton" in normalized_running
+    assert "Ordinary resume follows the persisted baton" in normalized_running
     assert "Attached polling starts after the full confirmed interval" in normalized_running
     assert "exactly one operating mode" in normalized_kickoff
     assert "Do not put the mode, CLI, model, session" in normalized_kickoff
@@ -3593,3 +3593,17 @@ def test_kickoff_rejects_incomplete_delivery_before_activation(tmp_path, damage)
     assert result.returncode != 0
     assert ("--delivery-contract" if damage == "missing" else "DeliveryContract") in result.stderr
     assert not (tmp_path / ".cafe").exists()
+
+
+def test_driver_managed_start_and_resume_require_the_skill_wrapper() -> None:
+    skill = _read_skill_resource("SKILL.md")
+    running = _read_skill_resource("references/running_workflow.md")
+    normalized = " ".join(running.split())
+
+    assert "scripts/run_workflow.py" in skill
+    assert "scripts/run_workflow.py" in running
+    assert "action: yield" in running
+    assert "terminal for the current Driver turn" in normalized
+    assert "explicit manual bypass" in running
+    assert "Resume the persisted baton with `cafe workflow" not in running
+    assert "cafe workflow --issue <issue> --execute --mute-agent-output" not in running
