@@ -16,7 +16,6 @@ from cafe.driver import EventCallbackRequest, event_callback_projection
 from cafe.driver._store import load_contract
 from cafe.workflow_execution.event_callback import resolve_builtin_workflow_event_callback
 
-
 CALLBACK_ID = "builtin:use-cafe-workflow:workflow_event_callback"
 MAX_WORKFLOW_STATE_BYTES = 256 * 1024
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -127,6 +126,63 @@ def _is_user_boundary(state: Mapping[str, Any]) -> bool:
     )
 
 
+def _validate_alignment_input(
+    raw_input: str | None,
+    *,
+    issue_dir: Path,
+    state: Mapping[str, Any],
+    contract: Mapping[str, Any],
+) -> str | None:
+    if raw_input is None:
+        return None
+    try:
+        payload = json.loads(raw_input, object_pairs_hook=_exact_object)
+    except json.JSONDecodeError as exc:
+        raise ValueError("alignment input must be a JSON object") from exc
+    decision = payload.get("decision") if isinstance(payload, dict) else None
+    reason = payload.get("reason") if isinstance(payload, dict) else None
+    if not isinstance(decision, str) or not decision.strip():
+        raise ValueError("alignment input requires an explicit decision")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError("alignment input requires an explicit reason")
+    handoff = state.get("handoff_contract")
+    if (
+        state.get("current_step") != "user"
+        or not isinstance(handoff, Mapping)
+        or handoff.get("to_owner") != "user"
+        or handoff.get("intent") != "alignment_checkpoint"
+    ):
+        raise ValueError("alignment input does not match the durable workflow boundary")
+    from_step = handoff.get("from_step")
+    if not isinstance(from_step, str) or not _IDENTIFIER.fullmatch(from_step):
+        raise ValueError("alignment input has no valid durable source step")
+    reactive = contract.get("reactive_user_handoffs")
+    if (
+        not isinstance(reactive, Mapping)
+        or reactive.get("alignment_checkpoint") != "driver_resolvable_when_clear"
+    ):
+        raise ValueError("the confirmed Driver contract does not authorize alignment input")
+    candidates = sorted((issue_dir / from_step).glob("iteration_*/alignment_request.json"))
+    if not candidates:
+        raise ValueError("durable alignment request is missing")
+    request_path = candidates[-1]
+    try:
+        metadata = request_path.lstat()
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+            raise ValueError("durable alignment request is unsafe")
+        if metadata.st_size > MAX_WORKFLOW_STATE_BYTES:
+            raise ValueError("durable alignment request exceeds the maximum bounded size")
+        request = json.loads(
+            request_path.read_text(encoding="utf-8"), object_pairs_hook=_exact_object
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("durable alignment request is unreadable") from exc
+    allowed = request.get("allowed_decisions") if isinstance(request, dict) else None
+    if not isinstance(allowed, list) or decision not in allowed:
+        raise ValueError("alignment decision is not allowed by the durable request")
+    return raw_input
+
+
 def _emit_directive(
     *,
     mode: str,
@@ -149,7 +205,8 @@ def _emit_directive(
     if exit_code is not None:
         directive["exit_code"] = exit_code
     print(
-        "CAFE_DRIVER_DIRECTIVE " + json.dumps(directive, ensure_ascii=True, separators=(",", ":"))
+        "CAFE_DRIVER_DIRECTIVE " + json.dumps(directive, ensure_ascii=True, separators=(",", ":")),
+        flush=True,
     )
     print(guidance)
 
@@ -163,7 +220,9 @@ def _launch_failed(
         worker=worker,
         next_wake=["user_input"],
         exit_code=exit_code,
-        guidance="Workflow launch failed. Inspect the reported error before deciding whether to retry.",
+        guidance=(
+            "Workflow launch failed. Inspect the reported error before deciding whether to retry."
+        ),
     )
     print(f"run_workflow.py: {message}", file=sys.stderr)
     return exit_code if exit_code not in (None, 0) else 2
@@ -177,6 +236,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--playbook", required=True)
     parser.add_argument(
         "--driver-mode", required=True, choices=("attached", "unattended", "event-driven")
+    )
+    parser.add_argument(
+        "--alignment-input",
+        help="Explicit JSON for an authorized durable alignment checkpoint.",
     )
     return parser
 
@@ -208,6 +271,12 @@ def run(
         if confirmed_mode != mode:
             raise ValueError("requested Driver mode differs from the confirmed contract")
         _validate_checkout(contract, project_root)
+        alignment_input = _validate_alignment_input(
+            args.alignment_input,
+            issue_dir=issue_dir,
+            state=state,
+            contract=contract,
+        )
         if mode == "event-driven":
             _validate_event_binding(
                 issue_dir=issue_dir,
@@ -220,13 +289,15 @@ def run(
     except (OSError, ValueError) as exc:
         return _launch_failed(mode, str(exc))
 
-    if _is_user_boundary(state):
+    if _is_user_boundary(state) and alignment_input is None:
         _emit_directive(
             mode=mode,
             action="await_user",
             worker="none",
             next_wake=["user_input"],
-            guidance="Workflow is at a durable user-owned boundary. Do not launch or infer an answer.",
+            guidance=(
+                "Workflow is at a durable user-owned boundary. Do not launch or infer an answer."
+            ),
         )
         return 0
 
@@ -245,6 +316,8 @@ def run(
         command.append("--background")
     if mode == "event-driven":
         command.extend(["--on-workflow-event", CALLBACK_ID])
+    if alignment_input is not None:
+        command.extend(["--user-input", alignment_input])
 
     try:
         process = process_factory(command, cwd=str(project_root))

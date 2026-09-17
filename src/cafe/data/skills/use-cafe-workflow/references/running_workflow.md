@@ -66,6 +66,10 @@ and `--mute-agent-output`, supplies `--background` only for unattended and
 event-driven operation, and supplies the callback only for event-driven mode.
 It never infers HumanTask answers, permissions, `--open-pr`, model or playbook
 changes, `--add-dir`, `--no-verify`, or retry/fresh-session choices.
+The only separately authorized continuation input is `--alignment-input`: it
+requires explicit JSON and is accepted only when the current durable handoff,
+confirmed Driver policy, and latest alignment request all authorize that exact
+decision. It is not a HumanTask answer or a general phase-input channel.
 
 The wrapper also emits stable `CAFE_DRIVER_DIRECTIVE` records for launch
 failure and a durable user-owned boundary. Do not launch through a user-owned

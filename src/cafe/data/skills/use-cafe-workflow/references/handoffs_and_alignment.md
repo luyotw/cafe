@@ -346,12 +346,16 @@ For an explicit `alignment_checkpoint`:
 1. Read the latest
    `.cafe/issues/<issue>/<step>/iteration_*/alignment_request.json`.
 2. Apply the same evidence tuple.
-3. For `within` + `agent`, resume with explicit JSON; plain text must not
-   approve the checkpoint:
+3. For `within` + `agent`, resume through the required wrapper with explicit
+   JSON; plain text must not approve the checkpoint. The wrapper verifies the
+   current alignment handoff, confirmed Driver authority, and the durable
+   request's allowed decision before forwarding the input:
 
    ```bash
-   cafe workflow --execute --mute-agent-output \
-     --user-input '{"decision":"approve","reason":"Within confirmed roadmap and mandate."}'
+   python3 <skill-dir>/scripts/run_workflow.py \
+     --issue <issue> --playbook <confirmed-playbook> \
+     --driver-mode <confirmed-mode> \
+     --alignment-input '{"decision":"approve","reason":"Within confirmed roadmap and mandate."}'
    ```
 
 4. For `within` + `propose`, use the playbook's grounded recommendation flow.

@@ -3346,7 +3346,6 @@ def test_use_cafe_workflow_defines_event_driven_mode_and_model_authority() -> No
     normalized_kickoff = " ".join(kickoff.split())
     normalized_running = " ".join(running.split())
     normalized_models = " ".join(models.split())
-    normalized_skill = " ".join(skill.split())
 
     assert "references/model_selection.md" in skill
     assert "attached with a positive `poll_interval_seconds`" in normalized_kickoff
@@ -3607,3 +3606,10 @@ def test_driver_managed_start_and_resume_require_the_skill_wrapper() -> None:
     assert "explicit manual bypass" in running
     assert "Resume the persisted baton with `cafe workflow" not in running
     assert "cafe workflow --issue <issue> --execute --mute-agent-output" not in running
+
+    hand_built = []
+    for path in SKILL_ROOT.rglob("*.md"):
+        text = path.read_text(encoding="utf-8")
+        if re.search(r"cafe workflow[^\n]*--execute", text):
+            hand_built.append(path.relative_to(SKILL_ROOT).as_posix())
+    assert hand_built == []
