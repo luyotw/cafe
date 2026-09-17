@@ -355,6 +355,7 @@ For an explicit `alignment_checkpoint`:
    python3 <skill-dir>/scripts/run_workflow.py \
      --issue <issue> --playbook <confirmed-playbook> \
      --driver-mode <confirmed-mode> \
+     --fresh-facts '<rebuilt-current-driver-facts-json>' \
      --alignment-input '{"decision":"approve","reason":"Within confirmed roadmap and mandate."}'
    ```
 

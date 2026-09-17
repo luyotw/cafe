@@ -39,7 +39,8 @@ Every Driver-managed start and ordinary resume must use the same wrapper:
 python3 <skill-dir>/scripts/run_workflow.py \
   --issue <issue> \
   --playbook <confirmed-playbook> \
-  --driver-mode <attached|unattended|event-driven>
+  --driver-mode <attached|unattended|event-driven> \
+  --fresh-facts '<rebuilt-current-driver-facts-json>'
 ```
 
 `--driver-mode` is an assertion against the confirmed contract. The wrapper
@@ -47,6 +48,14 @@ fails closed for missing, unreadable, stale, or conflicting workflow identity,
 playbook, mode, callback binding, CLI order, or checkout identity. It reads the
 prepared workflow and persisted baton for both start and resume; never add
 `--start-step` for an ordinary resume.
+
+Rebuild `--fresh-facts` from the current bounded runtime and catalog checks as
+an object containing `semantic_facts` and `material_assumptions`; do not copy
+the persisted preflight merely to make it match. The wrapper validates that
+payload through `evaluate_driver_entry` and rejects `material_change` and
+`unknown` before launching any attached, unattended, or event-driven worker.
+Continue only after the existing contract reconfirmation path establishes
+`same_semantics`.
 
 - **attached** launches foreground continuous execution and returns an
   `action: wait` directive containing the confirmed positive
@@ -237,8 +246,9 @@ repeat it when the user already has the same task and options unless they ask.
    Treat an uncertain command result as unconfirmed: inspect durable task and
    handoff state before retrying. Repeating the exact normalized response is
    safe and does not resume twice; a different response conflicts.
-4. After durable completion, invoke `scripts/run_workflow.py` with the confirmed
-   issue, playbook, and Driver mode. The wrapper follows the persisted continuation.
+4. After durable completion, rebuild fresh facts and invoke
+   `scripts/run_workflow.py` with the confirmed issue, playbook, Driver mode,
+   and `--fresh-facts`. The wrapper follows the persisted continuation.
 
 `--no-resume` is an internal driver control that separates durable task
 completion from mode-specific continuation. Direct `cafe task complete` users

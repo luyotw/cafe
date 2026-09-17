@@ -13,6 +13,10 @@ SCRIPT = (
     Path(__file__).parents[2] / "src/cafe/data/skills/use-cafe-workflow/scripts/run_workflow.py"
 )
 CALLBACK_ID = "builtin:use-cafe-workflow:workflow_event_callback"
+FRESH_FACTS = {
+    "semantic_facts": {"runtime": "current"},
+    "material_assumptions": {"catalogs": "unchanged"},
+}
 
 
 def _module():
@@ -72,7 +76,29 @@ class _Process:
         return self.returncode
 
 
+def _args(mode: str, *extra: str) -> list[str]:
+    return [
+        "--issue",
+        "issue498",
+        "--playbook",
+        "direct",
+        "--driver-mode",
+        mode,
+        "--fresh-facts",
+        json.dumps(FRESH_FACTS),
+        *extra,
+    ]
+
+
 def _install_contract_stubs(monkeypatch, module, contract):
+    monkeypatch.setattr(
+        module,
+        "evaluate_driver_entry",
+        lambda request: SimpleNamespace(
+            freshness=module.Freshness.SAME_SEMANTICS,
+            contract_sha256="digest",
+        ),
+    )
     monkeypatch.setattr(module, "load_contract", lambda *args, **kwargs: (contract, "digest"))
     monkeypatch.setattr(
         module,
@@ -127,7 +153,7 @@ def test_modes_launch_exact_safe_argv_and_emit_exact_directive(
         return _Process()
 
     result = module.run(
-        ["--issue", "issue498", "--playbook", "direct", "--driver-mode", mode],
+        _args(mode),
         cwd=tmp_path,
         process_factory=process_factory,
     )
@@ -161,7 +187,7 @@ def test_start_and_resume_use_identical_argv(tmp_path: Path, monkeypatch) -> Non
         launched.append(argv)
         return _Process()
 
-    args = ["--issue", "issue498", "--playbook", "direct", "--driver-mode", "unattended"]
+    args = _args("unattended")
     assert module.run(args, cwd=tmp_path, process_factory=process_factory) == 0
     state = json.loads((issue_dir / "blackboard.json").read_text(encoding="utf-8"))
     state["current_step"] = "review"
@@ -208,7 +234,7 @@ def test_contract_mode_prepared_identity_and_checkout_mismatches_fail_closed(
         return _Process()
 
     result = module.run(
-        ["--issue", "issue498", "--playbook", "direct", "--driver-mode", requested_mode],
+        _args(requested_mode),
         cwd=tmp_path,
         process_factory=process_factory,
     )
@@ -240,9 +266,9 @@ def test_relative_worktree_identity_resolves_from_main_checkout(
 
     assert (
         module.run(
-            ["--issue", "issue498", "--playbook", "direct", "--driver-mode", "unattended"],
+            _args("unattended"),
             cwd=worktree,
-            process_factory=lambda argv, **kwargs: (launched.append(argv) or _Process()),
+            process_factory=lambda argv, **kwargs: launched.append(argv) or _Process(),
         )
         == 0
     )
@@ -255,7 +281,7 @@ def test_stale_contract_identity_and_unreadable_state_fail_closed(
     module = _module()
     issue_dir = _prepared(tmp_path)
     contract = _contract("unattended", tmp_path)
-    args = ["--issue", "issue498", "--playbook", "direct", "--driver-mode", "unattended"]
+    args = _args("unattended")
 
     assert module.run(args, cwd=tmp_path, process_factory=lambda *a, **k: _Process()) == 2
     assert "launch_failed" in capsys.readouterr().out
@@ -292,7 +318,7 @@ def test_event_binding_or_order_change_fails_before_launch(
     )
 
     result = module.run(
-        ["--issue", "issue498", "--playbook", "direct", "--driver-mode", "event-driven"],
+        _args("event-driven"),
         cwd=tmp_path,
         process_factory=lambda *args, **kwargs: pytest.fail("worker must not launch"),
     )
@@ -307,7 +333,7 @@ def test_launch_failure_and_durable_user_boundary_have_stable_directives(
     module = _module()
     issue_dir = _prepared(tmp_path)
     _install_contract_stubs(monkeypatch, module, _contract("unattended", tmp_path))
-    args = ["--issue", "issue498", "--playbook", "direct", "--driver-mode", "unattended"]
+    args = _args("unattended")
 
     assert module.run(args, cwd=tmp_path, process_factory=lambda *a, **k: _Process(7)) == 7
     assert capsys.readouterr().out.splitlines()[0] == (
@@ -352,7 +378,7 @@ def test_attached_directive_is_flushed_before_wait(tmp_path: Path, monkeypatch) 
     monkeypatch.setattr("builtins.print", fake_print)
     assert (
         module.run(
-            ["--issue", "issue498", "--playbook", "direct", "--driver-mode", "attached"],
+            _args("attached"),
             cwd=tmp_path,
             process_factory=lambda *args, **kwargs: WaitingProcess(),
         )
@@ -386,18 +412,9 @@ def test_explicit_alignment_input_requires_durable_driver_authority(
 
     assert (
         module.run(
-            [
-                "--issue",
-                "issue498",
-                "--playbook",
-                "direct",
-                "--driver-mode",
-                "unattended",
-                "--alignment-input",
-                payload,
-            ],
+            _args("unattended", "--alignment-input", payload),
             cwd=tmp_path,
-            process_factory=lambda argv, **kwargs: (launched.append(argv) or _Process()),
+            process_factory=lambda argv, **kwargs: launched.append(argv) or _Process(),
         )
         == 0
     )
@@ -421,18 +438,56 @@ def test_explicit_alignment_input_requires_durable_driver_authority(
     state_path.write_text(json.dumps(state), encoding="utf-8")
     assert (
         module.run(
-            [
-                "--issue",
-                "issue498",
-                "--playbook",
-                "direct",
-                "--driver-mode",
-                "unattended",
-                "--alignment-input",
-                payload,
-            ],
+            _args("unattended", "--alignment-input", payload),
             cwd=tmp_path,
             process_factory=lambda *args, **kwargs: pytest.fail("worker must not launch"),
         )
         == 2
     )
+
+
+def test_rebuilt_fresh_facts_are_required_before_launch(tmp_path: Path) -> None:
+    module = _module()
+
+    with pytest.raises(SystemExit) as exc_info:
+        module.run(
+            ["--issue", "issue498", "--playbook", "direct", "--driver-mode", "unattended"],
+            cwd=tmp_path,
+            process_factory=lambda *args, **kwargs: pytest.fail("worker must not launch"),
+        )
+
+    assert exc_info.value.code == 2
+
+
+@pytest.mark.parametrize("mode", ["attached", "unattended", "event-driven"])
+@pytest.mark.parametrize("freshness_name", ["MATERIAL_CHANGE", "UNKNOWN"])
+def test_freshness_mismatch_fails_before_worker_creation(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+    mode: str,
+    freshness_name: str,
+) -> None:
+    module = _module()
+    _prepared(tmp_path)
+    _install_contract_stubs(monkeypatch, module, _contract(mode, tmp_path))
+    seen_facts: list[dict[str, object]] = []
+
+    def evaluate(request):
+        seen_facts.append(dict(request.fresh_facts))
+        return SimpleNamespace(
+            freshness=getattr(module.Freshness, freshness_name),
+            contract_sha256="digest",
+        )
+
+    monkeypatch.setattr(module, "evaluate_driver_entry", evaluate)
+
+    result = module.run(
+        _args(mode),
+        cwd=tmp_path,
+        process_factory=lambda *args, **kwargs: pytest.fail("worker must not launch"),
+    )
+
+    assert result == 2
+    assert seen_facts == [FRESH_FACTS]
+    assert '"action":"launch_failed"' in capsys.readouterr().out

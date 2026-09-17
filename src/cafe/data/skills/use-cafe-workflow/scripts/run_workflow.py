@@ -12,7 +12,13 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from cafe.driver import EventCallbackRequest, event_callback_projection
+from cafe.driver import (
+    DriverEntryRequest,
+    EventCallbackRequest,
+    Freshness,
+    evaluate_driver_entry,
+    event_callback_projection,
+)
 from cafe.driver._store import load_contract
 from cafe.workflow_execution.event_callback import resolve_builtin_workflow_event_callback
 
@@ -25,9 +31,19 @@ def _exact_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in result:
-            raise ValueError("prepared workflow JSON contains duplicate keys")
+            raise ValueError("JSON object contains duplicate keys")
         result[key] = value
     return result
+
+
+def _mapping_json(value: str) -> dict[str, Any]:
+    try:
+        parsed = json.loads(value, object_pairs_hook=_exact_object)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError("fresh facts must be valid JSON") from exc
+    if not isinstance(parsed, dict):
+        raise argparse.ArgumentTypeError("fresh facts must be a JSON object")
+    return parsed
 
 
 def _prepared_workflow(issue_dir: Path) -> dict[str, Any]:
@@ -282,6 +298,12 @@ def _parser() -> argparse.ArgumentParser:
         "--driver-mode", required=True, choices=("attached", "unattended", "event-driven")
     )
     parser.add_argument(
+        "--fresh-facts",
+        type=_mapping_json,
+        required=True,
+        help="Rebuilt current Driver facts as JSON.",
+    )
+    parser.add_argument(
         "--alignment-input",
         help="Explicit JSON for an authorized durable alignment checkpoint.",
     )
@@ -305,11 +327,23 @@ def run(
         if state["playbook_id"] != playbook:
             raise ValueError("requested playbook differs from the prepared workflow")
         workflow_id = state["workflow_id"]
+        entry = evaluate_driver_entry(
+            DriverEntryRequest(
+                issue_dir=issue_dir,
+                issue_name=issue_name,
+                workflow_id=workflow_id,
+                fresh_facts=args.fresh_facts,
+            )
+        )
+        if entry.freshness is not Freshness.SAME_SEMANTICS:
+            raise ValueError(f"Driver contract requires {entry.freshness.value} recovery")
         contract, digest = load_contract(
             issue_dir,
             issue_name=issue_name,
             workflow_id=workflow_id,
         )
+        if digest != entry.contract_sha256:
+            raise ValueError("Driver contract changed during entry validation")
         driver = contract.get("driver")
         confirmed_mode = driver.get("mode") if isinstance(driver, Mapping) else None
         if confirmed_mode != mode:

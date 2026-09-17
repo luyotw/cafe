@@ -3604,6 +3604,9 @@ def test_driver_managed_start_and_resume_require_the_skill_wrapper() -> None:
     assert "action: yield" in running
     assert "terminal for the current Driver turn" in normalized
     assert "explicit manual bypass" in running
+    assert "--fresh-facts '<rebuilt-current-driver-facts-json>'" in normalized
+    assert "through `evaluate_driver_entry`" in normalized
+    assert "rejects `material_change` and `unknown` before launching" in normalized
     assert "Resume the persisted baton with `cafe workflow" not in running
     assert "cafe workflow --issue <issue> --execute --mute-agent-output" not in running
 
