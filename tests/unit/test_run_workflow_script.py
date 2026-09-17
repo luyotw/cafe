@@ -221,6 +221,34 @@ def test_contract_mode_prepared_identity_and_checkout_mismatches_fail_closed(
     )
 
 
+def test_relative_worktree_identity_resolves_from_main_checkout(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = _module()
+    main_checkout = tmp_path / "project"
+    worktree = main_checkout / ".cafe/worktrees/issue498"
+    git_dir = main_checkout / ".git/worktrees/issue498"
+    git_dir.mkdir(parents=True)
+    worktree.mkdir(parents=True)
+    (worktree / ".git").write_text(f"gitdir: {git_dir}\n", encoding="utf-8")
+    (git_dir / "commondir").write_text("../..\n", encoding="utf-8")
+    _prepared(worktree)
+    contract = _contract("unattended", worktree)
+    contract["checkout"] = {"kind": "worktree", "path": ".cafe/worktrees/issue498"}
+    _install_contract_stubs(monkeypatch, module, contract)
+    launched: list[list[str]] = []
+
+    assert (
+        module.run(
+            ["--issue", "issue498", "--playbook", "direct", "--driver-mode", "unattended"],
+            cwd=worktree,
+            process_factory=lambda argv, **kwargs: (launched.append(argv) or _Process()),
+        )
+        == 0
+    )
+    assert len(launched) == 1
+
+
 def test_stale_contract_identity_and_unreadable_state_fail_closed(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:

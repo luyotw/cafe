@@ -67,6 +67,50 @@ def _validate_identifier(value: str, label: str) -> str:
     return value
 
 
+def _main_checkout_root(project_root: Path) -> Path:
+    marker = project_root / ".git"
+    try:
+        metadata = marker.lstat()
+    except OSError as exc:
+        raise ValueError("relative worktree identity requires Git checkout metadata") from exc
+    if stat.S_ISDIR(metadata.st_mode):
+        return project_root
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise ValueError("Git checkout metadata is unsafe")
+    if metadata.st_size > 4096:
+        raise ValueError("Git checkout metadata exceeds the maximum bounded size")
+    try:
+        marker_text = marker.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError) as exc:
+        raise ValueError("Git checkout metadata is unreadable") from exc
+    prefix = "gitdir: "
+    if not marker_text.startswith(prefix):
+        raise ValueError("Git checkout metadata is invalid")
+    git_dir = Path(marker_text[len(prefix) :])
+    if not git_dir.is_absolute():
+        git_dir = project_root / git_dir
+    git_dir = git_dir.resolve()
+    common_marker = git_dir / "commondir"
+    try:
+        common_metadata = common_marker.lstat()
+    except OSError as exc:
+        raise ValueError("Git common checkout metadata is unavailable") from exc
+    if stat.S_ISLNK(common_metadata.st_mode) or not stat.S_ISREG(common_metadata.st_mode):
+        raise ValueError("Git common checkout metadata is unsafe")
+    if common_metadata.st_size > 4096:
+        raise ValueError("Git common checkout metadata exceeds the maximum bounded size")
+    try:
+        common_text = common_marker.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError) as exc:
+        raise ValueError("Git common checkout metadata is unreadable") from exc
+    if not common_text:
+        raise ValueError("Git common checkout metadata is invalid")
+    common_dir = Path(common_text)
+    if not common_dir.is_absolute():
+        common_dir = git_dir / common_dir
+    return common_dir.resolve().parent
+
+
 def _validate_checkout(contract: Mapping[str, Any], project_root: Path) -> None:
     checkout = contract.get("checkout")
     if not isinstance(checkout, Mapping):
@@ -80,7 +124,7 @@ def _validate_checkout(contract: Mapping[str, Any], project_root: Path) -> None:
             raise ValueError("confirmed worktree identity is invalid")
         confirmed = Path(raw_path).expanduser()
         if not confirmed.is_absolute():
-            confirmed = project_root / confirmed
+            confirmed = _main_checkout_root(project_root) / confirmed
         if confirmed.resolve() != project_root:
             raise ValueError("current working directory differs from the confirmed worktree")
         return
