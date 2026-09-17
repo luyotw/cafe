@@ -14,7 +14,7 @@ pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
 DEVELOPMENT_PLAYBOOKS = {
     "direct",
-    "direct-agent-review",
+    "direct-subagent-review",
     "direct-qa",
     "simple",
     "standard",
@@ -208,13 +208,13 @@ def test_direct_is_the_reviewed_no_spec_no_plan_path() -> None:
     assert playbook.steps["review"].max_attempts_per_cycle == 5
 
 
-def test_direct_agent_review_uses_two_in_phase_reviewers_before_pr() -> None:
-    playbook = PlaybookLoader().load_model("direct-agent-review", strict=True).model
+def test_direct_subagent_review_uses_two_in_phase_reviewers_before_pr() -> None:
+    playbook = PlaybookLoader().load_model("direct-subagent-review", strict=True).model
 
     assert playbook.entry_point == "develop"
     assert list(playbook.steps) == ["develop", "pr"]
     develop = playbook.steps["develop"]
-    assert develop.skill == "cafe-develop_agent_review"
+    assert develop.skill == "cafe-develop_subagent_review"
     assert "Agent" in develop.allowed_tools
     assert develop.on["await_agent"] == "pr"
     assert develop.on["no_changes_needed"] == "develop"
@@ -223,7 +223,7 @@ def test_direct_agent_review_uses_two_in_phase_reviewers_before_pr() -> None:
 
     skill = (
         Path(__file__).parents[2]
-        / "src/cafe/data/skills/cafe-develop_agent_review/SKILL.md"
+        / "src/cafe/data/skills/cafe-develop_subagent_review/SKILL.md"
     ).read_text(encoding="utf-8")
     assert "剛好兩個原生 subagent" in skill
     assert "`detail`" in skill
@@ -233,7 +233,7 @@ def test_direct_agent_review_uses_two_in_phase_reviewers_before_pr() -> None:
 
     references = (
         Path(__file__).parents[2]
-        / "src/cafe/data/skills/cafe-develop_agent_review/references"
+        / "src/cafe/data/skills/cafe-develop_subagent_review/references"
     )
     for name in ("execution_steps_normal.md", "execution_steps_correction.md"):
         checklist = (references / name).read_text(encoding="utf-8")
@@ -358,7 +358,7 @@ def test_existing_hotfix_and_tdd_paths_remain_unchanged() -> None:
         "standard",
         "standard-qa",
         "direct",
-        "direct-agent-review",
+        "direct-subagent-review",
         "direct-qa",
         "hotfix",
         "simple",
@@ -389,7 +389,7 @@ def test_builtin_pr_feedback_routes_declare_portable_todo_metadata(
         "standard",
         "standard-qa",
         "direct",
-        "direct-agent-review",
+        "direct-subagent-review",
         "direct-qa",
         "hotfix",
         "simple",

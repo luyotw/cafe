@@ -1,5 +1,5 @@
 ---
-name: cafe-develop_agent_review
+name: cafe-develop_subagent_review
 description: "依計畫完成程式開發與測試，並以 detail、scope 兩個原生 subagent 完成 PR 前審查"
 version: 1.0.0
 workflow:

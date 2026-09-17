@@ -1,6 +1,6 @@
 playbook:
-  id: direct-agent-review
-  name: "Direct Development with Agent Review"
+  id: direct-subagent-review
+  name: "Direct Development with Subagent Review"
   conversation_locale: en-US
   applicability:
     summary: "Focused implementation with concurrent detail and scope subagent review before PR."
@@ -54,7 +54,7 @@ commands:
 steps:
   develop:
     type: skill
-    skill: cafe-develop_agent_review
+    skill: cafe-develop_subagent_review
     role: developer
     assignee_type: agent
     input_artifacts: [pr_result, workflow_feedback]
