@@ -1,13 +1,15 @@
 """Mode-neutral settings dispatch and owner adapter boundaries."""
 
-from importlib.metadata import EntryPoint
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-import tomllib
 
-from cafe.settings import SettingUpdateRequest, dispatch_setting_update
+from cafe.settings import (
+    SettingUpdateRequest,
+    _declared_setting_owners,
+    dispatch_setting_update,
+)
 
 
 class _EntryPoint:
@@ -49,10 +51,7 @@ def test_dispatch_rejects_unknown_or_duplicate_owner_before_call(monkeypatch) ->
 
 
 def test_packaged_setting_owner_adapters_are_declared_and_loadable() -> None:
-    root = Path(__file__).parents[2]
-    project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
-    declared = project["project"]["entry-points"]["cafe.setting_updates"]
+    declared = _declared_setting_owners()
 
-    assert set(declared) == {"driver", "pr.auto_create"}
-    for name, value in declared.items():
-        assert callable(EntryPoint(name=name, value=value, group="cafe.setting_updates").load())
+    assert {entry.name for entry in declared} == {"driver", "pr.auto_create"}
+    assert all(callable(entry.load()) for entry in declared)

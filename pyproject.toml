@@ -31,10 +31,6 @@ dev = [
 [project.scripts]
 cafe = "cafe.ui.cli:main"
 
-[project.entry-points."cafe.setting_updates"]
-driver = "cafe.driver.settings:update_driver_setting"
-"pr.auto_create" = "cafe.core.capability_setup:update_pr_auto_create_setting"
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
