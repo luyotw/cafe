@@ -239,7 +239,7 @@ def workflow_feedback_todo_items(
     id_prefix_by_kind: Mapping[str, str],
     source_identities: tuple[str, ...] | None = None,
 ) -> tuple[TodoItem, ...]:
-    """Normalize one exact workflow-feedback delivery into canonical Todo items."""
+    """Normalize pending target feedback or one exact delivered batch into Todo items."""
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -263,9 +263,12 @@ def workflow_feedback_todo_items(
         if not identity or identity in seen:
             raise TodoContractError("workflow feedback Todo identities are missing or duplicate")
         seen.add(identity)
-        if normalized.target_step != target_step:
-            continue
         if identities is None:
+            # Pending discovery is step-scoped. An explicit identity set is a
+            # previously pinned delivery and remains authoritative after its
+            # curator hands the canonical artifact to a different step.
+            if normalized.target_step != target_step:
+                continue
             if not normalized.actionable:
                 continue
         elif identity not in identities:
