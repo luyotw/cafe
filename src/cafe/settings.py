@@ -5,12 +5,10 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from importlib import import_module
-from importlib.metadata import entry_points
 from importlib.resources import files
 from pathlib import Path
 from typing import Any, Protocol
 
-SETTING_UPDATE_ENTRY_POINT_GROUP = "cafe.setting_updates"
 SETTING_UPDATE_MANIFEST = "data/setting_updates.json"
 
 
@@ -51,18 +49,9 @@ def _declared_setting_owners() -> list[_DeclaredSettingOwner]:
     return [_DeclaredSettingOwner(name, value) for name, value in document.items()]
 
 
-def _setting_entry_points() -> list[Any]:
-    discovered = entry_points()
-    if hasattr(discovered, "select"):
-        external = list(discovered.select(group=SETTING_UPDATE_ENTRY_POINT_GROUP))
-    else:
-        external = list(discovered.get(SETTING_UPDATE_ENTRY_POINT_GROUP, ()))
-    return [*_declared_setting_owners(), *external]
-
-
 def dispatch_setting_update(path: str, request: SettingUpdateRequest) -> SettingUpdateResult:
     """Load and invoke exactly one package-declared owner adapter."""
-    matches = [entry for entry in _setting_entry_points() if entry.name == path]
+    matches = [entry for entry in _declared_setting_owners() if entry.name == path]
     if not matches:
         raise ValueError(f"unsupported or protected settings path: {path}")
     if len(matches) != 1:
