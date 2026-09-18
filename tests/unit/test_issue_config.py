@@ -89,5 +89,19 @@ def test_registered_authority_rejects_symlink_escape(tmp_path: Path, monkeypatch
         "cafe.utils.issue_config._registered_worktree_paths", lambda _root: (tmp_path,)
     )
 
-    with pytest.raises(ValueError, match="outside a registered worktree"):
+    with pytest.raises(ValueError, match="must not traverse a symlink"):
         resolve_issue_config_path(issue / "issue.yaml", require_registered_worktree=True)
+
+
+def test_registered_authority_rejects_in_tree_issue_alias(tmp_path: Path, monkeypatch) -> None:
+    issues = tmp_path / ".cafe" / "issues"
+    victim = issues / "victim"
+    victim.mkdir(parents=True)
+    (victim / "issue.yaml").write_text("playbook_id: direct\n", encoding="utf-8")
+    (issues / "demo").symlink_to(victim, target_is_directory=True)
+    monkeypatch.setattr(
+        "cafe.utils.issue_config._registered_worktree_paths", lambda _root: (tmp_path,)
+    )
+
+    with pytest.raises(ValueError, match="must not traverse a symlink"):
+        resolve_issue_config_path(issues / "demo" / "issue.yaml", require_registered_worktree=True)

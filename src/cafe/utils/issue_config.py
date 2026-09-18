@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fcntl
+import stat
 import subprocess
 from contextlib import contextmanager
 from pathlib import Path
@@ -108,12 +109,26 @@ def _require_registered_issue_authority(
     return config_path
 
 
+def _reject_issue_authority_symlinks(config_path: Path) -> None:
+    """Reject aliases in the issue authority suffix before canonicalization."""
+    lexical = config_path.absolute()
+    for candidate in (lexical, lexical.parent, lexical.parent.parent, lexical.parent.parent.parent):
+        try:
+            metadata = candidate.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(metadata.st_mode):
+            raise ValueError("issue configuration paths must not traverse a symlink")
+
+
 def resolve_issue_config_path(
     config_path: Path,
     *,
     require_registered_worktree: bool = False,
 ) -> Path:
     """Resolve a repo inventory pointer to the active-worktree authority."""
+    if require_registered_worktree:
+        _reject_issue_authority_symlinks(Path(config_path))
     path = Path(config_path).resolve()
     registered_worktrees: tuple[Path, ...] = ()
     repository_root = _repository_root_for_config(path)
