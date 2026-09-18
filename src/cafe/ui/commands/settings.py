@@ -9,9 +9,7 @@ from typing import Any
 
 import typer
 
-from cafe.core.capability_setup import update_pr_auto_create
-from cafe.driver import update_driver_settings
-from cafe.driver._store import load_contract
+from cafe.settings import SettingUpdateRequest, dispatch_setting_update
 from cafe.utils.issue_config import resolve_issue_config_path
 
 settings_app = typer.Typer(help="Preview or save supported issue settings")
@@ -32,7 +30,7 @@ def settings_update(
     preview: bool = typer.Option(False, "--preview", help="Validate without writing"),
     json_output: bool = typer.Option(False, "--json", help="Emit machine JSON"),
 ) -> None:
-    """Update the complete Driver object or capability-owned pr.auto_create."""
+    """Preview or save one package-declared, issue-scoped setting."""
     try:
         issue_path = Path(issue)
         if issue_path.name != issue or issue in {"", ".", ".."}:
@@ -46,26 +44,14 @@ def settings_update(
             value = json.loads(encoded)
         except json.JSONDecodeError as exc:
             raise ValueError(f"--set requires JSON for {path}") from exc
-        if path not in {"driver", "pr.auto_create"}:
-            raise ValueError(f"unsupported or protected settings path: {path}")
-
         config_path = resolve_issue_config_path(
             Path(".cafe") / "issues" / issue / "issue.yaml",
             require_registered_worktree=True,
         )
-        if path == "driver":
-            if not isinstance(value, dict):
-                raise ValueError("driver must be a JSON object")
-            contract, _digest = load_contract(config_path.parent, allow_legacy_upgrade=True)
-            result = update_driver_settings(
-                issue_dir=config_path.parent,
-                issue_name=contract["identity"]["issue_name"],
-                workflow_id=contract["identity"]["workflow_id"],
-                driver=value,
-                preview=preview,
-            )
-        elif path == "pr.auto_create":
-            result = update_pr_auto_create(config_path=config_path, value=value, preview=preview)
+        result = dispatch_setting_update(
+            path,
+            SettingUpdateRequest(config_path=config_path, value=value, preview=preview),
+        )
     except ValueError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc

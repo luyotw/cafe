@@ -25,6 +25,8 @@ from cafe.driver import (
     update_driver_settings,
 )
 from cafe.driver._schema import proposal_digest
+from cafe.driver.settings import update_driver_setting
+from cafe.settings import SettingUpdateRequest
 from tests.fixtures.delivery_contract import delivery_contract
 
 
@@ -581,6 +583,24 @@ def test_targeted_driver_update_preserves_contract_version_and_confirmation(
     )
     assert unchanged.status == "unchanged"
     assert path.read_bytes() == before_noop
+
+
+def test_driver_owned_settings_adapter_resolves_existing_contract_identity(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / "issue"
+    activate_confirmed_contract(_activation(issue_dir))
+
+    result = update_driver_setting(
+        SettingUpdateRequest(
+            config_path=issue_dir / "issue.yaml",
+            value={"mode": "event-driven", "clis": [{"cli": "claude"}]},
+            preview=True,
+        )
+    )
+
+    assert result.status == "proposed"
+    assert result.changes["driver"]["after"]["clis"] == ({"cli": "claude"},)
 
 
 def test_targeted_driver_update_rejects_invalid_settings_without_writing(tmp_path: Path) -> None:

@@ -11,9 +11,11 @@ from cafe.core.capability_setup import (
     _load_effective_playbook,
     resolve_setup_choices,
     update_pr_auto_create,
+    update_pr_auto_create_setting,
 )
 from cafe.core.playbook import PlaybookDefinition
 from cafe.playbooks.loader import PlaybookLoader
+from cafe.settings import SettingUpdateRequest
 
 
 def _graph(capabilities=(), *, step="draft"):
@@ -117,6 +119,25 @@ def test_pr_auto_create_update_is_targeted_and_preview_is_read_only(tmp_path, mo
     unchanged = update_pr_auto_create(config_path=config_path, value=False)
     assert unchanged.status == "unchanged"
     assert config_path.read_bytes() == before
+
+
+def test_capability_owned_settings_adapter_delegates_typed_request(tmp_path, monkeypatch):
+    config_path = tmp_path / ".cafe" / "issues" / "demo" / "issue.yaml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        "playbook_id: direct-subagent-review\npr:\n  auto_create: true\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "cafe.utils.issue_config._registered_worktree_paths", lambda _root: (tmp_path,)
+    )
+
+    result = update_pr_auto_create_setting(
+        SettingUpdateRequest(config_path=config_path, value=False, preview=True)
+    )
+
+    assert result.status == "proposed"
+    assert result.changes["pr.auto_create"] == {"before": True, "after": False}
 
 
 def test_pr_auto_create_updates_linked_worktree_authority_not_inventory(tmp_path, monkeypatch):

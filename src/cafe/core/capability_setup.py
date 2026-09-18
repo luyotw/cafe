@@ -19,6 +19,7 @@ from cafe.core.capabilities import (
     load_capability_registry,
 )
 from cafe.core.playbook import PlaybookDefinition, normalize_playbook_yaml
+from cafe.settings import SettingUpdateRequest
 from cafe.utils.issue_config import (
     issue_config_lock,
     read_issue_config_strict,
@@ -184,3 +185,14 @@ def update_pr_auto_create(
             return PrAutoCreateUpdateResult("unchanged", changes, authority)
         write_issue_config_atomic(authority, config)
         return PrAutoCreateUpdateResult("saved", changes, authority)
+
+
+def update_pr_auto_create_setting(
+    request: SettingUpdateRequest,
+) -> PrAutoCreateUpdateResult:
+    """Adapt the capability-owned choice to the mode-neutral settings port."""
+    return update_pr_auto_create(
+        config_path=request.config_path,
+        value=request.value,
+        preview=request.preview,
+    )
