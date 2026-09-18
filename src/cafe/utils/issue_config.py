@@ -169,8 +169,12 @@ def resolve_issue_config_path(
     issue_path = Path(issue_name)
     if issue_path.is_absolute() or len(issue_path.parts) != 1 or issue_name in {"", ".", ".."}:
         raise ValueError("inventory issue name must identify one directory")
-    issues_root = (worktree / ".cafe" / "issues").resolve()
-    candidate = (issues_root / issue_name / "issue.yaml").resolve()
+    lexical_issues_root = worktree / ".cafe" / "issues"
+    lexical_candidate = lexical_issues_root / issue_name / "issue.yaml"
+    if require_registered_worktree:
+        _reject_issue_authority_symlinks(lexical_candidate)
+    issues_root = lexical_issues_root.resolve()
+    candidate = lexical_candidate.resolve()
     if not candidate.is_relative_to(issues_root):
         raise ValueError("inventory issue configuration escapes its worktree issue root")
     if candidate.exists():

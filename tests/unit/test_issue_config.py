@@ -105,3 +105,22 @@ def test_registered_authority_rejects_in_tree_issue_alias(tmp_path: Path, monkey
 
     with pytest.raises(ValueError, match="must not traverse a symlink"):
         resolve_issue_config_path(issues / "demo" / "issue.yaml", require_registered_worktree=True)
+
+
+def test_inventory_rejects_linked_worktree_issue_alias(tmp_path: Path, monkeypatch) -> None:
+    main = tmp_path / "main"
+    linked = tmp_path / "linked"
+    inventory = main / ".cafe" / "issues" / "demo" / "issue.yaml"
+    inventory.parent.mkdir(parents=True)
+    inventory.write_text(f"issue_name: demo\nworktree_path: {linked}\n", encoding="utf-8")
+    linked_issues = linked / ".cafe" / "issues"
+    victim = linked_issues / "victim"
+    victim.mkdir(parents=True)
+    (victim / "issue.yaml").write_text("playbook_id: direct\n", encoding="utf-8")
+    (linked_issues / "demo").symlink_to(victim, target_is_directory=True)
+    monkeypatch.setattr(
+        "cafe.utils.issue_config._registered_worktree_paths", lambda _root: (main, linked)
+    )
+
+    with pytest.raises(ValueError, match="must not traverse a symlink"):
+        resolve_issue_config_path(inventory, require_registered_worktree=True)
