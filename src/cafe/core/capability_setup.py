@@ -10,12 +10,13 @@ from typing import Any
 
 import yaml
 
+from cafe.catalogs.resolver import CatalogKind, CatalogResolver
 from cafe.core.capabilities import (
-    default_capability_definition_dirs,
-    load_capability_registry,
     CapabilityManifest,
     CapabilitySetupChoice,
     CapabilitySetupQuestion,
+    default_capability_definition_dirs,
+    load_capability_registry,
 )
 from cafe.core.playbook import PlaybookDefinition, normalize_playbook_yaml
 from cafe.utils.issue_config import (
@@ -124,15 +125,12 @@ def _load_effective_playbook(config: Mapping[str, Any], config_path: Path) -> Pl
     if not isinstance(name, str) or not name or Path(name).name != name:
         raise ValueError("issue.yaml has an invalid playbook_id")
     repository_root = config_path.parents[3]
-    roots = (
-        repository_root / ".cafe" / "playbooks",
-        Path.home() / ".cafe" / "playbooks",
-        Path(__file__).resolve().parents[1] / "data" / "playbooks",
-    )
+    resolver = CatalogResolver(project_root=repository_root)
+    roots = [root for _source, root, _layer in resolver.catalog_roots(CatalogKind.PLAYBOOK)]
     path = next(
         (
             candidate
-            for root in roots
+            for root in reversed(roots)
             for candidate in (root / f"{name}.yaml", root / f"{name}.yml")
             if candidate.is_file()
         ),
@@ -165,8 +163,9 @@ def update_pr_auto_create(
             default_capability_definition_dirs(authority.parents[3])
         )
         resolve_setup_choice(model, registry, "pr.auto_create", value)
+        has_old = "auto_create" in pr
         old = pr.get("auto_create")
-        if old is not None and type(old) is not bool:
+        if has_old and type(old) is not bool:
             raise ValueError("existing pr.auto_create must be a Boolean")
         updated_pr = dict(pr)
         updated_pr["auto_create"] = value

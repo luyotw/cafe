@@ -7,9 +7,10 @@ import pytest
 from cafe.utils.issue_config import (
     parse_issue_config_value,
     read_issue_config,
-    read_issue_config_value,
-    resolve_issue_id,
     read_issue_config_strict,
+    read_issue_config_value,
+    resolve_issue_config_path,
+    resolve_issue_id,
     write_issue_config_atomic,
 )
 
@@ -75,3 +76,18 @@ def test_strict_issue_config_io_rejects_malformed_and_is_atomic(
     with pytest.raises(OSError, match="interruption"):
         write_issue_config_atomic(config_path, {"pr": {"auto_create": False}})
     assert config_path.read_bytes() == before
+
+
+def test_registered_authority_rejects_symlink_escape(tmp_path: Path, monkeypatch) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "issue.yaml").write_text("playbook_id: direct\n", encoding="utf-8")
+    issue = tmp_path / ".cafe" / "issues" / "demo"
+    issue.parent.mkdir(parents=True)
+    issue.symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(
+        "cafe.utils.issue_config._registered_worktree_paths", lambda _root: (tmp_path,)
+    )
+
+    with pytest.raises(ValueError, match="outside a registered worktree"):
+        resolve_issue_config_path(issue / "issue.yaml", require_registered_worktree=True)

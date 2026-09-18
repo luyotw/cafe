@@ -14,7 +14,6 @@ from cafe.driver import update_driver_settings
 from cafe.driver._store import load_contract
 from cafe.utils.issue_config import resolve_issue_config_path
 
-
 settings_app = typer.Typer(help="Preview or save supported issue settings")
 
 
@@ -35,6 +34,9 @@ def settings_update(
 ) -> None:
     """Update the complete Driver object or capability-owned pr.auto_create."""
     try:
+        issue_path = Path(issue)
+        if issue_path.name != issue or issue in {"", ".", ".."}:
+            raise ValueError("ISSUE must identify exactly one issue directory")
         if len(settings) != 1:
             raise ValueError("exactly one --set is required; cross-owner batches are unsupported")
         path, separator, encoded = settings[0].partition("=")

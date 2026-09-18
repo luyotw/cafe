@@ -7,7 +7,6 @@ from typer.testing import CliRunner
 
 from cafe.ui.cli import app
 
-
 runner = CliRunner()
 
 
@@ -76,6 +75,13 @@ def test_settings_cli_rejects_unknown_paths_and_batches_before_owner_calls(monke
 
     assert unknown.exit_code == 1
     assert batch.exit_code == 1
+    assert called == []
+
+    traversal = runner.invoke(
+        app,
+        ["settings", "update", "../outside", "--set", "pr.auto_create=false"],
+    )
+    assert traversal.exit_code == 1
     assert called == []
 
 

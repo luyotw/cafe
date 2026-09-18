@@ -93,6 +93,21 @@ def _issue_authority_worktree(config_path: Path) -> Optional[Path]:
     return None
 
 
+def _require_registered_issue_authority(
+    config_path: Path, registered_worktrees: tuple[Path, ...]
+) -> Path:
+    worktree = _issue_authority_worktree(config_path)
+    issue_name = config_path.parent.name
+    if (
+        worktree not in registered_worktrees
+        or not issue_name
+        or issue_name in {".", ".."}
+        or Path(issue_name).name != issue_name
+    ):
+        raise ValueError("issue configuration is outside a registered worktree authority")
+    return config_path
+
+
 def resolve_issue_config_path(
     config_path: Path,
     *,
@@ -100,12 +115,6 @@ def resolve_issue_config_path(
 ) -> Path:
     """Resolve a repo inventory pointer to the active-worktree authority."""
     path = Path(config_path).resolve()
-    config = read_issue_config(path)
-    if not config:
-        return path
-    raw_worktree = config.get("worktree_path")
-    if not isinstance(raw_worktree, str) or not raw_worktree.strip():
-        return path
     registered_worktrees: tuple[Path, ...] = ()
     repository_root = _repository_root_for_config(path)
     authority_worktree = _issue_authority_worktree(path)
@@ -115,9 +124,23 @@ def resolve_issue_config_path(
         except ValueError:
             if require_registered_worktree:
                 raise
-        main_worktree = registered_worktrees[0] if registered_worktrees else None
-        if authority_worktree in registered_worktrees and authority_worktree != main_worktree:
-            return path
+    config = read_issue_config(path)
+    if not config:
+        return (
+            _require_registered_issue_authority(path, registered_worktrees)
+            if require_registered_worktree
+            else path
+        )
+    raw_worktree = config.get("worktree_path")
+    if not isinstance(raw_worktree, str) or not raw_worktree.strip():
+        return (
+            _require_registered_issue_authority(path, registered_worktrees)
+            if require_registered_worktree
+            else path
+        )
+    main_worktree = registered_worktrees[0] if registered_worktrees else None
+    if authority_worktree in registered_worktrees and authority_worktree != main_worktree:
+        return _require_registered_issue_authority(path, registered_worktrees)
     worktree = Path(raw_worktree)
     if not worktree.is_absolute():
         worktree = repository_root / worktree
@@ -136,7 +159,12 @@ def resolve_issue_config_path(
     if not candidate.is_relative_to(issues_root):
         raise ValueError("inventory issue configuration escapes its worktree issue root")
     if candidate.exists():
-        return candidate.resolve()
+        resolved_candidate = candidate.resolve()
+        return (
+            _require_registered_issue_authority(resolved_candidate, registered_worktrees)
+            if require_registered_worktree
+            else resolved_candidate
+        )
     if require_registered_worktree:
         raise ValueError("registered inventory worktree has no issue policy authority")
     return path

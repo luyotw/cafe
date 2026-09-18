@@ -7,10 +7,9 @@ import json
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Barrier, Thread
 
 import pytest
-
-from tests.fixtures.delivery_contract import delivery_contract
 
 from cafe.driver import (
     ActivateConfirmedContract,
@@ -26,6 +25,7 @@ from cafe.driver import (
     update_driver_settings,
 )
 from cafe.driver._schema import proposal_digest
+from tests.fixtures.delivery_contract import delivery_contract
 
 
 def _proposal() -> dict[str, object]:
@@ -657,6 +657,76 @@ def test_targeted_driver_update_does_not_mutate_runtime_owned_files(
     assert {path: path.read_bytes() for path in runtime_files} == runtime_files
     assert not any(issue_dir.rglob("*history*"))
     assert not any(issue_dir.rglob("*amendment*"))
+
+
+def test_targeted_driver_update_serializes_and_conflicts_stale_writer(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / "issue"
+    activated = activate_confirmed_contract(_activation(issue_dir))
+    start = Barrier(3)
+    outcomes: list[str] = []
+
+    def update(driver):
+        start.wait()
+        try:
+            result = update_driver_settings(
+                issue_dir=issue_dir,
+                issue_name="issue474",
+                workflow_id="workflow-474",
+                driver=driver,
+                expected_contract_sha256=activated.contract_sha256,
+            )
+            outcomes.append(result.status)
+        except ValueError as exc:
+            outcomes.append(str(exc))
+
+    workers = [
+        Thread(target=update, args=({"mode": "attached", "poll_interval_seconds": 5},)),
+        Thread(
+            target=update,
+            args=({"mode": "event-driven", "clis": [{"cli": "claude"}]},),
+        ),
+    ]
+    for worker in workers:
+        worker.start()
+    start.wait()
+    for worker in workers:
+        worker.join(2)
+
+    assert all(not worker.is_alive() for worker in workers)
+    assert outcomes.count("saved") == 1
+    assert sum("conflicts with a newer contract" in outcome for outcome in outcomes) == 1
+
+
+def test_targeted_driver_update_invokes_no_provider_publication_or_helper_sync(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from cafe.agents.manager import AgentManager
+    from cafe.core.hooks.native import GitHubPRCreator
+    from cafe.skills import global_installer
+
+    calls = []
+    monkeypatch.setattr(AgentManager, "execute", lambda *_args, **_kwargs: calls.append("provider"))
+    monkeypatch.setattr(
+        GitHubPRCreator, "run", lambda *_args, **_kwargs: calls.append("publication")
+    )
+    monkeypatch.setattr(
+        global_installer,
+        "auto_sync_global_skills",
+        lambda *_args, **_kwargs: calls.append("helper-sync"),
+    )
+    issue_dir = tmp_path / "issue"
+    activate_confirmed_contract(_activation(issue_dir))
+
+    update_driver_settings(
+        issue_dir=issue_dir,
+        issue_name="issue474",
+        workflow_id="workflow-474",
+        driver={"mode": "event-driven", "clis": [{"cli": "claude"}]},
+    )
+
+    assert calls == []
 
 
 def test_legacy_adoption_requires_complete_identity_bound_confirmation(tmp_path: Path) -> None:
