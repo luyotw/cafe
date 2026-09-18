@@ -347,6 +347,27 @@ def proposal_digest(contract: Mapping[str, Any]) -> str:
     return hashlib.sha256(canonical_json(_semantic_projection_from_validated(contract))).hexdigest()
 
 
+def build_driver_settings_update(
+    contract: Mapping[str, Any],
+    driver: Mapping[str, Any],
+    *,
+    previous_contract_sha256: str,
+) -> dict[str, Any]:
+    """Replace only Driver-owned settings in a validated v3/v4 document."""
+    current = validate_contract(contract, allow_legacy_upgrade=True)
+    updated = deepcopy(current)
+    updated["driver"] = _validate_driver(driver)
+    updated["preflight"]["semantic_facts"]["effective_policy"]["driver"] = deepcopy(
+        updated["driver"]
+    )
+    updated["revision"] = {
+        "generation": current["revision"]["generation"] + 1,
+        "previous_contract_sha256": previous_contract_sha256,
+    }
+    updated["provenance"]["proposal_digest"] = proposal_digest(updated)
+    return validate_contract(updated, allow_legacy_upgrade=True)
+
+
 def build_initial_contract(
     *,
     proposal: Mapping[str, Any],

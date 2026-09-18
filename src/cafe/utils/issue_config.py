@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import fcntl
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterator, Mapping, Optional
 
 import yaml
+
+from cafe.core.packet_io import atomic_write_bytes
 
 
 def read_issue_config(config_path: Path) -> Optional[Dict[str, Any]]:
@@ -19,6 +23,37 @@ def read_issue_config(config_path: Path) -> Optional[Dict[str, Any]]:
         return config_data if config_data else None
     except (yaml.YAMLError, OSError):
         return None
+
+
+def read_issue_config_strict(config_path: Path) -> Dict[str, Any]:
+    """Read mutable issue authority without hiding malformed or nonmapping data."""
+    try:
+        loaded = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise ValueError("issue.yaml is unreadable") from exc
+    if not isinstance(loaded, dict):
+        raise ValueError("issue.yaml must contain a mapping")
+    return loaded
+
+
+@contextmanager
+def issue_config_lock(config_path: Path) -> Iterator[None]:
+    """Serialize cooperating settings writers for one issue authority."""
+    lock_path = config_path.with_name("issue-settings.lock")
+    if lock_path.is_symlink():
+        raise ValueError("issue settings lock must not be a symlink")
+    with lock_path.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def write_issue_config_atomic(config_path: Path, config: Mapping[str, Any]) -> None:
+    """Replace a validated issue mapping through the shared atomic-write primitive."""
+    content = yaml.safe_dump(dict(config), sort_keys=False, allow_unicode=True).encode("utf-8")
+    atomic_write_bytes(config_path, content)
 
 
 def _repository_root_for_config(config_path: Path) -> Path:
@@ -81,10 +116,7 @@ def resolve_issue_config_path(
             if require_registered_worktree:
                 raise
         main_worktree = registered_worktrees[0] if registered_worktrees else None
-        if (
-            authority_worktree in registered_worktrees
-            and authority_worktree != main_worktree
-        ):
+        if authority_worktree in registered_worktrees and authority_worktree != main_worktree:
             return path
     worktree = Path(raw_worktree)
     if not worktree.is_absolute():
@@ -97,11 +129,7 @@ def resolve_issue_config_path(
     if not isinstance(issue_name, str) or not issue_name.strip():
         issue_name = path.parent.name
     issue_path = Path(issue_name)
-    if (
-        issue_path.is_absolute()
-        or len(issue_path.parts) != 1
-        or issue_name in {"", ".", ".."}
-    ):
+    if issue_path.is_absolute() or len(issue_path.parts) != 1 or issue_name in {"", ".", ".."}:
         raise ValueError("inventory issue name must identify one directory")
     issues_root = (worktree / ".cafe" / "issues").resolve()
     candidate = (issues_root / issue_name / "issue.yaml").resolve()

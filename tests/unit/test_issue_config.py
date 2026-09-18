@@ -2,11 +2,15 @@
 
 from pathlib import Path
 
+import pytest
+
 from cafe.utils.issue_config import (
     parse_issue_config_value,
     read_issue_config,
     read_issue_config_value,
     resolve_issue_id,
+    read_issue_config_strict,
+    write_issue_config_atomic,
 )
 
 
@@ -51,3 +55,23 @@ def test_parse_issue_config_value_missing_key() -> None:
 
 def test_read_issue_config_missing_file(tmp_path: Path) -> None:
     assert read_issue_config(tmp_path / "missing.yaml") is None
+
+
+def test_strict_issue_config_io_rejects_malformed_and_is_atomic(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = tmp_path / "issue.yaml"
+    config_path.write_text("pr: [\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="unreadable"):
+        read_issue_config_strict(config_path)
+
+    config_path.write_text("pr:\n  auto_create: true\n", encoding="utf-8")
+    before = config_path.read_bytes()
+
+    def fail_before_replace(*_args, **_kwargs):
+        raise OSError("simulated interruption")
+
+    monkeypatch.setattr("cafe.utils.issue_config.atomic_write_bytes", fail_before_replace)
+    with pytest.raises(OSError, match="interruption"):
+        write_issue_config_atomic(config_path, {"pr": {"auto_create": False}})
+    assert config_path.read_bytes() == before

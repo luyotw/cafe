@@ -184,3 +184,27 @@ def write_contract(
     except OSError:
         pass
     return sha256_bytes(content)
+
+
+def write_updated_contract(
+    issue_dir: Path,
+    document: Mapping[str, Any],
+    *,
+    expected_predecessor_sha256: str,
+) -> str:
+    """Atomically replace a supported v3/v4 contract after an exact CAS check."""
+    driver = _safe_driver_directory(issue_dir, create=False)
+    path = driver / CONTRACT_FILENAME
+    actual = sha256_bytes(_read_bounded(path, label="Driver contract predecessor"))
+    if actual != expected_predecessor_sha256:
+        raise ValueError("Driver contract predecessor is stale")
+    validated = validate_contract(document, allow_legacy_upgrade=True)
+    content = canonical_json(validated)
+    if len(content) > MAX_CONTRACT_BYTES:
+        raise ValueError("contract exceeds the maximum bounded size")
+    atomic_write_bytes(path, content)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    return sha256_bytes(content)
