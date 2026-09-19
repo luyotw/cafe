@@ -1785,7 +1785,6 @@ class GenericWorkflowStepExecutor(Phase):
         self, artifacts: Mapping[str, Any], *, step_def: Optional[Mapping[str, Any]] = None
     ) -> None:
         """Reject stale current-contract workspace companions before agent launch."""
-        active_repo = Path(getattr(self.git_ops, "repo_path", Path.cwd())).resolve()
         required_name = (
             step_def.get("workspace_input_artifact") if step_def is not None else None
         )
@@ -1802,6 +1801,7 @@ class GenericWorkflowStepExecutor(Phase):
         summary_name = (
             step_def.get("output_artifact") if step_def is not None else None
         )
+        workspace_entries: list[tuple[str, Any, Path]] = []
         for name, entry in artifacts.items():
             if getattr(entry, "kind", None) != ArtifactKind.WORKSPACE:
                 continue
@@ -1811,6 +1811,13 @@ class GenericWorkflowStepExecutor(Phase):
                 # readable for legacy consumers, but is never certified as a
                 # current Git workspace.
                 continue
+            workspace_entries.append((name, entry, path))
+
+        if not workspace_entries:
+            return
+
+        active_repo = Path(getattr(self.git_ops, "repo_path", Path.cwd())).resolve()
+        for name, entry, path in workspace_entries:
             try:
                 workspace = WorkspaceArtifact.from_dict(
                     json.loads(path.read_text(encoding="utf-8"))
