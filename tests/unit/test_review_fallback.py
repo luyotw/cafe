@@ -115,10 +115,10 @@ def test_review_skill_owns_portable_selection_and_updater() -> None:
     skill = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
 
     assert "runtime_hooks" not in skill
-    assert "Codex 與 Claude 的既有 reviewer 是 host-side CLI command" in skill
-    assert "Gemini、Cursor 與 Copilot" in skill
+    assert "existing Codex and Claude reviewers are host-side CLI commands" in skill
+    assert "Gemini, Cursor, or Copilot" in skill
     assert "references/review_procedure.md" in skill
-    assert "不得在 runtime 自行搜尋、下載或替換 reviewer" in skill
+    assert "Runtime must not search, download, or replace reviewers" in skill
     assert (skill_dir / "scripts/update_review_fallback.py").is_file()
     assert not list((PROJECT_ROOT / "src/cafe/review").glob("*.py"))
     assert not list((PROJECT_ROOT / "src/cafe/agents/capabilities").glob("*.py"))

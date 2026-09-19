@@ -614,11 +614,13 @@ def test_durable_local_review_delivers_feedback_and_completes_one_task(tmp_path:
     )
 
     records = HumanTaskRecordStore(issue_dir)
-    assert result.target == "develop"
+    assert result.target == "pr"
+    assert state.current_step == "pr"
     assert records.get_task(task.id).status is HumanTaskStatus.COMPLETED
     assert len(records.results()) == 1
-    assert [entry.content for entry in WorkflowFeedbackLedger(issue_dir).pending()] == [
-        "Preserve both durable contracts."
+    pending = WorkflowFeedbackLedger(issue_dir).pending()
+    assert [(entry.target_step, entry.content) for entry in pending] == [
+        ("pr", "Preserve both durable contracts.")
     ]
     assert not (issue_dir / "develop" / "iteration_001" / "user_input.md").exists()
 

@@ -28,6 +28,9 @@ This inventory is executable documentation: the unit contract discovers every `s
 | `src/cafe/core/git.py::run_git` | Internal fixed Git command family |
 | `src/cafe/core/phase_review_mixin.py::_open_file_with_editor` | Explicit interactive editor |
 | `src/cafe/core/sandbox_execution.py::run` | Sandbox script adapter |
+| `src/cafe/core/workspace_artifact.py::_git` | Internal fixed Git query family |
+| `src/cafe/core/workspace_artifact.py::build_workspace_artifact` | Internal fixed Git ancestry query |
+| `src/cafe/core/workspace_artifact.py::verify_workspace_artifact` | Internal fixed Git ancestry query |
 | `src/cafe/workflow_execution/worker_launch.py::launch` | Internal fixed CAFE worker bootstrap |
 | `src/cafe/workflow_execution/event_callback.py::dispatch_workflow_event_callback` | Trusted builtin asynchronous workflow event callback |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/format_kickoff_contract.py::_reexec_with_cafe_python` | Internal fixed Python re-exec |
@@ -59,6 +62,8 @@ This inventory is executable documentation: the unit contract discovers every `s
 | `src/cafe/ui/commands/workflow.py::make` | Internal fixed CAFE workflow command |
 | `src/cafe/ui/menu.py::_run_command` | Internal menu command dispatcher |
 | `src/cafe/utils/config.py::_get_issue_config` | Internal fixed Git query |
+| `src/cafe/utils/checklist_utils.py::_restore_completed_items` | Internal fixed Git root discovery query |
+| `src/cafe/utils/checklist_validator.py::_git` | Internal fixed Git evidence query family |
 | `src/cafe/utils/issue_config.py::_registered_worktree_paths` | Internal fixed Git worktree query |
 | `src/cafe/utils/git_utils.py::get_git_toplevel` | Internal fixed Git query |
 | `src/cafe/utils/git_utils.py::get_github_repo_name` | Internal fixed Git query |

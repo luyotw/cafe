@@ -1001,10 +1001,10 @@ def test_write_cafe_phase_spec_documents_basic_principles_reference() -> None:
     )
     skill = Path("src/cafe/data/skills/write-cafe-phase/SKILL.md").read_text(encoding="utf-8")
 
-    assert "references/basic_principles.md" in spec
-    assert "## Basic Principles" in spec
-    assert "references/execution_steps_*.md" in spec
-    assert "agent 檔 guidelines" in spec
+    assert "`references/basic_principles.md`" in spec
+    assert "`## Basic Principles`" in spec
+    assert "`references/execution_steps_*.md`" in spec
+    assert "Agent-file guidelines" in spec
     assert "references/basic_principles.md" in skill
 
 
@@ -1021,14 +1021,14 @@ def test_write_cafe_phase_requires_playbook_declared_confirmation_gates() -> Non
     assert "Neither side alone is a complete contract" in normalized_skill
     assert "cafe playbook confirmation-gates <id>" in skill
     assert "mandatory user-owned HumanTask" in normalized_skill
-    assert "mandatory HumanTask gates" in spec
+    assert "mandatory HumanTask gates" in normalized_spec
     assert "The stop contract is step-level" in normalized_skill
-    assert "Planned user confirmation gate" in spec
+    assert "### Planned User Confirmation Gates" in spec
     assert "skill-only pause" in spec
     assert "playbook-only gate" in spec
     assert "`confirm_output: <current-step>`" in normalized_spec
-    assert "`need_clarification`、`need_permission`、`alignment_checkpoint`" in spec
-    assert "同一 phase 內的多階段 checkpoint" in spec
+    assert "Clarification, permission, and alignment checkpoints" in normalized_spec
+    assert "### Multi-stage checkpoints within one phase" in spec
     assert "mandatory user-owned" in normalized_skill
     assert "durable stage evidence" in normalized_skill
     assert "first-entry/resume routing" in normalized_skill

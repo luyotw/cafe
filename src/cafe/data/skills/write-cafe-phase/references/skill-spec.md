@@ -252,6 +252,8 @@ number.
 
 ## 6. Handoff and Confirmation
 
+### Planned User Confirmation Gates
+
 The baton mechanism, JSON schema, legal values, and examples live only in
 `cafe-workflow-common`. A phase skill states routing decisions without
 duplicating that schema. Use playbook step names and the built-in `user` and
@@ -262,6 +264,13 @@ playbook `on.confirm_output` transition. The confirmation-gates command is the
 source of truth for assignable versus mandatory gates. Clarification,
 permission, and alignment checkpoints are reactive interruptions, not planned
 kickoff gates.
+
+Neither a skill-only pause nor a playbook-only gate is a complete contract. The
+phase routes the completed output to `user`, and the bound playbook step uses
+`confirm_output: <current-step>` so the approval remains at that step. A
+matching binding with `feedback_delivery` is one of the mandatory HumanTask
+gates and is mandatory user-owned; it is not assignable to the Driver at
+kickoff. The stop contract is step-level.
 
 The phase skill must route a normal approval to `user`, while the playbook
 binding supplies the matching `on.confirm_output` transition. A mandatory
@@ -278,10 +287,14 @@ unconfirmed, and keep it unreachable from downstream execution until
 validation rules. Split the phase when ownership, artifacts, gates, reuse, or
 downstream reachability differ.
 
+### Multi-stage checkpoints within one phase
+
 If a phase has multiple stages with one owner and one final artifact, keep the
 stages in one step only when durable stage evidence, resume rules, and a
 human-readable checkpoint make the boundaries unambiguous. Split the step when
-ownership, artifacts, planned gates, or downstream reachability differ.
+ownership, artifacts, planned gates, or downstream reachability differ. Treat
+iteration selectors as first-entry/resume routing rather than stage identity,
+and keep downstream execution unreachable until the final `confirm_output`.
 
 ## 7. Shared Rules
 
@@ -302,15 +315,17 @@ resume; it must not infer a domain stage from an iteration number.
 
 References contain details that are needed only under a declared condition.
 `SKILL.md` must say exactly when to open each reference; an unreferenced file
-is not an active instruction. `execution_steps_*` files are ordered
-procedures. `basic_principles.md` holds always-on repository rules and is
-projected into `## Basic Principles` when enabled. References and scripts have
-explicit activation conditions. Scripts must declare their activation
-condition, required inputs, and output or receipt contract. A script catalog
-is not activated merely because the file exists. Skill scripts are
-deterministic and rerunnable; progress and errors use stderr and structured
-results use stdout. Remote mutation runs through a host-side hook, while the
-agent prepares local artifacts.
+is not an active instruction. `references/execution_steps_*.md` files are
+ordered procedures. `references/basic_principles.md` holds always-on
+repository rules and is projected into `## Basic Principles` when enabled.
+Agent-file guidelines hold personal style and role preferences that follow the
+agent across phases; they do not replace workflow-owned always-on rules.
+References and scripts have explicit activation conditions. Scripts must
+declare their activation condition, required inputs, and output or receipt
+contract. A script catalog is not activated merely because the file exists.
+Skill scripts are deterministic and rerunnable; progress and errors use stderr
+and structured results use stdout. Remote mutation runs through a host-side
+hook, while the agent prepares local artifacts.
 
 ## 10. Chat Skill Structure
 
