@@ -23,6 +23,7 @@ from cafe.ui.commands import audit as audit_commands
 from cafe.ui.commands import verification as verification_commands
 from cafe.ui.commands import trust as trust_commands
 from cafe.ui.commands import update as update_commands
+from cafe.ui.commands import settings as settings_commands
 from cafe.ui.cli_shared import (
     CONTENT_TYPE_FILE_MAP as _SHARED_CONTENT_TYPE_FILE_MAP,
     VALID_CONTENT_TYPES as _SHARED_VALID_CONTENT_TYPES,
@@ -837,6 +838,7 @@ app.add_typer(catalog_commands.playbook_app, name="playbook")
 app.add_typer(catalog_commands.skill_app, name="skill")
 app.add_typer(catalog_commands.catalog_app, name="catalog")
 app.add_typer(update_commands.update_app, name="update")
+app.add_typer(settings_commands.settings_app, name="settings")
 
 # Workflow verification receipts
 app.add_typer(verification_commands.verification_app, name="verification")

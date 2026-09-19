@@ -9,7 +9,14 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 from ._freshness import Freshness
-from ._lifecycle import activate, adopt_legacy, evaluate, event_callback_policy, replace
+from ._lifecycle import (
+    activate,
+    adopt_legacy,
+    evaluate,
+    event_callback_policy,
+    replace,
+    update_driver,
+)
 from ._store import DriverContractMissingError, DriverContractUnsafeError
 
 
@@ -59,6 +66,14 @@ class ActivationResult:
 
 @dataclass(frozen=True)
 class ReplacementResult:
+    revision: int
+    contract_sha256: str
+
+
+@dataclass(frozen=True)
+class DriverSettingsUpdateResult:
+    status: str
+    changes: Mapping[str, Any]
     revision: int
     contract_sha256: str
 
@@ -142,6 +157,27 @@ def replace_confirmed_contract(command: ReplaceConfirmedContract) -> Replacement
     return ReplacementResult(revision, digest)
 
 
+def update_driver_settings(
+    *,
+    issue_dir: Path,
+    issue_name: str,
+    workflow_id: str,
+    driver: Mapping[str, Any],
+    preview: bool = False,
+    expected_contract_sha256: str | None = None,
+) -> DriverSettingsUpdateResult:
+    """Preview or persist one complete, schema-valid Driver settings object."""
+    status, value, revision, digest = update_driver(
+        issue_dir=issue_dir,
+        issue_name=issue_name,
+        workflow_id=workflow_id,
+        driver=driver,
+        preview=preview,
+        expected_contract_sha256=expected_contract_sha256,
+    )
+    return DriverSettingsUpdateResult(status, _freeze({"driver": value}), revision, digest)
+
+
 def evaluate_driver_entry(command: DriverEntryRequest) -> DriverEntryResult:
     freshness, contract, digest = evaluate(
         issue_dir=command.issue_dir,
@@ -193,6 +229,7 @@ __all__ = [
     "ActivationResult",
     "DriverEntryRequest",
     "DriverEntryResult",
+    "DriverSettingsUpdateResult",
     "DriverContractMissingError",
     "DriverContractUnsafeError",
     "EventCallbackPolicy",
@@ -207,4 +244,5 @@ __all__ = [
     "evaluate_driver_entry",
     "event_callback_projection",
     "replace_confirmed_contract",
+    "update_driver_settings",
 ]

@@ -2,11 +2,16 @@
 
 from pathlib import Path
 
+import pytest
+
 from cafe.utils.issue_config import (
     parse_issue_config_value,
     read_issue_config,
+    read_issue_config_strict,
     read_issue_config_value,
+    resolve_issue_config_path,
     resolve_issue_id,
+    write_issue_config_atomic,
 )
 
 
@@ -51,3 +56,71 @@ def test_parse_issue_config_value_missing_key() -> None:
 
 def test_read_issue_config_missing_file(tmp_path: Path) -> None:
     assert read_issue_config(tmp_path / "missing.yaml") is None
+
+
+def test_strict_issue_config_io_rejects_malformed_and_is_atomic(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = tmp_path / "issue.yaml"
+    config_path.write_text("pr: [\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="unreadable"):
+        read_issue_config_strict(config_path)
+
+    config_path.write_text("pr:\n  auto_create: true\n", encoding="utf-8")
+    before = config_path.read_bytes()
+
+    def fail_before_replace(*_args, **_kwargs):
+        raise OSError("simulated interruption")
+
+    monkeypatch.setattr("cafe.utils.issue_config.atomic_write_bytes", fail_before_replace)
+    with pytest.raises(OSError, match="interruption"):
+        write_issue_config_atomic(config_path, {"pr": {"auto_create": False}})
+    assert config_path.read_bytes() == before
+
+
+def test_registered_authority_rejects_symlink_escape(tmp_path: Path, monkeypatch) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "issue.yaml").write_text("playbook_id: direct\n", encoding="utf-8")
+    issue = tmp_path / ".cafe" / "issues" / "demo"
+    issue.parent.mkdir(parents=True)
+    issue.symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(
+        "cafe.utils.issue_config._registered_worktree_paths", lambda _root: (tmp_path,)
+    )
+
+    with pytest.raises(ValueError, match="must not traverse a symlink"):
+        resolve_issue_config_path(issue / "issue.yaml", require_registered_worktree=True)
+
+
+def test_registered_authority_rejects_in_tree_issue_alias(tmp_path: Path, monkeypatch) -> None:
+    issues = tmp_path / ".cafe" / "issues"
+    victim = issues / "victim"
+    victim.mkdir(parents=True)
+    (victim / "issue.yaml").write_text("playbook_id: direct\n", encoding="utf-8")
+    (issues / "demo").symlink_to(victim, target_is_directory=True)
+    monkeypatch.setattr(
+        "cafe.utils.issue_config._registered_worktree_paths", lambda _root: (tmp_path,)
+    )
+
+    with pytest.raises(ValueError, match="must not traverse a symlink"):
+        resolve_issue_config_path(issues / "demo" / "issue.yaml", require_registered_worktree=True)
+
+
+def test_inventory_rejects_linked_worktree_issue_alias(tmp_path: Path, monkeypatch) -> None:
+    main = tmp_path / "main"
+    linked = tmp_path / "linked"
+    inventory = main / ".cafe" / "issues" / "demo" / "issue.yaml"
+    inventory.parent.mkdir(parents=True)
+    inventory.write_text(f"issue_name: demo\nworktree_path: {linked}\n", encoding="utf-8")
+    linked_issues = linked / ".cafe" / "issues"
+    victim = linked_issues / "victim"
+    victim.mkdir(parents=True)
+    (victim / "issue.yaml").write_text("playbook_id: direct\n", encoding="utf-8")
+    (linked_issues / "demo").symlink_to(victim, target_is_directory=True)
+    monkeypatch.setattr(
+        "cafe.utils.issue_config._registered_worktree_paths", lambda _root: (main, linked)
+    )
+
+    with pytest.raises(ValueError, match="must not traverse a symlink"):
+        resolve_issue_config_path(inventory, require_registered_worktree=True)

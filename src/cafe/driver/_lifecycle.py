@@ -11,7 +11,7 @@ import yaml
 from cafe.core.packet_io import canonical_json
 
 from ._freshness import Freshness, compare_freshness
-from ._schema import build_initial_contract
+from ._schema import build_driver_settings_update, build_initial_contract
 from ._store import (
     DriverContractMissingError,
     _decode_exact,
@@ -19,6 +19,7 @@ from ._store import (
     contract_lock,
     load_contract,
     write_contract,
+    write_updated_contract,
 )
 
 
@@ -148,6 +149,49 @@ def replace(
         )
         digest = write_contract(issue_dir, candidate, expected_predecessor_sha256=current_sha)
         return candidate["revision"]["generation"], digest
+
+
+def update_driver(
+    *,
+    issue_dir: Path,
+    issue_name: str,
+    workflow_id: str,
+    driver: Mapping[str, Any],
+    preview: bool = False,
+    expected_contract_sha256: str | None = None,
+) -> tuple[str, dict[str, Any], int, str]:
+    """Preview or save a Driver-only update without reconfirming the contract."""
+
+    def candidate_from_current() -> tuple[dict[str, Any], str, dict[str, Any]]:
+        current, current_sha = load_contract(
+            issue_dir,
+            issue_name=issue_name,
+            workflow_id=workflow_id,
+            allow_legacy_upgrade=True,
+        )
+        if expected_contract_sha256 is not None and current_sha != expected_contract_sha256:
+            raise ValueError("Driver settings update conflicts with a newer contract")
+        candidate = build_driver_settings_update(
+            current, driver, previous_contract_sha256=current_sha
+        )
+        return current, current_sha, candidate
+
+    if preview:
+        current, current_sha, candidate = candidate_from_current()
+        changes = {"before": current["driver"], "after": candidate["driver"]}
+        if candidate["driver"] == current["driver"]:
+            return "unchanged", changes, current["revision"]["generation"], current_sha
+        return "proposed", changes, candidate["revision"]["generation"], current_sha
+
+    with contract_lock(issue_dir):
+        current, current_sha, candidate = candidate_from_current()
+        changes = {"before": current["driver"], "after": candidate["driver"]}
+        if candidate["driver"] == current["driver"]:
+            return "unchanged", changes, current["revision"]["generation"], current_sha
+        digest = write_updated_contract(
+            issue_dir, candidate, expected_predecessor_sha256=current_sha
+        )
+        return "saved", changes, candidate["revision"]["generation"], digest
 
 
 def _load_legacy_mapping(path: Path) -> Mapping[str, Any] | None:

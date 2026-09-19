@@ -7,10 +7,9 @@ import json
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Barrier, Thread
 
 import pytest
-
-from tests.fixtures.delivery_contract import delivery_contract
 
 from cafe.driver import (
     ActivateConfirmedContract,
@@ -23,7 +22,12 @@ from cafe.driver import (
     adopt_legacy_contract,
     evaluate_driver_entry,
     replace_confirmed_contract,
+    update_driver_settings,
 )
+from cafe.driver._schema import proposal_digest
+from cafe.driver.settings import update_driver_setting
+from cafe.settings import SettingUpdateRequest
+from tests.fixtures.delivery_contract import delivery_contract
 
 
 def _proposal() -> dict[str, object]:
@@ -529,6 +533,220 @@ def test_replacement_is_compare_and_swap_and_delegation_cannot_change_policy(
                 kind="user_reconfirmation",
             )
         )
+
+
+@pytest.mark.parametrize("schema_version", [3, 4])
+def test_targeted_driver_update_preserves_contract_version_and_confirmation(
+    tmp_path: Path, schema_version: int
+) -> None:
+    issue_dir = tmp_path / "issue"
+    activate_confirmed_contract(_activation(issue_dir))
+    path = issue_dir / "driver" / "contract.json"
+    original = json.loads(path.read_text(encoding="utf-8"))
+    if schema_version == 3:
+        original["schema_version"] = 3
+        original.pop("delivery_contract")
+        original["preflight"]["semantic_facts"]["effective_policy"].pop("delivery_contract")
+        original["provenance"]["proposal_digest"] = proposal_digest(original)
+        path.write_text(json.dumps(original), encoding="utf-8")
+
+    preview = update_driver_settings(
+        issue_dir=issue_dir,
+        issue_name="issue474",
+        workflow_id="workflow-474",
+        driver={"mode": "event-driven", "clis": [{"cli": "claude"}]},
+        preview=True,
+    )
+    assert preview.status == "proposed"
+    assert json.loads(path.read_text(encoding="utf-8")) == original
+
+    result = update_driver_settings(
+        issue_dir=issue_dir,
+        issue_name="issue474",
+        workflow_id="workflow-474",
+        driver={"mode": "event-driven", "clis": [{"cli": "claude"}]},
+    )
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert result.status == "saved"
+    assert saved["schema_version"] == schema_version
+    assert saved["driver"] == {"mode": "event-driven", "clis": [{"cli": "claude"}]}
+    assert saved["phases"] == original["phases"]
+    assert saved["provenance"]["confirmed_by"] == original["provenance"]["confirmed_by"]
+    assert saved["revision"]["generation"] == original["revision"]["generation"] + 1
+
+    before_noop = path.read_bytes()
+    unchanged = update_driver_settings(
+        issue_dir=issue_dir,
+        issue_name="issue474",
+        workflow_id="workflow-474",
+        driver=saved["driver"],
+    )
+    assert unchanged.status == "unchanged"
+    assert path.read_bytes() == before_noop
+
+
+def test_driver_owned_settings_adapter_resolves_existing_contract_identity(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / "issue"
+    activate_confirmed_contract(_activation(issue_dir))
+
+    result = update_driver_setting(
+        SettingUpdateRequest(
+            config_path=issue_dir / "issue.yaml",
+            value={"mode": "event-driven", "clis": [{"cli": "claude"}]},
+            preview=True,
+        )
+    )
+
+    assert result.status == "proposed"
+    assert result.changes["driver"]["after"]["clis"] == ({"cli": "claude"},)
+
+
+def test_targeted_driver_update_rejects_invalid_settings_without_writing(tmp_path: Path) -> None:
+    issue_dir = tmp_path / "issue"
+    activate_confirmed_contract(_activation(issue_dir))
+    path = issue_dir / "driver" / "contract.json"
+    before = path.read_bytes()
+
+    with pytest.raises(ValueError, match="ordered CLI chain"):
+        update_driver_settings(
+            issue_dir=issue_dir,
+            issue_name="issue474",
+            workflow_id="workflow-474",
+            driver={"mode": "event-driven", "clis": []},
+        )
+    assert path.read_bytes() == before
+
+
+def test_targeted_driver_update_reports_stale_revision_and_atomic_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    issue_dir = tmp_path / "issue"
+    activated = activate_confirmed_contract(_activation(issue_dir))
+    path = issue_dir / "driver" / "contract.json"
+    before = path.read_bytes()
+
+    with pytest.raises(ValueError, match="conflicts"):
+        update_driver_settings(
+            issue_dir=issue_dir,
+            issue_name="issue474",
+            workflow_id="workflow-474",
+            driver={"mode": "unattended"},
+            expected_contract_sha256="0" * 64,
+        )
+    assert path.read_bytes() == before
+
+    def fail_before_replace(*_args, **_kwargs):
+        raise OSError("simulated write interruption")
+
+    monkeypatch.setattr("cafe.driver._store.atomic_write_bytes", fail_before_replace)
+    with pytest.raises(OSError, match="interruption"):
+        update_driver_settings(
+            issue_dir=issue_dir,
+            issue_name="issue474",
+            workflow_id="workflow-474",
+            driver={"mode": "event-driven", "clis": [{"cli": "claude"}]},
+            expected_contract_sha256=activated.contract_sha256,
+        )
+    assert path.read_bytes() == before
+
+
+def test_targeted_driver_update_does_not_mutate_runtime_owned_files(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / "issue"
+    activate_confirmed_contract(_activation(issue_dir))
+    runtime_files = {
+        issue_dir / "driver" / "dispatch_state.json": b'{"state":"unchanged"}\n',
+        issue_dir / "sessions" / "provider.json": b'{"session":"unchanged"}\n',
+        issue_dir / "checkpoint.json": b'{"step":"develop"}\n',
+        issue_dir / "artifacts" / "result.txt": b"unchanged\n",
+    }
+    for path, content in runtime_files.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+
+    update_driver_settings(
+        issue_dir=issue_dir,
+        issue_name="issue474",
+        workflow_id="workflow-474",
+        driver={"mode": "event-driven", "clis": [{"cli": "claude"}]},
+    )
+
+    assert {path: path.read_bytes() for path in runtime_files} == runtime_files
+    assert not any(issue_dir.rglob("*history*"))
+    assert not any(issue_dir.rglob("*amendment*"))
+
+
+def test_targeted_driver_update_serializes_and_conflicts_stale_writer(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / "issue"
+    activated = activate_confirmed_contract(_activation(issue_dir))
+    start = Barrier(3)
+    outcomes: list[str] = []
+
+    def update(driver):
+        start.wait()
+        try:
+            result = update_driver_settings(
+                issue_dir=issue_dir,
+                issue_name="issue474",
+                workflow_id="workflow-474",
+                driver=driver,
+                expected_contract_sha256=activated.contract_sha256,
+            )
+            outcomes.append(result.status)
+        except ValueError as exc:
+            outcomes.append(str(exc))
+
+    workers = [
+        Thread(target=update, args=({"mode": "attached", "poll_interval_seconds": 5},)),
+        Thread(
+            target=update,
+            args=({"mode": "event-driven", "clis": [{"cli": "claude"}]},),
+        ),
+    ]
+    for worker in workers:
+        worker.start()
+    start.wait()
+    for worker in workers:
+        worker.join(2)
+
+    assert all(not worker.is_alive() for worker in workers)
+    assert outcomes.count("saved") == 1
+    assert sum("conflicts with a newer contract" in outcome for outcome in outcomes) == 1
+
+
+def test_targeted_driver_update_invokes_no_provider_publication_or_helper_sync(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from cafe.agents.manager import AgentManager
+    from cafe.core.hooks.native import GitHubPRCreator
+    from cafe.skills import global_installer
+
+    calls = []
+    monkeypatch.setattr(AgentManager, "execute", lambda *_args, **_kwargs: calls.append("provider"))
+    monkeypatch.setattr(
+        GitHubPRCreator, "run", lambda *_args, **_kwargs: calls.append("publication")
+    )
+    monkeypatch.setattr(
+        global_installer,
+        "auto_sync_global_skills",
+        lambda *_args, **_kwargs: calls.append("helper-sync"),
+    )
+    issue_dir = tmp_path / "issue"
+    activate_confirmed_contract(_activation(issue_dir))
+
+    update_driver_settings(
+        issue_dir=issue_dir,
+        issue_name="issue474",
+        workflow_id="workflow-474",
+        driver={"mode": "event-driven", "clis": [{"cli": "claude"}]},
+    )
+
+    assert calls == []
 
 
 def test_legacy_adoption_requires_complete_identity_bound_confirmation(tmp_path: Path) -> None:
