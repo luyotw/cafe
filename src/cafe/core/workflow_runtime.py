@@ -2644,6 +2644,13 @@ class BlackboardWorkflowRuntime:
                 declared_digest = record.get("content_sha256")
                 if declared_digest and declared_digest != content_sha256:
                     raise ValueError(f"artifact {key!r} content digest is contradictory")
+                if (
+                    "todo_identity_baseline" in record
+                    and not isinstance(record["todo_identity_baseline"], dict)
+                ):
+                    raise ValueError(
+                        f"artifact {key!r} Todo identity baseline metadata is invalid"
+                    )
                 entry_kwargs: dict[str, Any] = {
                     "name": key,
                     "kind": kind,
@@ -2660,6 +2667,11 @@ class BlackboardWorkflowRuntime:
                     "todo_work_identities": (
                         {str(k): str(v) for k, v in record["todo_work_identities"].items()}
                         if isinstance(record.get("todo_work_identities"), dict)
+                        else None
+                    ),
+                    "todo_identity_baseline": (
+                        dict(record["todo_identity_baseline"])
+                        if isinstance(record.get("todo_identity_baseline"), dict)
                         else None
                     ),
                 }

@@ -240,14 +240,20 @@ class ArtifactEntry:
     content_sha256: Optional[str] = None
     todo_identities: Optional[Dict[str, str]] = None
     todo_work_identities: Optional[Dict[str, str]] = None
+    todo_identity_baseline: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
         data["kind"] = self.kind.value
+        if self.todo_identity_baseline is None:
+            data.pop("todo_identity_baseline", None)
         return data
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ArtifactEntry":
+        raw_baseline = data.get("todo_identity_baseline")
+        if "todo_identity_baseline" in data and not isinstance(raw_baseline, dict):
+            raise ValueError("todo_identity_baseline must be an object when present")
         return cls(
             name=str(data["name"]),
             kind=ArtifactKind(str(data["kind"])),
@@ -271,6 +277,9 @@ class ArtifactEntry:
                 }
                 if isinstance(data.get("todo_work_identities"), dict)
                 else None
+            ),
+            todo_identity_baseline=(
+                dict(raw_baseline) if isinstance(raw_baseline, dict) else None
             ),
         )
 

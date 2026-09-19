@@ -69,13 +69,14 @@ from cafe.core.status_codes import (
 from cafe.core.takeover import build_takeover_snapshot
 from cafe.core.todo import (
     MAX_TODO_ITEMS,
+    PlanTodoDocumentKind,
     TodoContractError,
     TodoSourceArtifact,
-    plan_work_fingerprint,
+    parse_plan_todo_document,
     parse_todo_identity_continuity,
     parse_todo_list,
+    plan_work_fingerprint,
     projection_todo_items,
-    validate_todo_identities,
     workflow_feedback_matching_identities,
     workflow_feedback_todo_items,
 )
@@ -85,13 +86,13 @@ from cafe.core.workflow_feedback import (
     feedback_todo_mappings,
 )
 from cafe.core.workflow_models import BatonRejected, StepExecutionResult
-from cafe.core.workspace_lock import workspace_execution_lock
 from cafe.core.workspace_artifact import (
     WorkspaceArtifact,
     WorkspaceArtifactError,
     build_workspace_artifact,
     verify_workspace_artifact,
 )
+from cafe.core.workspace_lock import workspace_execution_lock
 from cafe.phases.generic_phase import GenericPhase
 from cafe.skills.checklist_composer import (
     compose_declared_checklist,
@@ -116,6 +117,89 @@ from cafe.utils.phase_config import load_phase_step_model
 def _plan_work_identity(item: Any) -> str:
     """Hash the retained work payload without making the mutable ID part of it."""
     return plan_work_fingerprint(str(item.work))
+
+
+_TODO_IDENTITY_BASELINE_SCHEMA_VERSION = 1
+
+
+def _normalize_todo_identity_baseline(
+    value: Any, *, artifact_name: str
+) -> dict[str, Any]:
+    """Validate and canonicalize a provisional plan's baseline reference."""
+    if not isinstance(value, dict):
+        raise ValueError(
+            f"prior plan Todo authority {artifact_name!r} has malformed baseline metadata"
+        )
+    if value.get("schema_version") != _TODO_IDENTITY_BASELINE_SCHEMA_VERSION:
+        raise ValueError(
+            f"prior plan Todo authority {artifact_name!r} has unsupported baseline metadata"
+        )
+    if "artifact" not in value:
+        raise ValueError(
+            f"prior plan Todo authority {artifact_name!r} has incomplete baseline metadata"
+        )
+    raw_artifact = value["artifact"]
+    if raw_artifact is None:
+        return {
+            "schema_version": _TODO_IDENTITY_BASELINE_SCHEMA_VERSION,
+            "artifact": None,
+        }
+    if not isinstance(raw_artifact, dict):
+        raise ValueError(
+            f"prior plan Todo authority {artifact_name!r} has malformed baseline artifact"
+        )
+    required_strings = ("name", "kind", "updated_by", "path", "content_sha256")
+    for field in required_strings:
+        if not isinstance(raw_artifact.get(field), str) or not raw_artifact[field].strip():
+            raise ValueError(
+                f"prior plan Todo authority {artifact_name!r} has invalid baseline artifact {field}"
+            )
+    version = raw_artifact.get("version")
+    if type(version) is not int or version <= 0:
+        raise ValueError(
+            f"prior plan Todo authority {artifact_name!r} has invalid baseline artifact version"
+        )
+    digest = str(raw_artifact["content_sha256"])
+    if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise ValueError(
+            f"prior plan Todo authority {artifact_name!r} has invalid baseline artifact digest"
+        )
+    if (
+        raw_artifact["name"] != artifact_name
+        or raw_artifact["kind"] != ArtifactKind.DOCUMENT.value
+    ):
+        raise ValueError(
+            f"prior plan Todo authority {artifact_name!r} has contradictory "
+            "baseline artifact identity"
+        )
+    return {
+        "schema_version": _TODO_IDENTITY_BASELINE_SCHEMA_VERSION,
+        "artifact": {
+            "name": str(raw_artifact["name"]),
+            "kind": str(raw_artifact["kind"]),
+            "version": version,
+            "updated_by": str(raw_artifact["updated_by"]),
+            "path": str(raw_artifact["path"]),
+            "content_sha256": digest,
+        },
+    }
+
+
+def _todo_identity_baseline_reference(artifact: ArtifactEntry) -> dict[str, Any]:
+    """Create the exact durable identity needed to reopen plan alignment safely."""
+    if not artifact.content_sha256:
+        raise ValueError("prior plan Todo authority is missing its content digest")
+    return {
+        "schema_version": _TODO_IDENTITY_BASELINE_SCHEMA_VERSION,
+        "artifact": {
+            "name": artifact.name,
+            "kind": artifact.kind.value,
+            "version": artifact.version,
+            "updated_by": artifact.updated_by,
+            "path": artifact.path,
+            "content_sha256": artifact.content_sha256,
+        },
+    }
 
 
 def align_pr_baton_after_execution(
@@ -2062,103 +2146,69 @@ class GenericWorkflowStepExecutor(Phase):
         return (behavior.feedback_routes or {}).get(destination)
 
     @staticmethod
-    def _prepare_todo_identity_input(
+    def _persist_plan_artifact_record(record_path: Path, record: dict[str, Any]) -> None:
+        temporary = record_path.with_name(f".{record_path.name}.{os.getpid()}.tmp")
+        temporary.write_text(
+            json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        os.replace(temporary, record_path)
+
+    @staticmethod
+    def _load_validated_plan_artifact(
+        artifact_name: str,
+        artifact: ArtifactEntry,
         *,
-        step_def: Dict[str, Any],
-        input_artifacts: Dict[str, Any],
-    ) -> None:
-        """Materialize and verify the declared prior PLAN identity authority."""
-        artifact_name = step_def.get("todo_identity_input_artifact")
-        if not isinstance(artifact_name, str) or not artifact_name.strip():
-            return
-        prior = input_artifacts.get(artifact_name)
-        if prior is None:
-            return
+        allow_missing_legacy_record: bool = False,
+    ) -> tuple[Any, dict[str, Any], Path, str]:
+        """Load one plan artifact and verify its selected and sibling identities."""
         def invalid_selected(field: str) -> ValueError:
             return ValueError(
                 f"prior plan Todo authority {artifact_name!r} has an invalid mandatory "
                 f"selected artifact {field}; restore the authoritative prior plan before continuing"
             )
 
-        prior_name = getattr(prior, "name", None)
-        if not isinstance(prior_name, str) or not prior_name.strip() or prior_name != artifact_name:
+        if artifact.name != artifact_name:
             raise invalid_selected("name")
-        prior_kind = getattr(prior, "kind", None)
-        if prior_kind is not ArtifactKind.DOCUMENT:
+        if artifact.kind is not ArtifactKind.DOCUMENT:
             raise invalid_selected("kind")
-        prior_version = getattr(prior, "version", None)
-        if type(prior_version) is not int or prior_version <= 0:
+        if type(artifact.version) is not int or artifact.version <= 0:
             raise invalid_selected("version")
-        prior_owner = getattr(prior, "updated_by", None)
-        if not isinstance(prior_owner, str) or not prior_owner.strip():
+        if not isinstance(artifact.updated_by, str) or not artifact.updated_by.strip():
             raise invalid_selected("owner")
-        prior_path_value = getattr(prior, "path", None)
-        if not isinstance(prior_path_value, str) or not prior_path_value.strip():
+        if not isinstance(artifact.path, str) or not artifact.path.strip():
             raise invalid_selected("path")
-        prior_path = Path(prior_path_value)
+        artifact_path = Path(artifact.path)
         try:
-            prior_bytes = prior_path.read_bytes()
-            content = prior_bytes.decode("utf-8")
-            prior_items = parse_todo_list(content)
+            artifact_bytes = artifact_path.read_bytes()
+            content = artifact_bytes.decode("utf-8")
+            document = parse_plan_todo_document(content)
         except (OSError, UnicodeError, TodoContractError) as exc:
             raise ValueError(
                 f"prior plan Todo authority {artifact_name!r} is unreadable or invalid; "
                 "restore the authoritative prior plan before continuing"
             ) from exc
-        if any(item.source != "plan" for item in prior_items):
-            raise ValueError(
-                f"prior plan Todo authority {artifact_name!r} contains a non-plan item; "
-                "restore the authoritative prior plan before continuing"
-            )
-        expected = {
-            plan_work_fingerprint(item.work): item.item_id
-            for item in prior_items
-        }
-        expected_todo = {
-            item.item_id: hashlib.sha256(
-                "\x1f".join(
-                    (item.source, item.item_id, " ".join(item.work.split()))
-                ).encode("utf-8")
-            ).hexdigest()
-            for item in prior_items
-        }
-        actual_content_sha256 = hashlib.sha256(prior_bytes).hexdigest()
-
-        def normalized_mapping(value: Any, *, field: str) -> Optional[dict[str, str]]:
-            if value is None:
-                return None
-            if not isinstance(value, dict):
-                raise ValueError(
-                    f"prior plan Todo authority {artifact_name!r} has malformed "
-                    f"{field} identity metadata; restore artifact.json before continuing"
-                )
-            return {str(key): str(item) for key, item in value.items()}
-
-        persisted_content_sha256 = getattr(prior, "content_sha256", None)
-        if (
-            persisted_content_sha256 is not None
-            and persisted_content_sha256 != actual_content_sha256
-        ):
+        actual_digest = hashlib.sha256(artifact_bytes).hexdigest()
+        if artifact.content_sha256 is not None and artifact.content_sha256 != actual_digest:
             raise ValueError(
                 f"prior plan Todo authority {artifact_name!r} has a contradictory "
                 "content digest; restore the authoritative prior plan before continuing"
             )
-        persisted = getattr(prior, "todo_work_identities", None)
-        persisted_map = normalized_mapping(persisted, field="work")
-        persisted_todo = getattr(prior, "todo_identities", None)
-        persisted_todo_map = normalized_mapping(persisted_todo, field="Todo")
-        for candidate, expected_map in (
-            (persisted_map, expected),
-            (persisted_todo_map, expected_todo),
-        ):
-            if candidate is not None and candidate != expected_map:
-                raise ValueError(
-                    f"prior plan Todo authority {artifact_name!r} has contradictory "
-                    "identity metadata; restore the authoritative prior plan before continuing"
-                )
-        record_path = prior_path.parent / "artifact.json"
+        record_path = artifact_path.parent / "artifact.json"
         try:
             record = json.loads(record_path.read_text(encoding="utf-8"))
+        except FileNotFoundError as exc:
+            if (
+                allow_missing_legacy_record
+                and document.kind is PlanTodoDocumentKind.TODO_AUTHORITY
+                and artifact.todo_identity_baseline is None
+            ):
+                record = artifact.to_dict()
+                record["content_sha256"] = actual_digest
+            else:
+                raise ValueError(
+                    f"prior plan Todo authority {artifact_name!r} has no readable artifact record; "
+                    "restore artifact.json before continuing"
+                ) from exc
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise ValueError(
                 f"prior plan Todo authority {artifact_name!r} has no readable artifact record; "
@@ -2176,58 +2226,217 @@ class GenericWorkflowStepExecutor(Phase):
                 f"artifact {field}; restore artifact.json before continuing"
             )
 
-        recorded_name = record.get("name")
-        if (
-            not isinstance(recorded_name, str)
-            or not recorded_name.strip()
-            or recorded_name != artifact_name
-        ):
+        if record.get("name") != artifact_name:
             raise invalid_record("name")
         if record.get("kind") != ArtifactKind.DOCUMENT.value:
             raise invalid_record("kind")
-        recorded_version = record.get("version")
-        if type(recorded_version) is not int or recorded_version <= 0:
+        if type(record.get("version")) is not int or record["version"] <= 0:
             raise invalid_record("version")
-        if recorded_version != prior_version:
+        if record["version"] != artifact.version:
             raise invalid_record("version")
-        recorded_owner = record.get("updated_by")
-        if not isinstance(recorded_owner, str) or not recorded_owner.strip():
+        if not isinstance(record.get("updated_by"), str) or not record["updated_by"].strip():
             raise invalid_record("owner")
-        if recorded_owner != prior_owner:
+        if record["updated_by"] != artifact.updated_by:
             raise invalid_record("owner")
-        recorded_path = record.get("path")
-        if not isinstance(recorded_path, str) or not recorded_path.strip():
+        if not isinstance(record.get("path"), str) or not record["path"].strip():
             raise invalid_record("path")
-        if Path(recorded_path).resolve() != prior_path.resolve():
+        if Path(record["path"]).resolve() != artifact_path.resolve():
             raise invalid_record("path")
-        recorded_digest = record.get("content_sha256")
-        if recorded_digest is not None and recorded_digest != actual_content_sha256:
+        if record.get("content_sha256") is not None and record["content_sha256"] != actual_digest:
             raise ValueError(
                 f"prior plan Todo authority {artifact_name!r} has a contradictory "
                 "content digest; restore artifact.json before continuing"
             )
-        recorded = record.get("todo_work_identities")
-        recorded_map = normalized_mapping(recorded, field="work")
-        recorded_todo = record.get("todo_identities")
-        recorded_todo_map = normalized_mapping(recorded_todo, field="Todo")
-        for candidate, expected_map in (
-            (recorded_map, expected),
-            (recorded_todo_map, expected_todo),
+        artifact.content_sha256 = actual_digest
+        return document, record, record_path, actual_digest
+
+    @staticmethod
+    def _normalized_identity_mapping(
+        value: Any, *, artifact_name: str, field: str
+    ) -> Optional[dict[str, str]]:
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            raise ValueError(
+                f"prior plan Todo authority {artifact_name!r} has malformed "
+                f"{field} identity metadata; restore artifact.json before continuing"
+            )
+        return {str(key): str(item) for key, item in value.items()}
+
+    @classmethod
+    def _validate_direct_plan_todo_authority(
+        cls,
+        artifact_name: str,
+        artifact: ArtifactEntry,
+        *,
+        allow_missing_legacy_record: bool = False,
+    ) -> tuple[ArtifactEntry, tuple[Any, ...]]:
+        document, record, record_path, _actual_digest = cls._load_validated_plan_artifact(
+            artifact_name,
+            artifact,
+            allow_missing_legacy_record=allow_missing_legacy_record,
+        )
+        if document.kind is not PlanTodoDocumentKind.TODO_AUTHORITY:
+            raise ValueError(
+                f"prior plan Todo authority {artifact_name!r} baseline points to a provisional plan"
+            )
+        if (
+            artifact.todo_identity_baseline is not None
+            or "todo_identity_baseline" in record
         ):
-            if candidate is not None and candidate != expected_map:
+            raise ValueError(
+                f"prior plan Todo authority {artifact_name!r} has contradictory baseline metadata"
+            )
+        if any(item.source != "plan" for item in document.items):
+            raise ValueError(
+                f"prior plan Todo authority {artifact_name!r} contains a non-plan item; "
+                "restore the authoritative prior plan before continuing"
+            )
+        expected_work = {
+            plan_work_fingerprint(item.work): item.item_id for item in document.items
+        }
+        expected_todo = {
+            item.item_id: hashlib.sha256(
+                "\x1f".join(
+                    (item.source, item.item_id, " ".join(item.work.split()))
+                ).encode("utf-8")
+            ).hexdigest()
+            for item in document.items
+        }
+        selected_work = cls._normalized_identity_mapping(
+            artifact.todo_work_identities, artifact_name=artifact_name, field="work"
+        )
+        selected_todo = cls._normalized_identity_mapping(
+            artifact.todo_identities, artifact_name=artifact_name, field="Todo"
+        )
+        recorded_work = cls._normalized_identity_mapping(
+            record.get("todo_work_identities"), artifact_name=artifact_name, field="work"
+        )
+        recorded_todo = cls._normalized_identity_mapping(
+            record.get("todo_identities"), artifact_name=artifact_name, field="Todo"
+        )
+        for candidate, expected in (
+            (selected_work, expected_work),
+            (selected_todo, expected_todo),
+            (recorded_work, expected_work),
+            (recorded_todo, expected_todo),
+        ):
+            if candidate is not None and candidate != expected:
                 raise ValueError(
-                    f"prior plan Todo authority {artifact_name!r} has contradictory identity metadata; "
+                    f"prior plan Todo authority {artifact_name!r} has contradictory "
+                    "identity metadata; "
                     "restore the authoritative prior plan before continuing"
                 )
-        if recorded_map is None:
-            record["todo_work_identities"] = expected
-            temporary = record_path.with_name(f".{record_path.name}.{os.getpid()}.tmp")
-            temporary.write_text(
-                json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        if recorded_work is None:
+            record["todo_work_identities"] = expected_work
+            cls._persist_plan_artifact_record(record_path, record)
+        artifact.todo_work_identities = expected_work
+        return artifact, tuple(document.items)
+
+    @classmethod
+    def _resolve_plan_todo_authority(
+        cls,
+        artifact_name: str,
+        artifact: ArtifactEntry,
+        *,
+        allow_missing_legacy_record: bool = False,
+    ) -> tuple[Optional[ArtifactEntry], tuple[Any, ...]]:
+        """Resolve the last detailed plan through any provisional alignment."""
+        document, record, record_path, _actual_digest = cls._load_validated_plan_artifact(
+            artifact_name,
+            artifact,
+            allow_missing_legacy_record=allow_missing_legacy_record,
+        )
+        if document.kind is PlanTodoDocumentKind.TODO_AUTHORITY:
+            return cls._validate_direct_plan_todo_authority(
+                artifact_name,
+                artifact,
+                allow_missing_legacy_record=allow_missing_legacy_record,
             )
-            os.replace(temporary, record_path)
-        if hasattr(prior, "todo_work_identities"):
-            prior.todo_work_identities = expected
+
+        for candidate in (
+            artifact.todo_identities,
+            artifact.todo_work_identities,
+            record.get("todo_identities"),
+            record.get("todo_work_identities"),
+        ):
+            if candidate is not None:
+                raise ValueError(
+                    f"prior plan Todo authority {artifact_name!r} provisional plan "
+                    "has identity metadata"
+                )
+        selected_baseline = (
+            _normalize_todo_identity_baseline(
+                artifact.todo_identity_baseline, artifact_name=artifact_name
+            )
+            if artifact.todo_identity_baseline is not None
+            else None
+        )
+        recorded_baseline = (
+            _normalize_todo_identity_baseline(
+                record["todo_identity_baseline"], artifact_name=artifact_name
+            )
+            if "todo_identity_baseline" in record
+            else None
+        )
+        if (
+            selected_baseline is not None
+            and recorded_baseline is not None
+            and selected_baseline != recorded_baseline
+        ):
+            raise ValueError(
+                f"prior plan Todo authority {artifact_name!r} has contradictory baseline metadata"
+            )
+        baseline = selected_baseline or recorded_baseline
+        if baseline is None:
+            if artifact.version != 1:
+                raise ValueError(
+                    f"prior plan Todo authority {artifact_name!r} has no baseline metadata"
+                )
+            baseline = {
+                "schema_version": _TODO_IDENTITY_BASELINE_SCHEMA_VERSION,
+                "artifact": None,
+            }
+        if recorded_baseline is None:
+            record["todo_identity_baseline"] = baseline
+            cls._persist_plan_artifact_record(record_path, record)
+        artifact.todo_identity_baseline = baseline
+        reference = baseline["artifact"]
+        if reference is None:
+            return None, ()
+        if reference["version"] >= artifact.version:
+            raise ValueError(
+                f"prior plan Todo authority {artifact_name!r} baseline is not an older version"
+            )
+        referenced = ArtifactEntry(
+            name=reference["name"],
+            kind=ArtifactKind(reference["kind"]),
+            version=reference["version"],
+            updated_by=reference["updated_by"],
+            path=reference["path"],
+            content_sha256=reference["content_sha256"],
+        )
+        return cls._validate_direct_plan_todo_authority(artifact_name, referenced)
+
+    @classmethod
+    def _prepare_todo_identity_input(
+        cls,
+        *,
+        step_def: Dict[str, Any],
+        input_artifacts: Dict[str, Any],
+    ) -> None:
+        """Materialize and verify the declared prior PLAN identity authority."""
+        artifact_name = step_def.get("todo_identity_input_artifact")
+        if not isinstance(artifact_name, str) or not artifact_name.strip():
+            return
+        prior = input_artifacts.get(artifact_name)
+        if prior is None:
+            return
+        if not isinstance(prior, ArtifactEntry):
+            raise ValueError(
+                f"prior plan Todo authority {artifact_name!r} has an invalid selected artifact"
+            )
+        cls._resolve_plan_todo_authority(artifact_name, prior)
 
     @staticmethod
     def _step_input_artifacts(
@@ -2982,15 +3191,55 @@ class GenericWorkflowStepExecutor(Phase):
         output_bytes = Path(output_path).read_bytes()
         todo_identities: Optional[dict[str, str]] = None
         todo_work_identities: Optional[dict[str, str]] = None
+        todo_identity_baseline: Optional[dict[str, Any]] = None
         content = output_bytes.decode("utf-8")
-        if "## Todo List" in content:
+        plan_document = None
+        todo_items: tuple[Any, ...] | None = None
+        stripped_lines = [line.strip() for line in content.splitlines()]
+        first_nonblank = next((line for line in stripped_lines if line), "")
+        if first_nonblank.startswith("<!-- plan-stage:"):
             try:
-                todo_items = parse_todo_list(content)
-                continuity_proofs = parse_todo_identity_continuity(content)
+                plan_document = parse_plan_todo_document(content)
             except TodoContractError as exc:
                 raise ValueError(
                     f"artifact {output_key!r} has an invalid Todo List: {exc}"
                 ) from exc
+            todo_items = plan_document.items
+        elif "## Todo List" in content:
+            try:
+                todo_items = parse_todo_list(content)
+            except TodoContractError as exc:
+                raise ValueError(
+                    f"artifact {output_key!r} has an invalid Todo List: {exc}"
+                ) from exc
+        if (
+            plan_document is not None
+            and plan_document.kind is PlanTodoDocumentKind.PROVISIONAL_ALIGNMENT
+        ):
+            if previous is None:
+                todo_identity_baseline = {
+                    "schema_version": _TODO_IDENTITY_BASELINE_SCHEMA_VERSION,
+                    "artifact": None,
+                }
+            else:
+                previous_authority, _previous_items = self._resolve_plan_todo_authority(
+                    output_key, previous, allow_missing_legacy_record=True
+                )
+                if previous.todo_identity_baseline is not None:
+                    todo_identity_baseline = _normalize_todo_identity_baseline(
+                        previous.todo_identity_baseline, artifact_name=output_key
+                    )
+                elif previous_authority is not None:
+                    todo_identity_baseline = _todo_identity_baseline_reference(
+                        previous_authority
+                    )
+                else:
+                    todo_identity_baseline = {
+                        "schema_version": _TODO_IDENTITY_BASELINE_SCHEMA_VERSION,
+                        "artifact": None,
+                    }
+        elif todo_items is not None:
+            continuity_proofs = parse_todo_identity_continuity(content)
             plan_items = [item for item in todo_items if item.source == "plan"]
             if plan_items:
                 todo_identities = {
@@ -3004,60 +3253,31 @@ class GenericWorkflowStepExecutor(Phase):
                 todo_work_identities = {
                     _plan_work_identity(item): item.item_id for item in plan_items
                 }
-                previous_work_identities = (
-                    getattr(previous, "todo_work_identities", None) if previous else None
-                )
                 previous_items: tuple[Any, ...] = ()
+                previous_work_identities: dict[str, str] = {}
                 if previous is not None:
-                    try:
-                        previous_items = parse_todo_list(
-                            Path(previous.path).read_text(encoding="utf-8")
+                    previous_authority, previous_items = self._resolve_plan_todo_authority(
+                        output_key, previous, allow_missing_legacy_record=True
+                    )
+                    if previous_authority is not None:
+                        previous_work_identities = dict(
+                            previous_authority.todo_work_identities or {}
                         )
-                        previous_plan_items = tuple(
-                            item for item in previous_items if item.source == "plan"
-                        )
-                        derived_previous_work_identities = {
-                            _plan_work_identity(item): item.item_id
-                            for item in previous_plan_items
-                        }
-                        if previous_work_identities is not None:
-                            if not isinstance(previous_work_identities, dict):
-                                raise ValueError(
-                                    "prior plan Todo authority has malformed identity metadata; "
-                                    "restore the authoritative prior plan before continuing"
-                                )
-                            previous_work_identities = {
-                                str(key): str(value)
-                                for key, value in previous_work_identities.items()
-                            }
-                            if previous_work_identities != derived_previous_work_identities:
-                                raise ValueError(
-                                    "prior plan Todo authority has contradictory identity metadata; "
-                                    "restore the authoritative prior plan before continuing"
-                                )
-                        else:
-                            previous_work_identities = derived_previous_work_identities
-                    except (OSError, UnicodeError, TodoContractError) as exc:
-                        raise ValueError(
-                            "prior plan Todo authority is unreadable or invalid; "
-                            "restore the authoritative prior plan before continuing"
-                        ) from exc
                 if previous_work_identities:
                     # PLAN-NNN is the durable authoring contract.  Unchanged
                     # work may be reordered, while a changed retained item must
                     # carry an explicit proof against its persisted work hash.
                     previous_by_id = {
-                        item.item_id: item for item in previous_items if item.source == "plan"
+                        item.item_id: item
+                        for item in previous_items
+                        if item.source == "plan"
                     }
                     for item in plan_items:
-                        prior_id = (
-                            previous_work_identities.get(_plan_work_identity(item))
-                            if previous_work_identities
-                            else None
-                        )
+                        prior_id = previous_work_identities.get(_plan_work_identity(item))
                         if prior_id is not None and prior_id != item.item_id:
                             raise ValueError(
-                                f"plan Todo identity {prior_id!r} was moved to {item.item_id!r}; retain the existing ID"
+                                f"plan Todo identity {prior_id!r} was moved to "
+                                f"{item.item_id!r}; retain the existing ID"
                             )
                         prior_item = previous_by_id.get(item.item_id)
                         if prior_item is not None and (
@@ -3067,8 +3287,9 @@ class GenericWorkflowStepExecutor(Phase):
                                 prior_item
                             ):
                                 raise ValueError(
-                                    f"plan Todo identity {item.item_id!r} changed work without a continuity proof; "
-                                    "retain the existing ID or declare the prior work fingerprint"
+                                    f"plan Todo identity {item.item_id!r} changed work "
+                                    "without a continuity proof; retain the existing ID "
+                                    "or declare the prior work fingerprint"
                                 )
         artifact = ArtifactEntry(
             name=output_key,
@@ -3079,6 +3300,7 @@ class GenericWorkflowStepExecutor(Phase):
             content_sha256=hashlib.sha256(output_bytes).hexdigest(),
             todo_identities=todo_identities,
             todo_work_identities=todo_work_identities,
+            todo_identity_baseline=todo_identity_baseline,
         )
         artifact_path = self._get_iteration_dir(self.iteration) / "artifact.json"
         temporary = artifact_path.with_name(f".{artifact_path.name}.{os.getpid()}.tmp")

@@ -55,7 +55,7 @@ def test_behaviorally_changed_skills_have_minor_version_bumps() -> None:
 
     expected_versions = {
         "cafe-spec": "version: 1.4.0",
-        "cafe-plan": "version: 1.8.1",
+        "cafe-plan": "version: 1.8.2",
         "cafe-review": "version: 1.13.0",
         "cafe-pr": "version: 1.4.1",
         "cafe-workflow-common": "version: 1.8.4",
