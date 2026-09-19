@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from enum import Enum
 from hashlib import sha256
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -18,6 +19,8 @@ _IDENTITY_HEADING = re.compile(r"^##\s+Todo Identity Continuity\s*$")
 _IDENTITY_ITEM = re.compile(
     r"^- `(?P<id>PLAN-\d{3})`\s+— Previous work fingerprint: `(?P<fingerprint>[0-9a-f]{64})`\s*$"
 )
+PLAN_STAGE_SOLUTION_ALIGNMENT = "<!-- plan-stage: solution-alignment -->"
+PLAN_STAGE_DETAILED_PLAN = "<!-- plan-stage: detailed-plan -->"
 _ITEM = re.compile(
     r"^- \[(?P<checked>[ xX])\] `(?P<id>[A-Za-z][A-Za-z0-9_-]*)`\s+— "
     r"Source: `(?P<source>[a-z_]+)`\s+— Work: (?P<work>.+?)\s+— "
@@ -27,6 +30,21 @@ _ITEM = re.compile(
 
 class TodoContractError(ValueError):
     """Raised when an authoritative Todo List is not safe to project."""
+
+
+class PlanTodoDocumentKind(str, Enum):
+    """The Todo-authority state encoded by one plan document."""
+
+    PROVISIONAL_ALIGNMENT = "provisional_alignment"
+    TODO_AUTHORITY = "todo_authority"
+
+
+@dataclass(frozen=True)
+class PlanTodoDocument:
+    """A classified plan document and any authoritative Todo rows it owns."""
+
+    kind: PlanTodoDocumentKind
+    items: tuple["TodoItem", ...]
 
 
 @dataclass(frozen=True)
@@ -157,6 +175,30 @@ def parse_todo_list(
         if len(items) > MAX_TODO_ITEMS:
             raise TodoContractError(f"Todo List exceeds {MAX_TODO_ITEMS} items")
     return tuple(items)
+
+
+def parse_plan_todo_document(content: str) -> PlanTodoDocument:
+    """Classify a staged plan without weakening the strict Todo parser.
+
+    Solution-alignment documents are deliberately provisional and therefore
+    own no Todo authority. Detailed plans and legacy markerless plans must
+    satisfy the existing canonical Todo contract.
+    """
+    stripped_lines = [line.strip() for line in content.splitlines()]
+    first_nonblank = next((line for line in stripped_lines if line), "")
+    if first_nonblank == PLAN_STAGE_SOLUTION_ALIGNMENT:
+        if any(
+            _HEADING.match(line) or _IDENTITY_HEADING.match(line)
+            for line in stripped_lines
+        ):
+            raise TodoContractError(
+                "solution-alignment plan must not contain Todo authority"
+            )
+        return PlanTodoDocument(PlanTodoDocumentKind.PROVISIONAL_ALIGNMENT, ())
+    if first_nonblank.startswith("<!-- plan-stage:"):
+        if first_nonblank != PLAN_STAGE_DETAILED_PLAN:
+            raise TodoContractError("plan contains an unsupported stage marker")
+    return PlanTodoDocument(PlanTodoDocumentKind.TODO_AUTHORITY, parse_todo_list(content))
 
 
 def parse_todo_identity_continuity(content: str) -> dict[str, str]:

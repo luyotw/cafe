@@ -1,7 +1,7 @@
 """Tests for direct workflow step execution."""
 
-import json
 import hashlib
+import json
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -32,7 +32,13 @@ from cafe.core.session_continuation import (
     SessionContinuationPolicy,
 )
 from cafe.core.status_codes import PhaseStatusCode
-from cafe.core.todo import plan_work_fingerprint, parse_todo_list, workflow_feedback_todo_items
+from cafe.core.todo import (
+    PLAN_STAGE_DETAILED_PLAN,
+    PLAN_STAGE_SOLUTION_ALIGNMENT,
+    parse_todo_list,
+    plan_work_fingerprint,
+    workflow_feedback_todo_items,
+)
 from cafe.core.types import AgentCLI, AgentConfig, AgentResponse, CliEntry, TokenUsage
 from cafe.core.workflow_feedback import WorkflowFeedbackLedger
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
@@ -6881,6 +6887,313 @@ def test_plan_identity_input_materializes_legacy_metadata_for_the_plan_author(
         plan_work_fingerprint("build parser"): "PLAN-001"
     }
     assert context["prior_plan_file"].endswith("plan/iteration_001/output.md")
+
+
+def test_plan_identity_input_migrates_initial_alignment_to_an_explicit_null_baseline(
+    tmp_path: Path,
+) -> None:
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.generic_phase = GenericPhase(SkillLoader())
+    executor.phase_dir = tmp_path / "issue" / "plan"
+    executor.iteration = 2
+    old_output = executor.phase_dir / "iteration_001" / "output.md"
+    old_output.parent.mkdir(parents=True)
+    old_output.write_text(
+        f"{PLAN_STAGE_SOLUTION_ALIGNMENT}\n# Unconfirmed Solution Direction\n",
+        encoding="utf-8",
+    )
+    old_record = ArtifactEntry(
+        name="plan",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="plan",
+        path=str(old_output),
+        content_sha256=hashlib.sha256(old_output.read_bytes()).hexdigest(),
+    )
+    record_path = old_output.parent / "artifact.json"
+    record_path.write_text(json.dumps(old_record.to_dict()), encoding="utf-8")
+    state = BlackboardStore(tmp_path / "issue").load_or_create("plan")
+    state.artifacts["plan"] = old_record
+
+    executor._prepare_todo_identity_input(
+        step_def={
+            "input_artifacts": ["plan"],
+            "todo_identity_input_artifact": "plan",
+        },
+        input_artifacts={"plan": state.artifacts["plan"]},
+    )
+
+    expected = {"schema_version": 1, "artifact": None}
+    assert old_record.todo_identity_baseline == expected
+    assert json.loads(record_path.read_text(encoding="utf-8"))[
+        "todo_identity_baseline"
+    ] == expected
+
+
+def test_plan_identity_input_rejects_later_alignment_without_baseline(
+    tmp_path: Path,
+) -> None:
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    old_output = tmp_path / "issue" / "plan" / "iteration_002" / "output.md"
+    old_output.parent.mkdir(parents=True)
+    old_output.write_text(
+        f"{PLAN_STAGE_SOLUTION_ALIGNMENT}\n# Unconfirmed Solution Direction\n",
+        encoding="utf-8",
+    )
+    old_record = ArtifactEntry(
+        name="plan",
+        kind=ArtifactKind.DOCUMENT,
+        version=2,
+        updated_by="plan",
+        path=str(old_output),
+        content_sha256=hashlib.sha256(old_output.read_bytes()).hexdigest(),
+    )
+    record_path = old_output.parent / "artifact.json"
+    record_path.write_text(json.dumps(old_record.to_dict()), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="no baseline metadata"):
+        executor._prepare_todo_identity_input(
+            step_def={"todo_identity_input_artifact": "plan"},
+            input_artifacts={"plan": old_record},
+        )
+
+    assert "todo_identity_baseline" not in json.loads(
+        record_path.read_text(encoding="utf-8")
+    )
+
+
+def test_backup_takeover_accepts_initial_alignment_without_todo_authority(
+    tmp_path: Path,
+) -> None:
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_dir = tmp_path / "issue" / "plan"
+    executor.phase_name = "plan"
+    executor.iteration = 2
+    state = BlackboardStore(tmp_path / "issue").load_or_create("plan")
+    old_output = executor.phase_dir / "iteration_001" / "output.md"
+    old_output.parent.mkdir(parents=True)
+    old_output.write_text(
+        f"{PLAN_STAGE_SOLUTION_ALIGNMENT}\n# Unconfirmed Solution Direction\n",
+        encoding="utf-8",
+    )
+    baseline = {"schema_version": 1, "artifact": None}
+    old_record = ArtifactEntry(
+        name="plan",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="plan",
+        path=str(old_output),
+        content_sha256=hashlib.sha256(old_output.read_bytes()).hexdigest(),
+        todo_identity_baseline=baseline,
+    )
+    (old_output.parent / "artifact.json").write_text(
+        json.dumps(old_record.to_dict()), encoding="utf-8"
+    )
+    state.artifacts["plan"] = old_record
+    iteration_dir = executor.phase_dir / "iteration_002"
+    iteration_dir.mkdir(parents=True)
+    step_def = {
+        "skill": "cafe-plan",
+        "input_artifacts": ["plan"],
+        "todo_identity_input_artifact": "plan",
+    }
+
+    snapshot = json.loads(
+        executor._build_backup_takeover_context(
+            error="primary failed",
+            step_name="plan",
+            step_def=step_def,
+            blackboard_state=state,
+            output_file=iteration_dir / "output.md",
+            checklist_file=iteration_dir / "checklist.md",
+            iteration_dir=iteration_dir,
+        )
+    )
+
+    assert snapshot["target"] == {"step": "plan", "iteration": 2}
+
+
+def test_plan_publication_allows_alignment_to_first_detailed_plan(tmp_path: Path) -> None:
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_dir = tmp_path / "issue" / "plan"
+    state = BlackboardStore(tmp_path / "issue").load_or_create("plan")
+    executor.iteration = 1
+    alignment = executor.phase_dir / "iteration_001" / "output.md"
+    alignment.parent.mkdir(parents=True)
+    alignment.write_text(
+        f"{PLAN_STAGE_SOLUTION_ALIGNMENT}\n# Unconfirmed Solution Direction\n",
+        encoding="utf-8",
+    )
+    state.artifacts["plan"] = executor._write_artifact_record(
+        blackboard_state=state,
+        output_key="plan",
+        output_path=str(alignment),
+        updated_by="plan",
+    )
+
+    executor.iteration = 2
+    detailed = executor.phase_dir / "iteration_002" / "output.md"
+    detailed.parent.mkdir(parents=True)
+    detailed.write_text(
+        f"{PLAN_STAGE_DETAILED_PLAN}\n## Todo List\n"
+        "- [ ] `PLAN-001` — Source: `plan` — Work: build parser — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+    record = executor._write_artifact_record(
+        blackboard_state=state,
+        output_key="plan",
+        output_path=str(detailed),
+        updated_by="plan",
+    )
+
+    assert record.todo_identity_baseline is None
+    assert record.todo_work_identities == {
+        plan_work_fingerprint("build parser"): "PLAN-001"
+    }
+
+
+def test_renamed_plan_artifact_preserves_baseline_across_alignment_rounds(
+    tmp_path: Path,
+) -> None:
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_dir = tmp_path / "issue" / "plan"
+    state = BlackboardStore(tmp_path / "issue").load_or_create("plan")
+    artifact_name = "implementation_plan"
+
+    executor.iteration = 1
+    original = executor.phase_dir / "iteration_001" / "output.md"
+    original.parent.mkdir(parents=True)
+    original.write_text(
+        f"{PLAN_STAGE_DETAILED_PLAN}\n## Todo List\n"
+        "- [ ] `PLAN-001` — Source: `plan` — Work: build parser — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+    state.artifacts[artifact_name] = executor._write_artifact_record(
+        blackboard_state=state,
+        output_key=artifact_name,
+        output_path=str(original),
+        updated_by="plan",
+    )
+
+    for iteration in (2, 3):
+        executor.iteration = iteration
+        alignment = executor.phase_dir / f"iteration_{iteration:03d}" / "output.md"
+        alignment.parent.mkdir(parents=True)
+        alignment.write_text(
+            f"{PLAN_STAGE_SOLUTION_ALIGNMENT}\n# Unconfirmed Solution Direction\n",
+            encoding="utf-8",
+        )
+        state.artifacts[artifact_name] = executor._write_artifact_record(
+            blackboard_state=state,
+            output_key=artifact_name,
+            output_path=str(alignment),
+            updated_by="plan",
+        )
+
+    baseline = state.artifacts[artifact_name].todo_identity_baseline
+    assert baseline is not None
+    assert baseline["artifact"]["version"] == 1
+    assert baseline["artifact"]["name"] == artifact_name
+
+    executor.iteration = 4
+    step_def = {
+        "skill": "cafe-plan",
+        "role": "pm",
+        "input_artifacts": [artifact_name],
+        "todo_identity_input_artifact": artifact_name,
+    }
+    context = executor._build_context(
+        step_name="plan",
+        step_def=step_def,
+        blackboard_state=state,
+        agent_name="Roger",
+        output_file=executor.phase_dir / "iteration_004" / "output.md",
+    )
+    takeover = json.loads(
+        executor._build_backup_takeover_context(
+            error="primary failed",
+            step_name="plan",
+            step_def=step_def,
+            blackboard_state=state,
+            output_file=executor.phase_dir / "iteration_004" / "output.md",
+            checklist_file=executor.phase_dir / "iteration_004" / "checklist.md",
+            iteration_dir=executor.phase_dir / "iteration_004",
+        )
+    )
+    assert context["output_file"].endswith("iteration_004/output.md")
+    assert takeover["target"] == {"step": "plan", "iteration": 4}
+
+    revised = executor.phase_dir / "iteration_004" / "output.md"
+    revised.parent.mkdir(parents=True, exist_ok=True)
+    revised.write_text(
+        f"{PLAN_STAGE_DETAILED_PLAN}\n## Todo List\n"
+        "- [ ] `PLAN-001` — Source: `plan` — Work: deploy parser — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="continuity proof"):
+        executor._write_artifact_record(
+            blackboard_state=state,
+            output_key=artifact_name,
+            output_path=str(revised),
+            updated_by="plan",
+        )
+
+    revised.write_text(
+        revised.read_text(encoding="utf-8")
+        + _plan_continuity("PLAN-001", "build parser"),
+        encoding="utf-8",
+    )
+    record = executor._write_artifact_record(
+        blackboard_state=state,
+        output_key=artifact_name,
+        output_path=str(revised),
+        updated_by="plan",
+    )
+    assert record.todo_work_identities == {
+        plan_work_fingerprint("deploy parser"): "PLAN-001"
+    }
+
+
+def test_plan_publication_rejects_corrupt_existing_artifact_record(
+    tmp_path: Path,
+) -> None:
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_dir = tmp_path / "issue" / "plan"
+    executor.iteration = 2
+    state = BlackboardStore(tmp_path / "issue").load_or_create("plan")
+    old_output = executor.phase_dir / "iteration_001" / "output.md"
+    old_output.parent.mkdir(parents=True)
+    old_output.write_text(
+        f"{PLAN_STAGE_DETAILED_PLAN}\n## Todo List\n"
+        "- [ ] `PLAN-001` — Source: `plan` — Work: build parser — "
+        "Closure: done — Evidence: test\n",
+        encoding="utf-8",
+    )
+    state.artifacts["implementation_plan"] = ArtifactEntry(
+        name="implementation_plan",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="plan",
+        path=str(old_output),
+        content_sha256=hashlib.sha256(old_output.read_bytes()).hexdigest(),
+    )
+    (old_output.parent / "artifact.json").write_text("{truncated", encoding="utf-8")
+    new_output = executor.phase_dir / "iteration_002" / "output.md"
+    new_output.parent.mkdir(parents=True)
+    new_output.write_text(old_output.read_text(encoding="utf-8"), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="no readable artifact record"):
+        executor._write_artifact_record(
+            blackboard_state=state,
+            output_key="implementation_plan",
+            output_path=str(new_output),
+            updated_by="plan",
+        )
+
+    assert (old_output.parent / "artifact.json").read_text(encoding="utf-8") == "{truncated"
 
 
 def test_plan_identity_input_fails_closed_on_malformed_prior_authority(tmp_path: Path) -> None:

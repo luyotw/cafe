@@ -7,9 +7,13 @@ from pathlib import Path
 import pytest
 
 from cafe.core.todo import (
+    PLAN_STAGE_DETAILED_PLAN,
+    PLAN_STAGE_SOLUTION_ALIGNMENT,
+    PlanTodoDocumentKind,
     TodoContractError,
-    parse_todo_list,
+    parse_plan_todo_document,
     parse_todo_identity_continuity,
+    parse_todo_list,
     resolve_todo_source,
     validate_todo_identities,
     workflow_feedback_todo_items,
@@ -95,6 +99,57 @@ def test_todo_identity_continuity_rejects_duplicate_or_malformed_rows() -> None:
 
 def test_todo_parser_accepts_only_the_canonical_intentionally_empty_marker() -> None:
     assert parse_todo_list("## Todo List\nNo actionable work.\n") == ()
+
+
+def test_plan_todo_document_accepts_provisional_alignment_without_a_todo_list() -> None:
+    document = parse_plan_todo_document(
+        f"{PLAN_STAGE_SOLUTION_ALIGNMENT}\n# Unconfirmed Solution Direction\n"
+    )
+    assert document.kind is PlanTodoDocumentKind.PROVISIONAL_ALIGNMENT
+    assert document.items == ()
+
+
+def test_plan_todo_document_keeps_detailed_and_legacy_todos_strict() -> None:
+    detailed = parse_plan_todo_document(
+        f"{PLAN_STAGE_DETAILED_PLAN}\n## Todo List\n{_item()}\n"
+    )
+    legacy = parse_plan_todo_document(f"## Todo List\n{_item()}\n")
+    assert detailed.kind is PlanTodoDocumentKind.TODO_AUTHORITY
+    assert legacy.kind is PlanTodoDocumentKind.TODO_AUTHORITY
+    assert [item.item_id for item in detailed.items] == ["PLAN-001"]
+    assert [item.item_id for item in legacy.items] == ["PLAN-001"]
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        f"{PLAN_STAGE_SOLUTION_ALIGNMENT}\n## Todo List\nNo actionable work.\n",
+        f"{PLAN_STAGE_SOLUTION_ALIGNMENT}\n## Todo Identity Continuity\n",
+        f"{PLAN_STAGE_SOLUTION_ALIGNMENT}\n##   Todo List   \nNo actionable work.\n",
+        f"{PLAN_STAGE_SOLUTION_ALIGNMENT}\n##\tTodo Identity Continuity\t\n",
+        f"{PLAN_STAGE_SOLUTION_ALIGNMENT}\n  ## Todo List\nNo actionable work.\n",
+        f"{PLAN_STAGE_SOLUTION_ALIGNMENT}\n\t## Todo Identity Continuity\n",
+        "<!-- plan-stage: unknown -->\n## Todo List\nNo actionable work.\n",
+        f"{PLAN_STAGE_DETAILED_PLAN}\n# Missing Todo List\n",
+        f"# Embedded\n{PLAN_STAGE_SOLUTION_ALIGNMENT}\n",
+    ],
+)
+def test_plan_todo_document_rejects_ambiguous_stage_authority(content: str) -> None:
+    with pytest.raises(TodoContractError):
+        parse_plan_todo_document(content)
+
+
+def test_plan_todo_document_ignores_embedded_stage_markers() -> None:
+    legacy = parse_plan_todo_document(
+        f"# Guide\n{PLAN_STAGE_SOLUTION_ALIGNMENT}\n## Todo List\n{_item()}\n"
+    )
+    detailed = parse_plan_todo_document(
+        f"{PLAN_STAGE_DETAILED_PLAN}\n{PLAN_STAGE_SOLUTION_ALIGNMENT}\n"
+        f"## Todo List\n{_item()}\n"
+    )
+
+    assert legacy.kind is PlanTodoDocumentKind.TODO_AUTHORITY
+    assert detailed.kind is PlanTodoDocumentKind.TODO_AUTHORITY
 
 
 @pytest.mark.parametrize(

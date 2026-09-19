@@ -133,6 +133,67 @@ def test_legacy_blackboard_events_load_without_callback_identity(tmp_path: Path)
     assert state.events[0].data == {"step": "spec"}
 
 
+def test_store_artifacts_preserves_plan_todo_identity_baseline(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "plan-baseline"
+    output = issue_dir / "plan" / "iteration_002" / "output.md"
+    output.parent.mkdir(parents=True)
+    output.write_text("<!-- plan-stage: solution-alignment -->\n", encoding="utf-8")
+    baseline = {"schema_version": 1, "artifact": None}
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook={"playbook": {"id": "test"}, "steps": {"plan": {}}},
+        executor=object(),
+    )
+
+    runtime._store_artifacts(
+        {"plan": str(output)},
+        {
+            "plan": {
+                "name": "plan",
+                "kind": "document",
+                "version": 2,
+                "updated_by": "plan",
+                "path": str(output),
+                "content_sha256": sha256(output.read_bytes()).hexdigest(),
+                "todo_identity_baseline": baseline,
+            }
+        },
+    )
+
+    assert runtime.blackboard.artifacts["plan"].todo_identity_baseline == baseline
+    reloaded = BlackboardStore(issue_dir).load_or_create("plan")
+    assert reloaded.artifacts["plan"].todo_identity_baseline == baseline
+
+
+def test_store_artifacts_rejects_malformed_plan_todo_identity_baseline(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "invalid-plan-baseline"
+    output = issue_dir / "plan" / "iteration_002" / "output.md"
+    output.parent.mkdir(parents=True)
+    output.write_text("<!-- plan-stage: solution-alignment -->\n", encoding="utf-8")
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook={"playbook": {"id": "test"}, "steps": {"plan": {}}},
+        executor=object(),
+    )
+
+    with pytest.raises(ValueError, match="baseline metadata is invalid"):
+        runtime._store_artifacts(
+            {"plan": str(output)},
+            {
+                "plan": {
+                    "name": "plan",
+                    "kind": "document",
+                    "version": 2,
+                    "updated_by": "plan",
+                    "path": str(output),
+                    "todo_identity_baseline": None,
+                }
+            },
+        )
+
+
 def test_event_callback_failure_never_blocks_workflow_advancement(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "callback-failure"
     playbook = {

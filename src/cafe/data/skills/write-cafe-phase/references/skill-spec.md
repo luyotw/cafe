@@ -506,6 +506,13 @@ This section is authoritative for current artifact normalization.
   fingerprint is SHA-256 of `plan\x1f` followed by Work with internal whitespace
   collapsed to one space. Missing, malformed, or contradictory prior authority
   fails closed before the plan author runs.
+- A `solution-alignment` plan owns no Todo authority. Its sibling
+  `artifact.json` must carry `todo_identity_baseline` with schema version `1`
+  and either an exact reference to the last detailed plan artifact or an
+  explicit null artifact when no detailed plan exists. Carry that reference
+  across repeated alignment rounds and resolve it before prompt preparation,
+  cold takeover, and detailed-plan publication. Only a legacy version-1
+  alignment artifact may migrate a missing baseline to explicit null.
 - Validate every changed authoritative skill and playbook in strict mode and
   record targeted runtime evidence for all declared domain routes, custom names,
   process restart, and v0.2 compatibility.
