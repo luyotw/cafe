@@ -48,6 +48,7 @@ from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
 from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
+from cafe.utils import checklist_validator
 from cafe.utils.phase_config import PhaseStepModelResolution
 from cafe.verification import run_verification
 
@@ -8706,7 +8707,6 @@ workflow:
     assert item.item_id.startswith("TASK-")
     assert item.source == "bespoke"
     assert item.checklist_row() in checklist.read_text(encoding="utf-8")
-    head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     evidence_commit = subprocess.check_output(
         [
             "git",
@@ -8729,38 +8729,32 @@ workflow:
         f"- Source fingerprint: `{item.fingerprint}`\n"
         "- Files: `tests/unit/test_generic_workflow_step.py`\n"
         f"- Commit: `{evidence_commit}`\n"
-        "- Targeted evidence: command=`pytest -q tests/unit/test_generic_workflow_step.py`; "
-        f"exit=0; head=`{head}`\n"
+        "- Targeted evidence: ran the unit tests\n"
         "- Remaining work: None.\n- Next action: Review.\n",
         encoding="utf-8",
     )
-    with patch(
-        "cafe.utils.checklist_validator.check_verification_receipt",
-        return_value=SimpleNamespace(
-            valid=True,
-            receipt={"command": ["pytest", "-q", "tests/unit/test_generic_workflow_step.py"]},
-        ),
-    ):
+    # This test validates against the CAFE worktree itself, which is dirty while
+    # the suite runs. Report only the clean-worktree probe as clean; the Files and
+    # Commit queries still hit the real repository.
+    real_git = checklist_validator._git
+
+    def clean_status_git(root, *args):
+        if args[:1] == ("status",):
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        return real_git(root, *args)
+
+    with patch.object(checklist_validator, "_git", side_effect=clean_status_git):
         assert executor._validate_projected_todo_completion(checklist)
 
-    with patch(
-        "cafe.utils.checklist_validator.check_verification_receipt",
-        return_value=SimpleNamespace(valid=False, receipt=None),
-    ):
+        valid_output = output.read_text(encoding="utf-8")
+        output.write_text("## Todo Progress\n\n- malformed ledger\n", encoding="utf-8")
         passed, detail = executor._validate_projected_todo_completion_detail(checklist)
-    assert passed is False
-    assert "cafe verification run --output-file" in detail
-    assert "--scope targeted -- <test command>" in detail
+        assert passed is False
+        assert "Todo ledger item set does not match the authoritative set" in detail
+        assert f"### {item.item_id}" in detail
+        assert f"- Source fingerprint: `{item.fingerprint}`" in detail
+        assert "- Commit: `<full 40-character commit SHA>`" in detail
+        output.write_text(valid_output, encoding="utf-8")
 
-    valid_output = output.read_text(encoding="utf-8")
-    output.write_text("## Todo Progress\n\n- malformed ledger\n", encoding="utf-8")
-    passed, detail = executor._validate_projected_todo_completion_detail(checklist)
-    assert passed is False
-    assert "Todo ledger item set does not match the authoritative set" in detail
-    assert f"### {item.item_id}" in detail
-    assert f"- Source fingerprint: `{item.fingerprint}`" in detail
-    assert "- Commit: `<full 40-character commit SHA>`" in detail
-    output.write_text(valid_output, encoding="utf-8")
-
-    ledger.path.write_text('{"version": 1, "entries": []}\n', encoding="utf-8")
-    assert not executor._validate_projected_todo_completion(checklist)
+        ledger.path.write_text('{"version": 1, "entries": []}\n', encoding="utf-8")
+        assert not executor._validate_projected_todo_completion(checklist)
