@@ -215,29 +215,47 @@ def test_script_launcher_inventory_covers_workflow_process_calls() -> None:
     root = Path(__file__).resolve().parents[2]
     inventory = (root / "docs" / "script-execution-boundaries.md").read_text(encoding="utf-8")
     documented = Counter()
-    for identity, count in re.findall(r"`([^`]+\.py::[^`]+)`(?: ×(\d+))?", inventory):
+    classifications: dict[str, str] = {}
+    inventory_rows = re.findall(
+        r"^\| `([^`]+\.py::[^`]+)`(?: ×(\d+))? \| ([^|]+) \|$",
+        inventory,
+        flags=re.MULTILINE,
+    )
+    for identity, count, classification in inventory_rows:
+        assert identity not in classifications, f"duplicate launcher inventory row: {identity}"
         documented[identity] += int(count or "1")
+        classifications[identity] = classification.strip()
+
+    required_classifications = {
+        "src/cafe/core/capabilities.py::run_pr_publish_capability": (
+            "Registered host capability adapter"
+        ),
+        "src/cafe/core/sandbox_execution.py::preflight_sandbox": (
+            "Internal fixed sandbox preflight"
+        ),
+        "src/cafe/core/sandbox_execution.py::run": "Sandbox script adapter",
+        "src/cafe/data/skills/use-cafe-workflow/scripts/run_workflow.py::run": (
+            "Internal fixed CAFE workflow bootstrap"
+        ),
+        "src/cafe/verification/receipt.py::_run_with_output_log": ("Explicit verification runner"),
+        "src/cafe/verification/receipt.py::run_focused_verification": (
+            "Explicit verification runner"
+        ),
+    }
+    assert {
+        identity: classifications.get(identity) for identity in required_classifications
+    } == required_classifications
 
     discovered = Counter()
     for path in (root / "src" / "cafe").rglob("*.py"):
         relative = path.relative_to(root).as_posix()
         tree = ast.parse(path.read_text(encoding="utf-8"))
 
-        process_modules = {"subprocess": "subprocess", "os": "os"}
-        process_callables: set[str] = set()
-        for node in tree.body:
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    if alias.name in {"subprocess", "os"}:
-                        process_modules[alias.asname or alias.name] = alias.name
-            elif isinstance(node, ast.ImportFrom) and node.module in {"subprocess", "os"}:
-                for alias in node.names:
-                    if (node.module == "subprocess" and alias.name in {"run", "Popen"}) or (
-                        node.module == "os" and alias.name.startswith("exec")
-                    ):
-                        process_callables.add(alias.asname or alias.name)
-
-        def is_process_callable(node: ast.expr) -> bool:
+        def is_process_callable(
+            node: ast.expr,
+            process_modules: dict[str, str],
+            process_callables: set[str],
+        ) -> bool:
             if isinstance(node, ast.Name):
                 return node.id in process_callables
             if not isinstance(node, ast.Attribute) or not isinstance(node.value, ast.Name):
@@ -247,45 +265,116 @@ def test_script_launcher_inventory_covers_workflow_process_calls() -> None:
                 module == "os" and node.attr.startswith("exec")
             )
 
-        changed = True
-        while changed:
-            changed = False
-            for node in ast.walk(tree):
-                if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+        def scope_nodes(body: list[ast.stmt]) -> list[ast.AST]:
+            pending: list[ast.AST] = list(reversed(body))
+            found: list[ast.AST] = []
+            while pending:
+                node = pending.pop()
+                found.append(node)
+                if isinstance(
+                    node,
+                    (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda),
+                ):
                     continue
-                value = node.value
-                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-                if not is_process_callable(value):
-                    continue
-                for target in targets:
-                    if isinstance(target, ast.Name) and target.id not in process_callables:
-                        process_callables.add(target.id)
-                        changed = True
+                pending.extend(reversed(list(ast.iter_child_nodes(node))))
+            return found
+
+        def collect_scope_bindings(
+            body: list[ast.stmt],
+            process_modules: dict[str, str],
+            process_callables: set[str],
+        ) -> None:
+            nodes = scope_nodes(body)
+            for node in nodes:
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name in {"subprocess", "os"}:
+                            process_modules[alias.asname or alias.name] = alias.name
+                elif isinstance(node, ast.ImportFrom) and node.module in {"subprocess", "os"}:
+                    for alias in node.names:
+                        if (node.module == "subprocess" and alias.name in {"run", "Popen"}) or (
+                            node.module == "os" and alias.name.startswith("exec")
+                        ):
+                            process_callables.add(alias.asname or alias.name)
+
+            changed = True
+            while changed:
+                changed = False
+                for node in nodes:
+                    if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                        continue
+                    value = node.value
+                    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                    if not is_process_callable(value, process_modules, process_callables):
+                        continue
+                    for target in targets:
+                        if isinstance(target, ast.Name) and target.id not in process_callables:
+                            process_callables.add(target.id)
+                            changed = True
+
+        module_process_modules: dict[str, str] = {}
+        module_process_callables: set[str] = set()
+        collect_scope_bindings(
+            tree.body,
+            module_process_modules,
+            module_process_callables,
+        )
+
+        def function_bindings(
+            node: ast.FunctionDef | ast.AsyncFunctionDef,
+            parent_modules: dict[str, str],
+            parent_callables: set[str],
+        ) -> tuple[dict[str, str], set[str]]:
+            process_modules = dict(parent_modules)
+            process_callables = set(parent_callables)
+            positional = [*node.args.posonlyargs, *node.args.args]
+            default_pairs = zip(positional[-len(node.args.defaults) :], node.args.defaults)
+            for argument, default in default_pairs:
+                if is_process_callable(default, parent_modules, parent_callables):
+                    process_callables.add(argument.arg)
+            for argument, default in zip(node.args.kwonlyargs, node.args.kw_defaults):
+                if default is not None and is_process_callable(
+                    default, parent_modules, parent_callables
+                ):
+                    process_callables.add(argument.arg)
+            collect_scope_bindings(node.body, process_modules, process_callables)
+            return process_modules, process_callables
+
+        class ScopedVisitor(ast.NodeVisitor):
+            def __init__(self) -> None:
+                self.process_modules = module_process_modules
+                self.process_callables = module_process_callables
+                self.scope: list[str] = []
+
+            def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+                previous = self.process_modules, self.process_callables
+                self.process_modules, self.process_callables = function_bindings(node, *previous)
+                self.scope.append(node.name)
+                for child in node.body:
+                    self.visit(child)
+                self.scope.pop()
+                self.process_modules, self.process_callables = previous
+
+            def visit_AsyncFunctionDef(  # noqa: N802
+                self, node: ast.AsyncFunctionDef
+            ) -> None:
+                self.visit_FunctionDef(node)
 
         runner_attributes: set[str] = set()
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            positional = [*node.args.posonlyargs, *node.args.args]
-            default_names = {
-                argument.arg
-                for argument, default in zip(
-                    positional[-len(node.args.defaults) :], node.args.defaults
-                )
-                if is_process_callable(default)
-            }
-            default_names.update(
-                argument.arg
-                for argument, default in zip(node.args.kwonlyargs, node.args.kw_defaults)
-                if default is not None and is_process_callable(default)
-            )
-            for child in ast.walk(node):
-                if not isinstance(child, (ast.Assign, ast.AnnAssign)):
-                    continue
-                value = child.value
-                targets = child.targets if isinstance(child, ast.Assign) else [child.target]
-                if not isinstance(value, ast.Name) or value.id not in default_names:
-                    continue
+
+        class RunnerAttributeVisitor(ScopedVisitor):
+            def visit_Assign(self, node: ast.Assign) -> None:
+                self._record(node.targets, node.value)
+                self.generic_visit(node)
+
+            def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+                if node.value is not None:
+                    self._record([node.target], node.value)
+                self.generic_visit(node)
+
+            def _record(self, targets: list[ast.expr], value: ast.expr) -> None:
+                if not is_process_callable(value, self.process_modules, self.process_callables):
+                    return
                 for target in targets:
                     if (
                         isinstance(target, ast.Attribute)
@@ -294,17 +383,9 @@ def test_script_launcher_inventory_covers_workflow_process_calls() -> None:
                     ):
                         runner_attributes.add(target.attr)
 
-        class Visitor(ast.NodeVisitor):
-            def __init__(self) -> None:
-                self.scope: list[str] = []
+        RunnerAttributeVisitor().visit(tree)
 
-            def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-                self.scope.append(node.name)
-                self.generic_visit(node)
-                self.scope.pop()
-
-            visit_AsyncFunctionDef = visit_FunctionDef
-
+        class Visitor(ScopedVisitor):
             def visit_Call(self, node: ast.Call) -> None:
                 target = node.func
                 injected_runner = (
@@ -313,7 +394,10 @@ def test_script_launcher_inventory_covers_workflow_process_calls() -> None:
                     and target.value.id == "self"
                     and target.attr in runner_attributes
                 )
-                if is_process_callable(target) or injected_runner:
+                if (
+                    is_process_callable(target, self.process_modules, self.process_callables)
+                    or injected_runner
+                ):
                     discovered[f"{relative}::{'.'.join(self.scope) or '<module>'}"] += 1
                 self.generic_visit(node)
 

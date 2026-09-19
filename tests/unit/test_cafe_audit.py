@@ -50,9 +50,7 @@ def test_build_context_materializes_playbook_role_agent(
     recorded: list[tuple[str, str]] = []
     source = tmp_path / "agents" / "writer" / "David.md"
     source.parent.mkdir(parents=True)
-    source_content = (
-        "---\nname: David\ndescription: writer\n---\n\nwriter guidance\n"
-    )
+    source_content = "---\nname: David\ndescription: writer\n---\n\nwriter guidance\n"
     source.write_text(source_content, encoding="utf-8")
 
     @classmethod
@@ -70,6 +68,7 @@ def test_build_context_materializes_playbook_role_agent(
     executor = GenericWorkflowStepExecutor.__new__(GenericWorkflowStepExecutor)
     executor.issue_dir = tmp_path / "issue"
     executor.iteration = 1
+    executor.playbook = {}
     state = BlackboardState(current_step="draft")
     output_file = executor.issue_dir / "draft" / "iteration_001" / "output.md"
     ctx = GenericWorkflowStepExecutor._build_context(

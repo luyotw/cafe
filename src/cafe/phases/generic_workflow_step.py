@@ -1685,7 +1685,7 @@ class GenericWorkflowStepExecutor(Phase):
             input_artifacts = self._add_causal_todo_artifact(
                 input_artifacts,
                 blackboard_state,
-                playbook=playbook,
+                playbook=self.playbook,
                 causal_artifact=causal_artifact,
             )
             feedback = bool(input_artifacts.get(causal_artifact))

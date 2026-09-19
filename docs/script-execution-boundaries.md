@@ -27,6 +27,7 @@ This inventory is executable documentation: the unit contract discovers every `s
 | `src/cafe/core/git.py::is_repository` | Internal fixed Git query |
 | `src/cafe/core/git.py::run_git` | Internal fixed Git command family |
 | `src/cafe/core/phase_review_mixin.py::_open_file_with_editor` | Explicit interactive editor |
+| `src/cafe/core/sandbox_execution.py::preflight_sandbox` | Internal fixed sandbox preflight |
 | `src/cafe/core/sandbox_execution.py::run` | Sandbox script adapter |
 | `src/cafe/core/workspace_artifact.py::_git` | Internal fixed Git query family |
 | `src/cafe/core/workspace_artifact.py::build_workspace_artifact` | Internal fixed Git ancestry query |
@@ -38,6 +39,7 @@ This inventory is executable documentation: the unit contract discovers every `s
 | `src/cafe/data/skills/use-cafe-workflow/scripts/sync_helper_with_preflight.py::_run_command` | Explicit CLI-native helper publication with fixed CAFE pre/post checks |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/preflight_cache.py::_cli_fingerprint` | Internal version probe |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/preflight_cache.py::candidate_probe` | User-requested model availability probe |
+| `src/cafe/data/skills/use-cafe-workflow/scripts/run_workflow.py::run` | Internal fixed CAFE workflow bootstrap |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/workflow_event_callback.py::_queue_host_callback` | Trusted builtin callback queue transport |
 | `src/cafe/catalogs/resolver.py::_run_git` | Internal fixed Git root discovery query |
 | `src/cafe/install/bootstrap.py::_run` | Internal installer command family |
