@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Mapping, Union
 
 from cafe.utils.checklist_validator import (
+    EXPECTED_LEDGER_FIELDS,
     GIT_EVIDENCE_TIMEOUT_SECONDS,
     validate_todo_evidence_set,
 )
@@ -128,27 +129,31 @@ def _restore_completed_items(
                 "Source fingerprint": f"`{fingerprint}`",
             }
             fields = {}
+            # `Targeted evidence` is optional informational text: every occurrence,
+            # and any genuinely indented continuation under it, is skipped before
+            # accounting. Only leading whitespace marks continuation, so a line
+            # without it is a top-level field whatever trailing whitespace it has.
+            in_evidence = False
             for raw in block.splitlines():
-                match = re.fullmatch(r"- ([A-Za-z ]+):\s*(.*)", raw.strip())
-                if match:
-                    fields.setdefault(match.group(1), []).append(match.group(2).strip())
-            expected_fields = {
-                "Status",
-                "Source fingerprint",
-                "Files",
-                "Commit",
-                "Targeted evidence",
-                "Remaining work",
-                "Next action",
-            }
+                stripped = raw.strip()
+                if stripped.startswith("- Targeted evidence:"):
+                    in_evidence = True
+                    continue
+                if in_evidence and raw != raw.lstrip():
+                    continue
+                in_evidence = False
+                match = re.fullmatch(r"- ([A-Za-z ]+):\s*(.*)", stripped)
+                if not match:
+                    continue
+                fields.setdefault(match.group(1), []).append(match.group(2).strip())
             if (
-                set(fields) != expected_fields
+                set(fields) != EXPECTED_LEDGER_FIELDS
                 or any(fields.get(name) != [value] for name, value in required.items())
                 or any(len(values) != 1 for values in fields.values())
             ):
                 valid_projected.discard((item_id, fingerprint))
                 continue
-            for name in ("Files", "Commit", "Targeted evidence"):
+            for name in ("Files", "Commit"):
                 values = fields.get(name, [])
                 if len(values) != 1 or values[0].lower() in {
                     "",
@@ -184,7 +189,6 @@ def _restore_completed_items(
                 evidence_errors = validate_todo_evidence_set(
                     evidence_by_id,
                     Path(repository.stdout.strip()),
-                    output_path=todo_ledger_path,
                 )
                 # Validation is one atomic evidence-set decision. This also
                 # protects against older validators returning sparse errors.
