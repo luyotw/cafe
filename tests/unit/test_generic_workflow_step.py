@@ -1940,7 +1940,7 @@ def test_generic_step_forwards_runtime_validated_publication_choice(
     assert captured["hook_context"]["validated_pr_auto_create"] is False
 
 
-def test_remote_pr_git_history_uses_fetched_remote_base(tmp_path: Path, monkeypatch) -> None:
+def test_remote_pr_git_history_uses_integrated_remote_base(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-remote-history"
     issue_dir.mkdir(parents=True)
@@ -1969,7 +1969,7 @@ def test_remote_pr_git_history_uses_fetched_remote_base(tmp_path: Path, monkeypa
     store = BlackboardStore(issue_dir)
     state = store.load_or_create("pr")
     git_ops = MagicMock()
-    git_ops.ensure_remote_base_ancestor.return_value = "origin/develop"
+    git_ops.merge_remote_base_into_head.return_value = "origin/develop"
     git_ops.get_commits_between.return_value = "abc123 direct bootstrap"
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
@@ -1983,7 +1983,7 @@ def test_remote_pr_git_history_uses_fetched_remote_base(tmp_path: Path, monkeypa
 
     executor.execute_step("pr", playbook["steps"]["pr"], state)
 
-    git_ops.ensure_remote_base_ancestor.assert_called_once_with("develop", "HEAD")
+    git_ops.merge_remote_base_into_head.assert_called_once_with("develop")
     git_ops.get_commits_between.assert_called_once_with(
         base="origin/develop",
         head="HEAD",

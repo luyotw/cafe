@@ -5748,6 +5748,41 @@ def test_runtime_handles_agent_execution_error(
     assert runtime._try_reconcile_current_step(current_step="spec") is None
 
 
+def test_runtime_routes_remote_base_integration_failure_to_a_recovery_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unsafe host-side base update creates a user recovery task."""
+    from cafe.core.git import RemoteBaseIntegrationError
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "remote-base-integration"
+    playbook = {
+        "playbook": {"id": "default"},
+        "steps": {
+            "pr": {"skill": "pr", "role": "developer", "on": {"await_agent": "_done"}},
+        },
+    }
+
+    def executor(_step_name: str, _step_def: dict, _state: object) -> StepExecutionResult:
+        raise RemoteBaseIntegrationError("automatic merge encountered conflicts")
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    notifications = []
+    monkeypatch.setattr(runtime, "_notify_new_human_task", notifications.append)
+
+    result = runtime.run(start_step="pr")
+
+    assert result.completed is False
+    assert result.final_status_code == "INTERRUPTED:agent_remote_base_integration"
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    assert task.step == "pr"
+    assert task.trigger == "agent_execution_interrupted"
+    assert notifications == [task]
+
+
 def test_runtime_does_not_reconcile_agent_error_after_valid_handoff(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

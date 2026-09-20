@@ -365,7 +365,7 @@ def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(
         def get_current_branch(self) -> str:
             return "pr-feedback"
 
-        def ensure_remote_base_ancestor(self, *_args, **_kwargs) -> None:
+        def merge_remote_base_into_head(self, *_args, **_kwargs) -> None:
             return None
 
         def get_commits_between(self, *_args, **_kwargs) -> list[object]:
