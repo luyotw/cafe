@@ -228,6 +228,34 @@ workflow:
         loader.get_workflow_declaration("templated")
 
 
+def test_primary_workflow_retains_generic_schema_validation_error(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    skill_dir = project_root / ".cafe" / "skills" / "malformed"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: malformed
+description: Malformed workflow declaration.
+workflow:
+  execution_profile: {reasoning: impossible}
+---
+""",
+        encoding="utf-8",
+    )
+    loader = SkillLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        loader.get_workflow_declaration("malformed")
+    message = str(exc_info.value)
+    assert "Invalid workflow declaration for skill malformed" in message
+    assert "execution_profile.reasoning" in message
+    assert "impossible" in message
+
+
 def test_builtin_catalog_includes_pr_skill(tmp_path: Path) -> None:
     builtin_root = Path(__file__).resolve().parents[2] / "src" / "cafe" / "data"
     loader = SkillLoader(

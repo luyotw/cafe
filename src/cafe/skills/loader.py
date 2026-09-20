@@ -245,20 +245,32 @@ class SkillLoader:
         self, name: str, *, validate_resources: bool = True
     ) -> tuple[SkillCatalogEntry, SkillWorkflowDeclaration]:
         """Return a declaration with the exact catalog entry that supplied it."""
+        entry, raw_declaration = self.get_workflow_declaration_data(name)
+        declaration = self.parse_workflow_declaration(entry, raw_declaration)
+        if validate_resources:
+            self.validate_workflow_declaration_resources(entry.directory, declaration)
+        return entry, declaration
+
+    def get_workflow_declaration_data(
+        self, name: str
+    ) -> tuple[SkillCatalogEntry, object]:
+        """Return resolved provenance and raw workflow metadata without validating it."""
         with global_catalog_lock(self.global_root):
             entry = self._resolve_entry(name)
-            skill_dir = entry.directory
-            metadata = self._read_skill_frontmatter(skill_dir / "SKILL.md")
-            raw_declaration = metadata.get("workflow", {})
-            try:
-                declaration = SkillWorkflowDeclaration.model_validate(raw_declaration)
-            except Exception as exc:
-                raise ValueError(
-                    f"Invalid workflow declaration for skill {skill_dir.name}: {exc}"
-                ) from exc
-            if validate_resources:
-                self.validate_workflow_declaration_resources(skill_dir, declaration)
-            return entry, declaration
+            metadata = self._read_skill_frontmatter(entry.directory / "SKILL.md")
+            return entry, metadata.get("workflow", {})
+
+    @staticmethod
+    def parse_workflow_declaration(
+        entry: SkillCatalogEntry, raw_declaration: object
+    ) -> SkillWorkflowDeclaration:
+        """Preserve the compatibility error used by direct and primary loading."""
+        try:
+            return SkillWorkflowDeclaration.model_validate(raw_declaration)
+        except Exception as exc:
+            raise ValueError(
+                f"Invalid workflow declaration for skill {entry.directory.name}: {exc}"
+            ) from exc
 
     @staticmethod
     def workflow_declaration_resource_errors(

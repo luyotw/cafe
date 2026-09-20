@@ -139,9 +139,18 @@ def resolve_step_workflow_composition(
     contributors: list[SkillWorkflowContributor] = []
     seen_roots: set[Path] = set()
     for index, requested_name in enumerate((primary_skill, *workflow_skills)):
-        entry, declaration = skill_loader.get_workflow_declaration_entry(
-            requested_name, validate_resources=False
-        )
+        entry, raw_declaration = skill_loader.get_workflow_declaration_data(requested_name)
+        if index == 0:
+            declaration = skill_loader.parse_workflow_declaration(entry, raw_declaration)
+        else:
+            try:
+                declaration = SkillWorkflowDeclaration.model_validate(raw_declaration)
+            except Exception as exc:
+                declaration_file = entry.directory / "SKILL.md"
+                raise WorkflowCompositionError(
+                    f"Step {step_name!r} contributor {entry.name!r} "
+                    f"({declaration_file}:workflow) has an invalid workflow declaration: {exc}"
+                ) from exc
         identity = entry.directory.resolve()
         if identity in seen_roots:
             continue

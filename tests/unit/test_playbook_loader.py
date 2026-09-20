@@ -261,6 +261,46 @@ steps:
     )
 
 
+def test_strict_validation_adds_step_and_source_to_malformed_contributor(
+    tmp_path: Path,
+) -> None:
+    builtin_root = tmp_path / "builtin"
+    _write_workflow_skill(
+        builtin_root / "skills",
+        "support",
+        "  execution_profile: {reasoning: impossible}\n",
+    )
+    _write_skill(builtin_root / "skills", "primary")
+    _write_playbook(
+        builtin_root / "playbooks",
+        "malformed-contributor",
+        """
+playbook: {id: malformed-contributor}
+roles: {operator: {}}
+commands: {prepare: {prompt_for_spec_plan_config: false}}
+skills:
+  workflow: {shared: [support]}
+  chat: {shared: []}
+steps:
+  run: {role: operator, skill: primary, on: {await_agent: _done}}
+""",
+    )
+
+    loader = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        loader.load_model("malformed-contributor", strict=True)
+    message = str(exc_info.value)
+    assert all(
+        token in message
+        for token in ("run", "support", "SKILL.md", "execution_profile.reasoning", "impossible")
+    )
+
+
 def _write_playbook(
     root: Path,
     name: str,
