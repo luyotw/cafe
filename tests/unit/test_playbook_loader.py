@@ -138,6 +138,109 @@ steps:
     assert "later" in message and "support" in message
 
 
+def test_strict_validation_activates_project_contributor_metadata_and_ignores_chat(
+    tmp_path: Path,
+) -> None:
+    builtin_root = tmp_path / "builtin"
+    project_root = tmp_path / "project"
+    _write_skill(builtin_root / "skills", "primary")
+    _write_skill(builtin_root / "skills", "neutral")
+    _write_workflow_skill(
+        tmp_path / "global" / "skills",
+        "support",
+        "  required_tools: [ForbiddenGlobal]\n",
+    )
+    _write_workflow_skill(
+        project_root / ".cafe" / "skills",
+        "support",
+        """  required_tools: [Read]
+  prompt_inputs:
+  - {artifacts: [spec], placeholder: spec_file, required: true}
+  human_tasks:
+  - id: approve
+    pattern: confirm_output
+    prompt: Approve?
+    input_schema: decision
+    decisions:
+    - {id: accept, label: Accept}
+""",
+    )
+    _write_workflow_skill(
+        project_root / ".cafe" / "skills",
+        "chat-only",
+        "  required_tools: [ForbiddenChat]\n",
+    )
+    _write_playbook(
+        project_root / ".cafe" / "playbooks",
+        "supported-contributor",
+        """
+playbook: {id: supported-contributor}
+roles: {operator: {}}
+commands: {prepare: {prompt_for_spec_plan_config: false}}
+skills:
+  workflow: {shared: [neutral, support]}
+  chat: {shared: [chat-only]}
+steps:
+  run:
+    role: operator
+    skill: primary
+    input_artifacts: [spec]
+    allowed_tools: [Read]
+    human_tasks:
+    - trigger: confirm_output
+      task_id: approve
+      outcomes: {accept: _done}
+    on: {confirm_output: run, await_agent: _done}
+""",
+    )
+
+    loaded = PlaybookLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    ).load_model("supported-contributor", strict=True)
+
+    assert loaded.model.steps["run"].allowed_tools == ["Read"]
+
+
+def test_strict_validation_rejects_contributor_primary_owned_metadata(tmp_path: Path) -> None:
+    builtin_root = tmp_path / "builtin"
+    support_dir = builtin_root / "skills" / "support"
+    (support_dir / "references").mkdir(parents=True)
+    (support_dir / "references" / "guide.md").write_text("guide", encoding="utf-8")
+    _write_workflow_skill(
+        builtin_root / "skills",
+        "support",
+        "  prompt_references: {guide: guide.md}\n",
+    )
+    _write_skill(builtin_root / "skills", "primary")
+    _write_playbook(
+        builtin_root / "playbooks",
+        "unsupported-contributor",
+        """
+playbook: {id: unsupported-contributor}
+roles: {operator: {}}
+commands: {prepare: {prompt_for_spec_plan_config: false}}
+skills:
+  workflow: {shared: [support]}
+  chat: {shared: []}
+steps:
+  run: {role: operator, skill: primary, on: {await_agent: _done}}
+""",
+    )
+
+    loader = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        loader.load_model("unsupported-contributor", strict=True)
+    message = str(exc_info.value)
+    assert all(token in message for token in ("run", "prompt_references", "support"))
+
+
 def _write_playbook(
     root: Path,
     name: str,
