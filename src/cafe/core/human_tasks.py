@@ -384,8 +384,24 @@ def resolve_step_human_task(
 
         skill_loader = SkillLoader()
     skill_name = _select_step_skill_name(raw_step, iteration)
-    contract = skill_loader.get_workflow_declaration(skill_name)
-    policy = resolve_human_task_policy(defaults=contract.human_tasks, binding=bindings[0])
+    from cafe.core.playbook import resolve_playbook_skills
+    from cafe.skills.workflow_composition import resolve_step_workflow_composition
+
+    workflow_skills = resolve_playbook_skills(
+        playbook_data,
+        channel="workflow",
+        role=str(raw_step.get("role")) if raw_step.get("role") else None,
+        step_name=step_name,
+    )
+    composition = resolve_step_workflow_composition(
+        skill_loader,
+        primary_skill=skill_name,
+        workflow_skills=workflow_skills,
+        step_name=step_name,
+    )
+    policy = resolve_human_task_policy(
+        defaults=composition.human_tasks, binding=bindings[0]
+    )
     return policy, bindings[0]
 
 

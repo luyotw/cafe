@@ -49,6 +49,7 @@ try:
     from cafe.core.playbook import (
         confirmation_gate_steps,
         mandatory_confirmation_gate_steps,
+        resolve_playbook_skills,
     )
     from cafe.core.types import AgentCLI, AgentConfig
     from cafe.driver import ActivateConfirmedContract, activate_confirmed_contract
@@ -921,7 +922,17 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
             gate, owner, stop = yes, driver_owner, no
         else:
             gate, owner, stop = no, no_gate, no
-        profile = resolve_execution_profile(skill_loader, step.skill)
+        profile = resolve_execution_profile(
+            skill_loader,
+            step.skill,
+            workflow_skills=resolve_playbook_skills(
+                model,
+                channel="workflow",
+                role=step.role,
+                step_name=step_name,
+            ),
+            step_name=step_name,
+        )
         skill_label = ", ".join(profile.skill_names)
         phase_rows.append([step_name, step.role, skill_label, gate, owner, stop])
         profile_rows.append(

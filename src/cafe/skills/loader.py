@@ -73,14 +73,20 @@ def canonical_skill_name(name: str) -> str:
 
 
 def read_skill_frontmatter(skill_file: Path) -> Dict[str, object]:
-    """Read YAML frontmatter from one skill file."""
-    content = skill_file.read_text(encoding="utf-8")
-    if not content.startswith("---"):
+    """Read YAML frontmatter without materializing the skill body."""
+    with skill_file.open(encoding="utf-8") as handle:
+        if handle.readline().rstrip("\r\n") != "---":
+            return {}
+        frontmatter_lines: list[str] = []
+        for line in handle:
+            if line.rstrip("\r\n") == "---":
+                break
+            frontmatter_lines.append(line)
+        else:
+            return {}
+    frontmatter = "".join(frontmatter_lines)
+    if not frontmatter.strip():
         return {}
-    end = content.find("\n---", 3)
-    if end == -1:
-        return {}
-    frontmatter = content[3:end]
     data = yaml.safe_load(frontmatter) or {}
     return data if isinstance(data, dict) else {}
 
@@ -232,8 +238,16 @@ class SkillLoader:
 
     def get_workflow_declaration(self, name: str) -> SkillWorkflowDeclaration:
         """Load and validate optional workflow metadata from the resolved skill."""
+        _entry, declaration = self.get_workflow_declaration_entry(name)
+        return declaration
+
+    def get_workflow_declaration_entry(
+        self, name: str
+    ) -> tuple[SkillCatalogEntry, SkillWorkflowDeclaration]:
+        """Return a declaration with the exact catalog entry that supplied it."""
         with global_catalog_lock(self.global_root):
-            skill_dir = self._resolve_entry(name).directory
+            entry = self._resolve_entry(name)
+            skill_dir = entry.directory
             metadata = self._read_skill_frontmatter(skill_dir / "SKILL.md")
             raw_declaration = metadata.get("workflow", {})
             try:
@@ -265,7 +279,7 @@ class SkillLoader:
                         f"Invalid workflow declaration for skill {skill_dir.name}: "
                         f"template catalog {declaration.output_templates.catalog!r} is unavailable"
                     )
-            return declaration
+            return entry, declaration
 
     # TODO: remove me
     def get_workflow_contract(self, name: str) -> SkillWorkflowDeclaration:

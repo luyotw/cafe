@@ -41,6 +41,103 @@ def _write_skill(root: Path, name: str) -> None:
     )
 
 
+def _write_workflow_skill(root: Path, name: str, workflow: str) -> None:
+    skill_dir = root / name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: desc-{name}\nworkflow:\n{workflow}\n---\n",
+        encoding="utf-8",
+    )
+
+
+def test_strict_validation_applies_contributor_tools_without_granting_permission(
+    tmp_path: Path,
+) -> None:
+    builtin_root = tmp_path / "builtin"
+    _write_skill(builtin_root / "skills", "primary")
+    _write_workflow_skill(
+        builtin_root / "skills", "support", "  required_tools: [Write]\n"
+    )
+    _write_playbook(
+        builtin_root / "playbooks",
+        "composed-tools",
+        """
+playbook: {id: composed-tools}
+roles: {operator: {}}
+commands: {prepare: {prompt_for_spec_plan_config: false}}
+skills:
+  workflow: {shared: [support]}
+  chat: {shared: []}
+steps:
+  run:
+    role: operator
+    skill: primary
+    allowed_tools: [Read]
+    on: {await_agent: _done}
+""",
+    )
+
+    loader = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError, match="allowed_tools.*Write"):
+        loader.load_model("composed-tools", strict=True)
+
+
+def test_strict_validation_checks_inactive_primary_branch_with_same_composition_rules(
+    tmp_path: Path,
+) -> None:
+    builtin_root = tmp_path / "builtin"
+    _write_workflow_skill(
+        builtin_root / "skills",
+        "first",
+        "  prompt_inputs:\n  - {artifacts: [spec], placeholder: spec_file}\n",
+    )
+    _write_workflow_skill(
+        builtin_root / "skills",
+        "later",
+        "  prompt_inputs:\n  - {artifacts: [plan], placeholder: spec_file}\n",
+    )
+    _write_workflow_skill(
+        builtin_root / "skills",
+        "support",
+        "  prompt_inputs:\n  - {artifacts: [spec], placeholder: spec_file}\n",
+    )
+    _write_playbook(
+        builtin_root / "playbooks",
+        "composed-branches",
+        """
+playbook: {id: composed-branches}
+roles: {operator: {}}
+commands: {prepare: {prompt_for_spec_plan_config: false}}
+skills:
+  workflow: {shared: [support]}
+  chat: {shared: []}
+steps:
+  run:
+    role: operator
+    skill: {'1': first, default: later}
+    input_artifacts: [spec, plan]
+    on: {await_agent: _done}
+""",
+    )
+
+    loader = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        loader.load_model("composed-branches", strict=True)
+    message = str(exc_info.value)
+    assert all(token in message for token in ("run", "prompt_inputs", "spec_file"))
+    assert "later" in message and "support" in message
+
+
 def _write_playbook(
     root: Path,
     name: str,

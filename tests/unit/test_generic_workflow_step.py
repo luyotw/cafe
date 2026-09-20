@@ -332,6 +332,68 @@ def test_generic_workflow_step_executor_writes_iteration_files(tmp_path: Path, m
     assert reloaded.handoff_contract.source == "workflow.status_transition_adapter"
 
 
+def test_launch_materializes_prompt_input_declared_by_workflow_contributor(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    generic_phase = _build_loader(tmp_path)
+    support_dir = tmp_path / ".cafe" / "skills" / "input-support"
+    support_dir.mkdir(parents=True)
+    (support_dir / "SKILL.md").write_text(
+        """---
+name: input-support
+description: contributed input
+workflow:
+  prompt_inputs:
+  - artifacts: [plan]
+    placeholder: plan_file
+    required: true
+---
+
+Use the declared plan input.
+""",
+        encoding="utf-8",
+    )
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-composed-input"
+    playbook = {
+        "playbook": {"id": "default"},
+        "roles": {"developer": {"default_agent": "David"}},
+        "skills": {"workflow": {"shared": ["input-support"]}},
+        "steps": {
+            "develop": {
+                "skill": "develop",
+                "role": "developer",
+                "input_artifacts": ["plan"],
+                "output_artifact": "code",
+                "allowed_tools": ["Read"],
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    plan_file = issue_dir / "plan" / "iteration_001" / "output.md"
+    plan_file.parent.mkdir(parents=True)
+    plan_file.write_text("# Plan\n", encoding="utf-8")
+    store.set_artifact(state, "plan", str(plan_file))
+    agent_manager = FakeAgentManager("done", on_execute=_complete_current_checklist)
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="issue-composed-input",
+        playbook=playbook,
+        generic_phase=generic_phase,
+        agent_manager=agent_manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"developer": "David"},
+    )
+
+    executor.execute_step("develop", playbook["steps"]["develop"], state)
+
+    assert len(agent_manager.prompts) == 1
+    assert "plan_file=" in agent_manager.prompts[0]
+    assert str(plan_file.relative_to(tmp_path)) in agent_manager.prompts[0]
+
+
 def test_backup_cli_skill_sync_refuses_external_symlink(
     tmp_path: Path,
     monkeypatch,

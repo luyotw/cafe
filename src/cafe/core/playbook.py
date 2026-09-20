@@ -32,6 +32,11 @@ from cafe.core.prepare_fields import (
 from cafe.core.status_codes import PLAYBOOK_INTENT_KEYS, PhaseStatusCode
 from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.skills.loader import SkillLoader, canonical_skill_name
+from cafe.skills.selectors import skill_selector_names
+from cafe.skills.workflow_composition import (
+    StepWorkflowComposition,
+    resolve_step_workflow_composition,
+)
 from cafe.templates.manager import TemplateManager
 
 DONE_TARGET = "_done"
@@ -1402,18 +1407,24 @@ def validate_playbook(
     _validate_skill_environments(model, skill_loader=skill_loader, warnings=warnings)
 
     for step_name, step in steps.items():
+        _validate_step_skills(step_name, step, skill_loader)
+    compositions = {
+        step_name: _resolve_step_compositions(model, step_name, step, skill_loader)
+        for step_name, step in steps.items()
+    }
+
+    for step_name, step in steps.items():
         _validate_step_role(step_name, step, model.roles)
         _validate_step_chat_role(step_name, step, model.roles)
-        _validate_step_skills(step_name, step, skill_loader)
-        _validate_step_required_prompt_inputs(step_name, step, skill_loader)
-        _validate_step_required_tools(step_name, step, skill_loader)
-        _validate_step_human_tasks(step_name, step, steps, skill_loader)
+        _validate_step_required_prompt_inputs(step_name, step, compositions[step_name])
+        _validate_step_required_tools(step_name, step, compositions[step_name])
+        _validate_step_human_tasks(step_name, step, steps, compositions[step_name])
         _validate_ownership_contract(step_name, step, steps)
         _validate_script_hook_stages(step_name, step.hooks)
         _validate_targets(step_name, step.allowed_goto, steps, "allowed_goto")
         _validate_transition_targets(step_name, step.on, steps)
         warnings.extend(_collect_tool_warnings(step_name, step.allowed_tools))
-    _validate_feedback_target_prompt_inputs(model, skill_loader=skill_loader)
+    _validate_feedback_target_prompt_inputs(model, compositions=compositions)
     _validate_prepare_metadata(
         model,
         skill_loader=skill_loader,
@@ -1686,23 +1697,45 @@ def _validate_step_skills(step_name: str, step: StepConfig, skill_loader: SkillL
             raise ValueError(f"Step '{step_name}' references unknown skill '{skill_name}'") from exc
 
 
-def _validate_step_required_prompt_inputs(
+def _resolve_step_compositions(
+    model: PlaybookDefinition,
     step_name: str,
     step: StepConfig,
     skill_loader: SkillLoader,
+) -> tuple[StepWorkflowComposition, ...]:
+    """Resolve every declared primary branch against one workflow environment."""
+    workflow_skills = resolve_playbook_skills(
+        model,
+        channel="workflow",
+        role=step.role,
+        step_name=step_name,
+    )
+    return tuple(
+        resolve_step_workflow_composition(
+            skill_loader,
+            primary_skill=skill_name,
+            workflow_skills=workflow_skills,
+            step_name=step_name,
+        )
+        for skill_name in skill_selector_names(step.skill)
+    )
+
+
+def _validate_step_required_prompt_inputs(
+    step_name: str,
+    step: StepConfig,
+    compositions: tuple[StepWorkflowComposition, ...],
 ) -> None:
     """Reject a step whose artifact graph cannot satisfy a required mapping."""
     if "input_artifacts" not in step.model_fields_set:
         return
-    selectors = [step.skill] if isinstance(step.skill, str) else list(step.skill.values())
     declared_artifacts = set(step.input_artifacts or [])
-    for skill_name in selectors:
-        contract = skill_loader.get_workflow_declaration(skill_name)
-        for mapping in contract.prompt_inputs:
+    for composition in compositions:
+        for mapping in composition.prompt_inputs:
             if mapping.required and not declared_artifacts.intersection(mapping.artifacts):
                 candidates = ", ".join(mapping.artifacts)
                 raise ValueError(
-                    f"Step {step_name!r}, skill {canonical_skill_name(skill_name)!r}: "
+                    f"Step {step_name!r}, composition {composition.skill_names!r}: "
                     f"required prompt input {mapping.placeholder!r} expects one of "
                     f"[{candidates}], but input_artifacts declares "
                     f"{sorted(declared_artifacts)}"
@@ -1712,20 +1745,20 @@ def _validate_step_required_prompt_inputs(
 def _validate_feedback_target_prompt_inputs(
     model: PlaybookDefinition,
     *,
-    skill_loader: SkillLoader,
+    compositions: Mapping[str, tuple[StepWorkflowComposition, ...]],
 ) -> None:
     """Ensure routed feedback is exposed to every possible target skill."""
 
-    def receives_feedback_artifact(skill_name: str, artifact: str) -> bool:
+    def receives_feedback_artifact(composition: StepWorkflowComposition, artifact: str) -> bool:
         return any(
             mapping.artifacts == (artifact,)
-            for mapping in skill_loader.get_workflow_declaration(skill_name).prompt_inputs
+            for mapping in composition.prompt_inputs
         )
 
-    def receives_causal_artifact(skill_name: str, artifact: str) -> bool:
+    def receives_causal_artifact(composition: StepWorkflowComposition, artifact: str) -> bool:
         return any(
             artifact in mapping.artifacts
-            for mapping in skill_loader.get_workflow_declaration(skill_name).prompt_inputs
+            for mapping in composition.prompt_inputs
         )
 
     for step_name, step in model.steps.items():
@@ -1761,17 +1794,13 @@ def _validate_feedback_target_prompt_inputs(
             )
 
         for source, target_name, artifact in targets:
-            target = model.steps[target_name]
-            selectors = (
-                [target.skill] if isinstance(target.skill, str) else list(target.skill.values())
-            )
             missing = [
-                canonical_skill_name(skill_name)
-                for skill_name in selectors
+                composition.skill_names
+                for composition in compositions[target_name]
                 if not (
-                    receives_causal_artifact(skill_name, artifact)
+                    receives_causal_artifact(composition, artifact)
                     if source == "behavior.feedback_routes"
-                    else receives_feedback_artifact(skill_name, artifact)
+                    else receives_feedback_artifact(composition, artifact)
                 )
             ]
             if missing:
@@ -1792,20 +1821,18 @@ def _tool_requirement_satisfied(required: str, allowed_tools: List[str]) -> bool
 def _validate_step_required_tools(
     step_name: str,
     step: StepConfig,
-    skill_loader: SkillLoader,
+    compositions: tuple[StepWorkflowComposition, ...],
 ) -> None:
     """Reject a step that cannot execute its selected skill's declared tools."""
-    selectors = [step.skill] if isinstance(step.skill, str) else list(step.skill.values())
-    for skill_name in selectors:
-        contract = skill_loader.get_workflow_declaration(skill_name)
+    for composition in compositions:
         missing = [
             required
-            for required in contract.required_tools
+            for required in composition.required_tools
             if not _tool_requirement_satisfied(required, step.allowed_tools)
         ]
         if missing:
             raise ValueError(
-                f"Step {step_name!r}, skill {canonical_skill_name(skill_name)!r}: "
+                f"Step {step_name!r}, composition {composition.skill_names!r}: "
                 f"allowed_tools is missing required declarations {missing}"
             )
 
@@ -1814,7 +1841,7 @@ def _validate_step_human_tasks(
     step_name: str,
     step: StepConfig,
     steps: Dict[str, StepConfig],
-    skill_loader: SkillLoader,
+    compositions: tuple[StepWorkflowComposition, ...],
 ) -> None:
     """Ensure every policy binding names a skill task and declared destinations."""
     if not step.human_tasks:
@@ -1824,8 +1851,6 @@ def _validate_step_human_tasks(
         for portion in (step.hybrid.portions if step.hybrid is not None else ())
         if portion.owner == "human"
     }
-    selectors = [step.skill] if isinstance(step.skill, str) else list(step.skill.values())
-    contracts = [skill_loader.get_workflow_declaration(skill) for skill in selectors]
     for binding in step.human_tasks:
         if (
             binding.trigger != "initial"
@@ -1836,13 +1861,13 @@ def _validate_step_human_tasks(
                 f"Step '{step_name}' human task trigger {binding.trigger!r} "
                 "is not declared in its transitions"
             )
-        for skill_name, contract in zip(selectors, contracts):
+        for composition in compositions:
             matching_policies = [
-                policy for policy in contract.human_tasks if policy.id == binding.task_id
+                policy for policy in composition.human_tasks if policy.id == binding.task_id
             ]
             if not matching_policies:
                 raise ValueError(
-                    f"Step '{step_name}', skill {canonical_skill_name(str(skill_name))!r}: "
+                    f"Step '{step_name}', composition {composition.skill_names!r}: "
                     f"unknown human task {binding.task_id!r}"
                 )
             policy = matching_policies[0]
@@ -1851,7 +1876,7 @@ def _validate_step_human_tasks(
                 or any(decision.requires_feedback for decision in policy.decisions)
             ):
                 raise ValueError(
-                    f"Step '{step_name}', skill {canonical_skill_name(str(skill_name))!r}: "
+                    f"Step '{step_name}', composition {composition.skill_names!r}: "
                     f"human task {binding.task_id!r} cannot deliver feedback because its policy "
                     "does not collect feedback"
                 )
@@ -1859,7 +1884,7 @@ def _validate_step_human_tasks(
                 binding.allowed_targets
             ):
                 raise ValueError(
-                    f"Step '{step_name}', skill {canonical_skill_name(str(skill_name))!r}: "
+                    f"Step '{step_name}', composition {composition.skill_names!r}: "
                     f"human task {binding.task_id!r} requires allowed_targets on the binding"
                 )
         for target in [*binding.outcomes.values(), *binding.allowed_targets]:

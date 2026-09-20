@@ -107,6 +107,7 @@ from cafe.skills.contracts import (
     resolve_prompt_inputs,
 )
 from cafe.skills.loader import SkillLoader, canonical_skill_name
+from cafe.skills.workflow_composition import resolve_step_workflow_composition
 from cafe.templates.manager import TemplateManager
 from cafe.utils.checklist_utils import generate_checklist_file
 from cafe.utils.checklist_validator import completion_requires_checklist, validate_projected_todos
@@ -252,6 +253,27 @@ class GenericWorkflowStepExecutor(Phase):
         """Return the GenericPhase loader, with a standalone-test fallback."""
         generic_phase = getattr(self, "generic_phase", None)
         return getattr(generic_phase, "skill_loader", None) or SkillLoader()
+
+    def _effective_workflow_declaration(
+        self,
+        *,
+        step_name: str,
+        step_def: Dict[str, Any],
+        skill_name: str,
+    ) -> SkillWorkflowDeclaration:
+        """Resolve supported runtime fields without changing primary-owned rendering."""
+        workflow_skills = resolve_playbook_skills(
+            self.playbook,
+            channel="workflow",
+            role=step_def.get("role"),
+            step_name=step_name,
+        )
+        return resolve_step_workflow_composition(
+            self._get_skill_loader(),
+            primary_skill=skill_name,
+            workflow_skills=workflow_skills,
+            step_name=step_name,
+        ).as_declaration()
 
     def __init__(
         self,
@@ -943,8 +965,10 @@ class GenericWorkflowStepExecutor(Phase):
         iteration_dir: Path,
     ) -> str:
         """Refresh a bounded cold-takeover snapshot just before a backup runs."""
-        contract = self._get_skill_loader().get_workflow_declaration(
-            self._resolve_skill_name(step_def, self.iteration)
+        skill_name = self._resolve_skill_name(step_def, self.iteration)
+        primary_contract = self._get_skill_loader().get_workflow_declaration(skill_name)
+        contract = self._effective_workflow_declaration(
+            step_name=step_name, step_def=step_def, skill_name=skill_name
         )
         input_artifacts = self._step_input_artifacts(step_def, blackboard_state)
         self._prepare_todo_identity_input(
@@ -954,7 +978,9 @@ class GenericWorkflowStepExecutor(Phase):
         causal_artifact = next(
             (
                 section.todo_projection.artifact
-                for variant in (contract.checklist.variants if contract.checklist else ())
+                for variant in (
+                    primary_contract.checklist.variants if primary_contract.checklist else ()
+                )
                 for section in variant.sections
                 if section.todo_projection and section.todo_projection.causal
             ),
@@ -1743,7 +1769,10 @@ class GenericWorkflowStepExecutor(Phase):
                 context["pr_auto_create"] = str(publication_choice).lower()
 
         skill_name = self._resolve_skill_name(step_def, self.iteration)
-        contract = self._get_skill_loader().get_workflow_declaration(skill_name)
+        primary_contract = self._get_skill_loader().get_workflow_declaration(skill_name)
+        contract = self._effective_workflow_declaration(
+            step_name=step_name, step_def=step_def, skill_name=skill_name
+        )
         self._refresh_declared_workspace_input(
             step_def=step_def,
             blackboard_state=blackboard_state,
@@ -1756,7 +1785,9 @@ class GenericWorkflowStepExecutor(Phase):
         self._validate_workspace_inputs(input_artifacts, step_def=step_def)
         causal_projections = [
             section.todo_projection
-            for variant in (contract.checklist.variants if contract.checklist else ())
+            for variant in (
+                primary_contract.checklist.variants if primary_contract.checklist else ()
+            )
             for section in variant.sections
             if section.todo_projection and section.todo_projection.causal
         ]
@@ -1764,7 +1795,11 @@ class GenericWorkflowStepExecutor(Phase):
             step_name, blackboard_state
         )
         if causal_projections or inbound_route is not None:
-            causal_artifact = causal_projections[0].artifact if causal_projections else inbound_route.artifact
+            causal_artifact = (
+                causal_projections[0].artifact
+                if causal_projections
+                else inbound_route.artifact
+            )
             assert causal_artifact is not None
             input_artifacts = self._add_causal_todo_artifact(
                 input_artifacts,
@@ -1826,7 +1861,7 @@ class GenericWorkflowStepExecutor(Phase):
             step_name=step_name,
             step_def=step_def,
             skill_name=skill_name,
-            contract=contract,
+            contract=primary_contract,
         )
 
         if "workflow_metadata" in behavior.context_providers:
@@ -2511,6 +2546,9 @@ class GenericWorkflowStepExecutor(Phase):
     ) -> None:
         canonical_name = canonical_skill_name(skill_name)
         contract = self._get_skill_loader().get_workflow_declaration(skill_name)
+        input_contract = self._effective_workflow_declaration(
+            step_name=step_name, step_def=step_def, skill_name=skill_name
+        )
         input_artifacts = self._step_input_artifacts(step_def, blackboard_state)
         self._validate_workspace_inputs(input_artifacts, step_def=step_def)
         declares_causal_todo = bool(
@@ -2541,7 +2579,7 @@ class GenericWorkflowStepExecutor(Phase):
                 causal_artifact=causal_artifact,
             )
         try:
-            declared_inputs = resolve_prompt_inputs(contract, input_artifacts)
+            declared_inputs = resolve_prompt_inputs(input_contract, input_artifacts)
         except DeclaredArtifactError as exc:
             raise ValueError(f"Step {step_name!r}, skill {canonical_name!r}: {exc}") from exc
 

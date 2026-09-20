@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -12,12 +14,62 @@ from cafe.core.human_tasks import (
     HumanTaskQuestion,
     HumanTaskRejection,
     resolve_human_task_continuation,
+    resolve_step_human_task,
     validate_human_task_completion,
 )
+from cafe.skills.loader import SkillLoader
 
 
 def _decisions(*ids: str) -> list[dict[str, str]]:
     return [{"id": item, "label": item.title()} for item in ids]
+
+
+def test_runtime_resolves_human_task_policy_from_workflow_contributor(tmp_path: Path) -> None:
+    skills = tmp_path / ".cafe" / "skills"
+    for name, workflow in {
+        "primary": "",
+        "support": """workflow:
+  human_tasks:
+  - id: approve
+    pattern: confirm_output
+    prompt: Approve the result
+    input_schema: decision
+    decisions:
+    - {id: accept, label: Accept}
+""",
+    }.items():
+        skill_dir = skills / name
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: test\n{workflow}\n---\n",
+            encoding="utf-8",
+        )
+    playbook = {
+        "skills": {"workflow": {"shared": ["support"]}},
+        "steps": {
+            "review": {
+                "role": "reviewer",
+                "skill": "primary",
+                "human_tasks": [
+                    {
+                        "trigger": "confirm_output",
+                        "task_id": "approve",
+                        "outcomes": {"accept": "_done"},
+                    }
+                ],
+            }
+        },
+    }
+
+    policy, binding = resolve_step_human_task(
+        playbook_data=playbook,
+        step_name="review",
+        trigger="confirm_output",
+        skill_loader=SkillLoader(project_root=tmp_path),
+    )
+
+    assert policy.id == "approve"
+    assert binding.outcomes == {"accept": "_done"}
 
 
 @pytest.mark.parametrize(

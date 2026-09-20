@@ -170,6 +170,35 @@ def test_equivalent_smaller_implementation_uses_arbitrary_graph(tmp_path, names)
     }
 
 
+def test_delivery_comparison_uses_contributed_prompt_inputs(tmp_path):
+    context, _, _ = _context(tmp_path, names=("brief", "publish"))
+    skill_dir = tmp_path / ".cafe" / "skills" / "delivery-support"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: delivery-support
+description: delivery support
+workflow:
+  prompt_inputs:
+  - artifacts: [source_material]
+    placeholder: source_file
+    required: true
+---
+""",
+        encoding="utf-8",
+    )
+    model_data = context["model"].model_dump(mode="json", exclude_none=True)
+    model_data["skills"] = {"workflow": {"shared": ["delivery-support"]}}
+    context["model"] = PlaybookDefinition.model_validate(model_data)
+
+    packet = comparison.comparison_packet(**context)
+
+    assert packet["data"]["missing_artifacts"] == ["source_material"]
+    assert "source_file" in {
+        item["placeholder"] for item in packet["data"]["input_contract"]["prompt_inputs"]
+    }
+
+
 @pytest.mark.parametrize("status", ["material", "uncertain", "missing"])
 def test_nonclear_deviation_fails_closed(tmp_path, status):
     context, _, _ = _context(tmp_path)
