@@ -144,6 +144,11 @@ through the existing lifecycle command's checks, and verify the resulting
 checkout, worktree, branch, and archive state. Cleanup is not a prerequisite for
 workflow completion.
 
+Completion and closeout replies still end with `workflow_progress.md` output.
+After lifecycle cleanup archives the issue, render from the exact archive path
+reported by that command; do not treat a missing active issue directory as
+proof that `close` succeeded.
+
 Before any proposed external action, run the read-only
 `scripts/check_action_authority.py --request '<JSON>' [--authority '<JSON>']`.
 The request contains `action`, exact `target`, and Boolean `declared` derived

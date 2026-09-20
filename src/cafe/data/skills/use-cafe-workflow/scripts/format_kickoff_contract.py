@@ -62,6 +62,9 @@ except ModuleNotFoundError:
     _reexec_with_cafe_python()
     raise
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from render_workflow_progress import render_progress  # noqa: E402
+
 
 ModelChain = list[tuple[str, str]]
 EventDriverChain = list[tuple[str, str | None]]
@@ -799,35 +802,13 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
     if zh:
         title = f"## Kickoff Contract — {args.issue_name}"
         summary_headers = ["欄位", "值"]
-        phase_headers = [
-            "Phase",
-            "Role",
-            "Skill",
-            "排程確認 gate",
-            "預定處理者",
-            "會停下來給 user 確認",
-        ]
-        yes, no = "是", "否"
-        no_gate, user_owner = "—", "user"
-        mandatory_user_owner = "user（mandatory）"
-        driver_owner = "driver（驗證後繼續）"
+        no = "否"
         reactive_title = "### Reactive user handoffs"
         reactive_headers = ["Intent", "Policy", "是否為排程 gate"]
     else:
         title = f"## Kickoff Contract — {args.issue_name}"
         summary_headers = ["Field", "Value"]
-        phase_headers = [
-            "Phase",
-            "Role",
-            "Skill",
-            "Scheduled confirmation gate",
-            "Planned owner",
-            "Stops for user confirmation",
-        ]
-        yes, no = "yes", "no"
-        no_gate, user_owner = "—", "user"
-        mandatory_user_owner = "user (mandatory)"
-        driver_owner = "driver (verify, then continue)"
+        no = "no"
         reactive_title = "### Reactive user handoffs"
         reactive_headers = ["Intent", "Policy", "Scheduled gate"]
 
@@ -910,18 +891,9 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
         ],
     )
 
-    phase_rows: list[list[Any]] = []
     model_rows: list[list[Any]] = []
     profile_rows: list[list[Any]] = []
     for step_name, step in model.steps.items():
-        if step_name in mandatory_human_tasks:
-            gate, owner, stop = yes, mandatory_user_owner, yes
-        elif step_name in user_required:
-            gate, owner, stop = yes, user_owner, yes
-        elif step_name in driver_confirmable:
-            gate, owner, stop = yes, driver_owner, no
-        else:
-            gate, owner, stop = no, no_gate, no
         profile = resolve_execution_profile(
             skill_loader,
             step.skill,
@@ -934,7 +906,6 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
             step_name=step_name,
         )
         skill_label = ", ".join(profile.skill_names)
-        phase_rows.append([step_name, step.role, skill_label, gate, owner, stop])
         profile_rows.append(
             [
                 step_name,
@@ -998,6 +969,21 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
             [phase, decision["decision"], decision["rationale"], clean_action]
         )
 
+    progress_contract = confirmed_proposal or {
+        "confirmation_contract": {
+            "user_required": list(user_required),
+            "driver_confirmable": list(driver_confirmable),
+            "mandatory_human_stops": list(mandatory_human_tasks),
+        },
+        "proactive_review": {"phase_decisions": proactive_decisions},
+    }
+    workflow_progress = render_progress(
+        playbook=model,
+        contract=progress_contract,
+        locale=effective_locale,
+        include_closeout=("deliver", "close"),
+    )
+
     reactive = _table(
         reactive_headers,
         [
@@ -1055,8 +1041,10 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
             *capability_contracts,
             "### Preflight evidence",
             preflight,
-            "### Phases",
-            _table(phase_headers, phase_rows),
+            "### Workflow progress",
+            "```text",
+            workflow_progress,
+            "```",
             "### Phase execution requirements",
             _table(
                 [

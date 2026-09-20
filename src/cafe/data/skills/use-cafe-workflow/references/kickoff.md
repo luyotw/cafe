@@ -109,6 +109,12 @@ obtain explicit user confirmation of:
   confirmed field of the sole Driver contract, never `driver/config.yaml`;
 - worktree choice and path when using a worktree.
 
+`format_kickoff_contract.py` renders the planned graph through the shared
+`render_workflow_progress.py` implementation. Preserve that text block exactly;
+do not recreate a phase list or append a second progress diagram. The kickoff
+has no runtime execution evidence, so phases are pending while omitted
+Driver-only review and closeout values are unknown.
+
 For a new workflow, use event-driven as the proposed default unless the user
 explicitly chooses another mode or an existing confirmed issue contract already
 fixes it. Render the proposed mode with the complete kickoff for confirmation;

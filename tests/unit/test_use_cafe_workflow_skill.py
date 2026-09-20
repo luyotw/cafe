@@ -249,6 +249,7 @@ def test_use_cafe_workflow_uses_progressive_disclosure() -> None:
         "correction_ab_experiment.md",
         "issue_decomposition.md",
         "project_global_skill_sync.md",
+        "workflow_progress.md",
     )
 
     assert "## Progressive disclosure" in skill
@@ -260,6 +261,29 @@ def test_use_cafe_workflow_uses_progressive_disclosure() -> None:
     assert "## Conversation Locale" not in skill
     assert "## Driver-Owned Alignment" not in skill
     assert "## Bounded Self-Diagnosis And Declarative Repair" not in skill
+
+
+def test_driver_requires_script_rendered_progress_on_every_visible_reply() -> None:
+    skill = _read_skill_resource("SKILL.md")
+    progress = _read_skill_resource("references/workflow_progress.md")
+    kickoff = _read_skill_resource("references/kickoff.md")
+    running = _read_skill_resource("references/running_workflow.md")
+    completion = _read_skill_resource("references/completion_and_authority.md")
+    normalized = " ".join((skill + progress + kickoff + running + completion).split())
+
+    assert "scripts/render_workflow_progress.py" in normalized
+    assert "every kickoff, question, progress update, error, and completion message" in normalized
+    assert "Do not hand-write, translate, reorder, trim" in normalized
+    assert "never starts or resumes a workflow" in normalized
+    assert "action: yield" in normalized
+    assert '"proactive_review"' in progress
+    assert '"deliver"' in progress
+    assert '"close"' in progress
+    assert "--show-deliver" in progress
+    assert "--show-close" in progress
+    assert "unknown" in progress
+    assert "human_tasks.json" in progress
+    assert "archived/<issue>" in progress
 
 
 def test_use_cafe_workflow_preflights_runtime_and_all_catalogs_before_execution() -> None:
@@ -961,11 +985,16 @@ mandate:
         "| playbook_selection_rationale | Repository policy requires the standard graph; "
         "QA is not independently required, so standard-qa is unnecessary. |" in result.stdout
     )
-    assert "| spec | pm | cafe-spec | 是 | driver（驗證後繼續） | 否 |" in result.stdout
-    assert "| plan | developer | cafe-plan | 是 | driver（驗證後繼續） | 否 |" in result.stdout
-    assert "| develop | developer | cafe-develop | 否 | — | 否 |" in result.stdout
-    assert "| review | reviewer | cafe-review | 否 | — | 否 |" in result.stdout
-    assert "| pr | developer | cafe-pr | 是 | user（mandatory） | 是 |" in result.stdout
+    assert "### Workflow progress" in result.stdout
+    assert "○ spec" in result.stdout
+    assert "○ spec：使用者確認（driver 可代理）" in result.stdout
+    assert "○ plan：使用者確認（driver 可代理）" in result.stdout
+    assert "○ develop" in result.stdout
+    assert "○ review" in result.stdout
+    assert "○ pr：使用者確認（driver 不可代理）" in result.stdout
+    assert "？ deliver（收尾）" in result.stdout
+    assert "？ close（收尾）" in result.stdout
+    assert "### Phases" not in result.stdout
     assert "| mandatory_human_tasks | pr |" in result.stdout
     assert "| effective_locale | zh-TW (user thread override) |" in result.stdout
     assert "| repository_content_locale | zh-TW |" in result.stdout
@@ -994,7 +1023,8 @@ mandate:
         in result.stdout
     )
     assert (
-        "| review | cafe-review | review | high | correctness, security | "
+        "| review | cafe-review, cafe-workflow-common, cafe-github_sync | review | high | "
+        "correctness, security | "
         "equivalent_or_stronger | declared |" in result.stdout
     )
     assert "| need_clarification | driver_confirmable | 否 |" in result.stdout
@@ -2203,7 +2233,7 @@ def test_kickoff_contract_formatter_uses_cafe_python_when_site_packages_are_miss
 
     assert result.returncode == 0, result.stderr
     assert "## Kickoff Contract — issue346" in result.stdout
-    assert "| spec | pm | cafe-spec | yes | user | yes |" in result.stdout
+    assert "○ spec: user confirmation (driver may not act)" in result.stdout
 
 
 def test_kickoff_formatter_resolves_custom_playbook_iteration_skills(
@@ -2302,7 +2332,7 @@ entry_point: audit
     )
 
     assert result.returncode == 0, result.stderr
-    assert "| audit | auditor | cafe-audit_first, cafe-audit_revise |" in result.stdout
+    assert "| audit | cafe-audit_first, cafe-audit_revise |" in result.stdout
     assert (
         "| audit | cafe-audit_first, cafe-audit_revise | research, review | high | "
         "evidence, security | equivalent_or_stronger | declared |" in result.stdout
