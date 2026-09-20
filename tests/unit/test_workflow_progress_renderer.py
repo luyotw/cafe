@@ -570,3 +570,137 @@ def test_completed_confirmation_renders_only_a_declared_non_correction_outcome(
     )
 
     assert "✓ publish-draft: user confirmation (driver may not act)" in rendered
+
+
+def test_forward_skip_review_manual_handoff_is_not_a_return(tmp_path: Path) -> None:
+    issue_dir = tmp_path / "issue"
+    issue_dir.mkdir()
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "current_step": "pr",
+                "events": [
+                    {
+                        "event_type": "transition",
+                        "step": "develop",
+                        "data": {
+                            "from": "develop",
+                            "to": "pr",
+                            "status_code": "skip_review",
+                            "transition_intent": "manual_handoff",
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rendered = _module().render_progress(
+        playbook={
+            "playbook": {"id": "skip-review"},
+            "steps": {
+                "develop": {"on": {"await_agent": "review", "manual_handoff": "pr"}},
+                "review": {"on": {"await_agent": "pr"}, "allowed_goto": ["develop"]},
+                "pr": {"on": {"await_agent": "_done"}, "allowed_goto": ["develop"]},
+            },
+        },
+        contract={},
+        locale="en",
+        issue_dir=issue_dir,
+    )
+
+    assert "↩ develop → pr" not in rendered
+
+
+def test_declared_correction_manual_handoff_is_a_formal_return(tmp_path: Path) -> None:
+    issue_dir = tmp_path / "issue"
+    issue_dir.mkdir()
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "current_step": "develop",
+                "events": [
+                    {
+                        "event_type": "transition",
+                        "step": "review",
+                        "data": {
+                            "from": "review",
+                            "to": "develop",
+                            "status_code": "needs_changes",
+                            "transition_intent": "manual_handoff",
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rendered = _module().render_progress(
+        playbook={
+            "playbook": {"id": "correction"},
+            "steps": {
+                "develop": {"on": {"await_agent": "review"}},
+                "review": {
+                    "on": {"await_agent": "_done", "manual_handoff": "develop"},
+                    "allowed_goto": ["develop"],
+                },
+            },
+        },
+        contract={},
+        locale="en",
+        issue_dir=issue_dir,
+    )
+
+    assert "↩ review → develop" in rendered
+
+
+def test_durable_blocked_event_overrides_completed_iteration_metadata(tmp_path: Path) -> None:
+    issue_dir = tmp_path / "issue"
+    issue_dir.mkdir()
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "current_step": "publish",
+                "events": [
+                    {
+                        "event_type": "step_completed",
+                        "step": "publish",
+                        "data": {"step": "publish", "attempt": 1},
+                    },
+                    {
+                        "event_type": "workflow_blocked",
+                        "step": "publish",
+                        "data": {"step": "publish", "missing_capabilities": ["demo.publish"]},
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    iteration = issue_dir / "publish" / "iteration_001"
+    iteration.mkdir(parents=True)
+    (iteration / "iteration.json").write_text(
+        json.dumps(
+            {
+                "iteration": 1,
+                "status_code": "confirmed",
+                "end_time": "2026-09-20T01:00:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rendered = _module().render_progress(
+        playbook={
+            "playbook": {"id": "blocked-publication"},
+            "steps": {"publish": {"on": {"await_agent": "_done"}}},
+        },
+        contract={},
+        locale="en",
+        issue_dir=issue_dir,
+    )
+
+    assert "! publish" in rendered
+    assert "✓ publish" not in rendered

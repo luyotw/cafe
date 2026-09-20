@@ -215,11 +215,13 @@ def _driver_progress(
 
 
 def _runtime_progress(
-    issue_dir: Path | None, steps: Sequence[str]
+    issue_dir: Path | None, playbook: Mapping[str, Any]
 ) -> tuple[dict[str, str], dict[str, int], list[tuple[str, str]]]:
+    steps = list(playbook["steps"])
     statuses = {step: "pending" for step in steps}
     iterations: dict[str, int] = {}
     returns: list[tuple[str, str]] = []
+    terminal_evidence: set[str] = set()
     if issue_dir is None:
         return statuses, iterations, returns
     blackboard = _read_json(issue_dir / "blackboard.json")
@@ -242,23 +244,32 @@ def _runtime_progress(
                 iterations[step] = max(iterations.get(step, 0), raw_iteration)
             if event_type == "step_started":
                 statuses[step] = "in_progress"
+                terminal_evidence.discard(step)
             elif event_type in {"step_completed", "single_step_completed"}:
                 statuses[step] = "completed"
+                terminal_evidence.discard(step)
             elif event_type in {"step_skipped", "workflow_step_skipped"}:
                 statuses[step] = "skipped"
+                terminal_evidence.add(step)
             elif event_type == "workflow_blocked" or (
                 event_type in {"workflow_paused", "workflow_interruption"}
                 and str(data.get("status_code", "")).upper() == "INTERRUPTED"
             ):
                 statuses[step] = "blocked"
+                terminal_evidence.add(step)
         if event_type == "transition":
             source, target = str(data.get("from", "")), str(data.get("to", ""))
             transition_intent = str(data.get("transition_intent", ""))
+            status_code = str(data.get("status_code", "")).lower()
+            source_step = playbook["steps"].get(source, {})
+            allowed_goto = source_step.get("allowed_goto", [])
+            declared_correction_target = isinstance(allowed_goto, list) and target in allowed_goto
             if (
                 source in statuses
                 and target in statuses
                 and source != target
                 and transition_intent == "manual_handoff"
+                and (status_code in {"needs_changes", "rejected"} or declared_correction_target)
             ):
                 edge = (source, target)
                 if edge not in returns:
@@ -273,6 +284,7 @@ def _runtime_progress(
             "BLOCKED",
         }:
             statuses[target] = "blocked"
+            terminal_evidence.add(target)
     for step in steps:
         step_dir = issue_dir / step
         if not step_dir.is_dir():
@@ -292,9 +304,11 @@ def _runtime_progress(
         code = str(metadata.get("status_code", "")).upper()
         if code == "SKIPPED":
             statuses[step] = "skipped"
+            terminal_evidence.add(step)
         elif code in {"INTERRUPTED", "BLOCKED"}:
             statuses[step] = "blocked"
-        elif metadata.get("end_time") and code:
+            terminal_evidence.add(step)
+        elif metadata.get("end_time") and code and step not in terminal_evidence:
             statuses[step] = "completed"
     if workflow_finished:
         statuses = {
@@ -444,7 +458,7 @@ def render_progress(
     invalid_closeout = set(include_closeout) - {"deliver", "close"}
     if invalid_closeout:
         raise ValueError(f"unknown closeout item: {sorted(invalid_closeout)[0]}")
-    phase_statuses, iterations, runtime_returns = _runtime_progress(issue_dir, steps)
+    phase_statuses, iterations, runtime_returns = _runtime_progress(issue_dir, model)
     user_required, driver_confirmable, mandatory = _confirmation_contract(policy)
     gate_steps = (user_required | driver_confirmable | mandatory) & set(steps)
     confirmation_statuses, task_returns = _confirmation_statuses(issue_dir, gate_steps, iterations)
