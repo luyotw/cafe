@@ -10,7 +10,6 @@ from cafe.utils.checklist_utils import (
     generate_checklist_file,
     resolve_checklist_placeholders,
 )
-from cafe.verification import run_verification
 
 
 class TestResolveChecklistPlaceholders:
@@ -174,7 +173,20 @@ class TestGenerateChecklistFile:
             "[ ] Validate consumer review:\n  - new checkpoint rule\n"
         )
 
-    def test_projected_completion_is_preserved_only_with_current_ledger_evidence(self, tmp_path):
+    @pytest.mark.parametrize(
+        "targeted",
+        [
+            "- Targeted evidence: tests passed\n",
+            # Informational text never blocks resume: duplicates and indented
+            # continuation under it are skipped like the field itself.
+            "- Targeted evidence: web green\n- Targeted evidence: api green\n",
+            "- Targeted evidence: e2e run\n  - Browser: Chromium\n",
+            "",
+        ],
+    )
+    def test_projected_completion_is_preserved_only_with_current_ledger_evidence(
+        self, tmp_path, targeted
+    ):
         from cafe.core.todo import parse_todo_list
 
         item = parse_todo_list(
@@ -189,8 +201,7 @@ class TestGenerateChecklistFile:
         ledger_path.write_text(
             "## Todo Progress\n\n### PLAN-001\n\n- Status: completed\n"
             f"- Source fingerprint: `{item.fingerprint}`\n- Files: a.py\n"
-            "- Commit: abc\n- Targeted evidence: tests passed\n"
-            "- Remaining work: None.\n- Next action: Review.\n",
+            "- Commit: abc\n" + targeted + "- Remaining work: None.\n- Next action: Review.\n",
             encoding="utf-8",
         )
 
@@ -218,76 +229,50 @@ class TestGenerateChecklistFile:
         )
         assert output_path.read_text(encoding="utf-8").startswith("[ ]")
 
-    def test_projected_resume_requires_a_current_targeted_receipt(self, tmp_path):
+    @pytest.mark.parametrize("malformed", ["- Status : failed\n", "- Status : failed   \n"])
+    def test_unindented_malformed_field_after_targeted_evidence_drops_completion(
+        self, tmp_path, malformed
+    ):
+        """Evidence mode skips indented continuation only, never a top-level bullet.
+
+        Trailing whitespace is not indentation, so it cannot disguise the bullet
+        as continuation of the preceding `Targeted evidence` text.
+        """
         from cafe.core.todo import parse_todo_list
 
-        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
-        subprocess.run(
-            ["git", "-C", str(tmp_path), "config", "user.email", "test@example.com"],
-            check=True,
-        )
-        subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "Test"], check=True)
-        (tmp_path / ".gitignore").write_text(
-            "checklist.md\noutput.md\nverification.json\nverification.log\n"
-            ".pytest_cache/\n__pycache__/\n"
-        )
-        source = tmp_path / "src" / "feature.py"
-        test = tmp_path / "tests" / "test_feature.py"
-        source.parent.mkdir()
-        test.parent.mkdir()
-        source.write_text("VALUE = 1\n")
-        test.write_text("def test_value(): assert True\n")
-        subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
-        subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "Add feature"], check=True)
-        head = subprocess.check_output(
-            ["git", "-C", str(tmp_path), "rev-parse", "HEAD"], text=True
-        ).strip()
         item = parse_todo_list(
-            "## Todo List\n- [ ] `PLAN-001` — Source: `plan` — Work: implement — "
-            "Closure: done — Evidence: test\n"
+            "## Todo List\n"
+            "- [ ] `PLAN-001` — Source: `plan` — Work: implement — "
+            "Closure: complete — Evidence: tests\n"
         )[0]
         output_path = tmp_path / "checklist.md"
         ledger_path = tmp_path / "output.md"
         row = item.checklist_row()
-        output_path.write_text(row.replace("[ ]", "[x]") + "\n")
-        command = "pytest -q tests/test_feature.py::test_value"
+        output_path.write_text(row.replace("[ ]", "[x]") + "\n", encoding="utf-8")
         ledger_path.write_text(
-            "## Todo Progress\n\n### PLAN-001\n- Status: completed\n"
-            f"- Source fingerprint: `{item.fingerprint}`\n"
-            "- Files: `src/feature.py`, `tests/test_feature.py`\n"
-            f"- Commit: `{head}`\n"
-            f"- Targeted evidence: command=`{command}`; exit=0; head=`{head}`\n"
-            "- Remaining work: None.\n- Next action: Review.\n"
+            "## Todo Progress\n\n### PLAN-001\n\n- Status: completed\n"
+            f"- Source fingerprint: `{item.fingerprint}`\n- Files: a.py\n"
+            "- Commit: abc\n- Targeted evidence: note\n"
+            # Unindented, so it is a top-level field and breaks the field set.
+            + malformed
+            + "- Remaining work: None.\n- Next action: Review.\n",
+            encoding="utf-8",
         )
-        assert (
-            run_verification(
-                output_file=ledger_path,
-                command=command.split(),
-                scope="targeted",
-                cwd=tmp_path,
-            )[0]
-            == 0
+
+        repository = subprocess.CompletedProcess(
+            args=["git"], returncode=0, stdout=str(tmp_path), stderr=""
         )
-        real_run = subprocess.run
-        with patch("cafe.utils.checklist_utils.subprocess.run", wraps=real_run) as git_run:
+        with (
+            patch("cafe.utils.checklist_utils.subprocess.run", return_value=repository),
+            patch("cafe.utils.checklist_utils.validate_todo_evidence_set", return_value={}),
+        ):
             generate_checklist_file(
                 output_path,
                 row + "\n",
                 preserve_completed_items=True,
                 todo_ledger_path=ledger_path,
             )
-        assert output_path.read_text().startswith("[x]")
-        # One repository discovery, four batched ledger queries, and three
-        # current-state queries made by the targeted receipt validator.
-        assert git_run.call_count == 8
-        (tmp_path / "verification.log").write_text("forged\n")
-        generate_checklist_file(
-            output_path,
-            row + "\n",
-            preserve_completed_items=True,
-            todo_ledger_path=ledger_path,
-        )
-        assert output_path.read_text().startswith("[ ]")
+        assert output_path.read_text(encoding="utf-8").startswith("[ ]")
 
     @pytest.mark.parametrize(
         "repository_result",
@@ -382,7 +367,6 @@ class TestGenerateChecklistFile:
         with (
             patch("cafe.utils.checklist_utils.subprocess.run", return_value=repository),
             patch("cafe.utils.checklist_validator._git") as git_call,
-            patch("cafe.utils.checklist_validator.check_verification_receipt") as receipt,
         ):
             generate_checklist_file(
                 checklist,
@@ -392,7 +376,6 @@ class TestGenerateChecklistFile:
             )
         assert checklist.read_text(encoding="utf-8").count("[ ]") == 2
         git_call.assert_not_called()
-        receipt.assert_not_called()
 
     def test_projected_resume_without_evidence_performs_no_repository_query(self, tmp_path):
         checklist = tmp_path / "checklist.md"

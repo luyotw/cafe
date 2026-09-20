@@ -1,4 +1,4 @@
-"""Create and validate test receipts shared between develop and review."""
+"""Create and validate optional command-execution receipts."""
 
 from __future__ import annotations
 

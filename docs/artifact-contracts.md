@@ -26,22 +26,21 @@ output_artifact: code
 workspace_artifact: workspace
 ```
 
-The runtime writes `workspace.json` only after the step's CAFE verification
-receipt is valid. A version-one workspace record contains:
+The runtime writes `workspace.json` from the current committed Git state after
+confirming that the worktree is clean. A version-one workspace record contains:
 
 - `repository`: the active worktree root;
 - `base_sha` and `head_sha`: canonical full commit IDs, with the base reachable
   from the head;
 - `changed_files`: the exact `git diff --name-status --find-renames` result;
-- `receipts`: receipt paths, SHA-256 digests, scopes, and the head they verified;
 - `name`, `version`, and `schema_version`.
 
 The workspace version is stored separately from the document version. A
 consumer must verify the workspace against its active repository before using
 it. Verification rejects a different repository, stale head, dirty worktree,
-changed-file drift, stale receipts, unsupported schema, or contradictory Git
-identity. A stale workspace must be republished; consumers must not silently
-fall back to a different commit or reconstruct the snapshot from prose.
+changed-file drift, unsupported schema, or contradictory Git identity. A stale
+workspace must be republished; consumers must not silently fall back to a
+different commit or reconstruct the snapshot from prose.
 
 Review, QA, and PR steps should declare the companion as an input when the
 playbook produces it:
@@ -50,8 +49,8 @@ playbook produces it:
 input_artifacts: [spec, code, workspace, review_feedback]
 ```
 
-`workspace` is the authoritative changed-file and receipt identity. `code` is
-the readable summary or implementation artifact used for context.
+`workspace` is the authoritative Git and changed-file identity. `code` is the
+readable summary or implementation artifact used for context.
 
 ## Correction routes and Todo identity
 
@@ -75,7 +74,8 @@ not widen the scope from unrelated feedback or chat history.
 
 ## Verification receipts
 
-Develop evidence is created with the repository command:
+`cafe verification` is an optional command runner that can preserve an
+iteration-local execution log and receipt. For example:
 
 ```bash
 cafe verification run \
@@ -84,8 +84,13 @@ cafe verification run \
 ```
 
 The resulting `verification.json` binds the command, exit status, Git head,
-and scope. Workspace publication accepts only that verified receipt, and the
-develop ledger records the exact receipt command and full commit SHA.
+and scope. It can be checked or reused when a user or another explicitly
+declared process wants that provenance.
+
+Ordinary Todo completion, review, and workspace publication do not require a
+CAFE verification receipt. `Targeted evidence` in a Develop ledger is optional
+informational text and is not validated against a receipt. Files, commits, Todo
+identity, and clean-worktree checks remain authoritative independently.
 
 ## Compatibility
 

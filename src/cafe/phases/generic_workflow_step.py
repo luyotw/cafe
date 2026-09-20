@@ -3583,14 +3583,6 @@ class GenericWorkflowStepExecutor(Phase):
             repo_root=get_git_toplevel(),
         )
         if errors:
-            receipt_guidance = ""
-            if any("no matching recorded result" in error for error in errors):
-                receipt_guidance = (
-                    "\n\nCreate the required targeted receipt before resubmitting with "
-                    f"`cafe verification run --output-file {output_path} "
-                    "--scope targeted -- <test command>`, then copy that receipt's "
-                    "command and current HEAD into Targeted evidence."
-                )
             templates = []
             for item in expected:
                 templates.append(
@@ -3599,8 +3591,6 @@ class GenericWorkflowStepExecutor(Phase):
                     f"- Source fingerprint: `{item.fingerprint}`\n"
                     "- Files: `<repo-relative path>`\n"
                     "- Commit: `<full 40-character commit SHA>`\n"
-                    "- Targeted evidence: command=`<command>`; exit=0; "
-                    "head=`<full current HEAD SHA>`\n"
                     "- Remaining work: None.\n"
                     "- Next action: Review."
                 )
@@ -3610,8 +3600,7 @@ class GenericWorkflowStepExecutor(Phase):
                 + "\n- ".join(errors)
                 + "\n\nUse exactly one '## Todo Progress' section with this canonical "
                 "entry shape for each authoritative item:\n\n"
-                + "\n\n".join(templates)
-                + receipt_guidance,
+                + "\n\n".join(templates),
             )
         return True, ""
 

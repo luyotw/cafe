@@ -1,4 +1,4 @@
-"""Commands for creating and checking workflow verification receipts."""
+"""Commands for optionally recording and checking command verification receipts."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from cafe.verification import (
 )
 
 verification_app = typer.Typer(
-    help="Create and validate test receipts tied to a clean Git HEAD."
+    help="Optionally record and validate command receipts tied to a clean Git HEAD."
 )
 
 
@@ -31,7 +31,7 @@ def verification_run(
     output_file: Path = typer.Option(..., "--output-file"),
     scope: str = typer.Option("full", "--scope"),
 ) -> None:
-    """Run a command after ``--`` and write an iteration-local log and receipt."""
+    """Optionally run a command and write an iteration-local log and receipt."""
     command: List[str] = list(ctx.args)
     if command[:1] == ["--"]:
         command = command[1:]

@@ -1,4 +1,4 @@
-"""Verification receipt support for workflow test handoffs."""
+"""Optional command-verification receipt support."""
 
 from cafe.verification.receipt import (
     ReceiptCheck,
