@@ -183,7 +183,7 @@ def test_strict_validation_accepts_declared_non_agent_owners(tmp_path: Path) -> 
         def get_skill_dir(self, _skill_name: str) -> Path:
             return tmp_path
 
-        def get_workflow_contract(self, _skill_name: str) -> SimpleNamespace:
+        def get_workflow_declaration(self, _skill_name: str) -> SimpleNamespace:
             return contract
 
     warnings = validate_playbook(

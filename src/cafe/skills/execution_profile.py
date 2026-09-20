@@ -42,7 +42,7 @@ def resolve_execution_profile(
     profiles: list[ExecutionProfile] = []
     uses_default = False
     for skill_name in skill_names:
-        declared = skill_loader.get_workflow_contract(skill_name).execution_profile
+        declared = skill_loader.get_workflow_declaration(skill_name).execution_profile
         if declared is None:
             uses_default = True
             declared = DEFAULT_EXECUTION_PROFILE

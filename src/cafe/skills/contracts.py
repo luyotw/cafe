@@ -345,7 +345,7 @@ class ExecutionProfile(BaseModel):
         return cleaned
 
 
-class SkillWorkflowContract(BaseModel):
+class SkillWorkflowDeclaration(BaseModel):
     """All optional workflow metadata carried in a skill frontmatter block."""
 
     model_config = ConfigDict(extra="forbid")
@@ -379,7 +379,7 @@ class SkillWorkflowContract(BaseModel):
         }
 
     @model_validator(mode="after")
-    def _validate_unique_placeholders(self) -> "SkillWorkflowContract":
+    def _validate_unique_placeholders(self) -> "SkillWorkflowDeclaration":
         input_placeholders = [item.placeholder for item in self.prompt_inputs]
         if len(set(input_placeholders)) != len(input_placeholders):
             raise ValueError("prompt input placeholders must be unique")
@@ -409,6 +409,11 @@ class SkillWorkflowContract(BaseModel):
                     f"{', '.join(sorted(overlap))}"
                 )
         return self
+
+
+# Compatibility alias for integrations that still import the previous name.
+# TODO: remove me
+SkillWorkflowContract = SkillWorkflowDeclaration
 
 
 @dataclass(frozen=True)
@@ -446,7 +451,7 @@ def _artifact_version(value: Any) -> int:
 
 
 def resolve_prompt_inputs(
-    contract: SkillWorkflowContract,
+    contract: SkillWorkflowDeclaration,
     artifacts: Mapping[str, Any],
 ) -> dict[str, str]:
     """Resolve declared artifacts in order without any implicit fallback names."""
@@ -464,7 +469,7 @@ def resolve_prompt_inputs(
 
 
 def resolve_packet_requested_placeholders(
-    contract: SkillWorkflowContract,
+    contract: SkillWorkflowDeclaration,
     artifacts: Mapping[str, Any],
     *,
     step: str,
@@ -500,7 +505,7 @@ def resolve_packet_requested_placeholders(
 
 
 def resolve_effective_prompt_inputs(
-    contract: SkillWorkflowContract,
+    contract: SkillWorkflowDeclaration,
     artifacts: Mapping[str, Any],
     *,
     step: str,

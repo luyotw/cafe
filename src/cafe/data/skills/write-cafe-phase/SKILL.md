@@ -40,7 +40,7 @@ version: 2.12.1
 - Build one proposed selection matrix covering every target CLI. Before adopting any candidate, installing or vendoring its content, or starting a self-authored option, present the matrix, source and license when applicable, material tradeoffs, and integration plan to the user; wait for explicit confirmation.
 - If the user rejects one CLI's proposed candidate, advance only that CLI to its next tier, rebuild the matrix, and ask again. Never propose the self-authored option for a CLI until its native and open-source tiers have both been evaluated and ruled out or rejected.
 - Read-only discovery and evaluation for unresolved CLI rows may happen before approval; confirmation is required before the proposed matrix becomes the selected implementation.
-- Keep the CAFE phase skill authoritative for its workflow contract, artifacts, checklist, approval gates, and handoff. A selected supporting skill supplies domain procedure only.
+- Keep the CAFE phase skill authoritative for its workflow declaration, artifacts, checklist, approval gates, and handoff. A selected supporting skill supplies domain procedure only.
 - Resolve and package the confirmed choice at authoring time. Do not make workflow execution search the network, download mutable content, or silently substitute a different skill.
 
 ## Declarative Repair Boundary

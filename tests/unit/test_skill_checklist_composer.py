@@ -21,7 +21,7 @@ from cafe.skills.checklist_composer import (
     generate_spec_checklist,
     select_checklist_variant,
 )
-from cafe.skills.contracts import SkillWorkflowContract
+from cafe.skills.contracts import SkillWorkflowDeclaration
 from cafe.skills.loader import SkillLoader
 
 pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
@@ -85,7 +85,7 @@ REQUIRED_SKILL_REFERENCES = {
 
 
 def test_checklist_variant_honors_declared_arbitrary_step() -> None:
-    contract = SkillWorkflowContract.model_validate(
+    contract = SkillWorkflowDeclaration.model_validate(
         {
             "checklist": {
                 "variants": [
@@ -115,7 +115,7 @@ def test_declared_todo_projection_preserves_one_authoritative_row(tmp_path: Path
         "Closure: valid rows parse — Evidence: targeted pytest\n",
         encoding="utf-8",
     )
-    contract = SkillWorkflowContract.model_validate(
+    contract = SkillWorkflowDeclaration.model_validate(
         {
             "checklist": {
                 "variants": [
@@ -467,7 +467,7 @@ def test_production_composer_golden_checklist_matches_fixture(
             expected_extra = item.checklist_row() + "\n"
         assert compose_declared_checklist(
             skill_name=case["skill"],
-            contract=SkillLoader().get_workflow_contract(case["skill"]),
+            contract=SkillLoader().get_workflow_declaration(case["skill"]),
             agent_name=case["agent"],
             role=case["role"],
             checklist_file_path=output_path,
@@ -514,7 +514,7 @@ def test_declared_checklist_uses_readable_builtin_agent_path_outside_checkout(
 
     assert compose_declared_checklist(
         skill_name=case["skill"],
-        contract=SkillLoader().get_workflow_contract(case["skill"]),
+        contract=SkillLoader().get_workflow_declaration(case["skill"]),
         agent_name="David",
         role="developer",
         checklist_file_path=checklist,
@@ -544,7 +544,7 @@ def test_review_correction_runtime_composes_planless_closure_contract(
 
     assert compose_declared_checklist(
         skill_name="cafe-review",
-        contract=SkillLoader().get_workflow_contract("cafe-review"),
+        contract=SkillLoader().get_workflow_declaration("cafe-review"),
         agent_name="Richard",
         role="reviewer",
         checklist_file_path=output_path,
@@ -643,7 +643,7 @@ def test_review_composed_checklists_stay_within_budget_and_keep_role_guidance(
         "get_agent_file_path",
         classmethod(lambda cls, *_args, **_kwargs: str(agent_file)),
     )
-    contract = SkillLoader().get_workflow_contract("cafe-review")
+    contract = SkillLoader().get_workflow_declaration("cafe-review")
     assert contract.checklist is not None
     assert contract.checklist.include_role_guidance is True
 
@@ -805,7 +805,7 @@ def test_short_builtin_playbook_checklists_compose_with_declared_artifact_scope(
     checklist = tmp_path / f"{playbook_id}-{step_name}.md"
     assert compose_declared_checklist(
         skill_name=step.skill,
-        contract=SkillLoader().get_workflow_contract(step.skill),
+        contract=SkillLoader().get_workflow_declaration(step.skill),
         agent_name="Ada",
         role=step.role,
         checklist_file_path=checklist,

@@ -104,7 +104,7 @@ def comparison_packet(
         raise ValueError("artifacts must contain complete non-empty text")
     # input_artifacts is a visibility declaration, not a required-input list.
     # Required alternative groups come from the selected skill's existing API.
-    contract = skill_loader.get_workflow_contract(
+    contract = skill_loader.get_workflow_declaration(
         resolve_skill_selector(step.skill, boundary["iteration"])
     )
     visible = (

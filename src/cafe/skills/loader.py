@@ -15,7 +15,7 @@ from cafe.catalogs.resolver import (
     CatalogResolver,
     global_catalog_lock,
 )
-from cafe.skills.contracts import SkillWorkflowContract
+from cafe.skills.contracts import SkillWorkflowDeclaration
 from cafe.skills.exceptions import SkillDiscoveryError
 
 _logger = logging.getLogger(__name__)
@@ -230,24 +230,24 @@ class SkillLoader:
             text = text.replace(f"{{{key}}}", str(value))
         return text
 
-    def get_workflow_contract(self, name: str) -> SkillWorkflowContract:
+    def get_workflow_declaration(self, name: str) -> SkillWorkflowDeclaration:
         """Load and validate optional workflow metadata from the resolved skill."""
         with global_catalog_lock(self.global_root):
             skill_dir = self._resolve_entry(name).directory
             metadata = self._read_skill_frontmatter(skill_dir / "SKILL.md")
-            raw_contract = metadata.get("workflow", {})
+            raw_declaration = metadata.get("workflow", {})
             try:
-                contract = SkillWorkflowContract.model_validate(raw_contract)
+                declaration = SkillWorkflowDeclaration.model_validate(raw_declaration)
             except Exception as exc:
                 raise ValueError(
-                    f"Invalid workflow contract for skill {skill_dir.name}: {exc}"
+                    f"Invalid workflow declaration for skill {skill_dir.name}: {exc}"
                 ) from exc
-            references = list(contract.prompt_references.values())
-            if contract.checklist is not None:
-                references.extend(contract.checklist.context_references.values())
+            references = list(declaration.prompt_references.values())
+            if declaration.checklist is not None:
+                references.extend(declaration.checklist.context_references.values())
                 references.extend(
                     section.reference
-                    for variant in contract.checklist.variants
+                    for variant in declaration.checklist.variants
                     for section in variant.sections
                     if section.reference is not None
                 )
@@ -255,17 +255,22 @@ class SkillLoader:
                 reference_path = skill_dir / "references" / reference
                 if not reference_path.is_file():
                     raise ValueError(
-                        f"Invalid workflow contract for skill {skill_dir.name}: "
+                        f"Invalid workflow declaration for skill {skill_dir.name}: "
                         f"workflow reference not found: {reference}"
                     )
-            if contract.output_templates is not None:
+            if declaration.output_templates is not None:
                 template_dir = skill_dir / "assets" / "templates"
                 if not template_dir.is_dir():
                     raise ValueError(
-                        f"Invalid workflow contract for skill {skill_dir.name}: "
-                        f"template catalog {contract.output_templates.catalog!r} is unavailable"
+                        f"Invalid workflow declaration for skill {skill_dir.name}: "
+                        f"template catalog {declaration.output_templates.catalog!r} is unavailable"
                     )
-            return contract
+            return declaration
+
+    # TODO: remove me
+    def get_workflow_contract(self, name: str) -> SkillWorkflowDeclaration:
+        """Load a workflow declaration through the compatibility API."""
+        return self.get_workflow_declaration(name)
 
     def get_reference(self, name: str, ref: str) -> str:
         """Read one reference file under skill references directory."""

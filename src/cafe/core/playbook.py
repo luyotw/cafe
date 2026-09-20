@@ -1609,7 +1609,7 @@ def declared_template_managers(
     managers: Dict[str, TemplateManager] = {}
     for step_name, step in model.steps.items():
         selectors = [step.skill] if isinstance(step.skill, str) else list(step.skill.values())
-        contracts = [skill_loader.get_workflow_contract(skill) for skill in selectors]
+        contracts = [skill_loader.get_workflow_declaration(skill) for skill in selectors]
         catalogs = {
             contract.output_templates.catalog
             for contract in contracts
@@ -1697,7 +1697,7 @@ def _validate_step_required_prompt_inputs(
     selectors = [step.skill] if isinstance(step.skill, str) else list(step.skill.values())
     declared_artifacts = set(step.input_artifacts or [])
     for skill_name in selectors:
-        contract = skill_loader.get_workflow_contract(skill_name)
+        contract = skill_loader.get_workflow_declaration(skill_name)
         for mapping in contract.prompt_inputs:
             if mapping.required and not declared_artifacts.intersection(mapping.artifacts):
                 candidates = ", ".join(mapping.artifacts)
@@ -1719,13 +1719,13 @@ def _validate_feedback_target_prompt_inputs(
     def receives_feedback_artifact(skill_name: str, artifact: str) -> bool:
         return any(
             mapping.artifacts == (artifact,)
-            for mapping in skill_loader.get_workflow_contract(skill_name).prompt_inputs
+            for mapping in skill_loader.get_workflow_declaration(skill_name).prompt_inputs
         )
 
     def receives_causal_artifact(skill_name: str, artifact: str) -> bool:
         return any(
             artifact in mapping.artifacts
-            for mapping in skill_loader.get_workflow_contract(skill_name).prompt_inputs
+            for mapping in skill_loader.get_workflow_declaration(skill_name).prompt_inputs
         )
 
     for step_name, step in model.steps.items():
@@ -1797,7 +1797,7 @@ def _validate_step_required_tools(
     """Reject a step that cannot execute its selected skill's declared tools."""
     selectors = [step.skill] if isinstance(step.skill, str) else list(step.skill.values())
     for skill_name in selectors:
-        contract = skill_loader.get_workflow_contract(skill_name)
+        contract = skill_loader.get_workflow_declaration(skill_name)
         missing = [
             required
             for required in contract.required_tools
@@ -1825,7 +1825,7 @@ def _validate_step_human_tasks(
         if portion.owner == "human"
     }
     selectors = [step.skill] if isinstance(step.skill, str) else list(step.skill.values())
-    contracts = [skill_loader.get_workflow_contract(skill) for skill in selectors]
+    contracts = [skill_loader.get_workflow_declaration(skill) for skill in selectors]
     for binding in step.human_tasks:
         if (
             binding.trigger != "initial"
