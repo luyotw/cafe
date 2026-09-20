@@ -41,6 +41,266 @@ def _write_skill(root: Path, name: str) -> None:
     )
 
 
+def _write_workflow_skill(root: Path, name: str, workflow: str) -> None:
+    skill_dir = root / name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: desc-{name}\nworkflow:\n{workflow}\n---\n",
+        encoding="utf-8",
+    )
+
+
+def test_strict_validation_applies_contributor_tools_without_granting_permission(
+    tmp_path: Path,
+) -> None:
+    builtin_root = tmp_path / "builtin"
+    _write_skill(builtin_root / "skills", "primary")
+    _write_workflow_skill(
+        builtin_root / "skills", "support", "  required_tools: [Write]\n"
+    )
+    _write_playbook(
+        builtin_root / "playbooks",
+        "composed-tools",
+        """
+playbook: {id: composed-tools}
+roles: {operator: {}}
+commands: {prepare: {prompt_for_spec_plan_config: false}}
+skills:
+  workflow: {shared: [support]}
+  chat: {shared: []}
+steps:
+  run:
+    role: operator
+    skill: primary
+    allowed_tools: [Read]
+    on: {await_agent: _done}
+""",
+    )
+
+    loader = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError, match="allowed_tools.*Write"):
+        loader.load_model("composed-tools", strict=True)
+
+
+def test_strict_validation_checks_inactive_primary_branch_with_same_composition_rules(
+    tmp_path: Path,
+) -> None:
+    builtin_root = tmp_path / "builtin"
+    _write_workflow_skill(
+        builtin_root / "skills",
+        "first",
+        "  prompt_inputs:\n  - {artifacts: [spec], placeholder: spec_file}\n",
+    )
+    _write_workflow_skill(
+        builtin_root / "skills",
+        "later",
+        "  prompt_inputs:\n  - {artifacts: [plan], placeholder: spec_file}\n",
+    )
+    _write_workflow_skill(
+        builtin_root / "skills",
+        "support",
+        "  prompt_inputs:\n  - {artifacts: [spec], placeholder: spec_file}\n",
+    )
+    _write_playbook(
+        builtin_root / "playbooks",
+        "composed-branches",
+        """
+playbook: {id: composed-branches}
+roles: {operator: {}}
+commands: {prepare: {prompt_for_spec_plan_config: false}}
+skills:
+  workflow: {shared: [support]}
+  chat: {shared: []}
+steps:
+  run:
+    role: operator
+    skill: {'1': first, default: later}
+    input_artifacts: [spec, plan]
+    on: {await_agent: _done}
+""",
+    )
+
+    loader = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        loader.load_model("composed-branches", strict=True)
+    message = str(exc_info.value)
+    assert all(token in message for token in ("run", "prompt_inputs", "spec_file"))
+    assert "later" in message and "support" in message
+
+
+def test_strict_validation_activates_project_contributor_metadata_and_ignores_chat(
+    tmp_path: Path,
+) -> None:
+    builtin_root = tmp_path / "builtin"
+    project_root = tmp_path / "project"
+    _write_skill(builtin_root / "skills", "primary")
+    _write_skill(builtin_root / "skills", "neutral")
+    _write_workflow_skill(
+        tmp_path / "global" / "skills",
+        "support",
+        "  required_tools: [ForbiddenGlobal]\n",
+    )
+    _write_workflow_skill(
+        project_root / ".cafe" / "skills",
+        "support",
+        """  required_tools: [Read]
+  prompt_inputs:
+  - {artifacts: [spec], placeholder: spec_file, required: true}
+  human_tasks:
+  - id: approve
+    pattern: confirm_output
+    prompt: Approve?
+    input_schema: decision
+    decisions:
+    - {id: accept, label: Accept}
+""",
+    )
+    _write_workflow_skill(
+        project_root / ".cafe" / "skills",
+        "chat-only",
+        "  required_tools: [ForbiddenChat]\n",
+    )
+    _write_playbook(
+        project_root / ".cafe" / "playbooks",
+        "supported-contributor",
+        """
+playbook: {id: supported-contributor}
+roles: {operator: {}}
+commands: {prepare: {prompt_for_spec_plan_config: false}}
+skills:
+  workflow: {shared: [neutral, support]}
+  chat: {shared: [chat-only]}
+steps:
+  run:
+    role: operator
+    skill: primary
+    input_artifacts: [spec]
+    allowed_tools: [Read]
+    human_tasks:
+    - trigger: confirm_output
+      task_id: approve
+      outcomes: {accept: _done}
+    on: {confirm_output: run, await_agent: _done}
+""",
+    )
+
+    loaded = PlaybookLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    ).load_model("supported-contributor", strict=True)
+
+    assert loaded.model.steps["run"].allowed_tools == ["Read"]
+
+
+@pytest.mark.parametrize(
+    ("field", "declaration", "resource_error"),
+    [
+        (
+            "prompt_references",
+            "  prompt_references: {guide: missing.md}\n",
+            "workflow reference not found: missing.md",
+        ),
+        (
+            "output_templates",
+            "  output_templates: {catalog: missing}\n",
+            "template catalog 'missing' is unavailable",
+        ),
+    ],
+)
+def test_strict_validation_rejects_missing_resource_on_primary_owned_contributor_field(
+    tmp_path: Path,
+    field: str,
+    declaration: str,
+    resource_error: str,
+) -> None:
+    builtin_root = tmp_path / "builtin"
+    _write_workflow_skill(
+        builtin_root / "skills",
+        "support",
+        declaration,
+    )
+    _write_skill(builtin_root / "skills", "primary")
+    _write_playbook(
+        builtin_root / "playbooks",
+        "unsupported-contributor",
+        """
+playbook: {id: unsupported-contributor}
+roles: {operator: {}}
+commands: {prepare: {prompt_for_spec_plan_config: false}}
+skills:
+  workflow: {shared: [support]}
+  chat: {shared: []}
+steps:
+  run: {role: operator, skill: primary, on: {await_agent: _done}}
+""",
+    )
+
+    loader = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        loader.load_model("unsupported-contributor", strict=True)
+    message = str(exc_info.value)
+    assert all(
+        token in message
+        for token in ("run", field, "support", "SKILL.md", "primary-owned", resource_error)
+    )
+
+
+def test_strict_validation_adds_step_and_source_to_malformed_contributor(
+    tmp_path: Path,
+) -> None:
+    builtin_root = tmp_path / "builtin"
+    _write_workflow_skill(
+        builtin_root / "skills",
+        "support",
+        "  execution_profile: {reasoning: impossible}\n",
+    )
+    _write_skill(builtin_root / "skills", "primary")
+    _write_playbook(
+        builtin_root / "playbooks",
+        "malformed-contributor",
+        """
+playbook: {id: malformed-contributor}
+roles: {operator: {}}
+commands: {prepare: {prompt_for_spec_plan_config: false}}
+skills:
+  workflow: {shared: [support]}
+  chat: {shared: []}
+steps:
+  run: {role: operator, skill: primary, on: {await_agent: _done}}
+""",
+    )
+
+    loader = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        loader.load_model("malformed-contributor", strict=True)
+    message = str(exc_info.value)
+    assert all(
+        token in message
+        for token in ("run", "support", "SKILL.md", "execution_profile.reasoning", "impossible")
+    )
+
+
 def _write_playbook(
     root: Path,
     name: str,

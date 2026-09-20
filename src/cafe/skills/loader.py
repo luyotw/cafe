@@ -73,14 +73,20 @@ def canonical_skill_name(name: str) -> str:
 
 
 def read_skill_frontmatter(skill_file: Path) -> Dict[str, object]:
-    """Read YAML frontmatter from one skill file."""
-    content = skill_file.read_text(encoding="utf-8")
-    if not content.startswith("---"):
+    """Read YAML frontmatter without materializing the skill body."""
+    with skill_file.open(encoding="utf-8") as handle:
+        if handle.readline().rstrip("\r\n") != "---":
+            return {}
+        frontmatter_lines: list[str] = []
+        for line in handle:
+            if line.rstrip("\r\n") == "---":
+                break
+            frontmatter_lines.append(line)
+        else:
+            return {}
+    frontmatter = "".join(frontmatter_lines)
+    if not frontmatter.strip():
         return {}
-    end = content.find("\n---", 3)
-    if end == -1:
-        return {}
-    frontmatter = content[3:end]
     data = yaml.safe_load(frontmatter) or {}
     return data if isinstance(data, dict) else {}
 
@@ -232,40 +238,89 @@ class SkillLoader:
 
     def get_workflow_declaration(self, name: str) -> SkillWorkflowDeclaration:
         """Load and validate optional workflow metadata from the resolved skill."""
+        _entry, declaration = self.get_workflow_declaration_entry(name)
+        return declaration
+
+    def get_workflow_declaration_entry(
+        self, name: str, *, validate_resources: bool = True
+    ) -> tuple[SkillCatalogEntry, SkillWorkflowDeclaration]:
+        """Return a declaration with the exact catalog entry that supplied it."""
         with global_catalog_lock(self.global_root):
-            skill_dir = self._resolve_entry(name).directory
-            metadata = self._read_skill_frontmatter(skill_dir / "SKILL.md")
-            raw_declaration = metadata.get("workflow", {})
-            try:
-                declaration = SkillWorkflowDeclaration.model_validate(raw_declaration)
-            except Exception as exc:
-                raise ValueError(
-                    f"Invalid workflow declaration for skill {skill_dir.name}: {exc}"
-                ) from exc
-            references = list(declaration.prompt_references.values())
-            if declaration.checklist is not None:
-                references.extend(declaration.checklist.context_references.values())
-                references.extend(
-                    section.reference
-                    for variant in declaration.checklist.variants
-                    for section in variant.sections
-                    if section.reference is not None
-                )
-            for reference in references:
-                reference_path = skill_dir / "references" / reference
-                if not reference_path.is_file():
-                    raise ValueError(
-                        f"Invalid workflow declaration for skill {skill_dir.name}: "
-                        f"workflow reference not found: {reference}"
-                    )
-            if declaration.output_templates is not None:
-                template_dir = skill_dir / "assets" / "templates"
-                if not template_dir.is_dir():
-                    raise ValueError(
-                        f"Invalid workflow declaration for skill {skill_dir.name}: "
-                        f"template catalog {declaration.output_templates.catalog!r} is unavailable"
-                    )
-            return declaration
+            entry, raw_declaration = self.get_workflow_declaration_data(name)
+            declaration = self.parse_workflow_declaration(entry, raw_declaration)
+            if validate_resources:
+                self.validate_workflow_declaration_resources(entry.directory, declaration)
+            return entry, declaration
+
+    def get_workflow_declaration_data(
+        self, name: str
+    ) -> tuple[SkillCatalogEntry, object]:
+        """Return resolved provenance and raw workflow metadata without validating it."""
+        with global_catalog_lock(self.global_root):
+            entry = self._resolve_entry(name)
+            metadata = self._read_skill_frontmatter(entry.directory / "SKILL.md")
+            return entry, metadata.get("workflow", {})
+
+    @staticmethod
+    def parse_workflow_declaration(
+        entry: SkillCatalogEntry, raw_declaration: object
+    ) -> SkillWorkflowDeclaration:
+        """Preserve the compatibility error used by direct and primary loading."""
+        try:
+            return SkillWorkflowDeclaration.model_validate(raw_declaration)
+        except Exception as exc:
+            raise ValueError(
+                f"Invalid workflow declaration for skill {entry.directory.name}: {exc}"
+            ) from exc
+
+    @staticmethod
+    def workflow_declaration_resource_errors(
+        skill_dir: Path,
+        declaration: SkillWorkflowDeclaration,
+        *,
+        fields: Optional[set[str]] = None,
+    ) -> tuple[str, ...]:
+        """Return bounded resource errors for selected declaration fields."""
+        selected = fields or {"prompt_references", "checklist", "output_templates"}
+        errors: list[str] = []
+        references: list[str] = []
+        if "prompt_references" in selected:
+            references.extend(declaration.prompt_references.values())
+        if "checklist" in selected and declaration.checklist is not None:
+            references.extend(declaration.checklist.context_references.values())
+            references.extend(
+                section.reference
+                for variant in declaration.checklist.variants
+                for section in variant.sections
+                if section.reference is not None
+            )
+        errors.extend(
+            f"workflow reference not found: {reference}"
+            for reference in references
+            if not (skill_dir / "references" / reference).is_file()
+        )
+        if (
+            "output_templates" in selected
+            and declaration.output_templates is not None
+            and not (skill_dir / "assets" / "templates").is_dir()
+        ):
+            errors.append(
+                f"template catalog {declaration.output_templates.catalog!r} is unavailable"
+            )
+        return tuple(errors)
+
+    @classmethod
+    def validate_workflow_declaration_resources(
+        cls,
+        skill_dir: Path,
+        declaration: SkillWorkflowDeclaration,
+    ) -> None:
+        """Preserve generic declaration validation for primary and supported fields."""
+        errors = cls.workflow_declaration_resource_errors(skill_dir, declaration)
+        if errors:
+            raise ValueError(
+                f"Invalid workflow declaration for skill {skill_dir.name}: {errors[0]}"
+            )
 
     # TODO: remove me
     def get_workflow_contract(self, name: str) -> SkillWorkflowDeclaration:

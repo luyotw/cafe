@@ -176,7 +176,12 @@ Read {evidence_file} and use {template_file}.
         playbook={
             "playbook": {"id": "synthesis"},
             "roles": {"researcher": {"default_agent": "Morgan"}},
-            "skills": {"workflow": {"shared": []}, "chat": {"shared": []}},
+            "skills": {
+                "workflow": {
+                    "shared": ["cafe-workflow-common", "cafe-github_sync"]
+                },
+                "chat": {"shared": []},
+            },
             "steps": {"synthesis": step},
         },
         generic_phase=generic_phase,

@@ -2,11 +2,17 @@
 
 import shutil
 from pathlib import Path
+from threading import Event, Thread
 from unittest.mock import patch
 
 import pytest
 
-from cafe.catalogs.resolver import CatalogKind, CatalogResolver, CatalogValidationError
+from cafe.catalogs.resolver import (
+    CatalogKind,
+    CatalogResolver,
+    CatalogValidationError,
+    global_catalog_lock,
+)
 from cafe.core.types import AgentCLI
 from cafe.skills.contracts import SkillWorkflowDeclaration
 from cafe.skills.exceptions import SkillDiscoveryError
@@ -202,6 +208,107 @@ workflow:
 
     with pytest.raises(ValueError, match="workflow reference not found: missing.md"):
         loader.get_workflow_declaration("prompt-only")
+
+
+def test_primary_workflow_retains_missing_template_catalog_error(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    skill_dir = project_root / ".cafe" / "skills" / "templated"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: templated
+description: Templated workflow declaration.
+workflow:
+  output_templates: {catalog: missing}
+---
+""",
+        encoding="utf-8",
+    )
+    loader = SkillLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+
+    with pytest.raises(ValueError, match="template catalog 'missing' is unavailable"):
+        loader.get_workflow_declaration("templated")
+
+
+def test_primary_workflow_retains_generic_schema_validation_error(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    skill_dir = project_root / ".cafe" / "skills" / "malformed"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: malformed
+description: Malformed workflow declaration.
+workflow:
+  execution_profile: {reasoning: impossible}
+---
+""",
+        encoding="utf-8",
+    )
+    loader = SkillLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        loader.get_workflow_declaration("malformed")
+    message = str(exc_info.value)
+    assert "Invalid workflow declaration for skill malformed" in message
+    assert "execution_profile.reasoning" in message
+    assert "impossible" in message
+
+
+def test_direct_declaration_holds_catalog_lock_through_resource_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "project"
+    _write_skill(project_root / ".cafe" / "skills", "stable")
+    loader = SkillLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+    validation_started = Event()
+    allow_validation = Event()
+    publisher_acquired = Event()
+    errors: list[BaseException] = []
+    original_validate = loader.validate_workflow_declaration_resources
+
+    def pause_validation(skill_dir: Path, declaration: SkillWorkflowDeclaration) -> None:
+        validation_started.set()
+        assert allow_validation.wait(timeout=5)
+        original_validate(skill_dir, declaration)
+
+    def read() -> None:
+        try:
+            loader.get_workflow_declaration("stable")
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    def publish() -> None:
+        with global_catalog_lock(loader.global_root, exclusive=True):
+            publisher_acquired.set()
+
+    monkeypatch.setattr(loader, "validate_workflow_declaration_resources", pause_validation)
+    reader = Thread(target=read)
+    publisher = Thread(target=publish)
+    reader.start()
+    assert validation_started.wait(timeout=5)
+    publisher.start()
+    assert not publisher_acquired.wait(timeout=0.1)
+
+    allow_validation.set()
+    reader.join(timeout=5)
+    publisher.join(timeout=5)
+
+    assert not reader.is_alive()
+    assert not publisher.is_alive()
+    assert publisher_acquired.is_set()
+    assert errors == []
 
 
 def test_builtin_catalog_includes_pr_skill(tmp_path: Path) -> None:
