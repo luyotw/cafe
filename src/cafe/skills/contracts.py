@@ -412,6 +412,7 @@ class SkillWorkflowDeclaration(BaseModel):
 
 
 # Compatibility alias for integrations that still import the previous name.
+# TODO: remove me
 SkillWorkflowContract = SkillWorkflowDeclaration
 
 

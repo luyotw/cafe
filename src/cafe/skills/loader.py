@@ -267,6 +267,7 @@ class SkillLoader:
                     )
             return declaration
 
+    # TODO: remove me
     def get_workflow_contract(self, name: str) -> SkillWorkflowDeclaration:
         """Load a workflow declaration through the compatibility API."""
         return self.get_workflow_declaration(name)
