@@ -245,11 +245,12 @@ class SkillLoader:
         self, name: str, *, validate_resources: bool = True
     ) -> tuple[SkillCatalogEntry, SkillWorkflowDeclaration]:
         """Return a declaration with the exact catalog entry that supplied it."""
-        entry, raw_declaration = self.get_workflow_declaration_data(name)
-        declaration = self.parse_workflow_declaration(entry, raw_declaration)
-        if validate_resources:
-            self.validate_workflow_declaration_resources(entry.directory, declaration)
-        return entry, declaration
+        with global_catalog_lock(self.global_root):
+            entry, raw_declaration = self.get_workflow_declaration_data(name)
+            declaration = self.parse_workflow_declaration(entry, raw_declaration)
+            if validate_resources:
+                self.validate_workflow_declaration_resources(entry.directory, declaration)
+            return entry, declaration
 
     def get_workflow_declaration_data(
         self, name: str

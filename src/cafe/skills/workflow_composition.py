@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+from cafe.catalogs.resolver import global_catalog_lock
 from cafe.core.human_tasks import HumanTaskPolicy
 from cafe.skills.contracts import (
     ExecutionProfile,
@@ -129,6 +130,23 @@ def _execution_requirements(
 
 
 def resolve_step_workflow_composition(
+    skill_loader: SkillLoader,
+    *,
+    primary_skill: str,
+    step_name: str,
+    workflow_skills: Iterable[str] = (),
+) -> StepWorkflowComposition:
+    """Compose one step against a stable catalog reader snapshot."""
+    with global_catalog_lock(skill_loader.global_root):
+        return _resolve_step_workflow_composition_locked(
+            skill_loader,
+            primary_skill=primary_skill,
+            step_name=step_name,
+            workflow_skills=workflow_skills,
+        )
+
+
+def _resolve_step_workflow_composition_locked(
     skill_loader: SkillLoader,
     *,
     primary_skill: str,

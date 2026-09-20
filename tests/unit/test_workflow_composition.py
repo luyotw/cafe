@@ -1,10 +1,13 @@
 """Invariant coverage for source-aware workflow declaration composition."""
 
 from pathlib import Path
+from threading import Event, Thread
 
 import pytest
 
+from cafe.catalogs.resolver import global_catalog_lock
 from cafe.core.playbook import resolve_playbook_skills
+from cafe.skills.contracts import SkillWorkflowDeclaration
 from cafe.skills.loader import SkillLoader
 from cafe.skills.workflow_composition import (
     WorkflowCompositionError,
@@ -253,3 +256,54 @@ def test_resolution_is_metadata_only_and_chat_skills_are_not_implicit(
 
     assert composition.required_tools == ("Read", "Write")
     assert "chat" not in composition.skill_names
+
+
+def test_composition_holds_catalog_lock_through_ownership_and_resources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "project" / ".cafe" / "skills"
+    _write_skill(root, "primary")
+    _write_skill(root, "support", "  required_tools: [Read]\n")
+    loader = _loader(tmp_path)
+    validation_started = Event()
+    allow_validation = Event()
+    publisher_acquired = Event()
+    errors: list[BaseException] = []
+    original_validate = loader.validate_workflow_declaration_resources
+
+    def pause_validation(skill_dir: Path, declaration: SkillWorkflowDeclaration) -> None:
+        validation_started.set()
+        assert allow_validation.wait(timeout=5)
+        original_validate(skill_dir, declaration)
+
+    def read() -> None:
+        try:
+            resolve_step_workflow_composition(
+                loader,
+                primary_skill="primary",
+                workflow_skills=["support"],
+                step_name="develop",
+            )
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    def publish() -> None:
+        with global_catalog_lock(loader.global_root, exclusive=True):
+            publisher_acquired.set()
+
+    monkeypatch.setattr(loader, "validate_workflow_declaration_resources", pause_validation)
+    reader = Thread(target=read)
+    publisher = Thread(target=publish)
+    reader.start()
+    assert validation_started.wait(timeout=5)
+    publisher.start()
+    assert not publisher_acquired.wait(timeout=0.1)
+
+    allow_validation.set()
+    reader.join(timeout=5)
+    publisher.join(timeout=5)
+
+    assert not reader.is_alive()
+    assert not publisher.is_alive()
+    assert publisher_acquired.is_set()
+    assert errors == []
