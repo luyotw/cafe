@@ -14,7 +14,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 import typer
 import yaml
@@ -34,6 +34,7 @@ from cafe.skills.loader import SkillLoader
 from cafe.utils.config import ConfigError, ConfigManager
 from cafe.utils.git_utils import get_git_toplevel, get_repo_root
 from cafe.utils.phase_config import load_phase_step_model
+from cafe.workflow_execution.phase_bindings import resolve_phase_binding
 
 VALID_CONTENT_TYPES = [
     "context",
@@ -177,32 +178,44 @@ def setup_agents(
     phase_name: Optional[str] = None,
     cafe_dir: Optional[Path] = None,
     stream_agent_output: bool = True,
+    playbook_data: Optional[Mapping[str, Any]] = None,
 ) -> AgentManager:
     """Build the active workflow agent from its complete phase chain."""
     if not issue_name or not phase_name:
         raise ValueError("phase configuration requires issue_name and phase_name")
 
-    def _resolve_phase_config_paths() -> tuple[Optional[Path], Optional[Path]]:
+    def _resolve_phase_config_paths() -> tuple[Optional[Path], Optional[Path], Optional[Path]]:
         local_path = None
         repo_path = None
         if cafe_dir is not None:
-            return Path(cafe_dir) / "phases.yaml", None
+            configured_cafe_dir = Path(cafe_dir)
+            return configured_cafe_dir / "phases.yaml", None, configured_cafe_dir.parent
         try:
             repo_root = get_repo_root()
             worktree_root = get_git_toplevel()
             local_path = worktree_root / ".cafe" / "phases.yaml"
             repo_path = repo_root / ".cafe" / "phases.yaml"
+            return local_path, repo_path, worktree_root
         except Exception:
             fallback_cafe_dir = Path(cafe_dir) if cafe_dir else Path(config_manager.config_dir)
             local_path = fallback_cafe_dir / "phases.yaml"
-        return local_path, repo_path
+            return local_path, repo_path, fallback_cafe_dir.parent
 
-    local_path, repo_path = _resolve_phase_config_paths()
-    resolved = load_phase_step_model(
-        step_name=phase_name,
-        local_path=local_path,
-        repo_path=repo_path,
-    )
+    local_path, repo_path, project_root = _resolve_phase_config_paths()
+    if playbook_data is None:
+        resolved = load_phase_step_model(
+            step_name=phase_name,
+            local_path=local_path,
+            repo_path=repo_path,
+        )
+    else:
+        resolved = resolve_phase_binding(
+            playbook=playbook_data,
+            step_name=phase_name,
+            local_path=local_path,
+            repo_path=repo_path,
+            project_root=project_root,
+        ).phase
     chain = [CliEntry(cli=AgentCLI(cli), model=model) for cli, model in resolved.clis]
     primary = chain[0]
     agent_manager = AgentManager(issue_name=issue_name, stream_agent_output=stream_agent_output)
@@ -520,6 +533,7 @@ def _build_workflow_step_executor(
             issue_name=issue_name,
             phase_name=phase_name,
             stream_agent_output=stream_agent_output,
+            playbook_data=playbook_data,
         ),
         git_ops=_get_git_operations_cls()(),
         role_agent_map=role_agent_map,
