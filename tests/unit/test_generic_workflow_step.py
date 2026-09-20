@@ -6737,6 +6737,75 @@ def test_workspace_companion_uses_custom_names_and_runtime_storage(tmp_path: Pat
     ).valid
 
 
+def test_workspace_companion_uses_merge_base_when_base_branch_has_diverged(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-b", "develop"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True)
+    (repo / ".gitignore").write_text(".cafe/\n", encoding="utf-8")
+    (repo / "tracked.txt").write_text("initial\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, check=True, capture_output=True)
+    merge_base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+    subprocess.run(["git", "checkout", "-b", "feature"], cwd=repo, check=True, capture_output=True)
+    (repo / "feature.txt").write_text("feature\n", encoding="utf-8")
+    subprocess.run(["git", "add", "feature.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "feature"], cwd=repo, check=True, capture_output=True)
+    feature_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+    subprocess.run(["git", "checkout", "develop"], cwd=repo, check=True, capture_output=True)
+    (repo / "develop.txt").write_text("develop\n", encoding="utf-8")
+    subprocess.run(["git", "add", "develop.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "develop"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "checkout", "feature"], cwd=repo, check=True, capture_output=True)
+
+    issue_dir = repo / ".cafe/issues/custom"
+    output = issue_dir / "develop" / "iteration_001" / "output.md"
+    output.parent.mkdir(parents=True)
+    run_verification(
+        output_file=output,
+        command=[sys.executable, "-c", "print('workspace')"],
+        scope="targeted",
+        cwd=repo,
+    )
+    (issue_dir / "issue.yaml").write_text("base_branch: develop\n", encoding="utf-8")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="custom",
+        playbook={"steps": {}},
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("done"),
+        git_ops=GitOperations(str(repo)),
+        role_agent_map={"developer": "David"},
+    )
+    state = BlackboardStore(issue_dir).load_or_create("develop")
+
+    workspace_path, metadata = executor._publish_workspace_artifact(
+        step_name="develop",
+        step_def={"output_artifact": "summary_doc", "workspace_artifact": "verified_snapshot"},
+        output_file=output,
+        blackboard_state=state,
+    )
+
+    assert metadata["base_sha"] == merge_base
+    assert metadata["head_sha"] == feature_head
+    assert subprocess.run(
+        ["git", "merge-base", "--is-ancestor", "develop", "HEAD"], cwd=repo, check=False
+    ).returncode == 1
+    assert subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip() == feature_head
+    assert verify_workspace_artifact(
+        json.loads(Path(workspace_path).read_text(encoding="utf-8")), repo=repo
+    ).valid
+
+
 def test_current_workspace_consumer_fails_closed_when_companion_is_missing(tmp_path: Path) -> None:
     executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
     with pytest.raises(ValueError, match="required workspace artifact"):

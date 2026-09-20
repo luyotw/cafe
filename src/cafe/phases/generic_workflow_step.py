@@ -3150,12 +3150,13 @@ class GenericWorkflowStepExecutor(Phase):
         if not base_ref:
             base_ref = self.git_ops.get_default_base_branch()
         head_sha = self.git_ops.run_git("rev-parse", "HEAD")
+        base_sha = self.git_ops.run_git("merge-base", str(base_ref), head_sha)
         try:
             candidate = build_workspace_artifact(
                 repo=repo,
                 name=workspace_name,
                 version=1,
-                base_sha=str(base_ref),
+                base_sha=base_sha,
                 head_sha=head_sha,
                 updated_at=updated_at or datetime.now(timezone.utc).isoformat(),
                 producer_step=step_name,
