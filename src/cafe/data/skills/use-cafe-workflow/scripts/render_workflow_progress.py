@@ -261,15 +261,12 @@ def _runtime_progress(
             source, target = str(data.get("from", "")), str(data.get("to", ""))
             transition_intent = str(data.get("transition_intent", ""))
             status_code = str(data.get("status_code", "")).lower()
-            source_step = playbook["steps"].get(source, {})
-            allowed_goto = source_step.get("allowed_goto", [])
-            declared_correction_target = isinstance(allowed_goto, list) and target in allowed_goto
             if (
                 source in statuses
                 and target in statuses
                 and source != target
                 and transition_intent == "manual_handoff"
-                and (status_code in {"needs_changes", "rejected"} or declared_correction_target)
+                and status_code in {"needs_changes", "rejected"}
             ):
                 edge = (source, target)
                 if edge not in returns:

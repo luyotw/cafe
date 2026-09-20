@@ -600,7 +600,10 @@ def test_forward_skip_review_manual_handoff_is_not_a_return(tmp_path: Path) -> N
         playbook={
             "playbook": {"id": "skip-review"},
             "steps": {
-                "develop": {"on": {"await_agent": "review", "manual_handoff": "pr"}},
+                "develop": {
+                    "on": {"await_agent": "review", "manual_handoff": "pr"},
+                    "allowed_goto": ["pr"],
+                },
                 "review": {"on": {"await_agent": "pr"}, "allowed_goto": ["develop"]},
                 "pr": {"on": {"await_agent": "_done"}, "allowed_goto": ["develop"]},
             },
