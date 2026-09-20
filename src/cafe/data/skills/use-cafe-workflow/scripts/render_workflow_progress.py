@@ -222,6 +222,7 @@ def _runtime_progress(
     iterations: dict[str, int] = {}
     returns: list[tuple[str, str]] = []
     terminal_evidence: set[str] = set()
+    delivered_feedback_steps: set[str] = set()
     if issue_dir is None:
         return statuses, iterations, returns
     blackboard = _read_json(issue_dir / "blackboard.json")
@@ -245,6 +246,7 @@ def _runtime_progress(
             if event_type == "step_started":
                 statuses[step] = "in_progress"
                 terminal_evidence.discard(step)
+                delivered_feedback_steps.discard(step)
             elif event_type in {"step_completed", "single_step_completed"}:
                 statuses[step] = "completed"
                 terminal_evidence.discard(step)
@@ -257,6 +259,10 @@ def _runtime_progress(
             ):
                 statuses[step] = "blocked"
                 terminal_evidence.add(step)
+        if event_type == "workflow_feedback_delivered":
+            source_identities = data.get("source_identities", [])
+            if step in statuses and isinstance(source_identities, list) and source_identities:
+                delivered_feedback_steps.add(step)
         if event_type == "transition":
             source, target = str(data.get("from", "")), str(data.get("to", ""))
             transition_intent = str(data.get("transition_intent", ""))
@@ -266,11 +272,15 @@ def _runtime_progress(
                 and target in statuses
                 and source != target
                 and transition_intent == "manual_handoff"
-                and status_code in {"needs_changes", "rejected"}
+                and (
+                    status_code in {"needs_changes", "rejected"}
+                    or source in delivered_feedback_steps
+                )
             ):
                 edge = (source, target)
                 if edge not in returns:
                     returns.append(edge)
+            delivered_feedback_steps.discard(source)
         if event_type == "workflow_completed":
             workflow_finished = True
     handoff = blackboard.get("handoff_contract", {})

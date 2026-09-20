@@ -659,6 +659,71 @@ def test_declared_correction_manual_handoff_is_a_formal_return(tmp_path: Path) -
     assert "↩ review → develop" in rendered
 
 
+def test_delivered_pr_feedback_baton_is_a_formal_return(tmp_path: Path) -> None:
+    issue_dir = tmp_path / "issue"
+    issue_dir.mkdir()
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "current_step": "develop",
+                "events": [
+                    {
+                        "event_type": "step_started",
+                        "step": "pr",
+                        "data": {"step": "pr", "attempt": 2},
+                    },
+                    {
+                        "event_type": "workflow_feedback_delivered",
+                        "step": "pr",
+                        "data": {
+                            "step": "pr",
+                            "delivery_id": "delivery-1",
+                            "source_identities": ["github_pr:comment:1"],
+                        },
+                    },
+                    {
+                        "event_type": "transition",
+                        "step": "pr",
+                        "data": {
+                            "from": "pr",
+                            "to": "develop",
+                            "source": "baton",
+                            "status_code": "BATON_MANUAL_HANDOFF",
+                            "transition_intent": "manual_handoff",
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rendered = _module().render_progress(
+        playbook={
+            "playbook": {"id": "direct"},
+            "steps": {
+                "develop": {"on": {"await_agent": "pr"}},
+                "pr": {
+                    "behavior": {
+                        "feedback_target": "pr",
+                        "feedback_artifact": "workflow_feedback",
+                        "feedback_source_kind": "github_pr",
+                        "feedback_todo_source": "pr_comment",
+                        "feedback_todo_id_prefix": "PRC",
+                    },
+                    "on": {"manual_handoff": "develop"},
+                    "allowed_goto": ["develop"],
+                },
+            },
+        },
+        contract={},
+        locale="en",
+        issue_dir=issue_dir,
+    )
+
+    assert "↩ pr → develop" in rendered
+
+
 def test_durable_blocked_event_overrides_completed_iteration_metadata(tmp_path: Path) -> None:
     issue_dir = tmp_path / "issue"
     issue_dir.mkdir()
