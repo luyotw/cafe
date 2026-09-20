@@ -724,6 +724,64 @@ def test_delivered_pr_feedback_baton_is_a_formal_return(tmp_path: Path) -> None:
     assert "↩ pr → develop" in rendered
 
 
+def test_forward_feedback_curation_delivery_is_not_a_return(tmp_path: Path) -> None:
+    issue_dir = tmp_path / "issue"
+    issue_dir.mkdir()
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "current_step": "consumer",
+                "events": [
+                    {
+                        "event_type": "workflow_feedback_delivered",
+                        "step": "curator",
+                        "data": {
+                            "step": "curator",
+                            "source_identities": ["external_note:1"],
+                        },
+                    },
+                    {
+                        "event_type": "transition",
+                        "step": "curator",
+                        "data": {
+                            "from": "curator",
+                            "to": "consumer",
+                            "source": "baton",
+                            "status_code": "BATON_MANUAL_HANDOFF",
+                            "transition_intent": "manual_handoff",
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rendered = _module().render_progress(
+        playbook={
+            "playbook": {"id": "feedback-curation"},
+            "steps": {
+                "curator": {
+                    "behavior": {
+                        "feedback_target": "curator",
+                        "feedback_artifact": "workflow_feedback",
+                        "feedback_source_kind": "external_note",
+                        "feedback_todo_source": "review_note",
+                        "feedback_todo_id_prefix": "REV",
+                    },
+                    "on": {"manual_handoff": "consumer"},
+                },
+                "consumer": {"on": {"await_agent": "_done"}},
+            },
+        },
+        contract={},
+        locale="en",
+        issue_dir=issue_dir,
+    )
+
+    assert "↩ curator → consumer" not in rendered
+
+
 def test_durable_blocked_event_overrides_completed_iteration_metadata(tmp_path: Path) -> None:
     issue_dir = tmp_path / "issue"
     issue_dir.mkdir()
