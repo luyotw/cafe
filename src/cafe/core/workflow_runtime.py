@@ -2272,14 +2272,11 @@ class BlackboardWorkflowRuntime:
             # executor failure so the workflow records a clean interrupted
             # state instead of crashing.
             from cafe.agents.executor import AgentExecutionError
-            from cafe.core.git import RemoteBaseIntegrationError
             from cafe.core.types import CriticalPhaseError
 
             reason = "agent_error"
             detail = str(exc)
-            if isinstance(exc, RemoteBaseIntegrationError):
-                reason = "agent_remote_base_integration"
-            elif isinstance(exc, (AgentExecutionError, CriticalPhaseError)) and getattr(
+            if isinstance(exc, (AgentExecutionError, CriticalPhaseError)) and getattr(
                 exc, "error_type", None
             ):
                 reason = f"agent_{exc.error_type}"

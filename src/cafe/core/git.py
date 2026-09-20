@@ -22,12 +22,6 @@ class GitError(Exception):
     pass
 
 
-class RemoteBaseIntegrationError(GitError):
-    """The remote PR base could not be integrated into the current branch safely."""
-
-    pass
-
-
 class GitOperations:
     """Handles all git operations."""
 
@@ -466,116 +460,6 @@ class GitOperations:
         except GitError:
             return False
         return True
-
-    def ensure_remote_base_ancestor(
-        self,
-        base_branch: str,
-        head_ref: str,
-        *,
-        remote: str = "origin",
-    ) -> str:
-        """Fetch a PR base and require the candidate history to contain it.
-
-        A local base may be ahead of its remote counterpart. A behind or
-        diverged base is unsafe because the eventual PR range would differ
-        from the range CAFE reviewed.
-        """
-        remote_ref = f"{remote}/{base_branch}"
-        self.run_git(
-            "fetch",
-            "--no-tags",
-            remote,
-            f"+refs/heads/{base_branch}:refs/remotes/{remote}/{base_branch}",
-        )
-        if not self.is_ancestor(remote_ref, head_ref):
-            raise GitError(
-                f"Remote base {remote_ref} is not contained in {head_ref}. "
-                f"Merge or rebase {remote_ref} into {head_ref}, resolve any conflicts, "
-                "then retry."
-            )
-        return remote_ref
-
-    def merge_remote_base_into_head(
-        self,
-        base_branch: str,
-        *,
-        remote: str = "origin",
-    ) -> str:
-        """Safely merge the current remote PR base into ``HEAD`` when needed.
-
-        Remote PRs must include their reviewed remote base.  A feature branch
-        that has fallen behind can usually be updated without user input, so
-        CAFE performs a host-owned merge before the PR agent runs.  The merge
-        is attempted only from a clean, healthy branch.  If Git reports a
-        conflict, the operation is aborted so the caller can present a
-        recoverable user task instead of leaving a hidden in-progress merge.
-
-        Returns:
-            The fetched remote ref, for example ``origin/develop``.
-
-        Raises:
-            RemoteBaseIntegrationError: The branch is unsafe to update or the
-                automatic merge cannot complete cleanly.
-        """
-        remote_ref = f"{remote}/{base_branch}"
-        try:
-            branch_health = self.get_branch_health()
-        except GitError as exc:
-            raise RemoteBaseIntegrationError(
-                "Cannot verify that the PR branch is safe for an automatic base update."
-            ) from exc
-        if not branch_health.is_healthy:
-            raise RemoteBaseIntegrationError(
-                "Cannot automatically update the PR base while the Git branch is unhealthy."
-            )
-
-        try:
-            if self.has_uncommitted_changes():
-                raise RemoteBaseIntegrationError(
-                    "Cannot automatically update the PR base with uncommitted changes."
-                )
-            self.run_git(
-                "fetch",
-                "--no-tags",
-                remote,
-                f"+refs/heads/{base_branch}:refs/remotes/{remote}/{base_branch}",
-            )
-        except RemoteBaseIntegrationError:
-            raise
-        except GitError as exc:
-            raise RemoteBaseIntegrationError(
-                f"Cannot fetch the remote PR base {remote_ref} for an automatic update."
-            ) from exc
-
-        if self.is_ancestor(remote_ref, "HEAD"):
-            return remote_ref
-
-        try:
-            self.run_git("merge", "--no-edit", remote_ref)
-        except GitError as exc:
-            try:
-                merge_in_progress = self.has_in_progress_operation()
-            except GitError:
-                merge_in_progress = True
-            if merge_in_progress:
-                try:
-                    self.run_git("merge", "--abort")
-                except GitError as abort_exc:
-                    raise RemoteBaseIntegrationError(
-                        "Automatic PR-base merge failed and could not be rolled back safely."
-                    ) from abort_exc
-                raise RemoteBaseIntegrationError(
-                    "Automatic PR-base merge encountered conflicts and was aborted."
-                ) from exc
-            raise RemoteBaseIntegrationError(
-                "Automatic PR-base merge failed before CAFE could verify a safe result."
-            ) from exc
-
-        if not self.is_ancestor(remote_ref, "HEAD"):
-            raise RemoteBaseIntegrationError(
-                "Automatic PR-base merge finished without including the remote base."
-            )
-        return remote_ref
 
     def get_commits_since(self, timestamp: str) -> List[dict]:
         """Get commits since a given timestamp.
