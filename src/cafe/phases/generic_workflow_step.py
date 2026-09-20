@@ -101,7 +101,7 @@ from cafe.skills.checklist_composer import (
 )
 from cafe.skills.contracts import (
     DeclaredArtifactError,
-    SkillWorkflowContract,
+    SkillWorkflowDeclaration,
     resolve_effective_prompt_inputs,
     resolve_packet_requested_placeholders,
     resolve_prompt_inputs,
@@ -484,7 +484,7 @@ class GenericWorkflowStepExecutor(Phase):
             baton_path=portion_baton_path or baton_path,
             validated_pr_auto_create=validated_pr_auto_create,
         )
-        contract = self._get_skill_loader().get_workflow_contract(skill_name)
+        contract = self._get_skill_loader().get_workflow_declaration(skill_name)
         self._template_allowed_directories = self._template_allowed_directories_for(
             step_name=step_name,
             step_def=step_def,
@@ -943,7 +943,7 @@ class GenericWorkflowStepExecutor(Phase):
         iteration_dir: Path,
     ) -> str:
         """Refresh a bounded cold-takeover snapshot just before a backup runs."""
-        contract = self._get_skill_loader().get_workflow_contract(
+        contract = self._get_skill_loader().get_workflow_declaration(
             self._resolve_skill_name(step_def, self.iteration)
         )
         input_artifacts = self._step_input_artifacts(step_def, blackboard_state)
@@ -1056,7 +1056,7 @@ class GenericWorkflowStepExecutor(Phase):
 
     @staticmethod
     def _packet_requested_placeholders(
-        contract: SkillWorkflowContract,
+        contract: SkillWorkflowDeclaration,
         artifacts: Mapping[str, Any],
         *,
         step: str,
@@ -1743,7 +1743,7 @@ class GenericWorkflowStepExecutor(Phase):
                 context["pr_auto_create"] = str(publication_choice).lower()
 
         skill_name = self._resolve_skill_name(step_def, self.iteration)
-        contract = self._get_skill_loader().get_workflow_contract(skill_name)
+        contract = self._get_skill_loader().get_workflow_declaration(skill_name)
         self._refresh_declared_workspace_input(
             step_def=step_def,
             blackboard_state=blackboard_state,
@@ -2510,7 +2510,7 @@ class GenericWorkflowStepExecutor(Phase):
         runtime_context: Optional[Mapping[str, str]] = None,
     ) -> None:
         canonical_name = canonical_skill_name(skill_name)
-        contract = self._get_skill_loader().get_workflow_contract(skill_name)
+        contract = self._get_skill_loader().get_workflow_declaration(skill_name)
         input_artifacts = self._step_input_artifacts(step_def, blackboard_state)
         self._validate_workspace_inputs(input_artifacts, step_def=step_def)
         declares_causal_todo = bool(
@@ -3007,7 +3007,7 @@ class GenericWorkflowStepExecutor(Phase):
         step_name: str,
         step_def: Dict[str, Any],
         skill_name: str,
-        contract: SkillWorkflowContract,
+        contract: SkillWorkflowDeclaration,
     ) -> Optional[str]:
         """Resolve a named selection through the owning skill's catalog."""
         if contract.output_templates is None:
@@ -3034,7 +3034,7 @@ class GenericWorkflowStepExecutor(Phase):
         step_name: str,
         step_def: Dict[str, Any],
         skill_name: str,
-        contract: SkillWorkflowContract,
+        contract: SkillWorkflowDeclaration,
     ) -> List[str]:
         """Grant read access to the catalog templates a step can select."""
         if contract.output_templates is None:
@@ -3068,7 +3068,7 @@ class GenericWorkflowStepExecutor(Phase):
         step_name: str,
         step_def: Dict[str, Any],
         skill_name: str,
-        contract: SkillWorkflowContract,
+        contract: SkillWorkflowDeclaration,
     ) -> None:
         """Expose only the declared template catalog or resolved selected file."""
         if contract.output_templates is None:
@@ -3402,7 +3402,7 @@ class GenericWorkflowStepExecutor(Phase):
             self.issue_dir / target,
         )
         target_skill = self._resolve_skill_name(target_def, target_iteration)
-        target_contract = self._get_skill_loader().get_workflow_contract(target_skill)
+        target_contract = self._get_skill_loader().get_workflow_declaration(target_skill)
         if target_contract.checklist is None:
             return True, "", route is not None
 
@@ -3509,7 +3509,7 @@ class GenericWorkflowStepExecutor(Phase):
         skill_name = self._resolve_skill_name(
             self.playbook["steps"][self.phase_name], self.iteration
         )
-        contract = self._get_skill_loader().get_workflow_contract(skill_name)
+        contract = self._get_skill_loader().get_workflow_declaration(skill_name)
         if contract.checklist is None:
             return True, ""
         state = BlackboardStore(self.issue_dir).load_or_create(self.phase_name)

@@ -87,7 +87,7 @@ class GenericPhase:
     ) -> str:
         """Install one skill for the target CLI and return its invocation syntax."""
         installed_dir = self.skill_bridge.install_skill(skill_name, agent_cli, context=context)
-        contract = self.skill_loader.get_workflow_contract(skill_name)
+        contract = self.skill_loader.get_workflow_declaration(skill_name)
         prompt_references = self._render_prompt_references(
             skill_name=skill_name,
             references=contract.prompt_references,

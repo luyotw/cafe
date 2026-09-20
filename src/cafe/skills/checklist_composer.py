@@ -9,7 +9,7 @@ from typing import Any, Mapping, Optional
 from cafe.agents.manager import AgentManager
 from cafe.core.todo import TodoContractError, projection_todo_items
 from cafe.skills.bridge import load_skill_reference, try_load_skill_reference
-from cafe.skills.contracts import ChecklistVariant, SkillWorkflowContract
+from cafe.skills.contracts import ChecklistVariant, SkillWorkflowDeclaration
 from cafe.skills.loader import canonical_skill_name
 from cafe.templates.manager import TemplateManager
 from cafe.utils.checklist_utils import generate_checklist_file, resolve_checklist_placeholders
@@ -56,7 +56,7 @@ def _variant_matches(
 
 
 def select_checklist_variant(
-    contract: SkillWorkflowContract,
+    contract: SkillWorkflowDeclaration,
     *,
     step: str | None = None,
     iteration: int,
@@ -77,7 +77,7 @@ def select_checklist_variant(
 def _template_instruction(
     *,
     skill_name: str,
-    contract: SkillWorkflowContract,
+    contract: SkillWorkflowDeclaration,
     template_mode: str,
     template_file: Optional[str],
 ) -> str:
@@ -130,7 +130,7 @@ def _reference_context(
 def compose_declared_checklist(
     *,
     skill_name: str,
-    contract: SkillWorkflowContract,
+    contract: SkillWorkflowDeclaration,
     agent_name: str,
     role: str,
     checklist_file_path: Path,

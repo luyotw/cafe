@@ -384,7 +384,7 @@ def resolve_step_human_task(
 
         skill_loader = SkillLoader()
     skill_name = _select_step_skill_name(raw_step, iteration)
-    contract = skill_loader.get_workflow_contract(skill_name)
+    contract = skill_loader.get_workflow_declaration(skill_name)
     policy = resolve_human_task_policy(defaults=contract.human_tasks, binding=bindings[0])
     return policy, bindings[0]
 

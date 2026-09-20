@@ -114,7 +114,7 @@ def test_cafe_pr_routes_completed_artifacts_to_local_review() -> None:
 
     policy = next(
         task
-        for task in SkillLoader().get_workflow_contract("cafe-pr").human_tasks
+        for task in SkillLoader().get_workflow_declaration("cafe-pr").human_tasks
         if task.id == "local-review"
     )
     decisions = {decision.id: decision for decision in policy.decisions}
@@ -243,7 +243,7 @@ def test_direct_subagent_review_uses_two_in_phase_reviewers_before_pr() -> None:
     correction = (references / "execution_steps_correction.md").read_text(encoding="utf-8")
     assert "`review`:" not in correction
 
-    contract = SkillLoader().get_workflow_contract("cafe-develop_subagent_review")
+    contract = SkillLoader().get_workflow_declaration("cafe-develop_subagent_review")
     planless = select_checklist_variant(
         contract,
         step="develop",
@@ -293,7 +293,7 @@ def test_solution_alignment_stays_inside_the_plan_step(playbook_id: str) -> None
 
 def test_plan_steps_declare_the_prior_identity_authority_and_skill_input() -> None:
     loader = PlaybookLoader()
-    contract = SkillLoader().get_workflow_contract("cafe-plan")
+    contract = SkillLoader().get_workflow_declaration("cafe-plan")
     prior_input = next(item for item in contract.prompt_inputs if item.placeholder == "prior_plan_file")
     assert prior_input.artifacts == ("plan",)
     assert prior_input.required is False
@@ -307,7 +307,7 @@ def test_every_builtin_develop_step_binds_the_generic_permission_task() -> None:
     """Test List 5: permission requests reuse one policy and always resume develop."""
     policy = next(
         task
-        for task in SkillLoader().get_workflow_contract("cafe-develop").human_tasks
+        for task in SkillLoader().get_workflow_declaration("cafe-develop").human_tasks
         if task.id == "permission-answers"
     )
     assert policy.pattern == "revision_feedback"
@@ -466,10 +466,10 @@ def test_qa_variants_share_one_bounded_acceptance_phase(playbook_id: str) -> Non
 def test_qa_feedback_is_exposed_by_every_correction_and_publication_skill() -> None:
     loader = SkillLoader()
     for skill_name in ("cafe-develop", "cafe-review", "cafe-pr"):
-        prompt_inputs = loader.get_workflow_contract(skill_name).prompt_inputs
+        prompt_inputs = loader.get_workflow_declaration(skill_name).prompt_inputs
         assert any("qa_feedback" in item.artifacts for item in prompt_inputs)
 
-    qa_contract = loader.get_workflow_contract("cafe-qa")
+    qa_contract = loader.get_workflow_declaration("cafe-qa")
     required = {
         mapping.artifacts[0]
         for mapping in qa_contract.prompt_inputs
@@ -483,7 +483,7 @@ def test_qa_feedback_is_exposed_by_every_correction_and_publication_skill() -> N
     assert required == {"code"}
     assert optional == {"spec", "plan", "review_feedback", "workspace"}
 
-    pr_contract = loader.get_workflow_contract("cafe-pr")
+    pr_contract = loader.get_workflow_declaration("cafe-pr")
     resolved = resolve_prompt_inputs(
         pr_contract,
         {"qa_feedback": "qa.md", "review_feedback": "review.md"},

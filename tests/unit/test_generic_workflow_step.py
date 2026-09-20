@@ -6035,13 +6035,13 @@ def test_persisted_packet_binding_must_match_declared_authority_and_envelope(
     tmp_path: Path,
 ) -> None:
     """UT-004: takeover cannot redirect a packet binding to another source."""
-    from cafe.skills.contracts import SkillWorkflowContract, resolve_effective_prompt_inputs
+    from cafe.skills.contracts import SkillWorkflowDeclaration, resolve_effective_prompt_inputs
 
     source = tmp_path / "spec.md"
     other = tmp_path / "other.md"
     _write_valid_spec_contract(source)
     other.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
-    contract = SkillWorkflowContract.model_validate(
+    contract = SkillWorkflowDeclaration.model_validate(
         {
             "prompt_inputs": [
                 {

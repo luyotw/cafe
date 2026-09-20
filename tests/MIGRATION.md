@@ -7,7 +7,7 @@ Related issues: #290 (SpecPhase), #291–#294 (sibling retirements).
 
 Prompt inputs, checklist variants, role-guidance opt-in, and template catalogs
 are now declared in skill frontmatter rather than dispatched by phase name.
-`tests/unit/test_skill_workflow_contract.py` owns parser/resolution/composition
+`tests/unit/test_skill_workflow_declaration.py` owns parser/resolution/composition
 contracts, and `tests/integration/test_declarative_skill_workflow.py` covers a
 custom non-development synthesis step. Legacy checklist helper functions remain
 as compatibility adapters for historic fixture tests; production execution uses

@@ -8,7 +8,7 @@ import pytest
 
 from cafe.catalogs.resolver import CatalogKind, CatalogResolver, CatalogValidationError
 from cafe.core.types import AgentCLI
-from cafe.skills.contracts import SkillWorkflowContract
+from cafe.skills.contracts import SkillWorkflowDeclaration
 from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.skills.importer import import_skills
 from cafe.skills.loader import SkillLoader, canonical_skill_name
@@ -124,7 +124,7 @@ def test_lookups_resolve_only_the_requested_skill_and_follow_precedence_changes(
 
     assert loader.get_skill_entry("plan").source == "builtin"
     assert "# plan" in loader.activate("plan")
-    assert loader.get_workflow_contract("plan") == SkillWorkflowContract()
+    assert loader.get_workflow_declaration("plan") == SkillWorkflowDeclaration()
     assert loader.get_reference("plan", "guide.md") == "builtin guide\n"
 
     _write_skill(global_skills, "plan")
@@ -184,7 +184,7 @@ def test_prompt_only_workflow_rejects_missing_reference(tmp_path: Path) -> None:
     (skill_dir / "SKILL.md").write_text(
         """---
 name: prompt-only
-description: Prompt-only workflow contract.
+description: Prompt-only workflow declaration.
 workflow:
   prompt_references:
     optional_instruction: missing.md
@@ -201,7 +201,7 @@ workflow:
     loader.discover()
 
     with pytest.raises(ValueError, match="workflow reference not found: missing.md"):
-        loader.get_workflow_contract("prompt-only")
+        loader.get_workflow_declaration("prompt-only")
 
 
 def test_builtin_catalog_includes_pr_skill(tmp_path: Path) -> None:
