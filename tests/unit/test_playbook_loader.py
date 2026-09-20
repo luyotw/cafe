@@ -203,15 +203,32 @@ steps:
     assert loaded.model.steps["run"].allowed_tools == ["Read"]
 
 
-def test_strict_validation_rejects_contributor_primary_owned_metadata(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("field", "declaration", "resource_error"),
+    [
+        (
+            "prompt_references",
+            "  prompt_references: {guide: missing.md}\n",
+            "workflow reference not found: missing.md",
+        ),
+        (
+            "output_templates",
+            "  output_templates: {catalog: missing}\n",
+            "template catalog 'missing' is unavailable",
+        ),
+    ],
+)
+def test_strict_validation_rejects_missing_resource_on_primary_owned_contributor_field(
+    tmp_path: Path,
+    field: str,
+    declaration: str,
+    resource_error: str,
+) -> None:
     builtin_root = tmp_path / "builtin"
-    support_dir = builtin_root / "skills" / "support"
-    (support_dir / "references").mkdir(parents=True)
-    (support_dir / "references" / "guide.md").write_text("guide", encoding="utf-8")
     _write_workflow_skill(
         builtin_root / "skills",
         "support",
-        "  prompt_references: {guide: guide.md}\n",
+        declaration,
     )
     _write_skill(builtin_root / "skills", "primary")
     _write_playbook(
@@ -238,7 +255,10 @@ steps:
     with pytest.raises(ValueError) as exc_info:
         loader.load_model("unsupported-contributor", strict=True)
     message = str(exc_info.value)
-    assert all(token in message for token in ("run", "prompt_references", "support"))
+    assert all(
+        token in message
+        for token in ("run", field, "support", "SKILL.md", "primary-owned", resource_error)
+    )
 
 
 def _write_playbook(

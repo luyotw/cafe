@@ -139,7 +139,9 @@ def resolve_step_workflow_composition(
     contributors: list[SkillWorkflowContributor] = []
     seen_roots: set[Path] = set()
     for index, requested_name in enumerate((primary_skill, *workflow_skills)):
-        entry, declaration = skill_loader.get_workflow_declaration_entry(requested_name)
+        entry, declaration = skill_loader.get_workflow_declaration_entry(
+            requested_name, validate_resources=False
+        )
         identity = entry.directory.resolve()
         if identity in seen_roots:
             continue
@@ -164,6 +166,9 @@ def resolve_step_workflow_composition(
     tasks: dict[str, tuple[HumanTaskPolicy, SkillWorkflowContributor]] = {}
     local_names: dict[str, SkillWorkflowContributor] = {}
     primary = contributors[0]
+    skill_loader.validate_workflow_declaration_resources(
+        primary.source.skill_root, primary.declaration
+    )
     reserved_names = set(primary.declaration.prompt_references)
 
     for contributor in contributors:
@@ -174,12 +179,25 @@ def resolve_step_workflow_composition(
                 ("output_templates", declaration.output_templates),
             ):
                 if value:
+                    resource_errors = skill_loader.workflow_declaration_resource_errors(
+                        contributor.source.skill_root,
+                        declaration,
+                        fields={field},
+                    )
+                    resource_context = (
+                        f" Malformed resource context: {resource_errors[0]}."
+                        if resource_errors
+                        else ""
+                    )
                     raise WorkflowCompositionError(
                         f"Step {step_name!r} contributor {_source_label(contributor)} declares "
                         f"primary-owned workflow field {field!r}; contributors may only supply "
                         "required_tools, prompt_inputs, human_tasks, execution_profile, and "
-                        "local checklist references"
+                        f"local checklist references.{resource_context}"
                     )
+            skill_loader.validate_workflow_declaration_resources(
+                contributor.source.skill_root, declaration
+            )
         tools.extend(tool for tool in declaration.required_tools if tool not in tools)
         for mapping in declaration.prompt_inputs:
             existing = inputs.get(mapping.placeholder)

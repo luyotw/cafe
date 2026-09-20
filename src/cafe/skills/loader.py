@@ -242,7 +242,7 @@ class SkillLoader:
         return declaration
 
     def get_workflow_declaration_entry(
-        self, name: str
+        self, name: str, *, validate_resources: bool = True
     ) -> tuple[SkillCatalogEntry, SkillWorkflowDeclaration]:
         """Return a declaration with the exact catalog entry that supplied it."""
         with global_catalog_lock(self.global_root):
@@ -256,30 +256,58 @@ class SkillLoader:
                 raise ValueError(
                     f"Invalid workflow declaration for skill {skill_dir.name}: {exc}"
                 ) from exc
-            references = list(declaration.prompt_references.values())
-            if declaration.checklist is not None:
-                references.extend(declaration.checklist.context_references.values())
-                references.extend(
-                    section.reference
-                    for variant in declaration.checklist.variants
-                    for section in variant.sections
-                    if section.reference is not None
-                )
-            for reference in references:
-                reference_path = skill_dir / "references" / reference
-                if not reference_path.is_file():
-                    raise ValueError(
-                        f"Invalid workflow declaration for skill {skill_dir.name}: "
-                        f"workflow reference not found: {reference}"
-                    )
-            if declaration.output_templates is not None:
-                template_dir = skill_dir / "assets" / "templates"
-                if not template_dir.is_dir():
-                    raise ValueError(
-                        f"Invalid workflow declaration for skill {skill_dir.name}: "
-                        f"template catalog {declaration.output_templates.catalog!r} is unavailable"
-                    )
+            if validate_resources:
+                self.validate_workflow_declaration_resources(skill_dir, declaration)
             return entry, declaration
+
+    @staticmethod
+    def workflow_declaration_resource_errors(
+        skill_dir: Path,
+        declaration: SkillWorkflowDeclaration,
+        *,
+        fields: Optional[set[str]] = None,
+    ) -> tuple[str, ...]:
+        """Return bounded resource errors for selected declaration fields."""
+        selected = fields or {"prompt_references", "checklist", "output_templates"}
+        errors: list[str] = []
+        references: list[str] = []
+        if "prompt_references" in selected:
+            references.extend(declaration.prompt_references.values())
+        if "checklist" in selected and declaration.checklist is not None:
+            references.extend(declaration.checklist.context_references.values())
+            references.extend(
+                section.reference
+                for variant in declaration.checklist.variants
+                for section in variant.sections
+                if section.reference is not None
+            )
+        errors.extend(
+            f"workflow reference not found: {reference}"
+            for reference in references
+            if not (skill_dir / "references" / reference).is_file()
+        )
+        if (
+            "output_templates" in selected
+            and declaration.output_templates is not None
+            and not (skill_dir / "assets" / "templates").is_dir()
+        ):
+            errors.append(
+                f"template catalog {declaration.output_templates.catalog!r} is unavailable"
+            )
+        return tuple(errors)
+
+    @classmethod
+    def validate_workflow_declaration_resources(
+        cls,
+        skill_dir: Path,
+        declaration: SkillWorkflowDeclaration,
+    ) -> None:
+        """Preserve generic declaration validation for primary and supported fields."""
+        errors = cls.workflow_declaration_resource_errors(skill_dir, declaration)
+        if errors:
+            raise ValueError(
+                f"Invalid workflow declaration for skill {skill_dir.name}: {errors[0]}"
+            )
 
     # TODO: remove me
     def get_workflow_contract(self, name: str) -> SkillWorkflowDeclaration:

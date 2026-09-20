@@ -204,6 +204,30 @@ workflow:
         loader.get_workflow_declaration("prompt-only")
 
 
+def test_primary_workflow_retains_missing_template_catalog_error(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    skill_dir = project_root / ".cafe" / "skills" / "templated"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: templated
+description: Templated workflow declaration.
+workflow:
+  output_templates: {catalog: missing}
+---
+""",
+        encoding="utf-8",
+    )
+    loader = SkillLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+
+    with pytest.raises(ValueError, match="template catalog 'missing' is unavailable"):
+        loader.get_workflow_declaration("templated")
+
+
 def test_builtin_catalog_includes_pr_skill(tmp_path: Path) -> None:
     builtin_root = Path(__file__).resolve().parents[2] / "src" / "cafe" / "data"
     loader = SkillLoader(
