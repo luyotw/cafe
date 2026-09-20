@@ -770,6 +770,7 @@ def test_forward_feedback_curation_delivery_is_not_a_return(tmp_path: Path) -> N
                         "feedback_todo_id_prefix": "REV",
                     },
                     "on": {"manual_handoff": "consumer"},
+                    "allowed_goto": ["consumer"],
                 },
                 "consumer": {"on": {"await_agent": "_done"}},
             },

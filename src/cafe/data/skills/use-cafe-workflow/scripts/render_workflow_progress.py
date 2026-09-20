@@ -214,6 +214,33 @@ def _driver_progress(
     return normalized_reviews, closeout
 
 
+def _reaches_through_non_handoff_routes(
+    playbook: Mapping[str, Any], *, start: str, destination: str
+) -> bool:
+    """Return whether the effective graph can normally advance from start to destination."""
+    steps = playbook["steps"]
+    pending = [start]
+    visited: set[str] = set()
+    while pending:
+        current = pending.pop()
+        if current in visited:
+            continue
+        visited.add(current)
+        step = steps.get(current, {})
+        routes = step.get("on", {}) if isinstance(step, Mapping) else {}
+        if not isinstance(routes, Mapping):
+            continue
+        for intent, raw_target in routes.items():
+            if intent == "manual_handoff":
+                continue
+            target = str(raw_target)
+            if target == destination:
+                return True
+            if target in steps and target not in visited:
+                pending.append(target)
+    return False
+
+
 def _runtime_progress(
     issue_dir: Path | None, playbook: Mapping[str, Any]
 ) -> tuple[dict[str, str], dict[str, int], list[tuple[str, str]]]:
@@ -267,12 +294,9 @@ def _runtime_progress(
             source, target = str(data.get("from", "")), str(data.get("to", ""))
             transition_intent = str(data.get("transition_intent", ""))
             status_code = str(data.get("status_code", "")).lower()
-            source_step = playbook["steps"].get(source, {})
-            allowed_goto = source_step.get("allowed_goto", [])
             delivered_correction = (
                 source in delivered_feedback_steps
-                and isinstance(allowed_goto, list)
-                and target in allowed_goto
+                and _reaches_through_non_handoff_routes(playbook, start=target, destination=source)
             )
             if (
                 source in statuses
