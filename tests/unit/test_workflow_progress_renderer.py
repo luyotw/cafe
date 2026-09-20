@@ -437,3 +437,136 @@ def test_cli_without_confirmed_contract_reports_unestablished_workflow(tmp_path:
 
     assert result.returncode == 0
     assert result.stdout.strip() == "流程尚未建立"
+
+
+def test_retry_baton_and_non_topological_graph_do_not_invent_a_return(tmp_path: Path) -> None:
+    issue_dir = tmp_path / "issue"
+    issue_dir.mkdir()
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "current_step": "A",
+                "events": [],
+                "handoff_contract": {
+                    "from_step": "A",
+                    "to_step": "A",
+                    "to_owner": "agent",
+                    "intent": "await_agent",
+                    "source": "workflow.start_step_override",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    playbook = {
+        "playbook": {"id": "non-topological"},
+        "steps": {
+            "A": {"on": {"await_agent": "C"}},
+            "B": {"on": {"await_agent": "_done"}},
+            "C": {"on": {"await_agent": "B"}},
+        },
+    }
+
+    rendered = _module().render_progress(
+        playbook=playbook,
+        contract={},
+        locale="en",
+        issue_dir=issue_dir,
+    )
+
+    assert "↩ A → A" not in rendered
+    assert "↩ C → B" not in rendered
+    assert "└─ await_agent → C" in rendered
+    assert "└─ await_agent → B" in rendered
+
+
+def test_latest_iteration_metadata_cannot_be_overwritten_by_prior_completion(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / "issue"
+    issue_dir.mkdir()
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "current_step": "review",
+                "events": [
+                    {
+                        "event_type": "step_started",
+                        "step": "review",
+                        "data": {"step": "review", "attempt": 2},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    previous = issue_dir / "review" / "iteration_001"
+    previous.mkdir(parents=True)
+    (previous / "iteration.json").write_text(
+        json.dumps(
+            {
+                "iteration": 1,
+                "status_code": "confirmed",
+                "end_time": "2026-09-20T01:00:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    current = issue_dir / "review" / "iteration_002"
+    current.mkdir()
+    (current / "iteration.json").write_text('{"iteration": 2}', encoding="utf-8")
+
+    rendered = _module().render_progress(
+        playbook={
+            "playbook": {"id": "rerun"},
+            "steps": {"review": {"on": {"await_agent": "_done"}}},
+        },
+        contract={},
+        locale="en",
+        issue_dir=issue_dir,
+    )
+
+    assert "▶ review · iteration 2" in rendered
+    assert "✓ review" not in rendered
+
+
+@pytest.mark.parametrize("payload", [{}, {"decision": "missing"}])
+def test_completed_confirmation_requires_a_recognized_outcome(
+    tmp_path: Path, payload: dict[str, str]
+) -> None:
+    issue_dir = tmp_path / "issue"
+    _write_runtime(issue_dir)
+    records_path = issue_dir / "human_tasks.json"
+    records = json.loads(records_path.read_text(encoding="utf-8"))
+    records["results"][0]["payload"] = payload
+    records_path.write_text(json.dumps(records), encoding="utf-8")
+
+    rendered = _module().render_progress(
+        playbook=_custom_playbook(),
+        contract=_contract(),
+        locale="en",
+        issue_dir=issue_dir,
+    )
+
+    assert "？ publish-draft: user confirmation (driver may not act)" in rendered
+    assert "✓ publish-draft: user confirmation" not in rendered
+
+
+def test_completed_confirmation_renders_only_a_declared_non_correction_outcome(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / "issue"
+    _write_runtime(issue_dir)
+    records_path = issue_dir / "human_tasks.json"
+    records = json.loads(records_path.read_text(encoding="utf-8"))
+    records["results"][0]["payload"] = {"decision": "confirm", "continuation": "_done"}
+    records_path.write_text(json.dumps(records), encoding="utf-8")
+
+    rendered = _module().render_progress(
+        playbook=_custom_playbook(),
+        contract=_contract(),
+        locale="en",
+        issue_dir=issue_dir,
+    )
+
+    assert "✓ publish-draft: user confirmation (driver may not act)" in rendered

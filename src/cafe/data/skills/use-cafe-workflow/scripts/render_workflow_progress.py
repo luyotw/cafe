@@ -228,7 +228,6 @@ def _runtime_progress(
     events = blackboard.get("events", [])
     if not isinstance(events, list):
         raise ValueError("blackboard events must be a list")
-    positions = {step: index for index, step in enumerate(steps)}
     workflow_finished = str(blackboard.get("current_step", "")) == "done"
     for event in events:
         if not isinstance(event, Mapping):
@@ -254,10 +253,12 @@ def _runtime_progress(
                 statuses[step] = "blocked"
         if event_type == "transition":
             source, target = str(data.get("from", "")), str(data.get("to", ""))
+            transition_intent = str(data.get("transition_intent", ""))
             if (
-                source in positions
-                and target in positions
-                and positions[target] <= positions[source]
+                source in statuses
+                and target in statuses
+                and source != target
+                and transition_intent == "manual_handoff"
             ):
                 edge = (source, target)
                 if edge not in returns:
@@ -266,11 +267,7 @@ def _runtime_progress(
             workflow_finished = True
     handoff = blackboard.get("handoff_contract", {})
     if isinstance(handoff, Mapping):
-        source, target = str(handoff.get("from_step", "")), str(handoff.get("to_step", ""))
-        if source in positions and target in positions and positions[target] <= positions[source]:
-            edge = (source, target)
-            if edge not in returns:
-                returns.append(edge)
+        target = str(handoff.get("to_step", ""))
         if target in statuses and str(handoff.get("status_code", "")).upper() in {
             "INTERRUPTED",
             "BLOCKED",
@@ -280,20 +277,25 @@ def _runtime_progress(
         step_dir = issue_dir / step
         if not step_dir.is_dir():
             continue
-        for candidate in step_dir.glob("iteration_*"):
-            suffix = candidate.name.removeprefix("iteration_")
-            if suffix.isdigit():
-                iterations[step] = max(iterations.get(step, 0), int(suffix))
-            metadata = _read_json(candidate / "iteration.json")
-            if metadata is None:
-                continue
-            code = str(metadata.get("status_code", "")).upper()
-            if code == "SKIPPED":
-                statuses[step] = "skipped"
-            elif code in {"INTERRUPTED", "BLOCKED"}:
-                statuses[step] = "blocked"
-            elif metadata.get("end_time") and code:
-                statuses[step] = "completed"
+        candidates = [
+            (int(candidate.name.removeprefix("iteration_")), candidate)
+            for candidate in step_dir.glob("iteration_*")
+            if candidate.name.removeprefix("iteration_").isdigit()
+        ]
+        if not candidates:
+            continue
+        iteration, candidate = max(candidates, key=lambda item: item[0])
+        iterations[step] = max(iterations.get(step, 0), iteration)
+        metadata = _read_json(candidate / "iteration.json")
+        if metadata is None:
+            continue
+        code = str(metadata.get("status_code", "")).upper()
+        if code == "SKIPPED":
+            statuses[step] = "skipped"
+        elif code in {"INTERRUPTED", "BLOCKED"}:
+            statuses[step] = "blocked"
+        elif metadata.get("end_time") and code:
+            statuses[step] = "completed"
     if workflow_finished:
         statuses = {
             step: "skipped" if status == "pending" else status for step, status in statuses.items()
@@ -348,25 +350,43 @@ def _confirmation_statuses(
             payload = result.get("payload", {}) if isinstance(result, Mapping) else {}
             payload = payload if isinstance(payload, Mapping) else {}
             decision = str(payload.get("decision", ""))
-            correction = False
             expected = task.get("expected_result", {})
             expected = expected if isinstance(expected, Mapping) else {}
             decisions = expected.get("decisions", [])
-            if isinstance(decisions, list):
-                correction = any(
-                    isinstance(item, Mapping)
-                    and item.get("id") == decision
-                    and item.get("correction") is True
-                    for item in decisions
+            matched = (
+                next(
+                    (
+                        item
+                        for item in decisions
+                        if isinstance(item, Mapping) and item.get("id") == decision
+                    ),
+                    None,
                 )
+                if isinstance(decisions, list)
+                else None
+            )
+            continuations = task.get("continuations", {})
+            declared_target = (
+                continuations.get(decision) if isinstance(continuations, Mapping) else None
+            )
+            payload_target = payload.get("continuation")
+            outcome_is_valid = (
+                matched is not None
+                and isinstance(declared_target, str)
+                and bool(declared_target)
+                and (payload_target is None or payload_target == declared_target)
+            )
+            if not outcome_is_valid:
+                statuses[step] = "unknown"
+                if (
+                    isinstance(task_iteration, int)
+                    and phase_iterations.get(step, 0) > task_iteration
+                ):
+                    statuses[step] = "pending"
+                continue
+            correction = matched.get("correction") is True
             if correction:
-                target = payload.get("continuation")
-                if not isinstance(target, str):
-                    continuations = task.get("continuations", {})
-                    if isinstance(continuations, Mapping):
-                        target = continuations.get(decision)
-                if isinstance(target, str) and target:
-                    returns.append((step, target))
+                returns.append((step, declared_target))
                 statuses[step] = "returned"
             else:
                 statuses[step] = "completed"
@@ -383,18 +403,19 @@ def _branch_lines(playbook: Mapping[str, Any], step: str, steps: Sequence[str]) 
     raw = playbook["steps"][step].get("on", {})
     if not isinstance(raw, Mapping):
         return []
-    positions = {name: index for index, name in enumerate(steps)}
     edges = [
         (str(intent), "done" if target in {"_done", "done"} else str(target))
         for intent, target in raw.items()
         if target != step
     ]
-    actual_targets = {target for _, target in edges}
-    has_return = any(
-        target in positions and positions[target] <= positions[step] for _, target in edges
-    )
-    if len(actual_targets) <= 1 and not has_return:
-        return []
+    allowed_goto = playbook["steps"][step].get("allowed_goto", [])
+    if isinstance(allowed_goto, list):
+        declared_targets = {target for _, target in edges}
+        edges.extend(
+            ("goto", str(target))
+            for target in allowed_goto
+            if isinstance(target, str) and target not in declared_targets
+        )
     return [
         f"  {'└─' if index == len(edges) - 1 else '├─'} {intent} → {target}"
         for index, (intent, target) in enumerate(edges)
@@ -434,13 +455,12 @@ def render_progress(
         if iterations.get(step, 0) > 1:
             label += " · " + str(text["iteration"]).format(iteration=iterations[step])
         phase_block = [_line(phase_statuses[step], label), *_branch_lines(model, step, steps)]
-        nodes.append("\n".join(phase_block))
         if step in required_reviews:
             review_status = reviews.get(step, "unknown")
             review_label = (
                 f"{step}：{text['review']}" if language == "zh" else f"{step}: {text['review']}"
             )
-            nodes.append(_line(review_status, review_label))
+            phase_block.append(_line(review_status, review_label))
         if step in gate_steps:
             proxy = text["delegable"] if step in driver_confirmable else text["not_delegable"]
             confirmation_label = (
@@ -448,12 +468,13 @@ def render_progress(
                 if language == "zh"
                 else f"{step}: {text['confirmation']} ({proxy})"
             )
-            nodes.append(
+            phase_block.append(
                 _line(
                     confirmation_statuses[step],
                     confirmation_label,
                 )
             )
+        nodes.append("\n".join(phase_block))
     for source, target in [*runtime_returns, *task_returns]:
         return_line = _line("returned", f"{source} → {target}")
         if return_line not in nodes:
@@ -469,7 +490,7 @@ def render_progress(
                 ),
             )
         )
-    body = "\n│\n".join(nodes)
+    body = "\n\n".join(nodes)
     legend = text["legend"]
     legend_lines = [
         "　".join(
