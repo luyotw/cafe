@@ -1880,8 +1880,6 @@ class GenericWorkflowStepExecutor(Phase):
             base_branch = self._get_issue_config_value(self.issue_dir / "issue.yaml", "base_branch")
             resolved_base = str(base_branch or self.git_ops.get_default_base_branch())
             comparison_base = resolved_base
-            if publication_choice is True:
-                comparison_base = self.git_ops.merge_remote_base_into_head(resolved_base)
             context["base_branch"] = resolved_base
             context["pr_comparison_base"] = comparison_base
             context["commits"] = self._get_current_branch_commits(

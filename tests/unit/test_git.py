@@ -6,44 +6,7 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 
-from cafe.core.git import GitError, GitOperations, RemoteBaseIntegrationError
-
-
-def _run_git(repo_path: Path, *args: str) -> None:
-    subprocess.run(
-        ["git", *args],
-        cwd=repo_path,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-
-
-def _remote_feature_checkout(tmp_path: Path) -> tuple[Path, Path]:
-    origin = tmp_path / "origin.git"
-    seed = tmp_path / "seed"
-    local = tmp_path / "local"
-    subprocess.run(["git", "init", "--bare", str(origin)], check=True, capture_output=True)
-    seed.mkdir()
-    _run_git(seed, "init", "-b", "develop")
-    _run_git(seed, "config", "user.name", "CAFE Test")
-    _run_git(seed, "config", "user.email", "cafe@example.invalid")
-    (seed / "shared.txt").write_text("base\n", encoding="utf-8")
-    _run_git(seed, "add", "shared.txt")
-    _run_git(seed, "commit", "-m", "base")
-    _run_git(seed, "remote", "add", "origin", str(origin))
-    _run_git(seed, "push", "-u", "origin", "develop")
-
-    subprocess.run(
-        ["git", "clone", "-b", "develop", str(origin), str(local)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    _run_git(local, "config", "user.name", "CAFE Test")
-    _run_git(local, "config", "user.email", "cafe@example.invalid")
-    _run_git(local, "checkout", "-b", "feature/demo")
-    return seed, local
+from cafe.core.git import GitError, GitOperations
 
 
 class TestGitOperations:
@@ -938,57 +901,3 @@ class TestGitOperations:
 
         with pytest.raises(GitError, match="origin/develop.*not contained in HEAD"):
             git.ensure_remote_base_ancestor("develop", "HEAD")
-
-    def test_merge_remote_base_into_head_updates_a_clean_feature_branch(
-        self, tmp_path: Path
-    ) -> None:
-        seed, local = _remote_feature_checkout(tmp_path)
-        (local / "feature.txt").write_text("feature\n", encoding="utf-8")
-        _run_git(local, "add", "feature.txt")
-        _run_git(local, "commit", "-m", "feature work")
-
-        (seed / "remote.txt").write_text("remote\n", encoding="utf-8")
-        _run_git(seed, "add", "remote.txt")
-        _run_git(seed, "commit", "-m", "remote work")
-        _run_git(seed, "push", "origin", "develop")
-
-        git = GitOperations(str(local))
-
-        assert git.merge_remote_base_into_head("develop") == "origin/develop"
-        assert git.is_ancestor("origin/develop", "HEAD")
-        assert git.run_git("status", "--porcelain") == ""
-        assert (local / "feature.txt").read_text(encoding="utf-8") == "feature\n"
-        assert (local / "remote.txt").read_text(encoding="utf-8") == "remote\n"
-
-    def test_merge_remote_base_into_head_aborts_a_conflicting_merge(
-        self, tmp_path: Path
-    ) -> None:
-        seed, local = _remote_feature_checkout(tmp_path)
-        (local / "shared.txt").write_text("feature\n", encoding="utf-8")
-        _run_git(local, "add", "shared.txt")
-        _run_git(local, "commit", "-m", "feature change")
-
-        (seed / "shared.txt").write_text("remote\n", encoding="utf-8")
-        _run_git(seed, "add", "shared.txt")
-        _run_git(seed, "commit", "-m", "remote change")
-        _run_git(seed, "push", "origin", "develop")
-
-        git = GitOperations(str(local))
-
-        with pytest.raises(RemoteBaseIntegrationError):
-            git.merge_remote_base_into_head("develop")
-
-        assert git.has_in_progress_operation() is False
-        assert git.is_ancestor("origin/develop", "HEAD") is False
-        assert git.run_git("status", "--porcelain") == ""
-
-    def test_merge_remote_base_into_head_refuses_a_dirty_worktree(self, tmp_path: Path) -> None:
-        _seed, local = _remote_feature_checkout(tmp_path)
-        (local / "draft.txt").write_text("uncommitted\n", encoding="utf-8")
-        git = GitOperations(str(local))
-        head_before = git.run_git("rev-parse", "HEAD")
-
-        with pytest.raises(RemoteBaseIntegrationError):
-            git.merge_remote_base_into_head("develop")
-
-        assert git.run_git("rev-parse", "HEAD") == head_before

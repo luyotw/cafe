@@ -1131,7 +1131,7 @@ def test_github_pr_creator_publish_output_runs_sync_pr_script(tmp_path: Path) ->
     assert result.events[1]["success"] is True
 
 
-def test_github_pr_creator_prepares_history_from_integrated_remote_base(tmp_path: Path) -> None:
+def test_github_pr_creator_prepares_history_without_remote_mutation(tmp_path: Path) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     _enable_remote_pr(issue_dir)
     (issue_dir / "issue.yaml").write_text(
@@ -1139,18 +1139,19 @@ def test_github_pr_creator_prepares_history_from_integrated_remote_base(tmp_path
         encoding="utf-8",
     )
     phase = _FakePhase(phase_dir=issue_dir / "pr", iteration=1)
-    phase.git_ops = MagicMock()
+    phase.git_ops = MagicMock(spec=GitOperations)
     phase.git_ops.get_current_branch.return_value = "feature/demo"
-    phase.git_ops.merge_remote_base_into_head.return_value = "origin/develop"
     phase.git_ops.get_commits_between.return_value = "abc123 local base commit"
 
     with patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops:
         mock_github_ops.return_value.get_pr_for_branch.return_value = None
         result = GitHubPRCreator().run(stage="prepare_input", phase=phase)
 
-    phase.git_ops.merge_remote_base_into_head.assert_called_once_with("develop")
-    phase.git_ops.get_commits_between.assert_called_once_with("origin/develop", "HEAD")
+    phase.git_ops.ensure_remote_base_ancestor.assert_not_called()
+    phase.git_ops.run_git.assert_not_called()
+    phase.git_ops.get_commits_between.assert_called_once_with("develop", "HEAD")
     assert result.context_updates["commits"] == "abc123 local base commit"
+    assert result.context_updates["pr_comparison_base"] == "develop"
 
 
 def test_github_pr_creator_local_mode_keeps_existing_pr_metadata_without_fetch(
@@ -1163,7 +1164,7 @@ def test_github_pr_creator_local_mode_keeps_existing_pr_metadata_without_fetch(
         encoding="utf-8",
     )
     phase = _FakePhase(phase_dir=issue_dir / "pr", iteration=1)
-    phase.git_ops = MagicMock()
+    phase.git_ops = MagicMock(spec=GitOperations)
     phase.git_ops.get_current_branch.return_value = "feature/demo"
 
     with patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops:
@@ -1173,7 +1174,8 @@ def test_github_pr_creator_local_mode_keeps_existing_pr_metadata_without_fetch(
         }
         result = GitHubPRCreator().run(stage="prepare_input", phase=phase)
 
-    phase.git_ops.merge_remote_base_into_head.assert_not_called()
+    phase.git_ops.ensure_remote_base_ancestor.assert_not_called()
+    phase.git_ops.run_git.assert_not_called()
     phase.git_ops.get_commits_between.assert_not_called()
     assert result.context_updates == {
         "pr_number": "42",

@@ -1186,7 +1186,7 @@ class GitHubPRCreator(NoOpHook):
             context = kwargs.get("context") or {}
             remote_base = str(context.get("pr_comparison_base") or "").strip()
             if not remote_base:
-                remote_base = phase.git_ops.merge_remote_base_into_head(base_branch)
+                remote_base = base_branch
             context_updates.update(
                 {
                     "commits": str(phase.git_ops.get_commits_between(remote_base, "HEAD")),
