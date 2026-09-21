@@ -51,16 +51,6 @@ _STATUSES = {
     "blocked",
     "unknown",
 }
-_SYMBOLS = {
-    "pending": "○",
-    "in_progress": "▶",
-    "completed": "✓",
-    "returned": "↩",
-    "awaiting_confirmation": "⏸",
-    "skipped": "−",
-    "blocked": "!",
-    "unknown": "？",
-}
 _TEXT = {
     "zh": {
         "missing": "流程尚未建立",
@@ -478,7 +468,7 @@ def _confirmation_statuses(
 
 
 def _line(status: str, label: str, status_text: Mapping[str, str]) -> str:
-    return f"{_SYMBOLS[status]} {label} · {status_text[status]}"
+    return f"{label} · {status_text[status]}"
 
 
 def render_progress(
