@@ -896,6 +896,179 @@ def test_same_phase_task_return_binds_to_persisted_next_iteration(tmp_path: Path
     assert "↩\ufe0e pr · iteration 11 → pr · iteration 12 · Returned" in rendered
 
 
+def test_return_trail_preserves_causal_order_across_targets(tmp_path: Path) -> None:
+    issue_dir = tmp_path / "issue"
+    issue_dir.mkdir()
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "current_step": "A",
+                "events": [
+                    {
+                        "event_type": "step_started",
+                        "step": "C",
+                        "data": {"step": "C", "attempt": 1},
+                    },
+                    {
+                        "event_type": "transition",
+                        "step": "C",
+                        "data": {
+                            "from": "C",
+                            "to": "B",
+                            "status_code": "needs_changes",
+                            "transition_intent": "manual_handoff",
+                        },
+                    },
+                    {
+                        "event_type": "step_started",
+                        "step": "B",
+                        "data": {"step": "B", "attempt": 2},
+                    },
+                    {
+                        "event_type": "step_started",
+                        "step": "C",
+                        "data": {"step": "C", "attempt": 2},
+                    },
+                    {
+                        "event_type": "transition",
+                        "step": "C",
+                        "data": {
+                            "from": "C",
+                            "to": "A",
+                            "status_code": "needs_changes",
+                            "transition_intent": "manual_handoff",
+                        },
+                    },
+                    {
+                        "event_type": "step_started",
+                        "step": "A",
+                        "data": {"step": "A", "attempt": 2},
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rendered = _module().render_progress(
+        playbook={
+            "playbook": {"id": "cross-target"},
+            "steps": {
+                "A": {"on": {"await_agent": "B"}},
+                "B": {"on": {"await_agent": "C"}},
+                "C": {
+                    "on": {"await_agent": "_done", "manual_handoff": "B"},
+                    "allowed_goto": ["A", "B"],
+                },
+            },
+        },
+        contract={},
+        locale="en",
+        issue_dir=issue_dir,
+    )
+
+    first = "↩\ufe0e C · iteration 1 → B · iteration 2 · Returned"
+    second = "↩\ufe0e C · iteration 2 → A · iteration 2 · Returned"
+    assert rendered.index(first) < rendered.index(second)
+
+
+def test_return_trail_interleaves_runtime_and_task_evidence_by_time(tmp_path: Path) -> None:
+    issue_dir = tmp_path / "issue"
+    issue_dir.mkdir()
+    events: list[dict[str, object]] = []
+    for source_iteration, target_iteration, timestamp in (
+        (11, 6, "2026-09-21T10:00:00+00:00"),
+        (13, 7, "2026-09-21T12:00:00+00:00"),
+    ):
+        events.extend(
+            [
+                {
+                    "event_type": "workflow_feedback_delivery_prepared",
+                    "step": "pr",
+                    "data": {"step": "pr", "iteration": {"number": source_iteration}},
+                },
+                {
+                    "event_type": "workflow_feedback_delivered",
+                    "step": "pr",
+                    "data": {"step": "pr", "source_identities": [f"review:{source_iteration}"]},
+                },
+                {
+                    "timestamp": timestamp,
+                    "event_type": "transition",
+                    "step": "pr",
+                    "data": {
+                        "from": "pr",
+                        "to": "develop",
+                        "status_code": "BATON_MANUAL_HANDOFF",
+                        "transition_intent": "manual_handoff",
+                    },
+                },
+                {
+                    "event_type": "step_started",
+                    "step": "develop",
+                    "data": {"step": "develop", "attempt": target_iteration},
+                },
+            ]
+        )
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps({"current_step": "develop", "events": events}), encoding="utf-8"
+    )
+    (issue_dir / "human_tasks.json").write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "task-pr-12",
+                        "step": "pr",
+                        "iteration": 12,
+                        "trigger": "confirm_output",
+                        "status": "completed",
+                        "expected_result": {
+                            "decisions": [{"id": "fix_now", "correction": True}]
+                        },
+                        "continuations": {"fix_now": "develop"},
+                    }
+                ],
+                "results": [
+                    {
+                        "task_id": "task-pr-12",
+                        "completed_at": "2026-09-21T11:00:00+00:00",
+                        "payload": {"decision": "fix_now", "continuation": "develop"},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rendered = _module().render_progress(
+        playbook={
+            "playbook": {"id": "interleaved"},
+            "steps": {
+                "develop": {"on": {"await_agent": "pr"}},
+                "pr": {
+                    "on": {"manual_handoff": "develop"},
+                    "allowed_goto": ["develop"],
+                },
+            },
+        },
+        contract={
+            "confirmation_contract": {
+                "mandatory_human_stops": ["pr"],
+                "driver_confirmable": [],
+                "user_required": [],
+            }
+        },
+        locale="en",
+        issue_dir=issue_dir,
+    )
+
+    first = "↩\ufe0e pr · iteration 11 → develop · iteration 6 · Returned"
+    second = "↩\ufe0e pr · iteration 12 → develop · iteration ? · Returned"
+    third = "↩\ufe0e pr · iteration 13 → develop · iteration 7 · Returned"
+    assert rendered.index(first) < rendered.index(second) < rendered.index(third)
+
+
 def test_forward_feedback_curation_delivery_is_not_a_return(tmp_path: Path) -> None:
     issue_dir = tmp_path / "issue"
     issue_dir.mkdir()

@@ -104,7 +104,14 @@ _TEXT = {
 
 
 class _ReturnEdge:
-    __slots__ = ("source", "target", "source_iteration", "target_iteration")
+    __slots__ = (
+        "source",
+        "target",
+        "source_iteration",
+        "target_iteration",
+        "occurred_at",
+        "sequence",
+    )
 
     def __init__(
         self,
@@ -113,11 +120,15 @@ class _ReturnEdge:
         target: str,
         source_iteration: int | None,
         target_iteration: int | None = None,
+        occurred_at: str | None = None,
+        sequence: int = 0,
     ) -> None:
         self.source = source
         self.target = target
         self.source_iteration = source_iteration
         self.target_iteration = target_iteration
+        self.occurred_at = occurred_at
+        self.sequence = sequence
 
 
 def _iteration_number(value: Any) -> int | None:
@@ -315,7 +326,7 @@ def _runtime_progress(
     if not isinstance(events, list):
         raise ValueError("blackboard events must be a list")
     workflow_finished = str(blackboard.get("current_step", "")) == "done"
-    for event in events:
+    for event_index, event in enumerate(events):
         if not isinstance(event, Mapping):
             continue
         event_type = str(event.get("event_type", event.get("type", "")))
@@ -372,6 +383,13 @@ def _runtime_progress(
                         source=source,
                         target=target,
                         source_iteration=iterations.get(source),
+                        occurred_at=(
+                            str(event["timestamp"])
+                            if isinstance(event.get("timestamp"), str)
+                            and event.get("timestamp")
+                            else None
+                        ),
+                        sequence=event_index,
                     )
                 )
             delivered_feedback_steps.discard(source)
@@ -438,6 +456,11 @@ def _confirmation_statuses(
         str(result.get("task_id")): result
         for result in results
         if isinstance(result, Mapping) and result.get("task_id")
+    }
+    task_sequence = {
+        str(task.get("id")): index
+        for index, task in enumerate(tasks)
+        if isinstance(task, Mapping) and task.get("id")
     }
     latest: dict[str, Mapping[str, Any]] = {}
     for task in tasks:
@@ -514,6 +537,14 @@ def _confirmation_statuses(
                         target=declared_target,
                         source_iteration=source_iteration,
                         target_iteration=target_iteration,
+                        occurred_at=(
+                            str(result["completed_at"])
+                            if isinstance(result, Mapping)
+                            and isinstance(result.get("completed_at"), str)
+                            and result.get("completed_at")
+                            else None
+                        ),
+                        sequence=task_sequence.get(str(task.get("id", "")), 0),
                     )
                 )
                 statuses[step] = "returned"
@@ -563,8 +594,6 @@ def render_progress(
     confirmation_statuses, task_returns = _confirmation_statuses(issue_dir, gate_steps, iterations)
     status_text = text["status"]
 
-    returns_by_target: dict[str, list[str]] = {step: [] for step in steps}
-    unplaced_returns: list[str] = []
     combined_returns = list(runtime_returns)
     for task_edge in task_returns:
         if any(
@@ -575,8 +604,10 @@ def render_progress(
         ):
             continue
         combined_returns.append(task_edge)
-    for edge in combined_returns:
-        return_line = _line(
+    if combined_returns and all(edge.occurred_at is not None for edge in combined_returns):
+        combined_returns.sort(key=lambda edge: (edge.occurred_at or "", edge.sequence))
+    return_lines = [
+        _line(
             "returned",
             (
                 f"{_return_endpoint(edge.source, edge.source_iteration, text)} → "
@@ -584,10 +615,9 @@ def render_progress(
             ),
             status_text,
         )
-        if edge.target in returns_by_target:
-            returns_by_target[edge.target].append(return_line)
-        else:
-            unplaced_returns.append(return_line)
+        for edge in combined_returns
+    ]
+    return_trail_target = combined_returns[-1].target if combined_returns else None
 
     phase_blocks: list[tuple[str, list[str]]] = []
     for step in _phase_order(model):
@@ -615,7 +645,8 @@ def render_progress(
                     status_text,
                 )
             )
-        block.extend(returns_by_target[step])
+        if step == return_trail_target:
+            block.extend(return_lines)
         phase_blocks.append((step, block))
 
     body = ""
@@ -626,8 +657,8 @@ def render_progress(
             body += separator
         body += "\n│\n".join(block)
         previous_step = step
-    if unplaced_returns:
-        body += ("\n\n" if body else "") + "\n│\n".join(unplaced_returns)
+    if return_lines and return_trail_target not in steps:
+        body += ("\n\n" if body else "") + "\n│\n".join(return_lines)
     for item in include_closeout:
         closeout_line = _line(
             closeout.get(item, "unknown"),

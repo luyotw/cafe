@@ -23,11 +23,14 @@ Stdout is a compact vertical execution spine. Each node carries a readable text
 status symbol plus its localized status text. Renderer-owned status markers use
 text presentation, never emoji presentation; ambiguous Unicode symbols are
 forced to text with variation selector 15. Proactive-review and confirmation
-checkpoints immediately follow their owning phase, and durable correction
-arrows stay with the phase they re-enter. Each correction arrow labels the
-source and target iterations captured from its causal runtime events; an
-endpoint without durable iteration evidence is shown as `?`, never inferred
-from the phase's latest iteration. Repeated returns remain in event order. The
+checkpoints immediately follow their owning phase. Durable correction arrows
+form one chronological trail attached to the latest phase they re-enter, so
+static phase order cannot reorder returns with different targets. Runtime and
+HumanTask arrows are interleaved by their durable timestamps when every arrow
+has one; otherwise their source order is preserved rather than guessed. Each
+correction arrow labels its own target plus the source and target iterations
+captured from its causal runtime events. An endpoint without durable iteration
+evidence is shown as `?`, never inferred from the phase's latest iteration. The
 renderer intentionally omits raw `on`/`allowed_goto` route dumps and a separate
 always-on legend. The effective graph is still authoritative for phase
 traversal, status, and correction interpretation. Sibling branches and phases
