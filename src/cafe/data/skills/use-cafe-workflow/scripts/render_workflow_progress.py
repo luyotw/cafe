@@ -9,7 +9,6 @@ import os
 import shlex
 import shutil
 import sys
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -104,60 +103,10 @@ _TEXT = {
 }
 
 
-class _ReturnEdge:
-    __slots__ = (
-        "source",
-        "target",
-        "source_iteration",
-        "target_iteration",
-        "occurred_at",
-    )
-
-    def __init__(
-        self,
-        *,
-        source: str,
-        target: str,
-        source_iteration: int | None,
-        target_iteration: int | None = None,
-        occurred_at: str | None = None,
-    ) -> None:
-        self.source = source
-        self.target = target
-        self.source_iteration = source_iteration
-        self.target_iteration = target_iteration
-        self.occurred_at = occurred_at
-
-
 def _iteration_number(value: Any) -> int | None:
     if isinstance(value, Mapping):
         value = value.get("number")
     return value if isinstance(value, int) and value > 0 else None
-
-
-def _ordered_returns(edges: list[_ReturnEdge]) -> list[_ReturnEdge]:
-    """Order fully timestamped evidence by instant, or preserve source order."""
-    instants: list[datetime] = []
-    for edge in edges:
-        if edge.occurred_at is None:
-            return edges
-        try:
-            timestamp = edge.occurred_at
-            if timestamp.endswith("Z"):
-                timestamp = timestamp[:-1] + "+00:00"
-            instant = datetime.fromisoformat(timestamp)
-        except ValueError:
-            return edges
-        if instant.tzinfo is None or instant.utcoffset() is None:
-            return edges
-        instants.append(instant)
-    return [
-        edge
-        for _, edge in sorted(
-            zip(instants, edges, strict=True),
-            key=lambda item: item[0],
-        )
-    ]
 
 
 def _language(locale: str) -> str:
@@ -333,18 +282,17 @@ def _phase_order(playbook: Mapping[str, Any]) -> list[str]:
 
 def _runtime_progress(
     issue_dir: Path | None, playbook: Mapping[str, Any]
-) -> tuple[dict[str, str], dict[str, int], list[_ReturnEdge]]:
+) -> tuple[dict[str, str], dict[str, int]]:
     steps = list(playbook["steps"])
     statuses = {step: "pending" for step in steps}
     iterations: dict[str, int] = {}
-    returns: list[_ReturnEdge] = []
     terminal_evidence: set[str] = set()
     delivered_feedback_steps: set[str] = set()
     if issue_dir is None:
-        return statuses, iterations, returns
+        return statuses, iterations
     blackboard = _read_json(issue_dir / "blackboard.json")
     if blackboard is None:
-        return statuses, iterations, returns
+        return statuses, iterations
     events = blackboard.get("events", [])
     if not isinstance(events, list):
         raise ValueError("blackboard events must be a list")
@@ -366,10 +314,6 @@ def _runtime_progress(
                 statuses[step] = "in_progress"
                 terminal_evidence.discard(step)
                 delivered_feedback_steps.discard(step)
-                for edge in returns:
-                    if edge.target == step and edge.target_iteration is None:
-                        edge.target_iteration = event_iteration
-                        break
             elif event_type in {"step_completed", "single_step_completed"}:
                 statuses[step] = "completed"
                 terminal_evidence.discard(step)
@@ -401,19 +345,8 @@ def _runtime_progress(
                 and transition_intent == "manual_handoff"
                 and (status_code in {"needs_changes", "rejected"} or delivered_correction)
             ):
-                returns.append(
-                    _ReturnEdge(
-                        source=source,
-                        target=target,
-                        source_iteration=iterations.get(source),
-                        occurred_at=(
-                            str(event["timestamp"])
-                            if isinstance(event.get("timestamp"), str)
-                            and event.get("timestamp")
-                            else None
-                        ),
-                    )
-                )
+                statuses[source] = "returned"
+                terminal_evidence.add(source)
             delivered_feedback_steps.discard(source)
         if event_type == "workflow_completed":
             workflow_finished = True
@@ -455,21 +388,20 @@ def _runtime_progress(
         statuses = {
             step: "skipped" if status == "pending" else status for step, status in statuses.items()
         }
-    return statuses, iterations, returns
+    return statuses, iterations
 
 
 def _confirmation_statuses(
     issue_dir: Path | None,
     gate_steps: set[str],
     phase_iterations: Mapping[str, int],
-) -> tuple[dict[str, str], list[_ReturnEdge]]:
+) -> dict[str, str]:
     statuses = {step: "pending" for step in gate_steps}
-    returns: list[_ReturnEdge] = []
     if issue_dir is None:
-        return statuses, returns
+        return statuses
     records = _read_json(issue_dir / "human_tasks.json")
     if records is None:
-        return statuses, returns
+        return statuses
     tasks = records.get("tasks", [])
     results = records.get("results", [])
     if not isinstance(tasks, list) or not isinstance(results, list):
@@ -541,45 +473,16 @@ def _confirmation_statuses(
                 continue
             correction = matched.get("correction") is True
             if correction:
-                source_iteration = _iteration_number(task_iteration)
-                target_iteration = None
-                if source_iteration is not None and declared_target == step:
-                    next_iteration = source_iteration + 1
-                    next_iteration_dir = issue_dir / step / f"iteration_{next_iteration:03d}"
-                    if next_iteration_dir.is_dir():
-                        target_iteration = next_iteration
-                returns.append(
-                    _ReturnEdge(
-                        source=step,
-                        target=declared_target,
-                        source_iteration=source_iteration,
-                        target_iteration=target_iteration,
-                        occurred_at=(
-                            str(result["completed_at"])
-                            if isinstance(result, Mapping)
-                            and isinstance(result.get("completed_at"), str)
-                            and result.get("completed_at")
-                            else None
-                        ),
-                    )
-                )
                 statuses[step] = "returned"
             else:
                 statuses[step] = "completed"
         if isinstance(task_iteration, int) and phase_iterations.get(step, 0) > task_iteration:
             statuses[step] = "pending"
-    return statuses, returns
+    return statuses
 
 
 def _line(status: str, label: str, status_text: Mapping[str, str]) -> str:
     return f"{_TEXT_STATUS_SYMBOLS[status]} {label} · {status_text[status]}"
-
-
-def _return_endpoint(step: str, iteration: int | None, text: Mapping[str, Any]) -> str:
-    rendered_iteration = str(text["iteration"]).format(
-        iteration=iteration if iteration is not None else "?"
-    )
-    return f"{step} · {rendered_iteration}"
 
 
 def render_progress(
@@ -604,35 +507,11 @@ def render_progress(
     invalid_closeout = set(include_closeout) - {"deliver", "close"}
     if invalid_closeout:
         raise ValueError(f"unknown closeout item: {sorted(invalid_closeout)[0]}")
-    phase_statuses, iterations, runtime_returns = _runtime_progress(issue_dir, model)
+    phase_statuses, iterations = _runtime_progress(issue_dir, model)
     user_required, driver_confirmable, mandatory = _confirmation_contract(policy)
     gate_steps = (user_required | driver_confirmable | mandatory) & set(steps)
-    confirmation_statuses, task_returns = _confirmation_statuses(issue_dir, gate_steps, iterations)
+    confirmation_statuses = _confirmation_statuses(issue_dir, gate_steps, iterations)
     status_text = text["status"]
-
-    combined_returns = list(runtime_returns)
-    for task_edge in task_returns:
-        if any(
-            edge.source == task_edge.source
-            and edge.target == task_edge.target
-            and edge.source_iteration == task_edge.source_iteration
-            for edge in runtime_returns
-        ):
-            continue
-        combined_returns.append(task_edge)
-    combined_returns = _ordered_returns(combined_returns)
-    return_lines = [
-        _line(
-            "returned",
-            (
-                f"{_return_endpoint(edge.source, edge.source_iteration, text)} → "
-                f"{_return_endpoint(edge.target, edge.target_iteration, text)}"
-            ),
-            status_text,
-        )
-        for edge in combined_returns
-    ]
-    return_trail_target = combined_returns[-1].target if combined_returns else None
 
     phase_blocks: list[tuple[str, list[str]]] = []
     for step in _phase_order(model):
@@ -660,8 +539,6 @@ def render_progress(
                     status_text,
                 )
             )
-        if step == return_trail_target:
-            block.extend(return_lines)
         phase_blocks.append((step, block))
 
     body = ""
@@ -672,8 +549,6 @@ def render_progress(
             body += separator
         body += "\n│\n".join(block)
         previous_step = step
-    if return_lines and return_trail_target not in steps:
-        body += ("\n\n" if body else "") + "\n│\n".join(return_lines)
     for item in include_closeout:
         closeout_line = _line(
             closeout.get(item, "unknown"),

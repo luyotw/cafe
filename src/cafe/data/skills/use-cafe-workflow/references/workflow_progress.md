@@ -23,16 +23,13 @@ Stdout is a compact vertical execution spine. Each node carries a readable text
 status symbol plus its localized status text. Renderer-owned status markers use
 text presentation, never emoji presentation; ambiguous Unicode symbols are
 forced to text with variation selector 15. Proactive-review and confirmation
-checkpoints immediately follow their owning phase. Durable correction arrows
-form one chronological trail attached to the latest phase they re-enter, so
-static phase order cannot reorder returns with different targets. Runtime and
-HumanTask arrows are interleaved by the absolute instants represented by their
-durable, timezone-aware timestamps when every arrow has a valid one; otherwise
-their source order is preserved rather than guessed. Equal instants retain
-their stable source order. Each
-correction arrow labels its own target plus the source and target iterations
-captured from its causal runtime events. An endpoint without durable iteration
-evidence is shown as `?`, never inferred from the phase's latest iteration. The
+checkpoints immediately follow their owning phase. The default diagram is a
+latest-state projection: it shows each phase's newest durable status and the
+Driver-review or user-confirmation checkpoint currently represented for that
+phase. The default projection never adds correction arrows or a historical
+trail; later iteration evidence supersedes earlier states. If a phase's newest
+durable state is itself returned, the phase line uses the returned symbol and
+status. The
 renderer intentionally omits raw `on`/`allowed_goto` route dumps and a separate
 always-on legend. The effective graph is still authoritative for phase
 traversal, status, and correction interpretation. Sibling branches and phases
@@ -84,8 +81,9 @@ python3 <skill-dir>/scripts/render_workflow_progress.py \
   --project-root <repo> --issue-dir <repo>/.cafe/issues/<issue> --locale en
 ```
 
-For a formal return, again pass no return override. The completed task outcome,
-continuation, current iteration, and durable transition produce the return edge:
+For a formal return, again pass no return override. The completed task outcome
+or durable transition updates the latest phase/checkpoint status; the renderer
+does not add a historical return arrow:
 
 ```bash
 python3 <skill-dir>/scripts/render_workflow_progress.py \
