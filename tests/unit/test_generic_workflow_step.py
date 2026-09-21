@@ -6738,6 +6738,65 @@ def test_workspace_companion_uses_custom_names_and_runtime_storage(tmp_path: Pat
     ).valid
 
 
+def test_workspace_companion_uses_merge_base_when_configured_base_diverges(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-b", "develop"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True)
+    (repo / ".gitignore").write_text(".cafe/\n", encoding="utf-8")
+    (repo / "tracked.txt").write_text("initial\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, check=True, capture_output=True)
+    initial = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+    subprocess.run(["git", "checkout", "-b", "feature"], cwd=repo, check=True, capture_output=True)
+    (repo / "tracked.txt").write_text("feature\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "feature work"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "checkout", "develop"], cwd=repo, check=True, capture_output=True)
+    (repo / "base-only.txt").write_text("advanced base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "base-only.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "advance base"], cwd=repo, check=True, capture_output=True)
+    configured_base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    subprocess.run(["git", "checkout", "feature"], cwd=repo, check=True, capture_output=True)
+
+    issue_dir = repo / ".cafe/issues/custom"
+    output = issue_dir / "develop" / "iteration_001" / "output.md"
+    output.parent.mkdir(parents=True)
+    output.write_text("producer summary\n", encoding="utf-8")
+    (issue_dir / "issue.yaml").write_text("base_branch: develop\n", encoding="utf-8")
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="custom",
+        playbook={"steps": {}},
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=FakeAgentManager("done"),
+        git_ops=GitOperations(str(repo)),
+        role_agent_map={"developer": "David"},
+    )
+    state = BlackboardStore(issue_dir).load_or_create("develop")
+
+    workspace_path, metadata = executor._publish_workspace_artifact(
+        step_name="develop",
+        step_def={"output_artifact": "summary_doc", "workspace_artifact": "verified_snapshot"},
+        output_file=output,
+        blackboard_state=state,
+    )
+
+    assert metadata["base_sha"] == initial
+    assert metadata["base_sha"] != configured_base
+    assert verify_workspace_artifact(
+        json.loads(Path(workspace_path).read_text(encoding="utf-8")), repo=repo
+    ).valid
+
+
 def test_current_workspace_consumer_fails_closed_when_companion_is_missing(tmp_path: Path) -> None:
     executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
     with pytest.raises(ValueError, match="required workspace artifact"):
