@@ -103,6 +103,29 @@ _TEXT = {
 }
 
 
+class _ReturnEdge:
+    __slots__ = ("source", "target", "source_iteration", "target_iteration")
+
+    def __init__(
+        self,
+        *,
+        source: str,
+        target: str,
+        source_iteration: int | None,
+        target_iteration: int | None = None,
+    ) -> None:
+        self.source = source
+        self.target = target
+        self.source_iteration = source_iteration
+        self.target_iteration = target_iteration
+
+
+def _iteration_number(value: Any) -> int | None:
+    if isinstance(value, Mapping):
+        value = value.get("number")
+    return value if isinstance(value, int) and value > 0 else None
+
+
 def _language(locale: str) -> str:
     token = locale.strip().lower().replace("_", "-")
     return "zh" if token == "zh-tw" or token.startswith("zh-hant") else "en"
@@ -276,11 +299,11 @@ def _phase_order(playbook: Mapping[str, Any]) -> list[str]:
 
 def _runtime_progress(
     issue_dir: Path | None, playbook: Mapping[str, Any]
-) -> tuple[dict[str, str], dict[str, int], list[tuple[str, str]]]:
+) -> tuple[dict[str, str], dict[str, int], list[_ReturnEdge]]:
     steps = list(playbook["steps"])
     statuses = {step: "pending" for step in steps}
     iterations: dict[str, int] = {}
-    returns: list[tuple[str, str]] = []
+    returns: list[_ReturnEdge] = []
     terminal_evidence: set[str] = set()
     delivered_feedback_steps: set[str] = set()
     if issue_dir is None:
@@ -299,14 +322,20 @@ def _runtime_progress(
         data = event.get("data", {})
         data = data if isinstance(data, Mapping) else {}
         step = str(data.get("step", event.get("step", "")))
+        event_iteration = _iteration_number(data.get("iteration")) or _iteration_number(
+            data.get("attempt")
+        )
         if step in statuses:
-            raw_iteration = data.get("iteration", data.get("attempt"))
-            if isinstance(raw_iteration, int) and raw_iteration > 0:
-                iterations[step] = max(iterations.get(step, 0), raw_iteration)
+            if event_iteration is not None:
+                iterations[step] = max(iterations.get(step, 0), event_iteration)
             if event_type == "step_started":
                 statuses[step] = "in_progress"
                 terminal_evidence.discard(step)
                 delivered_feedback_steps.discard(step)
+                for edge in returns:
+                    if edge.target == step and edge.target_iteration is None:
+                        edge.target_iteration = event_iteration
+                        break
             elif event_type in {"step_completed", "single_step_completed"}:
                 statuses[step] = "completed"
                 terminal_evidence.discard(step)
@@ -338,9 +367,13 @@ def _runtime_progress(
                 and transition_intent == "manual_handoff"
                 and (status_code in {"needs_changes", "rejected"} or delivered_correction)
             ):
-                edge = (source, target)
-                if edge not in returns:
-                    returns.append(edge)
+                returns.append(
+                    _ReturnEdge(
+                        source=source,
+                        target=target,
+                        source_iteration=iterations.get(source),
+                    )
+                )
             delivered_feedback_steps.discard(source)
         if event_type == "workflow_completed":
             workflow_finished = True
@@ -389,9 +422,9 @@ def _confirmation_statuses(
     issue_dir: Path | None,
     gate_steps: set[str],
     phase_iterations: Mapping[str, int],
-) -> tuple[dict[str, str], list[tuple[str, str]]]:
+) -> tuple[dict[str, str], list[_ReturnEdge]]:
     statuses = {step: "pending" for step in gate_steps}
-    returns: list[tuple[str, str]] = []
+    returns: list[_ReturnEdge] = []
     if issue_dir is None:
         return statuses, returns
     records = _read_json(issue_dir / "human_tasks.json")
@@ -468,7 +501,21 @@ def _confirmation_statuses(
                 continue
             correction = matched.get("correction") is True
             if correction:
-                returns.append((step, declared_target))
+                source_iteration = _iteration_number(task_iteration)
+                target_iteration = None
+                if source_iteration is not None and declared_target == step:
+                    next_iteration = source_iteration + 1
+                    next_iteration_dir = issue_dir / step / f"iteration_{next_iteration:03d}"
+                    if next_iteration_dir.is_dir():
+                        target_iteration = next_iteration
+                returns.append(
+                    _ReturnEdge(
+                        source=step,
+                        target=declared_target,
+                        source_iteration=source_iteration,
+                        target_iteration=target_iteration,
+                    )
+                )
                 statuses[step] = "returned"
             else:
                 statuses[step] = "completed"
@@ -479,6 +526,13 @@ def _confirmation_statuses(
 
 def _line(status: str, label: str, status_text: Mapping[str, str]) -> str:
     return f"{_TEXT_STATUS_SYMBOLS[status]} {label} · {status_text[status]}"
+
+
+def _return_endpoint(step: str, iteration: int | None, text: Mapping[str, Any]) -> str:
+    rendered_iteration = str(text["iteration"]).format(
+        iteration=iteration if iteration is not None else "?"
+    )
+    return f"{step} · {rendered_iteration}"
 
 
 def render_progress(
@@ -511,15 +565,27 @@ def render_progress(
 
     returns_by_target: dict[str, list[str]] = {step: [] for step in steps}
     unplaced_returns: list[str] = []
-    seen_returns: set[tuple[str, str]] = set()
-    for source, target in [*runtime_returns, *task_returns]:
-        edge = (source, target)
-        if edge in seen_returns:
+    combined_returns = list(runtime_returns)
+    for task_edge in task_returns:
+        if any(
+            edge.source == task_edge.source
+            and edge.target == task_edge.target
+            and edge.source_iteration == task_edge.source_iteration
+            for edge in runtime_returns
+        ):
             continue
-        seen_returns.add(edge)
-        return_line = _line("returned", f"{source} → {target}", status_text)
-        if target in returns_by_target:
-            returns_by_target[target].append(return_line)
+        combined_returns.append(task_edge)
+    for edge in combined_returns:
+        return_line = _line(
+            "returned",
+            (
+                f"{_return_endpoint(edge.source, edge.source_iteration, text)} → "
+                f"{_return_endpoint(edge.target, edge.target_iteration, text)}"
+            ),
+            status_text,
+        )
+        if edge.target in returns_by_target:
+            returns_by_target[edge.target].append(return_line)
         else:
             unplaced_returns.append(return_line)
 

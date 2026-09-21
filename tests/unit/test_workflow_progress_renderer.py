@@ -206,11 +206,11 @@ def test_renderer_uses_current_iteration_and_revise_outcome_as_return_evidence(
 
     assert "▶\ufe0e 資料盤點 · 第 2 輪 · 進行中" in rendered
     assert "↩\ufe0e publish-draft：使用者確認（driver 不可代理） · 已退回" in rendered
-    assert "↩\ufe0e publish-draft → 資料盤點 · 已退回" in rendered
+    assert "↩\ufe0e publish-draft · 第 1 輪 → 資料盤點 · 第 ? 輪 · 已退回" in rendered
     assert "✓ publish-draft：使用者確認（driver 不可代理） · 已完成" not in rendered
     assert (
         rendered.index("▶\ufe0e 資料盤點")
-        < rendered.index("↩\ufe0e publish-draft → 資料盤點")
+        < rendered.index("↩\ufe0e publish-draft · 第 1 輪 → 資料盤點 · 第 ? 輪")
         < rendered.index("✓ publish-draft")
     )
     assert before == {path: path.read_bytes() for path in before}
@@ -426,7 +426,7 @@ def test_previous_revision_does_not_approve_the_new_iteration(tmp_path: Path) ->
 
     assert "○ publish-draft: user confirmation (driver may not act) · Pending" in rendered
     assert "✓ publish-draft: user confirmation (driver may not act) · Completed" not in rendered
-    assert "↩\ufe0e publish-draft → 資料盤點 · Returned" in rendered
+    assert "↩\ufe0e publish-draft · iteration 1 → 資料盤點 · iteration ? · Returned" in rendered
 
 
 def test_cli_without_confirmed_contract_reports_unestablished_workflow(tmp_path: Path) -> None:
@@ -695,7 +695,7 @@ def test_declared_correction_manual_handoff_is_a_formal_return(tmp_path: Path) -
         issue_dir=issue_dir,
     )
 
-    assert "↩\ufe0e review → develop · Returned" in rendered
+    assert "↩\ufe0e review · iteration ? → develop · iteration ? · Returned" in rendered
 
 
 def test_delivered_pr_feedback_baton_is_a_formal_return(tmp_path: Path) -> None:
@@ -760,7 +760,140 @@ def test_delivered_pr_feedback_baton_is_a_formal_return(tmp_path: Path) -> None:
         issue_dir=issue_dir,
     )
 
-    assert "↩\ufe0e pr → develop · Returned" in rendered
+    assert "↩\ufe0e pr · iteration 2 → develop · iteration ? · Returned" in rendered
+
+
+def test_return_edges_bind_iterations_and_preserve_causal_order(tmp_path: Path) -> None:
+    issue_dir = tmp_path / "issue"
+    issue_dir.mkdir()
+    events: list[dict[str, object]] = []
+    for source_iteration, target_iteration in ((11, 6), (12, 7)):
+        events.extend(
+            [
+                {
+                    "event_type": "workflow_feedback_delivery_prepared",
+                    "step": "pr",
+                    "data": {
+                        "step": "pr",
+                        "iteration": {
+                            "directory": f"pr/iteration_{source_iteration:03d}",
+                            "number": source_iteration,
+                        },
+                        "source_identities": [f"local_review:pr:{source_iteration}"],
+                    },
+                },
+                {
+                    "event_type": "workflow_feedback_delivered",
+                    "step": "pr",
+                    "data": {
+                        "step": "pr",
+                        "source_identities": [f"local_review:pr:{source_iteration}"],
+                    },
+                },
+                {
+                    "event_type": "transition",
+                    "step": "pr",
+                    "data": {
+                        "from": "pr",
+                        "to": "develop",
+                        "status_code": "BATON_MANUAL_HANDOFF",
+                        "transition_intent": "manual_handoff",
+                    },
+                },
+                {
+                    "event_type": "step_started",
+                    "step": "develop",
+                    "data": {"step": "develop", "attempt": target_iteration},
+                },
+            ]
+        )
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps({"current_step": "develop", "events": events}),
+        encoding="utf-8",
+    )
+
+    rendered = _module().render_progress(
+        playbook={
+            "playbook": {"id": "direct"},
+            "steps": {
+                "develop": {"on": {"await_agent": "pr"}},
+                "pr": {
+                    "behavior": {
+                        "feedback_target": "pr",
+                        "feedback_artifact": "workflow_feedback",
+                        "feedback_source_kind": "local_review",
+                        "feedback_todo_source": "pr_comment",
+                        "feedback_todo_id_prefix": "REV",
+                    },
+                    "on": {"manual_handoff": "develop"},
+                    "allowed_goto": ["develop"],
+                },
+            },
+        },
+        contract={},
+        locale="en",
+        issue_dir=issue_dir,
+    )
+
+    first = "↩\ufe0e pr · iteration 11 → develop · iteration 6 · Returned"
+    second = "↩\ufe0e pr · iteration 12 → develop · iteration 7 · Returned"
+    assert first in rendered
+    assert second in rendered
+    assert rendered.index(first) < rendered.index(second)
+
+
+def test_same_phase_task_return_binds_to_persisted_next_iteration(tmp_path: Path) -> None:
+    issue_dir = tmp_path / "issue"
+    for iteration in (11, 12):
+        iteration_dir = issue_dir / "pr" / f"iteration_{iteration:03d}"
+        iteration_dir.mkdir(parents=True)
+        (iteration_dir / "iteration.json").write_text(
+            json.dumps({"iteration": iteration}), encoding="utf-8"
+        )
+    (issue_dir / "human_tasks.json").write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "task-pr-11",
+                        "step": "pr",
+                        "iteration": 11,
+                        "trigger": "confirm_output",
+                        "status": "completed",
+                        "expected_result": {
+                            "decisions": [{"id": "fix_now", "correction": True}]
+                        },
+                        "continuations": {"fix_now": "pr"},
+                    }
+                ],
+                "results": [
+                    {
+                        "task_id": "task-pr-11",
+                        "payload": {"decision": "fix_now", "continuation": "pr"},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rendered = _module().render_progress(
+        playbook={
+            "playbook": {"id": "single-pr"},
+            "steps": {"pr": {"on": {"await_agent": "_done"}}},
+        },
+        contract={
+            "confirmation_contract": {
+                "mandatory_human_stops": ["pr"],
+                "driver_confirmable": [],
+                "user_required": [],
+            }
+        },
+        locale="en",
+        issue_dir=issue_dir,
+    )
+
+    assert "↩\ufe0e pr · iteration 11 → pr · iteration 12 · Returned" in rendered
 
 
 def test_forward_feedback_curation_delivery_is_not_a_return(tmp_path: Path) -> None:

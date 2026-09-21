@@ -24,12 +24,16 @@ status symbol plus its localized status text. Renderer-owned status markers use
 text presentation, never emoji presentation; ambiguous Unicode symbols are
 forced to text with variation selector 15. Proactive-review and confirmation
 checkpoints immediately follow their owning phase, and durable correction
-arrows stay with the phase they re-enter. The renderer intentionally omits raw
-`on`/`allowed_goto` route dumps and a separate always-on legend. The effective
-graph is still authoritative for phase traversal, status, and correction
-interpretation. Sibling branches and phases unreachable from the entry point
-are separated rather than joined by a false spine edge. Omitting route
-declarations from the presentation does not change runtime routing.
+arrows stay with the phase they re-enter. Each correction arrow labels the
+source and target iterations captured from its causal runtime events; an
+endpoint without durable iteration evidence is shown as `?`, never inferred
+from the phase's latest iteration. Repeated returns remain in event order. The
+renderer intentionally omits raw `on`/`allowed_goto` route dumps and a separate
+always-on legend. The effective graph is still authoritative for phase
+traversal, status, and correction interpretation. Sibling branches and phases
+unreachable from the entry point are separated rather than joined by a false
+spine edge. Omitting route declarations from the presentation does not change
+runtime routing.
 
 Driver-only display state is one JSON object with only these fields:
 
