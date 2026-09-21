@@ -19,16 +19,17 @@ Step keys are always preserved exactly. `deliver` and `close` are optional
 Driver closeout items, not runtime phases: include each only with its explicit
 flag. A playbook phase with the same name remains a separate unqualified node.
 
-Stdout is a compact vertical execution spine. Each node carries its localized
-status inline as plain text, without emoji or symbolic status markers;
-proactive-review and confirmation checkpoints immediately follow their owning
-phase, and durable correction arrows stay with the phase they re-enter. The
-renderer intentionally omits raw `on`/`allowed_goto` route dumps and a separate
-always-on legend. The effective graph is still authoritative for phase
-traversal, status, and correction interpretation. Sibling branches and phases
-unreachable from the entry point are separated rather than joined by a false
-spine edge. Omitting route declarations from the presentation does not change
-runtime routing.
+Stdout is a compact vertical execution spine. Each node carries a readable text
+status symbol plus its localized status text. Renderer-owned status markers use
+text presentation, never emoji presentation; ambiguous Unicode symbols are
+forced to text with variation selector 15. Proactive-review and confirmation
+checkpoints immediately follow their owning phase, and durable correction
+arrows stay with the phase they re-enter. The renderer intentionally omits raw
+`on`/`allowed_goto` route dumps and a separate always-on legend. The effective
+graph is still authoritative for phase traversal, status, and correction
+interpretation. Sibling branches and phases unreachable from the entry point
+are separated rather than joined by a false spine edge. Omitting route
+declarations from the presentation does not change runtime routing.
 
 Driver-only display state is one JSON object with only these fields:
 

@@ -173,16 +173,16 @@ def test_renderer_preserves_custom_phase_names_and_localizes_only_annotations() 
         include_closeout=("deliver", "close"),
     )
 
-    assert "資料盤點 · 待執行" in rendered
-    assert "publish-draft · 待執行" in rendered
+    assert "○ 資料盤點 · 待執行" in rendered
+    assert "○ publish-draft · 待執行" in rendered
     assert (
-        "publish-draft · 待執行\n│\n"
-        "publish-draft：driver 主動審查 · 進行中\n│\n"
-        "publish-draft：使用者確認（driver 不可代理） · 待執行"
+        "○ publish-draft · 待執行\n│\n"
+        "▶\ufe0e publish-draft：driver 主動審查 · 進行中\n│\n"
+        "○ publish-draft：使用者確認（driver 不可代理） · 待執行"
     ) in rendered
-    assert "deliver（收尾） · 狀態未知" in rendered
-    assert "close（收尾） · 狀態未知" in rendered
-    assert not any(marker in rendered for marker in ("○", "▶", "✓", "↩", "⏸", "−", "!", "？"))
+    assert "？ deliver（收尾） · 狀態未知" in rendered
+    assert "？ close（收尾） · 狀態未知" in rendered
+    assert "\ufe0f" not in rendered
     assert "資料盤點" in rendered and "publish-draft" in rendered
 
 
@@ -204,14 +204,14 @@ def test_renderer_uses_current_iteration_and_revise_outcome_as_return_evidence(
         driver_state={"proactive_review": {"publish-draft": "completed"}},
     )
 
-    assert "資料盤點 · 第 2 輪 · 進行中" in rendered
-    assert "publish-draft：使用者確認（driver 不可代理） · 已退回" in rendered
-    assert "publish-draft → 資料盤點 · 已退回" in rendered
-    assert "publish-draft：使用者確認（driver 不可代理） · 已完成" not in rendered
+    assert "▶\ufe0e 資料盤點 · 第 2 輪 · 進行中" in rendered
+    assert "↩\ufe0e publish-draft：使用者確認（driver 不可代理） · 已退回" in rendered
+    assert "↩\ufe0e publish-draft → 資料盤點 · 已退回" in rendered
+    assert "✓ publish-draft：使用者確認（driver 不可代理） · 已完成" not in rendered
     assert (
-        rendered.index("資料盤點 · 第 2 輪")
-        < rendered.index("publish-draft → 資料盤點")
-        < rendered.index("publish-draft · 已完成")
+        rendered.index("▶\ufe0e 資料盤點")
+        < rendered.index("↩\ufe0e publish-draft → 資料盤點")
+        < rendered.index("✓ publish-draft")
     )
     assert before == {path: path.read_bytes() for path in before}
 
@@ -265,11 +265,11 @@ def test_closeout_visibility_is_explicit_and_custom_same_named_phase_is_distinct
         include_closeout=("deliver", "close"),
     )
 
-    assert "deliver (closeout) · Completed" not in hidden
-    assert "deliver · Pending" in hidden
-    assert "deliver · Pending\n│" in shown
-    assert "deliver (closeout) · Completed" in shown
-    assert "close (closeout) · Pending" in shown
+    assert "✓ deliver (closeout) · Completed" not in hidden
+    assert "○ deliver · Pending" in hidden
+    assert "○ deliver · Pending\n│" in shown
+    assert "✓ deliver (closeout) · Completed" in shown
+    assert "○ close (closeout) · Pending" in shown
 
 
 def test_renderer_reports_missing_workflow_without_inventing_success() -> None:
@@ -329,10 +329,11 @@ def test_pending_confirmation_blocked_and_skipped_use_durable_evidence(tmp_path:
         issue_dir=issue_dir,
     )
 
-    assert "資料盤點 · iteration 2 · Blocked" in rendered
-    assert "publish-draft · Skipped" in rendered
+    assert "! 資料盤點 · iteration 2 · Blocked" in rendered
+    assert "− publish-draft · Skipped" in rendered
     assert (
-        "publish-draft: user confirmation (driver may not act) · Awaiting confirmation" in rendered
+        "⏸\ufe0e publish-draft: user confirmation (driver may not act) · Awaiting confirmation"
+        in rendered
     )
 
 
@@ -402,10 +403,11 @@ def test_direct_playbook_and_archived_issue_cli_are_supported(tmp_path: Path) ->
     )
 
     assert result.returncode == 0, result.stderr
-    assert "develop · Completed" in result.stdout
-    assert "pr · In progress" in result.stdout
-    assert "deliver (closeout) · Completed" in result.stdout
-    assert "close (closeout) · Completed" in result.stdout
+    assert "✓ develop · Completed" in result.stdout
+    assert "▶\ufe0e pr · In progress" in result.stdout
+    assert "✓ deliver (closeout) · Completed" in result.stdout
+    assert "✓ close (closeout) · Completed" in result.stdout
+    assert "\ufe0f" not in result.stdout
 
 
 def test_previous_revision_does_not_approve_the_new_iteration(tmp_path: Path) -> None:
@@ -422,9 +424,9 @@ def test_previous_revision_does_not_approve_the_new_iteration(tmp_path: Path) ->
         issue_dir=issue_dir,
     )
 
-    assert "publish-draft: user confirmation (driver may not act) · Pending" in rendered
-    assert "publish-draft: user confirmation (driver may not act) · Completed" not in rendered
-    assert "publish-draft → 資料盤點 · Returned" in rendered
+    assert "○ publish-draft: user confirmation (driver may not act) · Pending" in rendered
+    assert "✓ publish-draft: user confirmation (driver may not act) · Completed" not in rendered
+    assert "↩\ufe0e publish-draft → 資料盤點 · Returned" in rendered
 
 
 def test_cli_without_confirmed_contract_reports_unestablished_workflow(tmp_path: Path) -> None:
@@ -487,11 +489,11 @@ def test_compact_spine_omits_raw_routes_without_inventing_a_return(tmp_path: Pat
     assert "↩ C → B" not in rendered
     assert "await_agent →" not in rendered
     assert rendered.splitlines() == [
-        "A · Pending",
+        "○ A · Pending",
         "│",
-        "C · Pending",
+        "○ C · Pending",
         "│",
-        "B · Pending",
+        "○ B · Pending",
     ]
 
 
@@ -512,9 +514,9 @@ def test_spine_separates_sibling_branches_and_unreachable_phases() -> None:
         locale="en",
     )
 
-    assert "A · Pending\n│\nB · Pending\n│\nD · Pending" in rendered
-    assert "D · Pending\n\nC · Pending" in rendered
-    assert "C · Pending\n\nunreachable · Pending" in rendered
+    assert "○ A · Pending\n│\n○ B · Pending\n│\n○ D · Pending" in rendered
+    assert "○ D · Pending\n\n○ C · Pending" in rendered
+    assert "○ C · Pending\n\n○ unreachable · Pending" in rendered
 
 
 def test_latest_iteration_metadata_cannot_be_overwritten_by_prior_completion(
@@ -563,8 +565,8 @@ def test_latest_iteration_metadata_cannot_be_overwritten_by_prior_completion(
         issue_dir=issue_dir,
     )
 
-    assert "review · iteration 2 · In progress" in rendered
-    assert "review · Completed" not in rendered
+    assert "▶\ufe0e review · iteration 2 · In progress" in rendered
+    assert "✓ review · Completed" not in rendered
 
 
 @pytest.mark.parametrize("payload", [{}, {"decision": "missing"}])
@@ -585,8 +587,8 @@ def test_completed_confirmation_requires_a_recognized_outcome(
         issue_dir=issue_dir,
     )
 
-    assert "publish-draft: user confirmation (driver may not act) · Unknown" in rendered
-    assert "publish-draft: user confirmation (driver may not act) · Completed" not in rendered
+    assert "？ publish-draft: user confirmation (driver may not act) · Unknown" in rendered
+    assert "✓ publish-draft: user confirmation (driver may not act) · Completed" not in rendered
 
 
 def test_completed_confirmation_renders_only_a_declared_non_correction_outcome(
@@ -606,7 +608,7 @@ def test_completed_confirmation_renders_only_a_declared_non_correction_outcome(
         issue_dir=issue_dir,
     )
 
-    assert "publish-draft: user confirmation (driver may not act) · Completed" in rendered
+    assert "✓ publish-draft: user confirmation (driver may not act) · Completed" in rendered
 
 
 def test_forward_skip_review_manual_handoff_is_not_a_return(tmp_path: Path) -> None:
@@ -650,7 +652,7 @@ def test_forward_skip_review_manual_handoff_is_not_a_return(tmp_path: Path) -> N
         issue_dir=issue_dir,
     )
 
-    assert "develop → pr · Returned" not in rendered
+    assert "↩\ufe0e develop → pr · Returned" not in rendered
 
 
 def test_declared_correction_manual_handoff_is_a_formal_return(tmp_path: Path) -> None:
@@ -693,7 +695,7 @@ def test_declared_correction_manual_handoff_is_a_formal_return(tmp_path: Path) -
         issue_dir=issue_dir,
     )
 
-    assert "review → develop · Returned" in rendered
+    assert "↩\ufe0e review → develop · Returned" in rendered
 
 
 def test_delivered_pr_feedback_baton_is_a_formal_return(tmp_path: Path) -> None:
@@ -758,7 +760,7 @@ def test_delivered_pr_feedback_baton_is_a_formal_return(tmp_path: Path) -> None:
         issue_dir=issue_dir,
     )
 
-    assert "pr → develop · Returned" in rendered
+    assert "↩\ufe0e pr → develop · Returned" in rendered
 
 
 def test_forward_feedback_curation_delivery_is_not_a_return(tmp_path: Path) -> None:
@@ -817,7 +819,7 @@ def test_forward_feedback_curation_delivery_is_not_a_return(tmp_path: Path) -> N
         issue_dir=issue_dir,
     )
 
-    assert "curator → consumer · Returned" not in rendered
+    assert "↩\ufe0e curator → consumer · Returned" not in rendered
 
 
 def test_durable_blocked_event_overrides_completed_iteration_metadata(tmp_path: Path) -> None:
@@ -866,5 +868,5 @@ def test_durable_blocked_event_overrides_completed_iteration_metadata(tmp_path: 
         issue_dir=issue_dir,
     )
 
-    assert "publish · Blocked" in rendered
-    assert "publish · Completed" not in rendered
+    assert "! publish · Blocked" in rendered
+    assert "✓ publish · Completed" not in rendered

@@ -986,15 +986,15 @@ mandate:
         "QA is not independently required, so standard-qa is unnecessary. |" in result.stdout
     )
     assert "### Workflow progress" in result.stdout
-    assert "spec · 待執行" in result.stdout
-    assert "spec：使用者確認（driver 可代理） · 待執行" in result.stdout
-    assert "plan：使用者確認（driver 可代理） · 待執行" in result.stdout
-    assert "develop · 待執行" in result.stdout
-    assert "review · 待執行" in result.stdout
-    assert "pr：使用者確認（driver 不可代理） · 待執行" in result.stdout
-    assert "deliver（收尾） · 狀態未知" in result.stdout
-    assert "close（收尾） · 狀態未知" in result.stdout
-    assert not any(marker in result.stdout for marker in ("○", "▶", "✓", "↩", "⏸", "−", "!", "？"))
+    assert "○ spec · 待執行" in result.stdout
+    assert "○ spec：使用者確認（driver 可代理） · 待執行" in result.stdout
+    assert "○ plan：使用者確認（driver 可代理） · 待執行" in result.stdout
+    assert "○ develop · 待執行" in result.stdout
+    assert "○ review · 待執行" in result.stdout
+    assert "○ pr：使用者確認（driver 不可代理） · 待執行" in result.stdout
+    assert "？ deliver（收尾） · 狀態未知" in result.stdout
+    assert "？ close（收尾） · 狀態未知" in result.stdout
+    assert "\ufe0f" not in result.stdout
     assert "### Phases" not in result.stdout
     assert "| mandatory_human_tasks | pr |" in result.stdout
     assert "| effective_locale | zh-TW (user thread override) |" in result.stdout
@@ -2234,7 +2234,7 @@ def test_kickoff_contract_formatter_uses_cafe_python_when_site_packages_are_miss
 
     assert result.returncode == 0, result.stderr
     assert "## Kickoff Contract — issue346" in result.stdout
-    assert "spec: user confirmation (driver may not act) · Pending" in result.stdout
+    assert "○ spec: user confirmation (driver may not act) · Pending" in result.stdout
 
 
 def test_kickoff_formatter_resolves_custom_playbook_iteration_skills(
