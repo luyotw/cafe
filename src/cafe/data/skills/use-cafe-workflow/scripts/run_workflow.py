@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import stat
 import subprocess
@@ -12,19 +13,114 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from cafe.driver import (
+_PYTHON_STARTUP_ENVIRONMENT_KEYS = ("PYTHONHOME", "PYTHONPATH")
+_ISOLATED_BOOTSTRAP_ENVIRONMENT_KEY = "CAFE_WORKFLOW_DRIVER_ISOLATED_RUNTIME"
+_WRAPPER_RELATIVE_PATH = Path("cafe/data/skills/use-cafe-workflow/scripts/run_workflow.py")
+
+
+def _sanitized_python_environment() -> dict[str, str]:
+    """Return an environment that cannot redirect Python imports."""
+    environment = dict(os.environ)
+    for key in _PYTHON_STARTUP_ENVIRONMENT_KEYS:
+        environment.pop(key, None)
+    return environment
+
+
+def _absolute_interpreter() -> str:
+    """Return the interpreter that loaded this Driver wrapper."""
+    if not sys.executable:
+        raise RuntimeError("Driver interpreter is unavailable")
+    return str(Path(sys.executable).absolute())
+
+
+def _bootstrap_isolated_runtime() -> None:
+    """Restart the executable wrapper once without ambient Python path overrides."""
+    if os.environ.get(_ISOLATED_BOOTSTRAP_ENVIRONMENT_KEY) == "1":
+        return
+    environment = _sanitized_python_environment()
+    environment[_ISOLATED_BOOTSTRAP_ENVIRONMENT_KEY] = "1"
+    interpreter = _absolute_interpreter()
+    try:
+        os.execvpe(
+            interpreter,
+            [interpreter, "-I", str(Path(__file__).resolve()), *sys.argv[1:]],
+            environment,
+        )
+    except OSError as exc:
+        print(f"run_workflow.py: unable to start isolated Driver runtime: {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
+
+
+if __name__ == "__main__":
+    _bootstrap_isolated_runtime()
+
+# The executable bootstrap intentionally precedes every CAFE import.
+import cafe  # noqa: E402
+from cafe.driver import (  # noqa: E402
     DriverEntryRequest,
     EventCallbackRequest,
     Freshness,
     evaluate_driver_entry,
     event_callback_projection,
 )
-from cafe.driver._store import load_contract
-from cafe.workflow_execution.event_callback import resolve_builtin_workflow_event_callback
+from cafe.driver._store import load_contract  # noqa: E402
+from cafe.workflow_execution.event_callback import (  # noqa: E402
+    resolve_builtin_workflow_event_callback,
+)
 
 CALLBACK_ID = "builtin:use-cafe-workflow:workflow_event_callback"
 MAX_WORKFLOW_STATE_BYTES = 256 * 1024
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def _wrapper_source_root() -> Path | None:
+    """Return the source root when this is a bundled CAFE wrapper."""
+    script = Path(__file__).resolve()
+    for parent in script.parents:
+        if script == parent / _WRAPPER_RELATIVE_PATH:
+            return parent
+    return None
+
+
+def _loaded_cafe_source_root() -> Path:
+    """Return the source root that supplied the loaded CAFE package."""
+    package_file = getattr(cafe, "__file__", None)
+    if not isinstance(package_file, str):
+        raise ValueError("Driver runtime CAFE package has no source file")
+    resolved = Path(package_file).resolve()
+    if resolved.name != "__init__.py" or resolved.parent.name != "cafe":
+        raise ValueError("Driver runtime CAFE package source is invalid")
+    return resolved.parent.parent
+
+
+def _global_wrapper_matches_runtime(runtime_source_root: Path) -> bool:
+    """Verify a globally synced wrapper matches the loaded runtime's bundled copy."""
+    try:
+        return Path(__file__).resolve().read_bytes() == (
+            runtime_source_root / _WRAPPER_RELATIVE_PATH
+        ).read_bytes()
+    except OSError:
+        return False
+
+
+def _validated_host_interpreter() -> str:
+    """Ensure the wrapper and loaded runtime agree before launching CAFE."""
+    wrapper_source_root = _wrapper_source_root()
+    loaded_source_root = _loaded_cafe_source_root()
+    if wrapper_source_root is not None:
+        if loaded_source_root != wrapper_source_root:
+            raise ValueError("Driver runtime source differs from the bundled workflow wrapper")
+    elif not _global_wrapper_matches_runtime(loaded_source_root):
+        raise ValueError("Driver runtime source differs from the global workflow wrapper")
+    return _absolute_interpreter()
+
+
+def _workflow_child_environment() -> dict[str, str]:
+    """Keep workflow control-plane imports fixed without leaking path overrides."""
+    environment = _sanitized_python_environment()
+    environment.pop(_ISOLATED_BOOTSTRAP_ENVIRONMENT_KEY, None)
+    environment["CAFE_SKIP_ENTRYPOINT_CHECK"] = "1"
+    return environment
 
 
 def _exact_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -319,6 +415,7 @@ def run(
     args = _parser().parse_args(argv)
     mode = args.driver_mode
     try:
+        interpreter = _validated_host_interpreter()
         issue_name = _validate_identifier(args.issue, "issue name")
         playbook = _validate_identifier(args.playbook, "playbook name")
         project_root = Path(cwd or Path.cwd()).resolve()
@@ -380,7 +477,10 @@ def run(
         return 0
 
     command = [
-        "cafe",
+        interpreter,
+        "-I",
+        "-m",
+        "cafe.ui.cli",
         "workflow",
         "--issue",
         issue_name,
@@ -398,7 +498,11 @@ def run(
         command.extend(["--user-input", alignment_input])
 
     try:
-        process = process_factory(command, cwd=str(project_root))
+        process = process_factory(
+            command,
+            cwd=str(project_root),
+            env=_workflow_child_environment(),
+        )
     except OSError as exc:
         return _launch_failed(mode, str(exc), worker=worker)
 

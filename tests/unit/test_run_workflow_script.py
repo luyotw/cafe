@@ -149,7 +149,10 @@ def test_modes_launch_exact_safe_argv_and_emit_exact_directive(
 
     def process_factory(argv, **kwargs):
         launched.append(argv)
-        assert kwargs == {"cwd": str(tmp_path)}
+        assert kwargs["cwd"] == str(tmp_path)
+        assert kwargs["env"]["CAFE_SKIP_ENTRYPOINT_CHECK"] == "1"
+        assert "PYTHONHOME" not in kwargs["env"]
+        assert "PYTHONPATH" not in kwargs["env"]
         return _Process()
 
     result = module.run(
@@ -161,7 +164,10 @@ def test_modes_launch_exact_safe_argv_and_emit_exact_directive(
     assert result == 0
     assert launched == [
         [
-            "cafe",
+            str(Path(module.sys.executable).absolute()),
+            "-I",
+            "-m",
+            "cafe.ui.cli",
             "workflow",
             "--issue",
             "issue498",
@@ -175,6 +181,112 @@ def test_modes_launch_exact_safe_argv_and_emit_exact_directive(
     assert capsys.readouterr().out.splitlines()[0] == directive
     assert "--single-step" not in launched[0]
     assert "--start-step" not in launched[0]
+
+
+def test_launch_uses_isolated_host_runtime_despite_python_path_overrides(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = _module()
+    _prepared(tmp_path)
+    _install_contract_stubs(monkeypatch, module, _contract("unattended", tmp_path))
+    monkeypatch.setenv("PYTHONPATH", "/old/worktree/src")
+    monkeypatch.setenv("PYTHONHOME", "/old/python/home")
+    launched: list[tuple[list[str], dict[str, object]]] = []
+
+    def process_factory(argv, **kwargs):
+        launched.append((argv, kwargs))
+        return _Process()
+
+    assert module.run(_args("unattended"), cwd=tmp_path, process_factory=process_factory) == 0
+
+    command, kwargs = launched[0]
+    assert command[:4] == [
+        str(Path(module.sys.executable).absolute()),
+        "-I",
+        "-m",
+        "cafe.ui.cli",
+    ]
+    assert kwargs["env"]["CAFE_SKIP_ENTRYPOINT_CHECK"] == "1"
+    assert "PYTHONHOME" not in kwargs["env"]
+    assert "PYTHONPATH" not in kwargs["env"]
+
+
+def test_runtime_source_mismatch_fails_before_worker_launch(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    module = _module()
+    _prepared(tmp_path)
+    _install_contract_stubs(monkeypatch, module, _contract("unattended", tmp_path))
+    monkeypatch.setattr(module, "_wrapper_source_root", lambda: tmp_path / "wrapper-src")
+    monkeypatch.setattr(module, "_loaded_cafe_source_root", lambda: tmp_path / "other-src")
+
+    assert (
+        module.run(
+            _args("unattended"),
+            cwd=tmp_path,
+            process_factory=lambda *args, **kwargs: pytest.fail("worker must not launch"),
+        )
+        == 2
+    )
+    assert "Driver runtime source differs" in capsys.readouterr().err
+
+
+def test_global_wrapper_accepts_an_identical_runtime_copy(tmp_path: Path, monkeypatch) -> None:
+    module = _module()
+    global_wrapper = tmp_path / "global/run_workflow.py"
+    global_wrapper.parent.mkdir(parents=True)
+    global_wrapper.write_bytes(SCRIPT.read_bytes())
+    runtime_source_root = tmp_path / "runtime/src"
+    runtime_wrapper = runtime_source_root / module._WRAPPER_RELATIVE_PATH
+    runtime_wrapper.parent.mkdir(parents=True)
+    runtime_wrapper.write_bytes(SCRIPT.read_bytes())
+    monkeypatch.setattr(module, "__file__", str(global_wrapper))
+    monkeypatch.setattr(module, "_loaded_cafe_source_root", lambda: runtime_source_root)
+
+    assert module._validated_host_interpreter() == str(Path(module.sys.executable).absolute())
+
+
+def test_global_wrapper_rejects_a_different_runtime_copy(tmp_path: Path, monkeypatch) -> None:
+    module = _module()
+    global_wrapper = tmp_path / "global/run_workflow.py"
+    global_wrapper.parent.mkdir(parents=True)
+    global_wrapper.write_bytes(SCRIPT.read_bytes())
+    runtime_source_root = tmp_path / "runtime/src"
+    runtime_wrapper = runtime_source_root / module._WRAPPER_RELATIVE_PATH
+    runtime_wrapper.parent.mkdir(parents=True)
+    runtime_wrapper.write_text("different runtime wrapper", encoding="utf-8")
+    monkeypatch.setattr(module, "__file__", str(global_wrapper))
+    monkeypatch.setattr(module, "_loaded_cafe_source_root", lambda: runtime_source_root)
+
+    with pytest.raises(ValueError, match="global workflow wrapper"):
+        module._validated_host_interpreter()
+
+
+def test_isolated_bootstrap_removes_python_path_overrides(monkeypatch) -> None:
+    module = _module()
+    monkeypatch.delenv(module._ISOLATED_BOOTSTRAP_ENVIRONMENT_KEY, raising=False)
+    monkeypatch.setenv("PYTHONPATH", "/old/worktree/src")
+    monkeypatch.setenv("PYTHONHOME", "/old/python/home")
+    captured: dict[str, object] = {}
+
+    def fake_execvpe(executable, argv, environment):
+        captured["executable"] = executable
+        captured["argv"] = argv
+        captured["environment"] = environment
+
+    monkeypatch.setattr(module.os, "execvpe", fake_execvpe)
+    module._bootstrap_isolated_runtime()
+
+    assert captured["executable"] == str(Path(module.sys.executable).absolute())
+    assert captured["argv"][:3] == [
+        str(Path(module.sys.executable).absolute()),
+        "-I",
+        str(SCRIPT.resolve()),
+    ]
+    environment = captured["environment"]
+    assert environment[module._ISOLATED_BOOTSTRAP_ENVIRONMENT_KEY] == "1"
+    assert "PYTHONHOME" not in environment
+    assert "PYTHONPATH" not in environment
 
 
 def test_start_and_resume_use_identical_argv(tmp_path: Path, monkeypatch) -> None:
@@ -420,7 +532,10 @@ def test_explicit_alignment_input_requires_durable_driver_authority(
     )
     assert launched == [
         [
-            "cafe",
+            str(Path(module.sys.executable).absolute()),
+            "-I",
+            "-m",
+            "cafe.ui.cli",
             "workflow",
             "--issue",
             "issue498",

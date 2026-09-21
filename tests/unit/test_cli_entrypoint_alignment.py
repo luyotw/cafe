@@ -113,6 +113,17 @@ def test_reexec_env_prefers_checkout_src(monkeypatch, tmp_path: Path) -> None:
     assert "/existing/path" in env["PYTHONPATH"].split(":")
 
 
+def test_entrypoint_check_honors_explicit_internal_skip(monkeypatch) -> None:
+    monkeypatch.setenv("CAFE_SKIP_ENTRYPOINT_CHECK", "1")
+    monkeypatch.setattr(
+        cli,
+        "_resolve_repo_entrypoint_mismatch",
+        lambda **_: pytest.fail("internal workflow launch must not re-exec into its worktree"),
+    )
+
+    assert cli._check_repo_entrypoint_alignment() is True
+
+
 def test_main_returns_error_code_without_traceback_when_auto_reexec_fails(
     monkeypatch,
     capsys,
