@@ -173,13 +173,16 @@ def test_renderer_preserves_custom_phase_names_and_localizes_only_annotations() 
         include_closeout=("deliver", "close"),
     )
 
-    assert "○ 資料盤點" in rendered
-    assert "○ publish-draft" in rendered
-    assert "▶ publish-draft：driver 主動審查" in rendered
-    assert "○ publish-draft：使用者確認（driver 不可代理）" in rendered
-    assert "？ deliver（收尾）" in rendered
-    assert "？ close（收尾）" in rendered
-    assert "？ 狀態未知" in rendered
+    assert "○ 資料盤點 · 待執行" in rendered
+    assert "○ publish-draft · 待執行" in rendered
+    assert (
+        "○ publish-draft · 待執行\n│\n"
+        "▶ publish-draft：driver 主動審查 · 進行中\n│\n"
+        "○ publish-draft：使用者確認（driver 不可代理） · 待執行"
+    ) in rendered
+    assert "？ deliver（收尾） · 狀態未知" in rendered
+    assert "？ close（收尾） · 狀態未知" in rendered
+    assert "○ 待執行" not in rendered
     assert "資料盤點" in rendered and "publish-draft" in rendered
 
 
@@ -205,6 +208,11 @@ def test_renderer_uses_current_iteration_and_revise_outcome_as_return_evidence(
     assert "↩ publish-draft：使用者確認（driver 不可代理）" in rendered
     assert "↩ publish-draft → 資料盤點" in rendered
     assert "✓ publish-draft：使用者確認" not in rendered
+    assert (
+        rendered.index("▶ 資料盤點")
+        < rendered.index("↩ publish-draft → 資料盤點")
+        < rendered.index("✓ publish-draft")
+    )
     assert before == {path: path.read_bytes() for path in before}
 
 
@@ -259,7 +267,7 @@ def test_closeout_visibility_is_explicit_and_custom_same_named_phase_is_distinct
 
     assert "✓ deliver (closeout)" not in hidden
     assert "○ deliver" in hidden
-    assert "○ deliver\n" in shown
+    assert "○ deliver · Pending\n│" in shown
     assert "✓ deliver (closeout)" in shown
     assert "○ close (closeout)" in shown
 
@@ -321,11 +329,14 @@ def test_pending_confirmation_blocked_and_skipped_use_durable_evidence(tmp_path:
         issue_dir=issue_dir,
     )
 
-    assert "! 資料盤點" in rendered
-    assert "− publish-draft" in rendered
-    assert "⏸ publish-draft: user confirmation (driver may not act)" in rendered
-    assert "! Blocked" in rendered
-    assert "− Skipped" in rendered
+    assert "! 資料盤點 · iteration 2 · Blocked" in rendered
+    assert "− publish-draft · Skipped" in rendered
+    assert (
+        "⏸ publish-draft: user confirmation (driver may not act) · Awaiting confirmation"
+        in rendered
+    )
+    assert "\n! Blocked" not in rendered
+    assert "\n− Skipped" not in rendered
 
 
 def test_direct_playbook_and_archived_issue_cli_are_supported(tmp_path: Path) -> None:
@@ -439,7 +450,7 @@ def test_cli_without_confirmed_contract_reports_unestablished_workflow(tmp_path:
     assert result.stdout.strip() == "流程尚未建立"
 
 
-def test_retry_baton_and_non_topological_graph_do_not_invent_a_return(tmp_path: Path) -> None:
+def test_compact_spine_omits_raw_routes_without_inventing_a_return(tmp_path: Path) -> None:
     issue_dir = tmp_path / "issue"
     issue_dir.mkdir()
     (issue_dir / "blackboard.json").write_text(
@@ -476,8 +487,14 @@ def test_retry_baton_and_non_topological_graph_do_not_invent_a_return(tmp_path: 
 
     assert "↩ A → A" not in rendered
     assert "↩ C → B" not in rendered
-    assert "└─ await_agent → C" in rendered
-    assert "└─ await_agent → B" in rendered
+    assert "await_agent →" not in rendered
+    assert rendered.splitlines() == [
+        "○ A · Pending",
+        "│",
+        "○ B · Pending",
+        "│",
+        "○ C · Pending",
+    ]
 
 
 def test_latest_iteration_metadata_cannot_be_overwritten_by_prior_completion(

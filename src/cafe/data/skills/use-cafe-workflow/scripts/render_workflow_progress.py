@@ -70,8 +70,7 @@ _TEXT = {
         "delegable": "driver 可代理",
         "not_delegable": "driver 不可代理",
         "closeout": "收尾",
-        "routes": "分支",
-        "legend": {
+        "status": {
             "pending": "待執行",
             "in_progress": "進行中",
             "completed": "已完成",
@@ -90,8 +89,7 @@ _TEXT = {
         "delegable": "driver may act",
         "not_delegable": "driver may not act",
         "closeout": "closeout",
-        "routes": "routes",
-        "legend": {
+        "status": {
             "pending": "Pending",
             "in_progress": "In progress",
             "completed": "Completed",
@@ -444,31 +442,8 @@ def _confirmation_statuses(
     return statuses, returns
 
 
-def _line(status: str, label: str) -> str:
-    return f"{_SYMBOLS[status]} {label}"
-
-
-def _branch_lines(playbook: Mapping[str, Any], step: str, steps: Sequence[str]) -> list[str]:
-    raw = playbook["steps"][step].get("on", {})
-    if not isinstance(raw, Mapping):
-        return []
-    edges = [
-        (str(intent), "done" if target in {"_done", "done"} else str(target))
-        for intent, target in raw.items()
-        if target != step
-    ]
-    allowed_goto = playbook["steps"][step].get("allowed_goto", [])
-    if isinstance(allowed_goto, list):
-        declared_targets = {target for _, target in edges}
-        edges.extend(
-            ("goto", str(target))
-            for target in allowed_goto
-            if isinstance(target, str) and target not in declared_targets
-        )
-    return [
-        f"  {'└─' if index == len(edges) - 1 else '├─'} {intent} → {target}"
-        for index, (intent, target) in enumerate(edges)
-    ]
+def _line(status: str, label: str, status_text: Mapping[str, str]) -> str:
+    return f"{_SYMBOLS[status]} {label} · {status_text[status]}"
 
 
 def render_progress(
@@ -497,19 +472,34 @@ def render_progress(
     user_required, driver_confirmable, mandatory = _confirmation_contract(policy)
     gate_steps = (user_required | driver_confirmable | mandatory) & set(steps)
     confirmation_statuses, task_returns = _confirmation_statuses(issue_dir, gate_steps, iterations)
+    status_text = text["status"]
+
+    returns_by_target: dict[str, list[str]] = {step: [] for step in steps}
+    unplaced_returns: list[str] = []
+    seen_returns: set[tuple[str, str]] = set()
+    for source, target in [*runtime_returns, *task_returns]:
+        edge = (source, target)
+        if edge in seen_returns:
+            continue
+        seen_returns.add(edge)
+        return_line = _line("returned", f"{source} → {target}", status_text)
+        if target in returns_by_target:
+            returns_by_target[target].append(return_line)
+        else:
+            unplaced_returns.append(return_line)
 
     nodes: list[str] = []
     for step in steps:
         label = step
         if iterations.get(step, 0) > 1:
             label += " · " + str(text["iteration"]).format(iteration=iterations[step])
-        phase_block = [_line(phase_statuses[step], label), *_branch_lines(model, step, steps)]
+        nodes.append(_line(phase_statuses[step], label, status_text))
         if step in required_reviews:
             review_status = reviews.get(step, "unknown")
             review_label = (
                 f"{step}：{text['review']}" if language == "zh" else f"{step}: {text['review']}"
             )
-            phase_block.append(_line(review_status, review_label))
+            nodes.append(_line(review_status, review_label, status_text))
         if step in gate_steps:
             proxy = text["delegable"] if step in driver_confirmable else text["not_delegable"]
             confirmation_label = (
@@ -517,17 +507,15 @@ def render_progress(
                 if language == "zh"
                 else f"{step}: {text['confirmation']} ({proxy})"
             )
-            phase_block.append(
+            nodes.append(
                 _line(
                     confirmation_statuses[step],
                     confirmation_label,
+                    status_text,
                 )
             )
-        nodes.append("\n".join(phase_block))
-    for source, target in [*runtime_returns, *task_returns]:
-        return_line = _line("returned", f"{source} → {target}")
-        if return_line not in nodes:
-            nodes.append(return_line)
+        nodes.extend(returns_by_target[step])
+    nodes.extend(unplaced_returns)
     for item in include_closeout:
         nodes.append(
             _line(
@@ -537,21 +525,10 @@ def render_progress(
                     if language == "zh"
                     else f"{item} ({text['closeout']})"
                 ),
+                status_text,
             )
         )
-    body = "\n\n".join(nodes)
-    legend = text["legend"]
-    legend_lines = [
-        "　".join(
-            f"{_SYMBOLS[name]} {legend[name]}"
-            for name in ("pending", "in_progress", "completed", "returned")
-        ),
-        "　".join(
-            f"{_SYMBOLS[name]} {legend[name]}"
-            for name in ("awaiting_confirmation", "skipped", "blocked", "unknown")
-        ),
-    ]
-    return body + "\n\n" + "\n".join(legend_lines)
+    return "\n│\n".join(nodes)
 
 
 def _json_argument(value: str) -> dict[str, Any]:
