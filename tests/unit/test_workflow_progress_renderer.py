@@ -977,8 +977,8 @@ def test_return_trail_interleaves_runtime_and_task_evidence_by_time(tmp_path: Pa
     issue_dir.mkdir()
     events: list[dict[str, object]] = []
     for source_iteration, target_iteration, timestamp in (
-        (11, 6, "2026-09-21T10:00:00+00:00"),
-        (13, 7, "2026-09-21T12:00:00+00:00"),
+        (11, 6, "2026-09-21T10:00:00+02:00"),
+        (13, 7, "2026-09-21T08:30:00-01:00"),
     ):
         events.extend(
             [
@@ -1032,7 +1032,7 @@ def test_return_trail_interleaves_runtime_and_task_evidence_by_time(tmp_path: Pa
                 "results": [
                     {
                         "task_id": "task-pr-12",
-                        "completed_at": "2026-09-21T11:00:00+00:00",
+                        "completed_at": "2026-09-21T09:00:00+00:00",
                         "payload": {"decision": "fix_now", "continuation": "develop"},
                     }
                 ],
@@ -1067,6 +1067,37 @@ def test_return_trail_interleaves_runtime_and_task_evidence_by_time(tmp_path: Pa
     second = "↩\ufe0e pr · iteration 12 → develop · iteration ? · Returned"
     third = "↩\ufe0e pr · iteration 13 → develop · iteration 7 · Returned"
     assert rendered.index(first) < rendered.index(second) < rendered.index(third)
+
+
+def test_return_order_falls_back_for_invalid_time_and_is_stable_for_equal_instants() -> None:
+    module = _module()
+    invalid = module._ReturnEdge(
+        source="invalid",
+        target="target",
+        source_iteration=1,
+        occurred_at="not-a-timestamp",
+    )
+    valid = module._ReturnEdge(
+        source="valid",
+        target="target",
+        source_iteration=2,
+        occurred_at="2026-09-21T10:00:00+00:00",
+    )
+    assert module._ordered_returns([invalid, valid]) == [invalid, valid]
+
+    first_equal = module._ReturnEdge(
+        source="first",
+        target="target",
+        source_iteration=3,
+        occurred_at="2026-09-21T10:00:00Z",
+    )
+    second_equal = module._ReturnEdge(
+        source="second",
+        target="target",
+        source_iteration=4,
+        occurred_at="2026-09-21T12:00:00+02:00",
+    )
+    assert module._ordered_returns([first_equal, second_equal]) == [first_equal, second_equal]
 
 
 def test_forward_feedback_curation_delivery_is_not_a_return(tmp_path: Path) -> None:

@@ -9,6 +9,7 @@ import os
 import shlex
 import shutil
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -110,7 +111,6 @@ class _ReturnEdge:
         "source_iteration",
         "target_iteration",
         "occurred_at",
-        "sequence",
     )
 
     def __init__(
@@ -121,20 +121,43 @@ class _ReturnEdge:
         source_iteration: int | None,
         target_iteration: int | None = None,
         occurred_at: str | None = None,
-        sequence: int = 0,
     ) -> None:
         self.source = source
         self.target = target
         self.source_iteration = source_iteration
         self.target_iteration = target_iteration
         self.occurred_at = occurred_at
-        self.sequence = sequence
 
 
 def _iteration_number(value: Any) -> int | None:
     if isinstance(value, Mapping):
         value = value.get("number")
     return value if isinstance(value, int) and value > 0 else None
+
+
+def _ordered_returns(edges: list[_ReturnEdge]) -> list[_ReturnEdge]:
+    """Order fully timestamped evidence by instant, or preserve source order."""
+    instants: list[datetime] = []
+    for edge in edges:
+        if edge.occurred_at is None:
+            return edges
+        try:
+            timestamp = edge.occurred_at
+            if timestamp.endswith("Z"):
+                timestamp = timestamp[:-1] + "+00:00"
+            instant = datetime.fromisoformat(timestamp)
+        except ValueError:
+            return edges
+        if instant.tzinfo is None or instant.utcoffset() is None:
+            return edges
+        instants.append(instant)
+    return [
+        edge
+        for _, edge in sorted(
+            zip(instants, edges, strict=True),
+            key=lambda item: item[0],
+        )
+    ]
 
 
 def _language(locale: str) -> str:
@@ -326,7 +349,7 @@ def _runtime_progress(
     if not isinstance(events, list):
         raise ValueError("blackboard events must be a list")
     workflow_finished = str(blackboard.get("current_step", "")) == "done"
-    for event_index, event in enumerate(events):
+    for event in events:
         if not isinstance(event, Mapping):
             continue
         event_type = str(event.get("event_type", event.get("type", "")))
@@ -389,7 +412,6 @@ def _runtime_progress(
                             and event.get("timestamp")
                             else None
                         ),
-                        sequence=event_index,
                     )
                 )
             delivered_feedback_steps.discard(source)
@@ -456,11 +478,6 @@ def _confirmation_statuses(
         str(result.get("task_id")): result
         for result in results
         if isinstance(result, Mapping) and result.get("task_id")
-    }
-    task_sequence = {
-        str(task.get("id")): index
-        for index, task in enumerate(tasks)
-        if isinstance(task, Mapping) and task.get("id")
     }
     latest: dict[str, Mapping[str, Any]] = {}
     for task in tasks:
@@ -544,7 +561,6 @@ def _confirmation_statuses(
                             and result.get("completed_at")
                             else None
                         ),
-                        sequence=task_sequence.get(str(task.get("id", "")), 0),
                     )
                 )
                 statuses[step] = "returned"
@@ -604,8 +620,7 @@ def render_progress(
         ):
             continue
         combined_returns.append(task_edge)
-    if combined_returns and all(edge.occurred_at is not None for edge in combined_returns):
-        combined_returns.sort(key=lambda edge: (edge.occurred_at or "", edge.sequence))
+    combined_returns = _ordered_returns(combined_returns)
     return_lines = [
         _line(
             "returned",

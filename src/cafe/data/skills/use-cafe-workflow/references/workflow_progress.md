@@ -26,8 +26,10 @@ forced to text with variation selector 15. Proactive-review and confirmation
 checkpoints immediately follow their owning phase. Durable correction arrows
 form one chronological trail attached to the latest phase they re-enter, so
 static phase order cannot reorder returns with different targets. Runtime and
-HumanTask arrows are interleaved by their durable timestamps when every arrow
-has one; otherwise their source order is preserved rather than guessed. Each
+HumanTask arrows are interleaved by the absolute instants represented by their
+durable, timezone-aware timestamps when every arrow has a valid one; otherwise
+their source order is preserved rather than guessed. Equal instants retain
+their stable source order. Each
 correction arrow labels its own target plus the source and target iterations
 captured from its causal runtime events. An endpoint without durable iteration
 evidence is shown as `?`, never inferred from the phase's latest iteration. The
