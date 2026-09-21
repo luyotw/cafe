@@ -4038,6 +4038,18 @@ def test_curator_pins_feedback_batch_after_preparation_before_agent_prompt(
                     "feedback_todo_source": "review_note",
                     "feedback_todo_id_prefix": "REV",
                 },
+                "human_tasks": [
+                    {
+                        "task_id": "local-review",
+                        "outcomes": {"fix_now": "curator"},
+                        "feedback_delivery": {
+                            "artifact": "workflow_feedback",
+                            "source_kind": "local_review",
+                            "todo_source": "workflow_feedback",
+                            "todo_id_prefix": "WF",
+                        },
+                    }
+                ],
                 "on": {"manual_handoff": "consumer"},
             },
             "consumer": {"skill": "develop", "role": "developer"},
@@ -4052,6 +4064,12 @@ def test_curator_pins_feedback_batch_after_preparation_before_agent_prompt(
         target_step="curator",
         content="Prepared before the agent prompt.",
     )
+    _created, local_review = ledger.record(
+        source_identity="local_review:pr:local-review:1",
+        source_kind="local_review",
+        target_step="curator",
+        content="Prepared from the local review task.",
+    )
     generic_phase = _build_loader(tmp_path)
 
     def curate_and_record_late(*, prompt: str, streaming_output_file: str, **_kwargs) -> None:
@@ -4061,8 +4079,22 @@ def test_curator_pins_feedback_batch_after_preparation_before_agent_prompt(
         assert "./" + str(snapshot.relative_to(tmp_path)) in prompt
         payload = json.loads(snapshot.read_text(encoding="utf-8"))
         assert [entry["source_identity"] for entry in payload["entries"]] == [
-            prepared.source_identity
+            prepared.source_identity,
+            local_review.source_identity,
         ]
+        prepared_id = hashlib.sha256(prepared.source_identity.encode("utf-8")).hexdigest()[:12]
+        local_review_id = hashlib.sha256(
+            local_review.source_identity.encode("utf-8")
+        ).hexdigest()[:12]
+        assert (
+            f"Batch entry 1: use ID `REV-{prepared_id.upper()}` and Source `review_note`."
+            in prompt
+        )
+        assert (
+            "Batch entry 2: use ID "
+            f"`WF-{local_review_id.upper()}` and Source `workflow_feedback`."
+            in prompt
+        )
         iteration_dir.joinpath("checklist.md").write_text(
             "[x] completed by test agent\n", encoding="utf-8"
         )
@@ -4095,12 +4127,19 @@ def test_curator_pins_feedback_batch_after_preparation_before_agent_prompt(
 
     result = executor.execute_step("curator", playbook["steps"]["curator"], state)
 
-    assert result.feedback_source_identities == (prepared.source_identity,)
+    assert result.feedback_source_identities == (
+        prepared.source_identity,
+        local_review.source_identity,
+    )
     snapshot = issue_dir / "curator" / "iteration_001" / "workflow_feedback_batch.json"
     payload = json.loads(snapshot.read_text(encoding="utf-8"))
-    assert [entry["source_identity"] for entry in payload["entries"]] == [prepared.source_identity]
+    assert [entry["source_identity"] for entry in payload["entries"]] == [
+        prepared.source_identity,
+        local_review.source_identity,
+    ]
     assert [entry.source_identity for entry in ledger.pending(target_step="curator")] == [
         prepared.source_identity,
+        local_review.source_identity,
         "review:508:late",
     ]
 

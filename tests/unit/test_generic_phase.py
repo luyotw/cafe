@@ -313,6 +313,31 @@ def test_build_prompt_pr_phase_identifies_local_only_workflow_mode(tmp_path: Pat
     assert "No PR URL will exist" in prompt
 
 
+def test_build_prompt_renders_canonical_feedback_todo_fields(tmp_path: Path) -> None:
+    phase = GenericPhase(_setup_loader(tmp_path))
+    prompt = phase.build_prompt(
+        skill_name="cafe-pr",
+        skill_invocation="/cafe-pr",
+        context={
+            "workflow_feedback_batch_file": (
+                ".cafe/issues/demo/pr/iteration_002/workflow_feedback_batch.json"
+            ),
+            "workflow_feedback_batch_count": "2",
+            "workflow_feedback_batch_todo_rows": (
+                "- Batch entry 1: use ID `WF-ABC123` and Source `workflow_feedback`.\n"
+                "- Batch entry 2: use ID `PRC-DEF456` and Source `pr_comment`."
+            ),
+        },
+    )
+
+    assert "Authoritative curated feedback batch:" in prompt
+    assert "Canonical Todo fields for this batch:" in prompt
+    assert "same-numbered immutable batch entry" in prompt
+    assert "do not derive or substitute generic PR-comment values" in prompt
+    assert "Batch entry 1: use ID `WF-ABC123` and Source `workflow_feedback`" in prompt
+    assert "Batch entry 2: use ID `PRC-DEF456` and Source `pr_comment`" in prompt
+
+
 def assert_runtime_handoff_guardrails_persist(prompt: str) -> None:
     """When ``handoff_summary`` is injected, these lines must stay in the runtime prompt.
 

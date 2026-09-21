@@ -648,7 +648,8 @@ class GenericWorkflowStepExecutor(Phase):
         def prepare_agent_context(runtime_context: Dict[str, str]) -> Dict[str, str]:
             """Expose one immutable, bounded feedback batch immediately before prompt."""
             nonlocal feedback_batch_source_identities
-            if not feedback_todo_mappings(self.playbook, target_step=step_name):
+            mappings = feedback_todo_mappings(self.playbook, target_step=step_name)
+            if not mappings:
                 return runtime_context
             snapshot_path = iteration_dir / "workflow_feedback_batch.json"
             ledger = WorkflowFeedbackLedger(self.issue_dir)
@@ -663,6 +664,24 @@ class GenericWorkflowStepExecutor(Phase):
                     "workflow_feedback_batch_count": str(len(feedback_batch_source_identities)),
                 }
             )
+            try:
+                canonical_items = workflow_feedback_todo_items(
+                    snapshot_path,
+                    target_step=step_name,
+                    source_by_kind={kind: values[0] for kind, values in mappings.items()},
+                    id_prefix_by_kind={kind: values[1] for kind, values in mappings.items()},
+                    source_identities=feedback_batch_source_identities,
+                )
+            except TodoContractError:
+                # Preserve the existing fail-closed delivery path for a malformed
+                # source. The runtime remains the authority for later validation.
+                canonical_items = ()
+            if len(canonical_items) == len(feedback_batch_source_identities):
+                runtime_context["workflow_feedback_batch_todo_rows"] = "\n".join(
+                    "- Batch entry "
+                    f"{index}: use ID `{item.item_id}` and Source `{item.source}`."
+                    for index, item in enumerate(canonical_items, start=1)
+                )
             return runtime_context
 
         execution = self.generic_phase.execute(

@@ -106,6 +106,8 @@ def test_cafe_pr_routes_completed_artifacts_to_local_review() -> None:
     assert "select an undeclared route" in skill
     assert "workflow_feedback_file" in skill
     assert "current corrective cycle" in skill
+    assert "Canonical Todo fields for this batch" in skill
+    assert "do not derive or substitute a generic PR-comment prefix or source" in skill
     assert "`manual_handoff`" in skill
     assert "Follow-up Proposals" in skill
     assert "does not create a GitHub issue automatically" in skill

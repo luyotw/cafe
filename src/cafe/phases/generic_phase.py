@@ -299,6 +299,16 @@ class GenericPhase:
                     "- Sources observed after this snapshot remain pending for a later cycle.",
                 ]
             )
+            if context.get("workflow_feedback_batch_todo_rows"):
+                runtime_context.extend(
+                    [
+                        "Canonical Todo fields for this batch:",
+                        "- Each line corresponds to the same-numbered immutable batch entry.",
+                        "- Copy its ID and Source exactly; do not derive or substitute "
+                        "generic PR-comment values.",
+                        context["workflow_feedback_batch_todo_rows"],
+                    ]
+                )
         if context and context.get("delta_packet"):
             runtime_context.extend(
                 [

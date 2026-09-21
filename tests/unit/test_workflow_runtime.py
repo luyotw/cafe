@@ -4530,7 +4530,7 @@ def test_runtime_records_excluded_feedback_without_widening_the_curated_handoff(
 
 @pytest.mark.parametrize(
     "invalid_output",
-    ["extra", "nondeterministic", "malformed", "duplicate"],
+    ["extra", "nondeterministic", "malformed", "duplicate", "wrong_source"],
 )
 def test_runtime_rejects_noncanonical_curated_feedback_without_consuming_sources(
     tmp_path: Path, invalid_output: str
@@ -4572,6 +4572,14 @@ def test_runtime_rejects_noncanonical_curated_feedback_without_consuming_sources
             )
         elif invalid_output == "malformed":
             output.write_text("## Todo List\n\n- not a Todo row\n", encoding="utf-8")
+        elif invalid_output == "wrong_source":
+            item_id = f"PRC-{sha256(identity.encode('utf-8')).hexdigest()[:12].upper()}"
+            output.write_text(
+                "## Todo List\n"
+                f"- [ ] `{item_id}` — Source: `pr_comment` — Work: Address the source — "
+                "Closure: verified — Evidence: targeted test\n",
+                encoding="utf-8",
+            )
         else:
             item_id = f"REV-{sha256(identity.encode('utf-8')).hexdigest()[:12].upper()}"
             row = (

@@ -233,10 +233,36 @@ def test_pr_review_handoff_tracks_published_or_local_only_journey(
 
 
 @pytest.mark.e2e
-def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("seed_local_review", "comments", "expected_source"),
+    [
+        (
+            None,
+            [
+                {"id": "100", "body": "Handle the first boundary.", "is_resolved": False},
+                {"id": "101", "body": "Handle the second boundary.", "is_resolved": False},
+            ],
+            "pr_comment",
+        ),
+        (
+            (
+                "local_review:pr:local-review:1",
+                "Handle the local review boundary.",
+            ),
+            [],
+            "workflow_feedback",
+        ),
+    ],
+    ids=["github_pr", "local_review"],
+)
+def test_declared_pr_feedback_source_records_and_delivers_each_item_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_local_review: tuple[str, str] | None,
+    comments: list[dict[str, object]],
+    expected_source: str,
 ) -> None:
-    """IT-001: current-invocation PR feedback is curated and consumed once."""
+    """IT-001: each declared PR feedback source is curated and consumed once."""
     from unittest.mock import patch
 
     from cafe.core.workflow_feedback import WorkflowFeedbackLedger
@@ -294,6 +320,14 @@ def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(
     playbook["steps"]["pr"]["behavior"]["publish_confirmation"] = False
     playbook["steps"]["pr"].pop("workspace_input_artifact", None)
     ledger = WorkflowFeedbackLedger(issue_dir)
+    if seed_local_review is not None:
+        source_identity, content = seed_local_review
+        ledger.record(
+            source_identity=source_identity,
+            source_kind="local_review",
+            target_step="pr",
+            content=content,
+        )
 
     class AgentManager:
         def __init__(self) -> None:
@@ -332,14 +366,20 @@ def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(
                     "- Next action: Review."
                 )
             output = iteration_dir / "output.md"
-            first_id = f"PRC-{sha256(b'github-pr:101:100').hexdigest()[:12].upper()}"
-            second_id = f"PRC-{sha256(b'github-pr:101:101').hexdigest()[:12].upper()}"
-            output.write_text(
-                "## Todo List\n"
-                f"- [ ] `{first_id}` — Source: `pr_comment` — Work: Curate the first boundary — "
+            canonical_rows = re.findall(
+                r"^- Batch entry \d+: use ID `([^`]+)` and Source `([^`]+)`\.$",
+                prompt,
+                flags=re.MULTILINE,
+            )
+            assert canonical_rows
+            assert {source for _item_id, source in canonical_rows} == {expected_source}
+            todo_rows = "".join(
+                f"- [ ] `{item_id}` — Source: `{source}` — Work: Curate a feedback boundary — "
                 "Closure: addressed — Evidence: targeted pytest\n"
-                f"- [ ] `{second_id}` — Source: `pr_comment` — Work: Curate the second boundary — "
-                "Closure: addressed — Evidence: targeted pytest\n\n"
+                for item_id, source in canonical_rows
+            )
+            output.write_text(
+                "## Todo List\n" + todo_rows + "\n"
                 "## Todo Progress\n\n" + "\n\n".join(entries) + "\n",
                 encoding="utf-8",
             )
@@ -405,10 +445,7 @@ def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(
         patch("cafe.core.hooks.feedback.GitHubOps") as github_ops,
         patch(
             "cafe.core.hooks.feedback.get_all_pr_comments",
-            return_value=[
-                {"id": "100", "body": "Handle the first boundary.", "is_resolved": False},
-                {"id": "101", "body": "Handle the second boundary.", "is_resolved": False},
-            ],
+            return_value=comments,
         ),
     ):
         github_ops.return_value.get_pr_for_branch.return_value = {
@@ -422,8 +459,10 @@ def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(
         ).run(start_step="pr", single_step=True)
 
     assert len(delivery_manager.prompts) == 1, runtime_result
-    assert "Handle the first boundary." in delivery_manager.prompts[0]
-    assert "Handle the second boundary." in delivery_manager.prompts[0]
+    for comment in comments:
+        assert str(comment["body"]) in delivery_manager.prompts[0]
+    assert "Canonical Todo fields for this batch:" in delivery_manager.prompts[0]
+    assert f"Source `{expected_source}`" in delivery_manager.prompts[0]
     assert ledger.pending(target_step="pr") == []
     state = BlackboardStore(issue_dir).load_or_create("pr")
     assert state.artifacts["pr_result"].updated_by == "pr"

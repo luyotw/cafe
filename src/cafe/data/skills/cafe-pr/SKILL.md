@@ -1,7 +1,7 @@
 ---
 name: cafe-pr
 description: "Prepare the local pull request title and description for publication"
-version: 1.4.1
+version: 1.4.2
 workflow:
   execution_profile:
     workload: publication
@@ -121,8 +121,8 @@ the review task can expose a verified PR URL.
 ### Corrective feedback curation mode
 When `workflow_feedback_file` contains feedback for this cycle, or `Current user input for this iteration` contains PR review comments, this is PR iteration 2:
 
- - When runtime provides `workflow_feedback_batch_file`, it is the only immutable source context for this cycle. Select Todo items only from that batch; later items remain for a later cycle. Otherwise, `workflow_feedback_file` and review comments are PR-agent context, not a Develop worklist. Process only unresolved corrective input declared for this step; do not import resolved, stale, duplicate, informational, ordinary PR-body, `## Test Plan`, or open follow-up proposal text.
- - Normalize each applicable source from the current corrective cycle into the output's one `## Todo List` of at most 100 rows. Use the declared Todo source and ID prefix, preserve one-to-one source identity, and never merge distinct sources because their text matches. Use only `No actionable work.` when there is no applicable source.
+ - When runtime provides `workflow_feedback_batch_file`, it is the only immutable source context for this cycle. Select Todo items only from that batch; later items remain for a later cycle. Use the paired ID and Source from runtime's `Canonical Todo fields for this batch` block exactly as shown for each selected batch entry; do not derive or substitute a generic PR-comment prefix or source. Otherwise, `workflow_feedback_file` and review comments are PR-agent context, not a Develop worklist. Process only unresolved corrective input declared for this step; do not import resolved, stale, duplicate, informational, ordinary PR-body, `## Test Plan`, or open follow-up proposal text.
+ - Normalize each applicable source from the current corrective cycle into the output's one `## Todo List` of at most 100 rows. Preserve one-to-one source identity, and never merge distinct sources because their text matches. Use only `No actionable work.` when there is no applicable source.
  - Todo rows must use ``- [ ] `<id>` — Source: `<source>` — Work: ... — Closure: ... — Evidence: ...``. Write only the normalized list; do not include raw PR comments or HumanTask feedback.
  - After curation, write the declared `manual_handoff` using injected `{step_transitions}`. Do not hardcode step names, skip the curator, or select an undeclared route.
 
