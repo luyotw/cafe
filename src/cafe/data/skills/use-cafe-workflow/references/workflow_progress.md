@@ -24,8 +24,10 @@ status inline; proactive-review and confirmation checkpoints immediately follow
 their owning phase, and durable correction arrows stay with the phase they
 re-enter. The renderer intentionally omits raw `on`/`allowed_goto` route dumps
 and a separate always-on legend. The effective graph is still authoritative for
-status and correction interpretation; omitting those declarations from the
-presentation does not change runtime routing.
+phase traversal, status, and correction interpretation. Sibling branches and
+phases unreachable from the entry point are separated rather than joined by a
+false spine edge. Omitting route declarations from the presentation does not
+change runtime routing.
 
 Driver-only display state is one JSON object with only these fields:
 

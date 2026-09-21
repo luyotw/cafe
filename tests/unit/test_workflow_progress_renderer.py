@@ -471,6 +471,7 @@ def test_compact_spine_omits_raw_routes_without_inventing_a_return(tmp_path: Pat
     )
     playbook = {
         "playbook": {"id": "non-topological"},
+        "entry_point": "A",
         "steps": {
             "A": {"on": {"await_agent": "C"}},
             "B": {"on": {"await_agent": "_done"}},
@@ -491,10 +492,32 @@ def test_compact_spine_omits_raw_routes_without_inventing_a_return(tmp_path: Pat
     assert rendered.splitlines() == [
         "○ A · Pending",
         "│",
-        "○ B · Pending",
-        "│",
         "○ C · Pending",
+        "│",
+        "○ B · Pending",
     ]
+
+
+def test_spine_separates_sibling_branches_and_unreachable_phases() -> None:
+    rendered = _module().render_progress(
+        playbook={
+            "playbook": {"id": "branched"},
+            "entry_point": "A",
+            "steps": {
+                "A": {"on": {"await_agent": "B", "no_changes_needed": "C"}},
+                "B": {"on": {"await_agent": "D"}},
+                "C": {"on": {"await_agent": "D"}},
+                "D": {"on": {"await_agent": "_done"}},
+                "unreachable": {"on": {"await_agent": "_done"}},
+            },
+        },
+        contract={},
+        locale="en",
+    )
+
+    assert "○ A · Pending\n│\n○ B · Pending\n│\n○ D · Pending" in rendered
+    assert "○ D · Pending\n\n○ C · Pending" in rendered
+    assert "○ C · Pending\n\n○ unreachable · Pending" in rendered
 
 
 def test_latest_iteration_metadata_cannot_be_overwritten_by_prior_completion(

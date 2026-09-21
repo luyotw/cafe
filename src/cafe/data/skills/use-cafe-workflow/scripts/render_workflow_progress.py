@@ -224,19 +224,54 @@ def _reaches_through_non_handoff_routes(
         if current in visited:
             continue
         visited.add(current)
-        step = steps.get(current, {})
-        routes = step.get("on", {}) if isinstance(step, Mapping) else {}
-        if not isinstance(routes, Mapping):
-            continue
-        for intent, raw_target in routes.items():
-            if intent == "manual_handoff":
-                continue
-            target = str(raw_target)
+        for target in _forward_targets(playbook, current):
             if target == destination:
                 return True
-            if target in steps and target not in visited:
+            if target not in visited:
                 pending.append(target)
     return False
+
+
+def _forward_targets(playbook: Mapping[str, Any], step_name: str) -> list[str]:
+    """Return stable normal-flow targets without correction/manual routes."""
+    steps = playbook["steps"]
+    step = steps.get(step_name, {})
+    routes = step.get("on", {}) if isinstance(step, Mapping) else {}
+    if not isinstance(routes, Mapping):
+        return []
+    targets: list[str] = []
+    for intent, raw_target in routes.items():
+        target = str(raw_target)
+        if (
+            intent != "manual_handoff"
+            and target in steps
+            and target != step_name
+            and target not in targets
+        ):
+            targets.append(target)
+    return targets
+
+
+def _phase_order(playbook: Mapping[str, Any]) -> list[str]:
+    """Walk the effective graph from its entry point, then include disconnected phases."""
+    steps = list(playbook["steps"])
+    entry_point = str(playbook.get("entry_point", ""))
+    roots = [entry_point] if entry_point in playbook["steps"] else steps[:1]
+    roots.extend(step for step in steps if step not in roots)
+    ordered: list[str] = []
+    visited: set[str] = set()
+
+    def visit(step: str) -> None:
+        if step in visited:
+            return
+        visited.add(step)
+        ordered.append(step)
+        for target in _forward_targets(playbook, step):
+            visit(target)
+
+    for root in roots:
+        visit(root)
+    return ordered
 
 
 def _runtime_progress(
@@ -488,18 +523,18 @@ def render_progress(
         else:
             unplaced_returns.append(return_line)
 
-    nodes: list[str] = []
-    for step in steps:
+    phase_blocks: list[tuple[str, list[str]]] = []
+    for step in _phase_order(model):
         label = step
         if iterations.get(step, 0) > 1:
             label += " · " + str(text["iteration"]).format(iteration=iterations[step])
-        nodes.append(_line(phase_statuses[step], label, status_text))
+        block = [_line(phase_statuses[step], label, status_text)]
         if step in required_reviews:
             review_status = reviews.get(step, "unknown")
             review_label = (
                 f"{step}：{text['review']}" if language == "zh" else f"{step}: {text['review']}"
             )
-            nodes.append(_line(review_status, review_label, status_text))
+            block.append(_line(review_status, review_label, status_text))
         if step in gate_steps:
             proxy = text["delegable"] if step in driver_confirmable else text["not_delegable"]
             confirmation_label = (
@@ -507,28 +542,38 @@ def render_progress(
                 if language == "zh"
                 else f"{step}: {text['confirmation']} ({proxy})"
             )
-            nodes.append(
+            block.append(
                 _line(
                     confirmation_statuses[step],
                     confirmation_label,
                     status_text,
                 )
             )
-        nodes.extend(returns_by_target[step])
-    nodes.extend(unplaced_returns)
+        block.extend(returns_by_target[step])
+        phase_blocks.append((step, block))
+
+    body = ""
+    previous_step: str | None = None
+    for step, block in phase_blocks:
+        if body:
+            separator = "\n│\n" if step in _forward_targets(model, previous_step or "") else "\n\n"
+            body += separator
+        body += "\n│\n".join(block)
+        previous_step = step
+    if unplaced_returns:
+        body += ("\n\n" if body else "") + "\n│\n".join(unplaced_returns)
     for item in include_closeout:
-        nodes.append(
-            _line(
-                closeout.get(item, "unknown"),
-                (
-                    f"{item}（{text['closeout']}）"
-                    if language == "zh"
-                    else f"{item} ({text['closeout']})"
-                ),
-                status_text,
-            )
+        closeout_line = _line(
+            closeout.get(item, "unknown"),
+            (
+                f"{item}（{text['closeout']}）"
+                if language == "zh"
+                else f"{item} ({text['closeout']})"
+            ),
+            status_text,
         )
-    return "\n│\n".join(nodes)
+        body += ("\n│\n" if body else "") + closeout_line
+    return body
 
 
 def _json_argument(value: str) -> dict[str, Any]:
