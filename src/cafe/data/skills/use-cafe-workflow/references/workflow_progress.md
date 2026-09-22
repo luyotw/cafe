@@ -15,9 +15,9 @@ still ends the current turn without an additional inspection.
 
 Use the effective conversation locale with `--locale`. Traditional Chinese is
 selected by `zh-TW` or `zh-Hant`; unsupported locales fall back to English.
-Step keys are always preserved exactly. `deliver` and `close` are optional
-Driver closeout items, not runtime phases: include each only with its explicit
-flag. A playbook phase with the same name remains a separate unqualified node.
+Step keys are always preserved exactly. `deliver` and `cleanup` are required
+Driver closeout items, not runtime phases, and always appear after the playbook
+phases. A playbook phase with the same name remains a separate unqualified node.
 
 Stdout is a compact vertical execution spine. Each node carries a readable text
 status symbol plus its localized status text. Renderer-owned status markers use
@@ -43,23 +43,24 @@ Driver-only display state is one JSON object with only these fields:
 {
   "proactive_review": {"spec": "completed", "plan": "in_progress"},
   "deliver": "pending",
-  "close": "pending"
+  "cleanup": "pending"
 }
 ```
 
 Allowed states are `pending`, `in_progress`, `completed`, `returned`,
 `awaiting_confirmation`, `skipped`, `blocked`, and `unknown`. Supply
-`proactive_review` only for phases whose confirmed
+Both `deliver` and `cleanup` are required for every established-workflow render.
+Supply `proactive_review` only for phases whose confirmed
 `proactive_review.phase_decisions` entry is `required`. Omitted displayed
-Driver state is `unknown`, including after a session boundary. The JSON cannot
-set phase or HumanTask status, confirmation ownership, return evidence, or gate
-outcomes. It is never persisted and grants no confirmation, capability, or
-external-operation authority.
+proactive-review state is `unknown`, including after a session boundary. The
+JSON cannot set phase or HumanTask status, confirmation ownership, return
+evidence, or gate outcomes. It is never persisted and grants no confirmation,
+capability, or external-operation authority.
 
 ## Minimal calls
 
 Kickoff uses `format_kickoff_contract.py`; that formatter invokes this renderer
-itself and explicitly displays both closeout items. Do not append a second
+itself with `deliver` and `cleanup` set to `unknown`. Do not append a second
 diagram.
 
 For an ordinary running update:
@@ -68,8 +69,7 @@ For an ordinary running update:
 python3 <skill-dir>/scripts/render_workflow_progress.py \
   --project-root <repo> --issue-dir <repo>/.cafe/issues/<issue> \
   --locale zh-TW --driver-state \
-  '{"proactive_review":{"develop":"in_progress"},"deliver":"pending","close":"pending"}' \
-  --show-deliver --show-close
+  '{"proactive_review":{"develop":"in_progress"},"deliver":"pending","cleanup":"pending"}'
 ```
 
 For a waiting-confirmation question, use the same call after reading the
@@ -78,7 +78,8 @@ it from `human_tasks.json`:
 
 ```bash
 python3 <skill-dir>/scripts/render_workflow_progress.py \
-  --project-root <repo> --issue-dir <repo>/.cafe/issues/<issue> --locale en
+  --project-root <repo> --issue-dir <repo>/.cafe/issues/<issue> --locale en \
+  --driver-state '{"deliver":"unknown","cleanup":"unknown"}'
 ```
 
 For a formal return, again pass no return override. The completed task outcome
@@ -87,17 +88,17 @@ does not add a historical return arrow:
 
 ```bash
 python3 <skill-dir>/scripts/render_workflow_progress.py \
-  --project-root <repo> --issue-dir <repo>/.cafe/issues/<issue> --locale zh-TW
+  --project-root <repo> --issue-dir <repo>/.cafe/issues/<issue> --locale zh-TW \
+  --driver-state '{"deliver":"unknown","cleanup":"unknown"}'
 ```
 
-For completion and Driver closeout reporting, show only the closeout items that
-actually apply and provide their current display values:
+For completion and Driver closeout reporting, provide both required closeout
+values:
 
 ```bash
 python3 <skill-dir>/scripts/render_workflow_progress.py \
   --project-root <repo> --issue-dir <repo>/.cafe/issues/<issue> --locale en \
-  --driver-state '{"deliver":"completed","close":"pending"}' \
-  --show-deliver --show-close
+  --driver-state '{"deliver":"completed","cleanup":"pending"}'
 ```
 
 On a resumed Driver session, rebuild the ephemeral JSON from evidence available
@@ -109,8 +110,7 @@ directory reported by the lifecycle command, for example:
 python3 <skill-dir>/scripts/render_workflow_progress.py \
   --project-root <repo> \
   --issue-dir ~/.cafe/projects/<project-path>/archived/<issue> \
-  --locale zh-TW --driver-state '{"deliver":"completed","close":"completed"}' \
-  --show-deliver --show-close
+  --locale zh-TW --driver-state '{"deliver":"completed","cleanup":"completed"}'
 ```
 
 An explicit archive path is read exactly like an active issue path. If neither

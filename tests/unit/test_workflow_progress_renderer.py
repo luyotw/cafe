@@ -74,6 +74,10 @@ def _contract() -> dict[str, object]:
     }
 
 
+def _unknown_closeout_state() -> dict[str, str]:
+    return {"deliver": "unknown", "cleanup": "unknown"}
+
+
 def _write_runtime(issue_dir: Path) -> None:
     issue_dir.mkdir(parents=True)
     (issue_dir / "blackboard.json").write_text(
@@ -169,8 +173,11 @@ def test_renderer_preserves_custom_phase_names_and_localizes_only_annotations() 
         playbook=_custom_playbook(),
         contract=_contract(),
         locale="zh-TW",
-        driver_state={"proactive_review": {"publish-draft": "in_progress"}},
-        include_closeout=("deliver", "close"),
+        driver_state={
+            "proactive_review": {"publish-draft": "in_progress"},
+            "deliver": "unknown",
+            "cleanup": "unknown",
+        },
     )
 
     assert "○ 資料盤點 · 待執行" in rendered
@@ -181,7 +188,7 @@ def test_renderer_preserves_custom_phase_names_and_localizes_only_annotations() 
         "○ publish-draft：使用者確認（driver 不可代理） · 待執行"
     ) in rendered
     assert "？ deliver（收尾） · 狀態未知" in rendered
-    assert "？ close（收尾） · 狀態未知" in rendered
+    assert "？ cleanup（收尾） · 狀態未知" in rendered
     assert "\ufe0f" not in rendered
     assert "資料盤點" in rendered and "publish-draft" in rendered
 
@@ -201,7 +208,11 @@ def test_renderer_uses_current_iteration_and_revise_outcome_as_checkpoint_state(
         contract=_contract(),
         locale="zh-TW",
         issue_dir=issue_dir,
-        driver_state={"proactive_review": {"publish-draft": "completed"}},
+        driver_state={
+            "proactive_review": {"publish-draft": "completed"},
+            "deliver": "unknown",
+            "cleanup": "unknown",
+        },
     )
 
     assert "▶\ufe0e 資料盤點 · 第 2 輪 · 進行中" in rendered
@@ -229,42 +240,44 @@ def test_driver_state_cannot_override_runtime_and_rejects_invalid_values(tmp_pat
             playbook=_custom_playbook(),
             contract=_contract(),
             locale="en",
-            driver_state={"proactive_review": {"missing": "completed"}},
+            driver_state={
+                "proactive_review": {"missing": "completed"},
+                "deliver": "pending",
+                "cleanup": "pending",
+            },
         )
     with pytest.raises(ValueError, match="invalid progress status"):
         module.render_progress(
             playbook=_custom_playbook(),
             contract=_contract(),
             locale="en",
-            driver_state={"deliver": "done"},
-            include_closeout=("deliver",),
+            driver_state={"deliver": "done", "cleanup": "pending"},
+        )
+    with pytest.raises(ValueError, match="missing required closeout item: cleanup"):
+        module.render_progress(
+            playbook=_custom_playbook(),
+            contract=_contract(),
+            locale="en",
+            driver_state={"deliver": "pending"},
         )
 
 
-def test_closeout_visibility_is_explicit_and_custom_same_named_phase_is_distinct() -> None:
+def test_required_closeouts_are_always_visible_and_custom_same_named_phase_is_distinct() -> None:
     playbook = _custom_playbook()
     playbook["steps"]["deliver"] = {"on": {"await_agent": "_done"}, "human_tasks": []}
     module = _module()
 
-    hidden = module.render_progress(
+    rendered = module.render_progress(
         playbook=playbook,
         contract=_contract(),
         locale="en",
-        driver_state={"deliver": "completed", "close": "pending"},
-    )
-    shown = module.render_progress(
-        playbook=playbook,
-        contract=_contract(),
-        locale="en",
-        driver_state={"deliver": "completed", "close": "pending"},
-        include_closeout=("deliver", "close"),
+        driver_state={"deliver": "completed", "cleanup": "pending"},
     )
 
-    assert "✓ deliver (closeout) · Completed" not in hidden
-    assert "○ deliver · Pending" in hidden
-    assert "○ deliver · Pending\n│" in shown
-    assert "✓ deliver (closeout) · Completed" in shown
-    assert "○ close (closeout) · Pending" in shown
+    assert "○ deliver · Pending" in rendered
+    assert "○ deliver · Pending\n│" in rendered
+    assert "✓ deliver (closeout) · Completed" in rendered
+    assert "○ cleanup (closeout) · Pending" in rendered
 
 
 def test_renderer_reports_missing_workflow_without_inventing_success() -> None:
@@ -322,6 +335,7 @@ def test_pending_confirmation_blocked_and_skipped_use_durable_evidence(tmp_path:
         contract=_contract(),
         locale="en-US",
         issue_dir=issue_dir,
+        driver_state=_unknown_closeout_state(),
     )
 
     assert "! 資料盤點 · iteration 2 · Blocked" in rendered
@@ -388,9 +402,7 @@ def test_direct_playbook_and_archived_issue_cli_are_supported(tmp_path: Path) ->
             "--locale",
             "en",
             "--driver-state",
-            '{"deliver":"completed","close":"completed"}',
-            "--show-deliver",
-            "--show-close",
+            '{"deliver":"completed","cleanup":"completed"}',
         ],
         text=True,
         capture_output=True,
@@ -401,8 +413,37 @@ def test_direct_playbook_and_archived_issue_cli_are_supported(tmp_path: Path) ->
     assert "✓ develop · Completed" in result.stdout
     assert "▶\ufe0e pr · In progress" in result.stdout
     assert "✓ deliver (closeout) · Completed" in result.stdout
-    assert "✓ close (closeout) · Completed" in result.stdout
+    assert "✓ cleanup (closeout) · Completed" in result.stdout
     assert "\ufe0f" not in result.stdout
+
+
+def test_cli_requires_both_fixed_closeout_states() -> None:
+    base = [
+        sys.executable,
+        str(SCRIPT),
+        "--project-root",
+        str(PROJECT_ROOT),
+        "--playbook",
+        "direct-subagent-review",
+    ]
+
+    missing_state = subprocess.run(
+        base,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    missing_cleanup = subprocess.run(
+        [*base, "--driver-state", '{"deliver":"pending"}'],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert missing_state.returncode == 2
+    assert "must provide required closeout items: deliver, cleanup" in missing_state.stderr
+    assert missing_cleanup.returncode == 2
+    assert "missing required closeout item: cleanup" in missing_cleanup.stderr
 
 
 def test_previous_revision_does_not_approve_the_new_iteration(tmp_path: Path) -> None:
@@ -417,6 +458,7 @@ def test_previous_revision_does_not_approve_the_new_iteration(tmp_path: Path) ->
         contract=_contract(),
         locale="en",
         issue_dir=issue_dir,
+        driver_state=_unknown_closeout_state(),
     )
 
     assert "○ publish-draft: user confirmation (driver may not act) · Pending" in rendered
@@ -478,6 +520,7 @@ def test_compact_spine_omits_raw_routes_without_inventing_a_return(tmp_path: Pat
         contract={},
         locale="en",
         issue_dir=issue_dir,
+        driver_state=_unknown_closeout_state(),
     )
 
     assert "↩ A → A" not in rendered
@@ -489,6 +532,10 @@ def test_compact_spine_omits_raw_routes_without_inventing_a_return(tmp_path: Pat
         "○ C · Pending",
         "│",
         "○ B · Pending",
+        "│",
+        "？ deliver (closeout) · Unknown",
+        "│",
+        "？ cleanup (closeout) · Unknown",
     ]
 
 
@@ -507,6 +554,7 @@ def test_spine_separates_sibling_branches_and_unreachable_phases() -> None:
         },
         contract={},
         locale="en",
+        driver_state=_unknown_closeout_state(),
     )
 
     assert "○ A · Pending\n│\n○ B · Pending\n│\n○ D · Pending" in rendered
@@ -558,6 +606,7 @@ def test_latest_iteration_metadata_cannot_be_overwritten_by_prior_completion(
         contract={},
         locale="en",
         issue_dir=issue_dir,
+        driver_state=_unknown_closeout_state(),
     )
 
     assert "▶\ufe0e review · iteration 2 · In progress" in rendered
@@ -580,6 +629,7 @@ def test_completed_confirmation_requires_a_recognized_outcome(
         contract=_contract(),
         locale="en",
         issue_dir=issue_dir,
+        driver_state=_unknown_closeout_state(),
     )
 
     assert "？ publish-draft: user confirmation (driver may not act) · Unknown" in rendered
@@ -601,6 +651,7 @@ def test_completed_confirmation_renders_only_a_declared_non_correction_outcome(
         contract=_contract(),
         locale="en",
         issue_dir=issue_dir,
+        driver_state=_unknown_closeout_state(),
     )
 
     assert "✓ publish-draft: user confirmation (driver may not act) · Completed" in rendered
@@ -645,6 +696,7 @@ def test_forward_skip_review_manual_handoff_is_not_a_return(tmp_path: Path) -> N
         contract={},
         locale="en",
         issue_dir=issue_dir,
+        driver_state=_unknown_closeout_state(),
     )
 
     assert "↩\ufe0e develop → pr · Returned" not in rendered
@@ -688,6 +740,7 @@ def test_declared_correction_manual_handoff_is_a_formal_return(tmp_path: Path) -
         contract={},
         locale="en",
         issue_dir=issue_dir,
+        driver_state=_unknown_closeout_state(),
     )
 
     assert "↩\ufe0e review · Returned" in rendered
@@ -754,6 +807,7 @@ def test_delivered_pr_feedback_baton_is_a_formal_return(tmp_path: Path) -> None:
         contract={},
         locale="en",
         issue_dir=issue_dir,
+        driver_state=_unknown_closeout_state(),
     )
 
     assert "↩\ufe0e pr · iteration 2 · Returned" in rendered
@@ -830,6 +884,7 @@ def test_repeated_returns_project_only_latest_phase_states(tmp_path: Path) -> No
         contract={},
         locale="en",
         issue_dir=issue_dir,
+        driver_state=_unknown_closeout_state(),
     )
 
     assert "▶\ufe0e develop · iteration 7 · In progress" in rendered
@@ -931,14 +986,20 @@ def test_default_projection_suppresses_superseded_returns_and_shows_active_check
         },
         locale="zh-TW",
         issue_dir=issue_dir,
-        driver_state={"proactive_review": {"pr": "completed"}},
+        driver_state={
+            "proactive_review": {"pr": "completed"},
+            "deliver": "unknown",
+            "cleanup": "unknown",
+        },
     )
 
     assert rendered == (
         "✓ develop · 第 6 輪 · 已完成\n│\n"
         "✓ pr · 第 14 輪 · 已完成\n│\n"
         "✓ pr：driver 主動審查 · 已完成\n│\n"
-        "⏸\ufe0e pr：使用者確認（driver 不可代理） · 等待確認"
+        "⏸\ufe0e pr：使用者確認（driver 不可代理） · 等待確認\n│\n"
+        "？ deliver（收尾） · 狀態未知\n│\n"
+        "？ cleanup（收尾） · 狀態未知"
     )
     assert "\ufe0f" not in rendered
 
@@ -988,6 +1049,7 @@ def test_latest_return_is_phase_state_without_a_historical_arrow(tmp_path: Path)
         contract={},
         locale="en",
         issue_dir=issue_dir,
+        driver_state=_unknown_closeout_state(),
     )
 
     assert "↩\ufe0e pr · iteration 14 · Returned" in rendered
@@ -1043,6 +1105,7 @@ def test_same_phase_task_return_projects_latest_confirmation_state(tmp_path: Pat
         },
         locale="en",
         issue_dir=issue_dir,
+        driver_state=_unknown_closeout_state(),
     )
 
     assert "↩\ufe0e pr: user confirmation (driver may not act) · Returned" in rendered
@@ -1118,6 +1181,7 @@ def test_cross_target_returns_project_only_each_phase_latest_state(tmp_path: Pat
         contract={},
         locale="en",
         issue_dir=issue_dir,
+        driver_state=_unknown_closeout_state(),
     )
 
     assert "▶\ufe0e A · iteration 2 · In progress" in rendered
@@ -1216,6 +1280,7 @@ def test_runtime_and_task_return_history_is_suppressed(tmp_path: Path) -> None:
         },
         locale="en",
         issue_dir=issue_dir,
+        driver_state=_unknown_closeout_state(),
     )
 
     assert "▶\ufe0e develop · iteration 7 · In progress" in rendered
@@ -1280,6 +1345,7 @@ def test_forward_feedback_curation_delivery_is_not_a_return(tmp_path: Path) -> N
         contract={},
         locale="en",
         issue_dir=issue_dir,
+        driver_state=_unknown_closeout_state(),
     )
 
     assert "↩\ufe0e curator → consumer · Returned" not in rendered
@@ -1329,6 +1395,7 @@ def test_durable_blocked_event_overrides_completed_iteration_metadata(tmp_path: 
         contract={},
         locale="en",
         issue_dir=issue_dir,
+        driver_state=_unknown_closeout_state(),
     )
 
     assert "! publish · Blocked" in rendered

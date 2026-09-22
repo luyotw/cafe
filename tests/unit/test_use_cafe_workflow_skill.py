@@ -278,9 +278,10 @@ def test_driver_requires_script_rendered_progress_on_every_visible_reply() -> No
     assert "action: yield" in normalized
     assert '"proactive_review"' in progress
     assert '"deliver"' in progress
-    assert '"close"' in progress
-    assert "--show-deliver" in progress
-    assert "--show-close" in progress
+    assert '"cleanup"' in progress
+    assert "required for every established-workflow render" in progress
+    assert "--show-deliver" not in progress
+    assert "--show-close" not in progress
     assert "unknown" in progress
     assert "human_tasks.json" in progress
     assert "archived/<issue>" in progress
@@ -993,7 +994,7 @@ mandate:
     assert "○ review · 待執行" in result.stdout
     assert "○ pr：使用者確認（driver 不可代理） · 待執行" in result.stdout
     assert "？ deliver（收尾） · 狀態未知" in result.stdout
-    assert "？ close（收尾） · 狀態未知" in result.stdout
+    assert "？ cleanup（收尾） · 狀態未知" in result.stdout
     assert "\ufe0f" not in result.stdout
     assert "### Phases" not in result.stdout
     assert "| mandatory_human_tasks | pr |" in result.stdout

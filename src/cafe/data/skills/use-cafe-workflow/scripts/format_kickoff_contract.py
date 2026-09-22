@@ -981,7 +981,7 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
         playbook=model,
         contract=progress_contract,
         locale=effective_locale,
-        include_closeout=("deliver", "close"),
+        driver_state={"deliver": "unknown", "cleanup": "unknown"},
     )
 
     reactive = _table(

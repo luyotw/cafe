@@ -10,7 +10,7 @@ import shlex
 import shutil
 import sys
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 
 
 def _reexec_with_cafe_python() -> None:
@@ -51,6 +51,7 @@ _STATUSES = {
     "blocked",
     "unknown",
 }
+_CLOSEOUT_ITEMS = ("deliver", "cleanup")
 _TEXT_STATUS_SYMBOLS = {
     "pending": "○",
     "in_progress": "▶\ufe0e",
@@ -200,12 +201,15 @@ def _driver_progress(
     required_reviews: set[str],
 ) -> tuple[dict[str, str], dict[str, str]]:
     if driver_state is None:
-        return {}, {}
+        raise ValueError("driver state must provide required closeout items: deliver, cleanup")
     state = _mapping(driver_state, "driver state")
-    unexpected = set(state) - {"proactive_review", "deliver", "close"}
+    unexpected = set(state) - {"proactive_review", *_CLOSEOUT_ITEMS}
     if unexpected:
         field = sorted(unexpected)[0]
         raise ValueError(f"driver state cannot override runtime phase '{field}'")
+    missing = [item for item in _CLOSEOUT_ITEMS if item not in state]
+    if missing:
+        raise ValueError(f"driver state missing required closeout item: {missing[0]}")
     review_raw = state.get("proactive_review", {})
     reviews = _mapping(review_raw, "proactive_review")
     unknown = set(reviews) - required_reviews
@@ -214,7 +218,7 @@ def _driver_progress(
     normalized_reviews = {
         phase: _status(value, f"proactive_review.{phase}") for phase, value in reviews.items()
     }
-    closeout = {name: _status(state[name], name) for name in ("deliver", "close") if name in state}
+    closeout = {name: _status(state[name], name) for name in _CLOSEOUT_ITEMS}
     return normalized_reviews, closeout
 
 
@@ -492,7 +496,6 @@ def render_progress(
     locale: str = "en",
     issue_dir: Path | None = None,
     driver_state: Mapping[str, Any] | None = None,
-    include_closeout: Sequence[str] = (),
 ) -> str:
     """Render progress without creating, resuming, or mutating workflow state."""
     language = _language(locale)
@@ -504,9 +507,6 @@ def render_progress(
     policy = _mapping(contract or {}, "contract")
     required_reviews = _required_reviews(policy, set(steps))
     reviews, closeout = _driver_progress(driver_state, required_reviews=required_reviews)
-    invalid_closeout = set(include_closeout) - {"deliver", "close"}
-    if invalid_closeout:
-        raise ValueError(f"unknown closeout item: {sorted(invalid_closeout)[0]}")
     phase_statuses, iterations = _runtime_progress(issue_dir, model)
     user_required, driver_confirmable, mandatory = _confirmation_contract(policy)
     gate_steps = (user_required | driver_confirmable | mandatory) & set(steps)
@@ -549,7 +549,7 @@ def render_progress(
             body += separator
         body += "\n│\n".join(block)
         previous_step = step
-    for item in include_closeout:
+    for item in _CLOSEOUT_ITEMS:
         closeout_line = _line(
             closeout.get(item, "unknown"),
             (
@@ -576,9 +576,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--playbook")
     parser.add_argument("--issue-dir", type=Path)
     parser.add_argument("--locale", default="en")
-    parser.add_argument("--driver-state", type=_json_argument)
-    parser.add_argument("--show-deliver", action="store_true")
-    parser.add_argument("--show-close", action="store_true")
+    parser.add_argument(
+        "--driver-state",
+        type=_json_argument,
+        help="JSON display state; must include deliver and cleanup",
+    )
     return parser
 
 
@@ -613,11 +615,8 @@ def main() -> int:
         if issue_dir is not None and contract is None:
             print(render_progress(locale=args.locale))
             return 0
-        include_closeout = tuple(
-            name
-            for name, enabled in (("deliver", args.show_deliver), ("close", args.show_close))
-            if enabled
-        )
+        if args.driver_state is None:
+            raise ValueError("driver state must provide required closeout items: deliver, cleanup")
         print(
             render_progress(
                 playbook=playbook,
@@ -625,7 +624,6 @@ def main() -> int:
                 locale=args.locale,
                 issue_dir=issue_dir,
                 driver_state=args.driver_state,
-                include_closeout=include_closeout,
             )
         )
     except (FileNotFoundError, LookupError, OSError, RuntimeError, ValueError) as exc:
