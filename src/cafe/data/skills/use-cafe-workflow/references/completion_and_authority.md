@@ -87,6 +87,14 @@ instructions. Use bounded read-only
 checks where needed; do not query unrelated services or apply a fixed shipping
 checklist to every playbook.
 
+When the confirmed Delivery Contract has a version-2 `closeout_plan`, use its
+`deliver_scope` and `cleanup_scope` only to decide which closeout activities to
+present and verify. The plan is not action authority: its
+`execution_authority` remains `separate_user_confirmation_required`, so every
+merge, deployment, publication, issue closure, branch deletion, worktree
+removal, or other external action still needs the exact authority and declared
+execution path below.
+
 1. Present a concise, self-contained handoff: what was achieved, where the usable
    result is, the evidence supporting completion, and any relevant remaining
    action. Distinguish required user follow-through from optional suggestions;

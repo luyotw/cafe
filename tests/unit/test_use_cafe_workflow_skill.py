@@ -82,6 +82,10 @@ def _preflight_args() -> list[str]:
     return [
         "--delivery-contract",
         json.dumps(delivery_contract()),
+        "--deliver-scope",
+        "manual_delivery_handoff",
+        "--cleanup-scope",
+        ("archive_cafe_issue_after_integration,remove_feature_worktree," "delete_feature_branch"),
         "--update-preflight",
         json.dumps(
             {
@@ -979,6 +983,11 @@ mandate:
 
     assert result.returncode == 0, result.stderr
     assert "## Kickoff Contract — issue346" in result.stdout
+    assert "### Repository CI/CD inference" in result.stdout
+    assert "### Deliver and cleanup scope to confirm" in result.stdout
+    assert "manual_delivery_handoff" in result.stdout
+    assert "separate_user_confirmation_required" in result.stdout
+    assert "no recognized repository CI/CD configuration" in result.stdout
     assert "### Delivery Contract" in result.stdout
     assert delivery_contract()["outcome"] in result.stdout
     assert delivery_contract()["required_evidence"][0] in result.stdout
@@ -1032,6 +1041,26 @@ mandate:
     assert "| need_clarification | driver_confirmable | 否 |" in result.stdout
     assert "| product_scope | escalate | roadmap, positioning |" in result.stdout
     assert result.stdout.count("| playbook_id |") == 1
+
+
+@pytest.mark.parametrize("flag", ["--deliver-scope", "--cleanup-scope"])
+def test_kickoff_formatter_requires_confirmable_closeout_scopes(tmp_path: Path, flag: str) -> None:
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text("version: 1\n", encoding="utf-8")
+    command = _kickoff_formatter_command(strategic_context)
+    index = command.index(flag)
+    del command[index : index + 2]
+
+    result = subprocess.run(
+        command,
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert flag in result.stderr
 
 
 def _write_fake_cafe(
@@ -1195,6 +1224,17 @@ def test_confirmed_kickoff_activates_one_issue_scoped_driver_contract(tmp_path: 
     assert contract["locales"] == {
         "conversation": {"value": "zh-TW", "source": "user thread override"}
     }
+    assert contract["delivery_contract"]["schema_version"] == 2
+    closeout_plan = contract["delivery_contract"]["closeout_plan"]
+    assert closeout_plan["ci_cd_inference"]["configurations"] == []
+    assert re.fullmatch(r"[0-9a-f]{64}", closeout_plan["ci_cd_inference"]["fingerprint_sha256"])
+    assert closeout_plan["deliver_scope"] == ["manual_delivery_handoff"]
+    assert closeout_plan["cleanup_scope"] == [
+        "archive_cafe_issue_after_integration",
+        "remove_feature_worktree",
+        "delete_feature_branch",
+    ]
+    assert closeout_plan["execution_authority"] == "separate_user_confirmation_required"
     assert "proactive_review.yaml" not in {path.name for path in (issue_dir / "driver").iterdir()}
     assert "No proactive review was confirmed for development." in result.stdout
     assert "| schema_version | 4 |" in result.stdout

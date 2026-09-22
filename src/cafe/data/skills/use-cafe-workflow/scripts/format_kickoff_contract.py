@@ -53,7 +53,7 @@ try:
     )
     from cafe.core.types import AgentCLI, AgentConfig
     from cafe.driver import ActivateConfirmedContract, activate_confirmed_contract
-    from cafe.driver.delivery import normalize_delivery_contract
+    from cafe.driver.delivery import normalize_closeout_inference, normalize_delivery_contract
     from cafe.playbooks.loader import PlaybookLoader
     from cafe.skills.execution_profile import resolve_execution_profile
     from cafe.skills.loader import SkillLoader
@@ -63,6 +63,7 @@ except ModuleNotFoundError:
     raise
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from infer_closeout_scope import infer_closeout_scope  # noqa: E402
 from render_workflow_progress import render_progress  # noqa: E402
 
 
@@ -82,6 +83,31 @@ def _items(values: Iterable[str] | None) -> list[str]:
             if token and token not in result:
                 result.append(token)
     return result
+
+
+def _kickoff_delivery_contract(args: argparse.Namespace, project_root: Path) -> dict[str, Any]:
+    """Build a v2 proposal from read-only CI/CD evidence and selected scopes."""
+    core = normalize_delivery_contract(args.delivery_contract)
+    if core["schema_version"] != 1:
+        raise ValueError("new kickoff requires version-1 core delivery facts")
+    deliver_scope = _items(args.deliver_scope)
+    cleanup_scope = _items(args.cleanup_scope)
+    if not deliver_scope:
+        raise ValueError("kickoff requires at least one --deliver-scope")
+    if not cleanup_scope:
+        raise ValueError("kickoff requires at least one --cleanup-scope")
+    return normalize_delivery_contract(
+        {
+            **core,
+            "schema_version": 2,
+            "closeout_plan": {
+                "ci_cd_inference": normalize_closeout_inference(infer_closeout_scope(project_root)),
+                "deliver_scope": deliver_scope,
+                "cleanup_scope": cleanup_scope,
+                "execution_authority": "separate_user_confirmation_required",
+            },
+        }
+    )
 
 
 def _positive_seconds(value: str) -> int:
@@ -396,7 +422,29 @@ def _parser() -> argparse.ArgumentParser:
         "--delivery-contract",
         type=_json_mapping,
         required=True,
-        help="Complete versioned delivery facts to confirm at kickoff.",
+        help="Complete version-1 product delivery facts; the formatter adds the proposed closeout scope.",
+    )
+    parser.add_argument(
+        "--deliver-scope",
+        action="append",
+        default=[],
+        required=True,
+        metavar="ACTION",
+        help=(
+            "Proposed deliver action, inferred from CI/CD then shown for user confirmation; "
+            "repeat or comma-separate."
+        ),
+    )
+    parser.add_argument(
+        "--cleanup-scope",
+        action="append",
+        default=[],
+        required=True,
+        metavar="ACTION",
+        help=(
+            "Proposed cleanup action, inferred from CI/CD then shown for user confirmation; "
+            "repeat or comma-separate."
+        ),
     )
     parser.add_argument(
         "--issue-scale",
@@ -614,7 +662,7 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
         else {"kind": "current_checkout"}
     )
     proposal: dict[str, Any] = {
-        "delivery_contract": normalize_delivery_contract(args.delivery_contract),
+        "delivery_contract": _kickoff_delivery_contract(args, project_root),
         "locales": {
             "conversation": {"value": effective_locale, "source": locale_source},
         },
@@ -798,6 +846,13 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
         )
     zh = effective_locale.lower().startswith("zh")
     worktree = args.worktree if args.worktree else "current checkout"
+    delivery_contract = (
+        confirmed_proposal["delivery_contract"]
+        if confirmed_proposal is not None
+        else _kickoff_delivery_contract(args, project_root)
+    )
+    closeout_plan = delivery_contract["closeout_plan"]
+    ci_cd_inference = closeout_plan["ci_cd_inference"]
 
     if zh:
         title = f"## Kickoff Contract — {args.issue_name}"
@@ -1014,11 +1069,49 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
             ["out_of_mandate", out_of_mandate or "[]"],
         ],
     )
+    ci_cd_rows: list[list[Any]] = [
+        ["fingerprint_sha256", ci_cd_inference["fingerprint_sha256"]],
+        [
+            "detected_configurations",
+            (
+                json.dumps(ci_cd_inference["configurations"], ensure_ascii=False)
+                if ci_cd_inference["configurations"]
+                else "[] (no recognized repository CI/CD configuration)"
+            ),
+        ],
+        [
+            "suggested_deliver_scope",
+            ", ".join(ci_cd_inference["suggested_deliver_scope"]),
+        ],
+        [
+            "suggested_cleanup_scope",
+            ", ".join(ci_cd_inference["suggested_cleanup_scope"]),
+        ],
+        [
+            "requires_explicit_confirmation",
+            ", ".join(ci_cd_inference["requires_explicit_confirmation"]),
+        ],
+    ]
+    closeout_rows: list[list[Any]] = [
+        ["deliver_scope", ", ".join(closeout_plan["deliver_scope"])],
+        ["cleanup_scope", ", ".join(closeout_plan["cleanup_scope"])],
+        ["execution_authority", closeout_plan["execution_authority"]],
+    ]
 
     return "\n\n".join(
         [
             title,
             summary,
+            "### Repository CI/CD inference",
+            _table(summary_headers, ci_cd_rows),
+            "The inference is a read-only recommendation from recognized repository "
+            "configuration files. It does not execute a pipeline or authorize any action.",
+            "### Deliver and cleanup scope to confirm",
+            _table(summary_headers, closeout_rows),
+            "These scopes define the closeout the Driver should later propose. They do not "
+            "authorize merge, deployment, publication, issue closure, branch deletion, "
+            "worktree removal, or any other external action; each action still needs its "
+            "own confirmed authority and declared execution path.",
             "### Delivery Contract",
             _table(
                 summary_headers,
@@ -1031,7 +1124,8 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
                             else value
                         ),
                     ]
-                    for key, value in normalize_delivery_contract(args.delivery_contract).items()
+                    for key, value in delivery_contract.items()
+                    if key != "closeout_plan"
                 ],
             ),
             "The Driver may accept a requirement-equivalent implementation with a smaller "

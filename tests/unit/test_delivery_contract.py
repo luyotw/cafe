@@ -486,6 +486,72 @@ def test_delivery_requires_complete_versioned_facts(field):
         normalize_delivery_contract(data)
 
 
+def _delivery_contract_v2():
+    data = delivery_contract()
+    data["schema_version"] = 2
+    data["closeout_plan"] = {
+        "ci_cd_inference": {
+            "schema_version": 1,
+            "fingerprint_sha256": "a" * 64,
+            "configurations": [
+                {
+                    "path": ".github/workflows/ci.yml",
+                    "system": "github_actions",
+                    "signals": ["pull_request", "push"],
+                }
+            ],
+            "suggested_deliver_scope": [
+                "publish_pull_request",
+                "wait_for_ci_checks",
+                "merge_pull_request",
+            ],
+            "suggested_cleanup_scope": [
+                "archive_cafe_issue_after_integration",
+                "remove_feature_worktree",
+                "delete_feature_branch",
+            ],
+            "requires_explicit_confirmation": ["merge_pull_request"],
+        },
+        "deliver_scope": ["publish_pull_request", "merge_pull_request"],
+        "cleanup_scope": ["archive_cafe_issue_after_integration"],
+        "execution_authority": "separate_user_confirmation_required",
+    }
+    return data
+
+
+def test_delivery_contract_v2_persists_closeout_scope_without_action_authority():
+    normalized = normalize_delivery_contract(_delivery_contract_v2())
+
+    assert normalized["schema_version"] == 2
+    assert normalized["closeout_plan"]["deliver_scope"] == [
+        "publish_pull_request",
+        "merge_pull_request",
+    ]
+    assert (
+        normalized["closeout_plan"]["execution_authority"] == "separate_user_confirmation_required"
+    )
+
+
+@pytest.mark.parametrize(
+    "path, value",
+    [
+        (("closeout_plan", "deliver_scope"), []),
+        (("closeout_plan", "cleanup_scope"), ["duplicate", "duplicate"]),
+        (("closeout_plan", "execution_authority"), "preauthorized"),
+        (("closeout_plan", "ci_cd_inference", "fingerprint_sha256"), "not-a-digest"),
+    ],
+)
+def test_delivery_contract_v2_rejects_invalid_closeout_plan(path, value):
+    data = _delivery_contract_v2()
+    target = data
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+
+    with pytest.raises(ValueError):
+        normalize_delivery_contract(data)
+
+
 @pytest.mark.parametrize(
     "text",
     [
