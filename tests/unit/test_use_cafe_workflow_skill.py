@@ -276,7 +276,9 @@ def test_driver_requires_script_rendered_progress_on_every_visible_reply() -> No
     normalized = " ".join((skill + progress + kickoff + running + completion).split())
 
     assert "scripts/render_workflow_progress.py" in normalized
-    assert "every kickoff, question, progress update, error, and completion message" in normalized
+    assert "For an initial kickoff" in normalized
+    assert "format_kickoff_contract.py` owns the complete response" in normalized
+    assert "For every other question, progress update, error, and completion message" in normalized
     assert "Do not hand-write, translate, reorder, trim" in normalized
     assert "never starts or resumes a workflow" in normalized
     assert "action: yield" in normalized
@@ -872,6 +874,10 @@ def test_use_cafe_workflow_skill_requires_playbook_derived_kickoff_contract() ->
     assert "repository_language:" in reference
     assert ".cafe/issues/<issue-name>/issue.yaml" in reference
     assert "scripts/format_kickoff_contract.py" in reference
+    assert "complete stdout" in skill
+    assert "instead of replacing it with a prose summary" in " ".join(skill.split())
+    assert "self-contained initial confirmation request" in normalized
+    assert "Do not substitute a shorter hand-written recap" in normalized
     assert "playbook_selection_rationale" in reference
     assert "independent-QA decision" in reference
     assert "cafe playbook list" in selection
@@ -988,6 +994,16 @@ mandate:
         "QA is not independently required, so standard-qa is unnecessary. |" in result.stdout
     )
     assert "### Workflow progress" in result.stdout
+    assert result.stdout.count("### Workflow progress") == 1
+    assert "### 請確認完整 Kickoff Contract" in result.stdout
+    assert "請確認上述完整契約" in result.stdout
+    confirmation_index = result.stdout.index("### 請確認完整 Kickoff Contract")
+    progress_index = result.stdout.index("### Workflow progress")
+    assert confirmation_index < progress_index
+    progress_block = result.stdout[progress_index:]
+    assert progress_block.startswith("### Workflow progress\n\n```text\n")
+    assert progress_block.rstrip().endswith("```")
+    assert "\n### " not in progress_block
     assert "○ spec · 待執行" in result.stdout
     assert "○ spec：使用者確認（driver 可代理） · 待執行" in result.stdout
     assert "○ plan：使用者確認（driver 可代理） · 待執行" in result.stdout
@@ -1082,6 +1098,63 @@ mandate:
     assert result.returncode == 0, result.stderr
     assert "| deliver | [] |" in result.stdout
     assert "| cleanup | [] |" in result.stdout
+
+
+def test_kickoff_formatter_places_catalog_reminder_before_confirmation_and_progress(
+    tmp_path: Path,
+) -> None:
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text(
+        "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
+        encoding="utf-8",
+    )
+    command = _kickoff_formatter_command(strategic_context)
+    catalog_index = command.index("--catalog-preflight") + 1
+    catalog_preflight = json.loads(command[catalog_index])
+    catalog_preflight["content_mismatch_entry_ids"] = ["agent:developer/shared"]
+    command[catalog_index] = json.dumps(catalog_preflight)
+
+    result = subprocess.run(
+        command,
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    reminder_index = result.stdout.index("### 可選的 Global catalog 同步")
+    confirmation_index = result.stdout.index("### 請確認完整 Kickoff Contract")
+    progress_index = result.stdout.index("### Workflow progress")
+    assert reminder_index < confirmation_index < progress_index
+    assert "agent:developer/shared" in result.stdout
+    assert "確認 kickoff 不代表同意發布" in result.stdout
+    assert "\n### " not in result.stdout[progress_index:]
+
+
+@pytest.mark.parametrize("locale", ["zh-CN", "zh-Hans"])
+def test_kickoff_formatter_falls_back_to_english_for_unsupported_chinese_locales(
+    tmp_path: Path, locale: str
+) -> None:
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text(
+        "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
+        encoding="utf-8",
+    )
+    command = _kickoff_formatter_command(strategic_context)
+    command[command.index("--effective-locale") + 1] = locale
+
+    result = subprocess.run(
+        command,
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "### Confirm the complete Kickoff Contract" in result.stdout
+    assert "### 請確認完整 Kickoff Contract" not in result.stdout
 
 
 def _write_fake_cafe(
@@ -2295,6 +2368,12 @@ def test_kickoff_contract_formatter_uses_cafe_python_when_site_packages_are_miss
 
     assert result.returncode == 0, result.stderr
     assert "## Kickoff Contract — issue346" in result.stdout
+    assert "### Confirm the complete Kickoff Contract" in result.stdout
+    assert "Please confirm the complete contract above" in result.stdout
+    assert result.stdout.index("### Confirm the complete Kickoff Contract") < result.stdout.index(
+        "### Workflow progress"
+    )
+    assert "\n### " not in result.stdout[result.stdout.index("### Workflow progress") :]
     assert "○ spec: user confirmation (driver may not act) · Pending" in result.stdout
 
 

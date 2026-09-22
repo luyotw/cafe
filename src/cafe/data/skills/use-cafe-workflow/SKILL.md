@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including passive supervision, bounded recovery, and declarative repair when execution leaves its safe operating envelope.
-metadata: {version: 1.57.0}
+metadata: {version: 1.58.0}
 ---
 
 # Use CAFE Workflow
@@ -64,10 +64,13 @@ read the union once; do not preload the rest.
   where the confirmed task contract explicitly grants them.
 - Treat a wrapper directive with `action: yield` as terminal for the current
   Driver turn. Do not poll the background worker after that directive.
-- End every user-visible reply with the unchanged output of
-  `scripts/render_workflow_progress.py`, following `workflow_progress.md`.
-  Rendering is read-only and never justifies polling, resuming, confirming, or
-  performing an external action.
+- For an initial kickoff confirmation request, return the complete stdout of
+  `scripts/format_kickoff_contract.py` instead of replacing it with a prose
+  summary. The formatter owns the confirmation prompt and final progress block;
+  do not append a second diagram. For every other user-visible reply, end with
+  the unchanged output of `scripts/render_workflow_progress.py`, following
+  `workflow_progress.md`. Rendering is read-only and never justifies polling,
+  resuming, confirming, or performing an external action.
 - Follow only the effective graph, confirmed contract, and action-specific
   authority. “Continue” or workflow completion grants no repair, merge, deploy,
   publish, close, delete, cleanup, or other external mutation authority. The

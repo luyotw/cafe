@@ -147,11 +147,14 @@ obtain explicit user confirmation of:
   confirmed field of the sole Driver contract, never `driver/config.yaml`;
 - worktree choice and path when using a worktree.
 
-`format_kickoff_contract.py` renders the planned graph through the shared
-`render_workflow_progress.py` implementation. Preserve that text block exactly;
-do not recreate a phase list or append a second progress diagram. The kickoff
-has no runtime execution evidence, so phases are pending while omitted
-Driver-only review and closeout values are unknown.
+`format_kickoff_contract.py` renders the complete user-facing kickoff, including
+the confirmation prompt and planned graph from the shared
+`render_workflow_progress.py` implementation. Return its complete stdout for the
+initial confirmation request instead of replacing it with a prose summary.
+Preserve the final progress block exactly; do not recreate a phase list or
+append a second diagram. The kickoff has no runtime execution evidence, so
+phases are pending while omitted Driver-only review and closeout values are
+unknown.
 
 For a new workflow, use event-driven as the proposed default unless the user
 explicitly chooses another mode or an existing confirmed issue contract already
@@ -246,12 +249,13 @@ continuing preparation.
 Runtime installation and project-to-Global catalog publication are separate
 approval scopes. Missing Global entries are ordinary project-only definitions
 and produce no reminder. Only when `content_mismatch_entry_ids` is non-empty,
-append those IDs as a non-blocking synchronization recommendation in the
-effective conversation locale at the very end of the rendered contract. Never
-ask a separate pre-kickoff catalog question or infer publication approval from
+have the formatter include those IDs as a non-blocking synchronization
+recommendation in the effective conversation locale after the contract details
+and before its confirmation prompt and final progress block. Never ask a
+separate pre-kickoff catalog question or infer publication approval from
 contract confirmation. If the user separately requests publication, bind its
-exact selection to the reported comparison token. After an approved change,
-run both checks again and compare effective workflow digests. When effective
+exact selection to the reported comparison token. After an approved change, run
+both checks again and compare effective workflow digests. When effective
 behavior changed, present a freshly rendered kickoff contract and obtain
 confirmation before preparation or workflow execution.
 
@@ -382,7 +386,10 @@ development, drafting, research, or any other entry step.
 
 ### Render the proposal
 
-Use the bundled formatter instead of a prose-only summary:
+Use the bundled formatter instead of a prose-only summary. Its stdout is a
+self-contained initial confirmation request: present the complete output so the
+user sees every field being confirmed, including `deliver` and `cleanup`. Do not
+substitute a shorter hand-written recap.
 
 ```bash
 python3 <skill-dir>/scripts/format_kickoff_contract.py <playbook-id> \
@@ -452,10 +459,10 @@ Add the existing preflight metadata (`checked_at`, `decision`, and
 `post_change_evidence`) to the script's nested `catalog_check` payload after a
 zero exit before passing it to `--catalog-preflight`. After a handled nonzero
 exit, add them to the raw catalog payload instead; no mismatch reminder exists
-for that branch. The formatter contains no fixed-language synchronization
-reminder. After formatting, append a reminder in the effective conversation
-locale only when `content_mismatch_entry_ids` is non-empty. It lists those IDs,
-stays last, and does not become a kickoff decision.
+for that branch. When `content_mismatch_entry_ids` is non-empty, the formatter
+renders the localized reminder with those exact IDs immediately before its
+confirmation prompt and final progress block. The reminder does not become a
+kickoff decision.
 
 If the user already chose values in the current request, render and restate them
 for confirmation rather than asking again.
