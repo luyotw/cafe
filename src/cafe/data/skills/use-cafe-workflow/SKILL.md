@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including passive supervision, bounded recovery, and declarative repair when execution leaves its safe operating envelope.
-metadata: {version: 1.54.1}
+metadata: {version: 1.55.0}
 ---
 
 # Use CAFE Workflow
@@ -30,7 +30,8 @@ read the union once; do not preload the rest.
 | Handle a HumanTask, confirmation, clarification, permission, alignment, or scheduled proactive review | `references/handoffs_and_alignment.md` and `references/strategic_context.md`; also read the proactive-review section of `references/running_workflow.md` when a configured review is due |
 | Start, resume, or confirm linked/decomposed work | `references/issue_decomposition.md`, `references/strategic_context.md`, and `references/handoffs_and_alignment.md` |
 | Diagnose or repair a playbook, phase, Driver, or runtime defect | `references/diagnosis_and_repair.md` plus the reference for the failing boundary |
-| Consider direct closeout, verify completion, or handle follow-up work | `references/completion_and_authority.md` |
+| Consider direct closeout, verify completion, handle a Git delivery conflict, or handle follow-up work | `references/completion_and_authority.md` |
+| Render any user-visible kickoff, question, progress, error, or completion reply | `references/workflow_progress.md` |
 | Measure fresh-versus-resumed correction efficiency | `references/correction_ab_experiment.md` |
 
 ## Operating sequence
@@ -63,6 +64,10 @@ read the union once; do not preload the rest.
   where the confirmed task contract explicitly grants them.
 - Treat a wrapper directive with `action: yield` as terminal for the current
   Driver turn. Do not poll the background worker after that directive.
+- End every user-visible reply with the unchanged output of
+  `scripts/render_workflow_progress.py`, following `workflow_progress.md`.
+  Rendering is read-only and never justifies polling, resuming, confirming, or
+  performing an external action.
 - Follow only the effective graph, confirmed contract, and action-specific
   authority. “Continue” or workflow completion grants no repair, merge, deploy,
   publish, close, delete, cleanup, or other external mutation authority.

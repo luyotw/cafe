@@ -24,6 +24,10 @@ The Driver must never execute `release-check` while a workflow is active. Defer
 an in-workflow request until the workflow is complete; the user may run it
 before release.
 
+Whenever an existing supervision rule already requires a user-facing reply,
+append the unchanged output required by `workflow_progress.md`. Rendering that
+reply must not add a status poll, resume, task completion, or other intervention.
+
 For Driver-managed preparation, resolve the user-facing runtime-update decision
 from `project_global_skill_sync.md` before invoking `cafe prepare
 --no-interactive`; callbacks never supply this answer.
