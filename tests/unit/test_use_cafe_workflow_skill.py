@@ -3546,6 +3546,25 @@ def test_driver_proactively_guides_cafe_lifecycle_cleanup_in_plain_language() ->
     assert "verify the resulting checkout, worktree, branch, and archive state" in normalized
 
 
+def test_driver_handles_git_delivery_conflicts_before_offering_repair() -> None:
+    skill = _read_skill_resource("SKILL.md")
+    reference = _read_skill_resource("references/completion_and_authority.md")
+    normalized = " ".join(reference.split())
+
+    assert "handle a Git delivery conflict" in skill
+    assert "## Handle a Git delivery conflict" in reference
+    assert "bounded read-only verification" in normalized
+    assert "exact PR and source/base references and commits" in normalized
+    assert "worktree cleanliness" in normalized
+    assert "do not fetch, checkout, reset, merge, rebase" in normalized
+    assert "recommend the smallest evidence-supported repair" in normalized
+    assert "Do not invent a raw Git command or an executor" in normalized
+    assert "Would you like me to help fix this exact conflict?" in reference
+    assert "does not authorize pushing, merging the PR, issue closure, or `cafe close`" in normalized
+    assert "controlled host-side repair path" in normalized
+    assert "inspect the final diff and validation evidence" in normalized
+
+
 class TestPollingContract:
     def test_first_poll_waits_for_the_full_confirmed_interval(self) -> None:
         skill = " ".join(_read_skill_resource("SKILL.md").split())

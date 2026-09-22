@@ -113,6 +113,38 @@ checklist to every playbook.
    never infer success from an earlier attempt. When no useful follow-up remains,
    deliver the result and say so without manufacturing another question.
 
+## Handle a Git delivery conflict
+
+A branch or pull-request merge conflict is a delivery blocker, not a reason to
+retry blindly or mutate Git state. First establish it with a bounded read-only
+verification: inspect the current issue and workflow state, exact PR and
+source/base references and commits, current mergeability or merge-state,
+worktree cleanliness, and whether a worker or another owner can still mutate
+the target. If those facts do not prove a current conflict, report the
+ambiguity rather than claiming one.
+
+Before the user chooses a repair, do not fetch, checkout, reset, merge, rebase,
+commit, push, close an issue, or run lifecycle cleanup. Give a self-contained
+handoff that states the verified blocker and the closeout actions it blocks,
+then recommend the smallest evidence-supported repair. For example, a clean
+head behind an advanced base may need that exact base integrated through an
+existing controlled host-side path; a semantic conflict or an unavailable safe
+path should be left for the user to resolve. Do not invent a raw Git command or
+an executor merely because a repair is plausible.
+
+Ask one focused question: “Would you like me to help fix this exact conflict?”
+Name the target, proposed bounded repair, expected validation, and the effect
+of declining. A yes authorizes only the stated conflict-repair scope. It does
+not authorize pushing, merging the PR, issue closure, or `cafe close`.
+
+After explicit approval, recheck the facts and use only an already available,
+controlled host-side repair path whose preconditions fit the exact target. Keep
+the work within the stated scope; if a resolution needs a user-owned choice,
+broader changes, or no safe controlled path exists, stop and hand it back to
+the user. After a successful repair, run the stated targeted validation and
+inspect the final diff and validation evidence before reporting the repair
+complete. A successful repair does not grant any separate closeout action.
+
 ## Check authority for a suggested or requested action
 
 - “Finish”, “complete the rest”, and “continue to the end” authorize only
