@@ -35,7 +35,7 @@ from cafe.core.delta_packet import (
     persist_delta_input_snapshot,
     persist_delta_packet,
 )
-from cafe.core.git import GitError, GitOperations
+from cafe.core.git import GitOperations
 from cafe.core.human_task_records import (
     HumanTaskRecordError,
     HumanTaskRecordStore,
@@ -1879,12 +1879,11 @@ class GenericWorkflowStepExecutor(Phase):
         if "git_history" in behavior.context_providers:
             base_branch = self._get_issue_config_value(self.issue_dir / "issue.yaml", "base_branch")
             resolved_base = str(base_branch or self.git_ops.get_default_base_branch())
-            comparison_base = resolved_base
             context["base_branch"] = resolved_base
-            context["pr_comparison_base"] = comparison_base
+            context["pr_comparison_base"] = resolved_base
             context["commits"] = self._get_current_branch_commits(
                 self.git_ops,
-                comparison_base,
+                resolved_base,
             )
 
         if "local_review" in behavior.context_providers:
@@ -3151,16 +3150,7 @@ class GenericWorkflowStepExecutor(Phase):
         if not base_ref:
             base_ref = self.git_ops.get_default_base_branch()
         head_sha = self.git_ops.run_git("rev-parse", "HEAD")
-        try:
-            # The configured base can move independently after this feature branch
-            # starts.  A workspace snapshot must use an actual ancestor of HEAD;
-            # derive that anchor locally without fetching, merging, or rebasing.
-            base_sha = self.git_ops.run_git("merge-base", str(base_ref), head_sha)
-        except GitError as exc:
-            raise ValueError(
-                f"workspace artifact {workspace_name!r} has no common ancestor between "
-                f"configured base {base_ref!r} and HEAD"
-            ) from exc
+        base_sha = self.git_ops.run_git("merge-base", str(base_ref), head_sha)
         try:
             candidate = build_workspace_artifact(
                 repo=repo,

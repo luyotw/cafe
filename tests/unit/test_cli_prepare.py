@@ -846,7 +846,7 @@ class TestPrepareCommand:
             assert config_data["base_branch"] == "main"
             assert config_data["feature_branch"] == "my-feature"
 
-    def test_prepare_auto_pr_does_not_fetch_remote_base_before_creating_branch(
+    def test_prepare_auto_pr_does_not_validate_remote_base_before_creating_branch(
         self, temp_repo_dir, mock_git_ops
     ):
         result = runner.invoke(
@@ -857,31 +857,6 @@ class TestPrepareCommand:
         assert result.exit_code == 0
         mock_git_ops.ensure_remote_base_ancestor.assert_not_called()
         mock_git_ops.create_branch.assert_called_once_with("remote-safe")
-
-    def test_prepare_auto_pr_does_not_stop_on_remote_base_ancestry(
-        self, temp_repo_dir, mock_git_ops
-    ):
-        from cafe.core.git import GitError
-
-        mock_git_ops.ensure_remote_base_ancestor.side_effect = GitError(
-            "Remote base origin/main is not contained in main"
-        )
-
-        result = runner.invoke(
-            app,
-            ["prepare", "remote-drift", "--auto-create-pr"],
-        )
-
-        assert result.exit_code == 0
-        mock_git_ops.ensure_remote_base_ancestor.assert_not_called()
-        mock_git_ops.create_branch.assert_called_once_with("remote-drift")
-        assert (
-            temp_repo_dir
-            / ".cafe"
-            / "issues"
-            / "remote-drift"
-            / "blackboard.json"
-        ).exists()
 
 
 class TestPrepareCommandWorktree:

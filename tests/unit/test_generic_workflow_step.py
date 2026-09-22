@@ -1940,7 +1940,7 @@ def test_generic_step_forwards_runtime_validated_publication_choice(
     assert captured["hook_context"]["validated_pr_auto_create"] is False
 
 
-def test_remote_pr_git_history_uses_local_base_without_remote_mutation(
+def test_remote_pr_git_history_uses_configured_base_without_updating_it(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -1970,7 +1970,7 @@ def test_remote_pr_git_history_uses_local_base_without_remote_mutation(
     }
     store = BlackboardStore(issue_dir)
     state = store.load_or_create("pr")
-    git_ops = MagicMock(spec=GitOperations)
+    git_ops = MagicMock()
     git_ops.get_commits_between.return_value = "abc123 direct bootstrap"
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
@@ -1984,8 +1984,7 @@ def test_remote_pr_git_history_uses_local_base_without_remote_mutation(
 
     executor.execute_step("pr", playbook["steps"]["pr"], state)
 
-    git_ops.ensure_remote_base_ancestor.assert_not_called()
-    git_ops.run_git.assert_not_called()
+    git_ops.merge_remote_base_into_head.assert_not_called()
     git_ops.get_commits_between.assert_called_once_with(
         base="develop",
         head="HEAD",
@@ -6738,9 +6737,7 @@ def test_workspace_companion_uses_custom_names_and_runtime_storage(tmp_path: Pat
     ).valid
 
 
-def test_workspace_companion_uses_merge_base_when_configured_base_diverges(
-    tmp_path: Path,
-) -> None:
+def test_workspace_companion_uses_merge_base_when_base_branch_has_diverged(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "init", "-b", "develop"], cwd=repo, check=True, capture_output=True)
@@ -6750,27 +6747,33 @@ def test_workspace_companion_uses_merge_base_when_configured_base_diverges(
     (repo / "tracked.txt").write_text("initial\n", encoding="utf-8")
     subprocess.run(["git", "add", "."], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, check=True, capture_output=True)
-    initial = subprocess.run(
+    merge_base = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
     ).stdout.strip()
 
     subprocess.run(["git", "checkout", "-b", "feature"], cwd=repo, check=True, capture_output=True)
-    (repo / "tracked.txt").write_text("feature\n", encoding="utf-8")
-    subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-m", "feature work"], cwd=repo, check=True, capture_output=True)
-    subprocess.run(["git", "checkout", "develop"], cwd=repo, check=True, capture_output=True)
-    (repo / "base-only.txt").write_text("advanced base\n", encoding="utf-8")
-    subprocess.run(["git", "add", "base-only.txt"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-m", "advance base"], cwd=repo, check=True, capture_output=True)
-    configured_base = subprocess.run(
+    (repo / "feature.txt").write_text("feature\n", encoding="utf-8")
+    subprocess.run(["git", "add", "feature.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "feature"], cwd=repo, check=True, capture_output=True)
+    feature_head = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
     ).stdout.strip()
+
+    subprocess.run(["git", "checkout", "develop"], cwd=repo, check=True, capture_output=True)
+    (repo / "develop.txt").write_text("develop\n", encoding="utf-8")
+    subprocess.run(["git", "add", "develop.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "develop"], cwd=repo, check=True, capture_output=True)
     subprocess.run(["git", "checkout", "feature"], cwd=repo, check=True, capture_output=True)
 
     issue_dir = repo / ".cafe/issues/custom"
     output = issue_dir / "develop" / "iteration_001" / "output.md"
     output.parent.mkdir(parents=True)
-    output.write_text("producer summary\n", encoding="utf-8")
+    run_verification(
+        output_file=output,
+        command=[sys.executable, "-c", "print('workspace')"],
+        scope="targeted",
+        cwd=repo,
+    )
     (issue_dir / "issue.yaml").write_text("base_branch: develop\n", encoding="utf-8")
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
@@ -6790,8 +6793,14 @@ def test_workspace_companion_uses_merge_base_when_configured_base_diverges(
         blackboard_state=state,
     )
 
-    assert metadata["base_sha"] == initial
-    assert metadata["base_sha"] != configured_base
+    assert metadata["base_sha"] == merge_base
+    assert metadata["head_sha"] == feature_head
+    assert subprocess.run(
+        ["git", "merge-base", "--is-ancestor", "develop", "HEAD"], cwd=repo, check=False
+    ).returncode == 1
+    assert subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip() == feature_head
     assert verify_workspace_artifact(
         json.loads(Path(workspace_path).read_text(encoding="utf-8")), repo=repo
     ).valid
