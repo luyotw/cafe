@@ -846,7 +846,8 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
         raise ValueError(
             "catalog preflight effective_digests must cover playbook, phase, and agent"
         )
-    zh = effective_locale.lower().startswith("zh")
+    locale_token = effective_locale.lower()
+    zh = locale_token == "zh-tw" or locale_token.startswith("zh-hant")
     worktree = args.worktree if args.worktree else "current checkout"
     delivery_contract = (
         confirmed_proposal["delivery_contract"]
@@ -861,12 +862,19 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
         no = "否"
         reactive_title = "### Reactive user handoffs"
         reactive_headers = ["Intent", "Policy", "是否為排程 gate"]
+        confirmation_title = "### 請確認完整 Kickoff Contract"
+        confirmation_prompt = "請確認上述完整契約；確認後 Driver 才會準備並啟動 workflow。"
     else:
         title = f"## Kickoff Contract — {args.issue_name}"
         summary_headers = ["Field", "Value"]
         no = "no"
         reactive_title = "### Reactive user handoffs"
         reactive_headers = ["Intent", "Policy", "Scheduled gate"]
+        confirmation_title = "### Confirm the complete Kickoff Contract"
+        confirmation_prompt = (
+            "Please confirm the complete contract above before the Driver prepares and "
+            "starts the workflow."
+        )
 
     summary_rows: list[list[Any]] = [
         ["playbook_id", args.playbook_id],
@@ -1071,6 +1079,29 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
         ["deliver", json.dumps(closeout_plan["deliver"], ensure_ascii=False)],
         ["cleanup", json.dumps(closeout_plan["cleanup"], ensure_ascii=False)],
     ]
+    mismatch_ids = catalog_preflight.get("content_mismatch_entry_ids", [])
+    if not isinstance(mismatch_ids, list) or not all(
+        isinstance(entry_id, str) and entry_id.strip() for entry_id in mismatch_ids
+    ):
+        raise ValueError("catalog preflight content_mismatch_entry_ids must be a string list")
+    if mismatch_ids:
+        catalog_reminder = [
+            "### 可選的 Global catalog 同步" if zh else "### Optional Global catalog sync",
+            (
+                "下列既有 Global entries 與 project 內容不同："
+                if zh
+                else "These existing Global entries differ from the project content: "
+            )
+            + ", ".join(mismatch_ids)
+            + (
+                "。確認 kickoff 不代表同意發布；如需同步請另行提出。"
+                if zh
+                else ". Kickoff confirmation does not approve publication; request "
+                "synchronization separately if desired."
+            ),
+        ]
+    else:
+        catalog_reminder = []
 
     return "\n\n".join(
         [
@@ -1105,10 +1136,6 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
             *capability_contracts,
             "### Preflight evidence",
             preflight,
-            "### Workflow progress",
-            "```text",
-            workflow_progress,
-            "```",
             "### Phase execution requirements",
             _table(
                 [
@@ -1154,6 +1181,13 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
                 if confirmed_proposal is not None
                 else []
             ),
+            *catalog_reminder,
+            confirmation_title,
+            confirmation_prompt,
+            "### Workflow progress",
+            "```text",
+            workflow_progress,
+            "```",
         ]
     )
 

@@ -1,10 +1,12 @@
 # Workflow Progress Diagram
 
-Read this reference before every user-visible Driver reply. The final block of
-every kickoff, question, progress update, error, and completion message must be
-the verbatim stdout of `scripts/render_workflow_progress.py`. Do not hand-write,
-translate, reorder, trim, or otherwise repair its diagram. If rendering fails,
-report the renderer error and do not invent progress.
+Read this reference before every user-visible Driver reply. For an initial
+kickoff, `format_kickoff_contract.py` owns the complete response and places the
+verbatim progress diagram at its end. For every other question, progress update,
+error, and completion message, the final block must be the verbatim stdout of
+`scripts/render_workflow_progress.py`. Do not hand-write, translate, reorder,
+trim, or otherwise repair its diagram. If rendering fails, report the renderer
+error and do not invent progress.
 
 The renderer reads the effective playbook, including `issue.yaml` overrides,
 plus existing blackboard, iteration, HumanTask, and confirmed Driver-contract
@@ -60,8 +62,9 @@ capability, or external-operation authority.
 ## Minimal calls
 
 Kickoff uses `format_kickoff_contract.py`; that formatter invokes this renderer
-itself with `deliver` and `cleanup` set to `unknown`. Do not append a second
-diagram.
+itself with `deliver` and `cleanup` set to `unknown` and makes its output the
+final kickoff block. Present the complete formatter stdout and do not append a
+second diagram.
 
 For an ordinary running update:
 
