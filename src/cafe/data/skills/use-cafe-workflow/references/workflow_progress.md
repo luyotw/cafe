@@ -62,9 +62,9 @@ capability, or external-operation authority.
 ## Minimal calls
 
 Kickoff uses `format_kickoff_contract.py`; that formatter invokes this renderer
-itself with `deliver` and `cleanup` set to `unknown` and makes its output the
-final kickoff block. Present the complete formatter stdout and do not append a
-second diagram.
+itself with every scheduled proactive review plus `deliver` and `cleanup` set
+to `pending`, then makes its output the final kickoff block. Present the
+complete formatter stdout and do not append a second diagram.
 
 For an ordinary running update:
 

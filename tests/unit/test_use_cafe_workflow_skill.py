@@ -973,7 +973,7 @@ mandate:
         encoding="utf-8",
     )
     result = subprocess.run(
-        _kickoff_formatter_command(strategic_context),
+        _kickoff_formatter_command(strategic_context, include_proactive_review_args=False),
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
@@ -1005,13 +1005,17 @@ mandate:
     assert progress_block.rstrip().endswith("```")
     assert "\n### " not in progress_block
     assert "○ spec · 待執行" in result.stdout
+    assert "○ spec：driver 主動審查 · 待執行" in result.stdout
     assert "○ spec：使用者確認（driver 可代理） · 待執行" in result.stdout
+    assert "○ plan：driver 主動審查 · 待執行" in result.stdout
     assert "○ plan：使用者確認（driver 可代理） · 待執行" in result.stdout
     assert "○ develop · 待執行" in result.stdout
     assert "○ review · 待執行" in result.stdout
+    assert "○ pr：driver 主動審查 · 待執行" in result.stdout
     assert "○ pr：使用者確認（driver 不可代理） · 待執行" in result.stdout
-    assert "？ deliver（收尾） · 狀態未知" in result.stdout
-    assert "？ cleanup（收尾） · 狀態未知" in result.stdout
+    assert "○ deliver（收尾） · 待執行" in result.stdout
+    assert "○ cleanup（收尾） · 待執行" in result.stdout
+    assert "狀態未知" not in progress_block
     assert "\ufe0f" not in result.stdout
     assert "### Phases" not in result.stdout
     assert "| mandatory_human_tasks | pr |" in result.stdout

@@ -1038,11 +1038,20 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
         },
         "proactive_review": {"phase_decisions": proactive_decisions},
     }
+    pending_reviews = {
+        decision["phase"]: "pending"
+        for decision in proactive_decisions
+        if decision["decision"] == "required"
+    }
     workflow_progress = render_progress(
         playbook=model,
         contract=progress_contract,
         locale=effective_locale,
-        driver_state={"deliver": "unknown", "cleanup": "unknown"},
+        driver_state={
+            "proactive_review": pending_reviews,
+            "deliver": "pending",
+            "cleanup": "pending",
+        },
     )
 
     reactive = _table(

@@ -153,8 +153,7 @@ the confirmation prompt and planned graph from the shared
 initial confirmation request instead of replacing it with a prose summary.
 Preserve the final progress block exactly; do not recreate a phase list or
 append a second diagram. The kickoff has no runtime execution evidence, so
-phases are pending while omitted Driver-only review and closeout values are
-unknown.
+phases, scheduled Driver reviews, and closeout items are all pending.
 
 For a new workflow, use event-driven as the proposed default unless the user
 explicitly chooses another mode or an existing confirmed issue contract already
