@@ -286,7 +286,9 @@ def test_driver_requires_script_rendered_progress_on_every_visible_reply() -> No
     assert "For an initial kickoff" in normalized
     assert "format_kickoff_contract.py` owns the complete response" in normalized
     assert "For every other question, progress update, error, and completion message" in normalized
-    assert "Do not hand-write, translate, reorder, trim" in normalized
+    assert "Do not hand-write, reorder, trim" in normalized
+    assert "Translate only descriptive labels and status words" in normalized
+    assert "step IDs, status meanings and symbols, counts, ownership, node order, and connectors" in normalized
     assert "never starts or resumes a workflow" in normalized
     assert "action: yield" in normalized
     assert '"proactive_review"' in progress
@@ -2970,6 +2972,13 @@ def test_use_cafe_workflow_prefers_user_conversation_locale() -> None:
     assert "Never claim this skill lacks a locale rule" in normalized
     assert "Do not copy the locale into `issue.yaml`" in normalized
     assert "commands, paths, playbook and step names, intents, artifact keys" in normalized
+    assert "Translate all presentation text into the effective conversation language" in normalized
+    assert "capability prompts and outcomes" in normalized
+    assert "including free-form text from manifests or repository context" in normalized
+    assert "any conversation locale, without requiring a translation catalog" in normalized
+    assert "setting keys, and typed values" in normalized
+    assert "do not summarize, omit, change gate ownership, or broaden permission" in normalized
+    assert "same validated proposal, not a translated copy of the saved policy" in normalized
 
 
 def test_use_cafe_workflow_defines_phase_scoped_proactive_driver_review() -> None:

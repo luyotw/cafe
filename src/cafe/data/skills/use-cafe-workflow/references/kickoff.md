@@ -149,10 +149,11 @@ obtain explicit user confirmation of:
 
 `format_kickoff_contract.py` renders the complete user-facing kickoff, including
 the confirmation prompt and planned graph from the shared
-`render_workflow_progress.py` implementation. Return its complete stdout for the
-initial confirmation request instead of replacing it with a prose summary.
-Preserve the final progress block exactly; do not recreate a phase list or
-append a second diagram. The kickoff has no runtime execution evidence, so
+`render_workflow_progress.py` implementation. Present its complete stdout in the
+effective conversation language for the initial confirmation request instead of
+replacing it with a prose summary. Follow the translation boundary below and
+`workflow_progress.md`; do not recreate a phase list or append a second diagram.
+The kickoff has no runtime execution evidence, so
 phases, scheduled Driver reviews, and closeout items are all pending.
 
 For a new workflow, use event-driven as the proposed default unless the user
@@ -390,6 +391,21 @@ Use the bundled formatter instead of a prose-only summary. Its stdout is a
 self-contained initial confirmation request: present the complete output so the
 user sees every field being confirmed, including `deliver` and `cleanup`. Do not
 substitute a shorter hand-written recap.
+
+Translate all presentation text into the effective conversation language:
+headings, readable field labels, descriptions, capability prompts and outcomes,
+authority explanations, and the confirmation request. The Driver owns this
+translation, including free-form text from manifests or repository context;
+the formatter's source language or English fallback is not the response language.
+This applies to any conversation locale, without requiring a translation catalog.
+
+Preserve literal commands and argv arrays, paths, URLs, CLI/model names, playbook
+and step IDs, setting keys, and typed values. Add a localized explanation beside
+an unfamiliar policy token when needed, without changing the token. Translate
+every requirement and limit faithfully; do not summarize, omit, change gate
+ownership, or broaden permission. Translation is presentation-only: activate the
+same validated proposal, not a translated copy of the saved policy. Keep the
+single final diagram's structure and facts as specified in `workflow_progress.md`.
 
 Complete means all user decisions are visible once: product scope and acceptance,
 constraints, ordered model chains, confirmation ownership, authority boundaries,

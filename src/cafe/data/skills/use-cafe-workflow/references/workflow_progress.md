@@ -2,11 +2,13 @@
 
 Read this reference before every user-visible Driver reply. For an initial
 kickoff, `format_kickoff_contract.py` owns the complete response and places the
-verbatim progress diagram at its end. For every other question, progress update,
-error, and completion message, the final block must be the verbatim stdout of
-`scripts/render_workflow_progress.py`. Do not hand-write, translate, reorder,
-trim, or otherwise repair its diagram. If rendering fails, report the renderer
-error and do not invent progress.
+renderer-produced progress diagram at its end. For every other question,
+progress update, error, and completion message, the final block must come from the stdout of
+`scripts/render_workflow_progress.py`. Translate only descriptive labels and
+status words into the effective conversation language when needed; preserve
+step IDs, status meanings and symbols, counts, ownership, node order, and connectors.
+Do not hand-write, reorder, trim, or otherwise repair its diagram. If rendering
+fails, report the renderer error and do not invent progress.
 
 The renderer reads the effective playbook, including `issue.yaml` overrides,
 plus existing blackboard, iteration, HumanTask, and confirmed Driver-contract
@@ -16,7 +18,8 @@ invoke it only when a user-visible response is already due. `action: yield`
 still ends the current turn without an additional inspection.
 
 Use the effective conversation locale with `--locale`. Traditional Chinese is
-selected by `zh-TW` or `zh-Hant`; unsupported locales fall back to English.
+selected by `zh-TW` or `zh-Hant`; other locales use English as the renderer's
+source text, which the Driver translates for the user.
 Step keys are always preserved exactly. `deliver` and `cleanup` are required
 Driver closeout items, not runtime phases, and always appear after the playbook
 phases. A playbook phase with the same name remains a separate unqualified node.
