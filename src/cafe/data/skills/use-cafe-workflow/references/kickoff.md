@@ -162,7 +162,8 @@ a default is not confirmation or execution authority.
 
 Resolve effective `steps.*.capability_requests` against the package-owned
 capability registry. Render each manifest's `setup_questions`: its prompt,
-setting, typed choices, observable outcomes, and selected `prepare_args`.
+setting, selected typed value, observable outcome, and selected `prepare_args`.
+Explain alternative choices when the user asks to change the proposal.
 Pass each explicit answer as `--capability-choice SETTING=JSON`. Require every
 declared answer and reject unknown settings, duplicate answers, and values
 outside the declared typed choices; never infer applicability from step names.
@@ -178,7 +179,7 @@ GitHub initial-input binding or an already persisted and verified issue binding;
 a bare issue-like name is insufficient. Without a corresponding issue, default
 that question to the manifest's local-only choice. A direct user choice or an
 existing valid confirmed choice takes precedence over either default. Always
-render the selected value, all declared outcomes, and the exact prepare
+render the selected value, its declared outcome, and the exact prepare
 arguments for confirmation; the default does not authorize publication before
 the complete kickoff is confirmed, and it never authorizes merge or issue
 closure.
@@ -390,6 +391,17 @@ self-contained initial confirmation request: present the complete output so the
 user sees every field being confirmed, including `deliver` and `cleanup`. Do not
 substitute a shorter hand-written recap.
 
+Complete means all user decisions are visible once: product scope and acceptance,
+constraints, ordered model chains, confirmation ownership, authority boundaries,
+locales, checkout, publication, and exact closeout commands. Keep the saved
+policy, duplicate semantic projections, schema versions, source paths, tokens,
+digests, timestamps, model-selection diagnostics, and execution-profile matrix
+out of the conversation. Worktree and command paths remain visible because they
+identify the user's approved targets. Show check results and actionable failures
+briefly. Keep custom mandate notes and limits visible. Do not add a second
+confirmation prompt or repeat the reason for requesting confirmation after the
+formatter output. Ordinary follow-up discussion may be concise.
+
 ```bash
 python3 <skill-dir>/scripts/format_kickoff_contract.py <playbook-id> \
   --issue-name <issue-name> \
@@ -437,17 +449,15 @@ model defaults. It
 rejects a missing primary, an unresolved model, and an unsupported CLI. It
 validates chain structure only; it does not validate model suitability. Pass one
 `--phase-rationale <step>=<text>` for every agent-executed phase. The formatter
-rejects missing, unknown, or duplicate rationales and displays them beside the
-chain. Use the capability band, phase profile, issue assessment, current
-provider documentation, and preflight evidence to justify that each selected
-model satisfies the displayed requirements. This judgment remains driver-owned
-rather than a runtime model registry, and the formatter labels the model-chain
-table `driver-assessed`.
+rejects missing, unknown, or duplicate rationales and preserves them in the
+durable policy. Use the capability band, resolved execution profile, issue
+assessment, provider documentation, and model preflight to justify each choice.
+The user-facing table shows the exact primary and fallback chain without
+repeating selection diagnostics. Model suitability remains Driver-assessed.
 
 Pass an option with no step values for an explicit empty list. The formatter
-validates the partition and includes every phase, role, skill, scheduled gate,
-owner, stop behavior, resolved skill execution profile, exact
-primary model, any configured fallbacks, their config source, exact operating
+validates the partition and shows every phase, scheduled gate,
+owner, stop behavior, exact primary model, any configured fallbacks, operating
 mode, reactive policy,
 mandate boundary, conversation locale source, repository content locale, and
 worktree choice. It

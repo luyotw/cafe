@@ -65,6 +65,8 @@ Kickoff uses `format_kickoff_contract.py`; that formatter invokes this renderer
 itself with every scheduled proactive review plus `deliver` and `cleanup` set
 to `pending`, then makes its output the final kickoff block. Present the
 complete formatter stdout and do not append a second diagram.
+The formatter's confirmation prompt already precedes the diagram; do not add
+another confirmation request after it.
 
 For an ordinary running update:
 

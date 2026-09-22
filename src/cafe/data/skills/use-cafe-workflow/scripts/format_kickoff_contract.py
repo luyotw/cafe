@@ -226,6 +226,15 @@ def _table(headers: list[str], rows: list[list[Any]]) -> str:
     return "\n".join(lines)
 
 
+def _fact(value: Any) -> str:
+    """Display all product facts without serializing their container structure."""
+    if isinstance(value, list):
+        return "\n".join(f"- {_fact(item)}" for item in value) or "[]"
+    if isinstance(value, dict):
+        return "\n".join(f"{key}: {_fact(item)}" for key, item in value.items()) or "{}"
+    return str(value)
+
+
 def _load_yaml_mapping(path: Path, *, label: str) -> dict[str, Any]:
     if not path.is_file():
         return {}
@@ -803,7 +812,7 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
     locale_source = args.locale_source or f"playbook:{args.playbook_id}"
     strategic_context = _project_path(args.strategic_context, project_root)
     phase_config = _project_path(args.phase_config, project_root)
-    mandate, mandate_source = _load_strategic_context(strategic_context, args.issue_name)
+    mandate, _ = _load_strategic_context(strategic_context, args.issue_name)
     phase_chain_overrides = _parse_phase_chains(
         args.phase_chain,
         step_names=set(model.steps),
@@ -846,7 +855,7 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
         raise ValueError(
             "catalog preflight effective_digests must cover playbook, phase, and agent"
         )
-    locale_token = effective_locale.lower()
+    locale_token = effective_locale.strip().lower().replace("_", "-")
     zh = locale_token == "zh-tw" or locale_token.startswith("zh-hant")
     worktree = args.worktree if args.worktree else "current checkout"
     delivery_contract = (
@@ -859,18 +868,14 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
     if zh:
         title = f"## Kickoff Contract — {args.issue_name}"
         summary_headers = ["欄位", "值"]
-        no = "否"
         reactive_title = "### Reactive user handoffs"
-        reactive_headers = ["Intent", "Policy", "是否為排程 gate"]
-        confirmation_title = "### 請確認完整 Kickoff Contract"
+        reactive_headers = ["Intent", "Policy"]
         confirmation_prompt = "請確認上述完整契約；確認後 Driver 才會準備並啟動 workflow。"
     else:
         title = f"## Kickoff Contract — {args.issue_name}"
         summary_headers = ["Field", "Value"]
-        no = "no"
         reactive_title = "### Reactive user handoffs"
-        reactive_headers = ["Intent", "Policy", "Scheduled gate"]
-        confirmation_title = "### Confirm the complete Kickoff Contract"
+        reactive_headers = ["Intent", "Policy"]
         confirmation_prompt = (
             "Please confirm the complete contract above before the Driver prepares and "
             "starts the workflow."
@@ -878,42 +883,47 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
 
     summary_rows: list[list[Any]] = [
         ["playbook_id", args.playbook_id],
-        ["playbook_source", f"{loaded.source}: {loaded.path}"],
         ["playbook_selection_rationale", playbook_rationale],
-        ["configured_locale", configured_locale],
         ["effective_locale", f"{effective_locale} ({locale_source})"],
         ["repository_content_locale", args.repository_content_locale],
         ["issue_nature", args.issue_nature],
         ["issue_scale", args.issue_scale],
         ["risk_factors", ", ".join(args.risk_factor)],
         ["assessment_rationale", args.assessment_rationale],
-        *_driver_policy_rows(args),
-        ["user_required", ", ".join(user_required) or "[]"],
-        ["driver_confirmable", ", ".join(driver_confirmable) or "[]"],
-        [
-            "mandatory_human_tasks",
-            ", ".join(mandatory_human_tasks) or "[]",
+        *[
+            row
+            for row in _driver_policy_rows(args)
+            if row[0] in {"driver.mode", "driver.poll_interval_seconds"}
+            or (row[0].startswith("driver.clis[") and row[0].endswith("]"))
         ],
         ["worktree", worktree],
-        ["mandate_source", mandate_source],
     ]
+    if args.driver_mode == "event-driven":
+        summary_rows.append(
+            ["通知", "第一個 CLI 沿用 session 模型；通知不代替使用者確認或授權。"]
+            if zh
+            else [
+                "Notifications",
+                "The primary CLI keeps its session model; notifications do not replace user "
+                "confirmation or permissions.",
+            ]
+        )
     capability_contracts = []
     for question, selected in capability_choices:
-        summary_rows.append([question.setting, json.dumps(selected.value, ensure_ascii=False)])
         capability_contracts.append(
             "\n\n".join(
                 [
                     f"### {question.prompt}",
                     _table(
-                        ["Value", "Observable outcome"],
+                        ["Setting", "Selected value", "Outcome", "Prepare arguments"],
                         [
-                            [json.dumps(choice.value, ensure_ascii=False), choice.outcome]
-                            for choice in question.choices
+                            [
+                                question.setting,
+                                json.dumps(selected.value, ensure_ascii=False),
+                                selected.outcome,
+                                shlex.join(selected.prepare_args),
+                            ]
                         ],
-                    ),
-                    _table(
-                        ["Prepare arguments (after confirmation)", "Verify in issue.yaml"],
-                        [[shlex.join(selected.prepare_args), question.setting]],
                     ),
                 ]
             )
@@ -922,42 +932,23 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
     preflight = _table(
         summary_headers,
         [
-            ["runtime_update.checked_at", update_preflight["checked_at"]],
-            ["runtime_update.status", update_preflight["status"]],
             [
-                "runtime_update.versions",
-                f"{update_preflight['installed_version']} → {update_preflight['latest_version']}",
+                "CAFE",
+                f"{update_preflight['installed_version']} → {update_preflight['latest_version']}"
+                f"; {update_preflight['status']}; {update_preflight['decision']}",
             ],
-            ["runtime_update.decision", update_preflight["decision"]],
-            [
-                "runtime_update.comparison_token",
-                update_preflight["comparison_token"],
-            ],
-            [
-                "runtime_update.post_change_evidence",
-                update_preflight["post_change_evidence"],
-            ],
-            ["catalog.checked_at", catalog_preflight["checked_at"]],
-            ["catalog.status", catalog_preflight["status"]],
-            ["catalog.decision", catalog_preflight["decision"]],
-            ["catalog.comparison_token", catalog_preflight["comparison_token"]],
-            [
-                "catalog.effective_digests",
-                ", ".join(
-                    f"{kind}={effective_digests[kind]}" for kind in ("playbook", "phase", "agent")
-                ),
-            ],
-            [
-                "catalog.post_change_evidence",
-                catalog_preflight["post_change_evidence"],
+            ["Catalog", catalog_preflight["status"]],
+            *[
+                [label, str(report["error"])]
+                for label, report in (("CAFE", update_preflight), ("Catalog", catalog_preflight))
+                if report.get("error")
             ],
         ],
     )
 
     model_rows: list[list[Any]] = []
-    profile_rows: list[list[Any]] = []
     for step_name, step in model.steps.items():
-        profile = resolve_execution_profile(
+        resolve_execution_profile(
             skill_loader,
             step.skill,
             workflow_skills=resolve_playbook_skills(
@@ -968,25 +959,13 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
             ),
             step_name=step_name,
         )
-        skill_label = ", ".join(profile.skill_names)
-        profile_rows.append(
-            [
-                step_name,
-                skill_label,
-                ", ".join(profile.workloads),
-                profile.reasoning,
-                ", ".join(profile.risk_domains) or "—",
-                profile.fallback_strength,
-                "defaulted" if profile.uses_default else "declared",
-            ]
-        )
         if step.assignee_type not in {"agent", "hybrid"}:
-            model_rows.append([step_name, "not agent-executed", "—", "playbook", "—"])
+            model_rows.append([step_name, "not agent-executed", "—"])
             continue
         if step_name in phase_chain_overrides:
-            chain, chain_source = phase_chain_overrides[step_name], "--phase-chain"
+            chain = phase_chain_overrides[step_name]
         else:
-            chain, chain_source = _resolve_configured_chain(
+            chain, _ = _resolve_configured_chain(
                 step_name=step_name,
                 role=step.role,
                 phase_config=phase_config,
@@ -996,7 +975,7 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
         rationale = phase_rationales.get(step_name)
         if rationale is None:
             raise ValueError(f"missing phase rationale for agent-executed step: {step_name}")
-        model_rows.append([step_name, primary, fallbacks, chain_source, rationale])
+        model_rows.append([step_name, primary, fallbacks])
 
     unused_rationales = set(phase_rationales) - {
         name for name, step in model.steps.items() if step.assignee_type in {"agent", "hybrid"}
@@ -1015,6 +994,7 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
         agent_phases=agent_phases,
         eligible_phases=eligible_phases,
     )
+    review_overrides = {value.partition("=")[0].strip() for value in args.proactive_review_decision}
     proactive_rows: list[list[Any]] = []
     for decision in proactive_decisions:
         phase = decision["phase"]
@@ -1028,7 +1008,14 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
             clean_action = "Driver may confirm and advance after clean review"
         else:
             clean_action = "user confirmation remains required"
-        proactive_rows.append([phase, decision["decision"], decision["rationale"], clean_action])
+        proactive_rows.append(
+            [
+                phase,
+                decision["decision"],
+                decision["rationale"] if phase in review_overrides else "—",
+                clean_action,
+            ]
+        )
 
     progress_contract = confirmed_proposal or {
         "confirmation_contract": {
@@ -1057,9 +1044,9 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
     reactive = _table(
         reactive_headers,
         [
-            ["need_clarification", args.need_clarification, no],
-            ["need_permission", args.need_permission, no],
-            ["alignment_checkpoint", args.alignment_checkpoint, no],
+            ["need_clarification", args.need_clarification],
+            ["need_permission", args.need_permission],
+            ["alignment_checkpoint", args.alignment_checkpoint],
         ],
     )
 
@@ -1068,10 +1055,8 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
     if isinstance(axes, dict):
         for axis, policy in axes.items():
             if isinstance(policy, dict):
-                grounds = policy.get("grounds") or []
-                if isinstance(grounds, list):
-                    grounds = ", ".join(str(item) for item in grounds)
-                mandate_rows.append([axis, policy.get("level", "—"), grounds or "—"])
+                details = {key: value for key, value in policy.items() if key != "level"}
+                mandate_rows.append([axis, policy.get("level", "—"), _fact(details)])
             else:
                 mandate_rows.append([axis, policy, "—"])
     out_of_mandate = mandate.get("out_of_mandate") or []
@@ -1082,6 +1067,11 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
         [
             ["preset", mandate.get("preset", "—")],
             ["out_of_mandate", out_of_mandate or "[]"],
+            *[
+                [key, _fact(value)]
+                for key, value in mandate.items()
+                if key not in {"preset", "out_of_mandate", "axes", "playbook_id"}
+            ],
         ],
     )
     closeout_rows: list[list[Any]] = [
@@ -1118,49 +1108,31 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
             summary,
             "### Deliver and cleanup plan to confirm",
             _table(summary_headers, closeout_rows),
-            "The Driver discovered these exact commands from repository evidence. Confirmation "
-            "of the complete kickoff authorizes the Driver to execute these arrays, in order, "
-            "without shell reconstruction. Any changed command, order, or material target/effect "
-            "requires reconfirmation.",
+            (
+                "確認後依序執行上述命令；更改命令、順序、目標或影響時另行確認。"
+                if zh
+                else "Confirmation authorizes these commands in order; changes to commands, order, "
+                "targets or effects require reconfirmation."
+            ),
             "### Delivery Contract",
             _table(
                 summary_headers,
                 [
                     [
                         key,
-                        (
-                            json.dumps(value, ensure_ascii=False)
-                            if isinstance(value, (dict, list))
-                            else value
-                        ),
+                        _fact(value),
                     ]
                     for key, value in delivery_contract.items()
-                    if key != "closeout_plan"
-                ],
+                    if key not in {"closeout_plan", "schema_version", "constraints"}
+                ]
+                + [[key, _fact(value)] for key, value in delivery_contract["constraints"].items()],
             ),
-            "The Driver may accept a requirement-equivalent implementation with a smaller "
-            "or simpler implementation footprint. It must not accept reduced user-visible "
-            "behavior, feature scope, acceptance coverage, edge-case coverage, or required "
-            "integrations.",
             *capability_contracts,
-            "### Preflight evidence",
+            "### 檢查結果" if zh else "### Checks",
             preflight,
-            "### Phase execution requirements",
-            _table(
-                [
-                    "Phase",
-                    "Resolved skill variants",
-                    "Workload",
-                    "Reasoning",
-                    "Risk domains",
-                    "Fallback strength",
-                    "Profile source",
-                ],
-                profile_rows,
-            ),
             "### Phase model chains — driver-assessed",
             _table(
-                ["Phase", "Primary", "Fallbacks", "Source", "Selection rationale"],
+                ["Phase", "Primary", "Fallbacks"],
                 model_rows,
             ),
             "### Proactive review at scheduled pauses",
@@ -1172,26 +1144,8 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
             reactive,
             "### Mandate",
             mandate_summary,
-            _table(["Axis", "Level", "Grounds"], mandate_rows),
-            *(
-                [
-                    "### Confirmed durable policy",
-                    "The following Driver-owned policy must be confirmed unchanged "
-                    "before activation.",
-                    "```json",
-                    json.dumps(
-                        {"schema_version": 4, "policy": confirmed_proposal},
-                        ensure_ascii=False,
-                        indent=2,
-                        sort_keys=True,
-                    ),
-                    "```",
-                ]
-                if confirmed_proposal is not None
-                else []
-            ),
+            _table(["Axis", "Level", "Boundaries"], mandate_rows),
             *catalog_reminder,
-            confirmation_title,
             confirmation_prompt,
             "### Workflow progress",
             "```text",

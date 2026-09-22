@@ -220,6 +220,13 @@ def _load_script_module(path: Path, name: str):
     return module
 
 
+def _kickoff_proposal(command: list[str]) -> dict:
+    module = _load_script_module(
+        SKILL_ROOT / "scripts" / "format_kickoff_contract.py", "kickoff_proposal"
+    )
+    return module.build_confirmed_proposal(module._parser().parse_args(command[2:]))
+
+
 def _run_preflight_cache(
     cache_file: Path, *args: str, env: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
@@ -885,7 +892,7 @@ def test_use_cafe_workflow_skill_requires_playbook_derived_kickoff_contract() ->
     assert "repository instructions require an independent QA" in selection
     assert "closest rejected candidates" in selection
     assert "do not infer behavior from a playbook name" in " ".join(selection.split())
-    assert "every phase, role, skill, scheduled gate" in normalized
+    assert "every phase, scheduled gate" in normalized
     assert "one primary and zero or more explicitly confirmed fallbacks" in normalized
     assert "Driver cannot change a phase" in normalized
     assert '--risk-factor "<risk factor; repeat as needed>"' in reference
@@ -995,9 +1002,8 @@ mandate:
     )
     assert "### Workflow progress" in result.stdout
     assert result.stdout.count("### Workflow progress") == 1
-    assert "### 請確認完整 Kickoff Contract" in result.stdout
-    assert "請確認上述完整契約" in result.stdout
-    confirmation_index = result.stdout.index("### 請確認完整 Kickoff Contract")
+    assert result.stdout.count("請確認上述完整契約") == 1
+    confirmation_index = result.stdout.index("請確認上述完整契約")
     progress_index = result.stdout.index("### Workflow progress")
     assert confirmation_index < progress_index
     progress_block = result.stdout[progress_index:]
@@ -1018,40 +1024,29 @@ mandate:
     assert "狀態未知" not in progress_block
     assert "\ufe0f" not in result.stdout
     assert "### Phases" not in result.stdout
-    assert "| mandatory_human_tasks | pr |" in result.stdout
     assert "| effective_locale | zh-TW (user thread override) |" in result.stdout
     assert "| repository_content_locale | zh-TW |" in result.stdout
     assert "| issue_nature | feature/integration |" in result.stdout
     assert "| issue_scale | medium |" in result.stdout
     assert "model_adjustment" not in result.stdout
-    assert "| schema_version | 4 |" in result.stdout
     assert "| driver.mode | unattended |" in result.stdout
-    assert "### Preflight evidence" in result.stdout
-    assert "| runtime_update.status | current |" in result.stdout
-    assert "| runtime_update.versions | 0.3.2 → 0.3.2 |" in result.stdout
-    assert "| catalog.status | identical |" in result.stdout
-    assert "| catalog.effective_digests |" in result.stdout
-    assert "playbook=playbook-digest" in result.stdout
+    assert "| CAFE | 0.3.2 → 0.3.2; current; not_needed |" in result.stdout
+    assert "| Catalog | identical |" in result.stdout
     assert "### Phase model chains — driver-assessed" in result.stdout
     assert (
         "| develop | copilot:implementation-main | "
-        "cursor-agent:implementation-fallback | --phase-chain | balanced:" in result.stdout
+        "cursor-agent:implementation-fallback |" in result.stdout
     )
-    assert (
-        "| review | gemini:review-main | copilot:review-fallback | --phase-chain | frontier:"
-        in result.stdout
+    assert "| review | gemini:review-main | copilot:review-fallback |" in result.stdout
+    assert "| pr | cursor-agent:publication-main | gemini:publication-fallback |" in result.stdout
+    assert "### Phase execution requirements" not in result.stdout
+    assert "| need_clarification | driver_confirmable |" in result.stdout
+    mandate_row = next(
+        line for line in result.stdout.splitlines() if line.startswith("| product_scope |")
     )
-    assert (
-        "| pr | cursor-agent:publication-main | gemini:publication-fallback | --phase-chain | efficiency:"
-        in result.stdout
-    )
-    assert (
-        "| review | cafe-review, cafe-workflow-common, cafe-github_sync | review | high | "
-        "correctness, security | "
-        "equivalent_or_stronger | declared |" in result.stdout
-    )
-    assert "| need_clarification | driver_confirmable | 否 |" in result.stdout
-    assert "| product_scope | escalate | roadmap, positioning |" in result.stdout
+    assert "| escalate |" in mandate_row
+    assert "roadmap" in mandate_row
+    assert "positioning" in mandate_row
     assert result.stdout.count("| playbook_id |") == 1
 
 
@@ -1104,6 +1099,42 @@ mandate:
     assert "| cleanup | [] |" in result.stdout
 
 
+@pytest.mark.parametrize("flag", ["--update-preflight", "--catalog-preflight"])
+def test_kickoff_formatter_keeps_failed_preflight_results_visible(
+    tmp_path: Path, flag: str
+) -> None:
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text("mandate: {preset: technical-led}\n", encoding="utf-8")
+    command = _kickoff_formatter_command(strategic_context)
+    index = command.index(flag) + 1
+    report = json.loads(command[index])
+    report.update(
+        status="unavailable",
+        decision="user_accepted_unavailable",
+        error="Registry could not be reached.",
+    )
+    command[index] = json.dumps(report)
+
+    result = subprocess.run(command, cwd=PROJECT_ROOT, text=True, capture_output=True, check=False)
+
+    assert result.returncode == 0, result.stderr
+    assert "unavailable" in result.stdout
+    assert result.stdout.count("Registry could not be reached.") == 1
+    assert "comparison_token" not in result.stdout
+    assert "effective_digests" not in result.stdout
+    if flag == "--update-preflight":
+        assert "user_accepted_unavailable" in result.stdout
+
+    del report["status"]
+    command[index] = json.dumps(report)
+    incomplete = subprocess.run(
+        command, cwd=PROJECT_ROOT, text=True, capture_output=True, check=False
+    )
+    assert incomplete.returncode == 2
+    assert "preflight is missing: status" in incomplete.stderr
+    assert not incomplete.stdout
+
+
 def test_kickoff_formatter_places_catalog_reminder_before_confirmation_and_progress(
     tmp_path: Path,
 ) -> None:
@@ -1128,7 +1159,7 @@ def test_kickoff_formatter_places_catalog_reminder_before_confirmation_and_progr
 
     assert result.returncode == 0, result.stderr
     reminder_index = result.stdout.index("### 可選的 Global catalog 同步")
-    confirmation_index = result.stdout.index("### 請確認完整 Kickoff Contract")
+    confirmation_index = result.stdout.index("請確認上述完整契約")
     progress_index = result.stdout.index("### Workflow progress")
     assert reminder_index < confirmation_index < progress_index
     assert "agent:developer/shared" in result.stdout
@@ -1157,8 +1188,8 @@ def test_kickoff_formatter_falls_back_to_english_for_unsupported_chinese_locales
     )
 
     assert result.returncode == 0, result.stderr
-    assert "### Confirm the complete Kickoff Contract" in result.stdout
-    assert "### 請確認完整 Kickoff Contract" not in result.stdout
+    assert "Please confirm the complete contract above" in result.stdout
+    assert "請確認上述完整契約" not in result.stdout
 
 
 def _write_fake_cafe(
@@ -1327,8 +1358,16 @@ def test_confirmed_kickoff_activates_one_issue_scoped_driver_contract(tmp_path: 
     assert closeout_plan["deliver"] == [{"argv": ["git", "push", "origin", "feature/issue346"]}]
     assert closeout_plan["cleanup"] == [{"argv": ["git", "worktree", "remove", "/tmp/issue346"]}]
     assert "proactive_review.yaml" not in {path.name for path in (issue_dir / "driver").iterdir()}
-    assert "No proactive review was confirmed for development." in result.stdout
-    assert "| schema_version | 4 |" in result.stdout
+    develop_review = next(
+        decision
+        for decision in contract["proactive_review"]["phase_decisions"]
+        if decision["phase"] == "develop"
+    )
+    assert develop_review == {
+        "phase": "develop",
+        "decision": "not_required",
+        "rationale": "No proactive review was confirmed for development.",
+    }
 
     entry = subprocess.run(
         [
@@ -1404,18 +1443,38 @@ def test_confirmed_event_driven_kickoff_binds_the_visible_codex_thread(
     assert state["entries"][0]["session"]["source"] == "host_session"
 
 
-def test_kickoff_formatter_renders_the_complete_normalized_policy_before_activation(
+def test_kickoff_formatter_shows_all_delivery_facts_once_without_internal_policy(
     tmp_path: Path,
 ) -> None:
-    """A user sees the exact policy fields before choosing to activate them."""
+    """Compact confirmation retains every product fact without mutating the project."""
     strategic_context = tmp_path / "strategic_context.yaml"
     strategic_context.write_text(
-        "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
+        """\
+mandate:
+  preset: technical-led
+  axes:
+    technical:
+      level: agent
+      grounds: [engineering_guidelines]
+      boundary: Existing export interface only.
+  out_of_mandate: [Production deployment.]
+  notes: Stay within the accepted report-export roadmap.
+  exceptions: [Confirm any new billing behavior.]
+""",
         encoding="utf-8",
     )
+    command = _kickoff_formatter_command(strategic_context, "--project-root", str(tmp_path))
+    product = delivery_contract()
+    product["outcome"] = "Readers can export text | citations.\nPreserve offline readability."
+    command[command.index("--delivery-contract") + 1] = json.dumps(product)
+    before = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
 
     result = subprocess.run(
-        _kickoff_formatter_command(strategic_context),
+        command,
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
@@ -1423,13 +1482,69 @@ def test_kickoff_formatter_renders_the_complete_normalized_policy_before_activat
     )
 
     assert result.returncode == 0, result.stderr
-    assert "### Confirmed durable policy" in result.stdout
-    assert '"proactive_review"' in result.stdout
-    assert '"effective_graph"' not in result.stdout
-    rendered = result.stdout.split("```json\n", 1)[1].split("\n```", 1)[0]
-    assert "pr" not in json.loads(rendered)["policy"]
-    assert '"material_assumptions"' in result.stdout
-    assert not (tmp_path / ".cafe" / "issues" / "issue346" / "driver").exists()
+    facts = [product[key] for key in ("outcome", "motivation", "implementation_direction")]
+    for key in (
+        "in_scope",
+        "out_of_scope",
+        "acceptance_invariants",
+        "required_evidence",
+        "allowed_variations",
+        "deviation_triggers",
+    ):
+        facts.extend(product[key])
+    for constraints in product["constraints"].values():
+        facts.extend(constraints)
+    facts.extend(
+        [
+            "Existing export interface only.",
+            "Production deployment.",
+            "Stay within the accepted report-export roadmap.",
+            "Confirm any new billing behavior.",
+        ]
+    )
+    for fact in facts:
+        assert result.stdout.count(fact.replace("|", "\\|").replace("\n", "<br>")) == 1
+    for internal in (
+        "```json",
+        "Confirmed durable policy",
+        "schema_version",
+        "semantic_facts",
+        "material_assumptions",
+        "effective_graph",
+        "comparison_token",
+        "effective_digests",
+        "update-token",
+        "catalog-token",
+        "playbook-digest",
+        "phase-digest",
+        "agent-digest",
+        "checked_at",
+        "post_change_evidence",
+        "playbook_source",
+        "--phase-chain",
+        "Phase execution requirements",
+        str(strategic_context),
+        str(SKILL_ROOT),
+    ):
+        assert internal not in result.stdout
+    assert '"architecture":' not in result.stdout
+    assert result.stdout.count("請確認上述完整契約") == 1
+    assert result.stdout.count("### Workflow progress") == 1
+    assert {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    } == before
+    assert not (tmp_path / ".cafe").exists()
+    proposal = _kickoff_proposal(command)
+    assert "pr" not in proposal
+    assert (
+        proposal["semantic_facts"]["effective_policy"]["delivery_contract"]
+        == proposal["delivery_contract"]
+    )
+    assert {phase["name"]: phase["rationale"] for phase in proposal["phases"]} == (
+        DEFAULT_PHASE_RATIONALES
+    )
 
 
 def test_kickoff_formatter_keeps_the_rendered_policy_stable_until_activation(
@@ -1446,8 +1561,9 @@ def test_kickoff_formatter_keeps_the_rendered_policy_stable_until_activation(
     (issue_dir / "blackboard.json").write_text(
         json.dumps({"workflow_id": "prepared-346"}), encoding="utf-8"
     )
+    normal_command = _kickoff_formatter_command(strategic_context)
     normal = subprocess.run(
-        _kickoff_formatter_command(strategic_context),
+        normal_command,
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
@@ -1475,11 +1591,16 @@ def test_kickoff_formatter_keeps_the_rendered_policy_stable_until_activation(
     assert normal.returncode == 0, normal.stderr
     assert activated.returncode == 0, activated.stderr
 
-    def rendered_policy(output: str) -> dict[str, object]:
-        serialized = output.split("```json\n", 1)[1].split("\n```", 1)[0]
-        return json.loads(serialized)["policy"]
-
-    assert rendered_policy(normal.stdout) == rendered_policy(activated.stdout)
+    assert normal.stdout == activated.stdout
+    proposal = _kickoff_proposal(normal_command)
+    contract = json.loads((issue_dir / "driver" / "contract.json").read_text(encoding="utf-8"))
+    for key, expected in proposal.items():
+        actual = (
+            contract["preflight"][key]
+            if key in {"semantic_facts", "material_assumptions"}
+            else contract[key]
+        )
+        assert actual == expected, key
 
 
 @pytest.mark.parametrize("choice", [True, False])
@@ -1506,8 +1627,10 @@ def test_kickoff_formatter_requires_and_binds_explicit_publication_choice(
     token = str(choice).lower()
     assert result.stdout.count(f"| pr.auto_create | {token} |") == 1
     assert "confirmation_contract.pr_auto_create" not in result.stdout
-    assert "verified PR URL" in result.stdout
-    assert "Publication mode: local-only. No PR URL exists." in result.stdout
+    assert ("verified PR URL" in result.stdout) is choice
+    assert ("Publication mode: local-only. No PR URL exists." in result.stdout) is not choice
+    assert ("--auto-create-pr" in result.stdout) is choice
+    assert ("--no-auto-create-pr" in result.stdout) is not choice
 
 
 @pytest.mark.parametrize("choice", [None, "yes"])
@@ -1726,9 +1849,17 @@ mandate:
         result.stdout.index("gemini:gemini-pro-exact"),
     ]
     assert positions == sorted(positions)
-    assert result.stdout.count("event-driven session-and-dispatch: conforming") == 3
-    assert "runtime-owned" in result.stdout
-    assert "does not grant HumanTask, permission, or capability authority" in result.stdout
+    assert "第一個 CLI 沿用 session 模型" in result.stdout
+    assert "通知不代替使用者確認或授權" in result.stdout
+    policy = _kickoff_proposal(result.args)
+    assert policy["driver"] == {
+        "mode": "event-driven",
+        "clis": [
+            {"cli": "codex"},
+            {"cli": "claude", "model": "claude-opus-exact"},
+            {"cli": "gemini", "model": "gemini-pro-exact"},
+        ],
+    }
 
 
 @pytest.mark.parametrize(
@@ -1891,7 +2022,7 @@ def test_kickoff_contract_formatter_accepts_primary_only_chains(tmp_path: Path) 
     )
 
     assert result.returncode == 0, result.stderr
-    assert "| develop | claude:implementation-main | — | --phase-chain |" in result.stdout
+    assert "| develop | claude:implementation-main | — |" in result.stdout
 
 
 def test_phase_writer_installs_exact_confirmed_chains_atomically(tmp_path: Path) -> None:
@@ -2372,17 +2503,18 @@ def test_kickoff_contract_formatter_uses_cafe_python_when_site_packages_are_miss
 
     assert result.returncode == 0, result.stderr
     assert "## Kickoff Contract — issue346" in result.stdout
-    assert "### Confirm the complete Kickoff Contract" in result.stdout
-    assert "Please confirm the complete contract above" in result.stdout
-    assert result.stdout.index("### Confirm the complete Kickoff Contract") < result.stdout.index(
+    assert result.stdout.count("Please confirm the complete contract above") == 1
+    assert result.stdout.index("Please confirm the complete contract above") < result.stdout.index(
         "### Workflow progress"
     )
     assert "\n### " not in result.stdout[result.stdout.index("### Workflow progress") :]
     assert "○ spec: user confirmation (driver may not act) · Pending" in result.stdout
 
 
-def test_kickoff_formatter_resolves_custom_playbook_iteration_skills(
+@pytest.mark.parametrize("profile_damage", [None, "missing", "invalid"])
+def test_kickoff_formatter_validates_custom_iteration_profiles_without_displaying_them(
     tmp_path: Path,
+    profile_damage: str | None,
 ) -> None:
     skills_root = tmp_path / ".cafe" / "skills"
     playbooks_root = tmp_path / ".cafe" / "playbooks"
@@ -2397,6 +2529,11 @@ def test_kickoff_formatter_resolves_custom_playbook_iteration_skills(
     risk_domains: [security]
     fallback_strength: equivalent_or_stronger""",
     }.items():
+        if name == "cafe-audit_revise":
+            if profile_damage == "missing":
+                continue
+            if profile_damage == "invalid":
+                profile = profile.replace("reasoning: high", "reasoning: unsupported")
         skill_dir = skills_root / name
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text(
@@ -2468,7 +2605,6 @@ entry_point: audit
             "--current-checkout",
             "--strategic-context",
             str(strategic_context),
-            *_proactive_review_args("custom-audit", project_root=tmp_path),
         ],
         cwd=tmp_path,
         text=True,
@@ -2476,12 +2612,15 @@ entry_point: audit
         check=False,
     )
 
+    if profile_damage is not None:
+        assert result.returncode == 2, result.stderr
+        assert "cafe-audit_revise" in result.stderr
+        return
     assert result.returncode == 0, result.stderr
-    assert "| audit | cafe-audit_first, cafe-audit_revise |" in result.stdout
-    assert (
-        "| audit | cafe-audit_first, cafe-audit_revise | research, review | high | "
-        "evidence, security | equivalent_or_stronger | declared |" in result.stdout
-    )
+    assert "| audit | gemini:audit-main | copilot:audit-fallback |" in result.stdout
+    assert "cafe-audit_first" not in result.stdout
+    assert "cafe-audit_revise" not in result.stdout
+    assert "Phase execution requirements" not in result.stdout
 
 
 def test_kickoff_formatter_rejects_unresolved_phase_models(tmp_path: Path) -> None:
@@ -2928,8 +3067,7 @@ def test_kickoff_derives_proactive_defaults_only_at_scheduled_pauses(
     )
 
     assert result.returncode == 0, result.stderr
-    rendered = result.stdout.split("```json\n", 1)[1].split("\n```", 1)[0]
-    policy = json.loads(rendered)["policy"]
+    policy = _kickoff_proposal(result.args)
     decisions = {
         item["phase"]: item["decision"] for item in policy["proactive_review"]["phase_decisions"]
     }
@@ -3045,8 +3183,7 @@ entry_point: define
     )
 
     assert result.returncode == 0, result.stderr
-    rendered = result.stdout.split("```json\n", 1)[1].split("\n```", 1)[0]
-    policy = json.loads(rendered)["policy"]
+    policy = _kickoff_proposal(result.args)
     assert policy["confirmation_contract"] == {
         "user_required": [],
         "driver_confirmable": ["define"],
@@ -3485,8 +3622,7 @@ def test_kickoff_accepts_required_review_at_scheduled_pauses(tmp_path: Path) -> 
     )
 
     assert result.returncode == 0, result.stderr
-    rendered = result.stdout.split("```json\n", 1)[1].split("\n```", 1)[0]
-    phase_decisions = json.loads(rendered)["policy"]["proactive_review"]["phase_decisions"]
+    phase_decisions = _kickoff_proposal(result.args)["proactive_review"]["phase_decisions"]
     required = {item["phase"] for item in phase_decisions if item["decision"] == "required"}
     assert required == {"spec", "plan"}
 
@@ -3741,7 +3877,9 @@ class TestPollingContract:
         assert "Substantive lifecycle output" in running
         assert "still wake the driver immediately" in running
 
-    def test_formatter_exposes_first_poll_and_timestamp_contract(self, tmp_path: Path) -> None:
+    def test_formatter_shows_confirmed_poll_interval_without_internal_poll_rules(
+        self, tmp_path: Path
+    ) -> None:
         strategic_context = tmp_path / "strategic_context.yaml"
         strategic_context.write_text(
             """\
@@ -3771,14 +3909,14 @@ mandate:
         )
 
         assert result.returncode == 0, result.stderr
-        assert (
-            "| driver.first_poll | after the full interval; "
-            "no startup or transport-level poll |" in result.stdout
-        )
-        assert (
-            "| driver.poll_timestamp | capture and print current system time "
-            "with every proactive poll |" in result.stdout
-        )
+        assert "| driver.mode | attached |" in result.stdout
+        assert "| driver.poll_interval_seconds | 180 |" in result.stdout
+        assert "driver.first_poll" not in result.stdout
+        assert "driver.poll_timestamp" not in result.stdout
+        assert _kickoff_proposal(result.args)["driver"] == {
+            "mode": "attached",
+            "poll_interval_seconds": 180,
+        }
 
 
 @pytest.mark.parametrize("damage", ["missing", "malformed"])
