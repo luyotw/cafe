@@ -76,38 +76,42 @@ resuming and whenever the playbook changes.
 - [ ] On resume, reuse this confirmed repository-wide value. Reconfirm before
   mutation when it is absent, unconfirmed, or the user requests a change.
 
-## Repository CI/CD inference and closeout scope
+## Repository-informed deliver and cleanup plan
 
-At the beginning of every new kickoff, before asking the user to confirm a
-delivery or cleanup plan, inspect the repository's existing CI/CD configuration
-through the bundled read-only helper:
+At the beginning of every new kickoff, inspect the repository context needed to
+find its actual delivery path: relevant documentation and runbooks, CI/CD
+configuration, scripts and make targets, repository conventions, and recent
+delivery evidence when it is available. This is Driver reasoning, not a
+provider detector or a fixed shipping checklist. Do not enumerate CI/CD vendors,
+match trigger keywords, or silently choose a generic merge/deploy/cleanup
+sequence.
 
-```bash
-python3 <skill-dir>/scripts/infer_closeout_scope.py --project-root <repository-root>
+Turn the discovered route into two ordered lists of exact host-side commands:
+
+```yaml
+deliver:
+  - argv: [command, argument]
+cleanup:
+  - argv: [command, argument]
 ```
 
-The helper reads only recognized CI/CD configuration files, reports their paths,
-coarse trigger/action signals, and a deterministic content fingerprint. It does
-not run a pipeline, inspect credentials, infer runtime state, or authorize an
-external action. Treat its `suggested_deliver_scope` and
-`suggested_cleanup_scope` as a proposal, not a decision.
+Both fields are required in every version-2 contract. Use an explicit `[]` for
+a stage with no remaining action; never omit the field or invent a no-op.
 
-Present the detected configurations, fingerprint, suggested scopes, and actions
-listed in `requires_explicit_confirmation` to the user. Ask the user to confirm
-the final `deliver_scope` and `cleanup_scope` before activating the kickoff
-contract. The user may narrow, expand, or replace a suggestion. Do not silently
-select the inferred values, and do not treat confirmation of either scope as
-authority to merge, deploy, publish, close an issue, remove a worktree, delete a
-branch, or perform any other action.
+Every argument must be concrete at kickoff: no shell strings, templates,
+placeholders, or future identifiers that will be filled in later. When a future
+identifier is unavailable, use an existing stable selector only after verifying
+it identifies the intended target, or obtain a fresh confirmation once the
+concrete command exists. Inspect whether integration already triggers delivery
+before proposing another deployment command.
 
-Pass the final proposed values to the formatter with `--deliver-scope` and
-`--cleanup-scope`. The complete rendered kickoff remains the confirmation
-artifact; activate it only after the user has explicitly confirmed all of its
-fields. If a recognized CI/CD configuration or its fingerprint changes before
-activation, rerun the helper, render the updated proposal, and obtain a new
-scope confirmation. Existing activated version-1 Delivery Contracts remain
-valid for their current workflows; do not rewrite them mid-run. A later explicit
-reconfirmation creates the version-2 form below.
+Present both exact arrays and the repository evidence that led to them. The user
+confirms the complete kickoff, including their command order and effects. That
+confirmation is durable authority for the Driver to execute exactly those arrays
+at closeout; it is not authority for a changed command, reordered command, or
+materially changed target/effect. Existing activated version-1 Delivery
+Contracts remain valid for their current workflows; do not rewrite them mid-run.
+A later explicit reconfirmation creates the version-2 form below.
 
 ## Kickoff contract: first blocking gate
 
@@ -115,8 +119,7 @@ Before `cafe prepare`, any repository mutation, or the first workflow execution,
 obtain explicit user confirmation of:
 
 - the versioned `delivery_contract` described below, including the user-confirmed
-  `deliver_scope` and `cleanup_scope` derived from the repository CI/CD
-  inference;
+  exact `deliver` and `cleanup` argv arrays derived from repository evidence;
 - `playbook_id`;
 - `playbook_selection_rationale`, including the independent-QA decision and the
   closest rejected alternative;
@@ -334,14 +337,12 @@ persists a version-2 Delivery Contract. Version 2 adds a `closeout_plan` with:
 
 | Field | Content |
 | --- | --- |
-| `ci_cd_inference` | Read-only helper output: recognized paths, coarse signals, and content fingerprint |
-| `deliver_scope` | User-confirmed closeout activities the Driver should later propose |
-| `cleanup_scope` | User-confirmed lifecycle cleanup activities the Driver should later propose |
-| `execution_authority` | Always `separate_user_confirmation_required` |
+| `deliver` | Ordered, user-confirmed objects shaped as `{ "argv": ["literal", "arguments"] }` |
+| `cleanup` | Ordered, user-confirmed objects shaped as `{ "argv": ["literal", "arguments"] }` |
 
-The scopes are planning facts, not an execution grant. Keep action-specific
-authority in the existing action-authority route at the time of the actual
-action.
+The complete confirmed plan is action-specific authority for these exact
+commands only. It does not authorize an argument change, target/effect change,
+or unrelated external action.
 
 Keep this contract specific about the result and flexible about how agents
 reach it. Put reasonable technical choices in `allowed_variations`. Treat only
@@ -387,8 +388,8 @@ Use the bundled formatter instead of a prose-only summary:
 python3 <skill-dir>/scripts/format_kickoff_contract.py <playbook-id> \
   --issue-name <issue-name> \
   --delivery-contract '<complete version-1 product delivery JSON>' \
-  --deliver-scope '<user-confirmed deliver activity; repeat or comma-separate>' \
-  --cleanup-scope '<user-confirmed cleanup activity; repeat or comma-separate>' \
+  --deliver '[["literal-executable", "literal-argument"]]' \
+  --cleanup '[["literal-executable", "literal-argument"]]' \
   --playbook-rationale "<source/evidence, QA decision, and rejected alternative>" \
   --issue-nature <nature> --issue-scale <small|medium|large> \
   --update-preflight '<bounded runtime-update JSON>' \

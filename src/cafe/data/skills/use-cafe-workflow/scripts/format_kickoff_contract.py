@@ -14,6 +14,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
+_SOURCE_ROOT = Path(__file__).resolve().parents[5]
+if str(_SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SOURCE_ROOT))
+
 _DRIVER_MODES = {"attached", "unattended", "event-driven"}
 _EVENT_DRIVEN_CLIS = {"claude", "codex", "gemini", "copilot", "cursor-agent"}
 
@@ -53,7 +57,7 @@ try:
     )
     from cafe.core.types import AgentCLI, AgentConfig
     from cafe.driver import ActivateConfirmedContract, activate_confirmed_contract
-    from cafe.driver.delivery import normalize_closeout_inference, normalize_delivery_contract
+    from cafe.driver.delivery import normalize_delivery_contract
     from cafe.playbooks.loader import PlaybookLoader
     from cafe.skills.execution_profile import resolve_execution_profile
     from cafe.skills.loader import SkillLoader
@@ -63,8 +67,7 @@ except ModuleNotFoundError:
     raise
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from infer_closeout_scope import infer_closeout_scope  # noqa: E402
-from render_workflow_progress import render_progress  # noqa: E402
+from render_workflow_progress import render_progress  # noqa: E402, I001
 
 
 ModelChain = list[tuple[str, str]]
@@ -85,26 +88,18 @@ def _items(values: Iterable[str] | None) -> list[str]:
     return result
 
 
-def _kickoff_delivery_contract(args: argparse.Namespace, project_root: Path) -> dict[str, Any]:
-    """Build a v2 proposal from read-only CI/CD evidence and selected scopes."""
+def _kickoff_delivery_contract(args: argparse.Namespace) -> dict[str, Any]:
+    """Build a v2 proposal containing the user-confirmable closeout commands."""
     core = normalize_delivery_contract(args.delivery_contract)
     if core["schema_version"] != 1:
         raise ValueError("new kickoff requires version-1 core delivery facts")
-    deliver_scope = _items(args.deliver_scope)
-    cleanup_scope = _items(args.cleanup_scope)
-    if not deliver_scope:
-        raise ValueError("kickoff requires at least one --deliver-scope")
-    if not cleanup_scope:
-        raise ValueError("kickoff requires at least one --cleanup-scope")
     return normalize_delivery_contract(
         {
             **core,
             "schema_version": 2,
             "closeout_plan": {
-                "ci_cd_inference": normalize_closeout_inference(infer_closeout_scope(project_root)),
-                "deliver_scope": deliver_scope,
-                "cleanup_scope": cleanup_scope,
-                "execution_authority": "separate_user_confirmation_required",
+                "deliver": [{"argv": command} for command in args.deliver],
+                "cleanup": [{"argv": command} for command in args.cleanup],
             },
         }
     )
@@ -247,6 +242,19 @@ def _json_mapping(value: str) -> dict[str, Any]:
         raise argparse.ArgumentTypeError(f"must be valid JSON: {exc.msg}") from exc
     if not isinstance(parsed, dict):
         raise argparse.ArgumentTypeError("must be a JSON object")
+    return parsed
+
+
+def _json_argv_list(value: str) -> list[list[str]]:
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise argparse.ArgumentTypeError(f"must be valid JSON: {exc.msg}") from exc
+    if not isinstance(parsed, list) or any(
+        not isinstance(command, list) or any(not isinstance(item, str) for item in command)
+        for command in parsed
+    ):
+        raise argparse.ArgumentTypeError("must be a JSON array of string arrays")
     return parsed
 
 
@@ -422,29 +430,24 @@ def _parser() -> argparse.ArgumentParser:
         "--delivery-contract",
         type=_json_mapping,
         required=True,
-        help="Complete version-1 product delivery facts; the formatter adds the proposed closeout scope.",
-    )
-    parser.add_argument(
-        "--deliver-scope",
-        action="append",
-        default=[],
-        required=True,
-        metavar="ACTION",
         help=(
-            "Proposed deliver action, inferred from CI/CD then shown for user confirmation; "
-            "repeat or comma-separate."
+            "Complete version-1 product delivery facts; the formatter adds the confirmed "
+            "closeout commands."
         ),
     )
     parser.add_argument(
-        "--cleanup-scope",
-        action="append",
-        default=[],
+        "--deliver",
         required=True,
-        metavar="ACTION",
-        help=(
-            "Proposed cleanup action, inferred from CI/CD then shown for user confirmation; "
-            "repeat or comma-separate."
-        ),
+        type=_json_argv_list,
+        metavar="JSON_ARGV_LIST",
+        help="Exact ordered deliver argv arrays, including [] when nothing remains.",
+    )
+    parser.add_argument(
+        "--cleanup",
+        required=True,
+        type=_json_argv_list,
+        metavar="JSON_ARGV_LIST",
+        help="Exact ordered cleanup argv arrays, including [] when nothing remains.",
     )
     parser.add_argument(
         "--issue-scale",
@@ -569,8 +572,7 @@ def _proactive_review_decisions(
                 "phase": phase,
                 "decision": "not_required",
                 "rationale": (
-                    "Derived: no scheduled confirmation pause exists before workflow "
-                    "advancement."
+                    "Derived: no scheduled confirmation pause exists before workflow advancement."
                 ),
             }
     return [decisions[phase] for phase in agent_phases]
@@ -662,7 +664,7 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
         else {"kind": "current_checkout"}
     )
     proposal: dict[str, Any] = {
-        "delivery_contract": _kickoff_delivery_contract(args, project_root),
+        "delivery_contract": _kickoff_delivery_contract(args),
         "locales": {
             "conversation": {"value": effective_locale, "source": locale_source},
         },
@@ -849,10 +851,9 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
     delivery_contract = (
         confirmed_proposal["delivery_contract"]
         if confirmed_proposal is not None
-        else _kickoff_delivery_contract(args, project_root)
+        else _kickoff_delivery_contract(args)
     )
     closeout_plan = delivery_contract["closeout_plan"]
-    ci_cd_inference = closeout_plan["ci_cd_inference"]
 
     if zh:
         title = f"## Kickoff Contract — {args.issue_name}"
@@ -917,8 +918,7 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
             ["runtime_update.status", update_preflight["status"]],
             [
                 "runtime_update.versions",
-                f"{update_preflight['installed_version']} → "
-                f"{update_preflight['latest_version']}",
+                f"{update_preflight['installed_version']} → {update_preflight['latest_version']}",
             ],
             ["runtime_update.decision", update_preflight["decision"]],
             [
@@ -1020,9 +1020,7 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
             clean_action = "Driver may confirm and advance after clean review"
         else:
             clean_action = "user confirmation remains required"
-        proactive_rows.append(
-            [phase, decision["decision"], decision["rationale"], clean_action]
-        )
+        proactive_rows.append([phase, decision["decision"], decision["rationale"], clean_action])
 
     progress_contract = confirmed_proposal or {
         "confirmation_contract": {
@@ -1069,49 +1067,21 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
             ["out_of_mandate", out_of_mandate or "[]"],
         ],
     )
-    ci_cd_rows: list[list[Any]] = [
-        ["fingerprint_sha256", ci_cd_inference["fingerprint_sha256"]],
-        [
-            "detected_configurations",
-            (
-                json.dumps(ci_cd_inference["configurations"], ensure_ascii=False)
-                if ci_cd_inference["configurations"]
-                else "[] (no recognized repository CI/CD configuration)"
-            ),
-        ],
-        [
-            "suggested_deliver_scope",
-            ", ".join(ci_cd_inference["suggested_deliver_scope"]),
-        ],
-        [
-            "suggested_cleanup_scope",
-            ", ".join(ci_cd_inference["suggested_cleanup_scope"]),
-        ],
-        [
-            "requires_explicit_confirmation",
-            ", ".join(ci_cd_inference["requires_explicit_confirmation"]),
-        ],
-    ]
     closeout_rows: list[list[Any]] = [
-        ["deliver_scope", ", ".join(closeout_plan["deliver_scope"])],
-        ["cleanup_scope", ", ".join(closeout_plan["cleanup_scope"])],
-        ["execution_authority", closeout_plan["execution_authority"]],
+        ["deliver", json.dumps(closeout_plan["deliver"], ensure_ascii=False)],
+        ["cleanup", json.dumps(closeout_plan["cleanup"], ensure_ascii=False)],
     ]
 
     return "\n\n".join(
         [
             title,
             summary,
-            "### Repository CI/CD inference",
-            _table(summary_headers, ci_cd_rows),
-            "The inference is a read-only recommendation from recognized repository "
-            "configuration files. It does not execute a pipeline or authorize any action.",
-            "### Deliver and cleanup scope to confirm",
+            "### Deliver and cleanup plan to confirm",
             _table(summary_headers, closeout_rows),
-            "These scopes define the closeout the Driver should later propose. They do not "
-            "authorize merge, deployment, publication, issue closure, branch deletion, "
-            "worktree removal, or any other external action; each action still needs its "
-            "own confirmed authority and declared execution path.",
+            "The Driver discovered these exact commands from repository evidence. Confirmation "
+            "of the complete kickoff authorizes the Driver to execute these arrays, in order, "
+            "without shell reconstruction. Any changed command, order, or material target/effect "
+            "requires reconfirmation.",
             "### Delivery Contract",
             _table(
                 summary_headers,

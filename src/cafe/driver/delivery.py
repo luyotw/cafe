@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import re
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 
@@ -57,72 +56,38 @@ class _DeliveryContractBase(BaseModel):
         return values
 
 
-class CICDConfiguration(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
+class CloseoutCommand(BaseModel):
+    """One exact host-side command approved as part of a closeout plan."""
 
-    path: str = Field(min_length=1)
-    system: str = Field(min_length=1)
-    signals: list[str]
+    model_config = ConfigDict(extra="forbid", strict=True)
 
-    @field_validator("signals")
+    argv: list[str] = Field(min_length=1)
+
+    @field_validator("argv")
     @classmethod
-    def _distinct_signals(cls, values: list[str]) -> list[str]:
-        if any(not value for value in values) or len(set(values)) != len(values):
-            raise ValueError("CI/CD signals must contain distinct non-empty values")
-        return values
-
-
-class CICDInference(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
-
-    schema_version: StrictInt
-    fingerprint_sha256: str = Field(min_length=64, max_length=64)
-    configurations: list[CICDConfiguration]
-    suggested_deliver_scope: list[str] = Field(min_length=1)
-    suggested_cleanup_scope: list[str] = Field(min_length=1)
-    requires_explicit_confirmation: list[str] = Field(min_length=1)
-
-    @field_validator("schema_version")
-    @classmethod
-    def _version(cls, value: int) -> int:
-        if value != 1:
-            raise ValueError("unsupported CI/CD inference version")
-        return value
-
-    @field_validator("fingerprint_sha256")
-    @classmethod
-    def _fingerprint(cls, value: str) -> str:
-        if re.fullmatch(r"[0-9a-f]{64}", value) is None:
-            raise ValueError("CI/CD inference fingerprint must be a SHA-256 digest")
-        return value
-
-    @field_validator(
-        "suggested_deliver_scope",
-        "suggested_cleanup_scope",
-        "requires_explicit_confirmation",
-    )
-    @classmethod
-    def _distinct_actions(cls, values: list[str]) -> list[str]:
-        if any(not value for value in values) or len(set(values)) != len(values):
-            raise ValueError("CI/CD action lists must contain distinct non-empty values")
+    def _literal_nonempty_argv(cls, values: list[str]) -> list[str]:
+        if not values[0]:
+            raise ValueError("closeout argv executable must not be empty")
+        for value in values:
+            if "{{" in value or "${" in value or (value.startswith("<") and value.endswith(">")):
+                raise ValueError("closeout argv must not contain unresolved placeholders")
         return values
 
 
 class DeliveryCloseoutPlan(BaseModel):
-    """A confirmed scope plan, deliberately distinct from action authority."""
+    """Exact commands confirmed with the complete Delivery Contract."""
 
     model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
 
-    ci_cd_inference: CICDInference
-    deliver_scope: list[str] = Field(min_length=1)
-    cleanup_scope: list[str] = Field(min_length=1)
-    execution_authority: Literal["separate_user_confirmation_required"]
+    deliver: list[CloseoutCommand]
+    cleanup: list[CloseoutCommand]
 
-    @field_validator("deliver_scope", "cleanup_scope")
+    @field_validator("deliver", "cleanup")
     @classmethod
-    def _distinct_scopes(cls, values: list[str]) -> list[str]:
-        if any(not value for value in values) or len(set(values)) != len(values):
-            raise ValueError("closeout scopes must contain distinct non-empty values")
+    def _distinct_commands(cls, values: list[CloseoutCommand]) -> list[CloseoutCommand]:
+        commands = [tuple(command.argv) for command in values]
+        if len(set(commands)) != len(commands):
+            raise ValueError("closeout commands must be distinct within each stage")
         return values
 
 
@@ -146,13 +111,8 @@ class DeliveryContractV2(_DeliveryContractBase):
         return value
 
 
-def normalize_closeout_inference(value: Any) -> dict[str, Any]:
-    """Validate read-only CI/CD inference before it becomes confirmed contract data."""
-    return CICDInference.model_validate(value).model_dump(mode="json")
-
-
 def normalize_delivery_contract(value: Any) -> dict[str, Any]:
-    """Validate structure only; text is untrusted data, not executable policy."""
+    """Validate contract structure; activation supplies confirmation authority."""
     if not isinstance(value, dict):
         raise ValueError("Delivery Contract must be a mapping")
     version = value.get("schema_version")
