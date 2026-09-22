@@ -76,12 +76,50 @@ resuming and whenever the playbook changes.
 - [ ] On resume, reuse this confirmed repository-wide value. Reconfirm before
   mutation when it is absent, unconfirmed, or the user requests a change.
 
+## Repository-informed deliver and cleanup plan
+
+At the beginning of every new kickoff, inspect the repository context needed to
+find its actual delivery path: relevant documentation and runbooks, CI/CD
+configuration, scripts and make targets, repository conventions, and recent
+delivery evidence when it is available. This is Driver reasoning, not a
+provider detector or a fixed shipping checklist. Do not enumerate CI/CD vendors,
+match trigger keywords, or silently choose a generic merge/deploy/cleanup
+sequence.
+
+Turn the discovered route into two ordered lists of exact host-side commands:
+
+```yaml
+deliver:
+  - argv: [command, argument]
+cleanup:
+  - argv: [command, argument]
+```
+
+Both fields are required in every version-2 contract. Use an explicit `[]` for
+a stage with no remaining action; never omit the field or invent a no-op.
+
+Every argument must be concrete at kickoff: no shell strings, templates,
+placeholders, or future identifiers that will be filled in later. When a future
+identifier is unavailable, use an existing stable selector only after verifying
+it identifies the intended target, or obtain a fresh confirmation once the
+concrete command exists. Inspect whether integration already triggers delivery
+before proposing another deployment command.
+
+Present both exact arrays and the repository evidence that led to them. The user
+confirms the complete kickoff, including their command order and effects. That
+confirmation is durable authority for the Driver to execute exactly those arrays
+at closeout; it is not authority for a changed command, reordered command, or
+materially changed target/effect. Existing activated version-1 Delivery
+Contracts remain valid for their current workflows; do not rewrite them mid-run.
+A later explicit reconfirmation creates the version-2 form below.
+
 ## Kickoff contract: first blocking gate
 
 Before `cafe prepare`, any repository mutation, or the first workflow execution,
 obtain explicit user confirmation of:
 
-- the versioned `delivery_contract` described below;
+- the versioned `delivery_contract` described below, including the user-confirmed
+  exact `deliver` and `cleanup` argv arrays derived from repository evidence;
 - `playbook_id`;
 - `playbook_selection_rationale`, including the independent-QA decision and the
   closest rejected alternative;
@@ -270,8 +308,8 @@ output is a hard stop.
 ### Delivery facts to confirm
 
 Before rendering, read the request and relevant existing evidence, then propose
-one complete `delivery_contract` object. Use the user's language. The required
-version-1 fields are:
+one complete version-1 product `delivery_contract` object. Use the user's
+language. The required version-1 fields are:
 
 | Field | Content |
 | --- | --- |
@@ -293,6 +331,18 @@ permission or an external-effect approval from product scope. Always preserve:
 > or simpler implementation footprint. It must not accept reduced user-visible
 > behavior, feature scope, acceptance coverage, edge-case coverage, or required
 > integrations.
+
+For a new kickoff, the formatter validates this version-1 product core and
+persists a version-2 Delivery Contract. Version 2 adds a `closeout_plan` with:
+
+| Field | Content |
+| --- | --- |
+| `deliver` | Ordered, user-confirmed objects shaped as `{ "argv": ["literal", "arguments"] }` |
+| `cleanup` | Ordered, user-confirmed objects shaped as `{ "argv": ["literal", "arguments"] }` |
+
+The complete confirmed plan is action-specific authority for these exact
+commands only. It does not authorize an argument change, target/effect change,
+or unrelated external action.
 
 Keep this contract specific about the result and flexible about how agents
 reach it. Put reasonable technical choices in `allowed_variations`. Treat only
@@ -337,7 +387,9 @@ Use the bundled formatter instead of a prose-only summary:
 ```bash
 python3 <skill-dir>/scripts/format_kickoff_contract.py <playbook-id> \
   --issue-name <issue-name> \
-  --delivery-contract '<complete version-1 delivery JSON>' \
+  --delivery-contract '<complete version-1 product delivery JSON>' \
+  --deliver '[["literal-executable", "literal-argument"]]' \
+  --cleanup '[["literal-executable", "literal-argument"]]' \
   --playbook-rationale "<source/evidence, QA decision, and rejected alternative>" \
   --issue-nature <nature> --issue-scale <small|medium|large> \
   --update-preflight '<bounded runtime-update JSON>' \

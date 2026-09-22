@@ -486,6 +486,74 @@ def test_delivery_requires_complete_versioned_facts(field):
         normalize_delivery_contract(data)
 
 
+def _delivery_contract_v2():
+    data = delivery_contract()
+    data["schema_version"] = 2
+    data["closeout_plan"] = {
+        "deliver": [
+            {"argv": ["git", "push", "origin", "feature/closeout"]},
+            {"argv": ["make", "deploy"]},
+        ],
+        "cleanup": [{"argv": ["git", "worktree", "remove", "/tmp/issue"]}],
+    }
+    return data
+
+
+def test_delivery_contract_v2_persists_exact_confirmed_closeout_commands():
+    normalized = normalize_delivery_contract(_delivery_contract_v2())
+
+    assert normalized["schema_version"] == 2
+    assert normalized["closeout_plan"]["deliver"] == [
+        {"argv": ["git", "push", "origin", "feature/closeout"]},
+        {"argv": ["make", "deploy"]},
+    ]
+    assert normalized["closeout_plan"]["cleanup"] == [
+        {"argv": ["git", "worktree", "remove", "/tmp/issue"]}
+    ]
+
+
+def test_delivery_contract_v2_allows_explicit_empty_closeout_stages():
+    data = _delivery_contract_v2()
+    data["closeout_plan"] = {"deliver": [], "cleanup": []}
+
+    assert normalize_delivery_contract(data)["closeout_plan"] == {"deliver": [], "cleanup": []}
+
+
+def test_delivery_contract_v2_preserves_literal_argv_arguments():
+    data = _delivery_contract_v2()
+    data["closeout_plan"]["deliver"] = [{"argv": ["tool", " release ", ""]}]
+
+    assert normalize_delivery_contract(data)["closeout_plan"]["deliver"] == [
+        {"argv": ["tool", " release ", ""]}
+    ]
+
+
+@pytest.mark.parametrize(
+    "path, value",
+    [
+        (
+            ("closeout_plan", "cleanup"),
+            [
+                {"argv": ["git", "worktree", "remove", "/tmp/issue"]},
+                {"argv": ["git", "worktree", "remove", "/tmp/issue"]},
+            ],
+        ),
+        (("closeout_plan", "deliver"), [{"argv": []}]),
+        (("closeout_plan", "deliver"), [{"argv": [""]}]),
+        (("closeout_plan", "deliver"), [{"argv": ["make", "${DEPLOY_TARGET}"]}]),
+    ],
+)
+def test_delivery_contract_v2_rejects_invalid_closeout_plan(path, value):
+    data = _delivery_contract_v2()
+    target = data
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+
+    with pytest.raises(ValueError):
+        normalize_delivery_contract(data)
+
+
 @pytest.mark.parametrize(
     "text",
     [

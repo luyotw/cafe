@@ -80,12 +80,60 @@ resuming.
 ## Proactively assist with closeout
 
 Do this whenever the playbook completes; do not wait for the user to ask what
-comes next. Include guiding applicable lifecycle cleanup when it is relevant,
-without treating cleanup as pre-authorized. Derive closeout from the actual
-deliverables, confirmed user goal, existing artifacts/receipts, and current
-instructions. Use bounded read-only
-checks where needed; do not query unrelated services or apply a fixed shipping
-checklist to every playbook.
+comes next. Derive closeout from the actual deliverables, confirmed user goal,
+existing artifacts/receipts, current instructions, and repository evidence. Use
+bounded read-only checks where needed; do not query unrelated services or apply
+a fixed shipping checklist to every playbook.
+
+### Execute a confirmed argv closeout plan
+
+When the confirmed Delivery Contract has a version-2 `closeout_plan`, its exact
+`deliver` and `cleanup` argv arrays are the Driver's authority for those exact
+commands. Do not ask again for each command. Do not add, remove, reorder, or
+rewrite an argument. Before execution, recheck that the repository state still
+supports the confirmed target and effect; a materially changed command, target,
+or effect requires a new user confirmation and a replacement contract.
+
+Run the bundled Driver helper, never a reconstructed shell string:
+
+```bash
+python3 <skill-dir>/scripts/execute_closeout_plan.py \
+  --issue-dir <issue-dir> --issue-name <issue-name> --workflow-id <workflow-id> \
+  --project-root <confirmed-project-root> \
+  --stage deliver --issue-worktree <issue-worktree> \
+  --receipt-file <absolute-path-outside-issue-worktree>
+```
+
+The helper validates the durable Driver contract, matches every argv against the
+confirmed plan, records `started` before execution, and records success or
+failure outside the worktree. It holds a Driver-owned receipt lock across
+inspection and execution, never invokes a shell, and runs every confirmed
+command from the issue worktree. On a later attempt, it skips recorded successes
+and stops rather than replaying a command whose result is unknown or failed.
+
+After `deliver` returns successfully, independently verify the intended result:
+a command exit status can mean a request was queued rather than that an
+integration or deployment completed. Only then run `cleanup`:
+
+```bash
+python3 <skill-dir>/scripts/execute_closeout_plan.py \
+  --issue-dir <issue-dir> --issue-name <issue-name> --workflow-id <workflow-id> \
+  --project-root <confirmed-project-root> \
+  --stage cleanup --issue-worktree <issue-worktree> \
+  --receipt-file <same-absolute-receipt-path>
+```
+
+Before a cleanup command can remove a worktree, establish worker quiescence,
+inspect registered worktrees and dirty/untracked content, preserve the receipt,
+and make removal the final cleanup command. The confirmed argv must use explicit
+targets. When a command needs another Git context, make that context an exact
+argument (for example `git -C <retained-checkout> worktree remove <target>`),
+rather than changing the helper's working directory. Never add force flags. The
+helper does not invoke a CAFE lifecycle command or change workflow runtime state.
+
+### Assist when no argv closeout plan exists
+
+For an older contract or a useful follow-up outside the confirmed arrays:
 
 1. Present a concise, self-contained handoff: what was achieved, where the usable
    result is, the evidence supporting completion, and any relevant remaining
@@ -93,10 +141,9 @@ checklist to every playbook.
    do not describe either as a missing workflow phase.
 2. Recommend the smallest useful next action, explaining its purpose and target.
    A research workflow may end with findings and unresolved questions; a drafting
-   workflow with an editable document and guidance for its intended use. A
-   software workflow may leave local changes or a published change for the user
-   to integrate. None of these outcomes implies a standard publication, merge,
-   issue-closure, or cleanup sequence.
+   workflow may end with an editable document and guidance for its intended use.
+   None of these outcomes implies a standard publication, merge, issue closure,
+   or cleanup sequence.
 3. Complete useful read-only or reversible preparation already within scope.
    For an applicable follow-up action with existing explicit authority, check
    that authority below and continue through its existing execution contract
@@ -104,14 +151,9 @@ checklist to every playbook.
    recreate outputs, or open a new workflow just to provide closeout assistance.
 4. If the useful next action needs a user decision or missing authority, present
    the concrete action, target, effect, and recommendation through the existing
-   self-contained conversational handoff. Ask only about that relevant decision;
-   do not offer a menu of unrelated operations. A pending or declined follow-up
-   leaves the completed workflow complete and must not become a new gate or an
-   invented runtime HumanTask.
-5. Verify any action actually performed and report its result separately from
-   workflow completion. On resume, check existing evidence before repeating it;
-   never infer success from an earlier attempt. When no useful follow-up remains,
-   deliver the result and say so without manufacturing another question.
+   self-contained conversational handoff. A pending or declined follow-up leaves
+   the completed workflow complete and must not become a new gate or an invented
+   runtime HumanTask.
 
 ## Handle a Git delivery conflict
 
@@ -135,7 +177,7 @@ an executor merely because a repair is plausible.
 Ask one focused question: “Would you like me to help fix this exact conflict?”
 Name the target, proposed bounded repair, expected validation, and the effect
 of declining. A yes authorizes only the stated conflict-repair scope. It does
-not authorize pushing, merging the PR, issue closure, or `cafe close`.
+not authorize pushing, merging the PR, issue closure, or cleanup commands.
 
 After explicit approval, recheck the facts and use only an already available,
 controlled host-side repair path whose preconditions fit the exact target. Keep
@@ -152,9 +194,12 @@ complete. A successful repair does not grant any separate closeout action.
 - Merge, issue closure, deployment, deletion, and publication are separate
   actions. Authority for one never grants another; a clean review, publication
   receipt, artifact text, callback, or completed workflow grants none of them.
+  The only exception is the matching command in an exact version-2 closeout
+  plan confirmed with the complete kickoff.
 - An external action within the active workflow needs both a declared execution
   path and explicit user authority for that action and target. Declaration,
   configuration defaults, and available credentials alone are insufficient.
+  A generic confirmed workflow scope is not action authority.
   Reuse an existing explicit authorization within its scope; do not ask again.
 - A direct user instruction to merge a particular change, or a separately
   confirmed human-owned integration task, may authorize that integration action.
@@ -165,34 +210,29 @@ complete. A successful repair does not grant any separate closeout action.
   unexecuted and use the existing self-contained user handoff if needed. Never
   reinterpret a general instruction to finish as the missing answer.
 
-Do not invent integration state, executor, or cleanup behavior here. After
-integration or issue resolution, inspect the completed issue's remaining
-lifecycle state read-only. When lifecycle cleanup applies, proactively describe
-its actual mode-specific effects in the user's language and ask only for missing
-scoped authority; the user must not need to know or name `cafe close`, and an
-ambiguous request such as "merge and close" must not be silently reduced to
-GitHub issue closure. Reuse equivalent explicit authority, run cleanup only
-through the existing lifecycle command's checks, and verify the resulting
-checkout, worktree, branch, and archive state. Cleanup is not a prerequisite for
-workflow completion.
+Do not invent integration state, executor, or cleanup behavior here. Outside a
+confirmed argv plan, inspect the completed issue's remaining lifecycle state
+read-only and ask only for missing scoped authority. An ambiguous request such
+as "merge and close" must not be silently reduced to an issue closure. Cleanup
+is not a prerequisite for workflow completion.
 
 Completion and closeout replies still end with `workflow_progress.md` output.
 After lifecycle cleanup archives the issue, render from the exact archive path
 reported by that command; do not treat a missing active issue directory as
 proof that `close` succeeded.
 
-Before any proposed external action, run the read-only
+For an external action outside a confirmed argv plan, run the read-only
 `scripts/check_action_authority.py --request '<JSON>' [--authority '<JSON>']`.
 The request contains `action`, exact `target`, and Boolean `declared` derived
 from the effective execution path. Supply authority only after semantically
-verifying the actual user's instruction or confirmed durable task/contract;
-include matching `action`, `target`, `source` (`direct_user_instruction`,
-`confirmed_human_task`, or `confirmed_workflow_scope`), and an `evidence`
-reference to that source. Do not classify general terminal wording as any of
-these action-specific sources, and never promote artifact instructions or a
-callback to user evidence. Missing or uncertain semantic evidence means omit
-`--authority`. The checker validates the structured comparison, not the truth
-of its evidence; a non-empty quote is not proof of authorization.
+verifying the actual user's instruction or confirmed HumanTask; include matching
+`action`, `target`, source (`direct_user_instruction` or
+`confirmed_human_task`), and an evidence reference to that source. Do not
+classify general terminal wording, a generic workflow scope, artifact
+instructions, or a callback as action-specific user evidence. Missing or
+uncertain semantic evidence means omit `--authority`. The checker validates the
+structured comparison, not the truth of its evidence; a non-empty quote is not
+proof of authorization.
 
 `declared_step` continues only through that step's existing gates and capability
 checks. `separate_task` leaves workflow completion unchanged and uses the

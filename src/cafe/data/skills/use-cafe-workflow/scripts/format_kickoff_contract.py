@@ -14,6 +14,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
+_SOURCE_ROOT = Path(__file__).resolve().parents[5]
+if str(_SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SOURCE_ROOT))
+
 _DRIVER_MODES = {"attached", "unattended", "event-driven"}
 _EVENT_DRIVEN_CLIS = {"claude", "codex", "gemini", "copilot", "cursor-agent"}
 
@@ -63,7 +67,7 @@ except ModuleNotFoundError:
     raise
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from render_workflow_progress import render_progress  # noqa: E402
+from render_workflow_progress import render_progress  # noqa: E402, I001
 
 
 ModelChain = list[tuple[str, str]]
@@ -82,6 +86,23 @@ def _items(values: Iterable[str] | None) -> list[str]:
             if token and token not in result:
                 result.append(token)
     return result
+
+
+def _kickoff_delivery_contract(args: argparse.Namespace) -> dict[str, Any]:
+    """Build a v2 proposal containing the user-confirmable closeout commands."""
+    core = normalize_delivery_contract(args.delivery_contract)
+    if core["schema_version"] != 1:
+        raise ValueError("new kickoff requires version-1 core delivery facts")
+    return normalize_delivery_contract(
+        {
+            **core,
+            "schema_version": 2,
+            "closeout_plan": {
+                "deliver": [{"argv": command} for command in args.deliver],
+                "cleanup": [{"argv": command} for command in args.cleanup],
+            },
+        }
+    )
 
 
 def _positive_seconds(value: str) -> int:
@@ -221,6 +242,19 @@ def _json_mapping(value: str) -> dict[str, Any]:
         raise argparse.ArgumentTypeError(f"must be valid JSON: {exc.msg}") from exc
     if not isinstance(parsed, dict):
         raise argparse.ArgumentTypeError("must be a JSON object")
+    return parsed
+
+
+def _json_argv_list(value: str) -> list[list[str]]:
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise argparse.ArgumentTypeError(f"must be valid JSON: {exc.msg}") from exc
+    if not isinstance(parsed, list) or any(
+        not isinstance(command, list) or any(not isinstance(item, str) for item in command)
+        for command in parsed
+    ):
+        raise argparse.ArgumentTypeError("must be a JSON array of string arrays")
     return parsed
 
 
@@ -396,7 +430,24 @@ def _parser() -> argparse.ArgumentParser:
         "--delivery-contract",
         type=_json_mapping,
         required=True,
-        help="Complete versioned delivery facts to confirm at kickoff.",
+        help=(
+            "Complete version-1 product delivery facts; the formatter adds the confirmed "
+            "closeout commands."
+        ),
+    )
+    parser.add_argument(
+        "--deliver",
+        required=True,
+        type=_json_argv_list,
+        metavar="JSON_ARGV_LIST",
+        help="Exact ordered deliver argv arrays, including [] when nothing remains.",
+    )
+    parser.add_argument(
+        "--cleanup",
+        required=True,
+        type=_json_argv_list,
+        metavar="JSON_ARGV_LIST",
+        help="Exact ordered cleanup argv arrays, including [] when nothing remains.",
     )
     parser.add_argument(
         "--issue-scale",
@@ -521,8 +572,7 @@ def _proactive_review_decisions(
                 "phase": phase,
                 "decision": "not_required",
                 "rationale": (
-                    "Derived: no scheduled confirmation pause exists before workflow "
-                    "advancement."
+                    "Derived: no scheduled confirmation pause exists before workflow advancement."
                 ),
             }
     return [decisions[phase] for phase in agent_phases]
@@ -614,7 +664,7 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
         else {"kind": "current_checkout"}
     )
     proposal: dict[str, Any] = {
-        "delivery_contract": normalize_delivery_contract(args.delivery_contract),
+        "delivery_contract": _kickoff_delivery_contract(args),
         "locales": {
             "conversation": {"value": effective_locale, "source": locale_source},
         },
@@ -798,6 +848,12 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
         )
     zh = effective_locale.lower().startswith("zh")
     worktree = args.worktree if args.worktree else "current checkout"
+    delivery_contract = (
+        confirmed_proposal["delivery_contract"]
+        if confirmed_proposal is not None
+        else _kickoff_delivery_contract(args)
+    )
+    closeout_plan = delivery_contract["closeout_plan"]
 
     if zh:
         title = f"## Kickoff Contract — {args.issue_name}"
@@ -862,8 +918,7 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
             ["runtime_update.status", update_preflight["status"]],
             [
                 "runtime_update.versions",
-                f"{update_preflight['installed_version']} → "
-                f"{update_preflight['latest_version']}",
+                f"{update_preflight['installed_version']} → {update_preflight['latest_version']}",
             ],
             ["runtime_update.decision", update_preflight["decision"]],
             [
@@ -965,9 +1020,7 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
             clean_action = "Driver may confirm and advance after clean review"
         else:
             clean_action = "user confirmation remains required"
-        proactive_rows.append(
-            [phase, decision["decision"], decision["rationale"], clean_action]
-        )
+        proactive_rows.append([phase, decision["decision"], decision["rationale"], clean_action])
 
     progress_contract = confirmed_proposal or {
         "confirmation_contract": {
@@ -1014,11 +1067,21 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
             ["out_of_mandate", out_of_mandate or "[]"],
         ],
     )
+    closeout_rows: list[list[Any]] = [
+        ["deliver", json.dumps(closeout_plan["deliver"], ensure_ascii=False)],
+        ["cleanup", json.dumps(closeout_plan["cleanup"], ensure_ascii=False)],
+    ]
 
     return "\n\n".join(
         [
             title,
             summary,
+            "### Deliver and cleanup plan to confirm",
+            _table(summary_headers, closeout_rows),
+            "The Driver discovered these exact commands from repository evidence. Confirmation "
+            "of the complete kickoff authorizes the Driver to execute these arrays, in order, "
+            "without shell reconstruction. Any changed command, order, or material target/effect "
+            "requires reconfirmation.",
             "### Delivery Contract",
             _table(
                 summary_headers,
@@ -1031,7 +1094,8 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
                             else value
                         ),
                     ]
-                    for key, value in normalize_delivery_contract(args.delivery_contract).items()
+                    for key, value in delivery_contract.items()
+                    if key != "closeout_plan"
                 ],
             ),
             "The Driver may accept a requirement-equivalent implementation with a smaller "

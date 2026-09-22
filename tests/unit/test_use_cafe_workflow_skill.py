@@ -82,6 +82,10 @@ def _preflight_args() -> list[str]:
     return [
         "--delivery-contract",
         json.dumps(delivery_contract()),
+        "--deliver",
+        json.dumps([["git", "push", "origin", "feature/issue346"]]),
+        "--cleanup",
+        json.dumps([["git", "worktree", "remove", "/tmp/issue346"]]),
         "--update-preflight",
         json.dumps(
             {
@@ -682,9 +686,7 @@ def test_helper_publication_rejects_contradictory_catalog_postflight(
     )
 
     assert exit_code == 1
-    assert receipt["postflight"]["errors"] == [
-        "differences catalog status requires a difference"
-    ]
+    assert receipt["postflight"]["errors"] == ["differences catalog status requires a difference"]
     assert receipt["post_change_verified"] is False
 
 
@@ -732,10 +734,7 @@ def test_helper_accepts_complete_near_maximum_over_budget_discovery() -> None:
         SKILL_ROOT / "scripts" / "sync_helper_with_preflight.py",
         "sync_helper_maximum_discovery",
     )
-    affected = [
-        f"agent:{index:04d}/" + ("x" * 590)
-        for index in range(module.MAX_CATALOG_ITEMS)
-    ]
+    affected = [f"agent:{index:04d}/" + ("x" * 590) for index in range(module.MAX_CATALOG_ITEMS)]
     payload = {
         "schema_version": 1,
         "status": "over_budget",
@@ -801,9 +800,7 @@ def test_helper_rejects_more_affected_entries_than_compared() -> None:
         "affected_entry_ids": ["phase:develop", "agent:developer"],
     }
 
-    with pytest.raises(
-        ValueError, match="affected_entry_ids cannot exceed compared_entry_count"
-    ):
+    with pytest.raises(ValueError, match="affected_entry_ids cannot exceed compared_entry_count"):
         module._validate_catalog(_helper_command(payload, exit_code=1))
 
 
@@ -979,6 +976,10 @@ mandate:
 
     assert result.returncode == 0, result.stderr
     assert "## Kickoff Contract — issue346" in result.stdout
+    assert "### Deliver and cleanup plan to confirm" in result.stdout
+    assert '"argv": ["git", "push", "origin", "feature/issue346"]' in result.stdout
+    assert '"argv": ["git", "worktree", "remove", "/tmp/issue346"]' in result.stdout
+    assert "Repository CI/CD inference" not in result.stdout
     assert "### Delivery Contract" in result.stdout
     assert delivery_contract()["outcome"] in result.stdout
     assert delivery_contract()["required_evidence"][0] in result.stdout
@@ -1032,6 +1033,55 @@ mandate:
     assert "| need_clarification | driver_confirmable | 否 |" in result.stdout
     assert "| product_scope | escalate | roadmap, positioning |" in result.stdout
     assert result.stdout.count("| playbook_id |") == 1
+
+
+@pytest.mark.parametrize("flag", ["--deliver", "--cleanup"])
+def test_kickoff_formatter_requires_confirmed_closeout_commands(tmp_path: Path, flag: str) -> None:
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text("version: 1\n", encoding="utf-8")
+    command = _kickoff_formatter_command(strategic_context)
+    index = command.index(flag)
+    del command[index : index + 2]
+
+    result = subprocess.run(
+        command,
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert flag in result.stderr
+
+
+def test_kickoff_formatter_keeps_explicit_empty_closeout_stages(tmp_path: Path) -> None:
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text(
+        """\
+version: 1
+mandate:
+  preset: technical-led
+  axes: {}
+  out_of_mandate: []
+""",
+        encoding="utf-8",
+    )
+    command = _kickoff_formatter_command(strategic_context)
+    for flag in ("--deliver", "--cleanup"):
+        command[command.index(flag) + 1] = "[]"
+
+    result = subprocess.run(
+        command,
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "| deliver | [] |" in result.stdout
+    assert "| cleanup | [] |" in result.stdout
 
 
 def _write_fake_cafe(
@@ -1195,6 +1245,10 @@ def test_confirmed_kickoff_activates_one_issue_scoped_driver_contract(tmp_path: 
     assert contract["locales"] == {
         "conversation": {"value": "zh-TW", "source": "user thread override"}
     }
+    assert contract["delivery_contract"]["schema_version"] == 2
+    closeout_plan = contract["delivery_contract"]["closeout_plan"]
+    assert closeout_plan["deliver"] == [{"argv": ["git", "push", "origin", "feature/issue346"]}]
+    assert closeout_plan["cleanup"] == [{"argv": ["git", "worktree", "remove", "/tmp/issue346"]}]
     assert "proactive_review.yaml" not in {path.name for path in (issue_dir / "driver").iterdir()}
     assert "No proactive review was confirmed for development." in result.stdout
     assert "| schema_version | 4 |" in result.stdout
@@ -2057,14 +2111,20 @@ def test_preflight_cache_preserves_accepted_model_identifier_when_only_case_diff
         "preflight_cache_model_identifier",
     )
 
-    assert module._canonical_resolved_model(
-        requested_model="auto",
-        reported_model="Auto",
-    ) == "auto"
-    assert module._canonical_resolved_model(
-        requested_model="floating-alias",
-        reported_model="canonical-model-v1",
-    ) == "canonical-model-v1"
+    assert (
+        module._canonical_resolved_model(
+            requested_model="auto",
+            reported_model="Auto",
+        )
+        == "auto"
+    )
+    assert (
+        module._canonical_resolved_model(
+            requested_model="floating-alias",
+            reported_model="canonical-model-v1",
+        )
+        == "canonical-model-v1"
+    )
 
 
 def test_preflight_cache_runs_and_reuses_cafe_fallback_smoke(tmp_path: Path) -> None:
@@ -2632,8 +2692,7 @@ def test_phase_agent_retry_stays_user_owned_and_bounded() -> None:
     normalized = " ".join(supervision.split())
 
     assert (
-        "`agent-execution-interrupted` remains a user-owned recovery-choice HumanTask"
-        in normalized
+        "`agent-execution-interrupted` remains a user-owned recovery-choice HumanTask" in normalized
     )
     assert "Present every declared recovery option and practical consequence" in normalized
     assert "recommend a retry under the unchanged contract" in normalized
@@ -2789,8 +2848,7 @@ def test_kickoff_derives_proactive_defaults_only_at_scheduled_pauses(
     rendered = result.stdout.split("```json\n", 1)[1].split("\n```", 1)[0]
     policy = json.loads(rendered)["policy"]
     decisions = {
-        item["phase"]: item["decision"]
-        for item in policy["proactive_review"]["phase_decisions"]
+        item["phase"]: item["decision"] for item in policy["proactive_review"]["phase_decisions"]
     }
     assert decisions == {
         "spec": "required",
@@ -3195,11 +3253,13 @@ def test_proactive_review_initial_routing_task_flow_and_matrix_share_correction_
         "`confirm_output` from a mandatory humantask step: always stop for the real user.",
         "`confirm_output` from a `user_required` step: stop for user approval or correction.",
     )
-    prior_task_flow = " ".join("""
+    prior_task_flow = " ".join(
+        """
         2. For user-owned tasks, serialize only the user's supplied answer into that schema.
         The driver may add the task ID required by the schema, but must not infer a decision,
         approval, permission, or missing answer.
-        """.split()).lower()
+        """.split()
+    ).lower()
 
     def is_consistent(initial: str, task: str, matrix: str) -> bool:
         return (
@@ -3451,7 +3511,10 @@ def test_use_cafe_workflow_keeps_human_task_completion_in_the_interactive_driver
         "cannot wait for, collect, infer, or choose a user answer for a mandatory"
         in normalized_running
     )
-    assert "whose confirmed reactive policy is `driver_confirmable` may be completed by any driver" in normalized_running.lower()
+    assert (
+        "whose confirmed reactive policy is `driver_confirmable` may be completed by any driver"
+        in normalized_running.lower()
+    )
     assert "cafe task complete <active-human-task-id>" in handoffs
     assert '"work_report"' in handoffs
     assert '--user-input \'{"task":"output-review"' not in handoffs
@@ -3531,19 +3594,22 @@ def test_driver_can_propose_a_user_approved_bounded_direct_closeout() -> None:
     assert "user-approved bounded" in running
 
 
-def test_driver_proactively_guides_cafe_lifecycle_cleanup_in_plain_language() -> None:
+def test_driver_executes_the_confirmed_argv_closeout_plan_without_core_lifecycle_calls() -> None:
     skill = _read_skill_resource("SKILL.md")
     reference = _read_skill_resource("references/completion_and_authority.md")
     normalized = " ".join(reference.split())
 
     assert "handle follow-up work" in skill
     assert "`references/completion_and_authority.md`" in skill
+    assert "exact `deliver` and `cleanup` argv arrays" in normalized
+    assert "Do not ask again for each command" in normalized
+    assert "scripts/execute_closeout_plan.py" in reference
+    assert "records `started` before execution" in normalized
+    assert "runs every confirmed command from the issue worktree" in normalized
+    assert "receipt lock across inspection and execution" in normalized
+    assert "does not invoke a CAFE lifecycle command" in normalized
     assert "inspect the completed issue's remaining lifecycle state read-only" in normalized
-    assert "actual mode-specific effects in the user's language" in normalized
-    assert "must not need to know or name `cafe close`" in normalized
-    assert '"merge and close" must not be silently reduced to GitHub issue closure' in normalized
-    assert "Reuse equivalent explicit authority" in normalized
-    assert "verify the resulting checkout, worktree, branch, and archive state" in normalized
+    assert '"merge and close" must not be silently reduced to an issue closure' in normalized
 
 
 def test_driver_handles_git_delivery_conflicts_before_offering_repair() -> None:
@@ -3560,7 +3626,10 @@ def test_driver_handles_git_delivery_conflicts_before_offering_repair() -> None:
     assert "recommend the smallest evidence-supported repair" in normalized
     assert "Do not invent a raw Git command or an executor" in normalized
     assert "Would you like me to help fix this exact conflict?" in reference
-    assert "does not authorize pushing, merging the PR, issue closure, or `cafe close`" in normalized
+    assert (
+        "does not authorize pushing, merging the PR, issue closure, or cleanup commands"
+        in normalized
+    )
     assert "controlled host-side repair path" in normalized
     assert "inspect the final diff and validation evidence" in normalized
 

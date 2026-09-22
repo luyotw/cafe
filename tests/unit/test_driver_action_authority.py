@@ -45,38 +45,68 @@ def test_terminal_wording_cannot_supply_action_authority(monkeypatch, wording, a
     assert calls == []
 
 
-def test_publication_authority_does_not_authorize_merge_or_other_mutations():
+def test_generic_confirmed_workflow_scope_never_authorizes_external_mutations():
     authority = {
         "source": "confirmed_workflow_scope",
         "action": "publish",
         "target": "repository/branch",
         "evidence": "confirmed kickoff publication",
     }
-    assert (
-        module.assess(
-            {"action": "publish", "target": "repository/branch", "declared": True}, authority
-        )["decision"]
-        == "declared_step"
-    )
-    for action in ("merge", "close_issue", "deploy", "delete"):
+    for action in ("publish", "merge", "close_issue", "deploy", "delete"):
         assert (
             module.assess(
                 {"action": action, "target": "repository/branch", "declared": True}, authority
             )["decision"]
             == "user_handoff"
         )
+
+
+def test_confirmed_closeout_authority_requires_an_exact_stage_index_and_argv():
+    plan = {
+        "deliver": [
+            {"argv": ["git", "push", "origin", "feature/closeout"]},
+            {"argv": ["make", "deploy"]},
+        ],
+        "cleanup": [{"argv": ["git", "worktree", "remove", "/tmp/issue"]}],
+    }
+    assert module.assess_confirmed_closeout_command(
+        {
+            "stage": "deliver",
+            "index": 1,
+            "argv": ["make", "deploy"],
+        },
+        plan,
+    ) == {"decision": "confirmed_closeout_command", "reason": "exact_confirmed_argv"}
     assert (
-        module.assess(
-            {"action": "publish", "target": "another/branch", "declared": True}, authority
+        module.assess_confirmed_closeout_command(
+            {
+                "stage": "deliver",
+                "index": 1,
+                "argv": ["make", "deploy-production"],
+            },
+            plan,
         )["decision"]
         == "user_handoff"
     )
     assert (
-        module.assess(
-            {"action": "publish", "target": "repository/branch", "declared": False}, authority
-        )["decision"]
-        == "user_handoff"
+        module.assess_confirmed_closeout_command(
+            {
+                "stage": "cleanup",
+                "index": 2,
+                "argv": ["git", "worktree", "remove", "/tmp/issue"],
+            },
+            plan,
+        )["reason"]
+        == "closeout_command_missing"
     )
+
+
+def test_confirmed_closeout_authority_preserves_empty_nonexecutable_arguments():
+    plan = {"deliver": [{"argv": ["tool", ""]}], "cleanup": []}
+
+    assert module.assess_confirmed_closeout_command(
+        {"stage": "deliver", "index": 0, "argv": ["tool", ""]}, plan
+    ) == {"decision": "confirmed_closeout_command", "reason": "exact_confirmed_argv"}
 
 
 @pytest.mark.parametrize("source", ["direct_user_instruction", "confirmed_human_task"])
