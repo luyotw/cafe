@@ -32,7 +32,7 @@ def test_packaged_develop_skill_uses_repository_quality_gate_guidance() -> None:
     builtin_root = PROJECT_ROOT / "src" / "cafe" / "data" / "skills"
     text = _skill_text(builtin_root, "cafe-develop")
 
-    assert "version: 1.10.1" in text
+    assert "version: 1.10.0" in text
     assert "與變更直接相關的 targeted checks" in text
     assert "Repository-owned quality gates" in text
     assert "max_read_only_commands" not in text
