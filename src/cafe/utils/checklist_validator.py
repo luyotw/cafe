@@ -79,13 +79,14 @@ def validate_checklist(
 ) -> ChecklistValidationResult:
     """Validate that all checklist items are completed.
 
-    Checks for unchecked items by searching for lines that start with "[ ]"
-    or "- [ ]" (after trimming whitespace). This avoids false positives from
-    "[ ]" appearing in descriptive text within a line.
+    Uses the materializer's checkbox grammar, including bare, dash and star
+    checkboxes with space or tab indentation/separation. Descriptive inline
+    checkbox examples do not create gates.
 
     Supported formats:
     - `[ ] Task name` - Direct checkbox
     - `- [ ] Task name` - Markdown list with checkbox
+    - `* [ ] Task name` - Star-bullet checkbox
     - `  - [ ] Nested task` - Indented checkbox
 
     Args:
@@ -103,7 +104,7 @@ def validate_checklist(
     # Read checklist content
     content = checklist_path.read_text(encoding="utf-8")
 
-    from cafe.core.checklist import load_materialization, normalized_checklist
+    from cafe.core.checklist import _CHECKBOX_LINE, load_materialization, normalized_checklist
 
     detail = ""
     try:
@@ -119,14 +120,11 @@ def validate_checklist(
         integrity_valid = False
         detail = str(exc)
 
-    # Count unchecked items - only lines starting with "[ ]" or "- [ ]" count as unchecked
-    # This avoids false positives from "[ ]" in descriptive text
-    unchecked_count = 0
-    for line in content.splitlines():
-        stripped = line.lstrip()
-        # Check for both "[ ]" and "- [ ]" formats
-        if stripped.startswith("[ ]") or stripped.startswith("- [ ]"):
-            unchecked_count += 1
+    unchecked_count = sum(
+        1
+        for line in content.splitlines()
+        if (match := _CHECKBOX_LINE.match(line)) and match.group("state") == " "
+    )
 
     return ChecklistValidationResult(
         is_complete=(unchecked_count == 0 and integrity_valid),

@@ -956,3 +956,56 @@ def test_executor_bounds_combined_todo_work_before_agent_retry(tmp_path, monkeyp
         finish(directory)
         assert validate_checklist(paths[0]).is_complete
         assert executor._validate_projected_todo_completion(paths[0])
+
+
+@pytest.mark.parametrize("prefix", ["", "- ", "* ", "  * ", "\t*\t", "  -\t"])
+@pytest.mark.parametrize("route", ["baton", "legacy"])
+def test_every_materialized_checkbox_blocks_success_and_restores_independently(
+    tmp_path, monkeypatch, prefix, route
+):
+    """U09/U10/U13, I04/I06: rendering, recovery and completion share gate grammar."""
+    import json
+
+    from cafe.core.blackboard import BlackboardStore
+    from cafe.utils.checklist_validator import validate_checklist
+
+    executor, step, state, directory = lifecycle_fixture(tmp_path, monkeypatch)
+    (tmp_path / ".cafe/skills/policy/references/review.md").write_text(
+        f"{prefix}[ ] Independent policy\n"
+    )
+
+    def finish(directory):
+        path = directory / "checklist.md"
+        if executor.agent_manager.calls == 2:
+            # A retry rematerializes the same unfinished overlay independently.
+            restored = generate(executor, step, state, directory, preserve_completed_items=True)
+            assert "[x] Primary" in restored
+            assert f"{prefix}[ ] Independent policy" in restored
+            assert validate_checklist(path).unchecked_count == 1
+            path.write_text(restored.replace("[ ]", "[X]"))
+        else:
+            path.write_text(path.read_text().replace("[ ] Primary", "[x] Primary"))
+        (directory / "output.md").write_text("# Result\n")
+        if route == "baton":
+            (executor.issue_dir / "next_step.txt").write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "to_owner": "agent",
+                        "to_step": "inspect",
+                        "intent": "await_agent",
+                    }
+                )
+            )
+            return ""
+        return "confirmed"
+
+    executor.agent_manager = JourneyAgent(executor, [finish])
+    result = executor.execute_step("assemble", step, state)
+    assert result.artifact_ready
+    assert executor.agent_manager.calls == 2
+    assert (
+        BlackboardStore(executor.issue_dir).load_or_create("assemble").handoff_contract.to_step
+        == "inspect"
+    )
+    assert validate_checklist(directory / "checklist.md").is_complete
