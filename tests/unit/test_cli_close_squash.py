@@ -249,20 +249,35 @@ class TestCloseSquash:
         mock_git_ops.commit.assert_not_called()
         assert "no merge needed" in result.stdout.lower()
 
-    def test_squash_overrides_pr_mode(
+    def test_squash_is_rejected_in_pr_mode(
         self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr
     ):
-        """pr.auto_create: true 但明確 --squash → 仍在本地 squash-merge（優先於 PR 模式），不 pull。"""
+        """pr.auto_create: true rejects the local-only --squash path."""
         _write_issue(temp_repo_dir, auto_create=True)
 
         result = runner.invoke(app, ["close", "--squash"])
 
-        assert result.exit_code == 0
-        assert "--squash is ignored" not in result.stdout
-        mock_git_ops.merge_squash.assert_called_once_with("test-issue")
+        assert result.exit_code == 1
+        assert "available only in local review mode" in result.stdout
+        mock_git_ops.checkout_branch.assert_not_called()
+        mock_git_ops.merge_squash.assert_not_called()
         mock_git_ops.pull.assert_not_called()
-        # squash 後分支非 fast-forward，需 force delete。
-        mock_git_ops.delete_branch.assert_called_once_with("test-issue", force=True)
+        mock_git_ops.delete_branch.assert_not_called()
+
+    @pytest.mark.parametrize("auto_create", [False, True])
+    def test_message_without_squash_is_rejected_before_mutation(
+        self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, auto_create
+    ):
+        _write_issue(temp_repo_dir, auto_create=auto_create)
+
+        result = runner.invoke(app, ["close", "--message", "unused"])
+
+        assert result.exit_code == 1
+        assert "--message requires --squash" in result.stdout
+        mock_git_ops.checkout_branch.assert_not_called()
+        mock_git_ops.merge.assert_not_called()
+        mock_git_ops.pull.assert_not_called()
+        mock_git_ops.delete_branch.assert_not_called()
 
     def test_non_squash_local_review_unchanged(
         self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr

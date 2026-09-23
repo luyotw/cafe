@@ -18,7 +18,11 @@ if str(_SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(_SOURCE_ROOT))
 
 from cafe.driver._store import load_contract  # noqa: E402
-from cafe.driver.delivery import normalize_delivery_contract  # noqa: E402
+from cafe.driver.delivery import (  # noqa: E402
+    normalize_delivery_contract,
+    validate_closeout_plan_policy,
+)
+from cafe.utils.issue_config import read_issue_config_strict  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from check_action_authority import assess_confirmed_closeout_command  # noqa: E402, I001
@@ -104,7 +108,7 @@ def _receipt_lock(receipt_path: Path) -> Iterator[None]:
 
 def _empty_receipt(contract_sha256: str) -> dict[str, Any]:
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "contract_sha256": contract_sha256,
         "close_recovery": None,
         "stages": {"deliver": [], "cleanup": []},
@@ -134,7 +138,16 @@ def _load_receipt(path: Path, *, contract_sha256: str | None) -> dict[str, Any]:
             "schema_version": 2,
             "close_recovery": None,
         }
-    if value.get("schema_version") != 2 or set(value) != {
+    if value.get("schema_version") == 2:
+        recovery = value.get("close_recovery")
+        if recovery is not None:
+            recovery = {
+                **recovery,
+                "close_argv": ["cafe", "close"],
+                "pr_auto_create": None,
+            }
+        value = {**value, "schema_version": 3, "close_recovery": recovery}
+    if value.get("schema_version") != 3 or set(value) != {
         "schema_version",
         "contract_sha256",
         "close_recovery",
@@ -149,9 +162,11 @@ def _load_receipt(path: Path, *, contract_sha256: str | None) -> dict[str, Any]:
     if recovery is not None:
         if not isinstance(recovery, dict) or set(recovery) != {
             "archive_path",
+            "close_argv",
             "cleanup_index",
             "issue_name",
             "issue_worktree",
+            "pr_auto_create",
             "project_root",
             "workflow_id",
         }:
@@ -170,6 +185,13 @@ def _load_receipt(path: Path, *, contract_sha256: str | None) -> dict[str, Any]:
             or not isinstance(recovery["cleanup_index"], int)
             or isinstance(recovery["cleanup_index"], bool)
             or recovery["cleanup_index"] < 0
+            or not isinstance(recovery["close_argv"], list)
+            or not recovery["close_argv"]
+            or any(not isinstance(item, str) for item in recovery["close_argv"])
+            or not (
+                recovery["pr_auto_create"] is None
+                or type(recovery["pr_auto_create"]) is bool
+            )
         ):
             raise ValueError("receipt close recovery context is invalid")
     stages = value["stages"]
@@ -210,6 +232,8 @@ def _close_recovery_context(
     project_root: Path,
     issue_worktree: Path,
     cleanup_index: int,
+    close_argv: list[str] | None = None,
+    pr_auto_create: bool | None = None,
 ) -> dict[str, Any]:
     if not issue_name or not workflow_id:
         raise ValueError("cafe close recovery requires issue and workflow identity")
@@ -217,9 +241,11 @@ def _close_recovery_context(
     worktree = issue_worktree.resolve()
     return {
         "archive_path": str(_issue_archive_path(project_root=root, issue_name=issue_name)),
+        "close_argv": list(close_argv or ["cafe", "close"]),
         "cleanup_index": cleanup_index,
         "issue_name": issue_name,
         "issue_worktree": str(worktree),
+        "pr_auto_create": pr_auto_create,
         "project_root": str(root),
         "workflow_id": workflow_id,
     }
@@ -292,7 +318,7 @@ def _write_receipt(path: Path, receipt: dict[str, Any]) -> None:
             temporary.unlink()
 
 
-def _validate_command(argv: list[str], *, stage: str, index: int, command_count: int) -> None:
+def _validate_command(argv: list[str]) -> None:
     executable = Path(argv[0]).name.lower()
     if executable in _SHELL_EXECUTABLES and any(arg in _SHELL_CODE_FLAGS for arg in argv[1:]):
         raise ValueError("closeout commands must not execute shell code strings")
@@ -300,18 +326,19 @@ def _validate_command(argv: list[str], *, stage: str, index: int, command_count:
         return
     if argv[1] == "deliver":
         raise ValueError("closeout plans must not recursively invoke cafe deliver")
-    if argv[1] != "close":
-        return
-    if argv != [argv[0], "close"]:
-        raise ValueError("closeout plans may invoke only exact `cafe close` without options")
-    if stage != "cleanup" or index != command_count - 1:
-        raise ValueError("cafe close is allowed only as the final cleanup command")
+    if argv[1] == "close" and argv[0] != "cafe":
+        raise ValueError("cafe close must use the literal `cafe` executable")
 
 
 def _validate_stage_commands(
-    *, stage: str, commands: list[Any], closeout_plan: dict[str, Any]
+    *,
+    stage: str,
+    commands: list[Any],
+    closeout_plan: dict[str, Any],
+    pr_auto_create: bool | None,
 ) -> list[list[str]]:
     """Validate the complete stage before any command can have side effects."""
+    validate_closeout_plan_policy(closeout_plan, pr_auto_create=pr_auto_create)
     validated: list[list[str]] = []
     for index, command in enumerate(commands):
         if not isinstance(command, dict) or set(command) != {"argv"}:
@@ -329,7 +356,7 @@ def _validate_stage_commands(
         )
         if decision["decision"] != "confirmed_closeout_command":
             raise ValueError("requested command is not the exact confirmed closeout command")
-        _validate_command(argv, stage=stage, index=index, command_count=len(commands))
+        _validate_command(argv)
         validated.append(argv)
     return validated
 
@@ -352,6 +379,7 @@ def execute_stage(
     issue_name: str | None = None,
     workflow_id: str | None = None,
     project_root: Path | None = None,
+    pr_auto_create: bool | None = None,
 ) -> dict[str, Any]:
     """Run one ordered stage, writing durable state before every command."""
     if stage not in {"deliver", "cleanup"}:
@@ -372,6 +400,7 @@ def execute_stage(
             issue_name=issue_name,
             workflow_id=workflow_id,
             project_root=project_root,
+            pr_auto_create=pr_auto_create,
         )
 
 
@@ -385,6 +414,7 @@ def _execute_stage_locked(
     issue_name: str | None,
     workflow_id: str | None,
     project_root: Path | None,
+    pr_auto_create: bool | None,
 ) -> dict[str, Any]:
     """Execute after holding the receipt lock for the whole stage."""
 
@@ -399,7 +429,10 @@ def _execute_stage_locked(
 
     commands = closeout_plan[stage]
     command_argv = _validate_stage_commands(
-        stage=stage, commands=commands, closeout_plan=closeout_plan
+        stage=stage,
+        commands=commands,
+        closeout_plan=closeout_plan,
+        pr_auto_create=pr_auto_create,
     )
     close_indexes = [
         index
@@ -416,6 +449,8 @@ def _execute_stage_locked(
             project_root=project_root,
             issue_worktree=worktree,
             cleanup_index=close_indexes[0],
+            close_argv=command_argv[close_indexes[0]],
+            pr_auto_create=pr_auto_create,
         )
         existing_recovery = receipt["close_recovery"]
         if existing_recovery is not None and existing_recovery != close_recovery:
@@ -475,6 +510,8 @@ def _reconcile_lifecycle_close(args: argparse.Namespace) -> dict[str, Any]:
             project_root=project_root,
             issue_worktree=issue_worktree,
             cleanup_index=recovery["cleanup_index"],
+            close_argv=recovery["close_argv"],
+            pr_auto_create=recovery["pr_auto_create"],
         )
         if recovery != expected:
             raise ValueError("receipt cafe close recovery context does not match this request")
@@ -485,8 +522,14 @@ def _reconcile_lifecycle_close(args: argparse.Namespace) -> dict[str, Any]:
         if any(record.get("status") != "succeeded" for record in cleanup_records[:index]):
             raise ValueError("receipt has incomplete cleanup commands before cafe close")
         record = cleanup_records[index]
-        if record.get("argv") != ["cafe", "close"]:
+        if record.get("argv") != recovery["close_argv"]:
             raise ValueError("receipt cafe close command is invalid")
+        validate_closeout_plan_policy(
+            {"deliver": [], "cleanup": [{"argv": record["argv"]}]},
+            pr_auto_create=recovery["pr_auto_create"],
+        )
+        if "--squash" in record["argv"] and recovery["pr_auto_create"] is not False:
+            raise ValueError("receipt cafe close mode is invalid")
         if record.get("status") == "succeeded":
             return receipt
         if record.get("status") != "started":
@@ -512,6 +555,19 @@ def _confirmed_plan(args: argparse.Namespace) -> tuple[dict[str, Any], str]:
     return delivery_contract["closeout_plan"], contract_sha256
 
 
+def _confirmed_pr_auto_create(issue_dir: Path) -> bool:
+    config = read_issue_config_strict(issue_dir / "issue.yaml")
+    pr = config.get("pr")
+    if pr is None:
+        return False
+    if not isinstance(pr, dict):
+        raise ValueError("issue.yaml requires a Boolean pr.auto_create for closeout")
+    value = pr.get("auto_create", False)
+    if type(value) is not bool:
+        raise ValueError("issue.yaml requires a Boolean pr.auto_create for closeout")
+    return value
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--issue-dir", type=Path, required=True)
@@ -529,6 +585,7 @@ def main() -> int:
     try:
         try:
             plan, contract_sha256 = _confirmed_plan(args)
+            pr_auto_create = _confirmed_pr_auto_create(args.issue_dir)
         except ValueError:
             if args.stage != "cleanup" or (
                 args.issue_dir.is_dir() and args.issue_worktree.is_dir()
@@ -545,6 +602,7 @@ def main() -> int:
             issue_name=args.issue_name,
             workflow_id=args.workflow_id,
             project_root=args.project_root,
+            pr_auto_create=pr_auto_create,
         )
     except CloseoutCommandError as exc:
         print(f"error: {exc}", file=sys.stderr)

@@ -125,21 +125,23 @@ python3 <skill-dir>/scripts/execute_closeout_plan.py \
 
 Before a cleanup command can remove a worktree, establish worker quiescence,
 inspect registered worktrees and dirty/untracked content, preserve the receipt,
-and make removal the final cleanup command. The exact argv `cafe close` is
-permitted only in that final cleanup position; option-bearing variants are not
-permitted because delivery must remain a separate confirmed stage. The confirmed
-argv must use explicit targets. When a command needs another Git
+and make removal the final cleanup command. A literal argv beginning with
+`cafe close` is permitted only in that final cleanup position. The plain command
+works in either mode; `--squash` and its optional message are permitted only for
+confirmed local-review mode and are rejected in create-PR mode. Remote PR merge
+strategy flags are separate delivery behavior. The confirmed argv must use
+explicit targets. When a command needs another Git
 context, make that context an exact argument (for example
 `git -C <retained-checkout> worktree remove <target>`), rather than changing the
 helper's working directory. Never add force flags. The helper does not otherwise
 invoke a CAFE lifecycle command or change workflow runtime state. Before the
 permitted final `cafe close`, it preserves the issue, workflow, checkout and
-expected archive identity outside the worktree. It records success only after
-the worktree is absent, the local feature branch is absent, and the archive
-contains the matching confirmed Driver contract. If the host stops after the
-worktree disappears but before success is recorded, rerun the same helper argv;
-it reconciles those postconditions from the external receipt without replaying
-`cafe close`.
+expected archive identity, exact close argv and publication mode outside the
+worktree. It records success only after the worktree is absent, the local feature
+branch is absent, and the archive contains the matching confirmed Driver
+contract. If the host stops after the worktree disappears but before success is
+recorded, rerun the same helper argv; it reconciles those postconditions from the
+external receipt without replaying `cafe close`.
 
 ### Assist when no argv closeout plan exists
 
