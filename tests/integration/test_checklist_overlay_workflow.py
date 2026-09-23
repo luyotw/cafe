@@ -195,3 +195,78 @@ def test_success_validation_rejects_missing_or_changed_expected_gates(tmp_path, 
         content = content.replace("Required rule", "Weakened rule")
     path.write_text(content)
     assert not validate_checklist(path).is_complete
+
+
+def git_evidence(tmp_path):
+    import subprocess
+    def git(*args):
+        return subprocess.check_output(["git", "-C", str(tmp_path), *args], text=True).strip()
+    git("init", "-q")
+    git("config", "user.email", "test@example.com")
+    git("config", "user.name", "Test")
+    (tmp_path / ".gitignore").write_text(".cafe/\n.codex/\nglobal/\nhome/\n")
+    (tmp_path / "work.txt").write_text("implemented\n")
+    git("add", ".gitignore", "work.txt")
+    git("commit", "-qm", "Implement work")
+    return git("rev-parse", "HEAD")
+
+
+def complete_ledger(directory, commit, *, only_first=False):
+    import re
+    path = directory / "checklist.md"
+    rows = re.findall(r"^\[[ xX]\] `([^`]+)` — .*\(source fingerprint: ([a-f0-9]{64})\)$", path.read_text(), re.M)
+    chosen = rows[:1] if only_first else rows
+    ledger = "## Todo Progress\n"
+    for handle, fingerprint in chosen:
+        ledger += f"\n### {handle}\n- Status: completed\n- Source fingerprint: `{fingerprint}`\n- Files: `work.txt`\n- Commit: `{commit}`\n- Remaining work: None.\n- Next action: Review.\n"
+    (directory / "output.md").write_text(ledger)
+    path.write_text(path.read_text().replace("[ ]", "[x]"))
+    return rows
+
+
+@pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.parametrize("mutation", ["none", "content", "path", "version", "missing", "file", "commit"])
+def test_all_contributors_require_distinct_live_todo_evidence(tmp_path, monkeypatch, fallback, mutation):
+    """I05/U11/U12: repeated producer IDs retain separate consumer evidence."""
+    from cafe.core.blackboard import BlackboardStore
+    root = tmp_path / ".cafe/skills"
+    projection = {"todo_projection": {"artifact": "blueprint", "source": "bespoke"}}
+    write_skill(root, "primary", {} if fallback else {"checklist": {"variants": [{"sections": [projection]}]}})
+    write_skill(root, "policy", {"checklist_overlay": {"variants": [{"sections": [projection, projection]}]}})
+    executor, step, state, directory = executor_fixture(tmp_path, monkeypatch)
+    todo = executor.issue_dir / "blueprint.md"
+    todo.write_text("## Todo List\n- [ ] `TASK-001` — Source: `bespoke` — Work: implement — Closure: correct — Evidence: tests\n")
+    store = BlackboardStore(executor.issue_dir)
+    store.set_artifact(state, "blueprint", str(todo))
+    commit = git_evidence(tmp_path)
+    generate(executor, step, state, directory)
+    rows = complete_ledger(directory, commit, only_first=True)
+    assert len(rows) == (2 if fallback else 3)
+    assert len({handle for handle, _ in rows}) == len(rows)
+    assert len({fingerprint for _, fingerprint in rows}) == 1
+    passed, detail = executor._validate_projected_todo_completion_detail(directory / "checklist.md")
+    assert not passed
+    assert all(handle in detail for handle, _ in rows)
+    complete_ledger(directory, commit)
+    assert executor._validate_projected_todo_completion(directory / "checklist.md")
+    if mutation == "content":
+        todo.write_text(todo.read_text().replace("implement", "changed work"))
+    elif mutation == "path":
+        new = todo.with_name("replacement.md")
+        new.write_text(todo.read_text())
+        state.artifacts["blueprint"].path = str(new)
+        store.save(state)
+    elif mutation == "version":
+        state.artifacts["blueprint"].version += 1
+        store.save(state)
+    elif mutation == "missing":
+        todo.unlink()
+    elif mutation == "file":
+        (tmp_path / "work.txt").write_text("uncommitted\n")
+    elif mutation == "commit":
+        output = directory / "output.md"
+        output.write_text(output.read_text().replace(commit, "a" * 40))
+    assert executor._validate_projected_todo_completion(directory / "checklist.md") == (mutation == "none")
+    if mutation in {"content", "path", "version", "file", "commit"}:
+        resumed = generate(executor, step, state, directory, preserve_completed_items=True)
+        assert "[x]" not in resumed

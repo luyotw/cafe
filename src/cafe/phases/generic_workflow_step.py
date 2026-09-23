@@ -108,7 +108,7 @@ from cafe.skills.contracts import (
     resolve_prompt_inputs,
 )
 from cafe.skills.loader import SkillLoader, canonical_skill_name
-from cafe.skills.workflow_composition import resolve_step_workflow_composition
+from cafe.skills.workflow_composition import StepWorkflowComposition, resolve_step_workflow_composition
 from cafe.templates.manager import TemplateManager
 from cafe.utils.checklist_utils import generate_checklist_file
 from cafe.utils.checklist_validator import completion_requires_checklist, validate_projected_todos
@@ -261,7 +261,7 @@ class GenericWorkflowStepExecutor(Phase):
         step_name: str,
         step_def: Dict[str, Any],
         skill_name: str,
-    ) -> SkillWorkflowDeclaration:
+    ) -> StepWorkflowComposition:
         """Resolve supported runtime fields without changing primary-owned rendering."""
         workflow_skills = resolve_playbook_skills(
             self.playbook,
@@ -278,6 +278,15 @@ class GenericWorkflowStepExecutor(Phase):
 
     def _effective_workflow_declaration(self, **kwargs) -> SkillWorkflowDeclaration:
         return self._effective_workflow_composition(**kwargs).as_declaration()
+
+    def _checklist_inputs(self, composition, artifacts, state):
+        aliases = composition.causal_todo_artifacts
+        inbound = self._persisted_inbound_feedback_route(composition.step_name, state)
+        if inbound is not None:
+            aliases = tuple(dict.fromkeys((*aliases, inbound.artifact)))
+        for alias in aliases:
+            artifacts = self._add_causal_todo_artifact(artifacts, state, playbook=self.playbook, causal_artifact=alias)
+        return artifacts, any(artifacts.get(alias) for alias in aliases)
 
     def __init__(
         self,
@@ -989,34 +998,15 @@ class GenericWorkflowStepExecutor(Phase):
     ) -> str:
         """Refresh a bounded cold-takeover snapshot just before a backup runs."""
         skill_name = self._resolve_skill_name(step_def, self.iteration)
-        primary_contract = self._get_skill_loader().get_workflow_declaration(skill_name)
-        contract = self._effective_workflow_declaration(
-            step_name=step_name, step_def=step_def, skill_name=skill_name
-        )
+        composition = self._effective_workflow_composition(step_name=step_name, step_def=step_def, skill_name=skill_name)
+        primary_contract = composition.contributors[0].declaration
+        contract = composition.as_declaration()
         input_artifacts = self._step_input_artifacts(step_def, blackboard_state)
         self._prepare_todo_identity_input(
             step_def=step_def,
             input_artifacts=input_artifacts,
         )
-        causal_artifact = next(
-            (
-                section.todo_projection.artifact
-                for variant in (
-                    primary_contract.checklist.variants if primary_contract.checklist else ()
-                )
-                for section in variant.sections
-                if section.todo_projection and section.todo_projection.causal
-            ),
-            None,
-        )
-        if causal_artifact is not None:
-            input_artifacts = self._add_causal_todo_artifact(
-                input_artifacts,
-                blackboard_state,
-                playbook=self.playbook,
-                causal_artifact=causal_artifact,
-            )
-        feedback = bool(causal_artifact and input_artifacts.get(causal_artifact))
+        input_artifacts, feedback = self._checklist_inputs(composition, input_artifacts, blackboard_state)
         authoritative_inputs = resolve_prompt_inputs(contract, input_artifacts)
         packet_requested_placeholders = self._packet_requested_placeholders(
             contract,
@@ -1792,10 +1782,9 @@ class GenericWorkflowStepExecutor(Phase):
                 context["pr_auto_create"] = str(publication_choice).lower()
 
         skill_name = self._resolve_skill_name(step_def, self.iteration)
-        primary_contract = self._get_skill_loader().get_workflow_declaration(skill_name)
-        contract = self._effective_workflow_declaration(
-            step_name=step_name, step_def=step_def, skill_name=skill_name
-        )
+        composition = self._effective_workflow_composition(step_name=step_name, step_def=step_def, skill_name=skill_name)
+        primary_contract = composition.contributors[0].declaration
+        contract = composition.as_declaration()
         self._refresh_declared_workspace_input(
             step_def=step_def,
             blackboard_state=blackboard_state,
@@ -1806,33 +1795,7 @@ class GenericWorkflowStepExecutor(Phase):
             input_artifacts=input_artifacts,
         )
         self._validate_workspace_inputs(input_artifacts, step_def=step_def)
-        causal_projections = [
-            section.todo_projection
-            for variant in (
-                primary_contract.checklist.variants if primary_contract.checklist else ()
-            )
-            for section in variant.sections
-            if section.todo_projection and section.todo_projection.causal
-        ]
-        inbound_route = self._persisted_inbound_feedback_route(
-            step_name, blackboard_state
-        )
-        if causal_projections or inbound_route is not None:
-            causal_artifact = (
-                causal_projections[0].artifact
-                if causal_projections
-                else inbound_route.artifact
-            )
-            assert causal_artifact is not None
-            input_artifacts = self._add_causal_todo_artifact(
-                input_artifacts,
-                blackboard_state,
-                playbook=self.playbook,
-                causal_artifact=causal_artifact,
-            )
-            feedback = bool(input_artifacts.get(causal_artifact))
-        else:
-            feedback = False
+        input_artifacts, feedback = self._checklist_inputs(composition, input_artifacts, blackboard_state)
         try:
             authoritative_inputs = resolve_prompt_inputs(contract, input_artifacts)
         except DeclaredArtifactError as exc:
@@ -2569,26 +2532,8 @@ class GenericWorkflowStepExecutor(Phase):
         input_contract = composition.as_declaration()
         input_artifacts = self._step_input_artifacts(step_def, blackboard_state)
         self._validate_workspace_inputs(input_artifacts, step_def=step_def)
-        causal_artifacts = tuple(dict.fromkeys(
-            section.todo_projection.artifact
-            for contributor in composition.contributors
-            for checklist in [contributor.declaration.checklist if contributor.primary else contributor.declaration.checklist_overlay]
-            if checklist is not None
-            for variant in checklist.variants for section in variant.sections
-            if section.todo_projection and section.todo_projection.causal
-        ))
-        declares_causal_todo = bool(causal_artifacts)
-        causal_artifact = next(iter(causal_artifacts), None)
-        inbound_route = self._persisted_inbound_feedback_route(step_name, blackboard_state)
-        if declares_causal_todo or inbound_route is not None:
-            causal_artifact = causal_artifact or inbound_route.artifact
-            assert causal_artifact is not None
-            input_artifacts = self._add_causal_todo_artifact(
-                input_artifacts,
-                blackboard_state,
-                playbook=self.playbook,
-                causal_artifact=causal_artifact,
-            )
+        input_artifacts, feedback = self._checklist_inputs(composition, input_artifacts, blackboard_state)
+        causal_artifact = next((name for name in composition.causal_todo_artifacts if input_artifacts.get(name)), None)
         try:
             declared_inputs = resolve_prompt_inputs(input_contract, input_artifacts)
         except DeclaredArtifactError as exc:
@@ -2624,7 +2569,6 @@ class GenericWorkflowStepExecutor(Phase):
                 "feedback_file",
                 self._display_path(Path(str(getattr(causal_entry, "path", causal_entry)))),
             )
-        feedback = bool(causal_entry)
         materialized = compose_effective_checklist(
             composition=composition, agent_name=agent_name,
             role=str(step_def.get("role", "developer")), checklist_file_path=checklist_file,
@@ -3510,7 +3454,73 @@ class GenericWorkflowStepExecutor(Phase):
         passed, _detail = self._validate_projected_todo_completion_detail(checklist_path)
         return passed
 
-    def _validate_projected_todo_completion_detail(
+    def _validate_projected_todo_completion_detail(self, checklist_path: Path) -> tuple[bool, str]:
+        """Rebind every selected projection to live sources without reselecting variants."""
+        from cafe.core.checklist import ProjectedTodo, load_materialization
+        try:
+            materialized = load_materialization(checklist_path.parent / "iteration.json")
+        except ValueError as exc:
+            return False, str(exc)
+        if materialized is None:
+            if getattr(self, "_effective_checklist", None) is not None:
+                return False, "Effective checklist metadata is missing; rebuild the checklist."
+            return self._validate_legacy_projected_todo_completion_detail(checklist_path)
+        if getattr(self, "_effective_checklist", materialized) != materialized:
+            return False, "Effective checklist metadata changed; rebuild the checklist."
+        if not materialized.projections:
+            return True, ""
+        state = BlackboardStore(self.issue_dir).load_or_create(self.phase_name)
+        step_def = self.playbook["steps"][self.phase_name]
+        artifacts = self._step_input_artifacts(step_def, state)
+        expected = []
+        for binding in materialized.projections:
+            name = binding["declaration_artifact"]
+            label = f"{binding['contributor']} Todo projection {name!r}"
+            try:
+                if binding["causal"]:
+                    artifacts = self._add_causal_todo_artifact(artifacts, state, playbook=self.playbook, causal_artifact=name)
+                entry = artifacts.get(name)
+                if entry is None:
+                    return False, f"{label} is missing; rebuild from the current source."
+                if (str(getattr(entry, "path", entry)) != binding["path"]
+                        or getattr(entry, "version", None) != binding["version"]
+                        or str(getattr(entry, "artifact", getattr(entry, "name", name))) != binding["artifact"]):
+                    return False, f"{label} source binding changed; rebuild the checklist."
+                if hashlib.sha256(Path(binding["path"]).read_bytes()).hexdigest() != binding["content_sha256"]:
+                    return False, f"{label} source content changed; rebuild the checklist."
+                items = projection_todo_items(entry, expected_source=binding["source"])
+                if [item.item_id for item in items] != binding["producer_ids"] or len(items) != len(binding["handles"]):
+                    return False, f"{label} item identities changed; rebuild the checklist."
+                bound = [ProjectedTodo(handle, item) for handle, item in zip(binding["handles"], items)]
+                if [item.checklist_row() for item in bound] != binding["rows"]:
+                    return False, f"{label} source fingerprint changed; rebuild the checklist."
+                expected.extend(bound)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                return False, f"{label} is invalid: {exc}"
+        output_path = self._get_versioned_file_path(self.phase_name, self.iteration, self.phase_dir)
+        errors = validate_projected_todos(checklist_path, output_path, tuple(expected), repo_root=get_git_toplevel())
+        return self._projected_todo_validation_detail(expected, errors)
+
+    @staticmethod
+    def _projected_todo_validation_detail(expected, errors) -> tuple[bool, str]:
+        if errors:
+            templates = []
+            for item in expected:
+                templates.append(
+                    f"### {item.item_id}\n"
+                    "- Status: completed\n"
+                    f"- Source fingerprint: `{item.fingerprint}`\n"
+                    "- Files: `<repo-relative path>`\n"
+                    "- Commit: `<full 40-character commit SHA>`\n"
+                    "- Remaining work: None.\n"
+                    "- Next action: Review."
+                )
+            return (False, "Projected Todo completion failed:\n- " + "\n- ".join(errors)
+                    + "\n\nUse exactly one '## Todo Progress' section with this canonical "
+                    "entry shape for each authoritative item:\n\n" + "\n\n".join(templates))
+        return True, ""
+
+    def _validate_legacy_projected_todo_completion_detail(
         self, checklist_path: Path
     ) -> tuple[bool, str]:
         """Return actionable projected Todo validation detail for agent retries."""
@@ -3592,27 +3602,7 @@ class GenericWorkflowStepExecutor(Phase):
             tuple(expected),
             repo_root=get_git_toplevel(),
         )
-        if errors:
-            templates = []
-            for item in expected:
-                templates.append(
-                    f"### {item.item_id}\n"
-                    "- Status: completed\n"
-                    f"- Source fingerprint: `{item.fingerprint}`\n"
-                    "- Files: `<repo-relative path>`\n"
-                    "- Commit: `<full 40-character commit SHA>`\n"
-                    "- Remaining work: None.\n"
-                    "- Next action: Review."
-                )
-            return (
-                False,
-                "Projected Todo completion failed:\n- "
-                + "\n- ".join(errors)
-                + "\n\nUse exactly one '## Todo Progress' section with this canonical "
-                "entry shape for each authoritative item:\n\n"
-                + "\n\n".join(templates),
-            )
-        return True, ""
+        return self._projected_todo_validation_detail(expected, errors)
 
     def _validate_produced_packet_contracts(
         self, *, producer_step: str, artifact_name: str, output_file: Path

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
@@ -790,8 +791,10 @@ def compose_effective_checklist(
                                         "causal": projection.causal, "contributor": source, "section": section_index,
                                         "artifact": str(getattr(entry, "artifact", getattr(entry, "name", projection.artifact))),
                                         "path": str(getattr(entry, "path", entry)), "version": getattr(entry, "version", None),
+                                        "content_sha256": sha256(Path(str(getattr(entry, "path", entry))).read_bytes()).hexdigest(),
                                         "handles": [item.item_id for item in bound], "producer_ids": [item.item_id for item in items],
                                         "rows": [item.checklist_row() for item in bound]})
+                    identity = [identity, projections[-1]]
                 content = resolve_checklist_placeholders(content, local)
                 unresolved = sorted(set(_PLACEHOLDER_PATTERN.findall(content)))
                 if unresolved:
