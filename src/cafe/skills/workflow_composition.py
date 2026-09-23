@@ -191,12 +191,24 @@ def _resolve_step_workflow_composition_locked(
     tools: list[str] = []
     inputs: dict[str, tuple[PromptInputContract, SkillWorkflowContributor]] = {}
     tasks: dict[str, tuple[HumanTaskPolicy, SkillWorkflowContributor]] = {}
-    local_names: dict[str, SkillWorkflowContributor] = {}
     primary = contributors[0]
-    skill_loader.validate_workflow_declaration_resources(
-        primary.source.skill_root, primary.declaration
-    )
-    reserved_names = set(primary.declaration.prompt_references)
+    reserved_names = {name: primary for name in primary.declaration.prompt_references}
+    # Collect all common names first so contributor order cannot hide a collision.
+    for contributor in contributors:
+        for mapping in contributor.declaration.prompt_inputs:
+            reserved_names.setdefault(mapping.placeholder, contributor)
+
+    def validate_resources(contributor: SkillWorkflowContributor) -> None:
+        try:
+            skill_loader.validate_workflow_declaration_resources(
+                contributor.source.skill_root, contributor.declaration
+            )
+        except ValueError as exc:
+            raise WorkflowCompositionError(
+                f"Step {step_name!r} contributor {_source_label(contributor)}: {exc}"
+            ) from exc
+
+    validate_resources(primary)
 
     for contributor in contributors:
         declaration = contributor.declaration
@@ -222,9 +234,7 @@ def _resolve_step_workflow_composition_locked(
                         "required_tools, prompt_inputs, human_tasks, execution_profile, and "
                         f"local checklist references.{resource_context}"
                     )
-            skill_loader.validate_workflow_declaration_resources(
-                contributor.source.skill_root, declaration
-            )
+            validate_resources(contributor)
         tools.extend(tool for tool in declaration.required_tools if tool not in tools)
         for mapping in declaration.prompt_inputs:
             existing = inputs.get(mapping.placeholder)
@@ -248,19 +258,19 @@ def _resolve_step_workflow_composition_locked(
                     second=contributor,
                 )
             tasks.setdefault(policy.id, (policy, contributor))
-        if declaration.checklist is not None:
-            for name in declaration.checklist.context_references:
-                existing = local_names.get(name)
-                if name in reserved_names or name in inputs or existing is not None:
-                    other = existing or inputs.get(name, (None, primary))[1]
+        for field in ("checklist", "checklist_overlay"):
+            checklist = getattr(declaration, field)
+            if checklist is None:
+                continue
+            for name in checklist.context_references:
+                if name in reserved_names:
                     raise _conflict(
                         step_name=step_name,
-                        field="checklist.context_references",
+                        field=f"{field}.context_references",
                         key=name,
-                        first=other,
+                        first=reserved_names[name],
                         second=contributor,
                     )
-                local_names[name] = contributor
 
     retained = tuple(contributors)
     return StepWorkflowComposition(

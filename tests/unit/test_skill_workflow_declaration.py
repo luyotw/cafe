@@ -420,3 +420,17 @@ def test_context_reference_omits_only_its_dedicated_optional_instruction(
         artifacts={"review": "review.md"},
     )
     assert "[ ] Read optional review review.md" in with_review.read_text(encoding="utf-8")
+
+
+def test_overlay_is_explicit_unconditional_and_cannot_own_primary_settings():
+    """U01: overlay ownership is a closed contract independent of primary."""
+    overlay = {"variants": [{"sections": [{"reference": "review.md"}]}]}
+    declaration = SkillWorkflowDeclaration.model_validate({"checklist_overlay": overlay})
+    assert declaration.checklist is None
+    assert declaration.checklist_overlay.when.matches(step="assemble", iteration=1, artifacts={}, feedback=False)
+    for field in ("include_role_guidance", "compact_agent_guidance", "output_templates", "prompt_references"):
+        with pytest.raises(ValidationError):
+            SkillWorkflowDeclaration.model_validate({"checklist_overlay": {**overlay, field: True}})
+    for invalid in ({"variants": []}, {"variants": [{"sections": []}]}, {"when": {"unknown": True}, **overlay}):
+        with pytest.raises(ValidationError):
+            SkillWorkflowDeclaration.model_validate({"checklist_overlay": invalid})

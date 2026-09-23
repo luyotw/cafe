@@ -307,3 +307,52 @@ def test_composition_holds_catalog_lock_through_ownership_and_resources(
     assert not publisher.is_alive()
     assert publisher_acquired.is_set()
     assert errors == []
+
+
+def _overlay(root, name, local="local", extra=""):
+    _write_skill(root, name, extra + f"""  checklist_overlay:
+    when: {{feedback: true}}
+    context_references: {{{local}: context.md}}
+    variants:
+    - sections: [{{reference: review.md}}, {{optional_checklist: absent.md}}]
+""")
+    refs = root / name / "references"
+    refs.mkdir()
+    (refs / "context.md").write_text(name)
+    (refs / "review.md").write_text("[ ] {" + local + "}\n")
+
+
+def test_overlay_locals_are_isolated_and_inactive_requirements_survive(tmp_path):
+    """U03/U04: repeated locals are legal; applicability cannot remove requirements."""
+    root = tmp_path / "project" / ".cafe" / "skills"
+    _write_skill(root, "primary")
+    _overlay(root, "one", extra="  required_tools: [Write]\n")
+    _overlay(root, "two", extra="  execution_profile: {workload: review, reasoning: high}\n")
+    result = resolve_step_workflow_composition(_loader(tmp_path), primary_skill="primary", workflow_skills=["one", "two"], step_name="assemble")
+    assert result.required_tools == ("Write",)
+    assert result.execution_requirements.reasoning == "high"
+    assert result.skill_names == ("primary", "one", "two")
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_overlay_local_cannot_shadow_later_global_input(tmp_path, reverse):
+    """U03: build the reserved global set before checking any contributor."""
+    root = tmp_path / "project" / ".cafe" / "skills"
+    _write_skill(root, "primary")
+    _overlay(root, "local-policy")
+    _write_skill(root, "global-policy", "  prompt_inputs:\n  - {artifacts: [notes], placeholder: local}\n")
+    names = ["local-policy", "global-policy"]
+    with pytest.raises(WorkflowCompositionError) as error:
+        resolve_step_workflow_composition(_loader(tmp_path), primary_skill="primary", workflow_skills=names[::-1] if reverse else names, step_name="assemble")
+    assert all(token in str(error.value) for token in ("assemble", "local-policy", "global-policy", "local"))
+
+
+def test_inactive_overlay_missing_reference_is_source_aware(tmp_path):
+    """U02: every required reference is checked, while optional files stay optional."""
+    root = tmp_path / "project" / ".cafe" / "skills"
+    _write_skill(root, "primary")
+    _overlay(root, "policy")
+    (root / "policy" / "references" / "review.md").unlink()
+    with pytest.raises(ValueError) as error:
+        resolve_step_workflow_composition(_loader(tmp_path), primary_skill="primary", workflow_skills=["policy"], step_name="assemble")
+    assert all(token in str(error.value) for token in ("assemble", "policy", "checklist_overlay", "review.md"))

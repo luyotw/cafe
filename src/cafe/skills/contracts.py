@@ -259,6 +259,31 @@ class ChecklistVariant(BaseModel):
         return value
 
 
+class ChecklistOverlay(BaseModel):
+    """An explicitly injected, source-local checklist contribution."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    when: ChecklistWhen = Field(default_factory=ChecklistWhen)
+    context_references: dict[str, str] = Field(default_factory=dict)
+    variants: Tuple[ChecklistVariant, ...]
+
+    @field_validator("context_references")
+    @classmethod
+    def _references(cls, value: dict[str, str]) -> dict[str, str]:
+        return {
+            _safe_placeholder(key, field_name="context reference placeholder"): _safe_reference(ref)
+            for key, ref in value.items()
+        }
+
+    @field_validator("variants")
+    @classmethod
+    def _variants(cls, value: Tuple[ChecklistVariant, ...]) -> Tuple[ChecklistVariant, ...]:
+        if not value:
+            raise ValueError("checklist overlay requires at least one variant")
+        return value
+
+
 class ChecklistContract(BaseModel):
     """Checklist references and explicit role-guideline behavior for a skill."""
 
@@ -354,6 +379,7 @@ class SkillWorkflowDeclaration(BaseModel):
     prompt_inputs: Tuple[PromptInputContract, ...] = ()
     prompt_references: dict[str, str] = Field(default_factory=dict)
     checklist: Optional[ChecklistContract] = None
+    checklist_overlay: Optional[ChecklistOverlay] = None
     output_templates: Optional[OutputTemplatesContract] = None
     human_tasks: Tuple[HumanTaskPolicy, ...] = ()
     execution_profile: Optional[ExecutionProfile] = None
@@ -394,8 +420,10 @@ class SkillWorkflowDeclaration(BaseModel):
         task_ids = [task.id for task in self.human_tasks]
         if len(set(task_ids)) != len(task_ids):
             raise ValueError("human task ids must be unique")
-        if self.checklist is not None:
-            checklist_references = set(self.checklist.context_references)
+        for checklist in (self.checklist, self.checklist_overlay):
+            if checklist is None:
+                continue
+            checklist_references = set(checklist.context_references)
             overlap = input_placeholder_set & checklist_references
             if overlap:
                 raise ValueError(
