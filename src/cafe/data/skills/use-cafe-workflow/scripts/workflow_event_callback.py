@@ -1501,7 +1501,7 @@ def _callback_prompt(event: dict[str, Any], *, repository_root: Path) -> str:
             "a user-facing driver turn may relay an explicit user-owned answer.",
             "You may complete a declared driver_confirmable task, including "
             "need_clarification, only after verifying its confirmed contract and evidence. "
-            "A clarification answer must stay within existing authority or allowed_variations "
+            "A clarification answer must stay within confirmed scope, constraints and authority "
             "and trigger no contract deviation; otherwise leave it for the user. Do not grant "
             "permissions/capabilities or wait for this callback.",
             "Do not assume you own a running background process. Only use an already "

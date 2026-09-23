@@ -33,14 +33,6 @@ DEFAULT_PHASE_CHAINS = {
     "pr": "cursor-agent:publication-main,gemini:publication-fallback",
 }
 
-DEFAULT_PHASE_RATIONALES = {
-    "spec": "frontier: high requirements reasoning and public-contract risk; equivalent fallback",
-    "plan": "frontier: high architecture reasoning and integration risk; equivalent fallback",
-    "develop": "balanced: bounded implementation with integration tests; equivalent fallback",
-    "review": "frontier: high correctness and security reasoning; stronger fallback",
-    "pr": "efficiency: routine publication artifact with independent host validation; equivalent fallback",
-}
-
 PRIMARY_ONLY_PHASE_CHAINS = {
     "spec": "claude:requirements-main",
     "plan": "claude:planning-main",
@@ -57,13 +49,6 @@ def _phase_chain_args(chains: dict[str, str] | None = None) -> list[str]:
     return result
 
 
-def _phase_rationale_args(rationales: dict[str, str] | None = None) -> list[str]:
-    result: list[str] = []
-    for step, rationale in (rationales or DEFAULT_PHASE_RATIONALES).items():
-        result.extend(["--phase-rationale", f"{step}={rationale}"])
-    return result
-
-
 def _proactive_review_args(playbook_id: str, *, project_root: Path = PROJECT_ROOT) -> list[str]:
     result: list[str] = []
     model = PlaybookLoader(project_root=project_root).load_model(playbook_id).model
@@ -72,16 +57,18 @@ def _proactive_review_args(playbook_id: str, *, project_root: Path = PROJECT_ROO
             result.extend(
                 [
                     "--proactive-review-decision",
-                    f"{step_name}=not_required:User confirms no proactive review for {step_name}.",
+                    f"{step_name}=not_required",
                 ]
             )
     return result
 
 
 def _preflight_args() -> list[str]:
+    product = delivery_contract()
+    product.pop("closeout_plan")
     return [
         "--delivery-contract",
-        json.dumps(delivery_contract()),
+        json.dumps(product),
         "--deliver",
         json.dumps([["git", "push", "origin", "feature/issue346"]]),
         "--cleanup",
@@ -157,7 +144,6 @@ def _kickoff_formatter_command(
     playbook_id: str = "standard",
     pr_auto_create: bool | str | None = False,
     phase_chains: dict[str, str] | None = None,
-    phase_rationales: dict[str, str] | None = None,
     driver_confirmable: tuple[str, ...] = ("spec", "plan"),
     include_proactive_review_args: bool = True,
 ) -> list[str]:
@@ -175,26 +161,12 @@ def _kickoff_formatter_command(
         playbook_id,
         "--issue-name",
         "issue346",
-        "--playbook-rationale",
-        (
-            "Repository policy requires the standard graph; QA is not independently "
-            "required, so standard-qa is unnecessary."
-        ),
-        "--issue-nature",
-        "feature/integration",
-        "--issue-scale",
-        "medium",
         "--driver-mode",
         "unattended",
         *extra_args,
         *pr_args,
         *_preflight_args(),
-        "--risk-factor",
-        "public contract",
-        "--assessment-rationale",
-        "Changes a public workflow contract across runtime and CLI.",
         *_phase_chain_args(phase_chains),
-        *_phase_rationale_args(phase_rationales),
         "--effective-locale",
         "zh-TW",
         "--locale-source",
@@ -206,8 +178,6 @@ def _kickoff_formatter_command(
         *driver_confirmable,
         "--worktree",
         ".cafe/worktrees/issue346",
-        "--strategic-context",
-        str(strategic_context),
         *proactive_args,
     ]
 
@@ -288,7 +258,10 @@ def test_driver_requires_script_rendered_progress_on_every_visible_reply() -> No
     assert "For every other question, progress update, error, and completion message" in normalized
     assert "Do not hand-write, reorder, trim" in normalized
     assert "Translate only descriptive labels and status words" in normalized
-    assert "step IDs, status meanings and symbols, counts, ownership, node order, and connectors" in normalized
+    assert (
+        "step IDs, status meanings and symbols, counts, ownership, node order, and connectors"
+        in normalized
+    )
     assert "never starts or resumes a workflow" in normalized
     assert "action: yield" in normalized
     assert '"proactive_review"' in progress
@@ -887,18 +860,17 @@ def test_use_cafe_workflow_skill_requires_playbook_derived_kickoff_contract() ->
     assert "instead of replacing it with a prose summary" in " ".join(skill.split())
     assert "self-contained initial confirmation request" in normalized
     assert "Do not substitute a shorter hand-written recap" in normalized
-    assert "playbook_selection_rationale" in reference
-    assert "independent-QA decision" in reference
+    assert "Do not require rationale, assessment or preflight records" in normalized
     assert "cafe playbook list" in selection
     assert "cafe playbook show <id>" in selection
     assert "repository instructions require an independent QA" in selection
-    assert "closest rejected candidates" in selection
+    assert "Compare the closest alternatives internally" in " ".join(selection.split())
     assert "do not infer behavior from a playbook name" in " ".join(selection.split())
     assert "every phase, scheduled gate" in normalized
     assert "one primary and zero or more explicitly confirmed fallbacks" in normalized
     assert "Driver cannot change a phase" in normalized
-    assert '--risk-factor "<risk factor; repeat as needed>"' in reference
-    assert '--assessment-rationale "<repository evidence for nature and scale>"' in reference
+    assert "--risk-factor" not in reference
+    assert "--assessment-rationale" not in reference
 
 
 def test_use_cafe_workflow_keeps_playbook_selection_issue_owned() -> None:
@@ -957,7 +929,7 @@ def test_driver_selection_is_evidence_based_across_every_effective_candidate() -
     assert "cafe playbook validate <id> --strict" in normalized
     assert "names and catalog sources are not ranking signals" in normalized
     assert "smallest sufficient graph" in normalized
-    assert "closest rejected candidates" in normalized
+    assert "Compare the closest alternatives internally" in normalized
     assert "speculative future work" in normalized
     assert "ask the user for an explicit decision" in normalized
     assert "Select a playbook" in normalized_skill
@@ -997,11 +969,7 @@ mandate:
     assert "Repository CI/CD inference" not in result.stdout
     assert "### Delivery Contract" in result.stdout
     assert delivery_contract()["outcome"] in result.stdout
-    assert delivery_contract()["required_evidence"][0] in result.stdout
-    assert (
-        "| playbook_selection_rationale | Repository policy requires the standard graph; "
-        "QA is not independently required, so standard-qa is unnecessary. |" in result.stdout
-    )
+    assert delivery_contract()["acceptance_invariants"][0] in result.stdout
     assert "### Workflow progress" in result.stdout
     assert result.stdout.count("### Workflow progress") == 1
     assert result.stdout.count("請確認上述完整契約") == 1
@@ -1028,13 +996,11 @@ mandate:
     assert "### Phases" not in result.stdout
     assert "| effective_locale | zh-TW (user thread override) |" in result.stdout
     assert "| repository_content_locale | zh-TW |" in result.stdout
-    assert "| issue_nature | feature/integration |" in result.stdout
-    assert "| issue_scale | medium |" in result.stdout
     assert "model_adjustment" not in result.stdout
     assert "| driver.mode | unattended |" in result.stdout
-    assert "| CAFE | 0.3.2 → 0.3.2; current; not_needed |" in result.stdout
-    assert "| Catalog | identical |" in result.stdout
-    assert "### Phase model chains — driver-assessed" in result.stdout
+    assert "| CAFE |" not in result.stdout
+    assert "| Catalog |" not in result.stdout
+    assert "### Phase model chains" in result.stdout
     assert (
         "| develop | copilot:implementation-main | "
         "cursor-agent:implementation-fallback |" in result.stdout
@@ -1043,12 +1009,7 @@ mandate:
     assert "| pr | cursor-agent:publication-main | gemini:publication-fallback |" in result.stdout
     assert "### Phase execution requirements" not in result.stdout
     assert "| need_clarification | driver_confirmable |" in result.stdout
-    mandate_row = next(
-        line for line in result.stdout.splitlines() if line.startswith("| product_scope |")
-    )
-    assert "| escalate |" in mandate_row
-    assert "roadmap" in mandate_row
-    assert "positioning" in mandate_row
+    assert "### Mandate" not in result.stdout
     assert result.stdout.count("| playbook_id |") == 1
 
 
@@ -1135,6 +1096,24 @@ def test_kickoff_formatter_keeps_failed_preflight_results_visible(
     assert incomplete.returncode == 2
     assert "preflight is missing: status" in incomplete.stderr
     assert not incomplete.stdout
+
+
+def test_kickoff_formatter_shows_update_decisions_without_adding_them_to_policy(tmp_path: Path) -> None:
+    command = _kickoff_formatter_command(tmp_path / "unused")
+    before = _kickoff_proposal(command)
+    index = command.index("--update-preflight") + 1
+    update = json.loads(command[index])
+    update.update(status="update_available", latest_version="0.4.0", decision="declined")
+    command[index] = json.dumps(update)
+
+    result = subprocess.run(
+        command, cwd=PROJECT_ROOT, text=True, capture_output=True, check=False
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "0.3.2 → 0.4.0; update_available; declined" in result.stdout
+    assert "comparison_token" not in result.stdout
+    assert _kickoff_proposal(command) == before
 
 
 def test_kickoff_formatter_places_catalog_reminder_before_confirmation_and_progress(
@@ -1331,15 +1310,15 @@ def test_confirmed_kickoff_activates_one_issue_scoped_driver_contract(tmp_path: 
             "--issue-dir",
             str(issue_dir),
             "--proactive-review-decision",
-            "spec=not_required:Specification review remains user-confirmed.",
+            "spec=not_required",
             "--proactive-review-decision",
-            "plan=not_required:Planning review remains user-confirmed.",
+            "plan=not_required",
             "--proactive-review-decision",
-            "develop=not_required:No proactive review was confirmed for development.",
+            "develop=not_required",
             "--proactive-review-decision",
-            "review=not_required:The normal review phase remains reactive.",
+            "review=not_required",
             "--proactive-review-decision",
-            "pr=not_required:Publication uses the generic PR path.",
+            "pr=not_required",
         ),
         cwd=PROJECT_ROOT,
         text=True,
@@ -1355,7 +1334,7 @@ def test_confirmed_kickoff_activates_one_issue_scoped_driver_contract(tmp_path: 
     assert contract["locales"] == {
         "conversation": {"value": "zh-TW", "source": "user thread override"}
     }
-    assert contract["delivery_contract"]["schema_version"] == 2
+    assert contract["delivery_contract"]["schema_version"] == 3
     closeout_plan = contract["delivery_contract"]["closeout_plan"]
     assert closeout_plan["deliver"] == [{"argv": ["git", "push", "origin", "feature/issue346"]}]
     assert closeout_plan["cleanup"] == [{"argv": ["git", "worktree", "remove", "/tmp/issue346"]}]
@@ -1368,8 +1347,12 @@ def test_confirmed_kickoff_activates_one_issue_scoped_driver_contract(tmp_path: 
     assert develop_review == {
         "phase": "develop",
         "decision": "not_required",
-        "rationale": "No proactive review was confirmed for development.",
     }
+    assert contract["schema_version"] == 5
+    assert (
+        not {"preflight", "semantic_facts", "material_assumptions", "mandate", "issue_assessment"}
+        & contract.keys()
+    )
 
     entry = subprocess.run(
         [
@@ -1382,7 +1365,7 @@ def test_confirmed_kickoff_activates_one_issue_scoped_driver_contract(tmp_path: 
             "--workflow-id",
             "prepared-346",
             "--fresh-facts",
-            json.dumps(contract["preflight"]),
+            json.dumps({"semantic_facts": {"effective_policy": _kickoff_proposal(result.args)}}),
         ],
         cwd=PROJECT_ROOT,
         text=True,
@@ -1445,36 +1428,106 @@ def test_confirmed_event_driven_kickoff_binds_the_visible_codex_thread(
     assert state["entries"][0]["session"]["source"] == "host_session"
 
 
-def test_kickoff_formatter_shows_all_delivery_facts_once_without_internal_policy(
+def test_kickoff_formatter_shows_only_task_decisions_without_mutating_the_project(
     tmp_path: Path,
 ) -> None:
-    """Compact confirmation retains every product fact without mutating the project."""
-    strategic_context = tmp_path / "strategic_context.yaml"
-    strategic_context.write_text(
-        """\
-mandate:
-  preset: technical-led
-  axes:
-    technical:
-      level: agent
-      grounds: [engineering_guidelines]
-      boundary: Existing export interface only.
-  out_of_mandate: [Production deployment.]
-  notes: Stay within the accepted report-export roadmap.
-  exceptions: [Confirm any new billing behavior.]
-""",
-        encoding="utf-8",
+    command = _kickoff_formatter_command(
+        tmp_path / "absent-strategic-context.yaml", "--project-root", str(tmp_path)
     )
-    command = _kickoff_formatter_command(strategic_context, "--project-root", str(tmp_path))
     product = delivery_contract()
+    product.pop("closeout_plan")
     product["outcome"] = "Readers can export text | citations.\nPreserve offline readability."
     command[command.index("--delivery-contract") + 1] = json.dumps(product)
-    before = {
-        path.relative_to(tmp_path): path.read_bytes()
-        for path in tmp_path.rglob("*")
-        if path.is_file()
+    result = subprocess.run(command, cwd=PROJECT_ROOT, text=True, capture_output=True, check=False)
+    assert result.returncode == 0, result.stderr
+    facts = [product["outcome"], product["implementation_direction"]]
+    for key in ("in_scope", "out_of_scope", "acceptance_invariants", "permissions", "constraints"):
+        facts.extend(product[key])
+    for fact in facts:
+        assert result.stdout.count(fact.replace("|", "\\|").replace("\n", "<br>")) == 1
+    for removed in (
+        "schema_version",
+        "semantic_facts",
+        "material_assumptions",
+        "comparison_token",
+        "effective_digests",
+        "checked_at",
+        "post_change_evidence",
+        "issue_assessment",
+        "required_evidence",
+        "allowed_variations",
+        "deviation_triggers",
+        "motivation",
+        "mandate",
+        "rationale",
+        "playbook_source",
+        "--phase-chain",
+        "Phase execution requirements",
+        "current; not_needed",
+        str(SKILL_ROOT),
+    ):
+        assert removed not in result.stdout
+    assert "Implementation direction is advisory" in result.stdout
+    assert (
+        "alternatives that satisfy scope, acceptance criteria, permissions and constraints "
+        "do not require reconfirmation" in result.stdout
+    )
+    assert result.stdout.count("請確認上述完整契約") == 1
+    assert result.stdout.count("### Workflow progress") == 1
+    assert list(tmp_path.iterdir()) == []
+    proposal = _kickoff_proposal(command)
+    assert set(proposal) == {
+        "delivery_contract",
+        "locales",
+        "confirmation_contract",
+        "reactive_user_handoffs",
+        "phases",
+        "proactive_review",
+        "driver",
+        "checkout",
+    }
+    assert all(set(phase) == {"name", "chain"} for phase in proposal["phases"])
+    assert all(
+        set(decision) == {"phase", "decision"}
+        for decision in proposal["proactive_review"]["phase_decisions"]
+    )
+    assert proposal["delivery_contract"] == {
+        **product,
+        "closeout_plan": {
+            "deliver": [{"argv": ["git", "push", "origin", "feature/issue346"]}],
+            "cleanup": [{"argv": ["git", "worktree", "remove", "/tmp/issue346"]}],
+        },
     }
 
+
+@pytest.mark.parametrize(
+    "flag",
+    [
+        "--issue-nature",
+        "--issue-scale",
+        "--risk-factor",
+        "--assessment-rationale",
+        "--playbook-rationale",
+        "--phase-rationale",
+        "--strategic-context",
+    ],
+)
+def test_kickoff_formatter_rejects_removed_contract_inputs(tmp_path: Path, flag: str) -> None:
+    result = subprocess.run(
+        _kickoff_formatter_command(tmp_path / "unused", flag, "removed"),
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 2
+    assert "unrecognized arguments" in result.stderr
+    assert flag in result.stderr
+
+
+def test_kickoff_formatter_rejects_embedded_closeout_plan(tmp_path: Path) -> None:
+    command = _kickoff_formatter_command(tmp_path / "unused")
+    command[command.index("--delivery-contract") + 1] = json.dumps(delivery_contract())
     result = subprocess.run(
         command,
         cwd=PROJECT_ROOT,
@@ -1482,71 +1535,8 @@ mandate:
         capture_output=True,
         check=False,
     )
-
-    assert result.returncode == 0, result.stderr
-    facts = [product[key] for key in ("outcome", "motivation", "implementation_direction")]
-    for key in (
-        "in_scope",
-        "out_of_scope",
-        "acceptance_invariants",
-        "required_evidence",
-        "allowed_variations",
-        "deviation_triggers",
-    ):
-        facts.extend(product[key])
-    for constraints in product["constraints"].values():
-        facts.extend(constraints)
-    facts.extend(
-        [
-            "Existing export interface only.",
-            "Production deployment.",
-            "Stay within the accepted report-export roadmap.",
-            "Confirm any new billing behavior.",
-        ]
-    )
-    for fact in facts:
-        assert result.stdout.count(fact.replace("|", "\\|").replace("\n", "<br>")) == 1
-    for internal in (
-        "```json",
-        "Confirmed durable policy",
-        "schema_version",
-        "semantic_facts",
-        "material_assumptions",
-        "effective_graph",
-        "comparison_token",
-        "effective_digests",
-        "update-token",
-        "catalog-token",
-        "playbook-digest",
-        "phase-digest",
-        "agent-digest",
-        "checked_at",
-        "post_change_evidence",
-        "playbook_source",
-        "--phase-chain",
-        "Phase execution requirements",
-        str(strategic_context),
-        str(SKILL_ROOT),
-    ):
-        assert internal not in result.stdout
-    assert '"architecture":' not in result.stdout
-    assert result.stdout.count("請確認上述完整契約") == 1
-    assert result.stdout.count("### Workflow progress") == 1
-    assert {
-        path.relative_to(tmp_path): path.read_bytes()
-        for path in tmp_path.rglob("*")
-        if path.is_file()
-    } == before
-    assert not (tmp_path / ".cafe").exists()
-    proposal = _kickoff_proposal(command)
-    assert "pr" not in proposal
-    assert (
-        proposal["semantic_facts"]["effective_policy"]["delivery_contract"]
-        == proposal["delivery_contract"]
-    )
-    assert {phase["name"]: phase["rationale"] for phase in proposal["phases"]} == (
-        DEFAULT_PHASE_RATIONALES
-    )
+    assert result.returncode == 2
+    assert "must omit closeout_plan" in result.stderr
 
 
 def test_kickoff_formatter_keeps_the_rendered_policy_stable_until_activation(
@@ -1597,12 +1587,8 @@ def test_kickoff_formatter_keeps_the_rendered_policy_stable_until_activation(
     proposal = _kickoff_proposal(normal_command)
     contract = json.loads((issue_dir / "driver" / "contract.json").read_text(encoding="utf-8"))
     for key, expected in proposal.items():
-        actual = (
-            contract["preflight"][key]
-            if key in {"semantic_facts", "material_assumptions"}
-            else contract[key]
-        )
-        assert actual == expected, key
+        assert contract[key] == expected, key
+    assert set(contract) == set(proposal) | {"schema_version", "identity", "revision", "provenance"}
 
 
 @pytest.mark.parametrize("choice", [True, False])
@@ -1667,10 +1653,6 @@ def test_non_pr_playbook_omits_choice_and_rejects_supplied_false(tmp_path: Path)
         encoding="utf-8",
     )
     chains = {step: f"gemini:{step}-main" for step in ("brief", "draft", "review", "publish")}
-    rationales = {
-        step: "balanced: bounded editorial work with an equivalent configured model"
-        for step in chains
-    }
 
     supplied = subprocess.run(
         _kickoff_formatter_command(
@@ -1678,7 +1660,6 @@ def test_non_pr_playbook_omits_choice_and_rejects_supplied_false(tmp_path: Path)
             playbook_id="editorial",
             pr_auto_create=False,
             phase_chains=chains,
-            phase_rationales=rationales,
             driver_confirmable=("brief",),
         ),
         cwd=PROJECT_ROOT,
@@ -1692,7 +1673,6 @@ def test_non_pr_playbook_omits_choice_and_rejects_supplied_false(tmp_path: Path)
             playbook_id="editorial",
             pr_auto_create=None,
             phase_chains=chains,
-            phase_rationales=rationales,
             driver_confirmable=("brief",),
         ),
         cwd=PROJECT_ROOT,
@@ -1740,13 +1720,12 @@ def test_minimal_non_software_kickoff_renders_only_its_two_declared_steps(
     command = _kickoff_formatter_command(
         tmp_path / "strategic_context.yaml",
         "--proactive-review-decision",
-        "brief=not_required:No confirmation gate.",
+        "brief=not_required",
         "--proactive-review-decision",
-        "draft=not_required:No confirmation gate.",
+        "draft=not_required",
         playbook_id="minimal",
         pr_auto_create=None,
         phase_chains=chains,
-        phase_rationales={step: "Bounded content work." for step in steps},
         driver_confirmable=(),
     )
     (tmp_path / "strategic_context.yaml").write_text("mandate: {preset: technical-led}\n")
@@ -1764,7 +1743,7 @@ def test_minimal_non_software_kickoff_renders_only_its_two_declared_steps(
     assert "Prepare arguments" not in rendered
 
 
-def test_kickoff_contract_documents_persisted_preflight_and_reconfirmation() -> None:
+def test_kickoff_contract_keeps_issue_preflight_separate_from_driver_policy() -> None:
     kickoff = _read_skill_resource("references/kickoff.md")
     normalized = " ".join(kickoff.split())
 
@@ -1777,6 +1756,7 @@ def test_kickoff_contract_documents_persisted_preflight_and_reconfirmation() -> 
     assert "post_change_evidence:" in kickoff
     assert "behavior_changed:" in kickoff
     assert "freshly rendered kickoff contract" in normalized
+    assert "current contract does not store assessment, mandate, rationale, preflight" in normalized
 
 
 def test_kickoff_defaults_verified_github_issues_to_pr_publication() -> None:
@@ -1801,7 +1781,7 @@ def test_need_clarification_defaults_to_bounded_driver_confirmation() -> None:
     normalized = " ".join((skill + kickoff + running + handoffs).split()).lower()
 
     assert "default `need_clarification` to bounded `driver_confirmable`" in normalized
-    assert "existing authority or `allowed_variations`" in normalized
+    assert "scope, explicit constraints and existing authority" in normalized
     assert "triggers no deviation" in normalized
     assert "reserved product or strategy decisions" in normalized
     assert "uncertainty about whether authority already exists remain user-owned" in normalized
@@ -1969,7 +1949,8 @@ def test_kickoff_formatter_documents_structural_validation_boundary() -> None:
 
     assert "structurally validated" in script
     assert "validates chain structure only; it does not validate model suitability" in kickoff
-    assert "driver-assessed" in script
+    assert "Model suitability remains Driver-assessed" in kickoff
+    assert "--phase-rationale" not in script
 
 
 def test_kickoff_contract_formatter_accepts_primary_only_chains(tmp_path: Path) -> None:
@@ -1978,10 +1959,6 @@ def test_kickoff_contract_formatter_accepts_primary_only_chains(tmp_path: Path) 
         "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
         encoding="utf-8",
     )
-    rationales = {
-        step: "User explicitly selected a primary-only chain; failures stop for adjustment."
-        for step in PRIMARY_ONLY_PHASE_CHAINS
-    }
 
     result = subprocess.run(
         [
@@ -1990,31 +1967,18 @@ def test_kickoff_contract_formatter_accepts_primary_only_chains(tmp_path: Path) 
             "standard",
             "--issue-name",
             "issue-primary-only",
-            "--playbook-rationale",
-            "The confirmed repository contract selects standard without independent QA.",
-            "--issue-nature",
-            "localized defect",
-            "--issue-scale",
-            "small",
             "--driver-mode",
             "unattended",
             "--capability-choice",
             "pr.auto_create=false",
             *_preflight_args(),
-            "--risk-factor",
-            "none",
-            "--assessment-rationale",
-            "Focused behavior with bounded verification.",
             *_phase_chain_args(PRIMARY_ONLY_PHASE_CHAINS),
-            *_phase_rationale_args(rationales),
             "--repository-content-locale",
             "en-US",
             "--user-required",
             "spec",
             "plan",
             "--current-checkout",
-            "--strategic-context",
-            str(strategic_context),
             *_proactive_review_args("standard"),
         ],
         cwd=PROJECT_ROOT,
@@ -2384,29 +2348,17 @@ def test_kickoff_contract_formatter_rejects_incomplete_gate_partition(
             "standard",
             "--issue-name",
             "issue346",
-            "--playbook-rationale",
-            "The confirmed issue contract selects standard.",
-            "--issue-nature",
-            "localized defect",
-            "--issue-scale",
-            "small",
             "--driver-mode",
             "unattended",
             "--capability-choice",
             "pr.auto_create=false",
             *_preflight_args(),
-            "--risk-factor",
-            "none",
-            "--assessment-rationale",
-            "One localized behavior and focused tests.",
             "--repository-content-locale",
             "en-US",
             "--user-required",
             "spec",
             "--worktree",
             ".cafe/worktrees/issue346",
-            "--strategic-context",
-            str(strategic_context),
         ],
         cwd=PROJECT_ROOT,
         text=True,
@@ -2469,21 +2421,11 @@ def test_kickoff_contract_formatter_uses_cafe_python_when_site_packages_are_miss
             "standard",
             "--issue-name",
             "issue346",
-            "--playbook-rationale",
-            "The confirmed issue contract selects standard.",
-            "--issue-nature",
-            "localized defect",
-            "--issue-scale",
-            "small",
             "--driver-mode",
             "unattended",
             "--capability-choice",
             "pr.auto_create=false",
             *_preflight_args(),
-            "--risk-factor",
-            "none",
-            "--assessment-rationale",
-            "One localized behavior and focused tests.",
             "--repository-content-locale",
             "en-US",
             "--user-required",
@@ -2491,11 +2433,8 @@ def test_kickoff_contract_formatter_uses_cafe_python_when_site_packages_are_miss
             "plan",
             "--worktree",
             ".cafe/worktrees/issue346",
-            "--strategic-context",
-            str(strategic_context),
             *_proactive_review_args("standard"),
             *_phase_chain_args(),
-            *_phase_rationale_args(),
         ],
         cwd=PROJECT_ROOT,
         text=True,
@@ -2585,28 +2524,14 @@ entry_point: audit
             str(tmp_path),
             "--issue-name",
             "audit-1",
-            "--playbook-rationale",
-            "The user selected the custom audit graph; no builtin candidate owns this audit responsibility.",
-            "--issue-nature",
-            "security review",
-            "--issue-scale",
-            "medium",
             "--driver-mode",
             "unattended",
             *_preflight_args(),
-            "--risk-factor",
-            "security boundary",
-            "--assessment-rationale",
-            "The custom phase evaluates a security-sensitive contract.",
             "--phase-chain",
             "audit=gemini:audit-main,copilot:audit-fallback",
-            "--phase-rationale",
-            "audit=frontier: high security review with an equivalent independent fallback",
             "--repository-content-locale",
             "en-US",
             "--current-checkout",
-            "--strategic-context",
-            str(strategic_context),
         ],
         cwd=tmp_path,
         text=True,
@@ -2640,29 +2565,16 @@ def test_kickoff_formatter_rejects_unresolved_phase_models(tmp_path: Path) -> No
             str(tmp_path),
             "--issue-name",
             "issue-no-models",
-            "--playbook-rationale",
-            (
-                "The simple graph covers the localized change with independent QA "
-                "and no separate plan or code review."
-            ),
-            "--issue-nature",
-            "localized defect",
-            "--issue-scale",
-            "small",
             "--driver-mode",
             "unattended",
+            "--capability-choice",
+            "pr.auto_create=false",
             *_preflight_args(),
-            "--risk-factor",
-            "none",
-            "--assessment-rationale",
-            "Focused behavior.",
             "--repository-content-locale",
             "en-US",
             "--user-required",
             "spec",
             "--current-checkout",
-            "--strategic-context",
-            str(strategic_context),
         ],
         cwd=tmp_path,
         text=True,
@@ -2675,55 +2587,24 @@ def test_kickoff_formatter_rejects_unresolved_phase_models(tmp_path: Path) -> No
     assert "field='spec'" in result.stderr
 
 
-def test_kickoff_formatter_rejects_missing_phase_rationale(tmp_path: Path) -> None:
-    strategic_context = tmp_path / "strategic_context.yaml"
-    strategic_context.write_text(
-        "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
-        encoding="utf-8",
+def test_kickoff_formatter_accepts_phase_chains_without_rationale(tmp_path: Path) -> None:
+    command = _kickoff_formatter_command(
+        tmp_path / "absent-context.yaml", "--project-root", str(tmp_path)
     )
+    assert not any("rationale" in argument for argument in command)
     result = subprocess.run(
-        [
-            sys.executable,
-            str(SKILL_ROOT / "scripts" / "format_kickoff_contract.py"),
-            "simple",
-            "--project-root",
-            str(PROJECT_ROOT),
-            "--issue-name",
-            "issue-no-rationale",
-            "--playbook-rationale",
-            (
-                "The simple graph covers the localized change with independent QA "
-                "and no separate plan or code review."
-            ),
-            "--issue-nature",
-            "localized defect",
-            "--issue-scale",
-            "small",
-            "--driver-mode",
-            "unattended",
-            *_preflight_args(),
-            "--risk-factor",
-            "none",
-            "--assessment-rationale",
-            "Focused behavior.",
-            "--phase-chain",
-            "spec=gemini:requirements-main,copilot:requirements-fallback",
-            "--repository-content-locale",
-            "en-US",
-            "--user-required",
-            "spec",
-            "--current-checkout",
-            "--strategic-context",
-            str(strategic_context),
-        ],
+        command,
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
         check=False,
     )
-
-    assert result.returncode == 2
-    assert "missing phase rationale for agent-executed step: spec" in result.stderr
+    assert result.returncode == 0, result.stderr
+    assert (
+        "| develop | copilot:implementation-main | cursor-agent:implementation-fallback |"
+        in result.stdout
+    )
+    assert "rationale" not in result.stdout
 
 
 def test_builtin_confirmation_gate_candidates_come_from_playbook_declarations() -> None:
@@ -3025,7 +2906,7 @@ def test_proactive_review_overrides_are_sparse_ordered_and_fail_closed() -> None
     }
 
     decisions = module._proactive_review_decisions(
-        ["define=not_required:User explicitly disabled this review."],
+        ["define=not_required"],
         **kwargs,
     )
     assert [item["phase"] for item in decisions] == ["define", "build", "publish"]
@@ -3037,19 +2918,19 @@ def test_proactive_review_overrides_are_sparse_ordered_and_fail_closed() -> None
 
     with pytest.raises(ValueError, match="duplicate proactive review decision"):
         module._proactive_review_decisions(
-            ["define=required:First.", "define=not_required:Second."],
+            ["define=required", "define=not_required"],
             **kwargs,
         )
     with pytest.raises(ValueError, match="unknown or non-agent phase: missing"):
         module._proactive_review_decisions(
-            ["missing=required:Unknown phase."],
+            ["missing=required"],
             **kwargs,
         )
     with pytest.raises(ValueError, match="must follow agent phase order"):
         module._proactive_review_decisions(
             [
-                "publish=required:Later phase first.",
-                "define=required:Earlier phase second.",
+                "publish=required",
+                "define=required",
             ],
             **kwargs,
         )
@@ -3158,32 +3039,16 @@ entry_point: define
             str(tmp_path),
             "--issue-name",
             "custom-1",
-            "--playbook-rationale",
-            "Custom graph verifies semantic defaults without conventional phase names.",
-            "--issue-nature",
-            "workflow",
-            "--issue-scale",
-            "small",
             "--driver-mode",
             "unattended",
             *_preflight_args(),
-            "--risk-factor",
-            "custom graph",
-            "--assessment-rationale",
-            "Two bounded custom confirmation gates.",
             "--phase-chain",
             "define=codex:define-model",
             "--phase-chain",
             "publish=codex:publish-model",
-            "--phase-rationale",
-            "define=balanced custom requirements work.",
-            "--phase-rationale",
-            "publish=efficiency custom publication work.",
             "--repository-content-locale",
             "en-US",
             "--current-checkout",
-            "--strategic-context",
-            str(strategic_context),
         ],
         cwd=tmp_path,
         text=True,
@@ -3223,7 +3088,7 @@ def test_kickoff_renders_not_required_override_without_claiming_a_review(
         _kickoff_formatter_command(
             strategic_context,
             "--proactive-review-decision",
-            "spec=not_required:User explicitly disabled proactive specification review.",
+            "spec=not_required",
         ),
         cwd=PROJECT_ROOT,
         text=True,
@@ -3334,8 +3199,8 @@ def test_delivery_contract_allows_bounded_technical_flexibility() -> None:
     contract = " ".join((skill + kickoff + running).split())
 
     for required in (
-        "reasonable technical choices in `allowed_variations`",
-        "working assumption or bounded variation",
+        "Recommended approach; advisory, not a binding method",
+        "technical clarification within the confirmed scope and constraints",
         "does not replace the Driver contract",
         "archiving, deleting, or rebuilding callback dispatch state",
         "no adequate handoff has been given in the current conversation",
@@ -3567,7 +3432,7 @@ def test_kickoff_rejects_required_review_without_a_scheduled_pause(tmp_path: Pat
             decisions.extend(
                 [
                     "--proactive-review-decision",
-                    f"{phase}={state}:Confirmed review decision for {phase}.",
+                    f"{phase}={state}",
                 ]
             )
         result = subprocess.run(
@@ -3585,25 +3450,21 @@ def test_kickoff_rejects_required_review_without_a_scheduled_pause(tmp_path: Pat
         ) in result.stderr
 
 
-def test_kickoff_rejects_proactive_review_without_a_rationale(tmp_path: Path) -> None:
-    strategic_context = tmp_path / "strategic_context.yaml"
-    strategic_context.write_text(
-        "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
-        encoding="utf-8",
-    )
-    decisions = _proactive_review_args("standard")
-    decisions[1] = "spec=not_required:   "
-
+@pytest.mark.parametrize("override", ["spec=", "spec=maybe", "spec=not_required:old rationale"])
+def test_kickoff_rejects_invalid_or_legacy_review_override(tmp_path: Path, override: str) -> None:
     result = subprocess.run(
-        _kickoff_formatter_command(strategic_context, *decisions),
+        _kickoff_formatter_command(
+            tmp_path / "unused",
+            "--proactive-review-decision",
+            override,
+        ),
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
         check=False,
     )
-
     assert result.returncode == 2
-    assert "proactive review decision for 'spec' requires a rationale" in result.stderr
+    assert "proactive review decisions use PHASE=required|not_required" in result.stderr
 
 
 def test_kickoff_accepts_required_review_at_scheduled_pauses(tmp_path: Path) -> None:
@@ -3618,7 +3479,7 @@ def test_kickoff_accepts_required_review_at_scheduled_pauses(tmp_path: Path) -> 
         decisions.extend(
             [
                 "--proactive-review-decision",
-                f"{phase}={state}:Confirmed review decision for {phase}.",
+                f"{phase}={state}",
             ]
         )
 
@@ -3937,7 +3798,7 @@ def test_kickoff_rejects_incomplete_delivery_before_activation(tmp_path, damage)
     if damage == "missing":
         del command[index : index + 2]
     else:
-        command[index + 1] = json.dumps({"schema_version": 1, "outcome": "Incomplete."})
+        command[index + 1] = json.dumps({"schema_version": 3, "outcome": "Incomplete."})
     result = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True)
     assert result.returncode != 0
     assert ("--delivery-contract" if damage == "missing" else "DeliveryContract") in result.stderr

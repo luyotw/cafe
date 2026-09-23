@@ -8,7 +8,7 @@ execution.
 ## Assess before proposing models
 
 Read the issue, relevant strategic documents, nearby implementation, existing
-tests, dependencies, and linked issues. Record:
+tests, dependencies, and linked issues. Assess internally:
 
 - `issue_nature`: the dominant kind of work, such as documentation/config,
   localized defect, feature/integration, refactor, migration, or security/trust
@@ -17,7 +17,7 @@ tests, dependencies, and linked issues. Record:
 - `risk_factors`: cross-subsystem behavior, durable schema/state, migration or
   compatibility, concurrency, security boundaries, external side effects, and
   unusually broad verification;
-- `rationale`: concrete repository evidence, not issue-label inference alone.
+- ground the assessment in repository evidence, not issue-label inference alone.
 
 Use these scale defaults as guidance, not line-count quotas:
 
@@ -48,7 +48,7 @@ aggregates all variants so every execution mode has a valid initial chain.
 Continuous mode does not pause at phase boundaries. Single-step mode may resolve
 the actual remaining iteration when control returns to the driver. This applies
 equally to bundled and custom playbooks. A legacy custom skill without a
-declaration receives the neutral default and the formatter marks it `defaulted`;
+declaration receives the neutral default;
 do not silently invent stronger or weaker requirements.
 
 ## Keep model ownership outside phase agents
@@ -138,11 +138,10 @@ Apply these rules:
    Do not persist a floating alias as "exact" when the preflight exposes the
    canonical model it resolved to.
 
-The driver may recommend any configured combination that meets these rules, but
-must record one phase-specific rationale naming the selected band, profile
-evidence, issue-risk overlay, and, when configured, why each fallback meets its
-strength contract. For a primary-only chain, record that explicit choice and
-its hard-stop consequence instead.
+The driver may recommend any configured combination that meets these rules.
+The contract records the exact chains, not assessment fields or model-selection
+rationales. Explain a material cost/capability tradeoff only when the user needs
+to choose or asks. A primary-only chain means failure stops rather than switching models.
 
 ## Model and fallback preflight
 
@@ -247,14 +246,8 @@ quality_gate:
 Append further `clis` entries only for confirmed fallbacks. A single entry is
 a valid primary-only chain.
 
-Persist the issue assessment in `.cafe/issues/<issue-name>/issue.yaml`:
-
-```yaml
-issue_assessment:
-  nature: feature/integration
-  scale: medium
-  risk_factors: [public contract, integration coverage]
-```
+Issue scale and risk inform selection; do not persist an assessment report as
+part of the confirmed contract or create a replacement assessment sidecar.
 
 Kickoff phase chains are initial values. The Driver never changes them from its
 own judgment. When the user explicitly requests a different phase model, edit

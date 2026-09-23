@@ -66,6 +66,10 @@ list is transient and is not persisted. Record `not_requested` when no explicit
 publication request exists; project-only entries do not require a decline
 decision.
 
+These check records belong to the existing issue preflight, not the confirmed
+Driver contract. Do not copy them or a second effective-policy snapshot into
+`driver/contract.json`, and do not ask the user to confirm successful diagnostics.
+
 A changed comparison token invalidates its cached decision, but does not by
 itself show a semantic change or require kickoff reconfirmation. Re-run the
 check and perform a bounded semantic comparison of the effective confirmed

@@ -266,7 +266,7 @@ def _confirmed_plan(args: argparse.Namespace) -> tuple[dict[str, Any], str]:
         args.issue_dir, issue_name=args.issue_name, workflow_id=args.workflow_id
     )
     delivery_contract = normalize_delivery_contract(contract["delivery_contract"])
-    if delivery_contract["schema_version"] != 2:
+    if delivery_contract["schema_version"] not in {2, 3}:
         raise ValueError("confirmed Driver contract has no argv closeout plan")
     expected_worktree = _confirmed_issue_worktree(contract, project_root=args.project_root)
     if _directory(args.issue_worktree, label="issue worktree") != expected_worktree:

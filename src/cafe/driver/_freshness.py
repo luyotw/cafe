@@ -7,6 +7,8 @@ from typing import Any, Mapping
 
 from cafe.core.packet_io import canonical_json
 
+from ._schema import freshness_semantic_facts
+
 
 class Freshness(str, Enum):
     """The only continuation classifications exposed by the contract boundary."""
@@ -20,31 +22,16 @@ def compare_freshness(contract: Mapping[str, Any], fresh_facts: Mapping[str, Any
     """Compare caller-supplied semantic facts without treating diagnostics as policy."""
     if not isinstance(fresh_facts, Mapping):
         return Freshness.UNKNOWN
-    current = contract.get("preflight")
-    if not isinstance(current, Mapping):
-        return Freshness.UNKNOWN
-    expected_semantics = current.get("semantic_facts")
-    expected_assumptions = current.get("material_assumptions")
     live_semantics = fresh_facts.get("semantic_facts")
-    live_assumptions = fresh_facts.get("material_assumptions")
-    if not all(
-        isinstance(item, Mapping)
-        for item in (expected_semantics, expected_assumptions, live_semantics, live_assumptions)
+    if (
+        not isinstance(live_semantics, Mapping)
+        or set(live_semantics) != {"effective_policy"}
+        or not isinstance(live_semantics.get("effective_policy"), Mapping)
     ):
         return Freshness.UNKNOWN
     try:
-        expected = canonical_json(
-            {
-                "semantic_facts": dict(expected_semantics),
-                "material_assumptions": dict(expected_assumptions),
-            }
-        )
-        live = canonical_json(
-            {
-                "semantic_facts": dict(live_semantics),
-                "material_assumptions": dict(live_assumptions),
-            }
-        )
+        expected = canonical_json(freshness_semantic_facts(contract))
+        live = canonical_json(dict(live_semantics))
     except (TypeError, ValueError):
         return Freshness.UNKNOWN
     return Freshness.SAME_SEMANTICS if live == expected else Freshness.MATERIAL_CHANGE

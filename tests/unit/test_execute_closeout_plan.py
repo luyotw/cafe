@@ -7,8 +7,12 @@ import json
 import multiprocessing
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+
+from cafe.driver import activate_confirmed_contract
+from tests.unit.test_driver_contract_application import _activation, _proposal
 
 SCRIPT = (
     Path(__file__).parents[2]
@@ -148,6 +152,25 @@ def test_closeout_runner_derives_the_issue_worktree_from_the_confirmed_contract(
         )
         == tmp_path.resolve()
     )
+
+
+def test_closeout_runner_loads_the_compact_confirmed_plan(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue474"
+    proposal = _proposal()
+    proposal["delivery_contract"]["closeout_plan"] = _plan()
+    activated = activate_confirmed_contract(_activation(issue_dir, proposal))
+    args = SimpleNamespace(
+        issue_dir=issue_dir,
+        issue_name="issue474",
+        workflow_id="workflow-474",
+        project_root=tmp_path,
+        issue_worktree=tmp_path,
+    )
+
+    plan, digest = module._confirmed_plan(args)
+
+    assert plan == _plan()
+    assert digest == activated.contract_sha256
 
 
 def test_closeout_runner_never_replays_an_unresolved_command(tmp_path: Path) -> None:

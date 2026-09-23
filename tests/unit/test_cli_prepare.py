@@ -3,7 +3,6 @@
 import importlib.util
 import json
 import subprocess
-from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -52,18 +51,10 @@ def _confirmed_driver_proposal() -> dict[str, object]:
             "need_permission": "user_required",
             "alignment_checkpoint": "driver_resolvable_when_clear",
         },
-        "mandate": {"source": "test", "boundaries": ["issue"]},
-        "issue_assessment": {
-            "nature": "defect",
-            "scale": "small",
-            "risks": [],
-            "rationale": "Exercise the prepare-to-Driver activation boundary.",
-        },
         "phases": [
             {
                 "name": "spec",
                 "chain": [{"cli": "codex", "model": "exact"}],
-                "rationale": "Confirmed test chain.",
             }
         ],
         "proactive_review": {
@@ -71,18 +62,13 @@ def _confirmed_driver_proposal() -> dict[str, object]:
                 {
                     "phase": "spec",
                     "decision": "not_required",
-                    "rationale": "No scheduled review in this test.",
                 }
             ]
         },
         "driver": {"mode": "unattended"},
         "checkout": {"kind": "current_checkout"},
     }
-    return {
-        **policy,
-        "semantic_facts": {"effective_policy": deepcopy(policy)},
-        "material_assumptions": {"permissions": ["local"]},
-    }
+    return policy
 
 
 @pytest.fixture(scope="module")

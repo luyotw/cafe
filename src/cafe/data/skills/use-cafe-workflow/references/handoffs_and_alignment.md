@@ -49,7 +49,7 @@ Then route by intent:
   accepted upstream artifacts before confirming. Apply the Delivery comparison below.
 - `need_clarification` with confirmed policy `driver_confirmable`: the Driver
   may answer when the complete response stays within the confirmed Delivery
-  Contract, existing authority or `allowed_variations`, and triggers no
+  Contract's scope, constraints and existing authority, and triggers no
   deviation. Multiple authorized reversible technical choices may be resolved
   using repository precedent, smaller footprint, and reversibility. Contract
   changes, new permission or external-effect authority, mandatory gates,
@@ -92,15 +92,16 @@ strings, count keywords or accept a proposal merely because it says â€œsimplerâ€
 
 Build the assessment against that exact `snapshot_sha256`:
 
-- `coverage`: one entry for every `in_scope`, `acceptance_invariants`, and
-  `required_evidence` obligation key returned in the packet, with `status`
+- `coverage`: one entry for every `in_scope` and `acceptance_invariants`
+  obligation key returned in the packet, with `status`
   (`preserved` only with positive proof), `source` (actual artifact name), exact
   `quote`, and a substantive `reason`. For every acceptance invariant also
   provide concrete `implementation` and `verification` paths.
 - `deviation`: one overall record with `status`, `source`, `quote`, and `reason`.
-  Read the complete contract, including outcome, motivation, out-of-scope
-  behavior, implementation direction, every constraint, allowed variations and
-  deviation triggers. Explain how the proposal fits those boundaries, citing
+  Read the complete contract, including purpose, out-of-scope behavior, explicit
+  constraints, permissions and exact closeout commands. Implementation direction
+  is advisory; an equivalent approach is not a deviation unless it violates a
+  fixed constraint or another requirement. Explain how the proposal fits those boundaries, citing
   relevant evidence; a bare "no deviation" or the proposal's own claim of
   compliance is insufficient. Use `clear` only when absence of unauthorized
   changes is positively shown; otherwise use `material`, `uncertain` or
@@ -109,10 +110,10 @@ Build the assessment against that exact `snapshot_sha256`:
 
 Check all confirmed behavior and acceptance coverage, including edge cases,
 compatibility and integrations. Fewer files, less abstraction or fewer
-unnecessary dependencies may be acceptable only within allowed variations,
-with every requirement and verification path preserved. Unapproved additions,
-architecture substitutions, new dependencies/costs, authority or external
-changes require a user handoff. Planning/refinement can elaborate existing
+unnecessary dependencies may be acceptable with every requirement and
+verification path preserved. Changes to scope, fixed constraints, permissions,
+or external effects require a user handoff. Implementation-only substitutions
+within those boundaries do not. Planning/refinement can elaborate existing
 facts; it cannot change the confirmed feature boundary in either direction.
 
 Refresh the context from current task/baton and preflight evidence, then run:

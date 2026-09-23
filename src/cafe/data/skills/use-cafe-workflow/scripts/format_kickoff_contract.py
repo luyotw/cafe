@@ -9,7 +9,6 @@ import os
 import shlex
 import shutil
 import sys
-from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
@@ -45,8 +44,6 @@ def _reexec_with_cafe_python() -> None:
 
 
 try:
-    import yaml  # type: ignore[import-untyped]
-
     from cafe.agents.executor import AgentExecutor
     from cafe.core.capabilities import default_capability_definition_dirs, load_capability_registry
     from cafe.core.capability_setup import resolve_setup_choices
@@ -89,14 +86,15 @@ def _items(values: Iterable[str] | None) -> list[str]:
 
 
 def _kickoff_delivery_contract(args: argparse.Namespace) -> dict[str, Any]:
-    """Build a v2 proposal containing the user-confirmable closeout commands."""
-    core = normalize_delivery_contract(args.delivery_contract)
-    if core["schema_version"] != 1:
-        raise ValueError("new kickoff requires version-1 core delivery facts")
+    """Combine concise product facts with separately confirmed exact closeout commands."""
+    core = args.delivery_contract
+    if core.get("schema_version") != 3:
+        raise ValueError("new kickoff requires version-3 delivery facts")
+    if "closeout_plan" in core:
+        raise ValueError("--delivery-contract must omit closeout_plan; use --deliver and --cleanup")
     return normalize_delivery_contract(
         {
             **core,
-            "schema_version": 2,
             "closeout_plan": {
                 "deliver": [{"argv": command} for command in args.deliver],
                 "cleanup": [{"argv": command} for command in args.cleanup],
@@ -121,64 +119,22 @@ def _capability_choices(args: argparse.Namespace, model: Any) -> list[Any]:
 
 
 def _driver_policy_rows(args: argparse.Namespace) -> list[list[Any]]:
-    rows: list[list[Any]] = [
-        ["schema_version", 4],
-        ["driver.mode", args.driver_mode],
-    ]
+    rows: list[list[Any]] = [["driver.mode", args.driver_mode]]
     if args.driver_mode == "attached":
         if args.poll_interval_seconds is None:
             raise ValueError("attached driver requires --poll-interval-seconds")
         if args.event_driver:
             raise ValueError("attached driver rejects event-driven fields")
-        rows.extend(
-            [
-                ["driver.poll_interval_seconds", args.poll_interval_seconds],
-                [
-                    "driver.first_poll",
-                    "after the full interval; no startup or transport-level poll",
-                ],
-                [
-                    "driver.poll_timestamp",
-                    "capture and print current system time with every proactive poll",
-                ],
-            ]
-        )
+        rows.append(["driver.poll_interval_seconds", args.poll_interval_seconds])
     elif args.driver_mode == "unattended":
         if args.poll_interval_seconds is not None or args.event_driver:
             raise ValueError("unattended driver accepts no mode-specific fields")
     else:
         if args.poll_interval_seconds is not None:
             raise ValueError("event-driven driver rejects attached polling")
-        entries = _parse_event_driver_entries(args.event_driver)
-        rows.append(["driver.schema_version", 3])
-        for index, (cli, model) in enumerate(entries):
-            rows.extend(
-                [
-                    [
-                        f"driver.clis[{index}]",
-                        cli if model is None else f"{cli}:{model}",
-                    ],
-                    [
-                        f"driver.clis[{index}].contract",
-                        "event-driven session-and-dispatch: conforming",
-                    ],
-                ]
-            )
-        bound = entries[0][0] == AgentCLI.CODEX.value and bool(
-            os.environ.get("CODEX_THREAD_ID", "").strip()
-        )
         rows.extend(
-            [
-                [
-                    "driver.host_session",
-                    "runtime-owned first Codex entry only" if bound else "unbound",
-                ],
-                [
-                    "driver.authority",
-                    "callback scope only; does not grant HumanTask, permission, "
-                    "or capability authority",
-                ],
-            ]
+            [f"driver.clis[{index}]", cli if model is None else f"{cli}:{model}"]
+            for index, (cli, model) in enumerate(_parse_event_driver_entries(args.event_driver))
         )
     return rows
 
@@ -235,15 +191,6 @@ def _fact(value: Any) -> str:
     return str(value)
 
 
-def _load_yaml_mapping(path: Path, *, label: str) -> dict[str, Any]:
-    if not path.is_file():
-        return {}
-    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    if not isinstance(raw, dict):
-        raise ValueError(f"{label} must contain a top-level mapping: {path}")
-    return raw
-
-
 def _json_mapping(value: str) -> dict[str, Any]:
     try:
         parsed = json.loads(value)
@@ -272,29 +219,6 @@ def _validate_preflight(value: dict[str, Any], *, label: str, required: set[str]
     if missing:
         raise ValueError(f"{label} preflight is missing: {', '.join(missing)}")
     return value
-
-
-def _load_strategic_context(path: Path, issue_name: str) -> tuple[dict[str, Any], str]:
-    if not path.is_file():
-        raise ValueError(f"strategic context not found: {path}")
-    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    if not isinstance(raw, dict) or not isinstance(raw.get("mandate"), dict):
-        raise ValueError(f"strategic context has no mandate mapping: {path}")
-
-    mandate = dict(raw["mandate"])
-    source = "mandate"
-    issues = raw.get("issues")
-    issue_override = issues.get(issue_name) if isinstance(issues, dict) else None
-    if isinstance(issue_override, dict):
-        source = f"mandate + issues.{issue_name}"
-        for key, value in issue_override.items():
-            if key == "axes" and isinstance(value, dict):
-                axes = dict(mandate.get("axes") or {})
-                axes.update(value)
-                mandate["axes"] = axes
-            else:
-                mandate[key] = value
-    return mandate, source
 
 
 def _resolve_partition(
@@ -389,25 +313,6 @@ def _parse_phase_chains(
     return parsed
 
 
-def _parse_phase_rationales(
-    values: list[str],
-    *,
-    step_names: set[str],
-) -> dict[str, str]:
-    parsed: dict[str, str] = {}
-    for value in values:
-        step_name, separator, rationale = value.partition("=")
-        step_name, rationale = step_name.strip(), rationale.strip()
-        if not separator or not step_name or not rationale:
-            raise ValueError("invalid --phase-rationale; expected STEP=RATIONALE")
-        if step_name not in step_names:
-            raise ValueError(f"unknown phase-rationale step: {step_name}")
-        if step_name in parsed:
-            raise ValueError(f"duplicate phase-rationale step: {step_name}")
-        parsed[step_name] = rationale
-    return parsed
-
-
 def _resolve_configured_chain(
     *,
     step_name: str,
@@ -433,14 +338,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("playbook_id")
     parser.add_argument("--project-root", type=Path, default=Path.cwd())
     parser.add_argument("--issue-name", required=True)
-    parser.add_argument("--playbook-rationale", required=True)
-    parser.add_argument("--issue-nature", required=True)
     parser.add_argument(
         "--delivery-contract",
         type=_json_mapping,
         required=True,
         help=(
-            "Complete version-1 product delivery facts; the formatter adds the confirmed "
+            "Version-3 product facts without closeout_plan; the formatter adds the exact "
             "closeout commands."
         ),
     )
@@ -458,11 +361,6 @@ def _parser() -> argparse.ArgumentParser:
         metavar="JSON_ARGV_LIST",
         help="Exact ordered cleanup argv arrays, including [] when nothing remains.",
     )
-    parser.add_argument(
-        "--issue-scale",
-        choices=("small", "medium", "large"),
-        required=True,
-    )
     parser.add_argument("--update-preflight", type=_json_mapping, required=True)
     parser.add_argument("--catalog-preflight", type=_json_mapping, required=True)
     parser.add_argument("--driver-mode", choices=tuple(sorted(_DRIVER_MODES)), required=True)
@@ -476,21 +374,12 @@ def _parser() -> argparse.ArgumentParser:
         default=[],
         metavar="CLI[:MODEL]",
     )
-    parser.add_argument("--risk-factor", action="append", required=True)
-    parser.add_argument("--assessment-rationale", required=True)
     parser.add_argument(
         "--phase-chain",
         action="append",
         default=[],
         metavar="STEP=CLI:MODEL[,CLI:MODEL...]",
         help="Exact ordered chain for a phase; otherwise resolve phases.yaml.",
-    )
-    parser.add_argument(
-        "--phase-rationale",
-        action="append",
-        default=[],
-        metavar="STEP=RATIONALE",
-        help="Driver-assessed capability band and evidence for an agent-executed phase.",
     )
     parser.add_argument("--phase-config", type=Path, default=Path(".cafe/phases.yaml"))
     parser.add_argument("--effective-locale")
@@ -505,11 +394,6 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--user-required", nargs="*", default=None)
     parser.add_argument("--driver-confirmable", nargs="*", default=None)
-    parser.add_argument(
-        "--strategic-context",
-        type=Path,
-        default=Path(".cafe/strategic_context.yaml"),
-    )
     checkout = parser.add_mutually_exclusive_group(required=True)
     checkout.add_argument("--worktree")
     checkout.add_argument("--current-checkout", action="store_true")
@@ -523,7 +407,7 @@ def _parser() -> argparse.ArgumentParser:
         "--proactive-review-decision",
         action="append",
         default=[],
-        metavar="PHASE=required|not_required:RATIONALE",
+        metavar="PHASE=required|not_required",
         help="Override the default proactive-review decision for an eligible phase.",
     )
     parser.add_argument(
@@ -541,16 +425,13 @@ def _parser() -> argparse.ArgumentParser:
 def _proactive_review_decisions(
     values: Iterable[str], *, agent_phases: list[str], eligible_phases: set[str]
 ) -> list[dict[str, str]]:
-    """Resolve overrides into one complete ordered policy without a sidecar."""
+    """Resolve sparse overrides into complete ordered review decisions."""
     decisions: dict[str, dict[str, str]] = {}
     for raw in values:
-        phase, separator, remainder = raw.partition("=")
-        state, rationale_separator, rationale = remainder.partition(":")
-        phase, state, rationale = phase.strip(), state.strip(), rationale.strip()
-        if not separator or not rationale_separator or state not in {"required", "not_required"}:
-            raise ValueError("proactive review decisions use PHASE=required|not_required:RATIONALE")
-        if not rationale:
-            raise ValueError(f"proactive review decision for '{phase}' requires a rationale")
+        phase, separator, state = raw.partition("=")
+        phase, state = phase.strip(), state.strip()
+        if not separator or state not in {"required", "not_required"}:
+            raise ValueError("proactive review decisions use PHASE=required|not_required")
         if phase in decisions:
             raise ValueError(f"duplicate proactive review decision: {phase}")
         if phase not in agent_phases:
@@ -560,48 +441,22 @@ def _proactive_review_decisions(
                 f"proactive review phase '{phase}' cannot be required because it has no "
                 "scheduled confirmation pause before workflow advancement"
             )
-        decisions[phase] = {"phase": phase, "decision": state, "rationale": rationale}
-    supplied_order = [phase for phase in agent_phases if phase in decisions]
-    if list(decisions) != supplied_order:
+        decisions[phase] = {"phase": phase, "decision": state}
+    if list(decisions) != [phase for phase in agent_phases if phase in decisions]:
         raise ValueError("proactive review overrides must follow agent phase order")
-    for phase in agent_phases:
-        if phase in decisions:
-            continue
-        if phase in eligible_phases:
-            decisions[phase] = {
+    return [
+        decisions.get(
+            phase,
+            {
                 "phase": phase,
-                "decision": "required",
-                "rationale": (
-                    "Default: the scheduled confirmation pause permits Driver review "
-                    "before workflow advancement."
-                ),
-            }
-        else:
-            decisions[phase] = {
-                "phase": phase,
-                "decision": "not_required",
-                "rationale": (
-                    "Derived: no scheduled confirmation pause exists before workflow advancement."
-                ),
-            }
-    return [decisions[phase] for phase in agent_phases]
+                "decision": "required" if phase in eligible_phases else "not_required",
+            },
+        )
+        for phase in agent_phases
+    ]
 
 
-def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
-    """Build the same normalized policy rendered at kickoff, with no persistence."""
-    project_root = args.project_root.resolve()
-    model = PlaybookLoader(project_root=project_root).load_model(args.playbook_id).model
-    candidates = confirmation_gate_steps(model)
-    mandatory_human_tasks = mandatory_confirmation_gate_steps(model)
-    user_required, driver_confirmable = _resolve_partition(
-        candidates=candidates,
-        user_values=args.user_required,
-        driver_values=args.driver_confirmable,
-    )
-    configured_locale = model.playbook.conversation_locale
-    effective_locale = args.effective_locale or configured_locale
-    if effective_locale.lower() == "auto":
-        raise ValueError("--effective-locale is required when the playbook locale is auto")
+def _preflight_reports(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any]]:
     update = _validate_preflight(
         args.update_preflight,
         label="runtime update",
@@ -635,14 +490,34 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError(
             "catalog preflight effective_digests must cover playbook, phase, and agent"
         )
-    mandate, mandate_source = _load_strategic_context(
-        _project_path(args.strategic_context, project_root), args.issue_name
+    mismatch_ids = catalog.get("content_mismatch_entry_ids", [])
+    if not isinstance(mismatch_ids, list) or not all(
+        isinstance(entry_id, str) and entry_id.strip() for entry_id in mismatch_ids
+    ):
+        raise ValueError("catalog preflight content_mismatch_entry_ids must be a string list")
+    return update, catalog
+
+
+def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
+    """Build only the issue's user-confirmed delivery and execution decisions."""
+    project_root = args.project_root.resolve()
+    model = PlaybookLoader(project_root=project_root).load_model(args.playbook_id).model
+    candidates = confirmation_gate_steps(model)
+    mandatory_human_tasks = mandatory_confirmation_gate_steps(model)
+    user_required, driver_confirmable = _resolve_partition(
+        candidates=candidates,
+        user_values=args.user_required,
+        driver_values=args.driver_confirmable,
     )
+    effective_locale = args.effective_locale or model.playbook.conversation_locale
+    if effective_locale.lower() == "auto":
+        raise ValueError("--effective-locale is required when the playbook locale is auto")
+    _preflight_reports(args)
+    _driver_policy_rows(args)
+    _capability_choices(args, model)
     overrides = _parse_phase_chains(args.phase_chain, step_names=set(model.steps))
-    rationales = _parse_phase_rationales(args.phase_rationale, step_names=set(model.steps))
     phase_config = _project_path(args.phase_config, project_root)
     phases: list[dict[str, Any]] = []
-    agent_phases: list[str] = []
     for step_name, step in model.steps.items():
         if step.assignee_type not in {"agent", "hybrid"}:
             continue
@@ -651,35 +526,23 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
             selected, _ = _resolve_configured_chain(
                 step_name=step_name, role=step.role, phase_config=phase_config
             )
-        rationale = rationales.get(step_name)
-        if rationale is None:
-            raise ValueError(f"missing phase rationale for agent-executed step: {step_name}")
-        chain = [{"cli": cli, "model": model_name} for cli, model_name in selected]
-        agent_phases.append(step_name)
         phases.append(
             {
                 "name": step_name,
-                "chain": chain,
-                "rationale": rationale,
+                "chain": [{"cli": cli, "model": model_name} for cli, model_name in selected],
             }
         )
-    if set(rationales) - set(agent_phases):
-        raise ValueError("phase rationale targets a non-agent phase")
-    _capability_choices(args, model)
-    locale_source = args.locale_source or f"playbook:{args.playbook_id}"
-    checkout = (
-        {"kind": "worktree", "path": args.worktree}
-        if args.worktree
-        else {"kind": "current_checkout"}
-    )
     proposal: dict[str, Any] = {
         "delivery_contract": _kickoff_delivery_contract(args),
         "locales": {
-            "conversation": {"value": effective_locale, "source": locale_source},
+            "conversation": {
+                "value": effective_locale,
+                "source": args.locale_source or f"playbook:{args.playbook_id}",
+            },
         },
         "confirmation_contract": {
-            "user_required": list(user_required),
-            "driver_confirmable": list(driver_confirmable),
+            "user_required": user_required,
+            "driver_confirmable": driver_confirmable,
             "mandatory_human_stops": list(mandatory_human_tasks),
         },
         "reactive_user_handoffs": {
@@ -687,36 +550,20 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
             "need_permission": args.need_permission,
             "alignment_checkpoint": args.alignment_checkpoint,
         },
-        "mandate": {"source": mandate_source, "value": mandate},
-        "issue_assessment": {
-            "nature": args.issue_nature,
-            "scale": args.issue_scale,
-            "risks": _items(args.risk_factor),
-            "rationale": args.assessment_rationale,
-        },
         "phases": phases,
         "proactive_review": {
             "phase_decisions": _proactive_review_decisions(
                 args.proactive_review_decision,
-                agent_phases=agent_phases,
+                agent_phases=[phase["name"] for phase in phases],
                 eligible_phases=set(candidates) | set(mandatory_human_tasks),
             )
         },
         "driver": {"mode": args.driver_mode},
-        "checkout": checkout,
-        "semantic_facts": {},
-        "material_assumptions": {
-            "runtime_update": {
-                name: update[name]
-                for name in (
-                    "status",
-                    "installed_version",
-                    "latest_version",
-                    "decision",
-                    "post_change_evidence",
-                )
-            },
-        },
+        "checkout": (
+            {"kind": "worktree", "path": args.worktree}
+            if args.worktree
+            else {"kind": "current_checkout"}
+        ),
     }
     if args.driver_mode == "attached":
         proposal["driver"]["poll_interval_seconds"] = args.poll_interval_seconds
@@ -725,23 +572,6 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
             {"cli": cli} if model_name is None else {"cli": cli, "model": model_name}
             for cli, model_name in _parse_event_driver_entries(args.event_driver)
         ]
-    policy_fields = (
-        "delivery_contract",
-        "locales",
-        "confirmation_contract",
-        "reactive_user_handoffs",
-        "mandate",
-        "issue_assessment",
-        "phases",
-        "proactive_review",
-        "driver",
-        "checkout",
-    )
-    proposal["semantic_facts"] = {
-        "effective_policy": {
-            name: deepcopy(proposal[name]) for name in policy_fields if name in proposal
-        }
-    }
     return proposal
 
 
@@ -788,118 +618,37 @@ def activate_confirmed_proposal(
 
 
 def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | None = None) -> str:
+    proposal = (
+        confirmed_proposal if confirmed_proposal is not None else build_confirmed_proposal(args)
+    )
     project_root = args.project_root.resolve()
-    playbook_rationale = args.playbook_rationale.strip()
-    if not playbook_rationale:
-        raise ValueError("--playbook-rationale must not be empty")
-    playbook_loader = PlaybookLoader(project_root=project_root)
-    loaded = playbook_loader.load_model(args.playbook_id)
-    model = loaded.model
+    model = PlaybookLoader(project_root=project_root).load_model(args.playbook_id).model
     capability_choices = _capability_choices(args, model)
     skill_loader = SkillLoader(project_root=project_root)
-    candidates = confirmation_gate_steps(model)
-    mandatory_human_tasks = mandatory_confirmation_gate_steps(model)
-    user_required, driver_confirmable = _resolve_partition(
-        candidates=candidates,
-        user_values=args.user_required,
-        driver_values=args.driver_confirmable,
-    )
-
-    configured_locale = model.playbook.conversation_locale
-    effective_locale = args.effective_locale or configured_locale
-    if effective_locale.lower() == "auto":
-        raise ValueError("--effective-locale is required when the playbook locale is auto")
-    locale_source = args.locale_source or f"playbook:{args.playbook_id}"
-    strategic_context = _project_path(args.strategic_context, project_root)
-    phase_config = _project_path(args.phase_config, project_root)
-    mandate, _ = _load_strategic_context(strategic_context, args.issue_name)
-    phase_chain_overrides = _parse_phase_chains(
-        args.phase_chain,
-        step_names=set(model.steps),
-    )
-    phase_rationales = _parse_phase_rationales(
-        args.phase_rationale,
-        step_names=set(model.steps),
-    )
-    update_preflight = _validate_preflight(
-        args.update_preflight,
-        label="runtime update",
-        required={
-            "checked_at",
-            "status",
-            "installed_version",
-            "latest_version",
-            "decision",
-            "comparison_token",
-            "post_change_evidence",
-        },
-    )
-    catalog_preflight = _validate_preflight(
-        args.catalog_preflight,
-        label="catalog",
-        required={
-            "checked_at",
-            "status",
-            "comparison_token",
-            "effective_digests",
-            "decision",
-            "post_change_evidence",
-        },
-    )
-    effective_digests = catalog_preflight["effective_digests"]
-    if not isinstance(effective_digests, dict) or set(effective_digests) != {
-        "playbook",
-        "phase",
-        "agent",
-    }:
-        raise ValueError(
-            "catalog preflight effective_digests must cover playbook, phase, and agent"
-        )
+    locale = proposal["locales"]["conversation"]
+    effective_locale = locale["value"]
     locale_token = effective_locale.strip().lower().replace("_", "-")
     zh = locale_token == "zh-tw" or locale_token.startswith("zh-hant")
-    worktree = args.worktree if args.worktree else "current checkout"
-    delivery_contract = (
-        confirmed_proposal["delivery_contract"]
-        if confirmed_proposal is not None
-        else _kickoff_delivery_contract(args)
+    headers = ["欄位", "值"] if zh else ["Field", "Value"]
+    confirmation_prompt = (
+        "請確認上述完整契約；確認後 Driver 才會準備並啟動 workflow。"
+        if zh
+        else "Please confirm the complete contract above before the Driver prepares "
+        "and starts the workflow."
     )
-    closeout_plan = delivery_contract["closeout_plan"]
-
-    if zh:
-        title = f"## Kickoff Contract — {args.issue_name}"
-        summary_headers = ["欄位", "值"]
-        reactive_title = "### Reactive user handoffs"
-        reactive_headers = ["Intent", "Policy"]
-        confirmation_prompt = "請確認上述完整契約；確認後 Driver 才會準備並啟動 workflow。"
-    else:
-        title = f"## Kickoff Contract — {args.issue_name}"
-        summary_headers = ["Field", "Value"]
-        reactive_title = "### Reactive user handoffs"
-        reactive_headers = ["Intent", "Policy"]
-        confirmation_prompt = (
-            "Please confirm the complete contract above before the Driver prepares and "
-            "starts the workflow."
+    driver = proposal["driver"]
+    driver_rows: list[list[Any]] = [["driver.mode", driver["mode"]]]
+    if driver["mode"] == "attached":
+        driver_rows.append(["driver.poll_interval_seconds", driver["poll_interval_seconds"]])
+    elif driver["mode"] == "event-driven":
+        driver_rows.extend(
+            [
+                f"driver.clis[{index}]",
+                entry["cli"] if index == 0 else f"{entry['cli']}:{entry['model']}",
+            ]
+            for index, entry in enumerate(driver["clis"])
         )
-
-    summary_rows: list[list[Any]] = [
-        ["playbook_id", args.playbook_id],
-        ["playbook_selection_rationale", playbook_rationale],
-        ["effective_locale", f"{effective_locale} ({locale_source})"],
-        ["repository_content_locale", args.repository_content_locale],
-        ["issue_nature", args.issue_nature],
-        ["issue_scale", args.issue_scale],
-        ["risk_factors", ", ".join(args.risk_factor)],
-        ["assessment_rationale", args.assessment_rationale],
-        *[
-            row
-            for row in _driver_policy_rows(args)
-            if row[0] in {"driver.mode", "driver.poll_interval_seconds"}
-            or (row[0].startswith("driver.clis[") and row[0].endswith("]"))
-        ],
-        ["worktree", worktree],
-    ]
-    if args.driver_mode == "event-driven":
-        summary_rows.append(
+        driver_rows.append(
             ["通知", "第一個 CLI 沿用 session 模型；通知不代替使用者確認或授權。"]
             if zh
             else [
@@ -908,44 +657,52 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
                 "confirmation or permissions.",
             ]
         )
-    capability_contracts = []
-    for question, selected in capability_choices:
-        capability_contracts.append(
-            "\n\n".join(
-                [
-                    f"### {question.prompt}",
-                    _table(
-                        ["Setting", "Selected value", "Outcome", "Prepare arguments"],
-                        [
-                            [
-                                question.setting,
-                                json.dumps(selected.value, ensure_ascii=False),
-                                selected.outcome,
-                                shlex.join(selected.prepare_args),
-                            ]
-                        ],
-                    ),
-                ]
-            )
-        )
-    summary = _table(summary_headers, summary_rows)
-    preflight = _table(
-        summary_headers,
+    summary = _table(
+        headers,
         [
-            [
-                "CAFE",
-                f"{update_preflight['installed_version']} → {update_preflight['latest_version']}"
-                f"; {update_preflight['status']}; {update_preflight['decision']}",
-            ],
-            ["Catalog", catalog_preflight["status"]],
-            *[
-                [label, str(report["error"])]
-                for label, report in (("CAFE", update_preflight), ("Catalog", catalog_preflight))
-                if report.get("error")
-            ],
+            ["playbook_id", args.playbook_id],
+            ["effective_locale", f"{effective_locale} ({locale['source']})"],
+            ["repository_content_locale", args.repository_content_locale],
+            *driver_rows,
+            ["worktree", proposal["checkout"].get("path", "current checkout")],
         ],
     )
-
+    capability_contracts = [
+        "\n\n".join(
+            [
+                f"### {question.prompt}",
+                _table(
+                    ["Setting", "Selected value", "Outcome", "Prepare arguments"],
+                    [
+                        [
+                            question.setting,
+                            json.dumps(selected.value, ensure_ascii=False),
+                            selected.outcome,
+                            shlex.join(selected.prepare_args),
+                        ]
+                    ],
+                ),
+            ]
+        )
+        for question, selected in capability_choices
+    ]
+    update, catalog = _preflight_reports(args)
+    preflight_rows: list[list[Any]] = []
+    successful = {"current", "identical", "no_project_entries", "updated", "synchronized"}
+    for label, report in (("CAFE", update), ("Catalog", catalog)):
+        if report.get("error") or report["status"] not in successful:
+            details = [str(report["status"]), str(report["decision"])]
+            if label == "CAFE":
+                details.insert(0, f"{report['installed_version']} → {report['latest_version']}")
+            if report.get("error"):
+                details.append(str(report["error"]))
+            preflight_rows.append([label, "; ".join(details)])
+    preflight = (
+        ["### 檢查結果" if zh else "### Checks", _table(headers, preflight_rows)]
+        if preflight_rows
+        else []
+    )
+    chains = {phase["name"]: phase["chain"] for phase in proposal["phases"]}
     model_rows: list[list[Any]] = []
     for step_name, step in model.steps.items():
         resolve_execution_profile(
@@ -962,127 +719,50 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
         if step.assignee_type not in {"agent", "hybrid"}:
             model_rows.append([step_name, "not agent-executed", "—"])
             continue
-        if step_name in phase_chain_overrides:
-            chain = phase_chain_overrides[step_name]
-        else:
-            chain, _ = _resolve_configured_chain(
-                step_name=step_name,
-                role=step.role,
-                phase_config=phase_config,
-            )
-        primary = f"{chain[0][0]}:{chain[0][1]}"
-        fallbacks = " → ".join(f"{cli}:{model_name}" for cli, model_name in chain[1:]) or "—"
-        rationale = phase_rationales.get(step_name)
-        if rationale is None:
-            raise ValueError(f"missing phase rationale for agent-executed step: {step_name}")
-        model_rows.append([step_name, primary, fallbacks])
-
-    unused_rationales = set(phase_rationales) - {
-        name for name, step in model.steps.items() if step.assignee_type in {"agent", "hybrid"}
-    }
-    if unused_rationales:
-        raise ValueError(
-            "phase rationale targets non-agent step: " + ", ".join(sorted(unused_rationales))
+        chain = chains[step_name]
+        model_rows.append(
+            [
+                step_name,
+                f"{chain[0]['cli']}:{chain[0]['model']}",
+                " → ".join(f"{entry['cli']}:{entry['model']}" for entry in chain[1:]) or "—",
+            ]
         )
-
-    agent_phases = [
-        name for name, step in model.steps.items() if step.assignee_type in {"agent", "hybrid"}
-    ]
-    eligible_phases = set(candidates) | set(mandatory_human_tasks)
-    proactive_decisions = _proactive_review_decisions(
-        args.proactive_review_decision,
-        agent_phases=agent_phases,
-        eligible_phases=eligible_phases,
-    )
-    review_overrides = {value.partition("=")[0].strip() for value in args.proactive_review_decision}
+    confirmation = proposal["confirmation_contract"]
+    driver_confirmable = set(confirmation["driver_confirmable"])
+    eligible = set(confirmation_gate_steps(model)) | set(mandatory_confirmation_gate_steps(model))
+    proactive_decisions = proposal["proactive_review"]["phase_decisions"]
     proactive_rows: list[list[Any]] = []
     for decision in proactive_decisions:
         phase = decision["phase"]
-        if phase not in eligible_phases:
+        if phase not in eligible:
             continue
         if decision["decision"] == "not_required" and phase in driver_confirmable:
-            clean_action = "Driver may confirm after ordinary evidence verification"
+            action = "Driver may confirm after ordinary evidence verification"
         elif decision["decision"] == "not_required":
-            clean_action = "user confirmation remains required; no proactive review"
+            action = "user confirmation remains required; no proactive review"
         elif phase in driver_confirmable:
-            clean_action = "Driver may confirm and advance after clean review"
+            action = "Driver may confirm and advance after clean review"
         else:
-            clean_action = "user confirmation remains required"
-        proactive_rows.append(
-            [
-                phase,
-                decision["decision"],
-                decision["rationale"] if phase in review_overrides else "—",
-                clean_action,
-            ]
-        )
-
-    progress_contract = confirmed_proposal or {
-        "confirmation_contract": {
-            "user_required": list(user_required),
-            "driver_confirmable": list(driver_confirmable),
-            "mandatory_human_stops": list(mandatory_human_tasks),
-        },
-        "proactive_review": {"phase_decisions": proactive_decisions},
-    }
-    pending_reviews = {
-        decision["phase"]: "pending"
-        for decision in proactive_decisions
-        if decision["decision"] == "required"
-    }
-    workflow_progress = render_progress(
+            action = "user confirmation remains required"
+        proactive_rows.append([phase, decision["decision"], action])
+    progress = render_progress(
         playbook=model,
-        contract=progress_contract,
+        contract=proposal,
         locale=effective_locale,
         driver_state={
-            "proactive_review": pending_reviews,
+            "proactive_review": {
+                decision["phase"]: "pending"
+                for decision in proactive_decisions
+                if decision["decision"] == "required"
+            },
             "deliver": "pending",
             "cleanup": "pending",
         },
     )
-
-    reactive = _table(
-        reactive_headers,
-        [
-            ["need_clarification", args.need_clarification],
-            ["need_permission", args.need_permission],
-            ["alignment_checkpoint", args.alignment_checkpoint],
-        ],
-    )
-
-    axes = mandate.get("axes") or {}
-    mandate_rows = []
-    if isinstance(axes, dict):
-        for axis, policy in axes.items():
-            if isinstance(policy, dict):
-                details = {key: value for key, value in policy.items() if key != "level"}
-                mandate_rows.append([axis, policy.get("level", "—"), _fact(details)])
-            else:
-                mandate_rows.append([axis, policy, "—"])
-    out_of_mandate = mandate.get("out_of_mandate") or []
-    if isinstance(out_of_mandate, list):
-        out_of_mandate = ", ".join(str(item) for item in out_of_mandate)
-    mandate_summary = _table(
-        summary_headers,
-        [
-            ["preset", mandate.get("preset", "—")],
-            ["out_of_mandate", out_of_mandate or "[]"],
-            *[
-                [key, _fact(value)]
-                for key, value in mandate.items()
-                if key not in {"preset", "out_of_mandate", "axes", "playbook_id"}
-            ],
-        ],
-    )
-    closeout_rows: list[list[Any]] = [
-        ["deliver", json.dumps(closeout_plan["deliver"], ensure_ascii=False)],
-        ["cleanup", json.dumps(closeout_plan["cleanup"], ensure_ascii=False)],
-    ]
-    mismatch_ids = catalog_preflight.get("content_mismatch_entry_ids", [])
-    if not isinstance(mismatch_ids, list) or not all(
-        isinstance(entry_id, str) and entry_id.strip() for entry_id in mismatch_ids
-    ):
-        raise ValueError("catalog preflight content_mismatch_entry_ids must be a string list")
+    delivery = proposal["delivery_contract"]
+    closeout = delivery["closeout_plan"]
+    mismatch_ids = catalog.get("content_mismatch_entry_ids", [])
+    catalog_reminder = []
     if mismatch_ids:
         catalog_reminder = [
             "### 可選的 Global catalog 同步" if zh else "### Optional Global catalog sync",
@@ -1099,57 +779,52 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
                 "synchronization separately if desired."
             ),
         ]
-    else:
-        catalog_reminder = []
-
     return "\n\n".join(
         [
-            title,
+            f"## Kickoff Contract — {args.issue_name}",
+            "### Delivery Contract",
+            _table(
+                headers,
+                [
+                    [key, _fact(value)]
+                    for key, value in delivery.items()
+                    if key not in {"closeout_plan", "schema_version"}
+                ],
+            ),
+            "Implementation direction is advisory; alternatives that satisfy scope, acceptance "
+            "criteria, permissions and constraints do not require reconfirmation.",
+            "### Execution settings",
             summary,
+            *capability_contracts,
+            *preflight,
+            "### Phase model chains",
+            _table(["Phase", "Primary", "Fallbacks"], model_rows),
+            "### Proactive review at scheduled pauses",
+            _table(["Phase", "Decision", "Clean result"], proactive_rows),
+            "### Reactive user handoffs",
+            _table(
+                ["Intent", "Policy"],
+                [[key, value] for key, value in proposal["reactive_user_handoffs"].items()],
+            ),
             "### Deliver and cleanup plan to confirm",
-            _table(summary_headers, closeout_rows),
+            _table(
+                headers,
+                [
+                    [stage, json.dumps(closeout[stage], ensure_ascii=False)]
+                    for stage in ("deliver", "cleanup")
+                ],
+            ),
             (
                 "確認後依序執行上述命令；更改命令、順序、目標或影響時另行確認。"
                 if zh
                 else "Confirmation authorizes these commands in order; changes to commands, order, "
                 "targets or effects require reconfirmation."
             ),
-            "### Delivery Contract",
-            _table(
-                summary_headers,
-                [
-                    [
-                        key,
-                        _fact(value),
-                    ]
-                    for key, value in delivery_contract.items()
-                    if key not in {"closeout_plan", "schema_version", "constraints"}
-                ]
-                + [[key, _fact(value)] for key, value in delivery_contract["constraints"].items()],
-            ),
-            *capability_contracts,
-            "### 檢查結果" if zh else "### Checks",
-            preflight,
-            "### Phase model chains — driver-assessed",
-            _table(
-                ["Phase", "Primary", "Fallbacks"],
-                model_rows,
-            ),
-            "### Proactive review at scheduled pauses",
-            _table(
-                ["Phase", "Decision", "Rationale", "Clean result"],
-                proactive_rows,
-            ),
-            reactive_title,
-            reactive,
-            "### Mandate",
-            mandate_summary,
-            _table(["Axis", "Level", "Boundaries"], mandate_rows),
             *catalog_reminder,
             confirmation_prompt,
             "### Workflow progress",
             "```text",
-            workflow_progress,
+            progress,
             "```",
         ]
     )

@@ -116,6 +116,11 @@ mandate:
 Resolve an explicit issue override over `mandate`, then ground the decision in
 the named documents and latest accepted issue artifacts.
 
+Do not copy the mandate table, preset, axes, grounds or notes into the Driver
+contract. Include only applicable task-specific authorizations in `permissions`
+and actual fixed limits in `constraints`; removal of the duplicate table does
+not grant broader authority or erase a user's restriction.
+
 - For questions: classify by axis and level. A contradiction or extension of
   strategy requires escalation. Missing grounds require document co-creation;
   do not invent strategy.

@@ -60,8 +60,8 @@ and catalog sources are not ranking signals. Evaluate:
 Do not select a simpler graph merely because the code change is small when a
 repository rule or acceptance boundary requires an omitted phase. Do not select
 a larger graph merely because it exists; every added phase needs issue or
-repository evidence. Report the closest rejected candidates with concrete,
-evidence-linked reasons. If no eligible candidate is sufficient, state the
+repository evidence. Compare the closest alternatives internally; explain a
+material tradeoff when the user needs to choose. If no eligible candidate is sufficient, state the
 uncovered requirements and ask the user for an explicit decision instead of
 choosing a familiar or larger playbook.
 
@@ -81,19 +81,17 @@ Select a QA-capable candidate when any of these apply:
 Ordinary automated tests do not by themselves require a QA phase. A non-QA
 candidate is acceptable only when develop verification plus independent review
 fully covers the acceptance boundary and no repository policy requires another
-owner. Record that justification rather than silently omitting QA.
+owner. Make that judgment before proposing the graph; no rationale field is required.
 
 When both a base and QA variant are plausible, compare their graphs directly.
 Prefer the QA variant when the evidence above applies; otherwise prefer the base
-variant and explain why its verification and review phases are sufficient.
+variant when its verification and review phases are sufficient.
 
 ## Record and reconfirm
 
-The kickoff contract must include `playbook_selection_rationale` containing:
-
-- the authoritative source or the repository and issue evidence used;
-- the required phase responsibilities, including the QA decision;
-- the closest rejected candidates and why each was rejected.
+The kickoff confirms the selected playbook, not a selection report. Keep the
+repository assessment and rejected alternatives out of the contract. Explain
+them on request or when a material tradeoff requires a user decision.
 
 If evidence cannot safely distinguish the candidates and the difference affects
 scope, cost, confirmation stops, external effects, or acceptance confidence, ask

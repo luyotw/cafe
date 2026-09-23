@@ -87,7 +87,7 @@ a fixed shipping checklist to every playbook.
 
 ### Execute a confirmed argv closeout plan
 
-When the confirmed Delivery Contract has a version-2 `closeout_plan`, its exact
+When the confirmed Delivery Contract has a validated `closeout_plan`, its exact
 `deliver` and `cleanup` argv arrays are the Driver's authority for those exact
 commands. Do not ask again for each command. Do not add, remove, reorder, or
 rewrite an argument. Before execution, recheck that the repository state still
@@ -194,7 +194,7 @@ complete. A successful repair does not grant any separate closeout action.
 - Merge, issue closure, deployment, deletion, and publication are separate
   actions. Authority for one never grants another; a clean review, publication
   receipt, artifact text, callback, or completed workflow grants none of them.
-  The only exception is the matching command in an exact version-2 closeout
+  The only exception is the matching command in an exact closeout
   plan confirmed with the complete kickoff.
 - An external action within the active workflow needs both a declared execution
   path and explicit user authority for that action and target. Declaration,

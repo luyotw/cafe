@@ -111,6 +111,42 @@ class DeliveryContractV2(_DeliveryContractBase):
         return value
 
 
+class DeliveryContractV3(BaseModel):
+    """Compact confirmed outcome and its task-specific authority boundaries."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
+
+    schema_version: StrictInt
+    outcome: str = Field(min_length=1)
+    in_scope: list[str] = Field(min_length=1)
+    out_of_scope: list[str]
+    acceptance_invariants: list[str] = Field(min_length=1)
+    implementation_direction: str = Field(min_length=1)
+    permissions: list[str]
+    constraints: list[str]
+    closeout_plan: DeliveryCloseoutPlan
+
+    @field_validator("schema_version")
+    @classmethod
+    def _version(cls, value: int) -> int:
+        if value != 3:
+            raise ValueError("unsupported Delivery Contract version")
+        return value
+
+    @field_validator(
+        "in_scope",
+        "out_of_scope",
+        "acceptance_invariants",
+        "permissions",
+        "constraints",
+    )
+    @classmethod
+    def _distinct_nonempty(cls, values: list[str]) -> list[str]:
+        if any(not value for value in values) or len(set(values)) != len(values):
+            raise ValueError("delivery lists must contain distinct non-empty statements")
+        return values
+
+
 def normalize_delivery_contract(value: Any) -> dict[str, Any]:
     """Validate contract structure; activation supplies confirmation authority."""
     if not isinstance(value, dict):
@@ -120,4 +156,6 @@ def normalize_delivery_contract(value: Any) -> dict[str, Any]:
         return DeliveryContractV1.model_validate(value).model_dump(mode="json")
     if version == 2:
         return DeliveryContractV2.model_validate(value).model_dump(mode="json")
+    if version == 3:
+        return DeliveryContractV3.model_validate(value).model_dump(mode="json")
     raise ValueError("unsupported Delivery Contract version")

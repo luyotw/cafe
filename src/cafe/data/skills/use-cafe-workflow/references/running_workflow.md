@@ -55,8 +55,10 @@ prepared workflow and persisted baton for both start and resume; never add
 `--start-step` for an ordinary resume.
 
 Rebuild `--fresh-facts` from the current bounded runtime and catalog checks as
-an object containing `semantic_facts` and `material_assumptions`; do not copy
-the persisted preflight merely to make it match. The wrapper validates that
+an object containing `semantic_facts.effective_policy`, rebuilt from the current
+complete Driver policy. Runtime/catalog diagnostics stay outside the contract;
+do not add `material_assumptions` or copy stale policy merely to make it match.
+The wrapper validates that
 payload through `evaluate_driver_entry` and rejects `material_change` and
 `unknown` before launching any attached, unattended, or event-driven worker.
 Continue only after the existing contract reconfirmation path establishes
@@ -186,7 +188,7 @@ infer, or choose a user answer for a mandatory, `user_required`, permission, or
 capability task, nor grant permissions or capabilities. A `need_clarification`
 task whose confirmed reactive policy is `driver_confirmable` may be answered
 only when the complete answer stays within the confirmed Delivery Contract,
-its existing authority or `allowed_variations`, and triggers no deviation.
+its scope, explicit constraints and existing authority, and triggers no deviation.
 Contract changes, new permission or external-effect authority, mandatory
 gates, reserved product or strategy decisions, and uncertainty about whether
 authority already exists remain user-owned. Authorized reversible technical
@@ -438,7 +440,9 @@ Before Driver-owned work, the entry adapter returns the confirmed
 user decisions and current bounded evidence; never echo persisted facts merely
 to force a freshness match. Reuse the same product contract across providers.
 A missing, malformed, stale or digest-mismatched contract stops Driver-owned
-work for the existing reconfirmation handoff.
+work for the existing reconfirmation handoff. An older full contract must be
+explicitly reconfirmed before becoming a compact contract; do not drop its
+restrictions or turn its advisory inputs into new authority during conversion.
 
 At each existing eligible output confirmation, use the Delivery comparison in
 `handoffs_and_alignment.md`. Derive the step and artifact names from the loaded

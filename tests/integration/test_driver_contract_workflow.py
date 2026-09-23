@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import importlib.util
 from copy import deepcopy
 from datetime import datetime, timezone
-import importlib.util
 from pathlib import Path
 
 import pytest
@@ -16,7 +16,6 @@ from cafe.driver import (
     adopt_legacy_contract,
 )
 from tests.fixtures.delivery_contract import delivery_contract
-
 
 PROJECT_ROOT = Path(__file__).parents[2]
 ENTRY_SCRIPT = (
@@ -44,7 +43,6 @@ def _proposal() -> dict[str, object]:
         {
             "name": "develop",
             "chain": [{"cli": "codex", "model": "exact"}],
-            "rationale": "Confirmed implementation chain.",
         },
     ]
     proposal: dict[str, object] = {
@@ -62,25 +60,15 @@ def _proposal() -> dict[str, object]:
             "need_permission": "user_required",
             "alignment_checkpoint": "user_required",
         },
-        "mandate": {"source": "test", "boundaries": ["issue"]},
-        "issue_assessment": {
-            "nature": "feature",
-            "scale": "small",
-            "risks": [],
-            "rationale": "test",
-        },
         "phases": phases,
         "proactive_review": {
             "phase_decisions": [
-                {"phase": "develop", "decision": "not_required", "rationale": "No schedule."},
+                {"phase": "develop", "decision": "not_required"},
             ]
         },
         "driver": {"mode": "unattended"},
         "checkout": {"kind": "current_checkout"},
-        "semantic_facts": {},
-        "material_assumptions": {"permissions": ["local"], "provider": "codex"},
     }
-    proposal["semantic_facts"] = _fresh_policy_facts(proposal)
     return proposal
 
 
@@ -90,8 +78,6 @@ def _fresh_policy_facts(proposal: dict[str, object]) -> dict[str, object]:
         "locales",
         "confirmation_contract",
         "reactive_user_handoffs",
-        "mandate",
-        "issue_assessment",
         "phases",
         "proactive_review",
         "driver",
@@ -120,8 +106,7 @@ def test_resume_and_cold_takeover_reach_the_same_safe_authority_decision(tmp_pat
     issue_dir = tmp_path / "issue"
     proposal = _activate(issue_dir)
     facts = {
-        "semantic_facts": proposal["semantic_facts"],
-        "material_assumptions": proposal["material_assumptions"],
+        "semantic_facts": _fresh_policy_facts(proposal),
         "metadata": {"cache_key": "changed", "checked_at": "later"},
     }
     adapter = _entry_adapter()
