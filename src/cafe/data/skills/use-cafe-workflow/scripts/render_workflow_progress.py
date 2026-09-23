@@ -518,7 +518,14 @@ def render_progress(
             label += " · " + str(text["iteration"]).format(iteration=iterations[step])
         block = [_line(phase_statuses[step], label, status_text)]
         if step in required_reviews:
-            review_status = reviews.get(step, "unknown")
+            review_status = reviews.get(
+                step,
+                (
+                    "pending"
+                    if phase_statuses[step] in {"pending", "in_progress"}
+                    else "unknown"
+                ),
+            )
             review_label = (
                 f"{step}：{text['review']}" if language == "zh" else f"{step}: {text['review']}"
             )

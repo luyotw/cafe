@@ -62,7 +62,10 @@ Allowed states are `pending`, `in_progress`, `completed`, `returned`,
 Both `deliver` and `cleanup` are required for every established-workflow render.
 Supply `proactive_review` only for phases whose confirmed
 `proactive_review.phase_decisions` entry is `required`. Omitted displayed
-proactive-review state is `unknown`, including after a session boundary. The
+proactive-review state is `pending` while its phase is pending or in progress,
+because that checkpoint has not been reached. Once the phase has otherwise
+finished, an omitted review state is `unknown`, including after a session
+boundary, because the renderer cannot prove the checkpoint outcome. The
 JSON cannot set phase or HumanTask status, confirmation ownership, return
 evidence, or gate outcomes. It is never persisted and grants no confirmation,
 capability, or external-operation authority.

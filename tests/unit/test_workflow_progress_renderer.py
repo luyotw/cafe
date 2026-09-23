@@ -192,6 +192,64 @@ def test_renderer_preserves_custom_phase_names_and_localizes_only_annotations() 
     assert "資料盤點" in rendered and "publish-draft" in rendered
 
 
+def test_omitted_review_is_pending_until_its_phase_finishes(tmp_path: Path) -> None:
+    issue_dir = tmp_path / "issue"
+    issue_dir.mkdir()
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "current_step": "active",
+                "events": [
+                    {
+                        "event_type": "step_started",
+                        "step": "completed",
+                        "data": {"step": "completed", "attempt": 1},
+                    },
+                    {
+                        "event_type": "step_completed",
+                        "step": "completed",
+                        "data": {"step": "completed", "attempt": 1},
+                    },
+                    {
+                        "event_type": "step_started",
+                        "step": "active",
+                        "data": {"step": "active", "attempt": 1},
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    phases = ("completed", "active", "future")
+
+    rendered = _module().render_progress(
+        playbook={
+            "playbook": {"id": "review-defaults"},
+            "steps": {
+                "completed": {"on": {"await_agent": "active"}},
+                "active": {"on": {"await_agent": "future"}},
+                "future": {"on": {"await_agent": "_done"}},
+            },
+        },
+        contract={
+            "proactive_review": {
+                "phase_decisions": [
+                    {"phase": phase, "decision": "required"} for phase in phases
+                ]
+            }
+        },
+        locale="zh-TW",
+        issue_dir=issue_dir,
+        driver_state={"deliver": "pending", "cleanup": "pending"},
+    )
+
+    assert "？ completed：driver 主動審查 · 狀態未知" in rendered
+    assert "○ active：driver 主動審查 · 待執行" in rendered
+    assert "○ future：driver 主動審查 · 待執行" in rendered
+    assert "？ active：driver 主動審查" not in rendered
+    assert "？ future：driver 主動審查" not in rendered
+
+
 def test_renderer_uses_current_iteration_and_revise_outcome_as_checkpoint_state(
     tmp_path: Path,
 ) -> None:
