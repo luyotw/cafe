@@ -652,6 +652,8 @@ class GenericWorkflowStepExecutor(Phase):
                 extra_prompt,
             )
 
+        from cafe.core.checklist import pending_checklist_continuation
+        self._checklist_continuation = pending_checklist_continuation(self.issue_dir, blackboard_state, step_name)
         self._persist_agent_invocation_marker(
             iteration_dir=iteration_dir,
             agent_invoked=False,
@@ -771,9 +773,7 @@ class GenericWorkflowStepExecutor(Phase):
         outbound_validation_required = initial_outbound_validation[2]
         checklist_validation_failed = False
         produced_todo_validation_failed = False
-        if agent_was_invoked and (
-            checklist_validation_required or outbound_validation_required
-        ):
+        if checklist_validation_required or (agent_was_invoked and outbound_validation_required):
             resolved_user_input = self._get_resolved_iteration_user_input(step_name)
 
             def validate_output_contract(
@@ -798,7 +798,12 @@ class GenericWorkflowStepExecutor(Phase):
             def validate_completion():
                 return self._validate_and_retry_checklist_completion(
                     agent_name=agent_name,
-                    prompt=last_prompt[0] if last_prompt else "",
+                    prompt=last_prompt[0] if last_prompt else self.generic_phase.build_prompt(
+                        skill_name=skill_name, skill_invocation=skill_invocation,
+                        shared_skill_invocations=shared_skill_invocations, context=context,
+                        output_file=output_file, checklist_file=checklist_file,
+                        questions_xml_file=questions_xml_file,
+                    ),
                     user_input=resolved_user_input,
                     valid_intents=valid_intents,
                     allowed_tools=allowed_tools,
@@ -827,7 +832,7 @@ class GenericWorkflowStepExecutor(Phase):
                 )[0]
 
         store = BlackboardStore(self.issue_dir)
-        if produced_todo_validation_failed and not is_hybrid_portion:
+        if checklist_validation_failed and not is_hybrid_portion:
             store.update_handoff_contract(
                 blackboard_state,
                 from_step=step_name,
@@ -919,7 +924,7 @@ class GenericWorkflowStepExecutor(Phase):
         if (
             status_code is not None
             and not is_hybrid_portion
-            and not produced_todo_validation_failed
+            and not checklist_validation_failed
         ):
             # If the agent already wrote a valid baton (next_step.txt),
             # skip the status-code-driven baton write so we don't overwrite
@@ -940,6 +945,19 @@ class GenericWorkflowStepExecutor(Phase):
                 step_name=step_name,
                 status_code=effective_status.value,
             )
+
+        continuation = getattr(self, "_checklist_continuation", None)
+        if continuation and checklist_validation_required and not checklist_validation_failed:
+            target, task_id = continuation
+            is_done = target == "_done"
+            store.update_handoff_contract(
+                blackboard_state, from_step=step_name,
+                to_owner=HandoffOwner.DONE if is_done else HandoffOwner.AGENT,
+                to_step="done" if is_done else target,
+                intent=HandoffIntent.WORKFLOW_COMPLETE if is_done else HandoffIntent.AWAIT_AGENT,
+                source="workflow.checklist_continuation",
+            )
+            store.record_event(blackboard_state, "checklist_continuation_completed", {"step": step_name, "human_task_id": task_id})
 
         if captured_hybrid_baton is not None:
             events.append(
@@ -2592,6 +2610,21 @@ class GenericWorkflowStepExecutor(Phase):
         ]
         metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    def _rebuild_checklist_for_iteration(self, iteration: int) -> None:
+        if self.phase_name not in self.playbook.get("steps", {}):
+            return super()._rebuild_checklist_for_iteration(iteration)
+        step_def = self.playbook["steps"][self.phase_name]
+        state = BlackboardStore(self.issue_dir).load_or_create(self.phase_name)
+        directory = self._get_iteration_dir(iteration)
+        output = self._get_versioned_file_path(self.phase_name, iteration, self.phase_dir)
+        agent = self._resolve_agent_name(self.phase_name, step_def)
+        context = self._build_context(step_name=self.phase_name, step_def=step_def,
+                                      blackboard_state=state, agent_name=agent, output_file=output)
+        self._generate_checklist(step_name=self.phase_name, skill_name=self._resolve_skill_name(step_def, iteration),
+                                 agent_name=agent, step_def=step_def, blackboard_state=state,
+                                 checklist_file=directory / "checklist.md", output_file=output,
+                                 questions_xml_file=directory / "questions.xml", runtime_context=context)
+
     @staticmethod
     def _add_causal_todo_artifact(
         artifacts: Dict[str, Any],
@@ -3442,9 +3475,16 @@ class GenericWorkflowStepExecutor(Phase):
                 hybrid_portion or contract.to_step != step_name
             )
             if valid_completion_baton:
+                if contract.intent == HandoffIntent.NO_CHANGES_NEEDED and contract.to_owner != HandoffOwner.USER:
+                    return True
                 return completion_requires_checklist(baton_intent=contract.intent.value)
         except (OSError, json.JSONDecodeError, ValueError, BatonRejected):
             pass
+        if status_code == PhaseStatusCode.NO_CHANGES_NEEDED:
+            step_def = self.playbook["steps"][step_name]
+            target = step_def.get("on", {}).get("no_changes_needed")
+            if not self.interactive and not self._declared_human_task_id(step_def, "no_changes_needed") and target in self.playbook.get("steps", {}):
+                return True
         return completion_requires_checklist(
             status_code=status_code.value if status_code is not None else None
         )

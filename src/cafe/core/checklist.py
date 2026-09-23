@@ -141,3 +141,27 @@ def load_materialization(path: Path) -> ChecklistMaterialization | None:
         return ChecklistMaterialization(content, gates, tuple(record["projections"]), record["overlays"])
     except (KeyError, TypeError, OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError("Invalid effective checklist metadata") from exc
+
+
+def pending_checklist_continuation(issue_dir, state, step):
+    """Recover a no-change gate continuation from its completed durable task."""
+    from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
+    consumed = set()
+    for event in reversed(state.events):
+        if event.event_type == "checklist_continuation_completed":
+            consumed.add(event.data.get("human_task_id"))
+        if event.event_type != "human_task_completed" or event.data.get("step") != step:
+            continue
+        target = event.data.get("checklist_continuation")
+        task_id = event.data.get("human_task_id")
+        if not target or not task_id or task_id in consumed:
+            continue
+        records = HumanTaskRecordStore(issue_dir)
+        task = records.get_task(task_id)
+        result = records.get_result(task_id)
+        if (task.workflow_id != state.workflow_id or task.step != step
+                or task.trigger != "no_changes_needed" or task.status != HumanTaskStatus.COMPLETED
+                or result is None or result.payload.get("continuation") != event.data.get("decision_continuation")):
+            raise ValueError("Checklist continuation does not match its completed HumanTask")
+        return target, task_id
+    return None

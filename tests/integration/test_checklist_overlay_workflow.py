@@ -270,3 +270,163 @@ def test_all_contributors_require_distinct_live_todo_evidence(tmp_path, monkeypa
     if mutation in {"content", "path", "version", "file", "commit"}:
         resumed = generate(executor, step, state, directory, preserve_completed_items=True)
         assert "[x]" not in resumed
+
+
+class JourneyAgent:
+    """Only the external agent boundary is substituted in lifecycle journeys."""
+    def __init__(self, executor, actions):
+        from types import SimpleNamespace
+        from cafe.core.types import AgentCLI
+        self.executor = executor
+        self.actions = actions
+        self.calls = 0
+        self.prompts = []
+        self.agent = SimpleNamespace(config=SimpleNamespace(cli=AgentCLI.CODEX, session_id=None, model=None))
+
+    def get_agent(self, name):
+        return self.agent
+
+    def execute(self, name, prompt, **kwargs):
+        from cafe.core.types import TokenUsage
+        self.prompts.append(prompt)
+        action = self.actions[min(self.calls, len(self.actions) - 1)]
+        self.calls += 1
+        response = action(self.executor._get_iteration_dir(self.executor.iteration))
+        return response, TokenUsage(), [], [], [], None
+
+
+def lifecycle_fixture(tmp_path, monkeypatch, *, real_develop=False):
+    root = tmp_path / ".cafe/skills"
+    if real_develop:
+        write_skill(root, "primary")
+    if not real_develop:
+        write_skill(root, "primary", {"checklist": {"variants": [{"sections": [{"reference": "work.md"}]}]}}, {"work.md": "[ ] Primary\n"})
+    write_skill(root, "policy", overlay(), {"review.md": "[ ] Independent policy\n"})
+    executor, step, state, directory = executor_fixture(tmp_path, monkeypatch, primary="cafe-develop" if real_develop else "primary")
+    step.update({"output_artifact": "result", "behavior": {"completion": "status_code"}, "on": {"await_agent": "inspect", "no_changes_needed": "inspect", "need_clarification": "assemble", "need_permission": "assemble", "manual_handoff": "inspect"}})
+    executor.playbook["steps"]["inspect"] = {"skill": "primary", "role": "developer", "on": {"await_agent": "_done"}}
+    git_evidence(tmp_path)
+    (tmp_path / ".cafe/phases.yaml").write_text("assemble:\n  name: David\n  clis: [{cli: codex, model: test}]\n")
+    return executor, step, state, directory
+
+
+@pytest.mark.parametrize("route", ["baton", "legacy", "automatic_no_change"])
+@pytest.mark.parametrize("repair", [False, True])
+def test_success_routes_require_overlay_before_transition(tmp_path, monkeypatch, route, repair):
+    """I06/U13: actual executor transitions require all effective gates."""
+    import json
+    from cafe.core.blackboard import BlackboardStore
+    executor, step, state, directory = lifecycle_fixture(tmp_path, monkeypatch)
+    def finish(directory):
+        path = directory / "checklist.md"
+        content = path.read_text().replace("[ ] Primary", "[x] Primary")
+        if repair and executor.agent_manager.calls > 1:
+            content = content.replace("[ ]", "[x]")
+        path.write_text(content)
+        (directory / "output.md").write_text("# Result\n")
+        if route == "baton":
+            (executor.issue_dir / "next_step.txt").write_text(json.dumps({"version": 1, "to_owner": "agent", "to_step": "inspect", "intent": "await_agent"}))
+            return ""
+        return "no_changes_needed" if route == "automatic_no_change" else "confirmed"
+    executor.agent_manager = JourneyAgent(executor, [finish])
+    result = executor.execute_step("assemble", step, state)
+    assert result.artifact_ready == repair
+    assert executor.agent_manager.calls == (2 if repair else 4)
+    handoff = BlackboardStore(executor.issue_dir).load_or_create("assemble").handoff_contract
+    if repair:
+        assert handoff.to_step == "inspect"
+    else:
+        assert handoff is None or handoff.to_step != "inspect"
+
+
+@pytest.mark.parametrize("intent", ["need_clarification", "need_permission", "manual_handoff"])
+def test_help_routes_do_not_require_overlay_completion(tmp_path, monkeypatch, intent):
+    """I07/U13: incomplete gates leave existing help/manual routes usable."""
+    import json
+    executor, step, state, directory = lifecycle_fixture(tmp_path, monkeypatch)
+    def help_request(directory):
+        (directory / "output.md").write_text("Help needed\n")
+        (executor.issue_dir / "next_step.txt").write_text(json.dumps({"version": 1, "to_owner": "agent" if intent == "manual_handoff" else "user", "to_step": "inspect" if intent == "manual_handoff" else "user", "intent": intent}))
+        return ""
+    executor.agent_manager = JourneyAgent(executor, [help_request])
+    result = executor.execute_step("assemble", step, state)
+    assert executor.agent_manager.calls == 1
+    assert not any(event["type"] == "checklist_validation_failed" for event in result.events)
+
+
+@pytest.mark.parametrize("metadata_state", ["intact", "missing", "corrupt"])
+@pytest.mark.parametrize("decision_target", ["inspect", "assemble"])
+def test_real_no_change_human_task_returns_to_finish_gates_without_reasking(tmp_path, monkeypatch, metadata_state, decision_target):
+    """I08: durable agreement cannot send unfinished Develop overlays to its target."""
+    from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
+    from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
+    from cafe.ui.human_tasks import apply_human_task_payload, resolve_step_human_task
+    executor, step, state, directory = lifecycle_fixture(tmp_path, monkeypatch, real_develop=True)
+    step["human_tasks"] = [{"trigger": "no_changes_needed", "task_id": "no-change-decision", "outcomes": {"agree": decision_target, "disagree": "assemble"}}]
+    step["hooks"] = {"prepare_input": ["UserInputCollector"], "after_execute": ["NoChangesNeededHandler"]}
+    store = BlackboardStore(executor.issue_dir)
+    plan = executor.issue_dir / "blueprint.md"
+    plan.write_text("## Todo List\nNo actionable work.\n")
+    store.set_artifact(state, "plan", str(plan))
+    def no_change(directory):
+        (directory / "output.md").write_text("No implementation changes are necessary.\n")
+        return "no_changes_needed"
+    executor.agent_manager = JourneyAgent(executor, [no_change])
+    from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
+    first = BlackboardWorkflowRuntime(issue_dir=executor.issue_dir, playbook=executor.playbook, executor=executor.execute_step).run(start_step="assemble")
+    assert not first.completed
+    assert executor.agent_manager.calls == 1
+    state = store.load_or_create("assemble")
+    records = HumanTaskRecordStore(executor.issue_dir)
+    task = records.tasks()[0]
+    if metadata_state == "missing":
+        (directory / "iteration.json").unlink()
+    elif metadata_state == "corrupt":
+        (directory / "iteration.json").write_text('{"effective_checklist": {"version": 999}}')
+    applied = apply_human_task_payload(issue_dir=executor.issue_dir, playbook_data=executor.playbook, blackboard=state, from_step="assemble", trigger="no_changes_needed", raw_payload={"task": task.policy_id, "human_task_id": task.id, "decision": "agree"}, source="test")
+    assert applied.target == "assemble"
+    assert records.get_task(task.id).status is HumanTaskStatus.COMPLETED
+    def finish(directory):
+        path = directory / "checklist.md"
+        path.write_text(path.read_text().replace("[ ]", "[x]"))
+        (directory / "output.md").write_text("No changes. All applicable review gates completed.\n")
+        return "confirmed"
+    executor.agent_manager = JourneyAgent(executor, [finish])
+    result = executor.execute_step("assemble", step, store.load_or_create("assemble"))
+    assert result.artifact_ready
+    assert executor.agent_manager.calls == 1
+    assert store.load_or_create("assemble").handoff_contract.to_step == "inspect"
+    assert len(records.tasks()) == 1
+
+
+def test_exact_duplicate_blocks_keep_independent_completion_on_resume(tmp_path, monkeypatch):
+    """U09/U10: identical complete blocks still have distinct source identities."""
+    root = tmp_path / ".cafe/skills"
+    write_skill(root, "primary", {"checklist": {"variants": [{"sections": [{"reference": "work.md"}]}]}}, {"work.md": "[ ] Same gate\n"})
+    write_skill(root, "policy", overlay(), {"review.md": "[ ] Same gate\n"})
+    executor, step, state, directory = executor_fixture(tmp_path, monkeypatch)
+    content = generate(executor, step, state, directory)
+    first, last = content.rsplit("[ ] Same gate", 1)
+    (directory / "checklist.md").write_text(first + "[x] Same gate" + last)
+    resumed = generate(executor, step, state, directory, preserve_completed_items=True)
+    assert resumed.split("## Checklist source: policy")[0].count("[x]") == 0
+    assert resumed.count("[x]") == 1
+
+
+def test_deleted_checklist_is_rebuilt_from_all_contributors_before_retry(tmp_path, monkeypatch):
+    """I06/U13: recovery cannot replace effective gates with a generic placeholder."""
+    executor, step, state, directory = lifecycle_fixture(tmp_path, monkeypatch)
+    def finish(directory):
+        path = directory / "checklist.md"
+        (directory / "output.md").write_text("# Result\n")
+        if executor.agent_manager.calls == 1:
+            path.unlink()
+        else:
+            content = path.read_text()
+            assert "Independent policy" in content and "Primary" in content
+            path.write_text(content.replace("[ ]", "[x]"))
+        return "confirmed"
+    executor.agent_manager = JourneyAgent(executor, [finish])
+    result = executor.execute_step("assemble", step, state)
+    assert result.artifact_ready
+    assert executor.agent_manager.calls == 2

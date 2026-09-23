@@ -177,7 +177,7 @@ class PhaseChecklistMixin:
             else:
                 retry_reason = (
                     f"the checklist at {checklist_display_path} still has unchecked items.\n\n"
-                    "Please review the checklist file, complete all remaining tasks, "
+                    "Please review the full effective checklist, complete all primary and overlay gates, "
                     "update the checklist by marking completed items with [x],"
                 )
 
