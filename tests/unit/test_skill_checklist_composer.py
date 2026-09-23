@@ -1035,29 +1035,80 @@ def test_write_cafe_phase_requires_playbook_declared_confirmation_gates() -> Non
     assert "final `confirm_output`" in normalized_skill
 
 
-@pytest.mark.parametrize("iteration,feedback,selected", [(1, False, "normal"), (2, False, "later"), (2, True, "correction")])
-def test_effective_contributors_select_independently_and_keep_local_roots(tmp_path, iteration, feedback, selected):
+@pytest.mark.parametrize(
+    "iteration,feedback,selected",
+    [(1, False, "normal"), (2, False, "later"), (2, True, "correction")],
+)
+def test_effective_contributors_select_independently_and_keep_local_roots(
+    tmp_path, iteration, feedback, selected
+):
     """U05–U08: each source first-matches and renders its own local context."""
     from cafe.skills.checklist_composer import compose_effective_checklist
     from cafe.skills.workflow_composition import resolve_step_workflow_composition
-    from tests.integration.test_checklist_overlay_workflow import write_skill, overlay
+    from tests.integration.test_checklist_overlay_workflow import overlay, write_skill
 
     root = tmp_path / ".cafe/skills"
-    primary = {"checklist": {"context_references": {"local": "context.md"}, "variants": [
-        {"when": {"feedback": True}, "sections": [{"reference": "correction.md"}]},
-        {"when": {"min_iteration": 2}, "sections": [{"reference": "later.md"}]},
-        {"sections": [{"reference": "review.md"}]},
-    ]}}
-    write_skill(root, "primary", primary, {"context.md": "primary", "review.md": "[ ] normal {local}\n", "later.md": "[ ] later {local}\n", "correction.md": "[ ] correction {local}\n"})
+    primary = {
+        "checklist": {
+            "context_references": {"local": "context.md"},
+            "variants": [
+                {"when": {"feedback": True}, "sections": [{"reference": "correction.md"}]},
+                {"when": {"min_iteration": 2}, "sections": [{"reference": "later.md"}]},
+                {"sections": [{"reference": "review.md"}]},
+            ],
+        }
+    }
+    write_skill(
+        root,
+        "primary",
+        primary,
+        {
+            "context.md": "primary",
+            "review.md": "[ ] normal {local}\n",
+            "later.md": "[ ] later {local}\n",
+            "correction.md": "[ ] correction {local}\n",
+        },
+    )
     for name in ("shared", "role", "step"):
-        write_skill(root, name, overlay(context_references={"local": "context.md"}), {"context.md": name, "review.md": "[ ] universal {local}\n"})
-    write_skill(root, "inert", {"checklist": {"variants": [{"sections": [{"reference": "review.md"}]}]}}, {"review.md": "[ ] must not appear\n"})
-    loader = SkillLoader(project_root=tmp_path, global_root=tmp_path / "global", builtin_root=tmp_path / "builtin")
-    composition = resolve_step_workflow_composition(loader, primary_skill="primary", workflow_skills=["shared", "role", "step", "shared", "primary", "inert"], step_name="assemble")
+        write_skill(
+            root,
+            name,
+            overlay(context_references={"local": "context.md"}),
+            {"context.md": name, "review.md": "[ ] universal {local}\n"},
+        )
+    write_skill(
+        root,
+        "inert",
+        {"checklist": {"variants": [{"sections": [{"reference": "review.md"}]}]}},
+        {"review.md": "[ ] must not appear\n"},
+    )
+    loader = SkillLoader(
+        project_root=tmp_path, global_root=tmp_path / "global", builtin_root=tmp_path / "builtin"
+    )
+    composition = resolve_step_workflow_composition(
+        loader,
+        primary_skill="primary",
+        workflow_skills=["shared", "role", "step", "shared", "primary", "inert"],
+        step_name="assemble",
+    )
     path = tmp_path / "checklist.md"
-    materialized = compose_effective_checklist(composition=composition, agent_name="David", role="developer", checklist_file_path=path, iteration=iteration, artifacts={}, context={}, feedback=feedback)
+    materialized = compose_effective_checklist(
+        composition=composition,
+        agent_name="David",
+        role="developer",
+        checklist_file_path=path,
+        iteration=iteration,
+        artifacts={},
+        context={},
+        feedback=feedback,
+    )
     gates = [line for line in path.read_text().splitlines() if line.startswith("[ ]")]
-    assert gates == [f"[ ] {selected} primary", "[ ] universal shared", "[ ] universal role", "[ ] universal step"]
+    assert gates == [
+        f"[ ] {selected} primary",
+        "[ ] universal shared",
+        "[ ] universal role",
+        "[ ] universal step",
+    ]
     assert len(materialized.gates) == 4
 
 
@@ -1066,12 +1117,36 @@ def test_applicable_overlay_without_match_fails_with_source(tmp_path):
     from cafe.skills.checklist_composer import compose_effective_checklist
     from cafe.skills.workflow_composition import resolve_step_workflow_composition
     from tests.integration.test_checklist_overlay_workflow import write_skill
+
     root = tmp_path / ".cafe/skills"
     write_skill(root, "primary")
-    write_skill(root, "policy", {"checklist_overlay": {"when": {"min_iteration": 2}, "variants": [{"when": {"feedback": True}, "sections": [{"reference": "review.md"}]}]}}, {"review.md": "[ ] review\n"})
-    loader = SkillLoader(project_root=tmp_path, global_root=tmp_path / "global", builtin_root=tmp_path / "builtin")
-    composition = resolve_step_workflow_composition(loader, primary_skill="primary", workflow_skills=["policy"], step_name="assemble")
-    kwargs = dict(composition=composition, agent_name="David", role="developer", checklist_file_path=tmp_path / "checklist.md", artifacts={}, context={})
+    write_skill(
+        root,
+        "policy",
+        {
+            "checklist_overlay": {
+                "when": {"min_iteration": 2},
+                "variants": [
+                    {"when": {"feedback": True}, "sections": [{"reference": "review.md"}]}
+                ],
+            }
+        },
+        {"review.md": "[ ] review\n"},
+    )
+    loader = SkillLoader(
+        project_root=tmp_path, global_root=tmp_path / "global", builtin_root=tmp_path / "builtin"
+    )
+    composition = resolve_step_workflow_composition(
+        loader, primary_skill="primary", workflow_skills=["policy"], step_name="assemble"
+    )
+    kwargs = dict(
+        composition=composition,
+        agent_name="David",
+        role="developer",
+        checklist_file_path=tmp_path / "checklist.md",
+        artifacts={},
+        context={},
+    )
     compose_effective_checklist(**kwargs, iteration=1)
     with pytest.raises(ValueError) as error:
         compose_effective_checklist(**kwargs, iteration=2)
@@ -1082,18 +1157,44 @@ def test_overlay_templates_belong_to_primary_and_locals_cannot_leak(tmp_path):
     """U07/U08: template requests use primary settings and required locals stay isolated."""
     from cafe.skills.checklist_composer import compose_effective_checklist
     from cafe.skills.workflow_composition import resolve_step_workflow_composition
-    from tests.integration.test_checklist_overlay_workflow import write_skill, overlay
+    from tests.integration.test_checklist_overlay_workflow import overlay, write_skill
+
     root = tmp_path / ".cafe/skills"
     directory = write_skill(root, "primary", {"output_templates": {"catalog": "notes"}})
     (directory / "assets/templates").mkdir(parents=True)
-    write_skill(root, "policy", {"checklist_overlay": {"variants": [{"sections": [{"template_catalog": True}, {"optional_checklist": "absent.md"}]}]}})
-    loader = SkillLoader(project_root=tmp_path, global_root=tmp_path / "global", builtin_root=tmp_path / "builtin")
-    kwargs = dict(agent_name="David", role="developer", checklist_file_path=tmp_path / "checklist.md", iteration=1, artifacts={}, context={}, template_mode="explicit", template_file="primary-template.md")
-    composition = resolve_step_workflow_composition(loader, primary_skill="primary", workflow_skills=["policy"], step_name="assemble")
+    write_skill(
+        root,
+        "policy",
+        {
+            "checklist_overlay": {
+                "variants": [
+                    {"sections": [{"template_catalog": True}, {"optional_checklist": "absent.md"}]}
+                ]
+            }
+        },
+    )
+    loader = SkillLoader(
+        project_root=tmp_path, global_root=tmp_path / "global", builtin_root=tmp_path / "builtin"
+    )
+    kwargs = dict(
+        agent_name="David",
+        role="developer",
+        checklist_file_path=tmp_path / "checklist.md",
+        iteration=1,
+        artifacts={},
+        context={},
+        template_mode="explicit",
+        template_file="primary-template.md",
+    )
+    composition = resolve_step_workflow_composition(
+        loader, primary_skill="primary", workflow_skills=["policy"], step_name="assemble"
+    )
     compose_effective_checklist(composition=composition, **kwargs)
     assert "primary-template.md" in kwargs["checklist_file_path"].read_text()
     write_skill(root, "policy", overlay(), {"review.md": "[ ] {foreign_local}\n"})
-    composition = resolve_step_workflow_composition(loader, primary_skill="primary", workflow_skills=["policy"], step_name="assemble")
+    composition = resolve_step_workflow_composition(
+        loader, primary_skill="primary", workflow_skills=["policy"], step_name="assemble"
+    )
     with pytest.raises(ValueError, match="foreign_local"):
         compose_effective_checklist(composition=composition, **kwargs)
 
@@ -1103,12 +1204,63 @@ def test_no_overlay_materialization_preserves_declared_output(tmp_path):
     from cafe.skills.checklist_composer import compose_effective_checklist
     from cafe.skills.workflow_composition import resolve_step_workflow_composition
     from tests.integration.test_checklist_overlay_workflow import write_skill
+
     root = tmp_path / ".cafe/skills"
-    write_skill(root, "primary", {"checklist": {"variants": [{"sections": [{"reference": "work.md"}]}], "include_role_guidance": True}}, {"work.md": "[ ] Check result\n"})
-    loader = SkillLoader(project_root=tmp_path, global_root=tmp_path / "global", builtin_root=tmp_path / "builtin")
-    composition = resolve_step_workflow_composition(loader, primary_skill="primary", step_name="assemble")
+    write_skill(
+        root,
+        "primary",
+        {
+            "checklist": {
+                "variants": [{"sections": [{"reference": "work.md"}]}],
+                "include_role_guidance": True,
+            }
+        },
+        {"work.md": "[ ] Check result\n"},
+    )
+    loader = SkillLoader(
+        project_root=tmp_path, global_root=tmp_path / "global", builtin_root=tmp_path / "builtin"
+    )
+    composition = resolve_step_workflow_composition(
+        loader, primary_skill="primary", step_name="assemble"
+    )
     kwargs = dict(agent_name="David", role="developer", iteration=1, artifacts={}, context={})
     # Direct source-local no-overlay output follows the existing declared format.
-    result = compose_effective_checklist(composition=composition, checklist_file_path=tmp_path / "checklist.md", **kwargs)
+    result = compose_effective_checklist(
+        composition=composition, checklist_file_path=tmp_path / "checklist.md", **kwargs
+    )
     assert result.content.startswith("[ ] Check result\n\n\n## Agent Guidelines Checklist")
     assert "Checklist source:" not in result.content
+
+
+def test_overlay_auto_template_catalog_uses_resolved_primary_loader(tmp_path):
+    """U07: auto catalogs retain the primary root when the caller uses custom catalogs."""
+    from cafe.skills.checklist_composer import compose_effective_checklist
+    from cafe.skills.workflow_composition import resolve_step_workflow_composition
+    from tests.integration.test_checklist_overlay_workflow import write_skill
+
+    root = tmp_path / ".cafe/skills"
+    primary = write_skill(root, "primary", {"output_templates": {"catalog": "report"}})
+    (primary / "assets/templates").mkdir(parents=True)
+    (primary / "assets/templates/owned.md").write_text("# Primary template\n")
+    write_skill(
+        root,
+        "policy",
+        {"checklist_overlay": {"variants": [{"sections": [{"template_catalog": True}]}]}},
+    )
+    loader = SkillLoader(
+        project_root=tmp_path, global_root=tmp_path / "global", builtin_root=tmp_path / "builtin"
+    )
+    composition = resolve_step_workflow_composition(
+        loader, primary_skill="primary", workflow_skills=["policy"], step_name="assemble"
+    )
+    result = compose_effective_checklist(
+        composition=composition,
+        skill_loader=loader,
+        agent_name="David",
+        role="developer",
+        checklist_file_path=tmp_path / "checklist.md",
+        iteration=1,
+        context={},
+        artifacts={},
+    )
+    assert str(primary / "assets/templates/owned.md") in result.content

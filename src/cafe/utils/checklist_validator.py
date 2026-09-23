@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Mapping
 
+from cafe.core.checklist import ChecklistMaterialization, ProjectedTodo
 from cafe.core.todo import MAX_TODO_ITEMS, TodoItem
 
 _PROJECTED = re.compile(
@@ -55,6 +56,7 @@ class ChecklistValidationResult:
     is_complete: bool
     unchecked_count: int
     checklist_path: Path
+    detail: str = ""
 
 
 def completion_requires_checklist(
@@ -72,7 +74,9 @@ def completion_requires_checklist(
     return status_code in CHECKLIST_COMPLETION_STATUS_CODES
 
 
-def validate_checklist(checklist_path: Path, *, expected=None) -> ChecklistValidationResult:
+def validate_checklist(
+    checklist_path: Path, *, expected: ChecklistMaterialization | None = None
+) -> ChecklistValidationResult:
     """Validate that all checklist items are completed.
 
     Checks for unchecked items by searching for lines that start with "[ ]"
@@ -100,13 +104,20 @@ def validate_checklist(checklist_path: Path, *, expected=None) -> ChecklistValid
     content = checklist_path.read_text(encoding="utf-8")
 
     from cafe.core.checklist import load_materialization, normalized_checklist
+
+    detail = ""
     try:
         pinned = load_materialization(checklist_path.parent / "iteration.json")
         integrity_valid = expected is None or pinned == expected
         expected = expected or pinned
-        integrity_valid = integrity_valid and (expected is None or not expected.content.strip() or normalized_checklist(content) == normalized_checklist(expected.content))
-    except ValueError:
+        integrity_valid = integrity_valid and (
+            expected is None
+            or not expected.content.strip()
+            or normalized_checklist(content) == normalized_checklist(expected.content)
+        )
+    except ValueError as exc:
         integrity_valid = False
+        detail = str(exc)
 
     # Count unchecked items - only lines starting with "[ ]" or "- [ ]" count as unchecked
     # This avoids false positives from "[ ]" in descriptive text
@@ -121,13 +132,20 @@ def validate_checklist(checklist_path: Path, *, expected=None) -> ChecklistValid
         is_complete=(unchecked_count == 0 and integrity_valid),
         unchecked_count=unchecked_count,
         checklist_path=checklist_path,
+        detail=detail
+        or (
+            "Required checklist gates or source metadata changed. "
+            "Rebuild the full effective checklist before completing it."
+            if not integrity_valid
+            else ""
+        ),
     )
 
 
 def validate_projected_todos(
     checklist_path: Path,
     output_path: Path,
-    expected: tuple[TodoItem, ...],
+    expected: tuple[TodoItem | ProjectedTodo, ...],
     *,
     repo_root: Path | None = None,
 ) -> list[str]:
@@ -148,7 +166,7 @@ def validate_projected_todos(
 
 def validate_todo_ledger(
     content: str,
-    expected: tuple[TodoItem, ...],
+    expected: tuple[TodoItem | ProjectedTodo, ...],
     *,
     repo_root: Path | None = None,
 ) -> list[str]:

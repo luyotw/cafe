@@ -329,7 +329,9 @@ class GenericPhase:
 
         if checklist_file is not None:
             lines.append("Do NOT finish this step until ALL checklist items are marked as [x].")
-            lines.append("Before a successful handoff, complete ALL applicable primary and overlay checklist gates and revalidate their Todo evidence. Do not delete or rewrite required gates to mark completion. Existing clarification, permission and manual handoff routes remain available.")
+            lines.append(
+                "Before a successful handoff, complete ALL applicable primary and overlay checklist gates and revalidate their Todo evidence. Do not delete or rewrite required gates to mark completion. Existing clarification, permission and manual handoff routes remain available."
+            )
 
         return "\n".join(lines).strip()
 

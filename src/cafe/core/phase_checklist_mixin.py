@@ -90,7 +90,9 @@ class PhaseChecklistMixin:
             )
         else:
             try:
-                result = validate_checklist(checklist_path, expected=getattr(self, "_effective_checklist", None))
+                result = validate_checklist(
+                    checklist_path, expected=getattr(self, "_effective_checklist", None)
+                )
             except (OSError, UnicodeError):
                 # A missing checklist cannot prove completion.
                 print("⚠️  Checklist file is unavailable after rebuild")
@@ -100,7 +102,7 @@ class PhaseChecklistMixin:
                     checklist_path=checklist_path,
                 )
 
-        validation_detail = ""
+        validation_detail = result.detail
         if (
             validate_checklist_completion
             and result.is_complete
@@ -230,7 +232,9 @@ Do NOT return a status code until ALL checklist items are marked as complete [x]
 
                 # Validate checklist again
                 retry_result = (
-                    validate_checklist(checklist_path, expected=getattr(self, "_effective_checklist", None))
+                    validate_checklist(
+                        checklist_path, expected=getattr(self, "_effective_checklist", None)
+                    )
                     if validate_checklist_completion
                     else ChecklistValidationResult(
                         is_complete=True,
@@ -239,7 +243,7 @@ Do NOT return a status code until ALL checklist items are marked as complete [x]
                     )
                 )
 
-                validation_detail = ""
+                validation_detail = retry_result.detail
                 if (
                     validate_checklist_completion
                     and retry_result.is_complete

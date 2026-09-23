@@ -281,7 +281,12 @@ class SkillLoader:
         fields: Optional[set[str]] = None,
     ) -> tuple[str, ...]:
         """Return bounded resource errors for selected declaration fields."""
-        selected = fields or {"prompt_references", "checklist", "checklist_overlay", "output_templates"}
+        selected = fields or {
+            "prompt_references",
+            "checklist",
+            "checklist_overlay",
+            "output_templates",
+        }
         errors: list[str] = []
         references: list[str] = []
         if "prompt_references" in selected:
@@ -292,10 +297,16 @@ class SkillLoader:
                 continue
             for key, reference in checklist.context_references.items():
                 if not (skill_dir / "references" / reference).is_file():
-                    errors.append(f"{field}.context_references.{key}: workflow reference not found: {reference}")
+                    errors.append(
+                        f"{field}.context_references.{key}: "
+                        f"workflow reference not found: {reference}"
+                    )
             for index, variant in enumerate(checklist.variants):
                 for position, section in enumerate(variant.sections):
-                    if section.reference and not (skill_dir / "references" / section.reference).is_file():
+                    if (
+                        section.reference
+                        and not (skill_dir / "references" / section.reference).is_file()
+                    ):
                         errors.append(
                             f"{field}.variants[{index}].sections[{position}].reference: "
                             f"workflow reference not found: {section.reference}"

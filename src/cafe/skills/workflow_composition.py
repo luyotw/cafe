@@ -74,14 +74,23 @@ class StepWorkflowComposition:
     @property
     def causal_todo_artifacts(self) -> tuple[str, ...]:
         """All checklist-local causal aliases share the same inbound transition."""
-        return tuple(dict.fromkeys(
-            section.todo_projection.artifact
-            for contributor in self.contributors
-            for checklist in [contributor.declaration.checklist if contributor.primary else contributor.declaration.checklist_overlay]
-            if checklist is not None
-            for variant in checklist.variants for section in variant.sections
-            if section.todo_projection and section.todo_projection.causal
-        ))
+        return tuple(
+            dict.fromkeys(
+                section.todo_projection.artifact
+                for contributor in self.contributors
+                for checklist in [
+                    (
+                        contributor.declaration.checklist
+                        if contributor.primary
+                        else contributor.declaration.checklist_overlay
+                    )
+                ]
+                if checklist is not None
+                for variant in checklist.variants
+                for section in variant.sections
+                if section.todo_projection and section.todo_projection.causal
+            )
+        )
 
     def as_declaration(self) -> SkillWorkflowDeclaration:
         """Expose supported effective fields through the legacy declaration API."""

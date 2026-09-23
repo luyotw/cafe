@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
-from hashlib import sha256
 import json
 import re
+from dataclasses import asdict, dataclass
+from hashlib import sha256
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from cafe.core.todo import TodoItem
+
+if TYPE_CHECKING:
+    from cafe.core.blackboard import BlackboardState
 
 
 def checklist_digest(value: Any) -> str:
@@ -35,7 +38,9 @@ class ProjectedTodo:
         return self.producer.fingerprint
 
     def checklist_row(self) -> str:
-        return f"[ ] `{self.item_id}` — {self.producer.work} (source fingerprint: {self.fingerprint})"
+        return (
+            f"[ ] `{self.item_id}` — {self.producer.work} (source fingerprint: {self.fingerprint})"
+        )
 
 
 @dataclass(frozen=True)
@@ -46,8 +51,20 @@ class ChecklistMaterialization:
     overlays: bool
 
     def to_dict(self) -> dict[str, Any]:
-        return {"version": 1, "content": self.content, "gates": [asdict(gate) for gate in self.gates],
-                "projections": list(self.projections), "overlays": self.overlays}
+        record = {
+            "version": 1,
+            "content": self.content,
+            "gates": [asdict(gate) for gate in self.gates],
+            "projections": list(self.projections),
+            "overlays": self.overlays,
+        }
+        if (
+            len(self.content.encode()) > 2 * 1024 * 1024
+            or len(self.gates) > 10000
+            or len(json.dumps(record).encode()) > 8 * 1024 * 1024
+        ):
+            raise ValueError("Effective checklist exceeds bounded persistence limits")
+        return record
 
 
 _CHECKBOX_LINE = re.compile(
@@ -104,13 +121,10 @@ def _checklist_item_blocks(content: str) -> list[tuple[int, str, bool]]:
     return items
 
 
-
-
 def normalized_checklist(content: str) -> str:
     """Clear completion marks without discarding instructions or provenance labels."""
     return "\n".join(
-        re.sub(r"^(\s*(?:[-*]\s+)?\[)[xX](\])", r"\1 \2", line)
-        for line in content.splitlines()
+        re.sub(r"^(\s*(?:[-*]\s+)?\[)[xX](\])", r"\1 \2", line) for line in content.splitlines()
     ).rstrip()
 
 
@@ -136,16 +150,55 @@ def load_materialization(path: Path) -> ChecklistMaterialization | None:
         if len({gate.identity for gate in gates}) != len(gates):
             raise ValueError("Effective checklist gate identities are duplicated")
         for gate, (_, block, _) in zip(gates, blocks):
-            if not re.fullmatch(r"[0-9a-f]{64}", gate.identity) or not gate.source or gate.block != block:
+            if (
+                not re.fullmatch(r"[0-9a-f]{64}", gate.identity)
+                or not gate.source
+                or gate.block != block
+            ):
                 raise ValueError("Effective checklist gate identity is inconsistent")
-        return ChecklistMaterialization(content, gates, tuple(record["projections"]), record["overlays"])
+        if not isinstance(record["overlays"], bool) or not isinstance(record["projections"], list):
+            raise ValueError("Invalid effective checklist projection metadata")
+        required = {
+            "declaration_artifact",
+            "source",
+            "causal",
+            "contributor",
+            "section",
+            "artifact",
+            "path",
+            "version",
+            "content_sha256",
+            "handles",
+            "producer_ids",
+            "rows",
+        }
+        for binding in record["projections"]:
+            if not isinstance(binding, dict) or not required.issubset(binding):
+                raise ValueError("Incomplete effective checklist projection binding")
+            if not all(
+                isinstance(binding[key], list) for key in ("handles", "producer_ids", "rows")
+            ):
+                raise ValueError("Invalid effective checklist Todo identities")
+            if len(binding["handles"]) != len(binding["producer_ids"]) or len(
+                binding["rows"]
+            ) != len(binding["handles"]):
+                raise ValueError("Inconsistent effective checklist Todo identities")
+        materialized = ChecklistMaterialization(
+            content, gates, tuple(record["projections"]), record["overlays"]
+        )
+        materialized.to_dict()
+        return materialized
+
     except (KeyError, TypeError, OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError("Invalid effective checklist metadata") from exc
 
 
-def pending_checklist_continuation(issue_dir, state, step):
+def pending_checklist_continuation(
+    issue_dir: Path, state: BlackboardState, step: str
+) -> tuple[str, str] | None:
     """Recover a no-change gate continuation from its completed durable task."""
     from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
+
     consumed = set()
     for event in reversed(state.events):
         if event.event_type == "checklist_continuation_completed":
@@ -159,9 +212,14 @@ def pending_checklist_continuation(issue_dir, state, step):
         records = HumanTaskRecordStore(issue_dir)
         task = records.get_task(task_id)
         result = records.get_result(task_id)
-        if (task.workflow_id != state.workflow_id or task.step != step
-                or task.trigger != "no_changes_needed" or task.status != HumanTaskStatus.COMPLETED
-                or result is None or result.payload.get("continuation") != event.data.get("decision_continuation")):
+        if (
+            task.workflow_id != state.workflow_id
+            or task.step != step
+            or task.trigger != "no_changes_needed"
+            or task.status != HumanTaskStatus.COMPLETED
+            or result is None
+            or result.payload.get("continuation") != event.data.get("decision_continuation")
+        ):
             raise ValueError("Checklist continuation does not match its completed HumanTask")
         return target, task_id
     return None

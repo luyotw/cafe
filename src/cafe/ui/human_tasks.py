@@ -851,10 +851,17 @@ def _apply_human_task_payload(
         )
     checklist_continuation = None
     decision_continuation = continuation
-    if (trigger == "no_changes_needed" and durable_task is not None and durable_result is not None
-            and not (delivery_decision is not None and delivery_decision.correction)):
+    if (
+        trigger == "no_changes_needed"
+        and durable_task is not None
+        and durable_result is not None
+        and not (delivery_decision is not None and delivery_decision.correction)
+    ):
         from cafe.core.checklist import load_materialization
-        metadata = issue_dir / from_step / f"iteration_{durable_task.iteration:03d}" / "iteration.json"
+
+        metadata = (
+            issue_dir / from_step / f"iteration_{durable_task.iteration:03d}" / "iteration.json"
+        )
         try:
             effective = load_materialization(metadata)
         except ValueError:
@@ -867,22 +874,37 @@ def _apply_human_task_payload(
                 from cafe.core.playbook import resolve_playbook_skills
                 from cafe.skills.selectors import resolve_skill_selector
                 from cafe.skills.workflow_composition import resolve_step_workflow_composition
+
                 step_definition = playbook_data["steps"][from_step]
                 composition = resolve_step_workflow_composition(
-                    SkillLoader(), primary_skill=resolve_skill_selector(step_definition["skill"], durable_task.iteration),
-                    workflow_skills=resolve_playbook_skills(playbook_data, channel="workflow", role=step_definition.get("role"), step_name=from_step),
+                    SkillLoader(),
+                    primary_skill=resolve_skill_selector(
+                        step_definition["skill"], durable_task.iteration
+                    ),
+                    workflow_skills=resolve_playbook_skills(
+                        playbook_data,
+                        channel="workflow",
+                        role=step_definition.get("role"),
+                        step_name=from_step,
+                    ),
                     step_name=from_step,
                 )
-                needs_revalidation = any(item.declaration.checklist_overlay for item in composition.contributors[1:])
+                needs_revalidation = any(
+                    item.declaration.checklist_overlay for item in composition.contributors[1:]
+                )
         if needs_revalidation:
             checklist_continuation = continuation
             if continuation == from_step:
-                checklist_continuation = playbook_data["steps"][from_step].get("on", {}).get("await_agent")
+                checklist_continuation = (
+                    playbook_data["steps"][from_step].get("on", {}).get("await_agent")
+                )
             if checklist_continuation:
                 continuation = from_step
                 pending_inputs.setdefault(from_step, []).append(
-                    "The no-change decision is complete. Finish all effective checklist gates and current evidence; "
-                    "the runtime will then continue to the decision's declared target. Do not request this decision again."
+                    "The no-change decision is complete. Finish all effective checklist "
+                    "gates and current evidence; "
+                    "the runtime will then continue to the decision's declared target. "
+                    "Do not request this decision again."
                 )
     for input_step, input_parts in pending_inputs.items():
         _write_next_iteration_user_input(
@@ -927,9 +949,15 @@ def _apply_human_task_payload(
             "task_id": policy.id,
             "pattern": policy.pattern,
             "to_step": continuation,
-            **({"checklist_continuation": checklist_continuation,
-                "decision_continuation": decision_continuation,
-                "human_task_id": durable_task.id} if checklist_continuation else {}),
+            **(
+                {
+                    "checklist_continuation": checklist_continuation,
+                    "decision_continuation": decision_continuation,
+                    "human_task_id": durable_task.id,
+                }
+                if checklist_continuation
+                else {}
+            ),
             **(
                 {
                     "declared_to_step": declared_continuation,

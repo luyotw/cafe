@@ -9,13 +9,12 @@ from collections import Counter
 from pathlib import Path
 from typing import Mapping, Union
 
+from cafe.core.checklist import _CHECKBOX_LINE, _checklist_item_blocks
 from cafe.utils.checklist_validator import (
     EXPECTED_LEDGER_FIELDS,
     GIT_EVIDENCE_TIMEOUT_SECONDS,
     validate_todo_evidence_set,
 )
-
-from cafe.core.checklist import _CHECKBOX_LINE, _checklist_item_blocks
 
 
 def resolve_checklist_placeholders(checklist: str, placeholders: Mapping[str, object]) -> str:
@@ -253,6 +252,7 @@ def generate_checklist_file(
 def publish_materialized_checklist(path, materialized, *, preserve=False, todo_ledger_path=None):
     """Restore proven source identities and publish through the existing atomic writer."""
     from cafe.core.checklist import load_materialization, normalized_checklist
+
     previous = _read_existing_regular_file(path)
     content = materialized.content
     if preserve and previous is not None:
@@ -263,9 +263,15 @@ def publish_materialized_checklist(path, materialized, *, preserve=False, todo_l
             legacy_allowed = False
         else:
             legacy_allowed = pinned is None and not materialized.overlays
-        if pinned is not None and normalized_checklist(previous) == normalized_checklist(pinned.content):
+        if pinned is not None and normalized_checklist(previous) == normalized_checklist(
+            pinned.content
+        ):
             prior_blocks = _checklist_item_blocks(previous)
-            complete = {gate.identity for gate, (_, _, checked) in zip(pinned.gates, prior_blocks) if checked}
+            complete = {
+                gate.identity
+                for gate, (_, _, checked) in zip(pinned.gates, prior_blocks)
+                if checked
+            }
             # Reuse live ledger and Git evidence checks, then intersect with
             # source identities instead of transferring completion by text.
             eligible = _restore_completed_items(
@@ -280,5 +286,7 @@ def publish_materialized_checklist(path, materialized, *, preserve=False, todo_l
             blocks = [block for _, block, _ in _checklist_item_blocks(content)]
             prior = [block for _, block, _ in _checklist_item_blocks(previous)]
             if len(set(blocks)) == len(blocks) and len(set(prior)) == len(prior):
-                content = _restore_completed_items(content, previous, todo_ledger_path=todo_ledger_path)
+                content = _restore_completed_items(
+                    content, previous, todo_ledger_path=todo_ledger_path
+                )
     generate_checklist_file(path, content)
