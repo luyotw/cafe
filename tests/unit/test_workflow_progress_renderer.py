@@ -12,7 +12,6 @@ import pytest
 
 from cafe.playbooks.loader import PlaybookLoader
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = PROJECT_ROOT / "src/cafe/data/skills/use-cafe-workflow/scripts/render_workflow_progress.py"
 
@@ -699,7 +698,224 @@ def test_forward_skip_review_manual_handoff_is_not_a_return(tmp_path: Path) -> N
         driver_state=_unknown_closeout_state(),
     )
 
-    assert "↩\ufe0e develop → pr · Returned" not in rendered
+    source_line = next(line for line in rendered.splitlines() if " develop · " in line)
+    assert "↩" not in source_line
+    assert "Returned" not in source_line
+
+
+@pytest.mark.parametrize(
+    ("source", "target"), [("review", "develop"), ("publish-draft", "資料盤點")]
+)
+def test_upstream_baton_without_feedback_returns_until_the_source_runs_again(
+    tmp_path: Path, source: str, target: str
+) -> None:
+    issue_dir = tmp_path / "issue"
+    issue_dir.mkdir()
+    blackboard_path = issue_dir / "blackboard.json"
+    events = [
+        {
+            "event_type": "step_started",
+            "step": source,
+            "data": {"step": source, "attempt": 2},
+        },
+        {
+            "event_type": "step_completed",
+            "step": source,
+            "data": {"step": source, "attempt": 2, "status_code": "BATON_MANUAL_HANDOFF"},
+        },
+        {
+            "event_type": "transition",
+            "step": source,
+            "data": {
+                "from": source,
+                "to": target,
+                "source": "baton",
+                "status_code": "BATON_MANUAL_HANDOFF",
+                "transition_intent": "manual_handoff",
+            },
+        },
+        {
+            "event_type": "step_started",
+            "step": target,
+            "data": {"step": target, "attempt": 3},
+        },
+    ]
+    blackboard_path.write_text(
+        json.dumps({"current_step": target, "events": events}), encoding="utf-8"
+    )
+    completed_iteration = issue_dir / source / "iteration_002"
+    completed_iteration.mkdir(parents=True)
+    (completed_iteration / "iteration.json").write_text(
+        json.dumps(
+            {
+                "iteration": 2,
+                "status_code": "BATON_MANUAL_HANDOFF",
+                "end_time": "2026-09-23T01:00:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    target_iteration = issue_dir / target / "iteration_003"
+    target_iteration.mkdir(parents=True)
+    (target_iteration / "iteration.json").write_text('{"iteration": 3}', encoding="utf-8")
+    playbook = {
+        "playbook": {"id": "upstream-baton"},
+        "steps": {
+            target: {"on": {"await_agent": source}},
+            source: {"on": {"await_agent": "_done", "manual_handoff": target}},
+        },
+    }
+    module = _module()
+    before = {path: path.read_bytes() for path in issue_dir.rglob("*.json")}
+
+    rendered = module.render_progress(
+        playbook=playbook,
+        contract={},
+        locale="en",
+        issue_dir=issue_dir,
+        driver_state=_unknown_closeout_state(),
+    )
+
+    assert not any(event["event_type"] == "workflow_feedback_delivered" for event in events)
+    assert f"↩\ufe0e {source} · iteration 2 · Returned" in rendered
+    assert f"✓ {source} · iteration 2 · Completed" not in rendered
+    assert f"▶\ufe0e {target} · iteration 3 · In progress" in rendered
+    assert before == {path: path.read_bytes() for path in before}
+
+    latest_iteration = issue_dir / source / "iteration_003"
+    latest_iteration.mkdir()
+    for event_type, symbol, status in (
+        ("step_started", "▶\ufe0e", "In progress"),
+        ("step_completed", "✓", "Completed"),
+    ):
+        events.append(
+            {"event_type": event_type, "step": source, "data": {"step": source, "attempt": 3}}
+        )
+        blackboard_path.write_text(
+            json.dumps({"current_step": source, "events": events}), encoding="utf-8"
+        )
+        metadata = {"iteration": 3}
+        if event_type == "step_completed":
+            metadata.update(status_code="confirmed", end_time="2026-09-23T02:00:00+00:00")
+        (latest_iteration / "iteration.json").write_text(json.dumps(metadata), encoding="utf-8")
+
+        rendered = module.render_progress(
+            playbook=playbook,
+            contract={},
+            locale="en",
+            issue_dir=issue_dir,
+            driver_state=_unknown_closeout_state(),
+        )
+
+        assert f"{symbol} {source} · iteration 3 · {status}" in rendered
+        assert f"↩\ufe0e {source}" not in rendered
+        assert f"{source} · iteration 2" not in rendered
+
+
+@pytest.mark.parametrize("target", ["unrelated", "source"])
+def test_manual_handoff_without_a_distinct_upstream_target_is_not_a_return(
+    tmp_path: Path, target: str
+) -> None:
+    issue_dir = tmp_path / "issue"
+    issue_dir.mkdir()
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "current_step": target,
+                "events": [
+                    {
+                        "event_type": "step_completed",
+                        "step": "source",
+                        "data": {"step": "source", "attempt": 1},
+                    },
+                    {
+                        "event_type": "transition",
+                        "step": "source",
+                        "data": {
+                            "from": "source",
+                            "to": target,
+                            "status_code": "BATON_MANUAL_HANDOFF",
+                            "transition_intent": "manual_handoff",
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rendered = _module().render_progress(
+        playbook={
+            "playbook": {"id": "non-correction-baton"},
+            "steps": {
+                "source": {"on": {"await_agent": "_done", "manual_handoff": target}},
+                "unrelated": {
+                    "on": {"await_agent": "_done", "manual_handoff": "source"},
+                    "allowed_goto": ["source"],
+                },
+            },
+        },
+        contract={},
+        locale="en",
+        issue_dir=issue_dir,
+        driver_state=_unknown_closeout_state(),
+    )
+
+    assert "✓ source · Completed" in rendered
+    assert "↩\ufe0e source" not in rendered
+    assert "Returned" not in rendered
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected"),
+    [("BATON_MANUAL_HANDOFF", "✓ C · Completed"), ("needs_changes", "↩\ufe0e C · Returned")],
+)
+def test_normal_cycle_requires_explicit_correction_to_infer_a_return(
+    tmp_path: Path, status_code: str, expected: str
+) -> None:
+    issue_dir = tmp_path / "issue"
+    issue_dir.mkdir()
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "current_step": "A",
+                "events": [
+                    {"event_type": "step_completed", "step": "C", "data": {}},
+                    {
+                        "event_type": "transition",
+                        "step": "C",
+                        "data": {
+                            "from": "C",
+                            "to": "A",
+                            "status_code": status_code,
+                            "transition_intent": "manual_handoff",
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rendered = _module().render_progress(
+        playbook={
+            "playbook": {"id": "normal-cycle"},
+            "steps": {
+                "A": {"on": {"await_agent": "B"}},
+                "B": {"on": {"await_agent": "C"}},
+                "C": {"on": {"await_agent": "A", "manual_handoff": "A"}},
+            },
+        },
+        contract={},
+        locale="en",
+        issue_dir=issue_dir,
+        driver_state=_unknown_closeout_state(),
+    )
+
+    assert expected in rendered
+    if status_code == "BATON_MANUAL_HANDOFF":
+        assert "↩" not in rendered
+        assert "Returned" not in rendered
 
 
 def test_declared_correction_manual_handoff_is_a_formal_return(tmp_path: Path) -> None:
@@ -1348,7 +1564,9 @@ def test_forward_feedback_curation_delivery_is_not_a_return(tmp_path: Path) -> N
         driver_state=_unknown_closeout_state(),
     )
 
-    assert "↩\ufe0e curator → consumer · Returned" not in rendered
+    source_line = next(line for line in rendered.splitlines() if " curator · " in line)
+    assert "↩" not in source_line
+    assert "Returned" not in source_line
 
 
 def test_durable_blocked_event_overrides_completed_iteration_metadata(tmp_path: Path) -> None:

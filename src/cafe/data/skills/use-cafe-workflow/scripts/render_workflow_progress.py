@@ -226,7 +226,6 @@ def _reaches_through_non_handoff_routes(
     playbook: Mapping[str, Any], *, start: str, destination: str
 ) -> bool:
     """Return whether the effective graph can normally advance from start to destination."""
-    steps = playbook["steps"]
     pending = [start]
     visited: set[str] = set()
     while pending:
@@ -291,7 +290,6 @@ def _runtime_progress(
     statuses = {step: "pending" for step in steps}
     iterations: dict[str, int] = {}
     terminal_evidence: set[str] = set()
-    delivered_feedback_steps: set[str] = set()
     if issue_dir is None:
         return statuses, iterations
     blackboard = _read_json(issue_dir / "blackboard.json")
@@ -317,7 +315,6 @@ def _runtime_progress(
             if event_type == "step_started":
                 statuses[step] = "in_progress"
                 terminal_evidence.discard(step)
-                delivered_feedback_steps.discard(step)
             elif event_type in {"step_completed", "single_step_completed"}:
                 statuses[step] = "completed"
                 terminal_evidence.discard(step)
@@ -330,28 +327,29 @@ def _runtime_progress(
             ):
                 statuses[step] = "blocked"
                 terminal_evidence.add(step)
-        if event_type == "workflow_feedback_delivered":
-            source_identities = data.get("source_identities", [])
-            if step in statuses and isinstance(source_identities, list) and source_identities:
-                delivered_feedback_steps.add(step)
         if event_type == "transition":
             source, target = str(data.get("from", "")), str(data.get("to", ""))
             transition_intent = str(data.get("transition_intent", ""))
             status_code = str(data.get("status_code", "")).lower()
-            delivered_correction = (
-                source in delivered_feedback_steps
-                and _reaches_through_non_handoff_routes(playbook, start=target, destination=source)
-            )
             if (
                 source in statuses
                 and target in statuses
                 and source != target
                 and transition_intent == "manual_handoff"
-                and (status_code in {"needs_changes", "rejected"} or delivered_correction)
+                and (
+                    status_code in {"needs_changes", "rejected"}
+                    or (
+                        _reaches_through_non_handoff_routes(
+                            playbook, start=target, destination=source
+                        )
+                        and not _reaches_through_non_handoff_routes(
+                            playbook, start=source, destination=target
+                        )
+                    )
+                )
             ):
                 statuses[source] = "returned"
                 terminal_evidence.add(source)
-            delivered_feedback_steps.discard(source)
         if event_type == "workflow_completed":
             workflow_finished = True
     handoff = blackboard.get("handoff_contract", {})

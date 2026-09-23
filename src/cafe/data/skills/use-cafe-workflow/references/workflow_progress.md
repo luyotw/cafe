@@ -34,7 +34,12 @@ Driver-review or user-confirmation checkpoint currently represented for that
 phase. The default projection never adds correction arrows or a historical
 trail; later iteration evidence supersedes earlier states. If a phase's newest
 durable state is itself returned, the phase line uses the returned symbol and
-status. The
+status. A durable manual handoff back to an upstream phase is a return even
+when its status is `BATON_MANUAL_HANDOFF` and no separate feedback-delivery
+event exists. Infer upstream only when the effective graph's non-manual routes
+reach from target to source but not back; a cycle alone cannot prove a return.
+Do not use phase names or display order. A later
+iteration of the returning phase replaces that returned state. The
 renderer intentionally omits raw `on`/`allowed_goto` route dumps and a separate
 always-on legend. The effective graph is still authoritative for phase
 traversal, status, and correction interpretation. Sibling branches and phases
