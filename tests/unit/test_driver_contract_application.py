@@ -180,6 +180,24 @@ def test_contract_rejects_removed_model_adjustment_authority(tmp_path: Path) -> 
 
 
 @pytest.mark.parametrize(
+    "cleanup",
+    [
+        [{"argv": ["cafe", "close"]}, {"argv": ["true"]}],
+        [{"argv": ["/tmp/cafe", "close"]}],
+        [{"argv": ["cafe", "close", "--message", "missing squash"]}],
+    ],
+)
+def test_contract_rejects_invalid_cafe_close_policy(
+    tmp_path: Path, cleanup: list[dict[str, list[str]]]
+) -> None:
+    proposal = _proposal()
+    proposal["delivery_contract"]["closeout_plan"]["cleanup"] = cleanup
+
+    with pytest.raises(ValueError):
+        activate_confirmed_contract(_activation(tmp_path / "invalid-closeout", proposal))
+
+
+@pytest.mark.parametrize(
     "field",
     ["mandate", "issue_assessment", "semantic_facts", "material_assumptions", "preflight"],
 )

@@ -205,6 +205,19 @@ class TestCloseCommand:
         archive_path = Path.home() / ".cafe" / "projects" / project_path / "archived" / "test-issue"
         assert archive_path.exists(), f"Issue should be archived at {archive_path}"
 
+    def test_close_fails_when_issue_archive_cannot_be_written(
+        self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_config
+    ):
+        with patch(
+            "cafe.ui.commands.lifecycle.shutil.move", side_effect=OSError("archive disk full")
+        ):
+            result = runner.invoke(app, ["close"])
+
+        assert result.exit_code == 1
+        assert "Failed to archive issue data: archive disk full" in result.stdout
+        assert "Successfully closed issue" not in result.stdout
+        assert issue_with_config.exists()
+
     def test_close_without_issue_config(self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr):
         """測試當 issue config 不存在時"""
         mock_git_ops.get_current_branch.return_value = "nonexistent-issue"
@@ -317,7 +330,7 @@ class TestCloseCommandWithPRCheck:
 
             # Verify git operations were called
             mock_git_ops.checkout_branch.assert_called_once_with("main")
-            mock_git_ops.delete_branch.assert_called_once_with("test-issue")
+            mock_git_ops.delete_branch.assert_called_once_with("test-issue", force=True)
 
     def test_close_allowed_with_closed_pr(self, temp_repo_dir, mock_git_ops, issue_with_config):
         """測試當 PR 已關閉時允許 close"""
@@ -366,6 +379,7 @@ class TestCloseCommandWorktree:
     @pytest.fixture
     def issue_with_worktree_config(self, temp_repo_dir):
         """Create an issue with worktree configuration."""
+        (temp_repo_dir / ".git").mkdir(exist_ok=True)
         # Create issue directory with config
         issue_dir = temp_repo_dir / ".cafe" / "issues" / "test-worktree-issue"
         issue_dir.mkdir(parents=True)
@@ -378,6 +392,18 @@ class TestCloseCommandWorktree:
         }
 
         with open(config_file, 'w', encoding='utf-8') as f:
+            yaml.dump(config_data, f)
+
+        worktree_issue_dir = (
+            temp_repo_dir
+            / "worktrees"
+            / "test-worktree-issue"
+            / ".cafe"
+            / "issues"
+            / "test-worktree-issue"
+        )
+        worktree_issue_dir.mkdir(parents=True)
+        with open(worktree_issue_dir / "issue.yaml", "w", encoding="utf-8") as f:
             yaml.dump(config_data, f)
 
         return issue_dir
@@ -437,14 +463,14 @@ class TestCloseCommandWorktree:
         self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_worktree_config
     ):
         """Worktree marker must remain when remove_worktree fails."""
-        (temp_repo_dir / ".git").mkdir()
+        (temp_repo_dir / ".git").mkdir(exist_ok=True)
         worktree_path = temp_repo_dir / "worktrees" / "test-worktree-issue"
         worktree_cafe = worktree_path / ".cafe"
-        worktree_cafe.mkdir(parents=True)
+        worktree_cafe.mkdir(parents=True, exist_ok=True)
         marker = worktree_cafe / "active_issue"
         marker.write_text("test-worktree-issue\n", encoding="utf-8")
         worktree_issue = worktree_cafe / "issues" / "test-worktree-issue"
-        worktree_issue.mkdir(parents=True)
+        worktree_issue.mkdir(parents=True, exist_ok=True)
 
         mock_git_ops.get_current_branch.return_value = "test-worktree-issue"
         mock_git_ops.remove_worktree.side_effect = GitError("failed to remove worktree")
@@ -554,7 +580,7 @@ class TestCloseCommandWorktree:
     ):
         """測試 worktree 模式下會將 .cafe/issues/{issue_name}/ 同步回 repo root"""
         # Setup: 創建 .git 目錄（模擬 git repository）
-        (temp_repo_dir / ".git").mkdir()
+        (temp_repo_dir / ".git").mkdir(exist_ok=True)
 
         # Setup: 創建 worktree and repo root  .cafe 目錄
         worktree_path = temp_repo_dir / "worktrees" / "sync-test"

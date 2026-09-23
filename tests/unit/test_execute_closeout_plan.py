@@ -200,14 +200,14 @@ def test_closeout_runner_never_replays_an_unresolved_command(tmp_path: Path) -> 
         )
 
 
-def test_closeout_runner_rejects_shell_code_and_lifecycle_recursion(tmp_path: Path) -> None:
+def test_closeout_runner_rejects_shell_code_and_delivery_recursion(tmp_path: Path) -> None:
     issue_worktree = tmp_path / "issue-worktree"
     issue_worktree.mkdir()
     receipt = tmp_path / "closeout.json"
 
     for argv, message in (
         (["sh", "-c", "do-a-thing"], "shell code strings"),
-        (["cafe", "close", "issue539"], "recursively invoke"),
+        (["cafe", "deliver"], "recursively invoke cafe deliver"),
     ):
         with pytest.raises(ValueError, match=message):
             module.execute_stage(
@@ -217,6 +217,336 @@ def test_closeout_runner_rejects_shell_code_and_lifecycle_recursion(tmp_path: Pa
                 issue_worktree=issue_worktree,
                 receipt_file=receipt,
             )
+
+
+@pytest.mark.parametrize(
+    "close_argv",
+    [
+        ["cafe", "close"],
+        ["cafe", "close", "--squash"],
+        ["cafe", "close", "--squash", "--message", "local merge"],
+    ],
+)
+def test_closeout_runner_allows_supported_cafe_close_as_final_cleanup(
+    close_argv: list[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    issue_worktree = tmp_path / "issue-worktree"
+    issue_worktree.mkdir()
+    receipt = tmp_path / "closeout.json"
+    plan: dict[str, object] = {
+        "deliver": [],
+        "cleanup": [{"argv": ["true"]}, {"argv": close_argv}],
+    }
+    calls: list[tuple[list[str], Path]] = []
+
+    def run(argv: list[str], *, cwd: Path, check: bool, shell: bool) -> SimpleNamespace:
+        calls.append((argv, cwd))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(module.subprocess, "run", run)
+    monkeypatch.setattr(module, "_close_postcondition_errors", lambda *_args, **_kwargs: [])
+
+    module.execute_stage(
+        closeout_plan=plan,
+        contract_sha256="a" * 64,
+        stage="deliver",
+        issue_worktree=issue_worktree,
+        receipt_file=receipt,
+    )
+    saved = module.execute_stage(
+        closeout_plan=plan,
+        contract_sha256="a" * 64,
+        stage="cleanup",
+        issue_worktree=issue_worktree,
+        receipt_file=receipt,
+        issue_name="issue539",
+        workflow_id="workflow-539",
+        project_root=tmp_path,
+        pr_auto_create=False,
+    )
+
+    assert calls == [
+        (["true"], issue_worktree.resolve()),
+        (close_argv, issue_worktree.resolve()),
+    ]
+    assert [record["status"] for record in saved["stages"]["cleanup"]] == [
+        "succeeded",
+        "succeeded",
+    ]
+    assert saved["close_recovery"]["issue_name"] == "issue539"
+
+
+def test_closeout_runner_fails_when_cafe_close_postconditions_are_incomplete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    issue_worktree = tmp_path / "issue-worktree"
+    issue_worktree.mkdir()
+    receipt = tmp_path / "closeout.json"
+    plan: dict[str, object] = {
+        "deliver": [],
+        "cleanup": [{"argv": ["cafe", "close"]}],
+    }
+    monkeypatch.setattr(
+        module.subprocess, "run", lambda *_args, **_kwargs: SimpleNamespace(returncode=0)
+    )
+    monkeypatch.setattr(
+        module,
+        "_close_postcondition_errors",
+        lambda *_args, **_kwargs: ["matching archived Driver contract is unavailable"],
+    )
+
+    module.execute_stage(
+        closeout_plan=plan,
+        contract_sha256="a" * 64,
+        stage="deliver",
+        issue_worktree=issue_worktree,
+        receipt_file=receipt,
+    )
+    with pytest.raises(module.CloseoutCommandError, match="postconditions failed"):
+        module.execute_stage(
+            closeout_plan=plan,
+            contract_sha256="a" * 64,
+            stage="cleanup",
+            issue_worktree=issue_worktree,
+            receipt_file=receipt,
+            issue_name="issue539",
+            workflow_id="workflow-539",
+            project_root=tmp_path,
+        )
+
+    saved = json.loads(receipt.read_text(encoding="utf-8"))
+    assert saved["stages"]["cleanup"] == [
+        {
+            "argv": ["cafe", "close"],
+            "error": "matching archived Driver contract is unavailable",
+            "returncode": 0,
+            "status": "failed",
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "close_argv",
+    [
+        ["cafe", "close"],
+        ["cafe", "close", "--squash"],
+        ["cafe", "close", "--squash", "-m", "local merge"],
+    ],
+)
+def test_closeout_runner_reconciles_started_cafe_close_after_worktree_removal(
+    close_argv: list[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    issue_worktree = tmp_path / "issue-worktree"
+    issue_worktree.mkdir()
+    receipt = tmp_path / "closeout.json"
+    recovery = module._close_recovery_context(
+        issue_name="issue539",
+        workflow_id="workflow-539",
+        project_root=tmp_path,
+        issue_worktree=issue_worktree,
+        cleanup_index=0,
+        close_argv=close_argv,
+        pr_auto_create=False,
+    )
+    module._write_receipt(
+        receipt,
+        {
+            "schema_version": 3,
+            "contract_sha256": "a" * 64,
+            "close_recovery": recovery,
+            "stages": {
+                "deliver": [],
+                "cleanup": [{"argv": close_argv, "status": "started"}],
+            },
+        },
+    )
+    issue_worktree.rmdir()
+    monkeypatch.setattr(module, "_close_postcondition_errors", lambda *_args, **_kwargs: [])
+    args = SimpleNamespace(
+        stage="cleanup",
+        issue_name="issue539",
+        workflow_id="workflow-539",
+        project_root=tmp_path,
+        issue_worktree=issue_worktree,
+        receipt_file=receipt,
+    )
+
+    saved = module._reconcile_lifecycle_close(args)
+
+    assert saved["stages"]["cleanup"] == [
+        {"argv": close_argv, "returncode": 0, "status": "succeeded"}
+    ]
+
+
+def test_closeout_runner_recovery_requires_verified_postconditions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    issue_worktree = tmp_path / "issue-worktree"
+    issue_worktree.mkdir()
+    receipt = tmp_path / "closeout.json"
+    recovery = module._close_recovery_context(
+        issue_name="issue539",
+        workflow_id="workflow-539",
+        project_root=tmp_path,
+        issue_worktree=issue_worktree,
+        cleanup_index=0,
+    )
+    module._write_receipt(
+        receipt,
+        {
+            "schema_version": 2,
+            "contract_sha256": "a" * 64,
+            "close_recovery": recovery,
+            "stages": {
+                "deliver": [],
+                "cleanup": [{"argv": ["cafe", "close"], "status": "started"}],
+            },
+        },
+    )
+    issue_worktree.rmdir()
+    monkeypatch.setattr(
+        module,
+        "_close_postcondition_errors",
+        lambda *_args, **_kwargs: ["local feature branch still exists"],
+    )
+    args = SimpleNamespace(
+        stage="cleanup",
+        issue_name="issue539",
+        workflow_id="workflow-539",
+        project_root=tmp_path,
+        issue_worktree=issue_worktree,
+        receipt_file=receipt,
+    )
+
+    with pytest.raises(ValueError, match="local feature branch still exists"):
+        module._reconcile_lifecycle_close(args)
+
+    saved = json.loads(receipt.read_text(encoding="utf-8"))
+    assert saved["stages"]["cleanup"][0]["status"] == "started"
+
+
+def test_cafe_close_postconditions_require_the_matching_archived_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "repo"
+    project_root.mkdir()
+    worktree = project_root / ".cafe" / "worktrees" / "issue539"
+    recovery = module._close_recovery_context(
+        issue_name="issue474",
+        workflow_id="workflow-474",
+        project_root=project_root,
+        issue_worktree=worktree,
+        cleanup_index=0,
+    )
+    archive = Path(recovery["archive_path"])
+    proposal = _proposal()
+    activated = activate_confirmed_contract(_activation(archive, proposal))
+    monkeypatch.setattr(module, "_local_branch_absent", lambda **_kwargs: True)
+
+    assert (
+        module._close_postcondition_errors(recovery, contract_sha256=activated.contract_sha256)
+        == []
+    )
+    assert module._close_postcondition_errors(recovery, contract_sha256="b" * 64) == [
+        "archived Driver contract does not match the confirmed contract"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("stage", "cleanup", "message"),
+    [
+        ("deliver", [{"argv": ["true"]}], "final cleanup command"),
+        (
+            "cleanup",
+            [{"argv": ["cafe", "close"]}, {"argv": ["true"]}],
+            "final cleanup command",
+        ),
+        (
+            "cleanup",
+            [{"argv": ["cafe", "close", "--message", "not-allowed"]}],
+            "requires --squash",
+        ),
+        (
+            "cleanup",
+            [{"argv": ["/tmp/cafe", "close"]}],
+            "literal `cafe` executable",
+        ),
+    ],
+)
+def test_closeout_runner_rejects_cafe_close_outside_its_exact_final_position(
+    tmp_path: Path,
+    stage: str,
+    cleanup: list[dict[str, list[str]]],
+    message: str,
+) -> None:
+    issue_worktree = tmp_path / "issue-worktree"
+    issue_worktree.mkdir()
+    receipt = tmp_path / "closeout.json"
+    plan: dict[str, object] = {
+        "deliver": [{"argv": ["cafe", "close"]}] if stage == "deliver" else [],
+        "cleanup": cleanup,
+    }
+
+    with pytest.raises(ValueError, match=message):
+        module.execute_stage(
+            closeout_plan=plan,
+            contract_sha256="a" * 64,
+            stage=stage,
+            issue_worktree=issue_worktree,
+            receipt_file=receipt,
+        )
+
+
+def test_closeout_runner_rejects_squash_in_create_pr_mode(tmp_path: Path) -> None:
+    issue_worktree = tmp_path / "issue-worktree"
+    issue_worktree.mkdir()
+    plan: dict[str, object] = {
+        "deliver": [],
+        "cleanup": [{"argv": ["cafe", "close", "--squash"]}],
+    }
+
+    with pytest.raises(ValueError, match="unavailable in create-PR mode"):
+        module.execute_stage(
+            closeout_plan=plan,
+            contract_sha256="a" * 64,
+            stage="cleanup",
+            issue_worktree=issue_worktree,
+            receipt_file=tmp_path / "closeout.json",
+            pr_auto_create=True,
+        )
+
+
+def test_closeout_runner_prevalidates_the_whole_stage_before_execution(tmp_path: Path) -> None:
+    issue_worktree = tmp_path / "issue-worktree"
+    issue_worktree.mkdir()
+    receipt = tmp_path / "closeout.json"
+    marker = issue_worktree / "must-not-exist.txt"
+    plan: dict[str, object] = {
+        "deliver": [],
+        "cleanup": [
+            {
+                "argv": [
+                    sys.executable,
+                    "-c",
+                    f"from pathlib import Path; Path({str(marker)!r}).touch()",
+                ]
+            },
+            {"argv": ["cafe", "close"]},
+            {"argv": ["true"]},
+        ],
+    }
+
+    with pytest.raises(ValueError, match="final cleanup command"):
+        module.execute_stage(
+            closeout_plan=plan,
+            contract_sha256="a" * 64,
+            stage="deliver",
+            issue_worktree=issue_worktree,
+            receipt_file=receipt,
+        )
+
+    assert not marker.exists()
+    assert not receipt.exists()
 
 
 def test_closeout_runner_serializes_concurrent_receipt_execution(tmp_path: Path) -> None:

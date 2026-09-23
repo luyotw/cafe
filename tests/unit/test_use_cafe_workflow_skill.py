@@ -1806,6 +1806,40 @@ def test_kickoff_formatter_requires_and_binds_explicit_publication_choice(
     assert ("--no-auto-create-pr" in result.stdout) is not choice
 
 
+@pytest.mark.parametrize(
+    ("choice", "close_argv", "expected_success"),
+    [
+        (False, ["cafe", "close", "--squash"], True),
+        (True, ["cafe", "close", "--squash"], False),
+        (True, ["cafe", "close"], True),
+        (True, ["gh", "pr", "merge", "issue346", "--squash"], True),
+    ],
+)
+def test_kickoff_formatter_validates_squash_against_publication_mode(
+    tmp_path: Path,
+    choice: bool,
+    close_argv: list[str],
+    expected_success: bool,
+) -> None:
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text("mandate: {preset: technical-led}\n", encoding="utf-8")
+    command = _kickoff_formatter_command(strategic_context, pr_auto_create=choice)
+    cleanup_index = command.index("--cleanup") + 1
+    command[cleanup_index] = json.dumps([close_argv])
+
+    result = subprocess.run(
+        command,
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert (result.returncode == 0) is expected_success
+    if not expected_success:
+        assert "unavailable in create-PR mode" in result.stderr
+
+
 @pytest.mark.parametrize("choice", [None, "yes"])
 def test_kickoff_formatter_rejects_missing_or_malformed_publication_choice(
     tmp_path: Path,
@@ -3881,7 +3915,9 @@ def test_driver_executes_the_confirmed_argv_closeout_plan_without_core_lifecycle
     assert "records `started` before execution" in normalized
     assert "runs every confirmed command from the issue worktree" in normalized
     assert "receipt lock across inspection and execution" in normalized
-    assert "does not invoke a CAFE lifecycle command" in normalized
+    assert "literal argv beginning with `cafe close`" in normalized
+    assert "permitted only for confirmed local-review mode" in normalized
+    assert "does not otherwise invoke a CAFE lifecycle command" in normalized
     assert "inspect the completed issue's remaining lifecycle state read-only" in normalized
     assert '"merge and close" must not be silently reduced to an issue closure' in normalized
 

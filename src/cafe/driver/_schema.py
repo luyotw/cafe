@@ -10,7 +10,7 @@ from typing import Any, Mapping
 from cafe.core.packet_io import canonical_json
 from cafe.core.types import AgentCLI
 
-from .delivery import normalize_delivery_contract
+from .delivery import normalize_delivery_contract, validate_closeout_plan_policy
 
 SCHEMA_VERSION = 5
 _RUNTIME_KEYS = {
@@ -310,6 +310,7 @@ def _validate_policy(proposal: Mapping[str, Any]) -> dict[str, Any]:
     delivery = normalize_delivery_contract(raw["delivery_contract"])
     if delivery["schema_version"] != 3:
         raise ValueError("Driver v5 requires Delivery Contract version 3")
+    validate_closeout_plan_policy(delivery["closeout_plan"], pr_auto_create=None)
     result["delivery_contract"] = delivery
     for field in ("need_clarification", "need_permission", "alignment_checkpoint"):
         result["reactive_user_handoffs"][field] = _string(
