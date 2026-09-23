@@ -145,8 +145,9 @@ def executor_fixture(tmp_path, monkeypatch, primary="primary", injections=("poli
 
 
 def generate(executor, step, state, directory, **kwargs):
+    step_name = executor.phase_name or "assemble"
     executor._generate_checklist(
-        step_name="assemble",
+        step_name=step_name,
         skill_name=executor._resolve_skill_name(step, executor.iteration),
         agent_name="David",
         step_def=step,
@@ -560,6 +561,134 @@ def lifecycle_fixture(tmp_path, monkeypatch, *, real_develop=False):
         "assemble:\n  name: David\n  clis: [{cli: codex, model: test}]\n"
     )
     return executor, step, state, directory
+
+
+def direct_subagent_review_fixture(tmp_path, monkeypatch):
+    """Use the production direct-subagent-review declarations without prior artifacts."""
+    import copy
+
+    from cafe.core.blackboard import BlackboardStore
+
+    executor, _step, state, _directory = executor_fixture(
+        tmp_path, monkeypatch, primary="cafe-develop", injections=()
+    )
+    executor.playbook = copy.deepcopy(PlaybookLoader().load("direct-subagent-review"))
+    step = executor.playbook["steps"]["develop"]
+    executor.phase_name = "develop"
+    executor.phase_dir = executor.issue_dir / "develop"
+    executor.iteration = 1
+    directory = executor._get_iteration_dir(executor.iteration)
+    directory.mkdir(parents=True)
+    state.current_step = "develop"
+    state.playbook_id = "direct-subagent-review"
+    BlackboardStore(executor.issue_dir).save(state)
+    return executor, step, state, directory
+
+
+@pytest.mark.parametrize("correction", [False, True])
+def test_direct_subagent_review_composes_review_gate_without_spec_or_plan(
+    tmp_path, monkeypatch, correction
+):
+    """I02/I06: first runs and PR-return corrections retain Develop plus the review gate."""
+    from cafe.core.blackboard import BlackboardStore
+
+    executor, step, state, directory = direct_subagent_review_fixture(tmp_path, monkeypatch)
+    store = BlackboardStore(executor.issue_dir)
+    if correction:
+        feedback = executor.issue_dir / "pr_result.md"
+        feedback.write_text(
+            "## Todo List\n- [ ] `PRC-001` — Source: `pr_comment` — Work: repair "
+            "— Closure: corrected — Evidence: targeted test\n"
+        )
+        state.current_step = "pr"
+        store.set_artifact(state, "pr_result", str(feedback))
+        state.current_step = "develop"
+        state.handoff_contract = None
+        store.record_event(state, "transition", {"from": "pr", "to": "develop"})
+
+    output = directory / "output.md"
+    context = executor._build_context(
+        step_name="develop",
+        step_def=step,
+        blackboard_state=state,
+        agent_name="David",
+        output_file=output,
+    )
+    content = generate(executor, step, state, directory, runtime_context=context)
+
+    assert "Dual-subagent review gate" in content
+    assert "Launch exactly two native subagents" in content
+    assert "spec_file" not in context
+    assert "plan_file" not in context
+    if correction:
+        assert context["feedback_file"].endswith("pr_result.md")
+        assert "Read feedback todo list" in content
+        assert "rerun both reviewers concurrently after each correction" in content
+    else:
+        assert executor._step_input_artifacts(step, state) == {}
+        assert "Follow existing commit message style" in content
+
+
+def test_direct_subagent_review_user_agreement_reenters_the_composed_gate_once(
+    tmp_path, monkeypatch
+):
+    """I08: an accepted no-change decision resumes the native review overlay before PR."""
+    from cafe.core.blackboard import BlackboardStore
+    from cafe.core.git import GitOperations
+    from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
+    from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
+    from cafe.ui.human_tasks import apply_human_task_payload
+
+    executor, step, state, _directory = direct_subagent_review_fixture(tmp_path, monkeypatch)
+    git_evidence(tmp_path)
+    executor.git_ops = GitOperations(tmp_path)
+    executor.git_ops.run_git("branch", "-M", "main")
+    (tmp_path / ".cafe/phases.yaml").write_text(
+        "develop:\n  name: David\n  clis: [{cli: codex, model: test}]\n"
+    )
+
+    def no_change(directory):
+        (directory / "output.md").write_text("No implementation changes are necessary.\n")
+        return "no_changes_needed"
+
+    executor.step_user_inputs["develop"] = "Confirm whether this already-complete change needs work."
+    executor.agent_manager = JourneyAgent(executor, [no_change])
+    first = BlackboardWorkflowRuntime(
+        issue_dir=executor.issue_dir, playbook=executor.playbook, executor=executor.execute_step
+    ).run(start_step="develop")
+    assert not first.completed
+    assert executor.agent_manager.calls == 1
+    assert "Confirm whether" in executor.agent_manager.prompts[0]
+
+    store = BlackboardStore(executor.issue_dir)
+    records = HumanTaskRecordStore(executor.issue_dir)
+    task = records.tasks()[0]
+    applied = apply_human_task_payload(
+        issue_dir=executor.issue_dir,
+        playbook_data=executor.playbook,
+        blackboard=store.load_or_create("develop"),
+        from_step="develop",
+        trigger="no_changes_needed",
+        raw_payload={"task": task.policy_id, "human_task_id": task.id, "decision": "agree"},
+        source="test",
+    )
+    assert applied.target == "develop"
+
+    def finish_after_review(directory):
+        checklist = directory / "checklist.md"
+        content = checklist.read_text()
+        assert "Dual-subagent review gate" in content
+        checklist.write_text(content.replace("[ ]", "[x]"))
+        (directory / "output.md").write_text("No changes; composed review gate completed.\n")
+        return "confirmed"
+
+    executor.agent_manager = JourneyAgent(executor, [finish_after_review])
+    result = executor.execute_step("develop", step, store.load_or_create("develop"))
+    assert result.artifact_ready
+    assert executor.agent_manager.calls == 1
+    assert store.load_or_create("develop").handoff_contract.to_step == "pr"
+    assert len(records.tasks()) == 1
+    assert records.get_task(task.id).status is HumanTaskStatus.COMPLETED
 
 
 @pytest.mark.parametrize("route", ["baton", "legacy", "automatic_no_change"])
