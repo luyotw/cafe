@@ -486,7 +486,7 @@ def generate_develop_checklist(
 
     guidance_separator = "\n\n" if basic_principles_checklist else "\n"
     checklist_content = (
-        f"{execution_steps}\n{basic_principles_checklist}" f"{guidance_separator}{agent_guidelines}"
+        f"{execution_steps}\n{basic_principles_checklist}{guidance_separator}{agent_guidelines}"
     )
 
     if questions_xml_file:
@@ -870,6 +870,15 @@ def compose_effective_checklist(
                             f"{projection.artifact!r}"
                         )
                     items = projection_todo_items(entry, expected_source=projection.source)
+                    from cafe.core.checklist import validate_projected_todo_count
+
+                    validate_projected_todo_count(
+                        sum(len(binding["handles"]) for binding in projections) + len(items),
+                        context=(
+                            f"Step {composition.step_name!r}, skill {source!r}, "
+                            f"{location}.sections[{section_index}]"
+                        ),
+                    )
                     qualifier = checklist_digest(identity)[:16]
                     bound = [
                         ProjectedTodo(

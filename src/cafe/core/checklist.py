@@ -9,7 +9,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from cafe.core.todo import TodoItem
+from cafe.core.todo import MAX_TODO_ITEMS, TodoItem
 
 if TYPE_CHECKING:
     from cafe.core.blackboard import BlackboardState
@@ -43,6 +43,17 @@ class ProjectedTodo:
         )
 
 
+def validate_projected_todo_count(count: int, *, context: str = "Effective checklist") -> None:
+    """Keep producer composition and persisted recovery within the ledger budget."""
+    if count > MAX_TODO_ITEMS:
+        raise ValueError(
+            f"{context}: aggregate Todo projection has {count} consumer handles; "
+            f"the completion ledger supports at most {MAX_TODO_ITEMS}. "
+            "Reduce selected projections or split the work across workflow steps. "
+            "Repeated projections each count toward this limit."
+        )
+
+
 @dataclass(frozen=True)
 class ChecklistMaterialization:
     content: str
@@ -51,6 +62,7 @@ class ChecklistMaterialization:
     overlays: bool
 
     def to_dict(self) -> dict[str, Any]:
+        validate_projected_todo_count(sum(len(binding["handles"]) for binding in self.projections))
         record = {
             "version": 1,
             "content": self.content,

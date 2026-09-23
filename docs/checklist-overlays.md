@@ -104,6 +104,15 @@ version, content, IDs, and fingerprints, then checks current file/commit
 evidence and worktree cleanliness through the existing evidence validator.
 The materialized snapshot does not freeze evidence validity.
 
+The completion ledger supports at most 100 Todo consumer handles across the
+entire effective checklist, including repeated projections of one producer.
+Each source also retains its existing 100-item limit. An aggregate above the
+ledger limit fails before publishing a checklist or invoking the agent, with
+the step, contributor, section and item count. Reduce selected projections or
+split the work across workflow steps; resubmitting the same ledger cannot fix
+this declaration/input limit. Persisted over-limit metadata cannot authorize
+completion or restoration.
+
 ## Completion and recovery
 
 The iteration's `effective_checklist` metadata records the complete rendered

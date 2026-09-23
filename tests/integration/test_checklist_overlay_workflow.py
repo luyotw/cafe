@@ -860,3 +860,99 @@ def test_manual_handoff_still_validates_todos_required_by_target_overlay(tmp_pat
     result = executor.execute_step("assemble", step, state)
     assert result.artifact_ready
     assert executor.agent_manager.calls == 2
+
+
+@pytest.mark.parametrize(
+    "counts", [(0, 0), (0, 1), (10, 10), (99, 1), (100, 1), (50, 50), (51, 51)]
+)
+def test_executor_bounds_combined_todo_work_before_agent_retry(tmp_path, monkeypatch, counts):
+    """U11/U12, I04/I05/I06: accepted aggregate work can finish and resume."""
+    import subprocess
+
+    from cafe.core.blackboard import BlackboardStore
+    from cafe.core.todo import MAX_TODO_ITEMS
+    from cafe.utils.checklist_validator import validate_checklist
+
+    executor, step, state, directory = lifecycle_fixture(tmp_path, monkeypatch)
+    store = BlackboardStore(executor.issue_dir)
+    # Keep an existing generation to verify rejection cannot partially replace it.
+    generate(executor, step, state, directory)
+    paths = [directory / "checklist.md", directory / "iteration.json"]
+    from cafe.core.checklist import load_materialization
+
+    before = (paths[0].read_bytes(), load_materialization(paths[1]))
+    for name, field, artifact, count in [
+        ("primary", "checklist", "first", counts[0]),
+        ("policy", "checklist_overlay", "second", counts[1]),
+    ]:
+        # Equal counts deliberately project the same producer through two contributors.
+        if counts[0] == counts[1]:
+            artifact = "shared_work"
+        write_skill(
+            tmp_path / ".cafe/skills",
+            name,
+            {
+                field: {
+                    "variants": [
+                        {
+                            "sections": [
+                                {"todo_projection": {"artifact": artifact, "source": "bespoke"}}
+                            ]
+                        }
+                    ]
+                }
+            },
+        )
+        source = executor.issue_dir / f"{artifact}.md"
+        source.write_text(
+            "## Todo List\n"
+            + (
+                "".join(
+                    f"- [ ] `TASK-{i:03}` — Source: `bespoke` — Work: task {i} "
+                    "— Closure: correct — Evidence: tests\n"
+                    for i in range(1, count + 1)
+                )
+                if count
+                else "No actionable work.\n"
+            )
+        )
+        store.set_artifact(state, artifact, str(source))
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+
+    def finish(directory):
+        complete_ledger(directory, commit)
+        return "confirmed"
+
+    executor.agent_manager = JourneyAgent(executor, [finish])
+    if sum(counts) > MAX_TODO_ITEMS:
+        with pytest.raises(ValueError) as caught:
+            executor.execute_step("assemble", step, state)
+        diagnostic = str(caught.value)
+        assert all(
+            value in diagnostic for value in ("assemble", "policy", "checklist_overlay", "100")
+        )
+        assert executor.agent_manager.calls == 0
+        assert (paths[0].read_bytes(), load_materialization(paths[1])) == before
+        return
+
+    result = executor.execute_step("assemble", step, state)
+    assert result.artifact_ready
+    assert executor.agent_manager.calls == 1
+    assert store.load_or_create("assemble").handoff_contract.to_step == "inspect"
+    generate(executor, step, state, directory, preserve_completed_items=True)
+    assert validate_checklist(directory / "checklist.md").is_complete
+    assert executor._validate_projected_todo_completion(directory / "checklist.md")
+
+    if counts == (99, 1):
+        import json
+
+        metadata = json.loads(paths[1].read_text())
+        bindings = metadata["effective_checklist"]["projections"]
+        bindings.append(bindings[-1])
+        paths[1].write_text(json.dumps(metadata))
+        assert not validate_checklist(paths[0]).is_complete
+        restored = generate(executor, step, state, directory, preserve_completed_items=True)
+        assert "[x]" not in restored
+        finish(directory)
+        assert validate_checklist(paths[0]).is_complete
+        assert executor._validate_projected_todo_completion(paths[0])
