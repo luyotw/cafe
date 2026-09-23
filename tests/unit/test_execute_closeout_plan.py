@@ -219,15 +219,23 @@ def test_closeout_runner_rejects_shell_code_and_delivery_recursion(tmp_path: Pat
             )
 
 
-def test_closeout_runner_allows_exact_cafe_close_only_as_final_cleanup(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    "close_argv",
+    [
+        ["cafe", "close"],
+        ["cafe", "close", "--squash"],
+        ["cafe", "close", "--squash", "--message", "local merge"],
+    ],
+)
+def test_closeout_runner_allows_supported_cafe_close_as_final_cleanup(
+    close_argv: list[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     issue_worktree = tmp_path / "issue-worktree"
     issue_worktree.mkdir()
     receipt = tmp_path / "closeout.json"
     plan: dict[str, object] = {
         "deliver": [],
-        "cleanup": [{"argv": ["true"]}, {"argv": ["cafe", "close"]}],
+        "cleanup": [{"argv": ["true"]}, {"argv": close_argv}],
     }
     calls: list[tuple[list[str], Path]] = []
 
@@ -254,11 +262,12 @@ def test_closeout_runner_allows_exact_cafe_close_only_as_final_cleanup(
         issue_name="issue539",
         workflow_id="workflow-539",
         project_root=tmp_path,
+        pr_auto_create=False,
     )
 
     assert calls == [
         (["true"], issue_worktree.resolve()),
-        (["cafe", "close"], issue_worktree.resolve()),
+        (close_argv, issue_worktree.resolve()),
     ]
     assert [record["status"] for record in saved["stages"]["cleanup"]] == [
         "succeeded",
@@ -316,8 +325,16 @@ def test_closeout_runner_fails_when_cafe_close_postconditions_are_incomplete(
     ]
 
 
+@pytest.mark.parametrize(
+    "close_argv",
+    [
+        ["cafe", "close"],
+        ["cafe", "close", "--squash"],
+        ["cafe", "close", "--squash", "-m", "local merge"],
+    ],
+)
 def test_closeout_runner_reconciles_started_cafe_close_after_worktree_removal(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    close_argv: list[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     issue_worktree = tmp_path / "issue-worktree"
     issue_worktree.mkdir()
@@ -328,16 +345,18 @@ def test_closeout_runner_reconciles_started_cafe_close_after_worktree_removal(
         project_root=tmp_path,
         issue_worktree=issue_worktree,
         cleanup_index=0,
+        close_argv=close_argv,
+        pr_auto_create=False,
     )
     module._write_receipt(
         receipt,
         {
-            "schema_version": 2,
+            "schema_version": 3,
             "contract_sha256": "a" * 64,
             "close_recovery": recovery,
             "stages": {
                 "deliver": [],
-                "cleanup": [{"argv": ["cafe", "close"], "status": "started"}],
+                "cleanup": [{"argv": close_argv, "status": "started"}],
             },
         },
     )
@@ -355,7 +374,7 @@ def test_closeout_runner_reconciles_started_cafe_close_after_worktree_removal(
     saved = module._reconcile_lifecycle_close(args)
 
     assert saved["stages"]["cleanup"] == [
-        {"argv": ["cafe", "close"], "returncode": 0, "status": "succeeded"}
+        {"argv": close_argv, "returncode": 0, "status": "succeeded"}
     ]
 
 
@@ -445,7 +464,12 @@ def test_cafe_close_postconditions_require_the_matching_archived_contract(
         (
             "cleanup",
             [{"argv": ["cafe", "close", "--message", "not-allowed"]}],
-            "without options",
+            "requires --squash",
+        ),
+        (
+            "cleanup",
+            [{"argv": ["/tmp/cafe", "close"]}],
+            "literal `cafe` executable",
         ),
     ],
 )
@@ -473,6 +497,25 @@ def test_closeout_runner_rejects_cafe_close_outside_its_exact_final_position(
         )
 
 
+def test_closeout_runner_rejects_squash_in_create_pr_mode(tmp_path: Path) -> None:
+    issue_worktree = tmp_path / "issue-worktree"
+    issue_worktree.mkdir()
+    plan: dict[str, object] = {
+        "deliver": [],
+        "cleanup": [{"argv": ["cafe", "close", "--squash"]}],
+    }
+
+    with pytest.raises(ValueError, match="unavailable in create-PR mode"):
+        module.execute_stage(
+            closeout_plan=plan,
+            contract_sha256="a" * 64,
+            stage="cleanup",
+            issue_worktree=issue_worktree,
+            receipt_file=tmp_path / "closeout.json",
+            pr_auto_create=True,
+        )
+
+
 def test_closeout_runner_prevalidates_the_whole_stage_before_execution(tmp_path: Path) -> None:
     issue_worktree = tmp_path / "issue-worktree"
     issue_worktree.mkdir()
@@ -493,18 +536,11 @@ def test_closeout_runner_prevalidates_the_whole_stage_before_execution(tmp_path:
         ],
     }
 
-    module.execute_stage(
-        closeout_plan=plan,
-        contract_sha256="a" * 64,
-        stage="deliver",
-        issue_worktree=issue_worktree,
-        receipt_file=receipt,
-    )
     with pytest.raises(ValueError, match="final cleanup command"):
         module.execute_stage(
             closeout_plan=plan,
             contract_sha256="a" * 64,
-            stage="cleanup",
+            stage="deliver",
             issue_worktree=issue_worktree,
             receipt_file=receipt,
         )

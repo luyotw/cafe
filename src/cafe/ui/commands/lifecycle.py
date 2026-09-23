@@ -1364,6 +1364,17 @@ def close(
         with open(issue_config_file, "r", encoding="utf-8") as f:
             config_data = yaml.safe_load(f)
 
+        pr_auto_create = config_data.get("pr", {}).get("auto_create", False)
+        if message is not None and not squash:
+            console.print("[red]Error: --message requires --squash.[/red]")
+            raise typer.Exit(1)
+        if squash and pr_auto_create is not False:
+            console.print(
+                "[red]Error: --squash is available only in local review mode; "
+                "it requires pr.auto_create to be false.[/red]"
+            )
+            raise typer.Exit(1)
+
         base_branch = config_data.get("base_branch", "main")
         feature_branch = current_branch
         issue_name = current_branch  # Issue name is the same as current branch
@@ -1423,13 +1434,10 @@ def close(
                 raise typer.Exit(1)
 
             # Step 3: Merge or pull changes based on pr.auto_create config
-            pr_auto_create = config_data.get("pr", {}).get("auto_create", False)
             worktree_abs = Path(worktree_path).resolve()
             worktree_issue_dir = worktree_abs / ".cafe" / "issues" / feature_branch
             try:
                 if squash:
-                    # Explicit --squash always squash-merges locally into the base
-                    # branch, even when pr.auto_create is true.
                     _perform_squash_merge(
                         git_ops,
                         feature_branch,
@@ -1564,11 +1572,8 @@ def close(
                 raise typer.Exit(1)
 
             # Step 2: Merge or pull changes based on pr.auto_create config
-            pr_auto_create = config_data.get("pr", {}).get("auto_create", False)
             try:
                 if squash:
-                    # Explicit --squash always squash-merges locally into the base
-                    # branch, even when pr.auto_create is true.
                     _perform_squash_merge(
                         git_ops,
                         feature_branch,

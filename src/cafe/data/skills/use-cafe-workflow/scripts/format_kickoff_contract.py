@@ -56,7 +56,7 @@ try:
     )
     from cafe.core.types import AgentCLI, AgentConfig
     from cafe.driver import ActivateConfirmedContract, activate_confirmed_contract
-    from cafe.driver.delivery import normalize_delivery_contract
+    from cafe.driver.delivery import normalize_delivery_contract, validate_closeout_plan_policy
     from cafe.playbooks.loader import PlaybookLoader
     from cafe.skills.execution_profile import resolve_execution_profile
     from cafe.skills.loader import SkillLoader
@@ -87,7 +87,9 @@ def _items(values: Iterable[str] | None) -> list[str]:
     return result
 
 
-def _kickoff_delivery_contract(args: argparse.Namespace) -> dict[str, Any]:
+def _kickoff_delivery_contract(
+    args: argparse.Namespace, *, capability_choices: list[Any]
+) -> dict[str, Any]:
     """Combine concise product facts with separately confirmed exact closeout commands."""
     core = args.delivery_contract
     if core.get("schema_version") != 3:
@@ -103,6 +105,15 @@ def _kickoff_delivery_contract(args: argparse.Namespace) -> dict[str, Any]:
             },
         }
     )
+    pr_auto_create = next(
+        (
+            selected.value
+            for question, selected in capability_choices
+            if question.setting == "pr.auto_create"
+        ),
+        None,
+    )
+    validate_closeout_plan_policy(delivery["closeout_plan"], pr_auto_create=pr_auto_create)
     _closeout_descriptions(args, delivery["closeout_plan"])
     return delivery
 
@@ -572,7 +583,7 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("--effective-locale is required when the playbook locale is auto")
     _preflight_reports(args)
     _driver_policy_rows(args)
-    _capability_choices(args, model)
+    capability_choices = _capability_choices(args, model)
     overrides = _parse_phase_chains(args.phase_chain, step_names=set(model.steps))
     phase_config = _project_path(args.phase_config, project_root)
     phases: list[dict[str, Any]] = []
@@ -591,7 +602,9 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
             }
         )
     proposal: dict[str, Any] = {
-        "delivery_contract": _kickoff_delivery_contract(args),
+        "delivery_contract": _kickoff_delivery_contract(
+            args, capability_choices=capability_choices
+        ),
         "locales": {
             "conversation": {
                 "value": effective_locale,
