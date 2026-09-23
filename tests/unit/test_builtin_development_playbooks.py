@@ -4,12 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from cafe.core.playbook import resolve_step_behavior
+from cafe.core.playbook import resolve_playbook_skills, resolve_step_behavior
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.playbooks.simulate import analyze_playbook
 from cafe.skills.checklist_composer import select_checklist_variant
 from cafe.skills.contracts import resolve_prompt_inputs
 from cafe.skills.loader import SkillLoader
+from cafe.skills.workflow_composition import resolve_step_workflow_composition
 
 pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
@@ -231,59 +232,62 @@ def test_direct_is_the_reviewed_no_spec_no_plan_path() -> None:
     assert any(item is not None and item.artifact == "plan" for item in projections)
 
 
-def test_direct_subagent_review_uses_two_in_phase_reviewers_before_pr() -> None:
-    playbook = PlaybookLoader().load_model("direct-subagent-review", strict=True).model
+def test_direct_subagent_review_composes_develop_with_one_review_overlay() -> None:
+    loader = PlaybookLoader()
+    playbook = loader.load_model("direct-subagent-review", strict=True).model
+    raw_playbook = loader.load("direct-subagent-review")
 
     assert playbook.entry_point == "develop"
     assert list(playbook.steps) == ["develop", "pr"]
     develop = playbook.steps["develop"]
-    assert develop.skill == "cafe-develop_subagent_review"
+    assert develop.skill == "cafe-develop"
     assert "Agent" in develop.allowed_tools
     assert develop.on["await_agent"] == "pr"
     assert develop.on["no_changes_needed"] == "develop"
     no_change = next(task for task in develop.human_tasks if task.trigger == "no_changes_needed")
     assert no_change.outcomes == {"agree": "develop", "disagree": "develop"}
 
-    skill = (
+    composition = resolve_step_workflow_composition(
+        SkillLoader(),
+        primary_skill=develop.skill,
+        step_name="develop",
+        workflow_skills=resolve_playbook_skills(
+            raw_playbook, channel="workflow", role="developer", step_name="develop"
+        ),
+    )
+    assert composition.skill_names == (
+        "cafe-develop",
+        "cafe-workflow-common",
+        "cafe-github_sync",
+        "cafe-develop_subagent_review",
+    )
+    assert composition.required_tools == ("Agent",)
+
+    overlay = composition.contributors[-1].declaration
+    assert overlay.checklist is None
+    assert overlay.checklist_overlay is not None
+    assert len(overlay.checklist_overlay.variants) == 1
+    assert [section.reference for section in overlay.checklist_overlay.variants[0].sections] == [
+        "dual_review_gate.md"
+    ]
+
+    skill_path = (
         Path(__file__).parents[2]
         / "src/cafe/data/skills/cafe-develop_subagent_review/SKILL.md"
-    ).read_text(encoding="utf-8")
+    )
+    skill = skill_path.read_text(encoding="utf-8")
     assert "剛好兩個原生 subagent" in skill
     assert "`detail`" in skill
     assert "`scope`" in skill
     assert "重新並行啟動" in skill
     assert "都明確回報 no blocking issues" in skill
+    assert "prompt_inputs:" not in skill
+    assert "human_tasks:" not in skill
 
-    references = (
-        Path(__file__).parents[2]
-        / "src/cafe/data/skills/cafe-develop_subagent_review/references"
-    )
-    for name in ("execution_steps_normal.md", "execution_steps_correction.md"):
-        checklist = (references / name).read_text(encoding="utf-8")
-        assert "Launch exactly two native subagents" in checklist
-        assert "reports no blocking issues from both `detail` and `scope`" in checklist
-    correction = (references / "execution_steps_correction.md").read_text(encoding="utf-8")
-    assert "`review`:" not in correction
-
-    contract = SkillLoader().get_workflow_declaration("cafe-develop_subagent_review")
-    planless = select_checklist_variant(
-        contract,
-        step="develop",
-        iteration=1,
-        artifacts={},
-        feedback=False,
-    )
-    assert all(section.todo_projection is None for section in planless.sections)
-
-    planned = select_checklist_variant(
-        contract,
-        step="develop",
-        iteration=1,
-        artifacts={"plan": object()},
-        feedback=False,
-    )
-    projections = [section.todo_projection for section in planned.sections]
-    assert any(item is not None and item.artifact == "plan" for item in projections)
+    root = skill_path.parent
+    assert sorted(
+        path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file()
+    ) == ["SKILL.md", "references/dual_review_gate.md"]
 
 
 def test_standard_owns_the_established_full_development_graph() -> None:
