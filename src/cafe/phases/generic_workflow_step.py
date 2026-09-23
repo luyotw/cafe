@@ -829,6 +829,7 @@ class GenericWorkflowStepExecutor(Phase):
                             status_code=current_status,
                             baton_path=portion_baton_path or baton_path,
                             hybrid_portion=is_hybrid_portion,
+                            default_required=checklist_validation_required,
                         )
                     ),
                     additional_validation=validate_output_contract,
@@ -3526,6 +3527,7 @@ class GenericWorkflowStepExecutor(Phase):
         status_code: Optional[PhaseStatusCode],
         baton_path: Path,
         hybrid_portion: bool,
+        default_required: bool = False,
     ) -> bool:
         try:
             payload = json.loads(baton_path.read_text(encoding="utf-8"))
@@ -3548,6 +3550,10 @@ class GenericWorkflowStepExecutor(Phase):
                 return completion_requires_checklist(baton_intent=contract.intent.value)
         except (OSError, json.JSONDecodeError, ValueError, BatonRejected):
             pass
+        # An absent decision must not waive a previously established obligation
+        # (including an initial baton-only success whose baton was removed).
+        if status_code is None:
+            return default_required
         if status_code == PhaseStatusCode.NO_CHANGES_NEEDED:
             step_def = self.playbook["steps"][step_name]
             target = step_def.get("on", {}).get("no_changes_needed")

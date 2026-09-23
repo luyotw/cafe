@@ -235,6 +235,12 @@ independent output contracts still apply.
                     valid_codes=valid_intents,
                 )
 
+                # Match the executor's legacy publication fallback: an absent
+                # retry status retains the initial status, including its evidence
+                # obligations. Use that effective status for every validator.
+                if retry_status_code is None:
+                    retry_status_code = completion_status
+
                 # A retry may request help instead of completing the step. Reuse
                 # the caller's baton-first classification for the current result.
                 retry_checklist_required = (

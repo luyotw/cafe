@@ -1014,7 +1014,7 @@ def test_every_materialized_checkbox_blocks_success_and_restores_independently(
 @pytest.mark.parametrize(
     "intent", ["await_agent", "need_clarification", "need_permission", "manual_handoff"]
 )
-@pytest.mark.parametrize("route", ["baton", "legacy"])
+@pytest.mark.parametrize("route", ["baton", "baton_only", "legacy"])
 @pytest.mark.parametrize("complete_gates", [True, False])
 def test_completed_decision_continuation_obeys_final_retry_handoff(
     tmp_path, monkeypatch, intent, route, complete_gates
@@ -1077,11 +1077,11 @@ def test_completed_decision_continuation_obeys_final_retry_handoff(
         if complete_gates:
             path = directory / "checklist.md"
             path.write_text(path.read_text().replace("[ ]", "[x]"))
-        if route == "baton":
+        if route != "legacy":
             (executor.issue_dir / "next_step.txt").write_text(
                 json.dumps({"version": 1, "to_owner": owner, "to_step": target, "intent": intent})
             )
-        return "confirmed" if success else intent
+        return "" if route == "baton_only" else "confirmed" if success else intent
 
     executor.agent_manager = JourneyAgent(executor, [retry_decision])
     result = executor.execute_step("assemble", step, store.load_or_create("assemble"))
@@ -1139,3 +1139,157 @@ def test_completed_decision_continuation_obeys_final_retry_handoff(
         )
         == 1
     )
+
+
+@pytest.mark.parametrize("repair_attempt", [None, 2, 3])
+@pytest.mark.parametrize(
+    "retry_text,baton_mode,defect,initial_signal",
+    [
+        (text, "absent", defect, "legacy")
+        for text in ("", "Still working.")
+        for defect in ("missing_ledger", "invalid_commit", "changed_source", "unchecked")
+    ]
+    + [
+        ("", mode, "missing_ledger", "legacy")
+        for mode in ("empty", "invalid_json", "invalid_shape", "invalid_intent")
+    ]
+    + [
+        ("", "absent", "missing_ledger", "baton"),
+        ("Still working.", "invalid_json", "changed_source", "baton"),
+    ],
+)
+def test_full_runtime_unclassified_retry_cannot_waive_live_evidence(
+    tmp_path, monkeypatch, repair_attempt, retry_text, baton_mode, defect, initial_signal
+):
+    """U12/U13, I05/I06: missing retry decisions cannot publish unvalidated work."""
+    import json
+    import subprocess
+
+    from cafe.core.blackboard import BlackboardStore
+    from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
+
+    executor, step, state, directory = lifecycle_fixture(tmp_path, monkeypatch)
+    write_skill(
+        tmp_path / ".cafe/skills",
+        "primary",
+        {
+            "checklist": {
+                "variants": [
+                    {
+                        "sections": [
+                            {"todo_projection": {"artifact": "blueprint", "source": "bespoke"}}
+                        ]
+                    }
+                ]
+            }
+        },
+    )
+    source = executor.issue_dir / "blueprint.md"
+    original = (
+        "## Todo List\n- [ ] `TASK-001` — Source: `bespoke` — Work: task "
+        "— Closure: works — Evidence: commit\n"
+    )
+    source.write_text(original)
+    store = BlackboardStore(executor.issue_dir)
+    store.set_artifact(state, "blueprint", str(source))
+    step["on"]["await_agent"] = "_done"
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    baton = executor.issue_dir / "next_step.txt"
+    success_baton = {
+        "version": 1,
+        "to_owner": "done",
+        "to_step": "done",
+        "intent": "workflow_complete",
+    }
+
+    def attempt(directory):
+        complete_ledger(directory, commit)
+        call = executor.agent_manager.calls
+        if repair_attempt is not None and call >= repair_attempt:
+            source.write_text(original)
+            if repair_attempt == 2 and initial_signal == "legacy":
+                # An omitted new status may retain the initial confirmed only
+                # after all current gates and evidence actually validate.
+                baton.unlink(missing_ok=True)
+                return retry_text
+            baton.write_text(json.dumps(success_baton))
+            return "confirmed"
+        output = directory / "output.md"
+        if defect == "missing_ledger":
+            output.write_text("# No Todo evidence supplied\n")
+        elif defect == "invalid_commit":
+            output.write_text(output.read_text().replace(commit, "f" * 40))
+        elif defect == "changed_source":
+            source.write_text(original.replace("Work: task", "Work: changed task"))
+        else:
+            checklist = directory / "checklist.md"
+            checklist.write_text(
+                checklist.read_text().replace("[x] Independent", "[ ] Independent")
+            )
+        if call == 1:
+            if initial_signal == "baton":
+                baton.write_text(json.dumps(success_baton))
+                return ""
+            return "confirmed"
+        if baton_mode == "absent":
+            baton.unlink(missing_ok=True)
+        else:
+            baton.write_text(
+                {
+                    "empty": "",
+                    "invalid_json": "{",
+                    "invalid_shape": "[]",
+                    "invalid_intent": json.dumps({**success_baton, "intent": "not_an_intent"}),
+                }[baton_mode]
+            )
+        return retry_text
+
+    executor.agent_manager = JourneyAgent(executor, [attempt])
+    result = BlackboardWorkflowRuntime(
+        issue_dir=executor.issue_dir, playbook=executor.playbook, executor=executor.execute_step
+    ).run(start_step="assemble")
+    assert result.completed == (repair_attempt is not None)
+    assert executor.agent_manager.calls == (repair_attempt or 4)
+    current = store.load_or_create("assemble")
+    if repair_attempt is not None:
+        assert current.handoff_contract.to_owner.value == "done"
+        assert executor._validate_projected_todo_completion(directory / "checklist.md")
+    else:
+        assert current.handoff_contract.to_owner.value != "done"
+        assert "result" not in current.artifacts
+        assert any(event.event_type == "checklist_validation_failed" for event in current.events)
+
+
+@pytest.mark.parametrize("repair", [False, True])
+def test_unclassified_retry_retains_outbound_todo_validation(tmp_path, monkeypatch, repair):
+    """U13/I07: fallback decisions also govern the independent consumer contract."""
+    executor, step, state, directory = lifecycle_fixture(tmp_path, monkeypatch)
+    write_skill(
+        tmp_path / ".cafe/skills",
+        "receiver",
+        {
+            "checklist": {
+                "variants": [
+                    {"sections": [{"todo_projection": {"artifact": "active_work", "causal": True}}]}
+                ]
+            }
+        },
+    )
+    executor.playbook["steps"]["inspect"].update(
+        {"skill": "receiver", "input_artifacts": ["result"]}
+    )
+
+    def attempt(directory):
+        path = directory / "checklist.md"
+        path.write_text(path.read_text().replace("[ ]", "[x]"))
+        (directory / "output.md").write_text(
+            "## Todo List\nNo actionable work.\n"
+            if repair and executor.agent_manager.calls >= 3
+            else "# Missing outbound Todo contract\n"
+        )
+        return "confirmed" if executor.agent_manager.calls == 1 else ""
+
+    executor.agent_manager = JourneyAgent(executor, [attempt])
+    result = executor.execute_step("assemble", step, state)
+    assert result.artifact_ready == repair
+    assert executor.agent_manager.calls == (3 if repair else 4)
