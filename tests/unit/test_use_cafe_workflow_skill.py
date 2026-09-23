@@ -3881,7 +3881,8 @@ def test_driver_executes_the_confirmed_argv_closeout_plan_without_core_lifecycle
     assert "records `started` before execution" in normalized
     assert "runs every confirmed command from the issue worktree" in normalized
     assert "receipt lock across inspection and execution" in normalized
-    assert "does not invoke a CAFE lifecycle command" in normalized
+    assert "exact argv `cafe close`" in normalized
+    assert "does not otherwise invoke a CAFE lifecycle command" in normalized
     assert "inspect the completed issue's remaining lifecycle state read-only" in normalized
     assert '"merge and close" must not be silently reduced to an issue closure' in normalized
 

@@ -125,11 +125,14 @@ python3 <skill-dir>/scripts/execute_closeout_plan.py \
 
 Before a cleanup command can remove a worktree, establish worker quiescence,
 inspect registered worktrees and dirty/untracked content, preserve the receipt,
-and make removal the final cleanup command. The confirmed argv must use explicit
-targets. When a command needs another Git context, make that context an exact
-argument (for example `git -C <retained-checkout> worktree remove <target>`),
-rather than changing the helper's working directory. Never add force flags. The
-helper does not invoke a CAFE lifecycle command or change workflow runtime state.
+and make removal the final cleanup command. The exact argv `cafe close` is
+permitted only in that final cleanup position; options such as `--squash` are
+not permitted because delivery must remain a separate confirmed stage. The
+confirmed argv must use explicit targets. When a command needs another Git
+context, make that context an exact argument (for example
+`git -C <retained-checkout> worktree remove <target>`), rather than changing the
+helper's working directory. Never add force flags. The helper does not otherwise
+invoke a CAFE lifecycle command or change workflow runtime state.
 
 ### Assist when no argv closeout plan exists
 
