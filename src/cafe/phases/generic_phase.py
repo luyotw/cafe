@@ -190,7 +190,14 @@ class GenericPhase:
         )
         runtime_context.append("Baton contract (single source of truth):")
         runtime_context.append(
-            "- write next_step_file as JSON with exactly these required fields: "
+            "- for an ordinary successful handoff, write next_step_file as "
+            "JSON with exactly these required fields: "
+            '{"version":1,"intent":"await_agent"}; the runtime resolves the concrete '
+            "target from this step's on declaration"
+        )
+        runtime_context.append(
+            "- for legacy or exceptional routes, write next_step_file as JSON with "
+            "exactly these required fields: "
             '{"version":1,"to_owner":"<agent|user|done>",'
             '"to_step":"<target>","intent":"<intent>"}'
         )

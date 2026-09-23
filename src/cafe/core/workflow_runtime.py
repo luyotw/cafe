@@ -1284,10 +1284,23 @@ class BlackboardWorkflowRuntime:
         Only the structured JSON baton contract is accepted; agents must
         always write structured JSON batons to ``next_step.txt``.
         """
-        self.blackboard = self.blackboard_store.load_or_create(current_step)
+        self.blackboard = self.blackboard_store.load_or_create(
+            current_step,
+            tolerate_invalid_baton=True,
+        )
+        outcome = self.blackboard_store.load_outcome_only_handoff()
+        if outcome is not None:
+            self._materialize_outcome_only_handoff(
+                current_step=current_step,
+                intent=outcome.intent,
+            )
         contract = self.blackboard_store.load_handoff_contract(
             self.blackboard,
             allowed_steps=list(self.steps.keys()),
+        )
+        self._validate_mapped_handoff_target(
+            current_step=current_step,
+            contract=contract,
         )
         if contract.source == "unknown":
             contract.source = "baton"
@@ -1326,6 +1339,117 @@ class BlackboardWorkflowRuntime:
                 allowed_steps=list(self.steps.keys()),
             )
         return contract
+
+    def _mapped_target_for_intent(
+        self,
+        *,
+        current_step: str,
+        intent: HandoffIntent | str,
+    ) -> str | None:
+        """Resolve one semantic outcome through the active playbook step."""
+        step_def = self.steps.get(current_step, {})
+        transitions = step_def.get("on")
+        if not isinstance(transitions, dict):
+            return None
+        intent_key = intent.value if isinstance(intent, HandoffIntent) else intent
+        target = transitions.get(intent_key)
+        if target is None:
+            target = transitions.get("default")
+        return str(target) if target is not None else None
+
+    def _materialize_outcome_only_handoff(
+        self,
+        *,
+        current_step: str,
+        intent: HandoffIntent,
+    ) -> None:
+        """Turn an ordinary success outcome into the playbook-owned baton."""
+        target = self._mapped_target_for_intent(
+            current_step=current_step,
+            intent=intent,
+        )
+        if target is None:
+            step_def = self.steps.get(current_step, {})
+            transitions = step_def.get("on")
+            valid_values = (
+                sorted(str(key) for key in transitions)
+                if isinstance(transitions, dict)
+                else []
+            )
+            raise BatonRejected(
+                field="intent",
+                invalid_value=intent.value,
+                valid_values=valid_values,
+            )
+
+        if target in {"done", "_done"}:
+            to_owner = HandoffOwner.DONE
+            to_step = "done"
+            handoff_intent = HandoffIntent.WORKFLOW_COMPLETE
+        elif target == "user":
+            to_owner = HandoffOwner.USER
+            to_step = "user"
+            handoff_intent = HandoffIntent.MANUAL_HANDOFF
+        elif target in self.steps:
+            to_owner = HandoffOwner.AGENT
+            to_step = target
+            handoff_intent = HandoffIntent.AWAIT_AGENT
+        else:
+            raise BatonRejected(
+                field="to_step",
+                invalid_value=target,
+                valid_values=sorted([*self.steps, "user", "done"]),
+            )
+
+        self.blackboard_store.update_handoff_contract(
+            self.blackboard,
+            from_step=current_step,
+            to_owner=to_owner,
+            to_step=to_step,
+            intent=handoff_intent,
+            status_code=intent.value,
+            source="workflow.semantic_outcome",
+        )
+
+    def _validate_mapped_handoff_target(
+        self,
+        *,
+        current_step: str,
+        contract: HandoffContract,
+    ) -> None:
+        """Reject an agent-authored route that contradicts its semantic outcome."""
+        if (
+            contract.from_step != current_step
+            or contract.to_step == current_step
+            or contract.source == "bootstrap"
+        ):
+            return
+        semantic_intent = contract.intent
+        if contract.intent is HandoffIntent.AWAIT_AGENT and contract.status_code:
+            try:
+                semantic_intent = HandoffIntent(
+                    transition_map_key(PhaseStatusCode(contract.status_code))
+                )
+            except ValueError:
+                pass
+        if semantic_intent not in {
+            HandoffIntent.AWAIT_AGENT,
+            HandoffIntent.MANUAL_HANDOFF,
+        }:
+            return
+        expected_target = self._mapped_target_for_intent(
+            current_step=current_step,
+            intent=semantic_intent,
+        )
+        if expected_target is None:
+            return
+        normalized_target = "done" if expected_target in {"done", "_done"} else expected_target
+        if contract.to_step != normalized_target:
+            raise BatonRejected(
+                field="to_step",
+                invalid_value=contract.to_step,
+                valid_values=[normalized_target],
+            )
 
     def _is_declared_manual_handoff(
         self,

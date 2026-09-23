@@ -128,8 +128,8 @@ Read your agent file: {agent_file}
 - The first round establishes acceptance closure and triggered-risk coverage. A correction round reopens only prior blockers, rows affected by the current correction, and new findings that remain blocking under the current mode. Unchanged proven boundaries may be referenced as `closed_reused`, but required cross-component seam coverage remains mandatory.
 - Follow the shared skill's **Develop and review disagreement protocol** and **Shared Rules** for developer discussion, arbitration, and blackboard/baton updates.
 - Write the next-step baton for this result; the runtime updates the blackboard.
-- If changes are required, write the next-step baton to `develop`.
-- When complete, write the next workflow step (the default playbook uses `pr`); unresolved non-Critical follow-up proposals are not blockers but must remain in the review output for the PR gate.
+- If changes are required, use the playbook-declared manual handoff route from the current runtime context.
+- When complete, report the ordinary-success outcome without naming a target; unresolved non-Critical follow-up proposals are not blockers but must remain in the review output for the PR gate.
 - Follow the shared skill's **Develop and review disagreement protocol** and **Shared Rules** for developer discussion, arbitration, and blackboard/baton updates.
 
 ## Output

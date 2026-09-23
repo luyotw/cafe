@@ -387,6 +387,233 @@ def _write_baton(
     )
 
 
+def _write_outcome_only_success(issue_dir: Path) -> None:
+    (issue_dir / "next_step.txt").write_text(
+        json.dumps({"version": 1, "intent": "await_agent"}),
+        encoding="utf-8",
+    )
+
+
+def test_runtime_routes_outcome_only_success_using_renamed_playbook_target(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "outcome-only-renamed-target"
+    calls: list[str] = []
+    playbook = {
+        "playbook": {"id": "outcome-only"},
+        "steps": {
+            "author": {
+                "skill": "authoring-skill",
+                "role": "writer",
+                "behavior": {"completion": "baton"},
+                "on": {"await_agent": "quality_gate"},
+            },
+            "quality_gate": {
+                "skill": "review-skill",
+                "role": "reviewer",
+                "behavior": {"completion": "baton"},
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+
+    def executor(step_name: str, _step_def: dict, _state: object) -> StepExecutionResult:
+        calls.append(step_name)
+        if step_name == "author":
+            _write_outcome_only_success(issue_dir)
+        else:
+            _write_baton(
+                issue_dir,
+                from_step="quality_gate",
+                to_owner="done",
+                to_step="done",
+                intent="workflow_complete",
+            )
+        return StepExecutionResult(response="", artifacts={})
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    ).run(start_step="author")
+
+    assert result.completed is True
+    assert calls == ["author", "quality_gate"]
+    state = BlackboardStore(issue_dir).load_or_create("author")
+    transitions = [event.data for event in state.events if event.event_type == "transition"]
+    assert transitions[0]["to"] == "quality_gate"
+    assert transitions[0]["source"] == "baton"
+
+
+def test_runtime_outcome_only_success_preserves_default_and_terminal_routes(tmp_path: Path) -> None:
+    default_issue_dir = tmp_path / ".cafe" / "issues" / "outcome-only-default"
+    default_calls: list[str] = []
+    default_playbook = {
+        "playbook": {"id": "outcome-only-default"},
+        "steps": {
+            "author": {
+                "skill": "authoring-skill",
+                "role": "writer",
+                "behavior": {"completion": "baton"},
+                "on": {"default": "renamed_review"},
+            },
+            "renamed_review": {
+                "skill": "review-skill",
+                "role": "reviewer",
+                "behavior": {"completion": "baton"},
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+
+    def default_executor(step_name: str, _step_def: dict, _state: object) -> StepExecutionResult:
+        default_calls.append(step_name)
+        if step_name == "author":
+            _write_outcome_only_success(default_issue_dir)
+        else:
+            _write_baton(
+                default_issue_dir,
+                from_step="renamed_review",
+                to_owner="done",
+                to_step="done",
+                intent="workflow_complete",
+            )
+        return StepExecutionResult(response="", artifacts={})
+
+    assert BlackboardWorkflowRuntime(
+        issue_dir=default_issue_dir,
+        playbook=default_playbook,
+        executor=default_executor,
+    ).run(start_step="author").completed is True
+    assert default_calls == ["author", "renamed_review"]
+
+    terminal_issue_dir = tmp_path / ".cafe" / "issues" / "outcome-only-terminal"
+    terminal_playbook = {
+        "playbook": {"id": "outcome-only-terminal"},
+        "steps": {
+            "author": {
+                "skill": "authoring-skill",
+                "role": "writer",
+                "behavior": {"completion": "baton"},
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+
+    def terminal_executor(_step_name: str, _step_def: dict, _state: object) -> StepExecutionResult:
+        _write_outcome_only_success(terminal_issue_dir)
+        return StepExecutionResult(response="", artifacts={})
+
+    terminal_result = BlackboardWorkflowRuntime(
+        issue_dir=terminal_issue_dir,
+        playbook=terminal_playbook,
+        executor=terminal_executor,
+    ).run(start_step="author")
+    assert terminal_result.completed is True
+
+
+def test_runtime_rejects_unmapped_outcome_only_success_without_inventing_target(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "outcome-only-unmapped"
+    issue_dir.mkdir(parents=True)
+    playbook = {
+        "playbook": {"id": "outcome-only-unmapped"},
+        "steps": {
+            "author": {
+                "skill": "authoring-skill",
+                "role": "writer",
+                "behavior": {"completion": "baton"},
+                "on": {"manual_handoff": "author"},
+            },
+        },
+    }
+
+    def executor(_step_name: str, _step_def: dict, _state: object, **_kwargs) -> StepExecutionResult:
+        _write_outcome_only_success(issue_dir)
+        return StepExecutionResult(response="", artifacts={})
+
+    with pytest.raises(RuntimeError, match="invalid baton 3 times"):
+        BlackboardWorkflowRuntime(
+            issue_dir=issue_dir,
+            playbook=playbook,
+            executor=executor,
+        ).run(start_step="author")
+
+    payload = json.loads((issue_dir / "next_step.txt").read_text(encoding="utf-8"))
+    assert payload == {"version": 1, "intent": "await_agent"}
+    state = BlackboardStore(issue_dir).load_or_create("author")
+    rejections = [event.data for event in state.events if event.event_type == "baton_rejected"]
+    assert [entry["field"] for entry in rejections] == ["intent", "intent", "intent"]
+
+
+def test_runtime_rejects_legacy_baton_target_that_conflicts_with_mapped_outcome(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "mapped-target-conflict"
+    issue_dir.mkdir(parents=True)
+    prompts: list[str | None] = []
+    playbook = {
+        "playbook": {"id": "mapped-target-conflict"},
+        "steps": {
+            "author": {
+                "skill": "authoring-skill",
+                "role": "writer",
+                "behavior": {"completion": "baton"},
+                "on": {"await_agent": "review"},
+            },
+            "review": {
+                "skill": "review-skill",
+                "role": "reviewer",
+                "behavior": {"completion": "baton"},
+                "on": {"await_agent": "_done"},
+            },
+            "other": {
+                "skill": "other-skill",
+                "role": "writer",
+                "behavior": {"completion": "baton"},
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+    calls = 0
+
+    def executor(step_name: str, _step_def: dict, _state: object, **kwargs) -> StepExecutionResult:
+        nonlocal calls
+        if step_name == "author":
+            calls += 1
+            prompts.append(kwargs.get("extra_prompt"))
+            if calls == 1:
+                _write_baton(
+                    issue_dir,
+                    from_step="author",
+                    to_owner="agent",
+                    to_step="other",
+                    intent="await_agent",
+                )
+            else:
+                _write_outcome_only_success(issue_dir)
+        else:
+            _write_baton(
+                issue_dir,
+                from_step="review",
+                to_owner="done",
+                to_step="done",
+                intent="workflow_complete",
+            )
+        return StepExecutionResult(response="", artifacts={})
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    ).run(start_step="author")
+
+    assert result.completed is True
+    assert calls == 2
+    assert "field 'to_step'" in (prompts[1] or "")
+    assert "other" in (prompts[1] or "")
+    assert "review" in (prompts[1] or "")
 def _write_publication_contract(
     issue_dir: Path,
     *,

@@ -210,6 +210,26 @@ def test_direct_is_the_reviewed_no_spec_no_plan_path() -> None:
     assert playbook.steps["pr"].on["manual_handoff"] == "develop"
     assert playbook.steps["review"].max_attempts_per_cycle == 5
 
+    contract = SkillLoader().get_workflow_declaration("cafe-develop")
+    planless = select_checklist_variant(
+        contract,
+        step="develop",
+        iteration=1,
+        artifacts={},
+        feedback=False,
+    )
+    assert all(section.todo_projection is None for section in planless.sections)
+
+    planned = select_checklist_variant(
+        contract,
+        step="develop",
+        iteration=1,
+        artifacts={"plan": object()},
+        feedback=False,
+    )
+    projections = [section.todo_projection for section in planned.sections]
+    assert any(item is not None and item.artifact == "plan" for item in projections)
+
 
 def test_direct_subagent_review_uses_two_in_phase_reviewers_before_pr() -> None:
     playbook = PlaybookLoader().load_model("direct-subagent-review", strict=True).model
