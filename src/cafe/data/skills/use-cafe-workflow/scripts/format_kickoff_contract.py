@@ -8,6 +8,7 @@ import json
 import os
 import shlex
 import shutil
+import string
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -182,13 +183,13 @@ def _table(headers: list[str], rows: list[list[Any]]) -> str:
     return "\n".join(lines)
 
 
-def _fact(value: Any) -> str:
-    """Display all product facts without serializing their container structure."""
-    if isinstance(value, list):
-        return "\n".join(f"- {_fact(item)}" for item in value) or "[]"
-    if isinstance(value, dict):
-        return "\n".join(f"{key}: {_fact(item)}" for key, item in value.items()) or "{}"
-    return str(value)
+def _fact(value: str | list[str]) -> str:
+    """Render literal prose without letting facts create Markdown structure."""
+    items = value if isinstance(value, list) else [value]
+    escapes = str.maketrans({mark: f"\\{mark}" for mark in string.punctuation})
+    return "\n".join(
+        "- " + item.translate(escapes).replace("\n", "\n  ") for item in items
+    ) or "- []"
 
 
 def _json_mapping(value: str) -> dict[str, Any]:
@@ -648,15 +649,6 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
             ]
             for index, entry in enumerate(driver["clis"])
         )
-        driver_rows.append(
-            ["通知", "第一個 CLI 沿用 session 模型；通知不代替使用者確認或授權。"]
-            if zh
-            else [
-                "Notifications",
-                "The primary CLI keeps its session model; notifications do not replace user "
-                "confirmation or permissions.",
-            ]
-        )
     summary = _table(
         headers,
         [
@@ -783,13 +775,10 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
         [
             f"## Kickoff Contract — {args.issue_name}",
             "### Delivery Contract",
-            _table(
-                headers,
-                [
-                    [key, _fact(value)]
-                    for key, value in delivery.items()
-                    if key not in {"closeout_plan", "schema_version"}
-                ],
+            "\n\n".join(
+                f"#### {key}\n\n{_fact(value)}"
+                for key, value in delivery.items()
+                if key not in {"closeout_plan", "schema_version"}
             ),
             "Implementation direction is advisory; alternatives that satisfy scope, acceptance "
             "criteria, permissions and constraints do not require reconfirmation.",

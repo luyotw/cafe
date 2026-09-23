@@ -86,6 +86,14 @@ provider detector or a fixed shipping checklist. Do not enumerate CI/CD vendors,
 match trigger keywords, or silently choose a generic merge/deploy/cleanup
 sequence.
 
+Discover the intended end state beyond merely opening a PR. Propose the
+repository-appropriate delivery and cleanup actions for user approval; an action
+not yet authorized is not a reason to leave it out of the proposal. Do not
+invent a PR-only endpoint or exclusions for merge, issue closure or worktree
+removal to avoid asking for that approval. Respect an explicit user choice to
+stop at a PR, preserve resources, or exclude an action. Repository context
+informs the recommendation; only user confirmation authorizes execution.
+
 Turn the discovered route into two ordered lists of exact host-side commands:
 
 ```yaml
@@ -96,7 +104,11 @@ cleanup:
 ```
 
 Both fields are required in every new contract. Use an explicit `[]` for
-a stage with no remaining action; never omit the field or invent a no-op.
+a stage with genuinely no remaining action or one the user explicitly excludes;
+make the reason clear in the existing scope or constraints. Lack of CI/CD
+configuration, lack of existing permission, or an unresolved future target does
+not mean nothing remains. Do not fill `[]` as a discovery fallback, omit the
+field, or invent a no-op.
 
 Every argument must be concrete at kickoff: no shell strings, templates,
 placeholders, or future identifiers that will be filled in later. When a future
@@ -105,8 +117,17 @@ it identifies the intended target, or obtain a fresh confirmation once the
 concrete command exists. Inspect whether integration already triggers delivery
 before proposing another deployment command.
 
-Present both exact arrays and the repository evidence that led to them. The user
-confirms the complete kickoff, including their command order and effects. That
+When the intended action or target is unresolved, identify the missing choice
+and ask a focused question instead of presenting an empty plan as settled. Do
+not activate a plan with an unresolved stage: obtain concrete argv or a verified
+stable selector, then render it for confirmation. The user may instead choose
+a narrower endpoint, such as stopping at a PR; record that choice in the
+existing scope or constraints. A later expansion requires a newly confirmed
+plan, not filling in the original `[]` after kickoff.
+
+Present both exact arrays, grounded in the repository context above, without
+adding an evidence report to the contract. The user confirms the complete
+kickoff, including their command order and effects. That
 confirmation is durable authority for the Driver to execute exactly those arrays
 at closeout; it is not authority for a changed command, reordered command, or
 materially changed target/effect. Never silently discard restrictions from an
@@ -384,6 +405,15 @@ Use the bundled formatter instead of a prose-only summary. Its stdout is a
 self-contained initial confirmation request: present the complete output so the
 user sees every field being confirmed, including `deliver` and `cleanup`. Do not
 substitute a shorter hand-written recap.
+
+Render the descriptive delivery facts as separate subheadings with bullet
+points, not a two-column table with long cells or HTML line breaks. Keep purpose,
+scope, and implementation direction separate. Preserve literal-text escaping
+during translation so fact content cannot introduce new Markdown sections.
+Compact execution settings,
+model chains, gates and command arrays may stay in tables. Notification/session
+mechanics follow the selected Driver mode; do not add a separate notification
+field or another approval choice for them.
 
 Translate all presentation text into the effective conversation language:
 headings, readable field labels, descriptions, capability prompts and outcomes,

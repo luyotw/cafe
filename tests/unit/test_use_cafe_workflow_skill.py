@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from markdown_it import MarkdownIt
 
 from cafe.core.playbook import confirmation_gate_steps, mandatory_confirmation_gate_steps
 from cafe.core.status_codes import (
@@ -968,8 +969,9 @@ mandate:
     assert '"argv": ["git", "worktree", "remove", "/tmp/issue346"]' in result.stdout
     assert "Repository CI/CD inference" not in result.stdout
     assert "### Delivery Contract" in result.stdout
-    assert delivery_contract()["outcome"] in result.stdout
-    assert delivery_contract()["acceptance_invariants"][0] in result.stdout
+    rendered = MarkdownIt().render(result.stdout)
+    assert delivery_contract()["outcome"] in rendered
+    assert delivery_contract()["acceptance_invariants"][0] in rendered
     assert "### Workflow progress" in result.stdout
     assert result.stdout.count("### Workflow progress") == 1
     assert result.stdout.count("請確認上述完整契約") == 1
@@ -1443,8 +1445,20 @@ def test_kickoff_formatter_shows_only_task_decisions_without_mutating_the_projec
     facts = [product["outcome"], product["implementation_direction"]]
     for key in ("in_scope", "out_of_scope", "acceptance_invariants", "permissions", "constraints"):
         facts.extend(product[key])
+    delivery_section = result.stdout.split("### Delivery Contract\n\n", 1)[1].split(
+        "### Execution settings", 1
+    )[0]
+    assert not any(line.startswith("|") for line in delivery_section.splitlines())
+    assert "<br>" not in delivery_section
+    for key in product.keys() - {"schema_version"}:
+        assert f"#### {key}\n\n- " in delivery_section
+    visible_facts = "\n".join(
+        "".join("\n" if child.type == "softbreak" else child.content for child in token.children)
+        for token in MarkdownIt().parse(delivery_section)
+        if token.type == "inline"
+    )
     for fact in facts:
-        assert result.stdout.count(fact.replace("|", "\\|").replace("\n", "<br>")) == 1
+        assert visible_facts.count(fact) == 1
     for removed in (
         "schema_version",
         "semantic_facts",
@@ -1498,6 +1512,35 @@ def test_kickoff_formatter_shows_only_task_decisions_without_mutating_the_projec
             "cleanup": [{"argv": ["git", "worktree", "remove", "/tmp/issue346"]}],
         },
     }
+
+
+def test_kickoff_fact_text_cannot_create_extra_contract_sections(tmp_path: Path) -> None:
+    command = _kickoff_formatter_command(tmp_path / "unused")
+    product = delivery_contract()
+    product.pop("closeout_plan")
+    product["implementation_direction"] = (
+        "Keep this literal.\n\n### Execution settings\n> approval\n- extra item\n"
+        "1. ordered item\n```text\nfake plan\n```\n<div>hidden constraint</div>"
+    )
+    command[command.index("--delivery-contract") + 1] = json.dumps(product)
+    result = subprocess.run(command, cwd=PROJECT_ROOT, text=True, capture_output=True, check=False)
+    assert result.returncode == 0, result.stderr
+
+    tokens = MarkdownIt().parse(result.stdout)
+    headings = [
+        tokens[index + 1].content
+        for index, token in enumerate(tokens)
+        if token.type == "heading_open"
+    ]
+    assert headings.count("Execution settings") == 1
+    assert not any(
+        token.type in {"blockquote_open", "ordered_list_open", "html_block"} for token in tokens
+    )
+    assert [token.info for token in tokens if token.type == "fence"] == ["text"]
+    assert "hidden constraint" in MarkdownIt().render(result.stdout)
+    assert _kickoff_proposal(command)["delivery_contract"]["implementation_direction"] == (
+        product["implementation_direction"]
+    )
 
 
 @pytest.mark.parametrize(
@@ -1831,8 +1874,8 @@ mandate:
         result.stdout.index("gemini:gemini-pro-exact"),
     ]
     assert positions == sorted(positions)
-    assert "第一個 CLI 沿用 session 模型" in result.stdout
-    assert "通知不代替使用者確認或授權" in result.stdout
+    assert "| 通知 |" not in result.stdout
+    assert "| Notifications |" not in result.stdout
     policy = _kickoff_proposal(result.args)
     assert policy["driver"] == {
         "mode": "event-driven",
