@@ -104,14 +104,17 @@ def _receipt_lock(receipt_path: Path) -> Iterator[None]:
 
 def _empty_receipt(contract_sha256: str) -> dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "contract_sha256": contract_sha256,
+        "close_recovery": None,
         "stages": {"deliver": [], "cleanup": []},
     }
 
 
-def _load_receipt(path: Path, *, contract_sha256: str) -> dict[str, Any]:
+def _load_receipt(path: Path, *, contract_sha256: str | None) -> dict[str, Any]:
     if not path.exists():
+        if contract_sha256 is None:
+            raise ValueError("receipt file does not exist")
         return _empty_receipt(contract_sha256)
     if path.is_symlink() or not path.is_file():
         raise ValueError("receipt file is unsafe")
@@ -119,10 +122,56 @@ def _load_receipt(path: Path, *, contract_sha256: str) -> dict[str, Any]:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError("receipt file is unreadable") from exc
-    if not isinstance(value, dict) or set(value) != {"schema_version", "contract_sha256", "stages"}:
+    if not isinstance(value, dict):
         raise ValueError("receipt file has an unsupported shape")
-    if value["schema_version"] != 1 or value["contract_sha256"] != contract_sha256:
+    if value.get("schema_version") == 1 and set(value) == {
+        "schema_version",
+        "contract_sha256",
+        "stages",
+    }:
+        value = {
+            **value,
+            "schema_version": 2,
+            "close_recovery": None,
+        }
+    if value.get("schema_version") != 2 or set(value) != {
+        "schema_version",
+        "contract_sha256",
+        "close_recovery",
+        "stages",
+    }:
+        raise ValueError("receipt file has an unsupported shape")
+    if contract_sha256 is not None and value["contract_sha256"] != contract_sha256:
         raise ValueError("receipt belongs to a different confirmed contract")
+    if not isinstance(value["contract_sha256"], str) or not value["contract_sha256"]:
+        raise ValueError("receipt contract identity is invalid")
+    recovery = value["close_recovery"]
+    if recovery is not None:
+        if not isinstance(recovery, dict) or set(recovery) != {
+            "archive_path",
+            "cleanup_index",
+            "issue_name",
+            "issue_worktree",
+            "project_root",
+            "workflow_id",
+        }:
+            raise ValueError("receipt close recovery context is invalid")
+        if (
+            any(
+                not isinstance(recovery[name], str) or not recovery[name]
+                for name in (
+                    "archive_path",
+                    "issue_name",
+                    "issue_worktree",
+                    "project_root",
+                    "workflow_id",
+                )
+            )
+            or not isinstance(recovery["cleanup_index"], int)
+            or isinstance(recovery["cleanup_index"], bool)
+            or recovery["cleanup_index"] < 0
+        ):
+            raise ValueError("receipt close recovery context is invalid")
     stages = value["stages"]
     if not isinstance(stages, dict) or set(stages) != {"deliver", "cleanup"}:
         raise ValueError("receipt stages are invalid")
@@ -145,6 +194,88 @@ def _load_receipt(path: Path, *, contract_sha256: str) -> dict[str, Any]:
     return value
 
 
+def _issue_archive_path(*, project_root: Path, issue_name: str) -> Path:
+    project_key = str(project_root.resolve()).lstrip("/").replace("/", "-")
+    archive_root = Path.home() / ".cafe" / "projects" / project_key / "archived"
+    archive_path = (archive_root / issue_name).resolve()
+    if not _is_within(archive_path, archive_root.resolve()):
+        raise ValueError("issue archive path escapes the project archive root")
+    return archive_path
+
+
+def _close_recovery_context(
+    *,
+    issue_name: str,
+    workflow_id: str,
+    project_root: Path,
+    issue_worktree: Path,
+    cleanup_index: int,
+) -> dict[str, Any]:
+    if not issue_name or not workflow_id:
+        raise ValueError("cafe close recovery requires issue and workflow identity")
+    root = _directory(project_root, label="confirmed project root")
+    worktree = issue_worktree.resolve()
+    return {
+        "archive_path": str(_issue_archive_path(project_root=root, issue_name=issue_name)),
+        "cleanup_index": cleanup_index,
+        "issue_name": issue_name,
+        "issue_worktree": str(worktree),
+        "project_root": str(root),
+        "workflow_id": workflow_id,
+    }
+
+
+def _local_branch_absent(*, project_root: Path, issue_name: str) -> bool:
+    result = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(project_root),
+            "show-ref",
+            "--verify",
+            "--quiet",
+            f"refs/heads/{issue_name}",
+        ],
+        check=False,
+        shell=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if result.returncode not in {0, 1}:
+        raise ValueError("could not verify the local feature branch state")
+    return result.returncode == 1
+
+
+def _close_postcondition_errors(recovery: dict[str, Any], *, contract_sha256: str) -> list[str]:
+    errors: list[str] = []
+    worktree = Path(recovery["issue_worktree"])
+    archive = Path(recovery["archive_path"])
+    project_root = Path(recovery["project_root"])
+    if worktree.exists():
+        errors.append("issue worktree still exists")
+    try:
+        _, archived_sha256 = load_contract(
+            archive,
+            issue_name=recovery["issue_name"],
+            workflow_id=recovery["workflow_id"],
+        )
+    except ValueError:
+        errors.append("matching archived Driver contract is unavailable")
+    else:
+        if archived_sha256 != contract_sha256:
+            errors.append("archived Driver contract does not match the confirmed contract")
+    try:
+        branch_absent = _local_branch_absent(
+            project_root=project_root, issue_name=recovery["issue_name"]
+        )
+    except ValueError as exc:
+        errors.append(str(exc))
+    else:
+        if not branch_absent:
+            errors.append("local feature branch still exists")
+    return errors
+
+
 def _write_receipt(path: Path, receipt: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
@@ -161,9 +292,7 @@ def _write_receipt(path: Path, receipt: dict[str, Any]) -> None:
             temporary.unlink()
 
 
-def _validate_command(
-    argv: list[str], *, stage: str, index: int, command_count: int
-) -> None:
+def _validate_command(argv: list[str], *, stage: str, index: int, command_count: int) -> None:
     executable = Path(argv[0]).name.lower()
     if executable in _SHELL_EXECUTABLES and any(arg in _SHELL_CODE_FLAGS for arg in argv[1:]):
         raise ValueError("closeout commands must not execute shell code strings")
@@ -200,9 +329,7 @@ def _validate_stage_commands(
         )
         if decision["decision"] != "confirmed_closeout_command":
             raise ValueError("requested command is not the exact confirmed closeout command")
-        _validate_command(
-            argv, stage=stage, index=index, command_count=len(commands)
-        )
+        _validate_command(argv, stage=stage, index=index, command_count=len(commands))
         validated.append(argv)
     return validated
 
@@ -222,6 +349,9 @@ def execute_stage(
     stage: str,
     issue_worktree: Path,
     receipt_file: Path,
+    issue_name: str | None = None,
+    workflow_id: str | None = None,
+    project_root: Path | None = None,
 ) -> dict[str, Any]:
     """Run one ordered stage, writing durable state before every command."""
     if stage not in {"deliver", "cleanup"}:
@@ -239,6 +369,9 @@ def execute_stage(
             stage=stage,
             worktree=worktree,
             receipt_path=receipt_path,
+            issue_name=issue_name,
+            workflow_id=workflow_id,
+            project_root=project_root,
         )
 
 
@@ -249,6 +382,9 @@ def _execute_stage_locked(
     stage: str,
     worktree: Path,
     receipt_path: Path,
+    issue_name: str | None,
+    workflow_id: str | None,
+    project_root: Path | None,
 ) -> dict[str, Any]:
     """Execute after holding the receipt lock for the whole stage."""
 
@@ -265,6 +401,26 @@ def _execute_stage_locked(
     command_argv = _validate_stage_commands(
         stage=stage, commands=commands, closeout_plan=closeout_plan
     )
+    close_indexes = [
+        index
+        for index, argv in enumerate(command_argv)
+        if Path(argv[0]).name.lower() == "cafe" and len(argv) > 1 and argv[1] == "close"
+    ]
+    close_recovery = None
+    if close_indexes:
+        if issue_name is None or workflow_id is None or project_root is None:
+            raise ValueError("cafe close requires durable recovery identity")
+        close_recovery = _close_recovery_context(
+            issue_name=issue_name,
+            workflow_id=workflow_id,
+            project_root=project_root,
+            issue_worktree=worktree,
+            cleanup_index=close_indexes[0],
+        )
+        existing_recovery = receipt["close_recovery"]
+        if existing_recovery is not None and existing_recovery != close_recovery:
+            raise ValueError("receipt cafe close recovery context does not match this execution")
+        receipt["close_recovery"] = close_recovery
     records = receipt["stages"][stage]
     if len(records) > len(commands):
         raise ValueError("receipt has more commands than the confirmed plan")
@@ -289,9 +445,58 @@ def _execute_stage_locked(
             record.update({"status": "failed", "returncode": result.returncode})
             _write_receipt(receipt_path, receipt)
             raise CloseoutCommandError(f"closeout command exited {result.returncode}: {argv[0]}")
+        if close_recovery is not None and index == close_recovery["cleanup_index"]:
+            errors = _close_postcondition_errors(close_recovery, contract_sha256=contract_sha256)
+            if errors:
+                detail = "; ".join(errors)
+                record.update({"status": "failed", "returncode": 0, "error": detail})
+                _write_receipt(receipt_path, receipt)
+                raise CloseoutCommandError(f"cafe close postconditions failed: {detail}")
         record.update({"status": "succeeded", "returncode": 0})
         _write_receipt(receipt_path, receipt)
     return receipt
+
+
+def _reconcile_lifecycle_close(args: argparse.Namespace) -> dict[str, Any]:
+    """Finish a recorded cafe close after its worktree and live contract are gone."""
+    if args.stage != "cleanup":
+        raise ValueError("cafe close recovery is available only for cleanup")
+    project_root = _directory(args.project_root, label="confirmed project root")
+    issue_worktree = args.issue_worktree.resolve()
+    receipt_path = _receipt_path(args.receipt_file, issue_worktree=issue_worktree)
+    with _receipt_lock(receipt_path):
+        receipt = _load_receipt(receipt_path, contract_sha256=None)
+        recovery = receipt["close_recovery"]
+        if recovery is None:
+            raise ValueError("receipt has no cafe close recovery context")
+        expected = _close_recovery_context(
+            issue_name=args.issue_name,
+            workflow_id=args.workflow_id,
+            project_root=project_root,
+            issue_worktree=issue_worktree,
+            cleanup_index=recovery["cleanup_index"],
+        )
+        if recovery != expected:
+            raise ValueError("receipt cafe close recovery context does not match this request")
+        cleanup_records = receipt["stages"]["cleanup"]
+        index = recovery["cleanup_index"]
+        if index != len(cleanup_records) - 1:
+            raise ValueError("receipt cafe close record is not the final cleanup command")
+        if any(record.get("status") != "succeeded" for record in cleanup_records[:index]):
+            raise ValueError("receipt has incomplete cleanup commands before cafe close")
+        record = cleanup_records[index]
+        if record.get("argv") != ["cafe", "close"]:
+            raise ValueError("receipt cafe close command is invalid")
+        if record.get("status") == "succeeded":
+            return receipt
+        if record.get("status") != "started":
+            raise ValueError("failed cafe close requires manual inspection")
+        errors = _close_postcondition_errors(recovery, contract_sha256=receipt["contract_sha256"])
+        if errors:
+            raise ValueError("cafe close recovery is incomplete: " + "; ".join(errors))
+        record.update({"status": "succeeded", "returncode": 0})
+        _write_receipt(receipt_path, receipt)
+        return receipt
 
 
 def _confirmed_plan(args: argparse.Namespace) -> tuple[dict[str, Any], str]:
@@ -322,13 +527,24 @@ def _parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = _parser().parse_args()
     try:
-        plan, contract_sha256 = _confirmed_plan(args)
+        try:
+            plan, contract_sha256 = _confirmed_plan(args)
+        except ValueError:
+            if args.stage != "cleanup" or (
+                args.issue_dir.is_dir() and args.issue_worktree.is_dir()
+            ):
+                raise
+            _reconcile_lifecycle_close(args)
+            return 0
         execute_stage(
             closeout_plan=plan,
             contract_sha256=contract_sha256,
             stage=args.stage,
             issue_worktree=args.issue_worktree,
             receipt_file=args.receipt_file,
+            issue_name=args.issue_name,
+            workflow_id=args.workflow_id,
+            project_root=args.project_root,
         )
     except CloseoutCommandError as exc:
         print(f"error: {exc}", file=sys.stderr)
