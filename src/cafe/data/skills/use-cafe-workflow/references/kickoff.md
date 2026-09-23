@@ -125,7 +125,7 @@ a narrower endpoint, such as stopping at a PR; record that choice in the
 existing scope or constraints. A later expansion requires a newly confirmed
 plan, not filling in the original `[]` after kickoff.
 
-Present both exact arrays, grounded in the repository context above, without
+Present both exact command lists, grounded in the repository context above, without
 adding an evidence report to the contract. The user confirms the complete
 kickoff, including their command order and effects. That
 confirmation is durable authority for the Driver to execute exactly those arrays
@@ -411,9 +411,24 @@ points, not a two-column table with long cells or HTML line breaks. Keep purpose
 scope, and implementation direction separate. Preserve literal-text escaping
 during translation so fact content cannot introduce new Markdown sections.
 Compact execution settings,
-model chains, gates and command arrays may stay in tables. Notification/session
+model chains and gates may stay in tables. Notification/session
 mechanics follow the selected Driver mode; do not add a separate notification
 field or another approval choice for them.
+
+Present `deliver` and `cleanup` as separate subheadings with ordered actions.
+Each action has a concise explanation in the conversation language and its
+complete, copyable command in a code block. Supply one `--deliver-description`
+or `--cleanup-description` per command, in the same order; provide none for an
+empty stage. Describe the actual action and target, including destructive
+effects, rather than a vague "clean up resources". The Driver writes these
+explanations from context; the formatter does not classify command names.
+
+Descriptions are presentation only, not new contract fields or authority.
+Keep every command and its order visible, never replace it with its description.
+The formatter shell-quotes the stored argv for display; execution still passes
+the original argv directly, never the rendered shell string. Preserve the code
+blocks and their quoting during translation: do not replace ASCII quotes or
+hyphens with typographic punctuation. Empty stages show that no command runs.
 
 Translate all presentation text into the effective conversation language:
 headings, readable field labels, descriptions, capability prompts and outcomes,
@@ -448,7 +463,9 @@ python3 <skill-dir>/scripts/format_kickoff_contract.py <playbook-id> \
   --issue-name <issue-name> \
   --delivery-contract '<compact version-3 product JSON without closeout_plan>' \
   --deliver '[["literal-executable", "literal-argument"]]' \
+  --deliver-description "<action and target in the conversation language>" \
   --cleanup '[["literal-executable", "literal-argument"]]' \
+  --cleanup-description "<action and target in the conversation language>" \
   --update-preflight '<bounded runtime-update JSON>' \
   --catalog-preflight '<bounded all-catalog JSON>' \
   --driver-mode <attached|unattended|event-driven> \

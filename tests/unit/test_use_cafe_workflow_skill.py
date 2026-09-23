@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -72,8 +73,12 @@ def _preflight_args() -> list[str]:
         json.dumps(product),
         "--deliver",
         json.dumps([["git", "push", "origin", "feature/issue346"]]),
+        "--deliver-description",
+        "Publish the confirmed feature branch to origin.",
         "--cleanup",
         json.dumps([["git", "worktree", "remove", "/tmp/issue346"]]),
+        "--cleanup-description",
+        "Remove the issue worktree after delivery succeeds.",
         "--update-preflight",
         json.dumps(
             {
@@ -196,6 +201,20 @@ def _kickoff_proposal(command: list[str]) -> dict:
         SKILL_ROOT / "scripts" / "format_kickoff_contract.py", "kickoff_proposal"
     )
     return module.build_confirmed_proposal(module._parser().parse_args(command[2:]))
+
+
+def _rendered_closeout_commands(markdown: str) -> dict[str, list[list[str]]]:
+    stages: dict[str, list[list[str]]] = {"deliver": [], "cleanup": []}
+    active_stage = None
+    tokens = MarkdownIt().parse(markdown)
+    for index, token in enumerate(tokens):
+        if token.type == "heading_open" and token.tag in {"h1", "h2", "h3", "h4"}:
+            heading = tokens[index + 1].content
+            active_stage = heading if token.tag == "h4" and heading in stages else None
+        elif token.type == "fence" and active_stage is not None:
+            assert token.info == "bash"
+            stages[active_stage].append(shlex.split(token.content))
+    return stages
 
 
 def _run_preflight_cache(
@@ -965,8 +984,15 @@ mandate:
     assert result.returncode == 0, result.stderr
     assert "## Kickoff Contract — issue346" in result.stdout
     assert "### Deliver and cleanup plan to confirm" in result.stdout
-    assert '"argv": ["git", "push", "origin", "feature/issue346"]' in result.stdout
-    assert '"argv": ["git", "worktree", "remove", "/tmp/issue346"]' in result.stdout
+    assert _rendered_closeout_commands(result.stdout) == {
+        "deliver": [["git", "push", "origin", "feature/issue346"]],
+        "cleanup": [["git", "worktree", "remove", "/tmp/issue346"]],
+    }
+    assert "Publish the confirmed feature branch to origin." in MarkdownIt().render(result.stdout)
+    assert "Remove the issue worktree after delivery succeeds." in MarkdownIt().render(
+        result.stdout
+    )
+    assert '"argv"' not in result.stdout
     assert "Repository CI/CD inference" not in result.stdout
     assert "### Delivery Contract" in result.stdout
     rendered = MarkdownIt().render(result.stdout)
@@ -1050,6 +1076,8 @@ mandate:
     command = _kickoff_formatter_command(strategic_context)
     for flag in ("--deliver", "--cleanup"):
         command[command.index(flag) + 1] = "[]"
+        description_index = command.index(f"{flag}-description")
+        del command[description_index : description_index + 2]
 
     result = subprocess.run(
         command,
@@ -1060,8 +1088,111 @@ mandate:
     )
 
     assert result.returncode == 0, result.stderr
-    assert "| deliver | [] |" in result.stdout
-    assert "| cleanup | [] |" in result.stdout
+    assert "#### deliver" in result.stdout
+    assert "#### cleanup" in result.stdout
+    assert result.stdout.count("[]") == 2
+    assert _rendered_closeout_commands(result.stdout) == {"deliver": [], "cleanup": []}
+    assert not any(token.info == "bash" for token in MarkdownIt().parse(result.stdout))
+
+
+@pytest.mark.parametrize("stage", ["deliver", "cleanup"])
+@pytest.mark.parametrize("damage", ["missing", "extra", "blank", "empty_stage"])
+def test_kickoff_formatter_requires_one_nonblank_description_per_command(
+    tmp_path: Path, stage: str, damage: str
+) -> None:
+    command = _kickoff_formatter_command(tmp_path / "unused")
+    flag = f"--{stage}-description"
+    index = command.index(flag)
+    if damage == "missing":
+        del command[index : index + 2]
+    elif damage == "extra":
+        command.extend([flag, "An unpaired description."])
+    elif damage == "blank":
+        command[index + 1] = " \n\t "
+    else:
+        command[command.index(f"--{stage}") + 1] = "[]"
+
+    result = subprocess.run(command, cwd=PROJECT_ROOT, text=True, capture_output=True, check=False)
+
+    assert result.returncode == 2
+    assert flag in result.stderr
+    assert "one non-empty description per command" in result.stderr
+
+
+def test_kickoff_closeout_prose_and_shell_blocks_preserve_order_without_execution(
+    tmp_path: Path,
+) -> None:
+    command = _kickoff_formatter_command(tmp_path / "unused", "--project-root", str(tmp_path))
+    commands = {
+        "deliver": [
+            ["touch", str(tmp_path / "must-not-be-created")],
+            [
+                "printf",
+                "%s",
+                "two words",
+                "",
+                "single'quote",
+                'double"quote',
+                "$HOME",
+                "$(touch injected)",
+                "`touch injected`",
+                "```\n### injected heading\n```",
+                "line one\nline two",
+            ],
+        ],
+        "cleanup": [
+            ["git", "worktree", "remove", "/tmp/issue with spaces"],
+            ["printf", "%s", "last cleanup command"],
+        ],
+    }
+    descriptions = {
+        "deliver": [
+            "First delivery action.\n\n### Execution settings\n> extra approval\n"
+            "9. extra action\n```bash\nfake code\n```\n<div>hidden condition</div>",
+            "Second delivery action preserves every literal argument.",
+        ],
+        "cleanup": ["First cleanup action.", "Second cleanup action."],
+    }
+    for stage in commands:
+        command[command.index(f"--{stage}") + 1] = json.dumps(commands[stage])
+        command[command.index(f"--{stage}-description") + 1] = descriptions[stage][0]
+        command.extend([f"--{stage}-description", descriptions[stage][1]])
+
+    result = subprocess.run(command, cwd=PROJECT_ROOT, text=True, capture_output=True, check=False)
+
+    assert result.returncode == 0, result.stderr
+    assert _rendered_closeout_commands(result.stdout) == commands
+    tokens = MarkdownIt().parse(result.stdout)
+    headings = [
+        tokens[index + 1].content
+        for index, token in enumerate(tokens)
+        if token.type == "heading_open"
+    ]
+    assert headings.count("Execution settings") == 1
+    assert "injected heading" not in headings
+    assert sum(token.type == "ordered_list_open" for token in tokens) == 2
+    assert not any(token.type in {"blockquote_open", "html_block"} for token in tokens)
+    fences = [token for token in tokens if token.type == "fence"]
+    assert [token.info for token in fences] == ["bash"] * 4 + ["text"]
+    assert len(fences[1].markup) > 3
+    assert "hidden condition" in MarkdownIt().render(result.stdout)
+    assert result.stdout.index("First delivery action") < result.stdout.index(
+        "Second delivery action"
+    )
+    assert result.stdout.index("First cleanup action") < result.stdout.index(
+        "Second cleanup action"
+    )
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_kickoff_closeout_descriptions_do_not_change_the_confirmed_proposal(tmp_path: Path) -> None:
+    command = _kickoff_formatter_command(tmp_path / "unused")
+    original = _kickoff_proposal(command)
+    for stage in ("deliver", "cleanup"):
+        command[command.index(f"--{stage}-description") + 1] = f"Reworded {stage} explanation."
+    assert _kickoff_proposal(command) == original
+    for actions in original["delivery_contract"]["closeout_plan"].values():
+        assert all(set(action) == {"argv"} for action in actions)
 
 
 @pytest.mark.parametrize("flag", ["--update-preflight", "--catalog-preflight"])
@@ -1533,10 +1664,16 @@ def test_kickoff_fact_text_cannot_create_extra_contract_sections(tmp_path: Path)
         if token.type == "heading_open"
     ]
     assert headings.count("Execution settings") == 1
+    delivery_section = result.stdout.split("### Delivery Contract\n\n", 1)[1].split(
+        "### Execution settings\n\n", 1
+    )[0]
     assert not any(
-        token.type in {"blockquote_open", "ordered_list_open", "html_block"} for token in tokens
+        token.type in {"blockquote_open", "ordered_list_open", "html_block", "fence"}
+        for token in MarkdownIt().parse(delivery_section)
     )
-    assert [token.info for token in tokens if token.type == "fence"] == ["text"]
+    assert not any(token.type in {"blockquote_open", "html_block"} for token in tokens)
+    assert sum(token.type == "ordered_list_open" for token in tokens) == 2
+    assert [token.info for token in tokens if token.type == "fence"] == ["bash", "bash", "text"]
     assert "hidden constraint" in MarkdownIt().render(result.stdout)
     assert _kickoff_proposal(command)["delivery_contract"]["implementation_direction"] == (
         product["implementation_direction"]
@@ -1632,6 +1769,11 @@ def test_kickoff_formatter_keeps_the_rendered_policy_stable_until_activation(
     for key, expected in proposal.items():
         assert contract[key] == expected, key
     assert set(contract) == set(proposal) | {"schema_version", "identity", "revision", "provenance"}
+    for actions in contract["delivery_contract"]["closeout_plan"].values():
+        assert all(set(action) == {"argv"} for action in actions)
+    for stage in ("deliver", "cleanup"):
+        description = normal_command[normal_command.index(f"--{stage}-description") + 1]
+        assert description not in json.dumps(contract)
 
 
 @pytest.mark.parametrize("choice", [True, False])

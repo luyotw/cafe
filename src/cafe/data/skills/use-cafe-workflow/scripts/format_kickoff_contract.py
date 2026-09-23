@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import shutil
 import string
@@ -93,7 +94,7 @@ def _kickoff_delivery_contract(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("new kickoff requires version-3 delivery facts")
     if "closeout_plan" in core:
         raise ValueError("--delivery-contract must omit closeout_plan; use --deliver and --cleanup")
-    return normalize_delivery_contract(
+    delivery = normalize_delivery_contract(
         {
             **core,
             "closeout_plan": {
@@ -102,6 +103,23 @@ def _kickoff_delivery_contract(args: argparse.Namespace) -> dict[str, Any]:
             },
         }
     )
+    _closeout_descriptions(args, delivery["closeout_plan"])
+    return delivery
+
+
+def _closeout_descriptions(
+    args: argparse.Namespace, plan: dict[str, Any]
+) -> dict[str, list[str]]:
+    """Require one human explanation per command, outside the durable policy."""
+    descriptions = {}
+    for stage in ("deliver", "cleanup"):
+        values = getattr(args, f"{stage}_description")
+        if len(values) != len(plan[stage]) or any(not value.strip() for value in values):
+            raise ValueError(
+                f"--{stage}-description requires one non-empty description per command"
+            )
+        descriptions[stage] = values
+    return descriptions
 
 
 def _positive_seconds(value: str) -> int:
@@ -183,13 +201,44 @@ def _table(headers: list[str], rows: list[list[Any]]) -> str:
     return "\n".join(lines)
 
 
-def _fact(value: str | list[str]) -> str:
-    """Render literal prose without letting facts create Markdown structure."""
-    items = value if isinstance(value, list) else [value]
+def _literal_text(value: str) -> str:
+    """Keep user-facing prose from introducing Markdown structure."""
     escapes = str.maketrans({mark: f"\\{mark}" for mark in string.punctuation})
+    return value.translate(escapes)
+
+
+def _fact(value: str | list[str]) -> str:
+    """Render literal prose as bullets."""
+    items = value if isinstance(value, list) else [value]
     return "\n".join(
-        "- " + item.translate(escapes).replace("\n", "\n  ") for item in items
+        "- " + _literal_text(item).replace("\n", "\n  ") for item in items
     ) or "- []"
+
+
+def _render_closeout(
+    plan: dict[str, Any], descriptions: dict[str, list[str]], *, zh: bool
+) -> str:
+    """Show explanations and losslessly quoted commands; never execute shell text."""
+    sections = []
+    for stage in ("deliver", "cleanup"):
+        entries = [f"#### {stage}"]
+        if not plan[stage]:
+            entries.append("無需執行命令（[]）。" if zh else "No commands ([]).")
+        for index, (action, description) in enumerate(
+            zip(plan[stage], descriptions[stage], strict=True), start=1
+        ):
+            prefix = f"{index}. "
+            indent = " " * len(prefix)
+            explanation = _literal_text(description).replace("\n", f"\n{indent}")
+            command = shlex.join(action["argv"])
+            longest_run = max((len(run) for run in re.findall(r"`+", command)), default=0)
+            fence = "`" * max(3, longest_run + 1)
+            code = "\n".join(indent + line for line in command.split("\n"))
+            entries.append(
+                f"{prefix}{explanation}\n\n{indent}{fence}bash\n{code}\n{indent}{fence}"
+            )
+        sections.append("\n\n".join(entries))
+    return "\n\n".join(sections)
 
 
 def _json_mapping(value: str) -> dict[str, Any]:
@@ -362,6 +411,14 @@ def _parser() -> argparse.ArgumentParser:
         metavar="JSON_ARGV_LIST",
         help="Exact ordered cleanup argv arrays, including [] when nothing remains.",
     )
+    for stage in ("deliver", "cleanup"):
+        parser.add_argument(
+            f"--{stage}-description",
+            action="append",
+            default=[],
+            metavar="TEXT",
+            help="Presentation-only explanation, repeated once per command in stage order.",
+        )
     parser.add_argument("--update-preflight", type=_json_mapping, required=True)
     parser.add_argument("--catalog-preflight", type=_json_mapping, required=True)
     parser.add_argument("--driver-mode", choices=tuple(sorted(_DRIVER_MODES)), required=True)
@@ -796,13 +853,7 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
                 [[key, value] for key, value in proposal["reactive_user_handoffs"].items()],
             ),
             "### Deliver and cleanup plan to confirm",
-            _table(
-                headers,
-                [
-                    [stage, json.dumps(closeout[stage], ensure_ascii=False)]
-                    for stage in ("deliver", "cleanup")
-                ],
-            ),
+            _render_closeout(closeout, _closeout_descriptions(args, closeout), zh=zh),
             (
                 "確認後依序執行上述命令；更改命令、順序、目標或影響時另行確認。"
                 if zh
