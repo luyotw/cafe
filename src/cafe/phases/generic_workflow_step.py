@@ -823,6 +823,14 @@ class GenericWorkflowStepExecutor(Phase):
                     completion_response=response,
                     completion_status=status_code,
                     validate_checklist_completion=checklist_validation_required,
+                    checklist_required_for_status=lambda current_status: (
+                        self._output_requires_contract_validation(
+                            step_name=step_name,
+                            status_code=current_status,
+                            baton_path=portion_baton_path or baton_path,
+                            hybrid_portion=is_hybrid_portion,
+                        )
+                    ),
                     additional_validation=validate_output_contract,
                 )
 
@@ -920,6 +928,15 @@ class GenericWorkflowStepExecutor(Phase):
                     }
                 )
 
+        # Classify the final retry decision before the legacy adapter translates
+        # manual routes into an agent-owned transport baton.
+        final_completion_required = self._output_requires_contract_validation(
+            step_name=step_name,
+            status_code=effective_status,
+            baton_path=portion_baton_path or baton_path,
+            hybrid_portion=is_hybrid_portion,
+        )
+
         captured_hybrid_baton: Optional[str] = None
         if portion_baton_path is not None and portion_baton_path.exists():
             try:
@@ -951,7 +968,7 @@ class GenericWorkflowStepExecutor(Phase):
             )
 
         continuation = getattr(self, "_checklist_continuation", None)
-        if continuation and checklist_validation_required and not checklist_validation_failed:
+        if continuation and final_completion_required and not checklist_validation_failed:
             target, task_id = continuation
             is_done = target == "_done"
             store.update_handoff_contract(

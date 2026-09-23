@@ -32,6 +32,7 @@ class PhaseChecklistMixin:
         completion_response: str = "",
         completion_status: Optional[PhaseStatusCode] = None,
         validate_checklist_completion: bool = True,
+        checklist_required_for_status: Optional[Callable[[Optional[PhaseStatusCode]], bool]] = None,
         additional_validation: Optional[
             Callable[[str, Optional[PhaseStatusCode]], tuple[bool, str]]
         ] = None,
@@ -48,6 +49,8 @@ class PhaseChecklistMixin:
             valid_intents: Valid status codes for this phase
             allowed_tools: Tools available to agent
             max_retries: Maximum number of retry attempts (default: 3)
+            checklist_required_for_status: Reclassify each retry using the caller's
+                current baton/status rules; absent callers keep the initial policy.
 
         Returns:
             tuple[final_response, final_status_code, validation_passed]:
@@ -185,7 +188,9 @@ class PhaseChecklistMixin:
 
             retry_prompt = f"""Your previous response was received, but {retry_reason} and re-submit your status code.
 
-Do NOT return a status code until ALL checklist items are marked as complete [x].
+Before a successful handoff, ALL checklist items must be complete [x].
+Clarification, permission and manual handoff retain their existing exemptions;
+independent output contracts still apply.
 """
 
             # Execute agent with retry prompt
@@ -230,12 +235,18 @@ Do NOT return a status code until ALL checklist items are marked as complete [x]
                     valid_codes=valid_intents,
                 )
 
-                # Validate checklist again
+                # A retry may request help instead of completing the step. Reuse
+                # the caller's baton-first classification for the current result.
+                retry_checklist_required = (
+                    checklist_required_for_status(retry_status_code)
+                    if checklist_required_for_status is not None
+                    else validate_checklist_completion
+                )
                 retry_result = (
                     validate_checklist(
                         checklist_path, expected=getattr(self, "_effective_checklist", None)
                     )
-                    if validate_checklist_completion
+                    if retry_checklist_required
                     else ChecklistValidationResult(
                         is_complete=True,
                         unchecked_count=0,
@@ -245,7 +256,7 @@ Do NOT return a status code until ALL checklist items are marked as complete [x]
 
                 validation_detail = retry_result.detail
                 if (
-                    validate_checklist_completion
+                    retry_checklist_required
                     and retry_result.is_complete
                     and hasattr(self, "_validate_projected_todo_completion")
                 ):

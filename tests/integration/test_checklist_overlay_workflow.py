@@ -1009,3 +1009,133 @@ def test_every_materialized_checkbox_blocks_success_and_restores_independently(
         == "inspect"
     )
     assert validate_checklist(directory / "checklist.md").is_complete
+
+
+@pytest.mark.parametrize(
+    "intent", ["await_agent", "need_clarification", "need_permission", "manual_handoff"]
+)
+@pytest.mark.parametrize("route", ["baton", "legacy"])
+@pytest.mark.parametrize("complete_gates", [True, False])
+def test_completed_decision_continuation_obeys_final_retry_handoff(
+    tmp_path, monkeypatch, intent, route, complete_gates
+):
+    """U13/I07/I08: final help routes retain the unconsumed durable decision."""
+    import json
+
+    from cafe.core.blackboard import BlackboardStore
+    from cafe.core.checklist import pending_checklist_continuation
+    from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
+    from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
+    from cafe.ui.human_tasks import apply_human_task_payload
+
+    executor, step, state, directory = lifecycle_fixture(tmp_path, monkeypatch, real_develop=True)
+    executor.playbook["steps"]["alternate"] = dict(executor.playbook["steps"]["inspect"])
+    step["on"]["manual_handoff"] = "alternate"
+    step["human_tasks"] = [
+        {
+            "trigger": "no_changes_needed",
+            "task_id": "no-change-decision",
+            "outcomes": {"agree": "inspect", "disagree": "assemble"},
+        }
+    ]
+    step["hooks"] = {
+        "prepare_input": ["UserInputCollector"],
+        "after_execute": ["NoChangesNeededHandler"],
+    }
+    store = BlackboardStore(executor.issue_dir)
+    source = executor.issue_dir / "blueprint.md"
+    source.write_text("## Todo List\nNo actionable work.\n")
+    store.set_artifact(state, "plan", str(source))
+
+    def no_change(directory):
+        (directory / "output.md").write_text("No changes needed.\n")
+        return "no_changes_needed"
+
+    executor.agent_manager = JourneyAgent(executor, [no_change])
+    BlackboardWorkflowRuntime(
+        issue_dir=executor.issue_dir, playbook=executor.playbook, executor=executor.execute_step
+    ).run(start_step="assemble")
+    records = HumanTaskRecordStore(executor.issue_dir)
+    task = records.tasks()[0]
+    apply_human_task_payload(
+        issue_dir=executor.issue_dir,
+        playbook_data=executor.playbook,
+        blackboard=store.load_or_create("assemble"),
+        from_step="assemble",
+        trigger="no_changes_needed",
+        source="test",
+        raw_payload={"task": task.policy_id, "human_task_id": task.id, "decision": "agree"},
+    )
+    success = intent == "await_agent"
+    target = "inspect" if success else "alternate" if intent == "manual_handoff" else "user"
+    owner = "agent" if target != "user" else "user"
+
+    def retry_decision(directory):
+        (directory / "output.md").write_text("Current decision\n")
+        if executor.agent_manager.calls == 1:
+            return "confirmed"
+        if complete_gates:
+            path = directory / "checklist.md"
+            path.write_text(path.read_text().replace("[ ]", "[x]"))
+        if route == "baton":
+            (executor.issue_dir / "next_step.txt").write_text(
+                json.dumps({"version": 1, "to_owner": owner, "to_step": target, "intent": intent})
+            )
+        return "confirmed" if success else intent
+
+    executor.agent_manager = JourneyAgent(executor, [retry_decision])
+    result = executor.execute_step("assemble", step, store.load_or_create("assemble"))
+    current = store.load_or_create("assemble")
+    baton = json.loads((executor.issue_dir / "next_step.txt").read_text())
+    pending = pending_checklist_continuation(executor.issue_dir, current, "assemble")
+    if success and not complete_gates:
+        assert not result.artifact_ready
+        assert executor.agent_manager.calls == 4
+        assert baton["to_step"] == "assemble"
+        assert pending == ("inspect", task.id)
+    else:
+        assert executor.agent_manager.calls == 2
+        assert baton["to_owner"] == owner
+        assert baton["to_step"] == target
+        expected_intent = (
+            "await_agent" if route == "legacy" and intent == "manual_handoff" else intent
+        )
+        assert baton["intent"] == expected_intent
+        assert pending == (None if success else ("inspect", task.id))
+    assert len(records.tasks()) == 1
+    assert records.get_task(task.id).status is HumanTaskStatus.COMPLETED
+
+    if pending is not None:
+
+        def finish_remaining(directory):
+            path = directory / "checklist.md"
+            path.write_text(path.read_text().replace("[ ]", "[x]"))
+            (directory / "output.md").write_text("All remaining gates completed.\n")
+            (executor.issue_dir / "next_step.txt").write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "to_owner": "agent",
+                        "to_step": "inspect",
+                        "intent": "await_agent",
+                    }
+                )
+            )
+            return "confirmed"
+
+        executor.agent_manager = JourneyAgent(executor, [finish_remaining])
+        resumed = executor.execute_step("assemble", step, store.load_or_create("assemble"))
+        assert resumed.artifact_ready
+        assert executor.agent_manager.calls == 1
+        current = store.load_or_create("assemble")
+        assert current.handoff_contract.to_step == "inspect"
+        assert pending_checklist_continuation(executor.issue_dir, current, "assemble") is None
+    assert len(records.tasks()) == 1
+    assert (
+        sum(
+            event.event_type == "checklist_continuation_completed"
+            and event.data.get("human_task_id") == task.id
+            for event in current.events
+        )
+        == 1
+    )
