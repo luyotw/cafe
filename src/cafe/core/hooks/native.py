@@ -337,6 +337,8 @@ class UserInputCollector(NoOpHook):
 
         previous_status = _get_previous_iteration_status(phase)
         if previous_status == "no_changes_needed":
+            if getattr(phase, "_checklist_continuation", None):
+                return HookResult()
             from cafe.core.workflow_feedback import WorkflowFeedbackLedger
 
             pending_feedback = WorkflowFeedbackLedger(phase.issue_dir).pending(

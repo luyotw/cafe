@@ -9,14 +9,11 @@ from collections import Counter
 from pathlib import Path
 from typing import Mapping, Union
 
+from cafe.core.checklist import _CHECKBOX_LINE, _checklist_item_blocks
 from cafe.utils.checklist_validator import (
     EXPECTED_LEDGER_FIELDS,
     GIT_EVIDENCE_TIMEOUT_SECONDS,
     validate_todo_evidence_set,
-)
-
-_CHECKBOX_LINE = re.compile(
-    r"^(?P<indent>[ \t]*)(?P<bullet>[-*][ \t]+)?\[(?P<state>[ xX])\](?P<body>.*)$"
 )
 
 
@@ -37,55 +34,6 @@ def resolve_checklist_placeholders(checklist: str, placeholders: Mapping[str, ob
         result = result.replace(placeholder, str(value))
 
     return result
-
-
-def _normalized_item_block(lines: list[str], start: int, end: int) -> str:
-    """Return one checklist item's block with all completion markers cleared."""
-    normalized: list[str] = []
-    for line in lines[start:end]:
-        match = _CHECKBOX_LINE.match(line.rstrip("\r\n"))
-        if match:
-            ending = line[len(line.rstrip("\r\n")) :]
-            normalized.append(
-                f"{match.group('indent')}{match.group('bullet') or ''}[ ]"
-                f"{match.group('body')}{ending}"
-            )
-        else:
-            normalized.append(line)
-    return "".join(normalized)
-
-
-def _checklist_item_blocks(content: str) -> list[tuple[int, str, bool]]:
-    """Return checklist item starts, complete blocks, and their completion state.
-
-    Continuation and nested lines are part of an item's identity.  A changed
-    subordinate rule must therefore reopen its parent gate rather than retain
-    a stale ``[x]`` merely because the leading checkbox text still matches.
-    """
-    lines = content.splitlines(keepends=True)
-    items: list[tuple[int, str, bool]] = []
-    for start, line in enumerate(lines):
-        match = _CHECKBOX_LINE.match(line.rstrip("\r\n"))
-        if match is None:
-            continue
-        indent = len(match.group("indent").expandtabs(4))
-        end = start + 1
-        while end < len(lines):
-            continuation = lines[end]
-            nested = _CHECKBOX_LINE.match(continuation.rstrip("\r\n"))
-            if nested is not None and len(nested.group("indent").expandtabs(4)) <= indent:
-                break
-            if continuation.strip() and not continuation.startswith((" ", "\t")):
-                break
-            end += 1
-        items.append(
-            (
-                start,
-                _normalized_item_block(lines, start, end),
-                match.group("state").lower() == "x",
-            )
-        )
-    return items
 
 
 def _restore_completed_items(
@@ -299,3 +247,46 @@ def generate_checklist_file(
         )
 
     _atomic_write_checklist(output_path, checklist_content)
+
+
+def publish_materialized_checklist(path, materialized, *, preserve=False, todo_ledger_path=None):
+    """Restore proven source identities and publish through the existing atomic writer."""
+    from cafe.core.checklist import load_materialization, normalized_checklist
+
+    previous = _read_existing_regular_file(path)
+    content = materialized.content
+    if preserve and previous is not None:
+        try:
+            pinned = load_materialization(path.parent / "iteration.json")
+        except ValueError:
+            pinned = None
+            legacy_allowed = False
+        else:
+            legacy_allowed = pinned is None and not materialized.overlays
+        if pinned is not None and normalized_checklist(previous) == normalized_checklist(
+            pinned.content
+        ):
+            prior_blocks = _checklist_item_blocks(previous)
+            complete = {
+                gate.identity
+                for gate, (_, _, checked) in zip(pinned.gates, prior_blocks)
+                if checked
+            }
+            # Reuse live ledger and Git evidence checks, then intersect with
+            # source identities instead of transferring completion by text.
+            eligible = _restore_completed_items(
+                content, content.replace("[ ]", "[x]"), todo_ledger_path=todo_ledger_path
+            )
+            lines = content.splitlines(keepends=True)
+            for gate, (line, _, valid) in zip(materialized.gates, _checklist_item_blocks(eligible)):
+                if gate.identity in complete and valid:
+                    lines[line] = lines[line].replace("[ ]", "[x]", 1)
+            content = "".join(lines)
+        elif legacy_allowed:
+            blocks = [block for _, block, _ in _checklist_item_blocks(content)]
+            prior = [block for _, block, _ in _checklist_item_blocks(previous)]
+            if len(set(blocks)) == len(blocks) and len(set(prior)) == len(prior):
+                content = _restore_completed_items(
+                    content, previous, todo_ledger_path=todo_ledger_path
+                )
+    generate_checklist_file(path, content)

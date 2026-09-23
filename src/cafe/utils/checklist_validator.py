@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Mapping
 
+from cafe.core.checklist import ChecklistMaterialization, ProjectedTodo
 from cafe.core.todo import MAX_TODO_ITEMS, TodoItem
 
 _PROJECTED = re.compile(
@@ -55,6 +56,7 @@ class ChecklistValidationResult:
     is_complete: bool
     unchecked_count: int
     checklist_path: Path
+    detail: str = ""
 
 
 def completion_requires_checklist(
@@ -72,16 +74,19 @@ def completion_requires_checklist(
     return status_code in CHECKLIST_COMPLETION_STATUS_CODES
 
 
-def validate_checklist(checklist_path: Path) -> ChecklistValidationResult:
+def validate_checklist(
+    checklist_path: Path, *, expected: ChecklistMaterialization | None = None
+) -> ChecklistValidationResult:
     """Validate that all checklist items are completed.
 
-    Checks for unchecked items by searching for lines that start with "[ ]"
-    or "- [ ]" (after trimming whitespace). This avoids false positives from
-    "[ ]" appearing in descriptive text within a line.
+    Uses the materializer's checkbox grammar, including bare, dash and star
+    checkboxes with space or tab indentation/separation. Descriptive inline
+    checkbox examples do not create gates.
 
     Supported formats:
     - `[ ] Task name` - Direct checkbox
     - `- [ ] Task name` - Markdown list with checkbox
+    - `* [ ] Task name` - Star-bullet checkbox
     - `  - [ ] Nested task` - Indented checkbox
 
     Args:
@@ -99,26 +104,46 @@ def validate_checklist(checklist_path: Path) -> ChecklistValidationResult:
     # Read checklist content
     content = checklist_path.read_text(encoding="utf-8")
 
-    # Count unchecked items - only lines starting with "[ ]" or "- [ ]" count as unchecked
-    # This avoids false positives from "[ ]" in descriptive text
-    unchecked_count = 0
-    for line in content.splitlines():
-        stripped = line.lstrip()
-        # Check for both "[ ]" and "- [ ]" formats
-        if stripped.startswith("[ ]") or stripped.startswith("- [ ]"):
-            unchecked_count += 1
+    from cafe.core.checklist import _CHECKBOX_LINE, load_materialization, normalized_checklist
+
+    detail = ""
+    try:
+        pinned = load_materialization(checklist_path.parent / "iteration.json")
+        integrity_valid = expected is None or pinned == expected
+        expected = expected or pinned
+        integrity_valid = integrity_valid and (
+            expected is None
+            or not expected.content.strip()
+            or normalized_checklist(content) == normalized_checklist(expected.content)
+        )
+    except ValueError as exc:
+        integrity_valid = False
+        detail = str(exc)
+
+    unchecked_count = sum(
+        1
+        for line in content.splitlines()
+        if (match := _CHECKBOX_LINE.match(line)) and match.group("state") == " "
+    )
 
     return ChecklistValidationResult(
-        is_complete=(unchecked_count == 0),
+        is_complete=(unchecked_count == 0 and integrity_valid),
         unchecked_count=unchecked_count,
         checklist_path=checklist_path,
+        detail=detail
+        or (
+            "Required checklist gates or source metadata changed. "
+            "Rebuild the full effective checklist before completing it."
+            if not integrity_valid
+            else ""
+        ),
     )
 
 
 def validate_projected_todos(
     checklist_path: Path,
     output_path: Path,
-    expected: tuple[TodoItem, ...],
+    expected: tuple[TodoItem | ProjectedTodo, ...],
     *,
     repo_root: Path | None = None,
 ) -> list[str]:
@@ -139,7 +164,7 @@ def validate_projected_todos(
 
 def validate_todo_ledger(
     content: str,
-    expected: tuple[TodoItem, ...],
+    expected: tuple[TodoItem | ProjectedTodo, ...],
     *,
     repo_root: Path | None = None,
 ) -> list[str]:

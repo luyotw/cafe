@@ -281,19 +281,36 @@ class SkillLoader:
         fields: Optional[set[str]] = None,
     ) -> tuple[str, ...]:
         """Return bounded resource errors for selected declaration fields."""
-        selected = fields or {"prompt_references", "checklist", "output_templates"}
+        selected = fields or {
+            "prompt_references",
+            "checklist",
+            "checklist_overlay",
+            "output_templates",
+        }
         errors: list[str] = []
         references: list[str] = []
         if "prompt_references" in selected:
             references.extend(declaration.prompt_references.values())
-        if "checklist" in selected and declaration.checklist is not None:
-            references.extend(declaration.checklist.context_references.values())
-            references.extend(
-                section.reference
-                for variant in declaration.checklist.variants
-                for section in variant.sections
-                if section.reference is not None
-            )
+        for field in ("checklist", "checklist_overlay"):
+            checklist = getattr(declaration, field)
+            if field not in selected or checklist is None:
+                continue
+            for key, reference in checklist.context_references.items():
+                if not (skill_dir / "references" / reference).is_file():
+                    errors.append(
+                        f"{field}.context_references.{key}: "
+                        f"workflow reference not found: {reference}"
+                    )
+            for index, variant in enumerate(checklist.variants):
+                for position, section in enumerate(variant.sections):
+                    if (
+                        section.reference
+                        and not (skill_dir / "references" / section.reference).is_file()
+                    ):
+                        errors.append(
+                            f"{field}.variants[{index}].sections[{position}].reference: "
+                            f"workflow reference not found: {section.reference}"
+                        )
         errors.extend(
             f"workflow reference not found: {reference}"
             for reference in references
