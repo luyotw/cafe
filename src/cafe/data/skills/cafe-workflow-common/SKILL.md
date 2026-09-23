@@ -19,10 +19,10 @@ The full `blackboard.json` is an unbounded audit history. Do **not** read or pri
 
 ## How workflow transitions work
 
-You control the next workflow step by writing a **baton** — a JSON object written to the runtime-provided `next_step.txt` path. The runtime reads your baton to decide where to go next.
+You control the next workflow step by writing a **baton** — a JSON object written to the runtime-provided `next_step.txt` path. For ordinary success, report only the semantic outcome; the runtime maps it through the current step's playbook declaration and constructs the concrete baton. The runtime reads that concrete baton to decide where to go next.
 
 1. Do your phase work (write output.md, checklist.md, questions.xml, code, etc.).
-2. Write the baton to `next_step.txt` with the correct `to_owner`, `to_step`, and `intent`.
+2. For ordinary success, write the outcome-only result to `next_step.txt`; use a concrete baton only for an exceptional route.
 3. The runtime reads your baton and transitions accordingly.
 
 If you do NOT write a baton, the runtime falls back to your response's status code to derive a transition — but this is less precise and may not match your intent. **Always write the baton for precise control.**
@@ -31,7 +31,18 @@ A final response ends the current CLI invocation. Treat it as a real execution b
 
 ## Baton Schema
 
-Write a JSON object to `next_step.txt` with exactly these required routing fields:
+For an ordinary successful handoff, write this outcome-only result. Do not name a target step:
+
+```json
+{
+  "version": 1,
+  "intent": "await_agent"
+}
+```
+
+The runtime resolves `await_agent` through the active step's `on` map, including its existing `default` and terminal behavior. If the outcome has no mapping or default, it rejects the result instead of inventing a target.
+
+For legacy compatibility and exceptional routes (human input, permission, manual handoff, or workflow completion), write a JSON object with these required routing fields:
 
 ```json
 {
@@ -78,12 +89,10 @@ If you write an invalid `to_owner` or `intent` value, the runtime will **reject*
 
 ### Example batons for common transitions
 
-**Agent → next automated step (e.g. spec → plan)**
+**Ordinary success → next automated step**
 ```json
 {
   "version": 1,
-  "to_owner": "agent",
-  "to_step": "plan",
   "intent": "await_agent"
 }
 ```
@@ -156,7 +165,7 @@ If you write an invalid `to_owner` or `intent` value, the runtime will **reject*
 
 ## Confirming spec and plan with the user
 
-- When a **spec** or **plan** draft needs human approval before the next playbook step, write a baton with `to_owner: "user"`, `to_step: "user"`, `intent: "confirm_output"`. Do not jump straight to `plan` or `develop` while the user still owes a decision.
+- When a draft needs human approval before the next playbook step, write a baton with `to_owner: "user"`, `to_step: "user"`, `intent: "confirm_output"`. Do not advance through an ordinary-success outcome while the user still owes a decision.
 - After the user has confirmed, write the baton that advances to the next step. The trusted runtime evaluates the fixed spec/plan `after_execute` + `confirmed` capability gate when sync is enabled. Phase agents must not execute `scripts/sync_github.sh` or construct the capability request themselves.
 
 ## Develop and review disagreement protocol
@@ -164,10 +173,10 @@ If you write an invalid `to_owner` or `intent` value, the runtime will **reject*
 Follow these in addition to **Shared Rules** whenever you are in **develop** or **review**.
 
 - The runtime prompt includes the bounded digest plus concrete paths to the blackboard and baton. Use the digest and read the small baton file before writing a new baton; keep the full blackboard path for selective diagnostics only.
-- **Reasonable feedback:** if the other role's request is technically sound, implement or accept it and write a baton targeting the next step (e.g. develop → review, review → pr).
+- **Reasonable feedback:** if the other role's request is technically sound, implement or accept it and report the ordinary-success outcome.
 - **Disagreement:** if you reject the other role's position, first read their full `output.md` and selectively query the matching dispute event summaries before deciding. Read a matching event's full payload only if its summary lacks the necessary technical detail. Then write technical reasoning in this iteration's `output.md` and a baton routing back to the other engineering step.
-- **First pushback from develop:** write a baton with `to_owner: "agent"`, `to_step: "review"`, `intent: "manual_handoff"`.
+- **First pushback from develop:** use a concrete `manual_handoff` baton targeting the correction route declared in the current runtime context.
 - **Round limit:** the same disagreement may go back and forth at most **three** times between develop and review. If the blackboard already shows three rounds without convergence, do **not** write a baton targeting the other engineering step again.
 - **User arbitration:** if you still disagree after the limit (or the issue is product-level), capture both sides in `questions.xml` and write a baton with `to_owner: "user"`, `intent: "need_clarification"`.
-- **Normal completion:** when develop work is done and review should run next, write `to_step: "review"`, `intent: "await_agent"`. When review approves, hand off to the step that comes next **in your playbook** — use the runtime prompt's `valid to_step values` and `this step's defined transitions`, not a hardcoded name. In the standard spec→plan→develop→review→pr pipeline that next step is `pr`; other playbooks may differ, or it may be `done` if review/the current step is the last one. Never write a `to_step` that is not in the prompt's valid list.
+- **Normal completion:** report the outcome-only `await_agent` result. The runtime resolves the target through the current step's playbook declarations. Concrete targets remain necessary only for manual handoffs and other exceptional routes.
 - Avoid infinite loops on the same unresolved point without new information.
