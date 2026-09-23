@@ -33,6 +33,7 @@ from cafe.ui.cli_shared import (
 )
 from cafe.ui.human_tasks import resolve_step_human_task
 from cafe.utils.config import ConfigManager
+from cafe.workflow_execution.worker_launch import WorkerLaunchStore
 
 pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
@@ -93,6 +94,84 @@ def test_background_forwards_trusted_event_callback_to_the_fixed_worker(
         "--on-workflow-event",
         "builtin:use-cafe-workflow:workflow_event_callback",
     ]
+
+
+def test_callback_worker_observes_done_through_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "terminal-callback"
+    _write_local_only_publication_contract(issue_dir)
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("pr", playbook_id="standard")
+    store.set_current_step(blackboard, "done")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="pr",
+        to_owner=HandoffOwner.DONE,
+        to_step="done",
+        intent=HandoffIntent.WORKFLOW_COMPLETE,
+        status_code="BATON_CONFIRM_OUTPUT",
+        source="test",
+    )
+    launch_store = WorkerLaunchStore(issue_dir)
+    launch = launch_store.start()
+    launch_store.mark(launch["worker_id"], "started")
+    observed: dict[str, object] = {}
+
+    class CapturingRuntime:
+        def __init__(self, **kwargs: object) -> None:
+            observed["callback"] = kwargs.get("workflow_event_callback")
+
+        def run(self, *, start_step: str | None = None, single_step: bool = False):
+            observed["start_step"] = start_step
+            observed["single_step"] = single_step
+            return PlaybookRunResult(
+                final_step="pr",
+                final_status_code="BATON_CONFIRM_OUTPUT",
+                completed=True,
+            )
+
+    callback = SimpleNamespace(
+        callback_id="builtin:use-cafe-workflow:workflow_event_callback",
+        script=tmp_path / "callback.py",
+    )
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.commands.workflow.BlackboardWorkflowRuntime", CapturingRuntime),
+        patch(
+            "cafe.ui.commands.workflow.resolve_builtin_workflow_event_callback",
+            return_value=callback,
+        ),
+        patch("cafe.ui.cli._find_incomplete_workflow_step", return_value=None),
+        patch("cafe.ui.cli._find_external_resume_step", return_value=None),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "terminal-callback"
+        mock_git_cls.return_value = git
+        result = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--issue",
+                "terminal-callback",
+                "--playbook",
+                "standard",
+                "--execute",
+                "--internal-worker-id",
+                launch["worker_id"],
+                "--internal-worker-token",
+                launch["worker_token"],
+                "--on-workflow-event",
+                callback.callback_id,
+            ],
+        )
+
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    assert callable(observed["callback"])
+    assert observed["start_step"] == "done"
+    assert observed["single_step"] is False
+    assert "Workflow completed" in result.stdout
 
 
 def test_background_persists_cold_start_input_before_worker_launch(

@@ -965,12 +965,22 @@ def workflow(
                         f"[yellow]Detected external workflow feedback[/yellow] step={external_step}"
                     )
                     continue
-            if active_step in {"user", "done"}:
+            terminal_callback_resume = (
+                active_step == "done"
+                and not interactive
+                and validated_worker_id is not None
+                and callback_binding is not None
+            )
+            if active_step in {"user", "done"} and not terminal_callback_resume:
                 if active_step == "done" and not interactive:
                     console.print("[green]Workflow already completed[/green] step=done")
                     console.print("[yellow]Workflow is waiting for user input[/yellow] step=user")
                     return
-                # active_step in {"user", "done"} (done only reaches here in interactive mode)
+                # A validated callback worker observes done through the runtime
+                # below so the durable terminal callback follows the same path
+                # as every other workflow completion. Terminal observations are
+                # intentionally at-least-once: each authorized worker gets a new
+                # durable event identity, and the Driver must re-read state.
                 if not interactive:
                     if user_input and user_input.strip():
                         step_keys = list(playbook_data.get("steps", {}).keys())

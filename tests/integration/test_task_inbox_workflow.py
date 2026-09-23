@@ -13,6 +13,8 @@ from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.ui.cli import app
 from cafe.ui.human_tasks import resolve_step_human_task
+from cafe.workflow_execution.event_callback import ResolvedWorkflowEventCallback
+from cafe.workflow_execution.worker_launch import WorkerLaunchStore
 
 pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
@@ -364,6 +366,111 @@ def test_deferred_self_loop_completion_persists_the_decision_for_the_worker(
     assert "workflow execute" not in continuation_input
     assert HumanTaskRecordStore(issue_dir).get_task(task.id).status is HumanTaskStatus.COMPLETED
     assert store.load_or_create("spec").current_step == "spec"
+
+
+def test_deferred_terminal_completion_wakes_driver_from_callback_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir, task = _pending_issue(
+        tmp_path / ".cafe",
+        "deferred-terminal",
+        step="pr",
+    )
+
+    completed = runner.invoke(
+        app,
+        [
+            "task",
+            "complete",
+            task.id,
+            "--result",
+            '{"decision":"continue_without_issue"}',
+            "--no-resume",
+        ],
+    )
+
+    assert completed.exit_code == 0, (completed.stdout, completed.exception)
+    state = BlackboardStore(issue_dir).load_or_create("pr", playbook_id="standard")
+    assert state.current_step == "done"
+    assert state.handoff_contract is not None
+    assert state.handoff_contract.to_owner is HandoffOwner.DONE
+    assert state.handoff_contract.intent is HandoffIntent.WORKFLOW_COMPLETE
+
+    launch_store = WorkerLaunchStore(issue_dir)
+    launch = launch_store.start()
+    launch_store.mark(launch["worker_id"], "started")
+    callback_id = "builtin:use-cafe-workflow:workflow_event_callback"
+    callback = ResolvedWorkflowEventCallback(callback_id, tmp_path / "callback.py")
+    dispatched: list[dict[str, object]] = []
+
+    class FakeGitOperations:
+        def get_current_branch(self) -> str:
+            return "deferred-terminal"
+
+    def capture_callback(_binding, event, *, cwd: Path) -> None:
+        assert cwd == tmp_path
+        dispatched.append(dict(event))
+
+    monkeypatch.setattr("cafe.ui.cli.GitOperations", FakeGitOperations)
+    monkeypatch.setattr(
+        "cafe.ui.commands.workflow.resolve_builtin_workflow_event_callback",
+        lambda *_args, **_kwargs: callback,
+    )
+    monkeypatch.setattr(
+        "cafe.ui.commands.workflow.dispatch_workflow_event_callback",
+        capture_callback,
+    )
+    monkeypatch.setattr(
+        "cafe.ui.cli._find_incomplete_workflow_step",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "cafe.ui.cli._find_external_resume_step",
+        lambda **_kwargs: None,
+    )
+
+    def resume_worker(worker: dict[str, object]):
+        return runner.invoke(
+            app,
+            [
+                "workflow",
+                "--issue",
+                "deferred-terminal",
+                "--playbook",
+                "standard",
+                "--execute",
+                "--internal-worker-id",
+                worker["worker_id"],
+                "--internal-worker-token",
+                worker["worker_token"],
+                "--on-workflow-event",
+                callback_id,
+            ],
+        )
+
+    resumed = resume_worker(launch)
+
+    assert resumed.exit_code == 0, (resumed.stdout, resumed.exception)
+    assert [event["event_type"] for event in dispatched] == ["workflow_completed"]
+    assert dispatched[0]["step"] == "pr"
+    assert dispatched[0]["status_code"] == "BATON_WORKFLOW_COMPLETE"
+    assert isinstance(dispatched[0]["event_id"], str)
+    assert isinstance(dispatched[0]["sequence"], int)
+    assert "Executing step=" not in resumed.stdout
+
+    replay_launch = launch_store.start()
+    launch_store.mark(replay_launch["worker_id"], "started")
+    replayed = resume_worker(replay_launch)
+
+    assert replayed.exit_code == 0, (replayed.stdout, replayed.exception)
+    assert [event["event_type"] for event in dispatched] == [
+        "workflow_completed",
+        "workflow_completed",
+    ]
+    assert dispatched[1]["event_id"] != dispatched[0]["event_id"]
+    assert dispatched[1]["sequence"] == dispatched[0]["sequence"] + 1
+    assert "Executing step=" not in replayed.stdout
 
 
 def test_interactive_completion_uses_same_durable_contract(
