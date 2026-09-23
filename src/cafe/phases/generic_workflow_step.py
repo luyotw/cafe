@@ -96,6 +96,7 @@ from cafe.core.workspace_lock import workspace_execution_lock
 from cafe.phases.generic_phase import GenericPhase
 from cafe.skills.checklist_composer import (
     compose_declared_checklist,
+    compose_effective_checklist,
     generate_custom_skill_checklist,
     select_checklist_variant,
 )
@@ -254,7 +255,7 @@ class GenericWorkflowStepExecutor(Phase):
         generic_phase = getattr(self, "generic_phase", None)
         return getattr(generic_phase, "skill_loader", None) or SkillLoader()
 
-    def _effective_workflow_declaration(
+    def _effective_workflow_composition(
         self,
         *,
         step_name: str,
@@ -273,7 +274,10 @@ class GenericWorkflowStepExecutor(Phase):
             primary_skill=skill_name,
             workflow_skills=workflow_skills,
             step_name=step_name,
-        ).as_declaration()
+        )
+
+    def _effective_workflow_declaration(self, **kwargs) -> SkillWorkflowDeclaration:
+        return self._effective_workflow_composition(**kwargs).as_declaration()
 
     def __init__(
         self,
@@ -2558,29 +2562,23 @@ class GenericWorkflowStepExecutor(Phase):
         runtime_context: Optional[Mapping[str, str]] = None,
     ) -> None:
         canonical_name = canonical_skill_name(skill_name)
-        contract = self._get_skill_loader().get_workflow_declaration(skill_name)
-        input_contract = self._effective_workflow_declaration(
+        composition = self._effective_workflow_composition(
             step_name=step_name, step_def=step_def, skill_name=skill_name
         )
+        contract = composition.contributors[0].declaration
+        input_contract = composition.as_declaration()
         input_artifacts = self._step_input_artifacts(step_def, blackboard_state)
         self._validate_workspace_inputs(input_artifacts, step_def=step_def)
-        declares_causal_todo = bool(
-            contract.checklist
-            and any(
-                section.todo_projection and section.todo_projection.causal
-                for variant in contract.checklist.variants
-                for section in variant.sections
-            )
-        )
-        causal_artifact = next(
-            (
-                section.todo_projection.artifact
-                for variant in (contract.checklist.variants if contract.checklist else ())
-                for section in variant.sections
-                if section.todo_projection and section.todo_projection.causal
-            ),
-            None,
-        )
+        causal_artifacts = tuple(dict.fromkeys(
+            section.todo_projection.artifact
+            for contributor in composition.contributors
+            for checklist in [contributor.declaration.checklist if contributor.primary else contributor.declaration.checklist_overlay]
+            if checklist is not None
+            for variant in checklist.variants for section in variant.sections
+            if section.todo_projection and section.todo_projection.causal
+        ))
+        declares_causal_todo = bool(causal_artifacts)
+        causal_artifact = next(iter(causal_artifacts), None)
         inbound_route = self._persisted_inbound_feedback_route(step_name, blackboard_state)
         if declares_causal_todo or inbound_route is not None:
             causal_artifact = causal_artifact or inbound_route.artifact
@@ -2627,68 +2625,27 @@ class GenericWorkflowStepExecutor(Phase):
                 self._display_path(Path(str(getattr(causal_entry, "path", causal_entry)))),
             )
         feedback = bool(causal_entry)
-        if contract.checklist is None:
-            generated = generate_custom_skill_checklist(
-                skill_name=canonical_name,
-                agent_name=agent_name,
-                role=str(step_def.get("role", "developer")),
-                checklist_file_path=checklist_file,
-                correction_mode=feedback,
-                placeholders=context,
-                preserve_completed_items=preserve_completed_items,
-            )
-            if not generated and not checklist_file.exists():
-                generate_checklist_file(checklist_file, "")
-            return
-        compose_declared_checklist(
-            skill_name=canonical_name,
-            contract=contract,
-            agent_name=agent_name,
-            role=str(step_def.get("role", "developer")),
-            checklist_file_path=checklist_file,
-            step=step_name,
-            iteration=self.iteration,
-            context=context,
-            artifacts=input_artifacts,
-            feedback=feedback,
+        materialized = compose_effective_checklist(
+            composition=composition, agent_name=agent_name,
+            role=str(step_def.get("role", "developer")), checklist_file_path=checklist_file,
+            iteration=self.iteration, context=context, artifacts=input_artifacts, feedback=feedback,
             template_mode=self._resolved_template_mode(step_name, step_def),
-            template_file=self._resolved_template_file(
-                step_name,
-                step_def,
-                canonical_name,
-                contract,
-            ),
-            preserve_completed_items=preserve_completed_items,
-            todo_ledger_path=output_file,
+            template_file=self._resolved_template_file(step_name, step_def, canonical_name, contract),
+            preserve_completed_items=preserve_completed_items, todo_ledger_path=output_file,
         )
-        variant = select_checklist_variant(
-            contract,
-            step=step_name,
-            iteration=self.iteration,
-            artifacts=input_artifacts,
-            feedback=feedback,
-        )
-        projections: list[dict[str, Any]] = []
-        for section in variant.sections:
-            declaration = section.todo_projection
-            if declaration is None:
-                continue
-            entry = input_artifacts.get(declaration.artifact)
-            if entry is None:
-                raise ValueError("Todo projection artifact disappeared during generation")
-            items = projection_todo_items(entry, expected_source=declaration.source)
-            projections.append(
-                {
-                    "declaration_artifact": declaration.artifact,
-                    "artifact": str(
-                        getattr(entry, "artifact", getattr(entry, "name", declaration.artifact))
-                    ),
-                    "path": str(getattr(entry, "path", entry)),
-                    "version": getattr(entry, "version", None),
-                    "rows": [item.checklist_row() for item in items],
-                }
-            )
-        self._persist_todo_projection_snapshot(output_file.parent, projections)
+        metadata_path = output_file.parent / "iteration.json"
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            metadata = {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        metadata["effective_checklist"] = materialized.to_dict()
+        metadata["todo_projections"] = [
+            {key: binding[key] for key in ("declaration_artifact", "artifact", "path", "version", "rows")}
+            for binding in materialized.projections
+        ]
+        metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
 
     @staticmethod
     def _add_causal_todo_artifact(

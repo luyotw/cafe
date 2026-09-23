@@ -65,6 +65,7 @@ class StepWorkflowComposition:
     prompt_inputs: tuple[PromptInputContract, ...]
     human_tasks: tuple[HumanTaskPolicy, ...]
     execution_requirements: ComposedExecutionRequirements
+    catalog_root: Path | None = None
 
     @property
     def skill_names(self) -> tuple[str, ...]:
@@ -280,4 +281,5 @@ def _resolve_step_workflow_composition_locked(
         prompt_inputs=tuple(value[0] for value in inputs.values()),
         human_tasks=tuple(value[0] for value in tasks.values()),
         execution_requirements=_execution_requirements(retained),
+        catalog_root=skill_loader.global_root,
     )

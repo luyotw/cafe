@@ -677,3 +677,134 @@ def generate_pr_comments_checklist(
 
     checklist_content = resolve_checklist_placeholders(checklist_content, placeholders)
     generate_checklist_file(checklist_file_path, checklist_content)
+
+
+def compose_effective_checklist(
+    *, composition, agent_name: str, role: str, checklist_file_path: Path,
+    iteration: int, context: Mapping[str, str], artifacts: Mapping[str, Any],
+    feedback: bool = False, template_mode: str = "auto", template_file: str | None = None,
+    preserve_completed_items: bool = False, todo_ledger_path: Path | None = None,
+):
+    """Select each contributor once and publish one source-aware materialization."""
+    from cafe.catalogs.resolver import global_catalog_lock
+    from cafe.core.checklist import ChecklistGate, ChecklistMaterialization, ProjectedTodo, checklist_digest
+    from cafe.utils.checklist_utils import _checklist_item_blocks
+
+    # Resolved roots stay pinned while references and templates are read.
+    with global_catalog_lock(composition.catalog_root):
+        primary = composition.contributors[0]
+        primary_contract = primary.declaration
+        selected = []
+        for contributor in composition.contributors:
+            field = "checklist" if contributor.primary else "checklist_overlay"
+            declaration = getattr(contributor.declaration, field)
+            if declaration is None:
+                continue
+            state = dict(step=composition.step_name, iteration=iteration, artifacts=artifacts, feedback=feedback)
+            if not contributor.primary and not declaration.when.matches(**state):
+                continue
+            match = next(((index, variant) for index, variant in enumerate(declaration.variants) if variant.when.matches(**state)), None)
+            if match is None:
+                if contributor.primary:
+                    raise ValueError(f"No checklist variant matches iteration {iteration}")
+                raise ValueError(f"Step {composition.step_name!r}, skill {contributor.source.skill_identity!r}, workflow.{field}.variants: no matching variant")
+            selected.append((contributor, field, declaration, *match))
+        has_overlays = any(not item[0].primary for item in selected)
+        guidance_role = role
+        if primary_contract.checklist is not None and role not in {"pm", "reviewer", "writer", "editor", "researcher", "ops"}:
+            guidance_role = "developer"
+        agent_file, guidance = _load_agent_guidance(agent_name, guidance_role)
+        common = {key: str(value) for key, value in context.items() if value is not None}
+        common["agent_file"] = agent_file
+        parts = []
+        gates = []
+        projections = []
+
+        def append(content, source, identity):
+            if not content:
+                return
+            parts.append(content)
+            for occurrence, (_start, block, _checked) in enumerate(_checklist_item_blocks(content)):
+                gates.append(ChecklistGate(checklist_digest([identity, occurrence, block]), source, block))
+
+        def read(contributor, reference, optional=False):
+            path = contributor.source.skill_root / "references" / reference
+            if optional and not path.is_file():
+                return ""
+            try:
+                return path.read_text(encoding="utf-8")
+            except OSError as exc:
+                raise ValueError(f"Step {composition.step_name!r}, skill {contributor.source.skill_identity!r}, reference {reference!r}: {exc}") from exc
+
+        if primary_contract.checklist is None:
+            fallback = read(primary, "execution_steps_correction.md", True) if feedback else ""
+            fallback = fallback or read(primary, "execution_steps_normal.md", True)
+            if fallback:
+                fallback = resolve_checklist_placeholders(fallback, common)
+                if has_overlays:
+                    parts.append(f"## Checklist source: {primary.source.skill_identity}\n")
+                append(fallback, primary.source.skill_identity, [str(primary.source.skill_root), "fallback", feedback])
+            include_guidance = bool(fallback)
+        else:
+            include_guidance = primary_contract.checklist.include_role_guidance
+
+        for contributor, field, declaration, variant_index, variant in selected:
+            source = contributor.source.skill_identity
+            location = f"workflow.{field}.variants[{variant_index}]"
+            local = dict(common)
+            overlap = set(local) & set(declaration.context_references)
+            if overlap:
+                raise ValueError(f"Step {composition.step_name!r}, skill {source!r}, {field}.context_references: reserved keys {sorted(overlap)}")
+            for key, reference in declaration.context_references.items():
+                value = read(contributor, reference)
+                names = _PLACEHOLDER_PATTERN.findall(value)
+                # Preserve primary optional instruction fragments. Explicit overlays
+                # must never silently erase an instruction with unavailable inputs.
+                if contributor.primary and not all(common.get(name) for name in names):
+                    local[key] = ""
+                else:
+                    local[key] = resolve_checklist_placeholders(value, common)
+            if has_overlays:
+                parts.append(f"## Checklist source: {source}\n")
+            for section_index, section in enumerate(variant.sections):
+                identity = [str(contributor.source.skill_root.resolve()), contributor.source.catalog_source,
+                            location, declaration.model_dump(mode="json"), section_index]
+                if section.reference:
+                    content = read(contributor, section.reference)
+                elif section.optional_checklist:
+                    optional = read(contributor, section.optional_checklist, True)
+                    content = convert_to_checklist(optional, "Basic Principles") if optional else ""
+                elif section.template_catalog:
+                    content = _template_instruction(skill_name=primary.source.skill_identity, contract=primary_contract,
+                                                    template_mode=template_mode, template_file=template_file)
+                else:
+                    projection = section.todo_projection
+                    entry = artifacts.get(projection.artifact)
+                    if entry is None:
+                        raise ValueError(f"Step {composition.step_name!r}, skill {source!r}, {location}.sections[{section_index}]: missing Todo artifact {projection.artifact!r}")
+                    items = projection_todo_items(entry, expected_source=projection.source)
+                    qualifier = checklist_digest(identity)[:16]
+                    bound = [ProjectedTodo(f"{item.item_id}__{qualifier}" if has_overlays else item.item_id, item) for item in items]
+                    content = "\n".join(item.checklist_row() for item in bound)
+                    projections.append({"declaration_artifact": projection.artifact, "source": projection.source,
+                                        "causal": projection.causal, "contributor": source, "section": section_index,
+                                        "artifact": str(getattr(entry, "artifact", getattr(entry, "name", projection.artifact))),
+                                        "path": str(getattr(entry, "path", entry)), "version": getattr(entry, "version", None),
+                                        "handles": [item.item_id for item in bound], "producer_ids": [item.item_id for item in items],
+                                        "rows": [item.checklist_row() for item in bound]})
+                content = resolve_checklist_placeholders(content, local)
+                unresolved = sorted(set(_PLACEHOLDER_PATTERN.findall(content)))
+                if unresolved:
+                    raise ValueError(f"Step {composition.step_name!r}, skill {source!r}, {location}.sections[{section_index}]: unresolved placeholders {unresolved}")
+                append(content, source, identity)
+        if include_guidance and guidance:
+            compact = primary_contract.checklist and primary_contract.checklist.compact_agent_guidance
+            separator = "" if compact or (parts and parts[-1].endswith("\n\n")) or primary_contract.checklist is None else "\n"
+            append(f"{separator}{guidance}", primary.source.skill_identity, [str(primary.source.skill_root), "role_guidance", agent_file])
+        content = "\n".join(part for part in parts if part)
+        if not content and primary_contract.checklist is None and not has_overlays:
+            from cafe.utils.checklist_utils import _read_existing_regular_file
+            content = _read_existing_regular_file(checklist_file_path) or ""
+        result = ChecklistMaterialization(content, tuple(gates), tuple(projections), has_overlays)
+        generate_checklist_file(checklist_file_path, content, preserve_completed_items=preserve_completed_items, todo_ledger_path=todo_ledger_path)
+        return result
