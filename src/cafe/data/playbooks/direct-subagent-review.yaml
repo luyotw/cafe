@@ -17,6 +17,10 @@ behavior:
 skills:
   workflow:
     shared: [cafe-workflow-common, cafe-github_sync]
+    steps:
+      develop:
+        mode: extend
+        skills: [cafe-develop_subagent_review]
   chat:
     shared: [cafe-common-chat-handoff, cafe-chat-develop-change, cafe-chat-spec-revision, cafe-chat-plan-revision, cafe-chat-alignment-decision]
 
@@ -54,7 +58,7 @@ commands:
 steps:
   develop:
     type: skill
-    skill: cafe-develop_subagent_review
+    skill: cafe-develop
     role: developer
     assignee_type: agent
     input_artifacts: [pr_result, workflow_feedback]
