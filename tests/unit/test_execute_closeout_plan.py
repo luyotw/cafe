@@ -200,14 +200,14 @@ def test_closeout_runner_never_replays_an_unresolved_command(tmp_path: Path) -> 
         )
 
 
-def test_closeout_runner_rejects_shell_code_and_lifecycle_recursion(tmp_path: Path) -> None:
+def test_closeout_runner_rejects_shell_code_and_delivery_recursion(tmp_path: Path) -> None:
     issue_worktree = tmp_path / "issue-worktree"
     issue_worktree.mkdir()
     receipt = tmp_path / "closeout.json"
 
     for argv, message in (
         (["sh", "-c", "do-a-thing"], "shell code strings"),
-        (["cafe", "close", "issue539"], "recursively invoke"),
+        (["cafe", "deliver"], "recursively invoke cafe deliver"),
     ):
         with pytest.raises(ValueError, match=message):
             module.execute_stage(
@@ -217,6 +217,129 @@ def test_closeout_runner_rejects_shell_code_and_lifecycle_recursion(tmp_path: Pa
                 issue_worktree=issue_worktree,
                 receipt_file=receipt,
             )
+
+
+def test_closeout_runner_allows_exact_cafe_close_only_as_final_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    issue_worktree = tmp_path / "issue-worktree"
+    issue_worktree.mkdir()
+    receipt = tmp_path / "closeout.json"
+    plan: dict[str, object] = {
+        "deliver": [],
+        "cleanup": [{"argv": ["true"]}, {"argv": ["cafe", "close"]}],
+    }
+    calls: list[tuple[list[str], Path]] = []
+
+    def run(argv: list[str], *, cwd: Path, check: bool, shell: bool) -> SimpleNamespace:
+        calls.append((argv, cwd))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(module.subprocess, "run", run)
+
+    module.execute_stage(
+        closeout_plan=plan,
+        contract_sha256="a" * 64,
+        stage="deliver",
+        issue_worktree=issue_worktree,
+        receipt_file=receipt,
+    )
+    saved = module.execute_stage(
+        closeout_plan=plan,
+        contract_sha256="a" * 64,
+        stage="cleanup",
+        issue_worktree=issue_worktree,
+        receipt_file=receipt,
+    )
+
+    assert calls == [
+        (["true"], issue_worktree.resolve()),
+        (["cafe", "close"], issue_worktree.resolve()),
+    ]
+    assert [record["status"] for record in saved["stages"]["cleanup"]] == [
+        "succeeded",
+        "succeeded",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("stage", "cleanup", "message"),
+    [
+        ("deliver", [{"argv": ["true"]}], "final cleanup command"),
+        (
+            "cleanup",
+            [{"argv": ["cafe", "close"]}, {"argv": ["true"]}],
+            "final cleanup command",
+        ),
+        (
+            "cleanup",
+            [{"argv": ["cafe", "close", "--squash"]}],
+            "without options",
+        ),
+    ],
+)
+def test_closeout_runner_rejects_cafe_close_outside_its_exact_final_position(
+    tmp_path: Path,
+    stage: str,
+    cleanup: list[dict[str, list[str]]],
+    message: str,
+) -> None:
+    issue_worktree = tmp_path / "issue-worktree"
+    issue_worktree.mkdir()
+    receipt = tmp_path / "closeout.json"
+    plan: dict[str, object] = {
+        "deliver": [{"argv": ["cafe", "close"]}] if stage == "deliver" else [],
+        "cleanup": cleanup,
+    }
+
+    with pytest.raises(ValueError, match=message):
+        module.execute_stage(
+            closeout_plan=plan,
+            contract_sha256="a" * 64,
+            stage=stage,
+            issue_worktree=issue_worktree,
+            receipt_file=receipt,
+        )
+
+
+def test_closeout_runner_prevalidates_the_whole_stage_before_execution(tmp_path: Path) -> None:
+    issue_worktree = tmp_path / "issue-worktree"
+    issue_worktree.mkdir()
+    receipt = tmp_path / "closeout.json"
+    marker = issue_worktree / "must-not-exist.txt"
+    plan: dict[str, object] = {
+        "deliver": [],
+        "cleanup": [
+            {
+                "argv": [
+                    sys.executable,
+                    "-c",
+                    f"from pathlib import Path; Path({str(marker)!r}).touch()",
+                ]
+            },
+            {"argv": ["cafe", "close"]},
+            {"argv": ["true"]},
+        ],
+    }
+
+    module.execute_stage(
+        closeout_plan=plan,
+        contract_sha256="a" * 64,
+        stage="deliver",
+        issue_worktree=issue_worktree,
+        receipt_file=receipt,
+    )
+    with pytest.raises(ValueError, match="final cleanup command"):
+        module.execute_stage(
+            closeout_plan=plan,
+            contract_sha256="a" * 64,
+            stage="cleanup",
+            issue_worktree=issue_worktree,
+            receipt_file=receipt,
+        )
+
+    assert not marker.exists()
+    assert not receipt.exists()
 
 
 def test_closeout_runner_serializes_concurrent_receipt_execution(tmp_path: Path) -> None:

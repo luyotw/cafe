@@ -161,12 +161,50 @@ def _write_receipt(path: Path, receipt: dict[str, Any]) -> None:
             temporary.unlink()
 
 
-def _validate_command(argv: list[str]) -> None:
+def _validate_command(
+    argv: list[str], *, stage: str, index: int, command_count: int
+) -> None:
     executable = Path(argv[0]).name.lower()
     if executable in _SHELL_EXECUTABLES and any(arg in _SHELL_CODE_FLAGS for arg in argv[1:]):
         raise ValueError("closeout commands must not execute shell code strings")
-    if executable == "cafe" and len(argv) > 1 and argv[1] in {"close", "deliver"}:
-        raise ValueError("closeout plans must not recursively invoke cafe close or deliver")
+    if executable != "cafe" or len(argv) <= 1:
+        return
+    if argv[1] == "deliver":
+        raise ValueError("closeout plans must not recursively invoke cafe deliver")
+    if argv[1] != "close":
+        return
+    if argv != [argv[0], "close"]:
+        raise ValueError("closeout plans may invoke only exact `cafe close` without options")
+    if stage != "cleanup" or index != command_count - 1:
+        raise ValueError("cafe close is allowed only as the final cleanup command")
+
+
+def _validate_stage_commands(
+    *, stage: str, commands: list[Any], closeout_plan: dict[str, Any]
+) -> list[list[str]]:
+    """Validate the complete stage before any command can have side effects."""
+    validated: list[list[str]] = []
+    for index, command in enumerate(commands):
+        if not isinstance(command, dict) or set(command) != {"argv"}:
+            raise ValueError("closeout plan command is invalid")
+        argv = command["argv"]
+        if (
+            not isinstance(argv, list)
+            or not argv
+            or any(not isinstance(item, str) for item in argv)
+            or not argv[0]
+        ):
+            raise ValueError("closeout plan command argv is invalid")
+        decision = assess_confirmed_closeout_command(
+            {"stage": stage, "index": index, "argv": argv}, closeout_plan
+        )
+        if decision["decision"] != "confirmed_closeout_command":
+            raise ValueError("requested command is not the exact confirmed closeout command")
+        _validate_command(
+            argv, stage=stage, index=index, command_count=len(commands)
+        )
+        validated.append(argv)
+    return validated
 
 
 def _record_matches(record: Any, argv: list[str]) -> bool:
@@ -224,25 +262,20 @@ def _execute_stage_locked(
         raise ValueError("cleanup requires every deliver command to have a recorded success")
 
     commands = closeout_plan[stage]
+    command_argv = _validate_stage_commands(
+        stage=stage, commands=commands, closeout_plan=closeout_plan
+    )
     records = receipt["stages"][stage]
     if len(records) > len(commands):
         raise ValueError("receipt has more commands than the confirmed plan")
-    for index, command in enumerate(commands):
-        argv = command["argv"]
-        decision = assess_confirmed_closeout_command(
-            {"stage": stage, "index": index, "argv": argv}, closeout_plan
-        )
-        if decision["decision"] != "confirmed_closeout_command":
-            raise ValueError("requested command is not the exact confirmed closeout command")
-        _validate_command(argv)
-        if index < len(records):
-            record = records[index]
-            if not _record_matches(record, argv):
-                raise ValueError("receipt command does not match the confirmed plan")
-            if record["status"] == "succeeded":
-                continue
+    for index, record in enumerate(records):
+        if not _record_matches(record, command_argv[index]):
+            raise ValueError("receipt command does not match the confirmed plan")
+        if record["status"] != "succeeded":
             raise ValueError("previous command outcome is not safe to replay; inspect it first")
 
+    for index in range(len(records), len(commands)):
+        argv = command_argv[index]
         record: dict[str, Any] = {"argv": argv, "status": "started"}
         records.append(record)
         _write_receipt(receipt_path, receipt)
