@@ -139,3 +139,59 @@ def test_real_develop_materializes_primary_and_independent_policy(tmp_path, monk
     assert content.count("## Agent Guidelines Checklist") == 1
     assert content.index("Independent policy") < content.index("## Agent Guidelines Checklist")
     assert "PLAN-001" in content
+
+
+@pytest.mark.parametrize("mutation", ["unchanged", "source", "content", "condition", "continuation", "missing_metadata", "corrupt_metadata"])
+def test_interrupted_identical_gates_restore_only_proven_source(tmp_path, monkeypatch, mutation):
+    """I04/U09/U10: identical text never transfers completion across sources."""
+    import json
+    from cafe.utils.checklist_validator import validate_checklist
+    root = tmp_path / ".cafe/skills"
+    write_skill(root, "primary", {"checklist": {"variants": [{"sections": [{"reference": "work.md"}]}]}}, {"work.md": "[ ] Same gate\n"})
+    write_skill(root, "policy", overlay(), {"review.md": "[ ] Same gate\n  Retain evidence\n"})
+    executor, step, state, directory = executor_fixture(tmp_path, monkeypatch)
+    content = generate(executor, step, state, directory)
+    path = directory / "checklist.md"
+    # Only the overlay gate is complete, not the identical primary gate.
+    path.write_text(content.replace("[ ] Same gate\n  Retain", "[x] Same gate\n  Retain"))
+    if mutation == "source":
+        write_skill(root, "replacement", overlay(), {"review.md": "[ ] Same gate\n  Retain evidence\n"})
+        executor.playbook["skills"]["workflow"]["shared"] = ["replacement"]
+    elif mutation in {"content", "continuation"}:
+        (root / "policy/references/review.md").write_text("[ ] Same gate\n  Changed rule\n" if mutation == "continuation" else "[ ] Changed gate\n  Retain evidence\n")
+    elif mutation == "condition":
+        write_skill(root, "policy", overlay(when={"iteration": 1}), {"review.md": "[ ] Same gate\n  Retain evidence\n"})
+    elif mutation == "missing_metadata":
+        (directory / "iteration.json").unlink()
+    elif mutation == "corrupt_metadata":
+        (directory / "iteration.json").write_text('{"effective_checklist": {"version": 999}}')
+    resumed = generate(executor, step, state, directory, preserve_completed_items=True)
+    assert "[x] Same gate\n\n## Checklist source: policy" not in resumed
+    assert resumed.count("[x]") == (1 if mutation == "unchanged" else 0)
+    assert not validate_checklist(path).is_complete
+
+
+@pytest.mark.parametrize("mutation", ["delete", "duplicate", "alter", "reorder", "continuation"])
+def test_success_validation_rejects_missing_or_changed_expected_gates(tmp_path, monkeypatch, mutation):
+    """U09/I04: checking a partial or edited gate set is never complete."""
+    from cafe.utils.checklist_validator import validate_checklist
+    root = tmp_path / ".cafe/skills"
+    write_skill(root, "primary", {"checklist": {"variants": [{"sections": [{"reference": "work.md"}]}]}}, {"work.md": "[ ] Primary\n"})
+    write_skill(root, "policy", overlay(), {"review.md": "[ ] Policy A\n  Required rule\n[ ] Policy B\n"})
+    executor, step, state, directory = executor_fixture(tmp_path, monkeypatch)
+    content = generate(executor, step, state, directory).replace("[ ]", "[x]")
+    path = directory / "checklist.md"
+    path.write_text(content)
+    assert validate_checklist(path).is_complete
+    if mutation == "delete":
+        content = content.replace("[x] Policy B\n", "")
+    elif mutation == "duplicate":
+        content += "[x] Policy B\n"
+    elif mutation == "alter":
+        content = content.replace("Policy B", "Other task")
+    elif mutation == "reorder":
+        content = content.replace("Policy A", "swap").replace("Policy B", "Policy A").replace("swap", "Policy B")
+    else:
+        content = content.replace("Required rule", "Weakened rule")
+    path.write_text(content)
+    assert not validate_checklist(path).is_complete

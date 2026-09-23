@@ -2633,6 +2633,7 @@ class GenericWorkflowStepExecutor(Phase):
             template_file=self._resolved_template_file(step_name, step_def, canonical_name, contract),
             preserve_completed_items=preserve_completed_items, todo_ledger_path=output_file,
         )
+        self._effective_checklist = materialized
         metadata_path = output_file.parent / "iteration.json"
         try:
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))

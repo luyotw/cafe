@@ -805,6 +805,9 @@ def compose_effective_checklist(
         if not content and primary_contract.checklist is None and not has_overlays:
             from cafe.utils.checklist_utils import _read_existing_regular_file
             content = _read_existing_regular_file(checklist_file_path) or ""
+            for occurrence, (_, block, _) in enumerate(_checklist_item_blocks(content)):
+                gates.append(ChecklistGate(checklist_digest([str(primary.source.skill_root), "legacy", occurrence, block]), primary.source.skill_identity, block))
         result = ChecklistMaterialization(content, tuple(gates), tuple(projections), has_overlays)
-        generate_checklist_file(checklist_file_path, content, preserve_completed_items=preserve_completed_items, todo_ledger_path=todo_ledger_path)
+        from cafe.utils.checklist_utils import publish_materialized_checklist
+        publish_materialized_checklist(checklist_file_path, result, preserve=preserve_completed_items, todo_ledger_path=todo_ledger_path)
         return result

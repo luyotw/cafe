@@ -72,7 +72,7 @@ def completion_requires_checklist(
     return status_code in CHECKLIST_COMPLETION_STATUS_CODES
 
 
-def validate_checklist(checklist_path: Path) -> ChecklistValidationResult:
+def validate_checklist(checklist_path: Path, *, expected=None) -> ChecklistValidationResult:
     """Validate that all checklist items are completed.
 
     Checks for unchecked items by searching for lines that start with "[ ]"
@@ -99,6 +99,15 @@ def validate_checklist(checklist_path: Path) -> ChecklistValidationResult:
     # Read checklist content
     content = checklist_path.read_text(encoding="utf-8")
 
+    from cafe.core.checklist import load_materialization, normalized_checklist
+    try:
+        pinned = load_materialization(checklist_path.parent / "iteration.json")
+        integrity_valid = expected is None or pinned == expected
+        expected = expected or pinned
+        integrity_valid = integrity_valid and (expected is None or not expected.content.strip() or normalized_checklist(content) == normalized_checklist(expected.content))
+    except ValueError:
+        integrity_valid = False
+
     # Count unchecked items - only lines starting with "[ ]" or "- [ ]" count as unchecked
     # This avoids false positives from "[ ]" in descriptive text
     unchecked_count = 0
@@ -109,7 +118,7 @@ def validate_checklist(checklist_path: Path) -> ChecklistValidationResult:
             unchecked_count += 1
 
     return ChecklistValidationResult(
-        is_complete=(unchecked_count == 0),
+        is_complete=(unchecked_count == 0 and integrity_valid),
         unchecked_count=unchecked_count,
         checklist_path=checklist_path,
     )

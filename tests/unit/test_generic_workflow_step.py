@@ -4191,9 +4191,7 @@ description: legacy test skill
     def assert_refreshed_checklist(*, streaming_output_file: str, **_kwargs) -> None:
         checklist = Path(streaming_output_file).parent / "checklist.md"
         observed["content"] = checklist.read_text(encoding="utf-8")
-        checklist.write_text(
-            "[x] Keep completed work\n[x] New checkpoint barrier\n", encoding="utf-8"
-        )
+        checklist.write_text(observed["content"].replace("[ ]", "[x]"), encoding="utf-8")
 
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
