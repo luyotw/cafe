@@ -1520,14 +1520,14 @@ def close(
 
             clear_marker_if_matches(worktree_abs / ".cafe", issue_name)
 
-            # Step 8: Delete local feature branch
-            # Squash merges leave no merge commit pointing at the feature branch,
-            # so Git treats it as "not merged" and `git branch -d` would fail.
-            # Force-delete in that case.
-            force_delete = squash
+            # Step 8: Delete local feature branch. A confirmed merged PR is
+            # authoritative even when local ancestry cannot prove the merge.
             try:
                 console.print(f"[dim]Deleting feature branch: {feature_branch}[/dim]")
-                if force_delete:
+                if merged_pr:
+                    git_ops.delete_branch(feature_branch, force=True)
+                elif squash:
+                    # Local review mode may have produced a squash commit.
                     git_ops.delete_branch(feature_branch, force=True)
                 else:
                     git_ops.delete_branch(feature_branch)
@@ -1610,13 +1610,14 @@ def close(
                 restore_local_branch_on_failure=True,
             )
 
-            # Step 4: Delete local feature branch
-            # Squash merges leave no merge commit, so `git branch -d` fails;
-            # force-delete when we squashed.
-            force_delete = squash
+            # Step 4: Delete local feature branch. A confirmed merged PR is
+            # authoritative even when local ancestry cannot prove the merge.
             try:
                 console.print(f"[dim]Deleting feature branch: {feature_branch}[/dim]")
-                if force_delete:
+                if merged_pr:
+                    git_ops.delete_branch(feature_branch, force=True)
+                elif squash:
+                    # Local review mode may have produced a squash commit.
                     git_ops.delete_branch(feature_branch, force=True)
                 else:
                     git_ops.delete_branch(feature_branch)
@@ -1651,20 +1652,19 @@ def close(
                     shutil.copy2(str(repo_config), str(issue_dir / "config.yaml"))
 
             # Move issue directory to archive
-            if issue_dir.exists():
-                # If archive already exists, remove it first
-                if archive_path.exists():
-                    shutil.rmtree(archive_path)
-                shutil.move(str(issue_dir), str(archive_path))
+            if not issue_dir.exists():
+                raise FileNotFoundError(f"No issue data found at: {issue_dir}")
 
-                console.print(f"[green]✓ Archived issue data to: {archive_path}[/green]")
-            else:
-                console.print(
-                    f"[yellow]⚠️  No issue data found at .cafe/issues/{issue_name}/[/yellow]"
-                )
+            # If archive already exists, remove it first
+            if archive_path.exists():
+                shutil.rmtree(archive_path)
+            shutil.move(str(issue_dir), str(archive_path))
+
+            console.print(f"[green]✓ Archived issue data to: {archive_path}[/green]")
         except Exception as e:
-            console.print(f"[yellow]⚠️  Failed to archive issue data: {e}[/yellow]")
+            console.print(f"[red]❌ Failed to archive issue data: {e}[/red]")
             console.print(f"[yellow]   Issue data remains at: .cafe/issues/{issue_name}/[/yellow]")
+            raise typer.Exit(1)
 
         clear_marker_if_matches(Path(".cafe"), issue_name)
 

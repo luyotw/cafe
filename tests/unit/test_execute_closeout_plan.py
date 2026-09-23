@@ -236,6 +236,7 @@ def test_closeout_runner_allows_exact_cafe_close_only_as_final_cleanup(
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(module.subprocess, "run", run)
+    monkeypatch.setattr(module, "_close_postcondition_errors", lambda *_args, **_kwargs: [])
 
     module.execute_stage(
         closeout_plan=plan,
@@ -250,6 +251,9 @@ def test_closeout_runner_allows_exact_cafe_close_only_as_final_cleanup(
         stage="cleanup",
         issue_worktree=issue_worktree,
         receipt_file=receipt,
+        issue_name="issue539",
+        workflow_id="workflow-539",
+        project_root=tmp_path,
     )
 
     assert calls == [
@@ -259,6 +263,173 @@ def test_closeout_runner_allows_exact_cafe_close_only_as_final_cleanup(
     assert [record["status"] for record in saved["stages"]["cleanup"]] == [
         "succeeded",
         "succeeded",
+    ]
+    assert saved["close_recovery"]["issue_name"] == "issue539"
+
+
+def test_closeout_runner_fails_when_cafe_close_postconditions_are_incomplete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    issue_worktree = tmp_path / "issue-worktree"
+    issue_worktree.mkdir()
+    receipt = tmp_path / "closeout.json"
+    plan: dict[str, object] = {
+        "deliver": [],
+        "cleanup": [{"argv": ["cafe", "close"]}],
+    }
+    monkeypatch.setattr(
+        module.subprocess, "run", lambda *_args, **_kwargs: SimpleNamespace(returncode=0)
+    )
+    monkeypatch.setattr(
+        module,
+        "_close_postcondition_errors",
+        lambda *_args, **_kwargs: ["matching archived Driver contract is unavailable"],
+    )
+
+    module.execute_stage(
+        closeout_plan=plan,
+        contract_sha256="a" * 64,
+        stage="deliver",
+        issue_worktree=issue_worktree,
+        receipt_file=receipt,
+    )
+    with pytest.raises(module.CloseoutCommandError, match="postconditions failed"):
+        module.execute_stage(
+            closeout_plan=plan,
+            contract_sha256="a" * 64,
+            stage="cleanup",
+            issue_worktree=issue_worktree,
+            receipt_file=receipt,
+            issue_name="issue539",
+            workflow_id="workflow-539",
+            project_root=tmp_path,
+        )
+
+    saved = json.loads(receipt.read_text(encoding="utf-8"))
+    assert saved["stages"]["cleanup"] == [
+        {
+            "argv": ["cafe", "close"],
+            "error": "matching archived Driver contract is unavailable",
+            "returncode": 0,
+            "status": "failed",
+        }
+    ]
+
+
+def test_closeout_runner_reconciles_started_cafe_close_after_worktree_removal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    issue_worktree = tmp_path / "issue-worktree"
+    issue_worktree.mkdir()
+    receipt = tmp_path / "closeout.json"
+    recovery = module._close_recovery_context(
+        issue_name="issue539",
+        workflow_id="workflow-539",
+        project_root=tmp_path,
+        issue_worktree=issue_worktree,
+        cleanup_index=0,
+    )
+    module._write_receipt(
+        receipt,
+        {
+            "schema_version": 2,
+            "contract_sha256": "a" * 64,
+            "close_recovery": recovery,
+            "stages": {
+                "deliver": [],
+                "cleanup": [{"argv": ["cafe", "close"], "status": "started"}],
+            },
+        },
+    )
+    issue_worktree.rmdir()
+    monkeypatch.setattr(module, "_close_postcondition_errors", lambda *_args, **_kwargs: [])
+    args = SimpleNamespace(
+        stage="cleanup",
+        issue_name="issue539",
+        workflow_id="workflow-539",
+        project_root=tmp_path,
+        issue_worktree=issue_worktree,
+        receipt_file=receipt,
+    )
+
+    saved = module._reconcile_lifecycle_close(args)
+
+    assert saved["stages"]["cleanup"] == [
+        {"argv": ["cafe", "close"], "returncode": 0, "status": "succeeded"}
+    ]
+
+
+def test_closeout_runner_recovery_requires_verified_postconditions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    issue_worktree = tmp_path / "issue-worktree"
+    issue_worktree.mkdir()
+    receipt = tmp_path / "closeout.json"
+    recovery = module._close_recovery_context(
+        issue_name="issue539",
+        workflow_id="workflow-539",
+        project_root=tmp_path,
+        issue_worktree=issue_worktree,
+        cleanup_index=0,
+    )
+    module._write_receipt(
+        receipt,
+        {
+            "schema_version": 2,
+            "contract_sha256": "a" * 64,
+            "close_recovery": recovery,
+            "stages": {
+                "deliver": [],
+                "cleanup": [{"argv": ["cafe", "close"], "status": "started"}],
+            },
+        },
+    )
+    issue_worktree.rmdir()
+    monkeypatch.setattr(
+        module,
+        "_close_postcondition_errors",
+        lambda *_args, **_kwargs: ["local feature branch still exists"],
+    )
+    args = SimpleNamespace(
+        stage="cleanup",
+        issue_name="issue539",
+        workflow_id="workflow-539",
+        project_root=tmp_path,
+        issue_worktree=issue_worktree,
+        receipt_file=receipt,
+    )
+
+    with pytest.raises(ValueError, match="local feature branch still exists"):
+        module._reconcile_lifecycle_close(args)
+
+    saved = json.loads(receipt.read_text(encoding="utf-8"))
+    assert saved["stages"]["cleanup"][0]["status"] == "started"
+
+
+def test_cafe_close_postconditions_require_the_matching_archived_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "repo"
+    project_root.mkdir()
+    worktree = project_root / ".cafe" / "worktrees" / "issue539"
+    recovery = module._close_recovery_context(
+        issue_name="issue474",
+        workflow_id="workflow-474",
+        project_root=project_root,
+        issue_worktree=worktree,
+        cleanup_index=0,
+    )
+    archive = Path(recovery["archive_path"])
+    proposal = _proposal()
+    activated = activate_confirmed_contract(_activation(archive, proposal))
+    monkeypatch.setattr(module, "_local_branch_absent", lambda **_kwargs: True)
+
+    assert (
+        module._close_postcondition_errors(recovery, contract_sha256=activated.contract_sha256)
+        == []
+    )
+    assert module._close_postcondition_errors(recovery, contract_sha256="b" * 64) == [
+        "archived Driver contract does not match the confirmed contract"
     ]
 
 
@@ -273,7 +444,7 @@ def test_closeout_runner_allows_exact_cafe_close_only_as_final_cleanup(
         ),
         (
             "cleanup",
-            [{"argv": ["cafe", "close", "--squash"]}],
+            [{"argv": ["cafe", "close", "--message", "not-allowed"]}],
             "without options",
         ),
     ],
