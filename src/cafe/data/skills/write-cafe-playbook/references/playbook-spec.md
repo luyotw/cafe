@@ -160,8 +160,9 @@ contract and every other warning are resolved.
 | `valid_intents` | Supported `PhaseStatusCode` tokens the phase may return |
 | `allowed_tools` | Least broad set that still allows the skill to complete |
 | `hooks` | Runtime-supported prepare/execute/publish hooks only |
-| `allowed_goto` | Explicit non-default routes; do not use as the happy path |
-| `"on"` | Complete intent-key → step transition map |
+| `allowed_goto` | Ordered discretionary routes exposed in the injected route catalog; do not use as the happy path |
+| `handoff_label` | Useful destination label preferred by the injected route catalog |
+| `"on"` | Complete intent-key → default transition map |
 | `human_tasks` | Explicit user-task bindings for user-facing handoff triggers |
 
 Quote `"on"`; unquoted YAML 1.1 may parse it as a boolean before normalization.

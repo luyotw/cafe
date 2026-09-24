@@ -119,6 +119,7 @@ version: 2.12.1
 - If one playbook step selects different skills by iteration, describe each skill honestly. The workflow driver resolves the actual iteration skill and conservatively aggregates all variants at kickoff.
 - Declare every mandatory tool dependency once in `workflow.required_tools`; every playbook step that selects the skill must grant it in `allowed_tools`.
 - Do not duplicate global workflow handoff rules across many phase skills. Put those rules in a shared skill.
+- A reusable phase selects ordinary and discretionary handoffs only from the injected playbook graph and route catalog; never hardcode another playbook step name in phase or overlay routing guidance.
 - Do not create extra docs like `README.md`, `CHANGELOG.md`, or design notes inside the skill folder.
 
 ## Writing Process

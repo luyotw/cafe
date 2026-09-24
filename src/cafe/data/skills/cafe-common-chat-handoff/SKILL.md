@@ -30,7 +30,7 @@ version: 1.0.0
 - If the workflow is fully complete, set blackboard `current_step` to `done`.
 - Write the same phase name into the provided next-step file when you want `cafe make` to consume it immediately.
 - The next-step file must contain only one valid workflow step name, with no explanation around it.
-- Choose the next responsible step after this chat. If you updated spec, hand off to planning. If you updated plan, hand off to development. If you updated code, hand off to review or the next downstream step allowed by the workflow.
+- Choose only among the workflow routes injected for this chat. Match the updated artifact and declared route contract without inferring a step name from the artifact or change type.
 - `user` and `done` are valid built-in handoff phases.
 - Do not send the user to phase-specific commands.
 - Only produce the required closing format when you are explicitly wrapping up the chat, summarizing completed work, or helping the user leave the session.

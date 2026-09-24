@@ -59,6 +59,7 @@ steps:
   develop:
     type: skill
     skill: cafe-develop
+    handoff_label: Continue implementation
     role: developer
     assignee_type: agent
     input_artifacts: [pr_result, workflow_feedback]

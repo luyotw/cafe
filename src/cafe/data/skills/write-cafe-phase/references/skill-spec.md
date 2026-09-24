@@ -203,7 +203,10 @@ Write next-step baton for this result; the runtime updates the blackboard.
 
 Every phase skill has `## Role` and `## Handoff`. `## Context` lists only
 declared inputs. `## Output` contains the fixed output path instruction. Route
-decisions belong in `## Instructions`; shared baton schema does not.
+decisions belong in `## Instructions`; shared baton schema does not. A reusable
+phase chooses only from the runtime-injected route catalog and never names
+another playbook step. The catalog's intent-keyed `defaults` are ordinary
+routes; its ordered `goto` entries are deliberate discretionary routes.
 
 Use these exact structural lines in a phase skill unless the section is not
 applicable:
@@ -229,7 +232,7 @@ not support conditionals or expressions. Runtime-owned placeholders include:
 | --- | --- |
 | `{agent_file}`, `{output_file}` | Every phase step |
 | `{handoff_summary}`, `{blackboard_path}`, `{next_step_path}` | Every phase step |
-| `{valid_to_steps}`, `{step_transitions}` | Every phase step |
+| `{playbook_graph}`, `{route_catalog}` | Every phase step, injected directly into runtime context |
 | Skill-declared input placeholders | The resolved artifact record |
 | `{template_file}`, `{template_catalog}` | A skill declaring output templates |
 | `{commits}`, `{base_branch}` | Git context when requested |
@@ -487,6 +490,10 @@ This section is authoritative for current artifact normalization.
   destination edge, never from chat, summaries, artifact names, or session
   memory. The handoff must bind the exact artifact name, path, version, and
   content digest used by the consumer.
+- In phase instructions, select a correction destination from the injected
+  `goto` entries and require `carries_feedback` when correction content must be
+  delivered. Never hardcode the destination step. Catalog `ready`/`missing`
+  fields are advisory; runtime target-entry validation remains authoritative.
 - Never infer correction mode from destination, artifact name, chat, or session
   memory.
 - A custom artifact and source name uses the same declared path as builtin names;
