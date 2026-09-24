@@ -61,54 +61,6 @@ def test_generic_confirmed_workflow_scope_never_authorizes_external_mutations():
         )
 
 
-def test_confirmed_closeout_authority_requires_an_exact_stage_index_and_argv():
-    plan = {
-        "deliver": [
-            {"argv": ["git", "push", "origin", "feature/closeout"]},
-            {"argv": ["make", "deploy"]},
-        ],
-        "cleanup": [{"argv": ["git", "worktree", "remove", "/tmp/issue"]}],
-    }
-    assert module.assess_confirmed_closeout_command(
-        {
-            "stage": "deliver",
-            "index": 1,
-            "argv": ["make", "deploy"],
-        },
-        plan,
-    ) == {"decision": "confirmed_closeout_command", "reason": "exact_confirmed_argv"}
-    assert (
-        module.assess_confirmed_closeout_command(
-            {
-                "stage": "deliver",
-                "index": 1,
-                "argv": ["make", "deploy-production"],
-            },
-            plan,
-        )["decision"]
-        == "user_handoff"
-    )
-    assert (
-        module.assess_confirmed_closeout_command(
-            {
-                "stage": "cleanup",
-                "index": 2,
-                "argv": ["git", "worktree", "remove", "/tmp/issue"],
-            },
-            plan,
-        )["reason"]
-        == "closeout_command_missing"
-    )
-
-
-def test_confirmed_closeout_authority_preserves_empty_nonexecutable_arguments():
-    plan = {"deliver": [{"argv": ["tool", ""]}], "cleanup": []}
-
-    assert module.assess_confirmed_closeout_command(
-        {"stage": "deliver", "index": 0, "argv": ["tool", ""]}, plan
-    ) == {"decision": "confirmed_closeout_command", "reason": "exact_confirmed_argv"}
-
-
 @pytest.mark.parametrize("source", ["direct_user_instruction", "confirmed_human_task"])
 def test_explicit_merge_authority_is_a_separate_task_without_implicit_calls(source):
     request = {"action": "merge", "target": "repo/pull/42", "declared": False}

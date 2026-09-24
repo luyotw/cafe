@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including passive supervision, bounded recovery, and declarative repair when execution leaves its safe operating envelope.
-metadata: {version: 1.66.0}
+metadata: {version: 1.69.0}
 ---
 
 # Use CAFE Workflow
@@ -78,6 +78,7 @@ read the union once; do not preload the rest.
 - Follow only the effective graph, confirmed contract, and action-specific
   authority. “Continue” or workflow completion grants no repair, merge, deploy,
   publish, close, delete, cleanup, or other external mutation authority. The
-  sole closeout exception is an exact `closeout_plan` argv array confirmed as
-  part of the complete Delivery Contract and executed through
+  closeout exceptions are an exact `closeout_plan` argv array confirmed as part
+  of the complete Delivery Contract, or `cafe close --archive-only` after the
+  user explicitly selects terminal archive; both execute only through
   `completion_and_authority.md`.

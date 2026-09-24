@@ -145,9 +145,9 @@ class TestRestoreCommand:
         mock_git_ops.create_branch.assert_called_once_with("test-issue")
         mock_git_ops.checkout_branch.assert_called_once_with("test-issue")
 
-    @pytest.mark.xfail(reason="_get_project_path() doesn't handle worktrees correctly - needs fix")
     def test_restore_worktree_mode_success(self, temp_repo_dir, mock_git_ops, archived_issue_with_worktree):
         """測試 worktree 模式的成功 restore（備份存在、worktree 路徑正確）"""
+        (temp_repo_dir / ".git").mkdir()
         # Create worktree directory structure
         worktree_path = temp_repo_dir / ".cafe" / "worktrees" / "test-worktree-issue"
         worktree_path.mkdir(parents=True, exist_ok=True)
@@ -171,6 +171,22 @@ class TestRestoreCommand:
         # Verify issue directory was restored in worktree
         issue_dir = worktree_path / ".cafe" / "issues" / "test-worktree-issue"
         assert issue_dir.exists(), "Issue directory should be restored in worktree"
+
+    def test_restore_reuses_a_retained_worktree_without_checking_out_its_branch(
+        self, temp_repo_dir, mock_git_ops, archived_issue_with_worktree
+    ):
+        (temp_repo_dir / ".git").mkdir()
+        worktree_path = temp_repo_dir / ".cafe" / "worktrees" / "test-worktree-issue"
+        (worktree_path / ".cafe" / "issues").mkdir(parents=True)
+        mock_git_ops.get_current_branch.return_value = "main"
+
+        with patch("cafe.ui.commands.lifecycle._ensure_worktree_cafe_excluded"):
+            result = runner.invoke(app, ["restore", "test-worktree-issue"], input="y\n")
+
+        assert result.exit_code == 0
+        assert "Using retained worktree" in result.stdout
+        mock_git_ops.checkout_branch.assert_not_called()
+        assert (worktree_path / ".cafe" / "issues" / "test-worktree-issue").exists()
 
     def test_restore_worktree_path_mismatch(self, temp_repo_dir, mock_git_ops, archived_issue_with_worktree):
         """測試 worktree 路徑不一致時自動導航到正確目錄"""

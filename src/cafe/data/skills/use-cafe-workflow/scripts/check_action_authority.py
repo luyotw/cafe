@@ -41,42 +41,6 @@ def assess(request: dict[str, Any], authority: dict[str, Any] | None) -> dict[st
     return {"decision": "user_handoff", "reason": "undeclared_execution_path"}
 
 
-def assess_confirmed_closeout_command(
-    request: dict[str, Any], closeout_plan: dict[str, Any]
-) -> dict[str, str]:
-    """Match one requested argv to the exact command in a confirmed plan.
-
-    The caller must load and validate the durable Driver contract before calling
-    this helper.  A generic workflow scope is never substituted for this exact
-    comparison.
-    """
-    if set(request) != {"stage", "index", "argv"}:
-        raise ValueError("closeout request requires only stage, index, and argv")
-    stage = request["stage"]
-    index = request["index"]
-    argv = request["argv"]
-    if stage not in {"deliver", "cleanup"}:
-        raise ValueError("closeout stage must be deliver or cleanup")
-    if not isinstance(index, int) or isinstance(index, bool) or index < 0:
-        raise ValueError("closeout index must be a non-negative integer")
-    if (
-        not isinstance(argv, list)
-        or not argv
-        or any(not isinstance(item, str) for item in argv)
-        or not argv[0]
-    ):
-        raise ValueError("closeout argv must be a non-empty string array")
-    if set(closeout_plan) != {"deliver", "cleanup"}:
-        raise ValueError("closeout plan requires only deliver and cleanup")
-    commands = closeout_plan[stage]
-    if not isinstance(commands, list) or index >= len(commands):
-        return {"decision": "user_handoff", "reason": "closeout_command_missing"}
-    command = commands[index]
-    if not isinstance(command, dict) or set(command) != {"argv"} or command["argv"] != argv:
-        return {"decision": "user_handoff", "reason": "closeout_command_mismatch"}
-    return {"decision": "confirmed_closeout_command", "reason": "exact_confirmed_argv"}
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--request", type=json.loads, required=True)

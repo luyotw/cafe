@@ -85,51 +85,39 @@ existing artifacts/receipts, current instructions, and repository evidence. Use
 bounded read-only checks where needed; do not query unrelated services or apply
 a fixed shipping checklist to every playbook.
 
-### Execute a confirmed argv closeout plan
+### Confirm cleanup, archive, or no action
 
-When the confirmed Delivery Contract has a validated `closeout_plan`, its exact
-`deliver` and `cleanup` argv arrays are the Driver's authority for those exact
-commands. Do not ask again for each command. Do not add, remove, reorder, or
-rewrite an argument. Before execution, recheck that the repository state still
-supports the confirmed target and effect; a materially changed command, target,
-or effect requires a new user confirmation and a replacement contract.
+After the Driver has verified workflow completion, offer the user these terminal
+choices once:
 
-Run the bundled Driver helper, never a reconstructed shell string:
+1. Run the confirmed non-empty `cleanup` array.
+2. Archive without delivery by running exactly `cafe close --archive-only`.
+3. Leave all external state unchanged.
 
-```bash
-python3 <skill-dir>/scripts/execute_closeout_plan.py \
-  --issue-dir <issue-dir> --issue-name <issue-name> --workflow-id <workflow-id> \
-  --project-root <confirmed-project-root> \
-  --stage deliver --issue-worktree <issue-worktree> \
-  --receipt-file <absolute-path-outside-issue-worktree>
-```
+The post-completion selection is required even when the cleanup plan appeared
+in kickoff. `deliver` remains owned by its declared workflow path or separate
+user authority; terminal closeout does not rerun it. Do not infer archive from
+terminal wording or from a declined cleanup plan.
 
-The helper validates the durable Driver contract, matches every argv against the
-confirmed plan, records `started` before execution, and records success or
-failure outside the worktree. It holds a Driver-owned receipt lock across
-inspection and execution, never invokes a shell, and runs every confirmed
-command from the issue worktree. On a later attempt, it skips recorded successes
-and stops rather than replaying a command whose result is unknown or failed.
+After the user confirms, run the `cleanup` array directly and in order from the
+issue worktree. Keep every argv exactly as confirmed; do not add, remove,
+reorder, rewrite, shell-wrap, retry, or replay a command. Stop and report the
+first command failure.
 
-After `deliver` returns successfully, independently verify the intended result:
-a command exit status can mean a request was queued rather than that an
-integration or deployment completed. Only then run `cleanup`:
+When the user selects archive, run only `cafe close --archive-only` from the
+issue worktree. This is the sole terminal archive command and requires no
+closeout-plan entry. It archives CAFE issue/workflow state without merging,
+pushing, closing the GitHub issue, or removing the feature branch or worktree.
+Do not add another command before or after it.
 
-```bash
-python3 <skill-dir>/scripts/execute_closeout_plan.py \
-  --issue-dir <issue-dir> --issue-name <issue-name> --workflow-id <workflow-id> \
-  --project-root <confirmed-project-root> \
-  --stage cleanup --issue-worktree <issue-worktree> \
-  --receipt-file <same-absolute-receipt-path>
-```
-
-Before a cleanup command can remove a worktree, establish worker quiescence,
-inspect registered worktrees and dirty/untracked content, preserve the receipt,
-and make removal the final cleanup command. The confirmed argv must use explicit
-targets. When a command needs another Git context, make that context an exact
-argument (for example `git -C <retained-checkout> worktree remove <target>`),
-rather than changing the helper's working directory. Never add force flags. The
-helper does not invoke a CAFE lifecycle command or change workflow runtime state.
+Before cleanup can remove a worktree, establish worker quiescence and inspect
+registered worktrees plus dirty/untracked content. The confirmed argv must use
+explicit targets. When a command needs another Git context, make that context
+an exact argument (for example `git -C <retained-checkout> worktree remove
+<target>`), rather than changing the Driver's working directory. Never add force
+flags. If `cafe close` is confirmed, it must be the exact final cleanup command,
+after any `gh issue close` command. It may archive the issue and remove its
+worktree; render final progress from the archive path it reports.
 
 ### Assist when no argv closeout plan exists
 
@@ -142,8 +130,10 @@ For an older contract or a useful follow-up outside the confirmed arrays:
 2. Recommend the smallest useful next action, explaining its purpose and target.
    A research workflow may end with findings and unresolved questions; a drafting
    workflow may end with an editable document and guidance for its intended use.
-   None of these outcomes implies a standard publication, merge, issue closure,
-   or cleanup sequence.
+   None of these outcomes implies a standard publication or merge. New confirmed
+   kickoff contracts instead use the default cleanup proposal from `kickoff.md`:
+   close a verified bound GitHub issue, then run `cafe close`, unless the user
+   explicitly excludes either action.
 3. Complete useful read-only or reversible preparation already within scope.
    For an applicable follow-up action with existing explicit authority, check
    that authority below and continue through its existing execution contract
@@ -214,7 +204,9 @@ Do not invent integration state, executor, or cleanup behavior here. Outside a
 confirmed argv plan, inspect the completed issue's remaining lifecycle state
 read-only and ask only for missing scoped authority. An ambiguous request such
 as "merge and close" must not be silently reduced to an issue closure. Cleanup
-is not a prerequisite for workflow completion.
+is not a prerequisite for workflow completion; for new contracts, however, the
+confirmed default cleanup plan closes the verified bound GitHub issue and then
+runs `cafe close` unless the user chose otherwise.
 
 Completion and closeout replies still end with `workflow_progress.md` output.
 After lifecycle cleanup archives the issue, render from the exact archive path

@@ -1111,22 +1111,38 @@ def prepare(
         raise typer.Exit(1)
 
 
+def _get_project_root() -> Path:
+    """Find the main repository root, including from an external worktree."""
+    original_root = Path.cwd().resolve()
+    repo_root = original_root
+    while repo_root != repo_root.parent:
+        if (repo_root / ".git").is_dir():
+            return repo_root
+        repo_root = repo_root.parent
+
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return original_root
+    if result.returncode == 0 and result.stdout.strip():
+        common_dir = Path(result.stdout.strip()).resolve()
+        if common_dir.name == ".git":
+            return common_dir.parent
+    return original_root
+
+
 def _get_project_path() -> str:
     """Get the project path in the ~/.claude/projects/ naming format.
 
     Converts absolute path like /Users/YO/side_projects/my-project
     to -Users-YO-side-projects-my-project
     """
-    repo_root = Path.cwd()
-    # Find the git repository root
-    original_root = repo_root
-    while repo_root != repo_root.parent:
-        if (repo_root / ".git").exists():
-            break
-        repo_root = repo_root.parent
-    else:
-        # If no .git directory found, use current working directory
-        repo_root = original_root
+    repo_root = _get_project_root()
 
     # Convert to ~/.claude/projects/ naming format: replace / with -
     abs_path = str(repo_root.resolve())
@@ -1139,6 +1155,54 @@ def _get_issue_archive_path(issue_name: str) -> Path:
     project_path = _get_project_path()
     home_dir = Path.home()
     return home_dir / ".cafe" / "projects" / project_path / "archived" / issue_name
+
+
+def _archive_issue_directory(
+    issue_dir: Path, issue_name: str, *, copy_current_config: bool
+) -> Path | None:
+    """Move one issue directory into the project archive."""
+    if not issue_dir.exists():
+        return None
+
+    if copy_current_config:
+        repo_config = Path.cwd() / ".cafe" / "config.yaml"
+        if repo_config.exists() and not (issue_dir / "config.yaml").exists():
+            shutil.copy2(str(repo_config), str(issue_dir / "config.yaml"))
+
+    archive_path = _get_issue_archive_path(issue_name)
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    if archive_path.exists():
+        shutil.rmtree(archive_path)
+    shutil.move(str(issue_dir), str(archive_path))
+    return archive_path
+
+
+def _remove_worktree_inventory_pointer(
+    *, project_root: Path, issue_name: str, worktree_path: str
+) -> None:
+    """Remove only the root inventory pointer for an archived worktree issue."""
+    pointer_dir = project_root / ".cafe" / "issues" / issue_name
+    pointer_file = pointer_dir / "issue.yaml"
+    if not pointer_file.is_file() or {path.name for path in pointer_dir.iterdir()} != {"issue.yaml"}:
+        return
+    try:
+        pointer = yaml.safe_load(pointer_file.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, yaml.YAMLError):
+        return
+    if not isinstance(pointer, dict) or set(pointer) != {"issue_name", "worktree_path"}:
+        return
+    if pointer.get("issue_name") != issue_name or not isinstance(pointer.get("worktree_path"), str):
+        return
+
+    expected_worktree = Path(worktree_path)
+    if not expected_worktree.is_absolute():
+        expected_worktree = project_root / expected_worktree
+    pointer_worktree = Path(pointer["worktree_path"])
+    if not pointer_worktree.is_absolute():
+        pointer_worktree = project_root / pointer_worktree
+    if pointer_worktree.resolve() != expected_worktree.resolve():
+        return
+    shutil.rmtree(pointer_dir)
 
 
 def _backup_issue_directory(issue_dir: Path, issue_name: str) -> Path:
@@ -1294,21 +1358,27 @@ def close(
         "--message",
         help="Override the squash commit message (only used with --squash)",
     ),
+    archive_only: bool = typer.Option(
+        False,
+        "--archive-only",
+        help="Archive CAFE issue state without merging, delivering, or removing source branches",
+    ),
 ) -> None:
     """Close current feature and return to base branch.
 
     \b
     This command:
-    1. Checks for open/draft PRs (blocks if found)
-    2. Switches to and updates the base branch
-    3. Deletes the remote feature branch when it exists
-    4. Removes the worktree, when used, and deletes the local feature branch
-    5. Archives .cafe/issues/<issue-name>/ to ~/.cafe/projects/<project-path>/archived/<issue-name>/
+    1. Normally checks for open/draft PRs, integrates delivery, and removes
+       feature resources.
+    2. With --archive-only, archives only CAFE issue state and retains all
+       source branches and worktrees.
     """
     import os
-    import shutil
-
     try:
+        if archive_only and squash:
+            console.print("[red]Error: --archive-only cannot be combined with --squash.[/red]")
+            raise typer.Exit(1)
+
         # 1. Initialize Git operations
         try:
             git_ops = GitOperations()
@@ -1322,7 +1392,46 @@ def close(
             console.print("[red]Error: Not on a valid branch (detached HEAD?).[/red]")
             raise typer.Exit(1)
 
-        # 3. Check for open/draft PRs
+        # 3. Load issue config
+        issue_config_file = Path(f".cafe/issues/{current_branch}/issue.yaml").resolve()
+        if not issue_config_file.exists():
+            console.print(f"[red]Error: Issue config not found: {issue_config_file}[/red]")
+            console.print(
+                "[yellow]Hint: This branch may not be initialized with 'cafe prepare'.[/yellow]"
+            )
+            raise typer.Exit(1)
+
+        with open(issue_config_file, "r", encoding="utf-8") as f:
+            config_data = yaml.safe_load(f)
+
+        base_branch = config_data.get("base_branch", "main")
+        feature_branch = current_branch
+        issue_name = current_branch  # Issue name is the same as current branch
+        worktree_path = config_data.get("worktree_path")
+
+        if archive_only:
+            project_root = _get_project_root()
+            archive_path = _archive_issue_directory(
+                issue_config_file.parent,
+                issue_name,
+                copy_current_config=True,
+            )
+            if archive_path is None:
+                console.print(f"[red]Error: No issue data found for: {issue_name}[/red]")
+                raise typer.Exit(1)
+            if isinstance(worktree_path, str) and worktree_path.strip():
+                _remove_worktree_inventory_pointer(
+                    project_root=project_root,
+                    issue_name=issue_name,
+                    worktree_path=worktree_path,
+                )
+            clear_marker_if_matches(Path(".cafe"), issue_name)
+            console.print(f"[green]✓ Archived issue without delivery: {issue_name}[/green]")
+            console.print(f"  📁 Issue data archived to: {archive_path}")
+            console.print("  🌿 Feature branch and worktree retained")
+            return
+
+        # 4. Check for open/draft PRs
         github_ops = None
         pr = None
         try:
@@ -1351,23 +1460,6 @@ def close(
             pass
 
         merged_pr = bool(pr and pr.get("state") == "MERGED")
-
-        # 4. Load issue config
-        issue_config_file = Path(f".cafe/issues/{current_branch}/issue.yaml").resolve()
-        if not issue_config_file.exists():
-            console.print(f"[red]Error: Issue config not found: {issue_config_file}[/red]")
-            console.print(
-                "[yellow]Hint: This branch may not be initialized with 'cafe prepare'.[/yellow]"
-            )
-            raise typer.Exit(1)
-
-        with open(issue_config_file, "r", encoding="utf-8") as f:
-            config_data = yaml.safe_load(f)
-
-        base_branch = config_data.get("base_branch", "main")
-        feature_branch = current_branch
-        issue_name = current_branch  # Issue name is the same as current branch
-        worktree_path = config_data.get("worktree_path")
 
         console.print()
         console.print(f"[bold blue]🔒 Closing issue: {issue_name}[/bold blue]")
@@ -1635,28 +1727,13 @@ def close(
         try:
             console.print("[dim]Archiving issue data...[/dim]")
 
-            # Get project path in ~/.claude/projects/ naming format
-            archive_path = _get_issue_archive_path(issue_name)
-            archive_base = archive_path.parent
-
-            # Ensure archive directory exists
-            archive_base.mkdir(parents=True, exist_ok=True)
-
-            # Copy config.yaml into issue dir so it gets archived
-            # (non-worktree uses cp to keep .cafe/config.yaml for other issues)
             issue_dir = Path.cwd() / ".cafe" / "issues" / issue_name
-            if issue_dir.exists() and not worktree_path:
-                repo_config = Path.cwd() / ".cafe" / "config.yaml"
-                if repo_config.exists() and not (issue_dir / "config.yaml").exists():
-                    shutil.copy2(str(repo_config), str(issue_dir / "config.yaml"))
-
-            # Move issue directory to archive
-            if issue_dir.exists():
-                # If archive already exists, remove it first
-                if archive_path.exists():
-                    shutil.rmtree(archive_path)
-                shutil.move(str(issue_dir), str(archive_path))
-
+            archive_path = _archive_issue_directory(
+                issue_dir,
+                issue_name,
+                copy_current_config=not worktree_path,
+            )
+            if archive_path is not None:
                 console.print(f"[green]✓ Archived issue data to: {archive_path}[/green]")
             else:
                 console.print(
@@ -1761,8 +1838,10 @@ def restore(issue_name: str = typer.Argument(..., help="Issue name to restore"))
 
         # 5. For worktree mode, create worktree first (before checkout)
         # This avoids branch conflict issues
+        retained_worktree = False
         if worktree_path:
             worktree_path_obj = Path(worktree_path)
+            retained_worktree = worktree_path_obj.exists()
             if not worktree_path_obj.exists():
                 console.print(f"[yellow]ℹ️  Creating worktree: {worktree_path}[/yellow]")
                 try:
@@ -1797,7 +1876,7 @@ def restore(issue_name: str = typer.Argument(..., help="Issue name to restore"))
                         raise typer.Exit(1)
 
         # 6. Auto-checkout feature branch if not already on it
-        if current_branch != feature_branch:
+        if current_branch != feature_branch and not retained_worktree:
             console.print(f"[yellow]ℹ️  Checking out feature branch: {feature_branch}[/yellow]")
             try:
                 # Check if branch exists, create if it doesn't
@@ -1811,6 +1890,10 @@ def restore(issue_name: str = typer.Argument(..., help="Issue name to restore"))
                     f"[red]❌ Error: Failed to checkout branch {feature_branch}: {e}[/red]"
                 )
                 raise typer.Exit(1)
+        elif retained_worktree:
+            console.print(
+                f"[yellow]ℹ️  Using retained worktree for branch: {feature_branch}[/yellow]"
+            )
 
         # 7. Remember main repo root before potentially changing directory
         main_repo_root = Path.cwd().resolve()

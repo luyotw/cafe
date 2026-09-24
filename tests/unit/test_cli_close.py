@@ -115,6 +115,46 @@ class TestCloseCommand:
         archive_path = Path.home() / ".cafe" / "projects" / project_path / "archived" / "test-issue"
         assert archive_path.exists(), f"Issue should be archived at {archive_path}"
 
+    def test_archive_only_bypasses_delivery_and_retains_source_state(
+        self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_config
+    ):
+        mock_github_ops_no_pr.get_pr_for_branch.return_value = {
+            "number": 123,
+            "title": "Open PR",
+            "url": "https://github.com/owner/repo/pull/123",
+            "state": "OPEN",
+            "isDraft": False,
+        }
+        marker = temp_repo_dir / ".cafe" / "active_issue"
+        marker.write_text("test-issue\n", encoding="utf-8")
+
+        result = runner.invoke(app, ["close", "--archive-only"])
+
+        assert result.exit_code == 0
+        assert "Archived issue without delivery: test-issue" in result.stdout
+        assert "Feature branch and worktree retained" in result.stdout
+        assert not issue_with_config.exists()
+        assert not marker.exists()
+        project_path = str(temp_repo_dir.resolve()).lstrip("/").replace("/", "-")
+        archive_path = Path.home() / ".cafe" / "projects" / project_path / "archived" / "test-issue"
+        assert (archive_path / "issue.yaml").exists()
+
+        mock_github_ops_no_pr.get_pr_for_branch.assert_not_called()
+        mock_git_ops.checkout_branch.assert_not_called()
+        mock_git_ops.pull.assert_not_called()
+        mock_git_ops.merge.assert_not_called()
+        mock_git_ops.merge_squash.assert_not_called()
+        mock_git_ops.delete_remote_branch_if_exists.assert_not_called()
+        mock_git_ops.delete_branch.assert_not_called()
+        mock_git_ops.remove_worktree.assert_not_called()
+
+    def test_archive_only_rejects_squash(self, temp_repo_dir, mock_git_ops, issue_with_config):
+        result = runner.invoke(app, ["close", "--archive-only", "--squash"])
+
+        assert result.exit_code == 1
+        assert "--archive-only cannot be combined with --squash" in result.stdout
+        mock_git_ops.get_current_branch.assert_not_called()
+
     def test_close_remote_delete_failure_preserves_local_cleanup_state(
         self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_config
     ):
@@ -398,6 +438,83 @@ class TestCloseCommandWorktree:
         mock_git_ops.delete_branch.assert_called_once_with("test-worktree-issue")
         # 驗證 worktree 目錄被刪除
         mock_git_ops.remove_worktree.assert_called_once_with("worktrees/test-worktree-issue")
+
+    def test_archive_only_removes_the_matching_worktree_inventory_pointer(
+        self, temp_repo_dir, monkeypatch, mock_git_ops, mock_github_ops_no_pr
+    ):
+        (temp_repo_dir / ".git").mkdir()
+        worktree_path = temp_repo_dir / ".cafe" / "worktrees" / "archive-test"
+        issue_dir = worktree_path / ".cafe" / "issues" / "archive-test"
+        issue_dir.mkdir(parents=True)
+        config = {
+            "base_branch": "main",
+            "feature_branch": "archive-test",
+            "worktree_path": str(worktree_path),
+        }
+        (issue_dir / "issue.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+        (worktree_path / ".cafe" / "active_issue").write_text(
+            "archive-test\n", encoding="utf-8"
+        )
+        pointer_dir = temp_repo_dir / ".cafe" / "issues" / "archive-test"
+        pointer_dir.mkdir(parents=True)
+        (pointer_dir / "issue.yaml").write_text(
+            yaml.safe_dump({"issue_name": "archive-test", "worktree_path": str(worktree_path)}),
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(worktree_path)
+        mock_git_ops.get_current_branch.return_value = "archive-test"
+
+        result = runner.invoke(app, ["close", "--archive-only"])
+
+        assert result.exit_code == 0
+        assert not pointer_dir.exists()
+        assert not (worktree_path / ".cafe" / "active_issue").exists()
+        assert worktree_path.exists()
+        assert not issue_dir.exists()
+        project_path = str(temp_repo_dir.resolve()).lstrip("/").replace("/", "-")
+        archive_path = Path.home() / ".cafe" / "projects" / project_path / "archived" / "archive-test"
+        assert (archive_path / "issue.yaml").exists()
+        mock_github_ops_no_pr.get_pr_for_branch.assert_not_called()
+        mock_git_ops.remove_worktree.assert_not_called()
+        mock_git_ops.delete_branch.assert_not_called()
+
+    def test_archive_only_uses_the_main_repo_key_for_an_external_worktree(
+        self, temp_repo_dir, monkeypatch, mock_git_ops, mock_github_ops_no_pr
+    ):
+        (temp_repo_dir / ".git").mkdir()
+        external_worktree = temp_repo_dir.parent / f"{temp_repo_dir.name}-external-worktree"
+        external_worktree.mkdir()
+        (external_worktree / ".git").write_text("gitdir: external\n", encoding="utf-8")
+        issue_dir = external_worktree / ".cafe" / "issues" / "external-test"
+        issue_dir.mkdir(parents=True)
+        config = {
+            "base_branch": "main",
+            "feature_branch": "external-test",
+            "worktree_path": str(external_worktree),
+        }
+        (issue_dir / "issue.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+        pointer_dir = temp_repo_dir / ".cafe" / "issues" / "external-test"
+        pointer_dir.mkdir(parents=True)
+        (pointer_dir / "issue.yaml").write_text(
+            yaml.safe_dump({"issue_name": "external-test", "worktree_path": str(external_worktree)}),
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(external_worktree)
+        mock_git_ops.get_current_branch.return_value = "external-test"
+
+        with patch("cafe.ui.commands.lifecycle.subprocess.run") as run:
+            run.return_value = MagicMock(
+                returncode=0,
+                stdout=f"{temp_repo_dir / '.git'}\n",
+            )
+            result = runner.invoke(app, ["close", "--archive-only"])
+
+        assert result.exit_code == 0
+        assert not pointer_dir.exists()
+        project_path = str(temp_repo_dir.resolve()).lstrip("/").replace("/", "-")
+        archive_path = Path.home() / ".cafe" / "projects" / project_path / "archived" / "external-test"
+        assert (archive_path / "issue.yaml").exists()
+        mock_github_ops_no_pr.get_pr_for_branch.assert_not_called()
 
     def test_close_with_worktree_branch_delete_fails(
         self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr, issue_with_worktree_config

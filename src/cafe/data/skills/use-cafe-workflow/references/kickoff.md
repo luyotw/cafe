@@ -94,6 +94,23 @@ removal to avoid asking for that approval. Respect an explicit user choice to
 stop at a PR, preserve resources, or exclude an action. Repository context
 informs the recommendation; only user confirmation authorizes execution.
 
+Default the cleanup proposal to closing the verified, bound GitHub issue and
+then running `cafe close`, in that order. Use the issue's verified numeric ID
+in the first exact argv array:
+
+```yaml
+cleanup:
+  - argv: [gh, issue, close, "123"]
+  - argv: [cafe, close]
+```
+
+`gh issue close` is applicable only when the issue has a verified GitHub
+binding; when it does not, omit that command but retain `cafe close` as the
+default. An explicit user choice to preserve the GitHub issue or CAFE issue
+state overrides the default. Never use an issue-like name, an unresolved
+placeholder, or a guessed ID. The complete proposal remains subject to the
+same kickoff confirmation as every other external action.
+
 Turn the discovered route into two ordered lists of exact host-side commands:
 
 ```yaml
@@ -108,7 +125,9 @@ a stage with genuinely no remaining action or one the user explicitly excludes;
 make the reason clear in the existing scope or constraints. Lack of CI/CD
 configuration, lack of existing permission, or an unresolved future target does
 not mean nothing remains. Do not fill `[]` as a discovery fallback, omit the
-field, or invent a no-op.
+field, or invent a no-op. In particular, do not use `[]` as a substitute for
+the default issue closure and `cafe close` cleanup route without recording the
+user's exclusion or the inapplicable GitHub binding.
 
 Every argument must be concrete at kickoff: no shell strings, templates,
 placeholders, or future identifiers that will be filled in later. When a future

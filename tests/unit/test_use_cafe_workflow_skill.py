@@ -3827,6 +3827,7 @@ def test_use_cafe_workflow_never_shows_unmuted_driver_execution() -> None:
 def test_driver_keeps_completion_separate_from_external_authority() -> None:
     skill = _read_skill_resource("SKILL.md")
     reference = _read_skill_resource("references/completion_and_authority.md")
+    kickoff = _read_skill_resource("references/kickoff.md")
     assert "references/completion_and_authority.md" in skill
     assert "scripts/check_action_authority.py" in reference
     assert not (SKILL_ROOT / "references/convergent_pr_review.md").exists()
@@ -3836,7 +3837,8 @@ def test_driver_keeps_completion_separate_from_external_authority() -> None:
         assert "cafe.pr.publish" not in text
         assert "pr.auto_create" not in text
         assert "gh pr merge" not in text
-        assert "gh issue close" not in text
+    assert "[gh, issue, close, \"123\"]" in kickoff
+    assert "[cafe, close]" in kickoff
 
 
 def test_driver_can_propose_a_user_approved_bounded_direct_closeout() -> None:
@@ -3868,20 +3870,23 @@ def test_driver_can_propose_a_user_approved_bounded_direct_closeout() -> None:
     assert "user-approved bounded" in running
 
 
-def test_driver_executes_the_confirmed_argv_closeout_plan_without_core_lifecycle_calls() -> None:
+def test_driver_confirms_cleanup_or_terminal_archive() -> None:
     skill = _read_skill_resource("SKILL.md")
     reference = _read_skill_resource("references/completion_and_authority.md")
     normalized = " ".join(reference.split())
 
     assert "handle follow-up work" in skill
     assert "`references/completion_and_authority.md`" in skill
-    assert "exact `deliver` and `cleanup` argv arrays" in normalized
-    assert "Do not ask again for each command" in normalized
-    assert "scripts/execute_closeout_plan.py" in reference
-    assert "records `started` before execution" in normalized
-    assert "runs every confirmed command from the issue worktree" in normalized
-    assert "receipt lock across inspection and execution" in normalized
-    assert "does not invoke a CAFE lifecycle command" in normalized
+    assert "non-empty `cleanup` array" in normalized
+    assert "Archive without delivery by running exactly `cafe close --archive-only`" in reference
+    assert "Leave all external state unchanged" in reference
+    assert "run the `cleanup` array directly and in order from the issue worktree" in normalized
+    assert "terminal closeout does not rerun it" in normalized
+    assert "Do not infer archive from terminal wording" in normalized
+    assert "requires no closeout-plan entry" in normalized
+    assert "without merging, pushing, closing the GitHub issue" in normalized
+    assert "Stop and report the first command failure." in normalized
+    assert "final cleanup command" in normalized
     assert "inspect the completed issue's remaining lifecycle state read-only" in normalized
     assert '"merge and close" must not be silently reduced to an issue closure' in normalized
 
