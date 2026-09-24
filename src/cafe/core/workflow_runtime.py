@@ -3875,7 +3875,13 @@ class BlackboardWorkflowRuntime:
 
             downstream = False
             if contract.to_owner == HandoffOwner.AGENT:
-                downstream = contract.to_step in self.steps and contract.to_step != current_step
+                downstream = contract.to_step in self.steps and (
+                    contract.to_step != current_step
+                    or self._is_declared_agent_self_loop(
+                        current_step=current_step,
+                        contract=contract,
+                    )
+                )
             elif contract.to_owner == HandoffOwner.USER:
                 downstream = contract.to_step == "user"
             elif contract.to_owner == HandoffOwner.DONE:

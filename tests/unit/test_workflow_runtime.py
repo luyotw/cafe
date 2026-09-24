@@ -6365,6 +6365,85 @@ def test_runtime_resume_reconciliation_is_idempotent(tmp_path: Path) -> None:
     assert [e.event_type for e in bb.events].count("step_reconciled") == 1
 
 
+def test_runtime_resume_reconciles_declared_self_loop_without_rerunning_agent(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "reconcile-declared-self-loop"
+    issue_dir.mkdir(parents=True)
+    _write_baton(
+        issue_dir,
+        from_step="inspect",
+        to_owner="agent",
+        to_step="inspect",
+        intent="await_agent",
+        source="baton",
+    )
+    _write_iteration_evidence(issue_dir, "inspect")
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "current_step": "inspect",
+                "playbook_id": "declared-self-loop-recovery",
+                "artifacts": {},
+                "events": [
+                    {
+                        "timestamp": "2026-04-26T23:00:00+08:00",
+                        "step": "inspect",
+                        "event_type": "step_interrupted",
+                        "message": "{}",
+                        "data": {
+                            "step": "inspect",
+                            "reason": "agent_connection_stalled",
+                        },
+                    }
+                ],
+                "decisions": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    playbook = {
+        "playbook": {"id": "declared-self-loop-recovery"},
+        "steps": {
+            "inspect": {
+                "skill": "review-skill",
+                "role": "reviewer",
+                "behavior": {"completion": "baton"},
+                "allowed_goto": ["inspect"],
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=lambda *_args, **_kwargs: pytest.fail(
+            "reconciliation must not rerun the completed agent step"
+        ),
+    )
+
+    result = runtime.run()
+
+    assert result.completed is False
+    assert result.final_step == "inspect"
+    transitions = [
+        event
+        for event in runtime.blackboard.events
+        if event.event_type == "transition"
+        and event.data.get("from") == "inspect"
+        and event.data.get("to") == "inspect"
+    ]
+    assert len(transitions) == 1
+    assert [event.event_type for event in runtime.blackboard.events].count(
+        "step_reconciled"
+    ) == 1
+    assert not any(
+        event.event_type == "step_reconciliation_failed"
+        for event in runtime.blackboard.events
+    )
+
+
 @pytest.mark.parametrize(
     ("intent", "policy_id", "input_schema", "questions"),
     [
