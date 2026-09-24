@@ -13,7 +13,6 @@ from pathlib import Path
 from cafe.driver import activate_confirmed_contract
 from tests.unit.test_driver_contract_application import _activation, _proposal
 
-
 SCRIPT = (
     Path(__file__).resolve().parents[2]
     / "src/cafe/data/skills/use-cafe-workflow/scripts/execute_closeout.py"
@@ -162,7 +161,10 @@ def test_closeout_resume_continues_only_not_started_command(tmp_path: Path) -> N
         [
             sys.executable,
             "-c",
-            f"from pathlib import Path; p=Path({str(marker)!r}); p.write_text(p.read_text()+' second')",
+            (
+                f"from pathlib import Path; p=Path({str(marker)!r}); "
+                "p.write_text(p.read_text()+' second')"
+            ),
         ],
     ]
     root, issue, _ = _journey(tmp_path, commands)
@@ -181,7 +183,10 @@ def test_closeout_interrupted_process_leaves_unknown_without_replay(tmp_path: Pa
             [
                 sys.executable,
                 "-c",
-                f"import time; from pathlib import Path; Path({str(marker)!r}).touch(); time.sleep(30)",
+                (
+                    f"import time; from pathlib import Path; Path({str(marker)!r}).touch(); "
+                    "time.sleep(30)"
+                ),
             ]
         ],
     )
