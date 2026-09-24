@@ -54,6 +54,26 @@ Before changing package metadata:
 5. Document migrations for any changed public contract.
 6. Run `./scripts/release-check.sh` from the final release commit.
 
+## Publishing
+
+After the release gate passes, merge the release pull request and publish a
+GitHub Release whose `vX.Y.Z` tag matches the version in `pyproject.toml`.
+Publishing the GitHub Release triggers
+`.github/workflows/publish-pypi.yml`, which checks out that exact tag, verifies
+the release identity, builds and inspects the wheel and source distribution,
+and publishes them to PyPI through short-lived OIDC credentials.
+
+The `cafe-engine` PyPI project must trust this exact GitHub publisher:
+
+- owner: `luyotw`
+- repository: `cafe`
+- workflow: `publish-pypi.yml`
+- environment: `pypi`
+
+Do not add a long-lived PyPI token to the repository or GitHub secrets. After
+publishing, verify that a clean environment can install the exact release from
+the public PyPI index.
+
 ## Stability at 1.0
 
 Version 1.0 means CAFE is ready to preserve its documented public contracts
