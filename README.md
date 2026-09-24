@@ -414,13 +414,13 @@ an agent additional system privileges.
 
 ### Project status and compatibility
 
-CAFE is actively evolving. Roadmap version labels describe development cycles;
-the changelog and release notes describe what a particular release actually
-ships.
+CAFE is actively evolving. Release numbers follow the documented Semantic
+Versioning policy, while roadmap stages describe product direction independently.
 
 - [Roadmap](docs/roadmap.md)
+- [Versioning policy](docs/versioning.md)
 - [Changelog](CHANGELOG.md)
-- [Latest release notes](docs/releases/v0.3.4.md)
+- [Latest release notes](docs/releases/v0.4.0.md)
 - [Strategic positioning](docs/positioning.md)
 
 ## Contributing

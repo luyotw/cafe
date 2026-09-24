@@ -78,6 +78,11 @@ Plan, develop, and review skills enforce a **test invariants** policy: tests sho
 
 ## Pre-release Verification
 
+Choose the release number using [the versioning policy](docs/versioning.md)
+before changing package metadata. User-visible capabilities increment the minor
+version; fix-only releases increment the patch version; mixed releases take the
+higher increment. Roadmap stages do not reserve release numbers.
+
 Engineering checks have distinct owners:
 
 - **Develop uses targeted checks** for the changed behavior.

@@ -84,24 +84,26 @@ When work requires a human to perform an action, make a judgment, approve a risk
 
 ## Roadmap Alignment
 
-Roadmap labels denote development cycles. `0.N.0` opens the `v0.N` cycle;
-capabilities assigned to that cycle are delivered throughout `0.N.x`, and its
-completion criteria are the exit criteria for `0.(N+1).0`. Release notes and
-migration guides describe what a specific release has already shipped.
+Release numbers follow the [versioning policy](versioning.md): user-visible
+capabilities increment the minor version, while fix-only releases increment the
+patch version. Roadmap stages describe product direction independently of
+release numbers. A stage may span several releases, and one release may advance
+more than one stage. Release notes and migration guides describe what a
+specific release has shipped.
 
-- `v0.2` cycle (`0.2.x`, exit criteria met for `0.3.0`)
+- Generic workflow engine foundation (historically delivered through `0.2.x`)
   Establish the generic workflow engine foundation—Skill, Playbook, Blackboard,
   Hook, GenericPhase, PlaybookRunner, and suspend/resume—and build the supporting
   surface around custom hooks, tooling, validation, simulation, dry runs, and an
   initial host-side capability contract prototype.
 
-- `v0.3` cycle (`0.3.x`, exit criteria for `0.4.0`)
+- Human-agent workflow
   Advance into human-agent workflow: HumanTask, trusted capability registry, host-executed script policy, and approval flow.
 
-- `v0.4` cycle (`0.4.x`, exit criteria for `0.5.0`)
+- Subflow and business objects
   Validate subflows and business object references so workflows can compose recursively.
 
-- `v0.5` cycle
+- Organization operating layer
   Evaluate organizational memory, governance, analytics, and operating-layer value.
 
 ## Capability Contract Positioning

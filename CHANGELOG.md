@@ -4,10 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
-## [0.3.4] - 2026-09-24
+## [0.4.0] - 2026-09-24
 
 ### Added
 
+- Defined a Semantic Versioning policy that separates release impact from
+  roadmap stages: user-visible capabilities increment minor, while fix-only
+  releases increment patch.
 - Added source-aware effective workflow contracts so shared, role, and
   step-injected skills can contribute tools, inputs, HumanTasks, execution
   profiles, and independently selected checklist overlays without copying the
@@ -19,6 +22,8 @@ All notable changes to this project will be documented in this file.
   review checkpoints, returns, user confirmations, and Driver closeout state.
 - Added `cafe settings update` for previewing and applying workflow-scoped
   Driver and `pr.auto_create` changes without reconfirming the whole contract.
+- Added `cafe task complete --handoff-to` so a supervising user can explicitly
+  route a completed HumanTask to another phase declared by its playbook.
 
 ### Changed
 
@@ -34,6 +39,8 @@ All notable changes to this project will be documented in this file.
 - Made verification receipts optional evidence rather than a mandatory Todo
   completion gate, while retaining file, commit, identity, and clean-worktree
   validation.
+- Deprecated `assignee_type: hybrid` in favor of explicit top-level ownership
+  steps; existing custom playbooks remain valid until the next breaking release.
 
 ### Fixed
 
@@ -46,7 +53,7 @@ All notable changes to this project will be documented in this file.
 - Restored the complete release gate and strengthened its trusted process
   launcher inventory and classification checks.
 
-See [the v0.3.4 release notes](docs/releases/v0.3.4.md) for upgrade guidance and
+See [the v0.4.0 release notes](docs/releases/v0.4.0.md) for upgrade guidance and
 details.
 
 ## [0.3.3] - 2026-09-10
