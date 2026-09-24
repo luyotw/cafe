@@ -118,8 +118,11 @@ python3 <skill-dir>/scripts/render_workflow_progress.py \
 ```
 
 On a resumed Driver session, rebuild the ephemeral JSON from evidence available
-in that session. Use `unknown` when it cannot be verified; never copy chat memory
-as proof. After `cafe close` moves issue data, pass the exact existing archive
+in that session. For confirmed closeout commands, inspect the durable
+`execute_closeout.py --inspect` record from a retained checkout and reconcile
+its per-command outcomes with read-only external-state checks. Use `unknown`
+when the result cannot be verified; never copy chat memory as proof or replay a
+failed or unknown command. After `cafe close` moves issue data, pass the exact existing archive
 directory reported by the lifecycle command, for example:
 
 ```bash

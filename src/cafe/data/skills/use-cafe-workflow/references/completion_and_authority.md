@@ -104,6 +104,44 @@ issue worktree. Keep every argv exactly as confirmed; do not add, remove,
 reorder, rewrite, shell-wrap, retry, or replay a command. Stop and report the
 first command failure.
 
+For each confirmed `deliver` or `cleanup` command, use
+`scripts/execute_closeout.py` as the sole command execution path. It reads the
+confirmed Driver contract immediately before execution and records the exact
+ordered argv, contract digest, issue/workflow identity, worktree target, and each
+command's outcome under the repository's shared Git directory at
+`<git-common-dir>/cafe/closeout/<issue>/<workflow-id>.json`. This location is
+outside the issue worktree and survives its archive or removal. The evidence is
+an outcome record, never a source of action authority. Establish the existing
+action, target, effect, worktree cleanliness, and worker-quiescence checks first;
+for `cleanup`, obtain the explicit terminal choice before invoking the helper.
+The helper must not be used to infer the user's choice or to bypass a declared
+workflow delivery path.
+
+Before the first command, run `--initialize` from a retained checkout, passing
+`--project-root <retained-checkout> --issue-dir <issue-worktree>/.cafe/issues/<issue>
+--issue-name <issue> --workflow-id <workflow-id>`. Before and after each command,
+use `--inspect` with the same project root and identity; `--inspect` does not
+need the issue directory and does not write state. Execute one confirmed command
+at a time with those same arguments plus
+`--execute --stage <deliver|cleanup> --index <zero-based-index>`. The helper
+starts at `not_started`, durably records `unknown` before spawning the exact argv
+without a shell, then records `succeeded` or `failed` and its exit code. It
+rejects a repeated command and a later command when an earlier command in the
+same array has not succeeded. Do not run the argv separately from the helper.
+
+After an interruption, inspect this evidence and the relevant external state
+read-only. A `not_started` entry means the helper has not attempted that command;
+only then may the existing confirmed authority and pre-execution checks allow
+its first execution. A `succeeded` entry is never replayed. A `failed` or
+`unknown` entry is never retried automatically, even if external state appears
+incomplete. If evidence is missing, corrupt, mismatched, or the observed effect
+remains ambiguous, stop and ask the user for explicit direction about that exact
+command and target. Such direction is a separate recovery decision; it does not
+silently reset the prior outcome or broaden the confirmed argv plan. Preserve
+the evidence when the final command removes the worktree; inspect it from the
+retained checkout and render progress using the lifecycle archive path if one
+was reported.
+
 When the user selects archive, run only `cafe close --archive-only` from the
 issue worktree. This is the sole terminal archive command and requires no
 closeout-plan entry. It archives CAFE issue/workflow state without merging,
