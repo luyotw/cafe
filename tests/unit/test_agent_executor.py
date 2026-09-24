@@ -878,6 +878,76 @@ class TestCopilotTokenUsageExtraction:
 class TestEventDriverObservation:
     """測試 callback-only provider evidence 觀察邊界。"""
 
+    def test_claude_bootstrap_uses_valid_empty_mcp_configuration(self, tmp_path: Path) -> None:
+        executor = AgentExecutor(
+            AgentConfig(name="driver", cli=AgentCLI.CLAUDE),
+            stream_output=False,
+        )
+
+        command = executor.preview_cli_command_args(
+            'say "HI"',
+            allowed_tools=[],
+            allowed_directories=[],
+            execution_control=AgentExecutionControl(working_directory=tmp_path),
+        )
+
+        assert command[command.index("--mcp-config") + 1] == '{"mcpServers":{}}'
+        assert "--strict-mcp-config" in command
+        assert command[command.index("--tools") + 1] == ""
+
+    def test_claude_default_model_session_can_be_acquired_and_accepted(self) -> None:
+        executor = AgentExecutor(
+            AgentConfig(name="driver", cli=AgentCLI.CLAUDE, model=None),
+            stream_output=False,
+        )
+
+        def execute_stream(**kwargs):
+            kwargs["structured_records"].extend(
+                [
+                    {
+                        "type": "system",
+                        "subtype": "init",
+                        "session_id": "provider-session",
+                        "model": "claude-provider-default",
+                    },
+                    {"type": "stream_event", "event": {"type": "message_start"}},
+                ]
+            )
+            return AgentResponse(response="HI", token_usage=TokenUsage())
+
+        with patch.object(executor, "_execute_with_streaming", side_effect=execute_stream):
+            bootstrap = executor.execute_event_driver('say "HI"')
+            delivery = executor.execute_event_driver(
+                "callback event-1",
+                expected_session_id="provider-session",
+                event_id="event-1",
+            )
+
+        assert bootstrap.session_id == "provider-session"
+        assert delivery.accepted is True
+
+    def test_claude_explicit_model_rejects_a_different_provider_model(self) -> None:
+        executor = AgentExecutor(
+            AgentConfig(name="driver", cli=AgentCLI.CLAUDE, model="claude-selected"),
+            stream_output=False,
+        )
+
+        def execute_stream(**kwargs):
+            kwargs["structured_records"].append(
+                {
+                    "type": "system",
+                    "subtype": "init",
+                    "session_id": "provider-session",
+                    "model": "claude-other",
+                }
+            )
+            return AgentResponse(response="HI", token_usage=TokenUsage())
+
+        with patch.object(executor, "_execute_with_streaming", side_effect=execute_stream):
+            bootstrap = executor.execute_event_driver('say "HI"')
+
+        assert bootstrap.session_id is None
+
     def test_bootstrap_extracts_provider_session_without_delivery(self) -> None:
         executor = AgentExecutor(
             AgentConfig(name="driver", cli=AgentCLI.CODEX, model="exact"),

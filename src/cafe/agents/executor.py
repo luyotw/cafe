@@ -547,7 +547,7 @@ class AgentExecutor:
                     "",
                     "--strict-mcp-config",
                     "--mcp-config",
-                    "{}",
+                    '{"mcpServers":{}}',
                     "--disable-slash-commands",
                 ]
             )
