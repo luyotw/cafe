@@ -10,7 +10,10 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 from cafe.driver import activate_confirmed_contract
+from cafe.driver.delivery import MAX_CLOSEOUT_EVIDENCE_BYTES, maximum_closeout_evidence_size
 from tests.unit.test_driver_contract_application import _activation, _proposal
 
 SCRIPT = (
@@ -233,3 +236,31 @@ def test_closeout_inspection_of_missing_evidence_is_read_only(tmp_path: Path) ->
     assert _run(root, issue, "--inspect").returncode != 0
     assert _run(root, issue, "--execute", "--stage", "deliver", "--index", "0").returncode != 0
     assert not evidence.parent.exists()
+
+
+def test_confirmed_plan_fits_durable_evidence_at_exact_boundary(tmp_path: Path) -> None:
+    commands = [["true", str(index)] for index in range(1500)]
+    plan = {
+        "deliver": [{"argv": argv} for argv in commands],
+        "cleanup": [],
+    }
+    padding = MAX_CLOSEOUT_EVIDENCE_BYTES - maximum_closeout_evidence_size(plan)
+    assert padding > 0
+    commands[-1][-1] += "x" * padding
+    plan["deliver"][-1]["argv"] = commands[-1]
+    assert maximum_closeout_evidence_size(plan) == MAX_CLOSEOUT_EVIDENCE_BYTES
+
+    accepted = tmp_path / "accepted"
+    accepted.mkdir()
+    root, issue, evidence = _journey(accepted, commands)
+    assert _run(root, issue, "--initialize").returncode == 0
+    assert evidence.is_file()
+
+    oversized = _proposal()
+    oversized["delivery_contract"]["closeout_plan"] = plan
+    oversized["delivery_contract"]["closeout_plan"]["deliver"][-1]["argv"][-1] += "x"
+    assert maximum_closeout_evidence_size(plan) == MAX_CLOSEOUT_EVIDENCE_BYTES + 1
+    rejected = tmp_path / "rejected"
+    with pytest.raises(ValueError):
+        activate_confirmed_contract(_activation(rejected, oversized))
+    assert not (rejected / "driver" / "contract.json").exists()

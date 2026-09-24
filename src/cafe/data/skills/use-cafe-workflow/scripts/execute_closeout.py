@@ -20,8 +20,12 @@ from typing import Any, Iterator
 
 from cafe.core.packet_io import atomic_write_bytes, canonical_json
 from cafe.driver._store import load_contract
+from cafe.driver.delivery import (
+    MAX_CLOSEOUT_EVIDENCE_BYTES,
+    closeout_evidence_record,
+)
 
-MAX_EVIDENCE_BYTES = 256 * 1024
+MAX_EVIDENCE_BYTES = MAX_CLOSEOUT_EVIDENCE_BYTES
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\Z")
 STAGES = ("deliver", "cleanup")
 STATUSES = {"not_started", "unknown", "succeeded", "failed"}
@@ -160,6 +164,8 @@ def _confirmed(
         raise ValueError("issue directory does not match the named worktree issue")
     if _common_dir(worktree) != common_dir:
         raise ValueError("issue worktree belongs to another repository")
+    if len(os.fsencode(str(worktree))) > 4096:
+        raise ValueError("issue worktree path exceeds the bounded evidence projection")
     contract, digest = load_contract(issue, issue_name=issue_name, workflow_id=workflow_id)
     return contract["delivery_contract"]["closeout_plan"], digest, worktree
 
@@ -174,30 +180,22 @@ def _initialize(
     common_dir: Path,
 ) -> dict[str, Any]:
     plan, digest, worktree = _confirmed(issue_dir, issue_name, workflow_id, common_dir)
-    commands = {
-        stage: [
-            {"argv": item["argv"], "status": "not_started", "returncode": None}
-            for item in plan[stage]
-        ]
-        for stage in STAGES
-    }
+    record = closeout_evidence_record(
+        plan,
+        issue_name=issue_name,
+        workflow_id=workflow_id,
+        contract_sha256=digest,
+        worktree=str(worktree),
+    )
     if prior is not None:
         if (
             prior["contract_sha256"] != digest
             or prior["worktree"] != str(worktree)
             or {stage: [item["argv"] for item in prior["commands"][stage]] for stage in STAGES}
-            != {stage: [item["argv"] for item in commands[stage]] for stage in STAGES}
+            != {stage: [item["argv"] for item in record["commands"][stage]] for stage in STAGES}
         ):
             raise ValueError("closeout evidence differs from the confirmed contract")
         return prior
-    record = {
-        "version": 1,
-        "issue_name": issue_name,
-        "workflow_id": workflow_id,
-        "contract_sha256": digest,
-        "worktree": str(worktree),
-        "commands": commands,
-    }
     _write(path, record)
     return record
 

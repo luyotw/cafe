@@ -5,7 +5,50 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
+
+from cafe.core.packet_io import canonical_json
+
+MAX_CLOSEOUT_EVIDENCE_BYTES = 256 * 1024
+# Linux pathname limit is 4096 bytes. JSON can expand each byte sixfold.
+_MAX_ENCODED_WORKTREE_PATH = 4096 * 6 + 1
+
+
+def closeout_evidence_record(
+    plan: dict[str, Any],
+    *,
+    issue_name: str,
+    workflow_id: str,
+    contract_sha256: str,
+    worktree: str,
+) -> dict[str, Any]:
+    """Use the same ordered, exact-argv projection for validation and persistence."""
+    return {
+        "version": 1,
+        "issue_name": issue_name,
+        "workflow_id": workflow_id,
+        "contract_sha256": contract_sha256,
+        "worktree": worktree,
+        "commands": {
+            stage: [
+                {"argv": item["argv"], "status": "not_started", "returncode": None}
+                for item in plan[stage]
+            ]
+            for stage in ("deliver", "cleanup")
+        },
+    }
+
+
+def maximum_closeout_evidence_size(plan: dict[str, Any]) -> int:
+    """Bound every accepted plan before confirmation, including path JSON expansion."""
+    record = closeout_evidence_record(
+        plan,
+        issue_name="x" * 255,
+        workflow_id="x" * 255,
+        contract_sha256="0" * 64,
+        worktree="/" + "x" * (_MAX_ENCODED_WORKTREE_PATH - 1),
+    )
+    return len(canonical_json(record))
 
 
 class DeliveryConstraints(BaseModel):
@@ -91,6 +134,15 @@ class DeliveryCloseoutPlan(BaseModel):
             raise ValueError("closeout commands must be distinct within each stage")
         return values
 
+    @model_validator(mode="after")
+    def _bounded_execution_evidence(self) -> DeliveryCloseoutPlan:
+        if (
+            maximum_closeout_evidence_size(self.model_dump(mode="json"))
+            > MAX_CLOSEOUT_EVIDENCE_BYTES
+        ):
+            raise ValueError("closeout plan exceeds durable execution evidence capacity")
+        return self
+
 
 class DeliveryContractV1(_DeliveryContractBase):
     @field_validator("schema_version")
@@ -171,11 +223,7 @@ def validate_closeout_plan_policy(
         commands = plan.deliver if stage == "deliver" else plan.cleanup
         for index, command in enumerate(commands):
             argv = command.argv
-            if (
-                len(argv) < 2
-                or argv[1] != "close"
-                or Path(argv[0]).name.lower() != "cafe"
-            ):
+            if len(argv) < 2 or argv[1] != "close" or Path(argv[0]).name.lower() != "cafe":
                 continue
             if argv[0] != "cafe":
                 raise ValueError("cafe close must use the literal `cafe` executable")
