@@ -35,11 +35,13 @@ This inventory is executable documentation: the unit contract discovers every `s
 | `src/cafe/workflow_execution/worker_launch.py::launch` | Internal fixed CAFE worker bootstrap |
 | `src/cafe/workflow_execution/event_callback.py::dispatch_workflow_event_callback` | Trusted builtin asynchronous workflow event callback |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/format_kickoff_contract.py::_reexec_with_cafe_python` | Internal fixed Python re-exec |
+| `src/cafe/data/skills/use-cafe-workflow/scripts/render_workflow_progress.py::_reexec_with_cafe_python` | Internal fixed Python re-exec |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/catalog_version_check.py::run_catalog_check` | Internal fixed CAFE catalog inspection |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/sync_helper_with_preflight.py::_run_command` | Explicit CLI-native helper publication with fixed CAFE pre/post checks |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/preflight_cache.py::_cli_fingerprint` | Internal version probe |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/preflight_cache.py::candidate_probe` | User-requested model availability probe |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/run_workflow.py::run` | Internal fixed CAFE workflow bootstrap |
+| `src/cafe/data/skills/use-cafe-workflow/scripts/run_workflow.py::_bootstrap_isolated_runtime` | Internal fixed Python re-exec |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/workflow_event_callback.py::_queue_host_callback` | Trusted builtin callback queue transport |
 | `src/cafe/catalogs/resolver.py::_run_git` | Internal fixed Git root discovery query |
 | `src/cafe/install/bootstrap.py::_run` | Internal installer command family |
@@ -58,6 +60,7 @@ This inventory is executable documentation: the unit contract discovers every `s
 | `src/cafe/ui/commands/agents.py::agent_edit` | Explicit interactive editor |
 | `src/cafe/ui/commands/issues.py::config` | Explicit interactive editor |
 | `src/cafe/ui/commands/lifecycle.py::_ensure_worktree_cafe_excluded` | Internal fixed Git command |
+| `src/cafe/ui/commands/lifecycle.py::_get_project_root` | Internal fixed Git root discovery query |
 | `src/cafe/ui/commands/templates.py::template_cat` | Explicit interactive pager |
 | `src/cafe/ui/commands/templates.py::template_create` | Explicit interactive editor |
 | `src/cafe/ui/commands/templates.py::template_edit` | Explicit interactive editor |

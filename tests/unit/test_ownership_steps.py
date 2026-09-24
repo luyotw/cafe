@@ -174,17 +174,41 @@ def test_strict_validation_accepts_declared_non_agent_owners(tmp_path: Path) -> 
     model = PlaybookDefinition.model_validate(data)
     contract = SimpleNamespace(
         prompt_inputs=(),
+        prompt_references=(),
         required_tools=(),
         human_tasks=(_approval_policy(),),
         output_templates=None,
+        checklist=None,
+        checklist_overlay=None,
+        execution_profile=None,
     )
 
     class SkillLoaderStub:
+        global_root = tmp_path / "global"
+
         def get_skill_dir(self, _skill_name: str) -> Path:
             return tmp_path
 
         def get_workflow_declaration(self, _skill_name: str) -> SimpleNamespace:
             return contract
+
+        def get_workflow_declaration_data(
+            self, skill_name: str
+        ) -> tuple[SimpleNamespace, dict]:
+            return (
+                SimpleNamespace(name=skill_name, source="test", directory=tmp_path),
+                {},
+            )
+
+        def parse_workflow_declaration(
+            self, _entry: SimpleNamespace, _raw: dict
+        ) -> SimpleNamespace:
+            return contract
+
+        def validate_workflow_declaration_resources(
+            self, _skill_dir: Path, _declaration: SimpleNamespace
+        ) -> None:
+            return None
 
     warnings = validate_playbook(
         model,

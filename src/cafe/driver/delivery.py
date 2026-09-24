@@ -163,7 +163,7 @@ def normalize_delivery_contract(value: Any) -> dict[str, Any]:
 
 
 def validate_closeout_plan_policy(
-    closeout_plan: dict[str, Any], *, pr_auto_create: bool | None
+    closeout_plan: dict[str, Any], *, allow_squash: bool | None
 ) -> None:
     """Validate lifecycle-command placement and mode before closeout execution."""
     plan = DeliveryCloseoutPlan.model_validate(closeout_plan)
@@ -200,5 +200,5 @@ def validate_closeout_plan_policy(
                 raise ValueError("cafe close has unsupported or duplicate options")
             if message and not squash:
                 raise ValueError("cafe close message option requires --squash")
-            if squash and pr_auto_create is True:
+            if squash and allow_squash is False:
                 raise ValueError("cafe close --squash is unavailable in create-PR mode")

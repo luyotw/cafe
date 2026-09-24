@@ -310,7 +310,7 @@ def _validate_policy(proposal: Mapping[str, Any]) -> dict[str, Any]:
     delivery = normalize_delivery_contract(raw["delivery_contract"])
     if delivery["schema_version"] != 3:
         raise ValueError("Driver v5 requires Delivery Contract version 3")
-    validate_closeout_plan_policy(delivery["closeout_plan"], pr_auto_create=None)
+    validate_closeout_plan_policy(delivery["closeout_plan"], allow_squash=None)
     result["delivery_contract"] = delivery
     for field in ("need_clarification", "need_permission", "alignment_checkpoint"):
         result["reactive_user_handoffs"][field] = _string(

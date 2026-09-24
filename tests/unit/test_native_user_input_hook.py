@@ -922,7 +922,7 @@ def test_github_issue_fetcher_uses_phase_step_user_input_without_prompting(tmp_p
     mock_fetch_issue.assert_not_called()
 
 
-def test_execute_step_skips_checklist_validation_when_confirmed_without_agent_run(
+def test_execute_step_validates_existing_checklist_when_confirmed_without_agent_run(
     tmp_path: Path,
 ) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
@@ -952,7 +952,9 @@ def test_execute_step_skips_checklist_validation_when_confirmed_without_agent_ru
     executor._build_context = MagicMock(return_value={})
     executor._generate_checklist = MagicMock()
     executor._persist_final_status = MagicMock()
-    executor._validate_and_retry_checklist_completion = MagicMock()
+    executor._validate_and_retry_checklist_completion = MagicMock(
+        return_value=("", PhaseStatusCode.CONFIRMED, True)
+    )
 
     result = executor.execute_step(
         "spec",
@@ -962,7 +964,7 @@ def test_execute_step_skips_checklist_validation_when_confirmed_without_agent_ru
 
     assert isinstance(result, StepExecutionResult)
     assert result.status_code == "confirmed"
-    executor._validate_and_retry_checklist_completion.assert_not_called()
+    executor._validate_and_retry_checklist_completion.assert_called_once()
 
 
 def test_pr_link_opener_opens_current_pr_url_when_confirmed() -> None:

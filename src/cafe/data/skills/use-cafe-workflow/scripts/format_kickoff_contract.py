@@ -113,7 +113,10 @@ def _kickoff_delivery_contract(
         ),
         None,
     )
-    validate_closeout_plan_policy(delivery["closeout_plan"], pr_auto_create=pr_auto_create)
+    validate_closeout_plan_policy(
+        delivery["closeout_plan"],
+        allow_squash=None if pr_auto_create is None else not pr_auto_create,
+    )
     _closeout_descriptions(args, delivery["closeout_plan"])
     return delivery
 

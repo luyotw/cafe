@@ -177,7 +177,7 @@ def test_pr_runtime_routes_generic_success_receipt_without_verified_url(
 
     assert result.completed is False
     assert result.final_step == "pr"
-    assert result.final_status_code == "confirmed"
+    assert result.final_status_code == "BATON_CONFIRM_OUTPUT"
     assert len(HumanTaskRecordStore(issue_dir).tasks()) == 1
 
 

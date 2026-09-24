@@ -555,8 +555,8 @@ def test_workflow_command_runs_execute_mode(tmp_path: Path, monkeypatch) -> None
                     state=blackboard_state,
                     from_step="pr",
                     to_step="user",
-                    status_code="confirmed",
-                    intent=HandoffIntent.MANUAL_HANDOFF,
+                    status_code="need_permission",
+                    intent=HandoffIntent.NEED_PERMISSION,
                 )
             return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
 
@@ -2804,8 +2804,8 @@ def test_workflow_command_rejects_plain_text_chat_baton_before_execution(
                     state=blackboard_state,
                     from_step="pr",
                     to_step="user",
-                    status_code="confirmed",
-                    intent=HandoffIntent.MANUAL_HANDOFF,
+                    status_code="need_permission",
+                    intent=HandoffIntent.NEED_PERMISSION,
                 )
             return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
 
@@ -3308,8 +3308,8 @@ def test_workflow_command_user_owner_can_set_next_phase(tmp_path: Path, monkeypa
                     state=blackboard_state,
                     from_step="pr",
                     to_step="user",
-                    status_code="confirmed",
-                    intent=HandoffIntent.MANUAL_HANDOFF,
+                    status_code="need_permission",
+                    intent=HandoffIntent.NEED_PERMISSION,
                 )
             return _result(
                 status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={}
@@ -3660,8 +3660,8 @@ def test_workflow_command_user_owner_can_chat_and_resume_from_baton(
                     state=blackboard_state,
                     from_step="pr",
                     to_step="user",
-                    status_code="confirmed",
-                    intent=HandoffIntent.MANUAL_HANDOFF,
+                    status_code="need_permission",
+                    intent=HandoffIntent.NEED_PERMISSION,
                 )
             return _result(
                 status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={}
@@ -3739,8 +3739,8 @@ def test_workflow_command_enters_user_phase_immediately_after_agent_handoff(
                 state=blackboard_state,
                 from_step="pr",
                 to_step="user",
-                status_code="confirmed",
-                intent=HandoffIntent.MANUAL_HANDOFF,
+                status_code="need_permission",
+                intent=HandoffIntent.NEED_PERMISSION,
             )
             return _result(
                 status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={}
@@ -3798,8 +3798,8 @@ def test_workflow_command_noninteractive_stops_after_agent_handoff_to_user(
                 state=blackboard_state,
                 from_step="pr",
                 to_step="user",
-                status_code="confirmed",
-                intent=HandoffIntent.MANUAL_HANDOFF,
+                status_code="need_permission",
+                intent=HandoffIntent.NEED_PERMISSION,
             )
             return _result(
                 status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={}
@@ -3999,8 +3999,8 @@ def test_workflow_command_done_phase_can_restart_workflow(tmp_path: Path, monkey
                     state=blackboard_state,
                     from_step="pr",
                     to_step="user",
-                    status_code="confirmed",
-                    intent=HandoffIntent.MANUAL_HANDOFF,
+                    status_code="need_permission",
+                    intent=HandoffIntent.NEED_PERMISSION,
                 )
             return _result(
                 status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={}

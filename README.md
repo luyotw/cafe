@@ -162,6 +162,7 @@ requirements and delivery rigor:
 | --- | --- | --- |
 | `direct` | develop → review → PR | The requested change is already clear and still needs independent review. |
 | `direct-qa` | spec → develop → review → QA → PR | Requirements need confirmation and acceptance needs both independent review and QA, but implementation does not need a separate plan. |
+| `direct-subagent-review` | develop + two subagent reviews → PR | The implementation boundary is already confirmed and focused detail and scope reviews can run inside Develop. |
 | `simple` | spec → develop → QA → PR | The outcome needs confirmation and independent acceptance, but a low-risk docs, data, or config change does not need a separate plan or code review. |
 | `standard` | spec → plan → develop → review → PR | The standard development path and built-in default. |
 | `standard-qa` | spec → plan → develop → review → QA → PR | Standard development needs independent product acceptance. |
@@ -419,7 +420,7 @@ ships.
 
 - [Roadmap](docs/roadmap.md)
 - [Changelog](CHANGELOG.md)
-- [Latest release notes](docs/releases/v0.3.3.md)
+- [Latest release notes](docs/releases/v0.3.4.md)
 - [Strategic positioning](docs/positioning.md)
 
 ## Contributing

@@ -4,11 +4,50 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.3.4] - 2026-09-24
+
+### Added
+
+- Added source-aware effective workflow contracts so shared, role, and
+  step-injected skills can contribute tools, inputs, HumanTasks, execution
+  profiles, and independently selected checklist overlays without copying the
+  primary phase skill.
+- Added the `direct-qa` and `direct-subagent-review` playbooks for focused work
+  that needs independent acceptance or two in-phase subagent reviews without a
+  separate planning phase.
+- Added read-only workflow progress diagrams that project current phases,
+  review checkpoints, returns, user confirmations, and Driver closeout state.
+- Added `cafe settings update` for previewing and applying workflow-scoped
+  Driver and `pr.auto_create` changes without reconfirming the whole contract.
+
+### Changed
+
+- Routed ordinary success through semantic playbook outcomes and injected
+  topology-neutral route catalogs, keeping concrete step names in the runtime
+  and playbook boundary.
+- Made artifact, workspace, Todo projection, checklist-gate, and correction
+  evidence source-aware across retries, overlays, no-change decisions, and
+  downstream consumers.
+- Made Driver kickoff and closeout present complete localized contracts,
+  repository-derived exact command plans, and an explicit terminal choice to
+  run cleanup, archive with `cafe close --archive-only`, or leave state intact.
+- Made verification receipts optional evidence rather than a mandatory Todo
+  completion gate, while retaining file, commit, identity, and clean-worktree
+  validation.
+
 ### Fixed
 
 - Made runtime update checks and approved installs use the canonical GitHub
   release instead of the stale PyPI package, keeping the reported version,
   approval token, and exact installation source on one release identity.
+- Preserved Driver callback, chat, retry, session, and completion behavior
+  across host-session rebinding, transient failures, terminal workers, and
+  already-consumed workflow handoffs.
+- Restored the complete release gate and strengthened its trusted process
+  launcher inventory and classification checks.
+
+See [the v0.3.4 release notes](docs/releases/v0.3.4.md) for upgrade guidance and
+details.
 
 ## [0.3.3] - 2026-09-10
 
