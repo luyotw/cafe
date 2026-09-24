@@ -136,6 +136,13 @@ it identifies the intended target, or obtain a fresh confirmation once the
 concrete command exists. Inspect whether integration already triggers delivery
 before proposing another deployment command.
 
+Validate lifecycle commands before presenting the contract. `cafe close` must
+be the final cleanup command and use the literal `cafe` executable. Its
+`--squash` and optional message arguments are local-review behavior only; reject
+them when the confirmed automatic-PR capability choice enables PR creation.
+This rule does not apply when a remote PR merge command uses the same flag to
+select its merge strategy rather than the local close path.
+
 When the intended action or target is unresolved, identify the missing choice
 and ask a focused question instead of presenting an empty plan as settled. Do
 not activate a plan with an unresolved stage: obtain concrete argv or a verified

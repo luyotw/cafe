@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
@@ -159,3 +160,45 @@ def normalize_delivery_contract(value: Any) -> dict[str, Any]:
     if version == 3:
         return DeliveryContractV3.model_validate(value).model_dump(mode="json")
     raise ValueError("unsupported Delivery Contract version")
+
+
+def validate_closeout_plan_policy(
+    closeout_plan: dict[str, Any], *, pr_auto_create: bool | None
+) -> None:
+    """Validate lifecycle-command placement and mode before closeout execution."""
+    plan = DeliveryCloseoutPlan.model_validate(closeout_plan)
+    for stage in ("deliver", "cleanup"):
+        commands = plan.deliver if stage == "deliver" else plan.cleanup
+        for index, command in enumerate(commands):
+            argv = command.argv
+            if (
+                len(argv) < 2
+                or argv[1] != "close"
+                or Path(argv[0]).name.lower() != "cafe"
+            ):
+                continue
+            if argv[0] != "cafe":
+                raise ValueError("cafe close must use the literal `cafe` executable")
+            if stage != "cleanup" or index != len(commands) - 1:
+                raise ValueError("cafe close is allowed only as the final cleanup command")
+
+            squash = False
+            message = False
+            argument_index = 2
+            while argument_index < len(argv):
+                argument = argv[argument_index]
+                if argument == "--squash" and not squash:
+                    squash = True
+                    argument_index += 1
+                    continue
+                if argument in {"-m", "--message"} and not message:
+                    if argument_index + 1 >= len(argv) or not argv[argument_index + 1]:
+                        raise ValueError("cafe close message option requires a non-empty value")
+                    message = True
+                    argument_index += 2
+                    continue
+                raise ValueError("cafe close has unsupported or duplicate options")
+            if message and not squash:
+                raise ValueError("cafe close message option requires --squash")
+            if squash and pr_auto_create is True:
+                raise ValueError("cafe close --squash is unavailable in create-PR mode")

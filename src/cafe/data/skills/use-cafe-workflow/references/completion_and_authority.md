@@ -118,6 +118,9 @@ an exact argument (for example `git -C <retained-checkout> worktree remove
 flags. If `cafe close` is confirmed, it must be the exact final cleanup command,
 after any `gh issue close` command. It may archive the issue and remove its
 worktree; render final progress from the archive path it reports.
+`cafe close --squash` and its optional message are valid only in confirmed
+local-review mode and are rejected in create-PR mode. Remote PR merge strategy
+flags are separate delivery behavior.
 
 ### Assist when no argv closeout plan exists
 
