@@ -54,6 +54,15 @@ from cafe.core.resume_user_input import (
     prior_cli_and_session,
     resolve_resume_user_input,
 )
+from cafe.core.route_catalog import (
+    RouteInputRequirement,
+    RouteReadiness,
+    authorize_route_target,
+    build_route_projection,
+    evaluate_route_readiness,
+    normalize_route_target,
+    select_route_label,
+)
 from cafe.core.session_continuation import (
     SessionContinuation,
     exact_continuation_from_context,
@@ -279,6 +288,169 @@ class GenericWorkflowStepExecutor(Phase):
 
     def _effective_workflow_declaration(self, **kwargs) -> SkillWorkflowDeclaration:
         return self._effective_workflow_composition(**kwargs).as_declaration()
+
+    @staticmethod
+    def _route_artifact_names(
+        artifacts: Mapping[str, Any],
+        *,
+        workspace_name: str | None,
+    ) -> set[str]:
+        """Return artifacts available to readiness without certifying freshness."""
+        available: set[str] = set()
+        for name, artifact in artifacts.items():
+            path = str(getattr(artifact, "path", artifact) or "").strip()
+            if not path:
+                continue
+            if name == workspace_name and getattr(artifact, "kind", None) != ArtifactKind.WORKSPACE:
+                continue
+            available.add(str(name))
+        return available
+
+    def _route_target_projection_inputs(
+        self,
+        *,
+        target: str,
+        blackboard_state: BlackboardState,
+    ) -> tuple[str, RouteReadiness]:
+        """Resolve one target's iteration-aware label and advisory readiness."""
+        normalized_target = normalize_route_target(target)
+        steps = self.playbook.get("steps", {})
+        target_def = steps.get(normalized_target) if isinstance(steps, Mapping) else None
+        if not isinstance(target_def, Mapping):
+            return normalized_target, RouteReadiness(ready=True)
+
+        target_iteration = (
+            self.iteration + 1
+            if normalized_target == self.phase_name
+            else self._get_next_iteration_number(
+                normalized_target,
+                self.issue_dir / normalized_target,
+            )
+        )
+        skill_name = self._resolve_skill_name(dict(target_def), target_iteration)
+        composition = self._effective_workflow_composition(
+            step_name=normalized_target,
+            step_def=dict(target_def),
+            skill_name=skill_name,
+        )
+        loader = self._get_skill_loader()
+        skill_descriptions = tuple(
+            loader.get_skill_entry(contributor.source.skill_identity).description
+            for contributor in composition.contributors
+        )
+        role_name = str(target_def.get("role", ""))
+        raw_role = self.playbook.get("roles", {}).get(role_name, {})
+        role_description = (
+            str(raw_role.get("description") or "") if isinstance(raw_role, Mapping) else ""
+        )
+        label = select_route_label(
+            target=normalized_target,
+            handoff_label=str(target_def.get("handoff_label") or ""),
+            skill_descriptions=skill_descriptions,
+            role_description=role_description,
+        )
+
+        artifacts = self._step_input_artifacts(dict(target_def), blackboard_state)
+        workspace_name = target_def.get("workspace_input_artifact")
+        required_inputs = [
+            RouteInputRequirement(
+                name=mapping.placeholder,
+                candidates=tuple(mapping.artifacts),
+            )
+            for mapping in composition.prompt_inputs
+            if mapping.required
+        ]
+        if isinstance(workspace_name, str) and workspace_name.strip():
+            required_inputs.append(
+                RouteInputRequirement(
+                    name=workspace_name,
+                    candidates=(workspace_name,),
+                )
+            )
+        readiness = evaluate_route_readiness(
+            required_inputs,
+            available_artifacts=self._route_artifact_names(
+                artifacts,
+                workspace_name=workspace_name if isinstance(workspace_name, str) else None,
+            ),
+        )
+        return label, readiness
+
+    def _build_route_context(
+        self,
+        *,
+        step_name: str,
+        step_def: Mapping[str, Any],
+        blackboard_state: BlackboardState,
+    ) -> dict[str, str]:
+        """Serialize the prompt-safe graph and current-step route catalog once."""
+        raw_steps = self.playbook.get("steps", {})
+        projected_steps: dict[str, Any] = {}
+        if isinstance(raw_steps, Mapping):
+            for projected_name, raw_step in raw_steps.items():
+                projected_step = dict(raw_step) if isinstance(raw_step, Mapping) else {}
+                raw_on = projected_step.get("on", {})
+                projected_on: dict[str, Any] = {}
+                if isinstance(raw_on, Mapping):
+                    projected_behavior = resolve_step_behavior(
+                        self.playbook,
+                        str(projected_name),
+                    )
+                    for raw_intent, raw_target in raw_on.items():
+                        intent = str(raw_intent)
+                        if (
+                            projected_behavior.completion == "baton"
+                            and normalize_route_target(raw_target) == "done"
+                        ):
+                            intent = HandoffIntent.WORKFLOW_COMPLETE.value
+                        projected_on[intent] = raw_target
+                projected_step["on"] = projected_on
+                projected_steps[str(projected_name)] = projected_step
+        projection_playbook = dict(self.playbook)
+        projection_playbook["steps"] = projected_steps
+        projected_current = projected_steps.get(step_name, {})
+        transitions = projected_current.get("on", {})
+        raw_targets: list[object] = []
+        if isinstance(transitions, Mapping):
+            raw_targets.extend(transitions.values())
+        allowed_goto = projected_current.get("allowed_goto", ())
+        if isinstance(allowed_goto, (list, tuple)):
+            raw_targets.extend(allowed_goto)
+        targets = tuple(dict.fromkeys(normalize_route_target(target) for target in raw_targets))
+
+        labels: dict[str, str] = {}
+        readiness: dict[str, RouteReadiness] = {}
+        for target in targets:
+            label, state = self._route_target_projection_inputs(
+                target=target,
+                blackboard_state=blackboard_state,
+            )
+            labels[target] = label
+            readiness[target] = state
+
+        behavior = resolve_step_behavior(self.playbook, step_name)
+        feedback_targets = list((behavior.feedback_routes or {}).keys())
+        if behavior.feedback_target:
+            feedback_targets.append(behavior.feedback_target)
+        projection = build_route_projection(
+            projection_playbook,
+            current_step=step_name,
+            labels=labels,
+            readiness=readiness,
+            feedback_targets=feedback_targets,
+        )
+        return {
+            "playbook_graph": json.dumps(
+                projection.graph,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+            "route_catalog": json.dumps(
+                projection.routes,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        }
 
     def _checklist_inputs(self, composition, artifacts, state):
         aliases = composition.causal_todo_artifacts
@@ -1814,6 +1986,13 @@ class GenericWorkflowStepExecutor(Phase):
             "behavior_completion": behavior.completion,
             "publish_confirmation": behavior.publish_confirmation,
         }
+        context.update(
+            self._build_route_context(
+                step_name=step_name,
+                step_def=step_def,
+                blackboard_state=blackboard_state,
+            )
+        )
         if getattr(self, "_session_recovery", None) is not None:
             context["session_recovery"] = (
                 "The user explicitly selected a fresh provider session after an interruption. "
@@ -4001,8 +4180,12 @@ class GenericWorkflowStepExecutor(Phase):
     ) -> Optional[str]:
         goto_target = self.generic_phase.extract_goto_target(response)
         if goto_target:
-            allowed_targets = {str(target) for target in step_def.get("allowed_goto", [])}
-            if goto_target in allowed_targets:
+            if authorize_route_target(
+                self.playbook,
+                current_step=step_name,
+                intent=transition_map_key(status_code),
+                target=goto_target,
+            ):
                 return goto_target
 
         transitions = step_def.get("on", {})

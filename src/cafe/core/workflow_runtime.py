@@ -59,6 +59,7 @@ from cafe.core.playbook import (
     resolve_step_behavior,
 )
 from cafe.core.questions_schema import validate_questions_xml
+from cafe.core.route_catalog import authorize_route_target, route_choices
 from cafe.core.status_codes import (
     PhaseStatusCode,
     StatusCodeParser,
@@ -580,8 +581,11 @@ class BlackboardWorkflowRuntime:
         )
         if br.field == "to_step":
             message += (
-                " The baton must target a valid next step and cannot point back to the same phase."
+                " The baton target must be the applicable default or a declared "
+                "discretionary route."
             )
+        if br.detail:
+            message += f" {br.detail}."
         return message
 
     @staticmethod
@@ -864,8 +868,18 @@ class BlackboardWorkflowRuntime:
         transitions = step.get("on", {})
         goto_target = self._extract_goto_target(response)
         if goto_target:
-            allowed_targets = {str(target) for target in step.get("allowed_goto", [])}
-            if goto_target in allowed_targets:
+            transition_key = status_code
+            if status_code:
+                try:
+                    transition_key = transition_map_key(PhaseStatusCode(status_code))
+                except ValueError:
+                    transition_key = status_code
+            if authorize_route_target(
+                self.playbook,
+                current_step=current_step,
+                intent=transition_key or "default",
+                target=goto_target,
+            ):
                 self.blackboard_store.record_event(
                     self.blackboard,
                     "goto",
@@ -881,7 +895,7 @@ class BlackboardWorkflowRuntime:
                 {
                     "step": current_step,
                     "goto_target": goto_target,
-                    "reason": "not in allowed_goto",
+                    "reason": "not a mapped default or declared discretionary route",
                 },
             )
 
@@ -1278,7 +1292,12 @@ class BlackboardWorkflowRuntime:
             and result.payload.get("continuation") == current_step
         )
 
-    def _load_agent_written_handoff_contract(self, *, current_step: str) -> HandoffContract:
+    def _load_agent_written_handoff_contract(
+        self,
+        *,
+        current_step: str,
+        validate_route: bool = True,
+    ) -> HandoffContract:
         """Load and normalize a baton written by a just-finished agent step.
 
         Only the structured JSON baton contract is accepted; agents must
@@ -1298,10 +1317,11 @@ class BlackboardWorkflowRuntime:
             self.blackboard,
             allowed_steps=list(self.steps.keys()),
         )
-        self._validate_mapped_handoff_target(
-            current_step=current_step,
-            contract=contract,
-        )
+        if validate_route:
+            self._validate_mapped_handoff_target(
+                current_step=current_step,
+                contract=contract,
+            )
         if contract.source == "unknown":
             contract.source = "baton"
         self.blackboard_store.write_handoff_contract(self.blackboard, contract)
@@ -1418,11 +1438,17 @@ class BlackboardWorkflowRuntime:
         contract: HandoffContract,
     ) -> None:
         """Reject an agent-authored route that contradicts its semantic outcome."""
+        if contract.from_step != current_step or contract.source == "bootstrap":
+            return
         if (
-            contract.from_step != current_step
-            or contract.to_step == current_step
-            or contract.source == "bootstrap"
+            contract.to_step == current_step
+            and contract.source not in {"unknown", "baton"}
         ):
+            # Legacy/status-driven execution may leave the inbound runtime
+            # baton in place until its adapter materializes the result.  It is
+            # not an agent-authored route choice.  A minimal agent baton has
+            # source ``unknown`` on first load and ``baton`` on retries, so an
+            # undeclared authored self-loop is still validated.
             return
         semantic_intent = contract.intent
         if contract.intent is HandoffIntent.AWAIT_AGENT and contract.status_code:
@@ -1437,18 +1463,17 @@ class BlackboardWorkflowRuntime:
             HandoffIntent.MANUAL_HANDOFF,
         }:
             return
-        expected_target = self._mapped_target_for_intent(
+        choices = route_choices(
+            self.playbook,
             current_step=current_step,
-            intent=semantic_intent,
+            intent=semantic_intent.value,
         )
-        if expected_target is None:
-            return
-        normalized_target = "done" if expected_target in {"done", "_done"} else expected_target
-        if contract.to_step != normalized_target:
+        if contract.to_step not in choices.authorized:
             raise BatonRejected(
                 field="to_step",
                 invalid_value=contract.to_step,
-                valid_values=[normalized_target],
+                valid_values=list(choices.authorized),
+                detail=choices.diagnostic(),
             )
 
     def _is_declared_manual_handoff(
@@ -1472,10 +1497,11 @@ class BlackboardWorkflowRuntime:
             or contract.intent is not HandoffIntent.MANUAL_HANDOFF
         ):
             return False
-        step_def = self.steps.get(current_step, {})
-        transitions = step_def.get("on") if isinstance(step_def, dict) else None
-        return (
-            isinstance(transitions, dict) and transitions.get("manual_handoff") == contract.to_step
+        return authorize_route_target(
+            self.playbook,
+            current_step=current_step,
+            intent=HandoffIntent.MANUAL_HANDOFF.value,
+            target=contract.to_step,
         )
 
     def _status_from_contract(self, current_step: str, execution_result: Any) -> str:
@@ -1493,7 +1519,10 @@ class BlackboardWorkflowRuntime:
         )
 
     def _load_step_handoff_contract(self, *, current_step: str) -> Optional[HandoffContract]:
-        contract = self._load_agent_written_handoff_contract(current_step=current_step)
+        contract = self._load_agent_written_handoff_contract(
+            current_step=current_step,
+            validate_route=False,
+        )
         if contract.from_step != current_step:
             return None
         if not (contract.to_owner == HandoffOwner.AGENT and contract.to_step == current_step):
@@ -1504,6 +1533,10 @@ class BlackboardWorkflowRuntime:
                     invalid_value=contract.intent.value,
                     valid_values=valid_intents,
                 )
+        self._validate_mapped_handoff_target(
+            current_step=current_step,
+            contract=contract,
+        )
         return contract
 
     @staticmethod

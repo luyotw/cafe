@@ -560,6 +560,7 @@ def test_runtime_rejects_legacy_baton_target_that_conflicts_with_mapped_outcome(
                 "skill": "authoring-skill",
                 "role": "writer",
                 "behavior": {"completion": "baton"},
+                "allowed_goto": ["revise"],
                 "on": {"await_agent": "review"},
             },
             "review": {
@@ -570,6 +571,12 @@ def test_runtime_rejects_legacy_baton_target_that_conflicts_with_mapped_outcome(
             },
             "other": {
                 "skill": "other-skill",
+                "role": "writer",
+                "behavior": {"completion": "baton"},
+                "on": {"await_agent": "_done"},
+            },
+            "revise": {
+                "skill": "revision-skill",
                 "role": "writer",
                 "behavior": {"completion": "baton"},
                 "on": {"await_agent": "_done"},
@@ -614,6 +621,71 @@ def test_runtime_rejects_legacy_baton_target_that_conflicts_with_mapped_outcome(
     assert "field 'to_step'" in (prompts[1] or "")
     assert "other" in (prompts[1] or "")
     assert "review" in (prompts[1] or "")
+    assert "default route: review" in (prompts[1] or "")
+    assert "discretionary routes: revise" in (prompts[1] or "")
+
+
+def test_runtime_accepts_declared_discretionary_baton_target(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "declared-discretionary-target"
+    issue_dir.mkdir(parents=True)
+    calls: list[str] = []
+    playbook = {
+        "playbook": {"id": "declared-discretionary-target"},
+        "steps": {
+            "author": {
+                "skill": "authoring-skill",
+                "role": "writer",
+                "behavior": {"completion": "baton"},
+                "allowed_goto": ["revise"],
+                "on": {"await_agent": "review"},
+            },
+            "review": {
+                "skill": "review-skill",
+                "role": "reviewer",
+                "behavior": {"completion": "baton"},
+                "on": {"await_agent": "_done"},
+            },
+            "revise": {
+                "skill": "revision-skill",
+                "role": "writer",
+                "behavior": {"completion": "baton"},
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+
+    def executor(step_name: str, _step_def: dict, _state: object) -> StepExecutionResult:
+        calls.append(step_name)
+        if step_name == "author":
+            _write_baton(
+                issue_dir,
+                from_step="author",
+                to_owner="agent",
+                to_step="revise",
+                intent="await_agent",
+            )
+        else:
+            _write_baton(
+                issue_dir,
+                from_step="revise",
+                to_owner="done",
+                to_step="done",
+                intent="workflow_complete",
+            )
+        return StepExecutionResult(response="", artifacts={})
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    ).run(start_step="author")
+
+    assert result.completed is True
+    assert calls == ["author", "revise"]
+
+
 def _write_publication_contract(
     issue_dir: Path,
     *,
@@ -4392,6 +4464,7 @@ def test_runtime_chains_pr_need_changes_through_develop_to_review(tmp_path: Path
                     "feedback_todo_source": "pr_comment",
                     "feedback_todo_id_prefix": "PRC",
                 },
+                "allowed_goto": ["develop"],
                 "on": {},
             },
             "develop": {
