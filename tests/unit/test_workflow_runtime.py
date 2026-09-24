@@ -394,6 +394,28 @@ def _write_outcome_only_success(issue_dir: Path) -> None:
     )
 
 
+def _write_minimal_baton(
+    issue_dir: Path,
+    *,
+    to_owner: str,
+    to_step: str,
+    intent: str,
+) -> None:
+    (issue_dir / "next_step.txt").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "to_owner": to_owner,
+                "to_step": to_step,
+                "intent": intent,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_runtime_routes_outcome_only_success_using_renamed_playbook_target(
     tmp_path: Path,
 ) -> None:
@@ -684,6 +706,126 @@ def test_runtime_accepts_declared_discretionary_baton_target(
 
     assert result.completed is True
     assert calls == ["author", "revise"]
+
+
+def test_runtime_accepts_declared_minimal_self_loop_after_identical_inbound_handoff(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "declared-minimal-self-loop"
+    issue_dir.mkdir(parents=True)
+    calls: list[str] = []
+    playbook = {
+        "playbook": {"id": "declared-minimal-self-loop"},
+        "steps": {
+            "author": {
+                "skill": "authoring-skill",
+                "role": "writer",
+                "behavior": {"completion": "baton"},
+                "on": {"await_agent": "inspect"},
+            },
+            "inspect": {
+                "skill": "review-skill",
+                "role": "reviewer",
+                "behavior": {"completion": "baton"},
+                "allowed_goto": ["inspect"],
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+
+    def executor(step_name: str, _step_def: dict, _state: object) -> StepExecutionResult:
+        calls.append(step_name)
+        if step_name == "author" or calls.count("inspect") == 2:
+            _write_outcome_only_success(issue_dir)
+        else:
+            _write_minimal_baton(
+                issue_dir,
+                to_owner="agent",
+                to_step="inspect",
+                intent="await_agent",
+            )
+        return StepExecutionResult(response="", artifacts={})
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    result = runtime.run(start_step="author")
+
+    assert result.completed is True
+    assert calls == ["author", "inspect", "inspect"]
+    transitions = [
+        (event.data.get("from"), event.data.get("to"))
+        for event in runtime.blackboard.events
+        if event.event_type == "transition"
+    ]
+    assert ("inspect", "inspect") in transitions
+
+
+def test_runtime_rejects_undeclared_minimal_self_loop_after_identical_inbound_handoff(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "undeclared-minimal-self-loop"
+    issue_dir.mkdir(parents=True)
+    calls: list[str] = []
+    playbook = {
+        "playbook": {"id": "undeclared-minimal-self-loop"},
+        "steps": {
+            "author": {
+                "skill": "authoring-skill",
+                "role": "writer",
+                "behavior": {"completion": "baton"},
+                "on": {"await_agent": "inspect"},
+            },
+            "inspect": {
+                "skill": "review-skill",
+                "role": "reviewer",
+                "behavior": {"completion": "baton"},
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+
+    def executor(step_name: str, _step_def: dict, _state: object) -> StepExecutionResult:
+        calls.append(step_name)
+        if step_name == "author" or calls.count("inspect") == 2:
+            _write_outcome_only_success(issue_dir)
+        else:
+            _write_minimal_baton(
+                issue_dir,
+                to_owner="agent",
+                to_step="inspect",
+                intent="await_agent",
+            )
+        return StepExecutionResult(response="", artifacts={})
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    result = runtime.run(start_step="author")
+
+    assert result.completed is True
+    assert calls == ["author", "inspect", "inspect"]
+    rejections = [
+        event.data
+        for event in runtime.blackboard.events
+        if event.event_type == "baton_rejected" and event.data.get("step") == "inspect"
+    ]
+    assert any(
+        rejection.get("field") == "to_step"
+        and rejection.get("invalid_value") == "inspect"
+        and rejection.get("valid_values") == ["done"]
+        for rejection in rejections
+    )
+    assert not any(
+        event.event_type == "transition"
+        and event.data.get("from") == "inspect"
+        and event.data.get("to") == "inspect"
+        for event in runtime.blackboard.events
+    )
 
 
 def _write_publication_contract(

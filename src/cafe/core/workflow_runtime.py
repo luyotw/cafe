@@ -436,6 +436,7 @@ class BlackboardWorkflowRuntime:
         self._workflow_event_callback = workflow_event_callback
         self._pending_phase_terminal: Dict[str, Any] | None = None
         self._observed_result_keys: set[tuple[str, str]] = set()
+        self._agent_baton_snapshot: tuple[int, int, int, int, int, str] | None = None
 
     def _validate_automatic_executor_declarations(self) -> None:
         """Reject unavailable automatic authority before recording a workflow visit."""
@@ -950,8 +951,13 @@ class BlackboardWorkflowRuntime:
         if getattr(contract, "from_step", None) != current_step:
             return None
         to_step = getattr(contract, "to_step", None)
-        if to_step is None or to_step == current_step:
+        if to_step is None:
             return None
+        if to_step == current_step:
+            return current_step if self._is_declared_agent_self_loop(
+                current_step=current_step,
+                contract=contract,
+            ) else None
         # Validate the target step exists in the playbook or is a known
         # synthetic step (user, done, _done).
         if to_step in self.steps or to_step in {"user", "done", "_done"}:
@@ -986,13 +992,19 @@ class BlackboardWorkflowRuntime:
             for event in events
         )
 
-    @staticmethod
     def _outbound_completion_intent(
-        *, current_step: str, contract: HandoffContract | None
+        self, *, current_step: str, contract: HandoffContract | None
     ) -> str | None:
         if contract is None or contract.from_step != current_step:
             return None
-        if contract.to_owner == HandoffOwner.AGENT and contract.to_step == current_step:
+        if (
+            contract.to_owner == HandoffOwner.AGENT
+            and contract.to_step == current_step
+            and not self._is_declared_agent_self_loop(
+                current_step=current_step,
+                contract=contract,
+            )
+        ):
             return None
         return contract.intent.value
 
@@ -1303,6 +1315,22 @@ class BlackboardWorkflowRuntime:
         Only the structured JSON baton contract is accepted; agents must
         always write structured JSON batons to ``next_step.txt``.
         """
+        rewritten_baton = self._baton_file_snapshot() != self._agent_baton_snapshot
+        authored_payload: dict[str, Any] | None = None
+        if rewritten_baton:
+            try:
+                raw_payload = json.loads(
+                    self.blackboard_store.next_step_path.read_text(encoding="utf-8")
+                )
+            except (OSError, json.JSONDecodeError):
+                raw_payload = None
+            if isinstance(raw_payload, dict) and {
+                "version",
+                "to_owner",
+                "to_step",
+                "intent",
+            }.issubset(raw_payload):
+                authored_payload = raw_payload
         self.blackboard = self.blackboard_store.load_or_create(
             current_step,
             tolerate_invalid_baton=True,
@@ -1317,6 +1345,15 @@ class BlackboardWorkflowRuntime:
             self.blackboard,
             allowed_steps=list(self.steps.keys()),
         )
+        if authored_payload is not None:
+            if "from_step" not in authored_payload:
+                contract.from_step = current_step
+            if "status_code" not in authored_payload:
+                contract.status_code = ""
+            if "created_at" not in authored_payload:
+                contract.created_at = self._now_iso()
+            if "source" not in authored_payload:
+                contract.source = "baton"
         if validate_route:
             self._validate_mapped_handoff_target(
                 current_step=current_step,
@@ -1358,7 +1395,45 @@ class BlackboardWorkflowRuntime:
                 self.blackboard,
                 allowed_steps=list(self.steps.keys()),
             )
+        self._agent_baton_snapshot = self._baton_file_snapshot()
         return contract
+
+    def _baton_file_snapshot(self) -> tuple[int, int, int, int, int, str] | None:
+        """Identify whether the agent rewrote the strict baton, even with equal JSON."""
+        path = self.blackboard_store.next_step_path
+        try:
+            payload = path.read_bytes()
+            stat = path.stat()
+        except OSError:
+            return None
+        return (
+            stat.st_dev,
+            stat.st_ino,
+            stat.st_size,
+            stat.st_mtime_ns,
+            stat.st_ctime_ns,
+            sha256_bytes(payload),
+        )
+
+    def _is_declared_agent_self_loop(
+        self,
+        *,
+        current_step: str,
+        contract: HandoffContract,
+    ) -> bool:
+        """Distinguish an authored self-loop from the retained inbound baton."""
+        return (
+            contract.from_step == current_step
+            and contract.to_owner is HandoffOwner.AGENT
+            and contract.to_step == current_step
+            and contract.source in {"baton", "workflow.semantic_outcome"}
+            and authorize_route_target(
+                self.playbook,
+                current_step=current_step,
+                intent=contract.intent.value,
+                target=current_step,
+            )
+        )
 
     def _mapped_target_for_intent(
         self,
@@ -1506,7 +1581,14 @@ class BlackboardWorkflowRuntime:
 
     def _status_from_contract(self, current_step: str, execution_result: Any) -> str:
         contract = self._load_agent_written_handoff_contract(current_step=current_step)
-        if contract.to_owner == HandoffOwner.AGENT and contract.to_step == current_step:
+        if (
+            contract.to_owner == HandoffOwner.AGENT
+            and contract.to_step == current_step
+            and not self._is_declared_agent_self_loop(
+                current_step=current_step,
+                contract=contract,
+            )
+        ):
             explicit_status_code = getattr(execution_result, "status_code", None)
             if explicit_status_code:
                 return str(explicit_status_code)
@@ -2384,6 +2466,7 @@ class BlackboardWorkflowRuntime:
             },
         )
         feedback_ledger = WorkflowFeedbackLedger(self.issue_dir)
+        self._agent_baton_snapshot = self._baton_file_snapshot()
 
         try:
             execute_kwargs = {
@@ -3490,7 +3573,14 @@ class BlackboardWorkflowRuntime:
         post_contract = self._load_step_handoff_contract(current_step=current_step)
         if post_contract is None:
             return None
-        if post_contract.to_owner == HandoffOwner.AGENT and post_contract.to_step == current_step:
+        if (
+            post_contract.to_owner == HandoffOwner.AGENT
+            and post_contract.to_step == current_step
+            and not self._is_declared_agent_self_loop(
+                current_step=current_step,
+                contract=post_contract,
+            )
+        ):
             return None
 
         resolved_status_code = (
@@ -4388,7 +4478,14 @@ class BlackboardWorkflowRuntime:
                         contract = self._load_agent_written_handoff_contract(
                             current_step=current_step
                         )
-                    if contract.to_owner == HandoffOwner.AGENT and contract.to_step == current_step:
+                    if (
+                        contract.to_owner == HandoffOwner.AGENT
+                        and contract.to_step == current_step
+                        and not self._is_declared_agent_self_loop(
+                            current_step=current_step,
+                            contract=contract,
+                        )
+                    ):
                         explicit_status_code = getattr(frame.execution_result, "status_code", None)
                         if not explicit_status_code:
                             retry_num = _baton_attempt + 1
@@ -4467,7 +4564,14 @@ class BlackboardWorkflowRuntime:
             )
             next_step = contract.to_step
 
-            if contract.to_owner == HandoffOwner.AGENT and next_step == current_step:
+            if (
+                contract.to_owner == HandoffOwner.AGENT
+                and next_step == current_step
+                and not self._is_declared_agent_self_loop(
+                    current_step=current_step,
+                    contract=contract,
+                )
+            ):
                 self.blackboard_store.record_event(
                     self.blackboard,
                     "baton_missing_transition",
@@ -4787,9 +4891,13 @@ class BlackboardWorkflowRuntime:
                     invalid_intents = {
                         token for token in status_like_tokens if token not in allowed_status_codes
                     }
-                    has_outbound_handoff = post_contract is not None and not (
-                        post_contract.to_owner == HandoffOwner.AGENT
-                        and post_contract.to_step == current_step
+                    has_outbound_handoff = post_contract is not None and (
+                        post_contract.to_owner != HandoffOwner.AGENT
+                        or post_contract.to_step != current_step
+                        or self._is_declared_agent_self_loop(
+                            current_step=current_step,
+                            contract=post_contract,
+                        )
                     )
                     if (
                         not has_outbound_handoff
@@ -4839,9 +4947,13 @@ class BlackboardWorkflowRuntime:
                     _baton_retry_extra_prompt = self._baton_rejected_prompt(br)
             else:
                 post_contract = None
-            if post_contract is not None and not (
-                post_contract.to_owner == HandoffOwner.AGENT
-                and post_contract.to_step == current_step
+            if post_contract is not None and (
+                post_contract.to_owner != HandoffOwner.AGENT
+                or post_contract.to_step != current_step
+                or self._is_declared_agent_self_loop(
+                    current_step=current_step,
+                    contract=post_contract,
+                )
             ):
                 status_code = (
                     post_contract.status_code or f"BATON_{post_contract.intent.value.upper()}"
