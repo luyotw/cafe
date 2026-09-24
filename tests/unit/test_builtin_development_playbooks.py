@@ -1,5 +1,6 @@
 """Contracts for the built-in software-development playbooks."""
 
+import re
 from pathlib import Path
 
 import pytest
@@ -63,6 +64,46 @@ def test_development_playbooks_are_discoverable_and_strictly_valid() -> None:
         assert simulation.missing_intent_handlers == ()
 
 
+def test_every_builtin_discretionary_destination_has_a_declared_label() -> None:
+    loader = PlaybookLoader()
+
+    for playbook_id in sorted(BUNDLED_PLAYBOOKS):
+        playbook = loader.load_model(playbook_id, strict=True).model
+        for source_name, source in playbook.steps.items():
+            for target_name in source.allowed_goto:
+                label = playbook.steps[target_name].handoff_label
+                assert label and label.strip(), (
+                    f"{playbook_id}:{source_name} -> {target_name} needs handoff_label"
+                )
+
+
+def test_builtin_phase_routing_guidance_uses_injected_routes_not_step_names() -> None:
+    skill_root = Path(__file__).parents[2] / "src" / "cafe" / "data" / "skills"
+    phase_files = [
+        path
+        for directory in skill_root.glob("cafe-*")
+        for path in directory.rglob("*.md")
+        if "assets" not in path.parts
+    ]
+    concrete_route = re.compile(
+        r"(?i)(?:route|handoff|hand off)[^\n]{0,100}`"
+        r"(?:spec|plan|develop|review|qa|pr|brief|draft|publish|"
+        r"research_[a-z_]+|incident_[a-z_]+)`"
+    )
+
+    findings = [
+        f"{path.relative_to(skill_root)}: {match.group(0)}"
+        for path in phase_files
+        for match in concrete_route.finditer(path.read_text(encoding="utf-8"))
+    ]
+
+    assert findings == []
+    assert all(
+        "{step_transitions}" not in path.read_text(encoding="utf-8")
+        for path in phase_files
+    )
+
+
 def test_every_builtin_pr_requires_local_review_before_done() -> None:
     """A PR artifact cannot complete a built-in development workflow by itself."""
     loader = PlaybookLoader()
@@ -101,9 +142,9 @@ def test_cafe_pr_routes_completed_artifacts_to_local_review() -> None:
         Path(__file__).parents[2] / "src" / "cafe" / "data" / "skills" / "cafe-pr" / "SKILL.md"
     ).read_text(encoding="utf-8")
 
-    assert "injected `{step_transitions}`" in skill
+    assert "from the injected route catalog" in skill
     assert "Route `confirm_output` to `user`" in skill
-    assert "complete directly only when `workflow_complete→done` is declared" in skill
+    assert "catalog declares a `workflow_complete` default to `done`" in skill
     assert "select an undeclared route" in skill
     assert "workflow_feedback_file" in skill
     assert "current corrective cycle" in skill

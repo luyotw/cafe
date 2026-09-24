@@ -58,11 +58,22 @@ class BatonRejected(Exception):
     agent can correct the baton on retry.
     """
 
-    def __init__(self, *, field: str, invalid_value: str, valid_values: list[str]) -> None:
+    def __init__(
+        self,
+        *,
+        field: str,
+        invalid_value: str,
+        valid_values: list[str],
+        detail: str = "",
+    ) -> None:
         self.field = field
         self.invalid_value = invalid_value
         self.valid_values = list(valid_values)
-        super().__init__(
+        self.detail = detail
+        message = (
             f"Invalid baton field '{field}': got '{invalid_value}', "
             f"valid values are {self.valid_values}"
         )
+        if detail:
+            message = f"{message}; {detail}"
+        super().__init__(message)

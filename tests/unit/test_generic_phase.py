@@ -122,6 +122,63 @@ def test_build_prompt_distinguishes_confirmation_baton_from_continuation(tmp_pat
     assert "continuation after the human task is completed, not the baton target" in prompt
 
 
+def test_build_prompt_injects_graph_once_and_current_route_catalog(tmp_path: Path) -> None:
+    phase = GenericPhase(_setup_loader(tmp_path))
+    graph = json.dumps(
+        {
+            "entry": "compose",
+            "steps": [
+                {
+                    "from": "compose",
+                    "defaults": [{"intent": "await_agent", "to": "inspect"}],
+                    "goto": ["revise"],
+                }
+            ],
+        },
+        separators=(",", ":"),
+    )
+    routes = json.dumps(
+        {
+            "defaults": {
+                "await_agent": {
+                    "to": "inspect",
+                    "label": "Inspect draft",
+                    "ready": False,
+                    "missing": ["accepted_draft"],
+                }
+            },
+            "goto": [
+                {
+                    "to": "revise",
+                    "label": "Revise draft",
+                    "ready": True,
+                    "carries_feedback": True,
+                }
+            ],
+        },
+        separators=(",", ":"),
+    )
+
+    prompt = phase.build_prompt(
+        skill_name="cafe-plan",
+        skill_invocation="/plan",
+        context={
+            "valid_baton_intents": "await_agent, manual_handoff",
+            "valid_to_steps": "compose, inspect, revise, user, done",
+            "step_transitions": "await_agent→inspect",
+            "playbook_graph": graph,
+            "route_catalog": routes,
+        },
+    )
+
+    assert prompt.count("Active playbook graph (bounded topology projection):") == 1
+    assert prompt.count(graph) == 1
+    assert prompt.count("Routes available from the current step:") == 1
+    assert prompt.count(routes) == 1
+    assert "valid to_step values:" not in prompt
+    assert "this step's defined transitions" not in prompt
+
+
 def test_build_prompt_includes_files_and_checklist_guard(tmp_path: Path) -> None:
     phase = GenericPhase(_setup_loader(tmp_path))
     prompt = phase.build_prompt(

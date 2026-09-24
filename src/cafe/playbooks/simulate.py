@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Set, Tuple
 
-from cafe.core.playbook import DONE_TARGET, PlaybookDefinition
+from cafe.core.playbook import PlaybookDefinition
+from cafe.core.route_catalog import normalize_route_target
 from cafe.core.status_codes import PhaseStatusCode, transition_map_key
 
 
@@ -14,6 +15,7 @@ class PlaybookSimulationResult:
     playbook_id: str
     entry_point: str
     edges: List[Tuple[str, str, str]]
+    discretionary_edges: List[Tuple[str, str]]
     reachable_steps: Set[str]
     unreachable_steps: Tuple[str, ...]
     dead_end_steps: Tuple[str, ...]
@@ -31,12 +33,21 @@ def validate_entry_point(model: PlaybookDefinition) -> None:
 
 
 def _iter_edges(model: PlaybookDefinition) -> List[Tuple[str, str, str]]:
-    """(from_step, intent_key, to_target) where to_target is a step id or ``_done``."""
+    """Return normalized default edges in declaration order."""
     edges: List[Tuple[str, str, str]] = []
     for step_name, step in model.steps.items():
         for intent_key, target in step.on.items():
-            edges.append((step_name, str(intent_key), str(target)))
+            edges.append((step_name, str(intent_key), normalize_route_target(target)))
     return edges
+
+
+def _iter_discretionary_edges(model: PlaybookDefinition) -> List[Tuple[str, str]]:
+    """Return declared discretionary edges in declaration order."""
+    return [
+        (step_name, normalize_route_target(target))
+        for step_name, step in model.steps.items()
+        for target in step.allowed_goto
+    ]
 
 
 def _reachable_step_names(model: PlaybookDefinition) -> Set[str]:
@@ -51,8 +62,10 @@ def _reachable_step_names(model: PlaybookDefinition) -> Set[str]:
         step = model.steps.get(cur)
         if step is None:
             continue
-        for _intent, tgt in step.on.items():
-            if tgt == DONE_TARGET:
+        targets = [*step.on.values(), *step.allowed_goto]
+        for raw_target in targets:
+            tgt = normalize_route_target(raw_target)
+            if tgt in {"done", "user"}:
                 continue
             if tgt in model.steps and tgt not in seen:
                 seen.add(tgt)
@@ -61,7 +74,9 @@ def _reachable_step_names(model: PlaybookDefinition) -> Set[str]:
 
 
 def _dead_end_steps(model: PlaybookDefinition) -> List[str]:
-    return sorted(name for name, step in model.steps.items() if not step.on)
+    return sorted(
+        name for name, step in model.steps.items() if not step.on and not step.allowed_goto
+    )
 
 
 def _missing_intent_handlers(model: PlaybookDefinition) -> List[str]:
@@ -87,8 +102,9 @@ def _missing_intent_handlers(model: PlaybookDefinition) -> List[str]:
 def _step_adjacency(model: PlaybookDefinition) -> Dict[str, Set[str]]:
     """Directed edges among defined steps only (``_done`` dropped)."""
     adj: Dict[str, Set[str]] = {name: set() for name in model.steps}
-    for u, _intent, v in _iter_edges(model):
-        if v != DONE_TARGET and v in model.steps:
+    default_edges = ((u, v) for u, _intent, v in _iter_edges(model))
+    for u, v in (*default_edges, *_iter_discretionary_edges(model)):
+        if v in model.steps:
             adj[u].add(v)
     return adj
 
@@ -170,6 +186,7 @@ def analyze_playbook(model: PlaybookDefinition) -> PlaybookSimulationResult:
     validate_entry_point(model)
     entry = model.entry_point or next(iter(model.steps.keys()))
     edges = _iter_edges(model)
+    discretionary_edges = _iter_discretionary_edges(model)
     reachable = _reachable_step_names(model)
     all_names = set(model.steps.keys())
     unreachable = tuple(sorted(all_names - reachable))
@@ -180,6 +197,7 @@ def analyze_playbook(model: PlaybookDefinition) -> PlaybookSimulationResult:
         playbook_id=model.playbook.id,
         entry_point=entry,
         edges=edges,
+        discretionary_edges=discretionary_edges,
         reachable_steps=reachable,
         unreachable_steps=unreachable,
         dead_end_steps=dead,
@@ -204,7 +222,7 @@ def format_text_report(result: PlaybookSimulationResult) -> str:
     else:
         lines.append("  (no declarations)")
     lines.append("")
-    lines.append("Transitions (intent -> next step)")
+    lines.append("Default routes (intent -> next step)")
     by_from: Dict[str, List[Tuple[str, str]]] = {}
     for frm, intent, to in result.edges:
         by_from.setdefault(frm, []).append((intent, to))
@@ -212,6 +230,18 @@ def format_text_report(result: PlaybookSimulationResult) -> str:
         lines.append(f"  [{step}]")
         for intent, to in sorted(by_from[step], key=lambda x: (x[0], x[1])):
             lines.append(f"    {intent} -> {to}")
+    lines.append("")
+    lines.append("Discretionary routes (goto -> next step)")
+    discretionary_by_from: Dict[str, List[str]] = {}
+    for frm, to in result.discretionary_edges:
+        discretionary_by_from.setdefault(frm, []).append(to)
+    if discretionary_by_from:
+        for step in sorted(discretionary_by_from):
+            lines.append(f"  [{step}]")
+            for to in discretionary_by_from[step]:
+                lines.append(f"    goto -> {to}")
+    else:
+        lines.append("  (no declarations)")
     lines.append("")
     lines.append("Unreachable steps (from entry)")
     if result.unreachable_steps:
@@ -249,6 +279,9 @@ def format_dot(result: PlaybookSimulationResult) -> str:
     for f, _i, t in result.edges:
         nodes.add(f)
         nodes.add(t)
+    for f, t in result.discretionary_edges:
+        nodes.add(f)
+        nodes.add(t)
     ownership_by_step: Dict[str, List[str]] = {}
     current_step: str | None = None
     for line in result.ownership:
@@ -264,5 +297,7 @@ def format_dot(result: PlaybookSimulationResult) -> str:
         lines.append(f'  "{_dot_escape(n)}" [label="{_dot_escape(label)}"];')
     for f, intent, t in result.edges:
         lines.append(f'  "{_dot_escape(f)}" -> "{_dot_escape(t)}" [label="{_dot_escape(intent)}"];')
+    for f, t in result.discretionary_edges:
+        lines.append(f'  "{_dot_escape(f)}" -> "{_dot_escape(t)}" [label="goto"];')
     lines.append("}")
     return "\n".join(lines)

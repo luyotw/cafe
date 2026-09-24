@@ -71,7 +71,9 @@ version: 1.4.1
 - A serial bridge may declare both `input_artifacts: [plan]` and `output_artifact: plan`; the incoming `{plan_file}` and next `{output_file}` are different files.
 - Keep user-requested revisions in the phase responsible for the current output. Model them as self-loops through `confirm_output`, `need_clarification`, `need_permission`, or `manual_handoff`.
 - Represent optional work with a confirmed or `not_required` plan and an explicit forward skip. Do not add routine backward cycles merely to rewrite a checklist.
-- Reserve `allowed_goto` for deliberate conditional or exceptional routes. Keep the normal path in `"on"` so static simulation can explain it.
+- Reserve `allowed_goto` for deliberate conditional or exceptional routes. Keep the normal path in `"on"` so prompt projection, runtime authorization, and static simulation classify the same edges.
+- Give every deliberate discretionary destination a useful `handoff_label`; runtime falls back through its resolved iteration skill description, role description, and step name, but playbooks should own user-facing route meaning.
+- Declare `behavior.feedback_routes[target]` only when that exact edge delivers structured correction content. Navigation-only `allowed_goto` edges must not imply feedback delivery.
 - Quote the YAML key `"on"`. Avoid custom status tokens; use CAFE's supported intents and mappings from the reference.
 - For a workflow with interactive setup, declare `commands.prepare.fields` or `fields_ref`; own all prompt copy and defaults there. For a workflow without setup, explicitly set `commands.prepare.prompt_for_spec_plan_config: false`.
 

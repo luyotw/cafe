@@ -1678,6 +1678,9 @@ def test_generic_workflow_step_prompt_includes_latest_blackboard_handoff(
     assert any("還要再實作 cafe skill rm" in prompt for prompt in agent_manager.prompts)
     prompt = agent_manager.prompts[-1]
     assert "Bounded blackboard digest:" in prompt
+    assert prompt.count("Active playbook graph (bounded topology projection):") == 1
+    assert prompt.count("Routes available from the current step:") == 1
+    assert '"defaults":{"await_agent":{"to":"done"' in prompt
     assert '"event_type": "plan_confirmed"' in prompt
     assert hidden_payload not in prompt
     assert len(prompt) < 20_000
@@ -1687,6 +1690,132 @@ def test_generic_workflow_step_prompt_includes_latest_blackboard_handoff(
     expected_output = "./.cafe/issues/issue-handoff/develop/iteration_001/output.md"
     assert f"Write plan to: {expected_output}" in installed_skill
     assert "{output_file}" not in installed_skill
+
+
+def test_build_context_projects_iteration_label_and_required_route_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    skill_root = tmp_path / "builtin" / "skills"
+    skills = {
+        "source-skill": ("Compose source", ""),
+        "inspect-first": (
+            "Inspect first iteration",
+            "workflow:\n"
+            "  prompt_inputs:\n"
+            "    - artifacts: [draft, brief]\n"
+            "      placeholder: accepted_draft\n"
+            "      required: true\n"
+            "    - artifacts: [notes]\n"
+            "      placeholder: optional_notes\n"
+            "      required: false\n",
+        ),
+        "inspect-later": ("Inspect later iteration", ""),
+        "revise-primary": ("", ""),
+        "route-overlay": ("Composed inspection route", ""),
+    }
+    for name, (description, workflow) in skills.items():
+        directory = skill_root / name
+        directory.mkdir(parents=True, exist_ok=True)
+        description_line = f"description: {description}\n" if description else ""
+        (directory / "SKILL.md").write_text(
+            f"---\nname: {name}\n{description_line}{workflow}---\n\n# Skill\n",
+            encoding="utf-8",
+        )
+    loader = SkillLoader(
+        project_root=tmp_path,
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+    loader.discover()
+    phase = GenericPhase(
+        loader,
+        skill_bridge=NativeSkillBridge(
+            loader,
+            project_root=tmp_path,
+            home_dir=tmp_path / "home",
+        ),
+    )
+    issue_dir = tmp_path / ".cafe" / "issues" / "route-context"
+    playbook = {
+        "playbook": {"id": "renamed-routes"},
+        "roles": {
+            "writer": {"default_agent": "David", "description": "Writer"},
+            "critic": {"default_agent": "David", "description": "Critic"},
+        },
+        "skills": {
+            "workflow": {
+                "shared": [],
+                "steps": {
+                    "revise": {"mode": "extend", "skills": ["route-overlay"]},
+                },
+            }
+        },
+        "steps": {
+            "compose": {
+                "skill": "source-skill",
+                "role": "writer",
+                "allowed_goto": ["compose", "revise"],
+                "on": {"await_agent": "inspect"},
+            },
+            "inspect": {
+                "skill": {"1": "inspect-first", "default": "inspect-later"},
+                "role": "critic",
+                "input_artifacts": ["draft", "brief", "notes", "workspace"],
+                "workspace_input_artifact": "workspace",
+                "on": {"await_agent": "_done"},
+            },
+            "revise": {
+                "skill": "revise-primary",
+                "role": "critic",
+                "on": {"await_agent": "inspect"},
+            },
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("compose")
+    brief = issue_dir / "brief" / "iteration_001" / "output.md"
+    brief.parent.mkdir(parents=True, exist_ok=True)
+    brief.write_text("# Brief\n", encoding="utf-8")
+    store.set_artifact(state, "brief", str(brief))
+    monkeypatch.setattr(
+        AgentManager,
+        "read_agent_file",
+        staticmethod(lambda _name, _role: ("test", "---\nname: David\n---\n")),
+    )
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="route-context",
+        playbook=playbook,
+        generic_phase=phase,
+        agent_manager=FakeAgentManager("await_agent"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"writer": "David", "critic": "David"},
+    )
+    executor.iteration = 1
+    output = issue_dir / "compose" / "iteration_001" / "output.md"
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    context = executor._build_context(
+        step_name="compose",
+        step_def=playbook["steps"]["compose"],
+        blackboard_state=state,
+        agent_name="David",
+        output_file=output,
+    )
+
+    assert json.loads(context["playbook_graph"])["steps"][0]["from"] == "compose"
+    routes = json.loads(context["route_catalog"])
+    assert routes["defaults"]["await_agent"] == {
+        "to": "inspect",
+        "label": "Inspect first iteration",
+        "ready": False,
+        "missing": ["workspace"],
+    }
+    assert routes["goto"] == [
+        {"to": "compose", "label": "Compose source", "ready": True},
+        {"to": "revise", "label": "Composed inspection route", "ready": True},
+    ]
 
 
 def test_generic_workflow_step_prompt_keeps_skill_invocations_only(
@@ -1746,7 +1875,7 @@ def test_generic_workflow_step_prompt_keeps_skill_invocations_only(
     assert "Phase skill instructions:" not in prompt
     assert "Read blackboard first." not in prompt
     assert "Write PR content to:" not in prompt
-    assert "workflow_complete→done" in prompt
+    assert '"workflow_complete":{"to":"done"' in prompt
     assert "await_agent→done" not in prompt
     assert "valid intent values: [workflow_complete]" in prompt
 

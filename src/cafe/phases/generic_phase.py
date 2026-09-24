@@ -206,17 +206,38 @@ class GenericPhase:
             "and updates the blackboard"
         )
         runtime_context.append(f"- valid intent values: [{baton_intents}]")
-        # 列出本 playbook 實際合法的 to_step，避免 agent 沿用共用 skill 範例裡的 step
-        # （如 pr）而寫出此 playbook 不存在的目標導致 baton 被拒。
-        if context and context.get("valid_to_steps"):
-            runtime_context.append(
-                f"- valid to_step values: [{context['valid_to_steps']}] "
-                "— use ONLY these; this playbook has no other steps (e.g. do not assume 'pr')"
+        has_route_projection = bool(
+            context and context.get("playbook_graph") and context.get("route_catalog")
+        )
+        if has_route_projection:
+            runtime_context.extend(
+                [
+                    "Active playbook graph (bounded topology projection):",
+                    context["playbook_graph"],
+                    "Routes available from the current step:",
+                    context["route_catalog"],
+                    "Use an outcome-only baton for a default route. Use an explicit baton "
+                    "only to select a listed discretionary `goto` target; a step that merely "
+                    "appears in the graph is not authorized.",
+                    "Route readiness is advisory context. The runtime revalidates required "
+                    "inputs and every ownership, human, permission, capability, publication, "
+                    "external-mutation, and terminal gate before entering the target.",
+                ]
             )
-        if context and context.get("step_transitions"):
-            runtime_context.append(
-                f"- this step's defined transitions (intent→to_step): {context['step_transitions']}"
-            )
+        else:
+            # Legacy callers may not yet supply the route projection. Keep the
+            # earlier bounded hints for those direct integrations only.
+            if context and context.get("valid_to_steps"):
+                runtime_context.append(
+                    f"- valid to_step values: [{context['valid_to_steps']}] "
+                    "— use ONLY these; this playbook has no other steps "
+                    "(e.g. do not assume 'pr')"
+                )
+            if context and context.get("step_transitions"):
+                runtime_context.append(
+                    "- this step's defined transitions (intent→to_step): "
+                    f"{context['step_transitions']}"
+                )
         if "confirm_output" in {
             intent.strip() for intent in baton_intents.split(",") if intent.strip()
         }:

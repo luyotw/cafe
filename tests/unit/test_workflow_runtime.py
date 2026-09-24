@@ -394,6 +394,28 @@ def _write_outcome_only_success(issue_dir: Path) -> None:
     )
 
 
+def _write_minimal_baton(
+    issue_dir: Path,
+    *,
+    to_owner: str,
+    to_step: str,
+    intent: str,
+) -> None:
+    (issue_dir / "next_step.txt").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "to_owner": to_owner,
+                "to_step": to_step,
+                "intent": intent,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_runtime_routes_outcome_only_success_using_renamed_playbook_target(
     tmp_path: Path,
 ) -> None:
@@ -560,6 +582,7 @@ def test_runtime_rejects_legacy_baton_target_that_conflicts_with_mapped_outcome(
                 "skill": "authoring-skill",
                 "role": "writer",
                 "behavior": {"completion": "baton"},
+                "allowed_goto": ["revise"],
                 "on": {"await_agent": "review"},
             },
             "review": {
@@ -570,6 +593,12 @@ def test_runtime_rejects_legacy_baton_target_that_conflicts_with_mapped_outcome(
             },
             "other": {
                 "skill": "other-skill",
+                "role": "writer",
+                "behavior": {"completion": "baton"},
+                "on": {"await_agent": "_done"},
+            },
+            "revise": {
+                "skill": "revision-skill",
                 "role": "writer",
                 "behavior": {"completion": "baton"},
                 "on": {"await_agent": "_done"},
@@ -614,6 +643,191 @@ def test_runtime_rejects_legacy_baton_target_that_conflicts_with_mapped_outcome(
     assert "field 'to_step'" in (prompts[1] or "")
     assert "other" in (prompts[1] or "")
     assert "review" in (prompts[1] or "")
+    assert "default route: review" in (prompts[1] or "")
+    assert "discretionary routes: revise" in (prompts[1] or "")
+
+
+def test_runtime_accepts_declared_discretionary_baton_target(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "declared-discretionary-target"
+    issue_dir.mkdir(parents=True)
+    calls: list[str] = []
+    playbook = {
+        "playbook": {"id": "declared-discretionary-target"},
+        "steps": {
+            "author": {
+                "skill": "authoring-skill",
+                "role": "writer",
+                "behavior": {"completion": "baton"},
+                "allowed_goto": ["revise"],
+                "on": {"await_agent": "review"},
+            },
+            "review": {
+                "skill": "review-skill",
+                "role": "reviewer",
+                "behavior": {"completion": "baton"},
+                "on": {"await_agent": "_done"},
+            },
+            "revise": {
+                "skill": "revision-skill",
+                "role": "writer",
+                "behavior": {"completion": "baton"},
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+
+    def executor(step_name: str, _step_def: dict, _state: object) -> StepExecutionResult:
+        calls.append(step_name)
+        if step_name == "author":
+            _write_baton(
+                issue_dir,
+                from_step="author",
+                to_owner="agent",
+                to_step="revise",
+                intent="await_agent",
+            )
+        else:
+            _write_baton(
+                issue_dir,
+                from_step="revise",
+                to_owner="done",
+                to_step="done",
+                intent="workflow_complete",
+            )
+        return StepExecutionResult(response="", artifacts={})
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    ).run(start_step="author")
+
+    assert result.completed is True
+    assert calls == ["author", "revise"]
+
+
+def test_runtime_accepts_declared_minimal_self_loop_after_identical_inbound_handoff(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "declared-minimal-self-loop"
+    issue_dir.mkdir(parents=True)
+    calls: list[str] = []
+    playbook = {
+        "playbook": {"id": "declared-minimal-self-loop"},
+        "steps": {
+            "author": {
+                "skill": "authoring-skill",
+                "role": "writer",
+                "behavior": {"completion": "baton"},
+                "on": {"await_agent": "inspect"},
+            },
+            "inspect": {
+                "skill": "review-skill",
+                "role": "reviewer",
+                "behavior": {"completion": "baton"},
+                "allowed_goto": ["inspect"],
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+
+    def executor(step_name: str, _step_def: dict, _state: object) -> StepExecutionResult:
+        calls.append(step_name)
+        if step_name == "author" or calls.count("inspect") == 2:
+            _write_outcome_only_success(issue_dir)
+        else:
+            _write_minimal_baton(
+                issue_dir,
+                to_owner="agent",
+                to_step="inspect",
+                intent="await_agent",
+            )
+        return StepExecutionResult(response="", artifacts={})
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    result = runtime.run(start_step="author")
+
+    assert result.completed is True
+    assert calls == ["author", "inspect", "inspect"]
+    transitions = [
+        (event.data.get("from"), event.data.get("to"))
+        for event in runtime.blackboard.events
+        if event.event_type == "transition"
+    ]
+    assert ("inspect", "inspect") in transitions
+
+
+def test_runtime_rejects_undeclared_minimal_self_loop_after_identical_inbound_handoff(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "undeclared-minimal-self-loop"
+    issue_dir.mkdir(parents=True)
+    calls: list[str] = []
+    playbook = {
+        "playbook": {"id": "undeclared-minimal-self-loop"},
+        "steps": {
+            "author": {
+                "skill": "authoring-skill",
+                "role": "writer",
+                "behavior": {"completion": "baton"},
+                "on": {"await_agent": "inspect"},
+            },
+            "inspect": {
+                "skill": "review-skill",
+                "role": "reviewer",
+                "behavior": {"completion": "baton"},
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+
+    def executor(step_name: str, _step_def: dict, _state: object) -> StepExecutionResult:
+        calls.append(step_name)
+        if step_name == "author" or calls.count("inspect") == 2:
+            _write_outcome_only_success(issue_dir)
+        else:
+            _write_minimal_baton(
+                issue_dir,
+                to_owner="agent",
+                to_step="inspect",
+                intent="await_agent",
+            )
+        return StepExecutionResult(response="", artifacts={})
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=executor,
+    )
+    result = runtime.run(start_step="author")
+
+    assert result.completed is True
+    assert calls == ["author", "inspect", "inspect"]
+    rejections = [
+        event.data
+        for event in runtime.blackboard.events
+        if event.event_type == "baton_rejected" and event.data.get("step") == "inspect"
+    ]
+    assert any(
+        rejection.get("field") == "to_step"
+        and rejection.get("invalid_value") == "inspect"
+        and rejection.get("valid_values") == ["done"]
+        for rejection in rejections
+    )
+    assert not any(
+        event.event_type == "transition"
+        and event.data.get("from") == "inspect"
+        and event.data.get("to") == "inspect"
+        for event in runtime.blackboard.events
+    )
+
+
 def _write_publication_contract(
     issue_dir: Path,
     *,
@@ -4392,6 +4606,7 @@ def test_runtime_chains_pr_need_changes_through_develop_to_review(tmp_path: Path
                     "feedback_todo_source": "pr_comment",
                     "feedback_todo_id_prefix": "PRC",
                 },
+                "allowed_goto": ["develop"],
                 "on": {},
             },
             "develop": {
@@ -6148,6 +6363,85 @@ def test_runtime_resume_reconciliation_is_idempotent(tmp_path: Path) -> None:
     bb = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="standard")
     assert bb.current_step == "plan"
     assert [e.event_type for e in bb.events].count("step_reconciled") == 1
+
+
+def test_runtime_resume_reconciles_declared_self_loop_without_rerunning_agent(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "reconcile-declared-self-loop"
+    issue_dir.mkdir(parents=True)
+    _write_baton(
+        issue_dir,
+        from_step="inspect",
+        to_owner="agent",
+        to_step="inspect",
+        intent="await_agent",
+        source="baton",
+    )
+    _write_iteration_evidence(issue_dir, "inspect")
+    (issue_dir / "blackboard.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "current_step": "inspect",
+                "playbook_id": "declared-self-loop-recovery",
+                "artifacts": {},
+                "events": [
+                    {
+                        "timestamp": "2026-04-26T23:00:00+08:00",
+                        "step": "inspect",
+                        "event_type": "step_interrupted",
+                        "message": "{}",
+                        "data": {
+                            "step": "inspect",
+                            "reason": "agent_connection_stalled",
+                        },
+                    }
+                ],
+                "decisions": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    playbook = {
+        "playbook": {"id": "declared-self-loop-recovery"},
+        "steps": {
+            "inspect": {
+                "skill": "review-skill",
+                "role": "reviewer",
+                "behavior": {"completion": "baton"},
+                "allowed_goto": ["inspect"],
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=lambda *_args, **_kwargs: pytest.fail(
+            "reconciliation must not rerun the completed agent step"
+        ),
+    )
+
+    result = runtime.run()
+
+    assert result.completed is False
+    assert result.final_step == "inspect"
+    transitions = [
+        event
+        for event in runtime.blackboard.events
+        if event.event_type == "transition"
+        and event.data.get("from") == "inspect"
+        and event.data.get("to") == "inspect"
+    ]
+    assert len(transitions) == 1
+    assert [event.event_type for event in runtime.blackboard.events].count(
+        "step_reconciled"
+    ) == 1
+    assert not any(
+        event.event_type == "step_reconciliation_failed"
+        for event in runtime.blackboard.events
+    )
 
 
 @pytest.mark.parametrize(

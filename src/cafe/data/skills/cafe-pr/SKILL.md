@@ -124,7 +124,7 @@ When `workflow_feedback_file` contains feedback for this cycle, or `Current user
  - When runtime provides `workflow_feedback_batch_file`, it is the only immutable source context for this cycle. Select Todo items only from that batch; later items remain for a later cycle. Use the paired ID and Source from runtime's `Canonical Todo fields for this batch` block exactly as shown for each selected batch entry; do not derive or substitute a generic PR-comment prefix or source. Otherwise, `workflow_feedback_file` and review comments are PR-agent context, not a Develop worklist. Process only unresolved corrective input declared for this step; do not import resolved, stale, duplicate, informational, ordinary PR-body, `## Test Plan`, or open follow-up proposal text.
  - Normalize each applicable source from the current corrective cycle into the output's one `## Todo List` of at most 100 rows. Preserve one-to-one source identity, and never merge distinct sources because their text matches. Use only `No actionable work.` when there is no applicable source.
  - Todo rows must use ``- [ ] `<id>` — Source: `<source>` — Work: ... — Closure: ... — Evidence: ...``. Write only the normalized list; do not include raw PR comments or HumanTask feedback.
- - After curation, write the declared `manual_handoff` using injected `{step_transitions}`. Do not hardcode step names, skip the curator, or select an undeclared route.
+ - After curation, write the declared `manual_handoff` using the injected discretionary route marked `carries_feedback`. Do not hardcode step names, skip the curator, or select an undeclared route.
 
 ### PR content mode
 Otherwise (there are no PR review comments):
@@ -137,10 +137,10 @@ Otherwise (there are no PR review comments):
    - Write `None` when there are no open proposals. Otherwise state that one PR HumanTask choice applies to all open `FUP-NNN` items; `create_follow_up` records the request and does not create a GitHub issue automatically.
 3. Do not call a GitHub connector or API, `gh pr create`, or `scripts/sync_pr.sh` directly.
 4. Do not query or wait for a remote branch or PR; the host-side hook publishes after the agent returns.
-5. After the local PR artifact and checklist are complete, choose the next baton from injected `{step_transitions}`. Route `confirm_output` to `user`; complete directly only when `workflow_complete→done` is declared. Do not handle a follow-up proposal on the user's behalf.
+5. After the local PR artifact and checklist are complete, choose the next baton from the injected route catalog. Route `confirm_output` to `user`; complete directly only when the catalog declares a `workflow_complete` default to `done`. Do not handle a follow-up proposal on the user's behalf.
 6. When `pr.auto_create: true`, the host-side hook runs `scripts/sync_pr.sh --output {output_file}` before human review or completion, adding `--base` from `issue.yaml`. Only a successful result passing the output contract may produce `pr_synced` evidence and a verified PR URL.
 7. When `pr.auto_create: false`, the workflow is `local-only`: the hook does not publish or reuse an old URL, and the review task states `Publication mode: local-only. No PR URL exists.`
-8. When `{step_transitions}` declares `confirm_output`, only the bound HumanTask approval may complete the workflow; the PR agent must not rewrite it as `done` or `workflow_complete`.
+8. When the injected route catalog declares a `confirm_output` default, only the bound HumanTask approval may complete the workflow; the PR agent must not rewrite it as `done` or `workflow_complete`.
 
 ### Publication authority
 - PR content and publication follow this phase and the `cafe.pr.publish` capability contract; kickoff questions, options, and prepare parameters come from the capability manifest's `setup_questions`.
