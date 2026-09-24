@@ -1,7 +1,7 @@
 ---
 name: write-cafe-phase
 description: Use this skill when creating, updating, or repairing a CAFE workflow phase or its supporting shared/chat skill under src/cafe/data/skills or .cafe/skills. Covers phase scope, SKILL.md structure, placeholders, plan handoffs, interruption-safe checkpoint/resume behavior, and runtime conventions, including declarative defects identified by use-cafe-workflow. Not for generic skill files, playbook YAML, driver skills, or CAFE core/runtime defects.
-version: 2.10.0
+version: 2.12.1
 ---
 
 # Write CAFE Phase Skill
@@ -19,7 +19,7 @@ version: 2.10.0
 ## Structural Spec (required reading)
 - Before writing or restructuring any SKILL.md, read `references/skill-spec.md`.
 - It defines the four skill types (phase / shared / chat / driver), the canonical section order per type, the runtime placeholder contract, and where handoff rules live.
-- For a plan → execute phase pair, follow `references/skill-spec.md` §14 exactly; for a forward chain where one phase executes an incoming plan and produces the next phase's plan, also follow §15.
+- For a plan → execute phase pair, follow `references/skill-spec.md` §14 exactly; for a forward chain where one phase executes an incoming plan and produces the next phase's plan, also follow §15. For correction Todo routing, follow the topology-neutral declaration rules in §18.
 - For a phase that processes many independent items, performs long external/API work, runs repeated reviews, or may exceed one provider session, follow `references/skill-spec.md` §17 exactly.
 - If an existing skill conflicts with the spec, fix the skill to match the spec.
 
@@ -40,7 +40,7 @@ version: 2.10.0
 - Build one proposed selection matrix covering every target CLI. Before adopting any candidate, installing or vendoring its content, or starting a self-authored option, present the matrix, source and license when applicable, material tradeoffs, and integration plan to the user; wait for explicit confirmation.
 - If the user rejects one CLI's proposed candidate, advance only that CLI to its next tier, rebuild the matrix, and ask again. Never propose the self-authored option for a CLI until its native and open-source tiers have both been evaluated and ruled out or rejected.
 - Read-only discovery and evaluation for unresolved CLI rows may happen before approval; confirmation is required before the proposed matrix becomes the selected implementation.
-- Keep the CAFE phase skill authoritative for its workflow contract, artifacts, checklist, approval gates, and handoff. A selected supporting skill supplies domain procedure only.
+- Keep the CAFE phase skill authoritative for its workflow declaration, artifacts, checklist, approval gates, and handoff. A selected supporting skill supplies domain procedure only.
 - Resolve and package the confirmed choice at authoring time. Do not make workflow execution search the network, download mutable content, or silently substitute a different skill.
 
 ## Declarative Repair Boundary
@@ -101,8 +101,8 @@ version: 2.10.0
 
 ## Plan → Execution Convention
 - Follow the standard playbook contract: the planning step uses `output_artifact: plan`; the execution step declares `input_artifacts: [plan]` and reads `Implementation Plan: {plan_file}` in `## Context`.
-- The plan output itself is the implementation worklist. It must include a Test List and an ordered task breakdown using `- [ ]`; the execution phase marks those same items `- [x]` as work completes.
-- Do not generate a separate plan-derived checklist sidecar. Runtime `checklist.md` is the phase-procedure checklist; plan task checkboxes are the cross-phase implementation checklist. Both may exist and serve different purposes.
+- The plan output itself is the immutable implementation worklist. It must include a Test List and an ordered task breakdown using `- [ ]`; the execution phase completes the projected runtime rows and records their evidence in its consumer ledger without editing the Plan.
+- For executable upstream work, declare `todo_projection` in the consumer checklist. The accepted upstream artifact is immutable; runtime `checklist.md` owns the derived gates and the consumer `{output_file}` owns the only mutable per-item ledger. Never create an undeclared sidecar or write progress back to the accepted source.
 - A domain-specific step or skill name is allowed, but the artifact key must remain exactly `plan` unless runtime placeholder support is deliberately extended.
 - Forward chains may reuse the `plan` artifact key serially. A bridge step may declare both `input_artifacts: [plan]` and `output_artifact: plan`: `{plan_file}` is the incoming plan it executes, while `{output_file}` is the new plan for the next step. Never overwrite or repurpose the incoming plan.
 - The bridge step completes and checks the incoming plan, obtains user acceptance of its result, then writes the next plan. If the next optional phase has no work, write a `not_required` plan with no unchecked implementation tasks and route around that phase.
@@ -119,6 +119,7 @@ version: 2.10.0
 - If one playbook step selects different skills by iteration, describe each skill honestly. The workflow driver resolves the actual iteration skill and conservatively aggregates all variants at kickoff.
 - Declare every mandatory tool dependency once in `workflow.required_tools`; every playbook step that selects the skill must grant it in `allowed_tools`.
 - Do not duplicate global workflow handoff rules across many phase skills. Put those rules in a shared skill.
+- A reusable phase selects ordinary and discretionary handoffs only from the injected playbook graph and route catalog; never hardcode another playbook step name in phase or overlay routing guidance.
 - Do not create extra docs like `README.md`, `CHANGELOG.md`, or design notes inside the skill folder.
 
 ## Writing Process
@@ -145,7 +146,7 @@ version: 2.10.0
 - Edge cases only appear if they materially change the workflow.
 - References are one hop away from `SKILL.md`, not deeply chained.
 - The skill does not rely on hidden context that runtime will not provide.
-- A plan → execute pair uses `plan` as the artifact key, the execute skill declares `{plan_file}` in `## Context`, and no sidecar duplicates the plan task list.
+- A plan → execute pair uses `plan` as the conventional built-in artifact key, emits at most 100 canonical rows only inside `## Todo List`, and declares a direct projection such as `{todo_projection: {artifact: plan, source: plan}}` in the execute checklist. Custom workflows may use any safe artifact and lowercase Todo source identifiers. A producer with no work writes exactly `No actionable work.` under that heading; a blank section is invalid. Correction consumers declare a causal alias such as `{todo_projection: {artifact: active_work, causal: true}}` and project only the runtime-resolved source; every declaration must choose exactly one direct `source` or `causal: true` strategy. The playbook declares producer `output_artifact` ownership and every feedback route's `feedback_target`, `feedback_artifact`, `feedback_source_kind`, `feedback_todo_source`, and `feedback_todo_id_prefix` (or the corresponding HumanTask `feedback_delivery` fields); generic runtime must not infer those relationships or item identity presentation from built-in step, artifact, or source names. Consumers never prioritize or union historical feedback artifacts. A completion consumer must batch repository evidence lookup, reject more than 32 files or 8 full commit SHAs per item before lookup, and require a clean current worktree.
 - A bridge phase that consumes one plan and produces the next clearly distinguishes incoming `{plan_file}` from next-plan `{output_file}`, completes the incoming checklist before handoff, and supports a `not_required` next plan.
 - Every planned output-confirmation route has a matching playbook `on.confirm_output` declaration and is classified as assignable or mandatory; reactive user interruptions are not mislabeled as kickoff candidates.
 - A same-phase staged checkpoint, when used, is mandatory user-owned, resumes from durable stage evidence, remains unreachable from downstream execution until final `confirm_output`, and is not presented as a kickoff-assignable approval.

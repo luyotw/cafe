@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -12,12 +14,62 @@ from cafe.core.human_tasks import (
     HumanTaskQuestion,
     HumanTaskRejection,
     resolve_human_task_continuation,
+    resolve_step_human_task,
     validate_human_task_completion,
 )
+from cafe.skills.loader import SkillLoader
 
 
 def _decisions(*ids: str) -> list[dict[str, str]]:
     return [{"id": item, "label": item.title()} for item in ids]
+
+
+def test_runtime_resolves_human_task_policy_from_workflow_contributor(tmp_path: Path) -> None:
+    skills = tmp_path / ".cafe" / "skills"
+    for name, workflow in {
+        "primary": "",
+        "support": """workflow:
+  human_tasks:
+  - id: approve
+    pattern: confirm_output
+    prompt: Approve the result
+    input_schema: decision
+    decisions:
+    - {id: accept, label: Accept}
+""",
+    }.items():
+        skill_dir = skills / name
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: test\n{workflow}\n---\n",
+            encoding="utf-8",
+        )
+    playbook = {
+        "skills": {"workflow": {"shared": ["support"]}},
+        "steps": {
+            "review": {
+                "role": "reviewer",
+                "skill": "primary",
+                "human_tasks": [
+                    {
+                        "trigger": "confirm_output",
+                        "task_id": "approve",
+                        "outcomes": {"accept": "_done"},
+                    }
+                ],
+            }
+        },
+    }
+
+    policy, binding = resolve_step_human_task(
+        playbook_data=playbook,
+        step_name="review",
+        trigger="confirm_output",
+        skill_loader=SkillLoader(project_root=tmp_path),
+    )
+
+    assert policy.id == "approve"
+    assert binding.outcomes == {"accept": "_done"}
 
 
 @pytest.mark.parametrize(
@@ -52,25 +104,31 @@ def test_policy_accepts_each_supported_response_pattern(
     assert policy.input_schema == input_schema
 
 
-def test_feedback_delivery_binding_is_strict_and_uses_the_canonical_artifact() -> None:
-    """UT-004 — delivery metadata cannot silently bind an arbitrary artifact."""
+def test_feedback_delivery_binding_declares_portable_artifact_and_source() -> None:
     binding = HumanTaskBinding.model_validate(
         {
             "trigger": "confirm_output",
             "task_id": "local-review",
             "outcomes": {"request_changes": "develop"},
             "feedback_delivery": {
-                "artifact": "workflow_feedback",
-                "source_kind": "local_review",
+                "artifact": "signals",
+                "source_kind": "inspection_note",
+                "todo_source": "bespoke",
+                "todo_id_prefix": "TASK",
             },
         }
     )
 
     assert binding.feedback_delivery is not None
+    assert binding.feedback_delivery.artifact == "signals"
+    assert binding.feedback_delivery.todo_source == "bespoke"
+    assert binding.feedback_delivery.todo_id_prefix == "TASK"
     for malformed in (
-        {"artifact": "user_input", "source_kind": "local_review"},
-        {"artifact": "workflow_feedback", "source_kind": " "},
-        {"artifact": "workflow_feedback", "source_kind": "local_review", "target": "develop"},
+        {"artifact": "", "source_kind": "local_review", "todo_source": "custom", "todo_id_prefix": "TASK"},
+        {"artifact": "signals", "source_kind": " ", "todo_source": "custom", "todo_id_prefix": "TASK"},
+        {"artifact": "signals", "source_kind": "note", "todo_source": " ", "todo_id_prefix": "TASK"},
+        {"artifact": "signals", "source_kind": "note", "todo_source": "custom", "todo_id_prefix": "bad"},
+        {"artifact": "signals", "source_kind": "note", "todo_source": "custom", "todo_id_prefix": "TASK", "target": "build"},
     ):
         with pytest.raises(ValidationError):
             HumanTaskBinding.model_validate(
@@ -323,3 +381,44 @@ def test_continuation_must_be_declared_by_binding_and_playbook() -> None:
     )
 
     assert isinstance(result, HumanTaskRejection)
+
+
+def test_completion_accepts_only_a_bounded_structured_work_report() -> None:
+    policy = HumanTaskPolicy(
+        id="review",
+        pattern="confirm_output",
+        prompt="Review",
+        input_schema="decision",
+        decisions=_decisions("confirm"),
+    )
+
+    completion = validate_human_task_completion(
+        policy,
+        {
+            "decision": "confirm",
+            "work_report": {
+                "summary": "  Updated the adapter.  ",
+                "outcome": "  Targeted tests pass.  ",
+                "evidence": ["tests/unit/test_adapter.py"],
+            },
+        },
+    )
+
+    assert isinstance(completion, HumanTaskCompletion)
+    assert completion.work_report is not None
+    assert completion.work_report.summary == "Updated the adapter."
+    assert completion.work_report.outcome == "Targeted tests pass."
+    assert completion.work_report.evidence == ("tests/unit/test_adapter.py",)
+
+    invalid_payloads = (
+        {"decision": "confirm", "work_report": {"summary": "done"}},
+        {
+            "decision": "confirm",
+            "work_report": {"summary": "done", "outcome": "ok", "extra": True},
+        },
+        {"work_report": {"summary": "done", "outcome": "ok"}},
+    )
+    assert all(
+        isinstance(validate_human_task_completion(policy, payload), HumanTaskRejection)
+        for payload in invalid_payloads
+    )

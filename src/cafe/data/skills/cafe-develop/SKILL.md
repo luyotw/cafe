@@ -1,7 +1,7 @@
 ---
 name: cafe-develop
 description: "依計畫進行程式開發與測試"
-version: 1.9.0
+version: 1.10.1
 workflow:
   execution_profile:
     workload: implementation
@@ -77,6 +77,12 @@ workflow:
       - when: {feedback: true}
         sections:
           - reference: execution_steps_correction.md
+          - todo_projection: {artifact: causal_todo, causal: true}
+          - optional_checklist: basic_principles.md
+      - when: {artifact_present: [plan]}
+        sections:
+          - reference: execution_steps_normal.md
+          - todo_projection: {artifact: plan, source: plan}
           - optional_checklist: basic_principles.md
       - when: {}
         sections:
@@ -94,14 +100,19 @@ Read your agent file: {agent_file}
 - Use the workflow inputs listed in the runtime context. When a specification or plan is supplied, treat it as authoritative for this run.
 
 ## Instructions
+- `## Todo Progress` 的 completed item 必須使用可驗證 evidence contract：每項最多 32 個 `Files` 與 8 個 `Commit`；`Files` 列出 backtick 包住的 repo-relative tracked paths；`Commit` 列出涵蓋這些檔案且可解析的完整 backtick SHA。確實沒有 repository change 時，`Files` 寫 `N/A (no repository changes)`、`Commit` 寫 `N/A (no repository changes): <reason>`。任何 completed item 都只在 worktree clean（含 untracked files）時有效。`Files` 與 `Commit` 不得杜撰或改用自由文字。`Targeted evidence` 為選填的自由說明文字，不受格式限制，可以省略。
 - 依目前 workflow 已提供的需求與計畫逐項完成；若此 workflow 未提供 spec 或 plan，依使用者輸入與 review feedback 完成範圍內修正
 - 先補測試再改程式
 - 第一次探索只做一輪：讀一次已提供的 spec、plan 與 feedback，再針對可用 Test List 與預計修改點搜尋程式碼；未出現新證據時不得重讀同一檔案或重跑相同的搜尋、`git status`、`git diff`
 - 實作中只執行與變更直接相關的 targeted checks，並保持輸出有界；若 workflow 提供 plan，將 checks 對應其 Test List；不要在本 phase 重複 repository 的 full-suite、coverage、release 或 pre-push gate
 - 若 workflow 提供 plan，新增或修改的測試必須對應其 **Test List** 項目（範圍變更時先更新計畫）
 - 斷言以 invariant 為主：避免綁定 UI copy、CSS class、DOM 結構、內部 state shape；允許 a11y role/label、`data-testid`、以及規格明訂的文案（見 `cafe-plan/references/test_invariants_policy.md`）
-- 每輪完成後更新 checklist
-- 更新 plan 的完成狀態時，authoritative body checkbox 使用 `[x]`，`## Downstream Contract` 的 `Task Status` 僅使用 schema 允許的 `completed`；不得寫 `done`
+- 將一次 Develop CLI invocation 視為同一個持續執行單位：只要仍有已授權且可執行的未完成工作，就繼續處理；完成一個 bounded unit、commit 或 targeted check 都只是進度，不是 iteration 邊界、checkpoint 終點或 handoff 理由
+- 每完成一個 bounded unit，先驗證 evidence，再立即更新 `{output_file}` 的 `## Todo Progress` ledger；accepted plan 與 feedback 是不可變輸入，不得修改其 checkbox 或 Task Status。每筆 ledger 記錄 item ID、status、source fingerprint、files、commit（無 commit 時明列理由）、remaining work 與 next action，然後直接繼續下一個未完成項目
+- retry 或重新進入 phase 時，先從 plan、review feedback 與 `{output_file}` 重建未完成工作，並對照目前 worktree、dependency 與 evidence 驗證既有進度；不得只因 checkbox 已勾選或 commit 存在就假定工作完成，只跳過證據仍有效的項目
+- 不得以純進度說明、要求外部再說 `continue`／`resume`、或等待下一次呼叫作為結束本次 invocation 的方式
+- 只有三種情況可以結束本次 invocation：所有適用 checklist gate 與工作均已完成並寫出合法 handoff；確實需要 clarification、permission 或 user arbitration 並寫出合法 handoff；或 provider/tool 無法繼續。最後一種情況只保留真實 checkpoint，不得偽造已完成 checkbox、問題或 baton
+- checklist 的 `[x]` 只有在本輪 Todo item 的 source fingerprint 與 ledger evidence 仍匹配時才可保留；不得以相似 wording、既有 commit 或上游 artifact checkbox 取代 evidence
 - 在 handoff 前寫入非空的 development summary 到 `{output_file}`
 - 維持既有 commit 風格與程式碼註解語言
 - 優先重用現有模式與工具

@@ -1,12 +1,20 @@
 """Tests for skill loader."""
 
+import shutil
 from pathlib import Path
+from threading import Event, Thread
 from unittest.mock import patch
 
 import pytest
 
-from cafe.catalogs.resolver import CatalogKind, CatalogResolver, CatalogValidationError
+from cafe.catalogs.resolver import (
+    CatalogKind,
+    CatalogResolver,
+    CatalogValidationError,
+    global_catalog_lock,
+)
 from cafe.core.types import AgentCLI
+from cafe.skills.contracts import SkillWorkflowDeclaration
 from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.skills.importer import import_skills
 from cafe.skills.loader import SkillLoader, canonical_skill_name
@@ -99,6 +107,82 @@ def test_activate_replaces_placeholders(tmp_path: Path) -> None:
     assert "Hello World" in text
 
 
+def test_lookups_resolve_only_the_requested_skill_and_follow_precedence_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    builtin = tmp_path / "builtin" / "skills"
+    global_skills = tmp_path / "global" / "skills"
+    project_root = tmp_path / "project"
+    _write_skill(builtin, "plan")
+    references = builtin / "plan" / "references"
+    references.mkdir()
+    (references / "guide.md").write_text("builtin guide\n", encoding="utf-8")
+    loader = SkillLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+    monkeypatch.setattr(
+        loader,
+        "_discover_unlocked",
+        lambda **_kwargs: pytest.fail("single-skill lookup must not scan the full catalog"),
+    )
+
+    assert loader.get_skill_entry("plan").source == "builtin"
+    assert "# plan" in loader.activate("plan")
+    assert loader.get_workflow_declaration("plan") == SkillWorkflowDeclaration()
+    assert loader.get_reference("plan", "guide.md") == "builtin guide\n"
+
+    _write_skill(global_skills, "plan")
+    assert loader.get_skill_entry("plan").source == "global"
+
+    _write_skill(project_root / ".cafe" / "skills", "plan")
+    assert loader.get_skill_entry("plan").source == "project"
+
+    shutil.rmtree(project_root / ".cafe" / "skills" / "plan")
+    assert loader.get_skill_entry("plan").source == "global"
+
+    shutil.rmtree(global_skills / "plan")
+    assert loader.get_skill_entry("plan").source == "builtin"
+
+
+def test_lookup_prefers_a_late_exact_override_to_a_deprecated_alias(tmp_path: Path) -> None:
+    builtin = tmp_path / "builtin" / "skills"
+    project_skills = tmp_path / "project" / ".cafe" / "skills"
+    _write_skill(builtin, "cafe-plan")
+    loader = SkillLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+
+    assert "# cafe-plan" in loader.activate("plan")
+
+    _write_skill(project_skills, "plan")
+    assert loader.get_skill_entry("plan").source == "project"
+    assert "# plan" in loader.activate("plan")
+
+
+def test_lookup_revalidates_replaced_catalog_entry(tmp_path: Path) -> None:
+    global_skills = tmp_path / "global" / "skills"
+    _write_skill(global_skills, "plan")
+    loader = SkillLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+
+    assert loader.get_skill_entry("plan").source == "global"
+
+    shutil.rmtree(global_skills / "plan")
+    external = tmp_path / "external"
+    _write_skill(external, "plan")
+    (global_skills / "plan").symlink_to(external / "plan", target_is_directory=True)
+
+    with pytest.raises(CatalogValidationError, match="escapes entry authority"):
+        loader.activate("plan")
+
+
 def test_prompt_only_workflow_rejects_missing_reference(tmp_path: Path) -> None:
     project_root = tmp_path / "project"
     skill_dir = project_root / ".cafe" / "skills" / "prompt-only"
@@ -106,7 +190,7 @@ def test_prompt_only_workflow_rejects_missing_reference(tmp_path: Path) -> None:
     (skill_dir / "SKILL.md").write_text(
         """---
 name: prompt-only
-description: Prompt-only workflow contract.
+description: Prompt-only workflow declaration.
 workflow:
   prompt_references:
     optional_instruction: missing.md
@@ -123,7 +207,108 @@ workflow:
     loader.discover()
 
     with pytest.raises(ValueError, match="workflow reference not found: missing.md"):
-        loader.get_workflow_contract("prompt-only")
+        loader.get_workflow_declaration("prompt-only")
+
+
+def test_primary_workflow_retains_missing_template_catalog_error(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    skill_dir = project_root / ".cafe" / "skills" / "templated"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: templated
+description: Templated workflow declaration.
+workflow:
+  output_templates: {catalog: missing}
+---
+""",
+        encoding="utf-8",
+    )
+    loader = SkillLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+
+    with pytest.raises(ValueError, match="template catalog 'missing' is unavailable"):
+        loader.get_workflow_declaration("templated")
+
+
+def test_primary_workflow_retains_generic_schema_validation_error(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    skill_dir = project_root / ".cafe" / "skills" / "malformed"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: malformed
+description: Malformed workflow declaration.
+workflow:
+  execution_profile: {reasoning: impossible}
+---
+""",
+        encoding="utf-8",
+    )
+    loader = SkillLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        loader.get_workflow_declaration("malformed")
+    message = str(exc_info.value)
+    assert "Invalid workflow declaration for skill malformed" in message
+    assert "execution_profile.reasoning" in message
+    assert "impossible" in message
+
+
+def test_direct_declaration_holds_catalog_lock_through_resource_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "project"
+    _write_skill(project_root / ".cafe" / "skills", "stable")
+    loader = SkillLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+    validation_started = Event()
+    allow_validation = Event()
+    publisher_acquired = Event()
+    errors: list[BaseException] = []
+    original_validate = loader.validate_workflow_declaration_resources
+
+    def pause_validation(skill_dir: Path, declaration: SkillWorkflowDeclaration) -> None:
+        validation_started.set()
+        assert allow_validation.wait(timeout=5)
+        original_validate(skill_dir, declaration)
+
+    def read() -> None:
+        try:
+            loader.get_workflow_declaration("stable")
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    def publish() -> None:
+        with global_catalog_lock(loader.global_root, exclusive=True):
+            publisher_acquired.set()
+
+    monkeypatch.setattr(loader, "validate_workflow_declaration_resources", pause_validation)
+    reader = Thread(target=read)
+    publisher = Thread(target=publish)
+    reader.start()
+    assert validation_started.wait(timeout=5)
+    publisher.start()
+    assert not publisher_acquired.wait(timeout=0.1)
+
+    allow_validation.set()
+    reader.join(timeout=5)
+    publisher.join(timeout=5)
+
+    assert not reader.is_alive()
+    assert not publisher.is_alive()
+    assert publisher_acquired.is_set()
+    assert errors == []
 
 
 def test_builtin_catalog_includes_pr_skill(tmp_path: Path) -> None:

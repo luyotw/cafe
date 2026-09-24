@@ -28,7 +28,6 @@ def assess(request: dict[str, Any], authority: dict[str, Any] | None) -> dict[st
     if authority["source"] not in {
         "direct_user_instruction",
         "confirmed_human_task",
-        "confirmed_workflow_scope",
     }:
         return denied
     if not isinstance(authority["evidence"], str) or not authority["evidence"].strip():

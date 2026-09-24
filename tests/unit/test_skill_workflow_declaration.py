@@ -1,4 +1,4 @@
-"""Tests for skill-owned workflow metadata contracts."""
+"""Tests for skill-owned workflow metadata declarations."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pydantic import ValidationError
 from cafe.skills.checklist_composer import compose_declared_checklist
 from cafe.skills.contracts import (
     DeclaredArtifactError,
-    SkillWorkflowContract,
+    SkillWorkflowDeclaration,
     resolve_prompt_inputs,
 )
 from cafe.skills.loader import SkillLoader
@@ -57,9 +57,9 @@ def _write_agent(tmp_path, name: str = "Ada") -> str:
     return str(path)
 
 
-def test_workflow_contract_parses_declared_inputs_checklists_and_templates() -> None:
+def test_workflow_declaration_parses_declared_inputs_checklists_and_templates() -> None:
     """Valid metadata keeps declared ordering and the custom catalog intact."""
-    contract = SkillWorkflowContract.model_validate(_contract_data())
+    contract = SkillWorkflowDeclaration.model_validate(_contract_data())
 
     assert contract.required_tools == ("Bash(cafe verification check:*)",)
     assert contract.prompt_inputs[0].artifacts == ("research_notes", "legacy_notes")
@@ -70,8 +70,36 @@ def test_workflow_contract_parses_declared_inputs_checklists_and_templates() -> 
     assert contract.output_templates.catalog == "research-report"
 
 
-def test_workflow_contract_parses_provider_neutral_execution_profile() -> None:
-    contract = SkillWorkflowContract.model_validate(
+def test_todo_projection_requires_exactly_one_source_strategy() -> None:
+    def contract(projection: dict) -> SkillWorkflowDeclaration:
+        return SkillWorkflowDeclaration.model_validate(
+            {
+                "checklist": {
+                    "variants": [{"when": {}, "sections": [{"todo_projection": projection}]}]
+                }
+            }
+        )
+
+    direct = contract({"artifact": "plan", "source": "plan"})
+    causal = contract({"artifact": "active_work", "causal": True})
+    assert direct.checklist.variants[0].sections[0].todo_projection.source == "plan"
+    assert causal.checklist.variants[0].sections[0].todo_projection.causal is True
+
+    for invalid in (
+        {"artifact": "plan"},
+        {"artifact": "causal_todo", "source": "review", "causal": True},
+        {"artifact": "active_work", "source": "review", "causal": True},
+        {"artifact": "plan", "source": "not-valid"},
+    ):
+        with pytest.raises(ValidationError, match="source strategy|lowercase identifier"):
+            contract(invalid)
+
+    custom = contract({"artifact": "inspection", "source": "bespoke"})
+    assert custom.checklist.variants[0].sections[0].todo_projection.source == "bespoke"
+
+
+def test_workflow_declaration_parses_provider_neutral_execution_profile() -> None:
+    contract = SkillWorkflowDeclaration.model_validate(
         {
             "execution_profile": {
                 "workload": "review",
@@ -87,9 +115,9 @@ def test_workflow_contract_parses_provider_neutral_execution_profile() -> None:
     assert contract.execution_profile.risk_domains == ("correctness", "security")
 
 
-def test_workflow_contract_rejects_invalid_execution_profile() -> None:
+def test_workflow_declaration_rejects_invalid_execution_profile() -> None:
     with pytest.raises(ValidationError, match="risk_domains must not contain duplicates"):
-        SkillWorkflowContract.model_validate(
+        SkillWorkflowDeclaration.model_validate(
             {
                 "execution_profile": {
                     "workload": "review",
@@ -100,18 +128,18 @@ def test_workflow_contract_rejects_invalid_execution_profile() -> None:
         )
 
 
-def test_workflow_contract_rejects_duplicate_required_tools() -> None:
+def test_workflow_declaration_rejects_duplicate_required_tools() -> None:
     """Required tools are normalized once and cannot contain duplicate grants."""
     data = _contract_data()
     data["required_tools"] = ["Bash(git:*)", " Bash(git:*) "]
 
     with pytest.raises(ValidationError, match="must not contain duplicates"):
-        SkillWorkflowContract.model_validate(data)
+        SkillWorkflowDeclaration.model_validate(data)
 
 
-def test_workflow_contract_parses_reusable_human_task_defaults() -> None:
+def test_workflow_declaration_parses_reusable_human_task_defaults() -> None:
     """Skills may own reusable response shape and participant-facing copy."""
-    contract = SkillWorkflowContract.model_validate(
+    contract = SkillWorkflowDeclaration.model_validate(
         {
             "human_tasks": [
                 {
@@ -139,20 +167,20 @@ def test_workflow_contract_parses_reusable_human_task_defaults() -> None:
     "placeholder",
     ["output_file", "checklist_file", "questions_xml_file", "next_step_path"],
 )
-def test_workflow_contract_rejects_runtime_owned_input_placeholders(placeholder: str) -> None:
+def test_workflow_declaration_rejects_runtime_owned_input_placeholders(placeholder: str) -> None:
     """Skill inputs cannot replace locations that the runtime exclusively owns."""
     data = _contract_data()
     data["prompt_inputs"][0]["placeholder"] = placeholder
 
     with pytest.raises(ValidationError, match="runtime-owned"):
-        SkillWorkflowContract.model_validate(data)
+        SkillWorkflowDeclaration.model_validate(data)
 
 
 @pytest.mark.parametrize(
     "placeholder",
     ["output_file", "checklist_file", "questions_xml_file", "next_step_path"],
 )
-def test_workflow_contract_rejects_runtime_owned_context_reference_placeholders(
+def test_workflow_declaration_rejects_runtime_owned_context_reference_placeholders(
     placeholder: str,
 ) -> None:
     """Checklist references cannot replace values supplied by the runtime."""
@@ -160,25 +188,25 @@ def test_workflow_contract_rejects_runtime_owned_context_reference_placeholders(
     data["checklist"]["context_references"] = {placeholder: "xml_questions.md"}
 
     with pytest.raises(ValidationError, match="runtime-owned"):
-        SkillWorkflowContract.model_validate(data)
+        SkillWorkflowDeclaration.model_validate(data)
 
 
-def test_workflow_contract_rejects_context_reference_that_overlaps_prompt_input() -> None:
+def test_workflow_declaration_rejects_context_reference_that_overlaps_prompt_input() -> None:
     """Context references cannot overwrite declared artifact input values."""
     data = _contract_data()
     data["checklist"]["context_references"] = {"evidence_file": "evidence.md"}
 
     with pytest.raises(ValidationError, match="must not overlap"):
-        SkillWorkflowContract.model_validate(data)
+        SkillWorkflowDeclaration.model_validate(data)
 
 
-def test_workflow_contract_rejects_prompt_reference_that_overlaps_prompt_input() -> None:
+def test_workflow_declaration_rejects_prompt_reference_that_overlaps_prompt_input() -> None:
     """Prompt references reserve their own marker names."""
     data = _contract_data()
     data["prompt_references"] = {"evidence_file": "evidence.md"}
 
     with pytest.raises(ValidationError, match="must not overlap"):
-        SkillWorkflowContract.model_validate(data)
+        SkillWorkflowDeclaration.model_validate(data)
 
 
 @pytest.mark.parametrize(
@@ -198,18 +226,18 @@ def test_workflow_contract_rejects_prompt_reference_that_overlaps_prompt_input()
         lambda data: data["checklist"]["variants"].__setitem__(0, {"when": {"iteration": 1}}),
     ],
 )
-def test_workflow_contract_rejects_ambiguous_or_unsafe_declarations(mutate) -> None:
+def test_workflow_declaration_rejects_ambiguous_or_unsafe_declarations(mutate) -> None:
     """Authors receive a validation failure for invalid contract fields."""
     data = _contract_data()
     mutate(data)
 
     with pytest.raises(ValidationError):
-        SkillWorkflowContract.model_validate(data)
+        SkillWorkflowDeclaration.model_validate(data)
 
 
 def test_declared_inputs_use_first_available_artifact_and_omit_optional_absences() -> None:
     """Artifact resolution is deterministic and never invents legacy context keys."""
-    contract = SkillWorkflowContract.model_validate(_contract_data())
+    contract = SkillWorkflowDeclaration.model_validate(_contract_data())
 
     resolved = resolve_prompt_inputs(
         contract,
@@ -220,8 +248,8 @@ def test_declared_inputs_use_first_available_artifact_and_omit_optional_absences
 
 
 def test_declared_inputs_report_missing_required_mapping_before_execution() -> None:
-    """A missing required input names the contract placeholder and candidates."""
-    contract = SkillWorkflowContract.model_validate(_contract_data())
+    """A missing required input names the declaration placeholder and candidates."""
+    contract = SkillWorkflowDeclaration.model_validate(_contract_data())
 
     with pytest.raises(DeclaredArtifactError) as exc_info:
         resolve_prompt_inputs(contract, {})
@@ -230,7 +258,7 @@ def test_declared_inputs_report_missing_required_mapping_before_execution() -> N
     assert exc_info.value.artifacts == ("research_notes", "legacy_notes")
 
 
-def test_custom_contract_composes_selected_variant_and_explicit_role_guidance(
+def test_custom_declaration_composes_selected_variant_and_explicit_role_guidance(
     tmp_path, monkeypatch
 ) -> None:
     """A custom skill owns first/later checklist choice and role-guidance opt-in."""
@@ -246,7 +274,7 @@ def test_custom_contract_composes_selected_variant_and_explicit_role_guidance(
     (skill_dir / "references" / "later.md").write_text(
         "[ ] Revise {evidence_file}\n", encoding="utf-8"
     )
-    contract = SkillWorkflowContract.model_validate(
+    contract = SkillWorkflowDeclaration.model_validate(
         {
             "prompt_inputs": [
                 {"artifacts": ["research"], "placeholder": "evidence_file", "required": True}
@@ -282,7 +310,7 @@ def test_custom_contract_composes_selected_variant_and_explicit_role_guidance(
     assert output.read_text(encoding="utf-8") == "[ ] Revise research.md\n"
 
 
-def test_custom_contract_rejects_unresolved_optional_instruction_when_absent(
+def test_custom_declaration_rejects_unresolved_optional_instruction_when_absent(
     tmp_path, monkeypatch
 ) -> None:
     """Optional inputs need an explicit context reference, never line deletion."""
@@ -296,7 +324,7 @@ def test_custom_contract_rejects_unresolved_optional_instruction_when_absent(
         "[ ] Read optional review {review_file}\n[ ] Write the result\n",
         encoding="utf-8",
     )
-    contract = SkillWorkflowContract.model_validate(
+    contract = SkillWorkflowDeclaration.model_validate(
         {
             "prompt_inputs": [
                 {"artifacts": ["review"], "placeholder": "review_file", "required": False}
@@ -346,7 +374,7 @@ def test_context_reference_omits_only_its_dedicated_optional_instruction(
     (skill_dir / "references" / "optional_review.md").write_text(
         "[ ] Read optional review {review_file}\n", encoding="utf-8"
     )
-    contract = SkillWorkflowContract.model_validate(
+    contract = SkillWorkflowDeclaration.model_validate(
         {
             "prompt_inputs": [
                 {"artifacts": ["review"], "placeholder": "review_file", "required": False}
@@ -392,3 +420,28 @@ def test_context_reference_omits_only_its_dedicated_optional_instruction(
         artifacts={"review": "review.md"},
     )
     assert "[ ] Read optional review review.md" in with_review.read_text(encoding="utf-8")
+
+
+def test_overlay_is_explicit_unconditional_and_cannot_own_primary_settings():
+    """U01: overlay ownership is a closed contract independent of primary."""
+    overlay = {"variants": [{"sections": [{"reference": "review.md"}]}]}
+    declaration = SkillWorkflowDeclaration.model_validate({"checklist_overlay": overlay})
+    assert declaration.checklist is None
+    assert declaration.checklist_overlay.when.matches(
+        step="assemble", iteration=1, artifacts={}, feedback=False
+    )
+    for field in (
+        "include_role_guidance",
+        "compact_agent_guidance",
+        "output_templates",
+        "prompt_references",
+    ):
+        with pytest.raises(ValidationError):
+            SkillWorkflowDeclaration.model_validate({"checklist_overlay": {**overlay, field: True}})
+    for invalid in (
+        {"variants": []},
+        {"variants": [{"sections": []}]},
+        {"when": {"unknown": True}, **overlay},
+    ):
+        with pytest.raises(ValidationError):
+            SkillWorkflowDeclaration.model_validate({"checklist_overlay": invalid})

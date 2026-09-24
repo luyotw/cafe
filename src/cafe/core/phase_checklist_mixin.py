@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 from cafe.core.session_continuation import SessionContinuation
 from cafe.core.status_codes import PhaseStatusCode
@@ -29,6 +29,13 @@ class PhaseChecklistMixin:
         valid_intents: List[PhaseStatusCode],
         allowed_tools: Optional[List[str]] = None,
         max_retries: int = 3,
+        completion_response: str = "",
+        completion_status: Optional[PhaseStatusCode] = None,
+        validate_checklist_completion: bool = True,
+        checklist_required_for_status: Optional[Callable[[Optional[PhaseStatusCode]], bool]] = None,
+        additional_validation: Optional[
+            Callable[[str, Optional[PhaseStatusCode]], tuple[bool, str]]
+        ] = None,
     ) -> tuple[str, Optional[PhaseStatusCode], bool]:
         """Validate checklist completion and retry if incomplete.
 
@@ -42,6 +49,8 @@ class PhaseChecklistMixin:
             valid_intents: Valid status codes for this phase
             allowed_tools: Tools available to agent
             max_retries: Maximum number of retry attempts (default: 3)
+            checklist_required_for_status: Reclassify each retry using the caller's
+                current baton/status rules; absent callers keep the initial policy.
 
         Returns:
             tuple[final_response, final_status_code, validation_passed]:
@@ -52,7 +61,7 @@ class PhaseChecklistMixin:
         Raises:
             AttributeError: If phase lacks required attributes
         """
-        from cafe.utils.checklist_validator import validate_checklist
+        from cafe.utils.checklist_validator import ChecklistValidationResult, validate_checklist
 
         # Check required attributes
         if not hasattr(self, "phase_dir"):
@@ -65,32 +74,70 @@ class PhaseChecklistMixin:
         checklist_path = iteration_dir / "checklist.md"
 
         # Check if checklist exists, if not rebuild it
-        if not checklist_path.exists() or checklist_path.stat().st_size == 0:
+        if validate_checklist_completion and (
+            not checklist_path.exists() or checklist_path.stat().st_size == 0
+        ):
             print(f"⚠️  Checklist file not found or empty, rebuilding...")
             try:
                 self._rebuild_checklist_for_iteration(self.iteration)
             except Exception as e:
                 print(f"⚠️  Failed to rebuild checklist: {e}")
-                # Continue without checklist validation if rebuild fails
+                # Validation below fails closed if the checklist remains unavailable.
 
         # Validate checklist
-        try:
-            result = validate_checklist(checklist_path)
-        except FileNotFoundError:
-            # If still not found after rebuild attempt, skip validation
-            print(f"⚠️  Checklist file still not found after rebuild, skipping validation")
-            # Get current response from context
-            context_file = self._resolve_iteration_context_file(iteration_dir)
-            if context_file.exists():
-                with open(context_file, "r", encoding="utf-8") as f:
-                    context_data = json.load(f)
-                    response = context_data.get("response", "")
-                    status_code = self._extract_status_code_from_response(
-                        response,
-                        valid_codes=valid_intents,
-                    )
-                    return response, status_code, True
-            return "", None, True
+        if not validate_checklist_completion:
+            result = ChecklistValidationResult(
+                is_complete=True,
+                unchecked_count=0,
+                checklist_path=checklist_path,
+            )
+        else:
+            try:
+                result = validate_checklist(
+                    checklist_path, expected=getattr(self, "_effective_checklist", None)
+                )
+            except (OSError, UnicodeError):
+                # A missing checklist cannot prove completion.
+                print("⚠️  Checklist file is unavailable after rebuild")
+                result = ChecklistValidationResult(
+                    is_complete=False,
+                    unchecked_count=0,
+                    checklist_path=checklist_path,
+                )
+
+        validation_detail = result.detail
+        if (
+            validate_checklist_completion
+            and result.is_complete
+            and hasattr(self, "_validate_projected_todo_completion")
+        ):
+            detailed_validator = getattr(
+                self,
+                "_validate_projected_todo_completion_detail",
+                None,
+            )
+            if callable(detailed_validator):
+                projected_passed, validation_detail = detailed_validator(checklist_path)
+            else:
+                projected_passed = self._validate_projected_todo_completion(checklist_path)
+            if not projected_passed:
+                result = ChecklistValidationResult(
+                    is_complete=False,
+                    unchecked_count=0,
+                    checklist_path=checklist_path,
+                )
+
+        if result.is_complete and additional_validation is not None:
+            additional_passed, validation_detail = additional_validation(
+                completion_response,
+                completion_status,
+            )
+            if not additional_passed:
+                result = ChecklistValidationResult(
+                    is_complete=False,
+                    unchecked_count=0,
+                    checklist_path=checklist_path,
+                )
 
         if result.is_complete:
             print(f"✅ Checklist validation passed - all items completed")
@@ -126,11 +173,24 @@ class PhaseChecklistMixin:
                 # Fallback to str if relative path conversion fails
                 checklist_display_path = str(checklist_path)
 
-            retry_prompt = f"""Your previous response was received, but the checklist at {checklist_display_path} still has unchecked items.
+            if validation_detail:
+                retry_reason = (
+                    "the phase completion contract failed:\n"
+                    f"{validation_detail}\n\n"
+                    "Correct the phase output, keep completed checklist items checked,"
+                )
+            else:
+                retry_reason = (
+                    f"the checklist at {checklist_display_path} still has unchecked items.\n\n"
+                    "Please review the full effective checklist, complete all primary and overlay gates, "
+                    "update the checklist by marking completed items with [x],"
+                )
 
-Please review the checklist file, complete all remaining tasks, update the checklist by marking completed items with [x], and re-submit your status code.
+            retry_prompt = f"""Your previous response was received, but {retry_reason} and re-submit your status code.
 
-Do NOT return a status code until ALL checklist items are marked as complete [x].
+Before a successful handoff, ALL checklist items must be complete [x].
+Clarification, permission and manual handoff retain their existing exemptions;
+independent output contracts still apply.
 """
 
             # Execute agent with retry prompt
@@ -175,10 +235,70 @@ Do NOT return a status code until ALL checklist items are marked as complete [x]
                     valid_codes=valid_intents,
                 )
 
-                # Validate checklist again
-                retry_result = validate_checklist(checklist_path)
+                # Match the executor's legacy publication fallback: an absent
+                # retry status retains the initial status, including its evidence
+                # obligations. Use that effective status for every validator.
+                if retry_status_code is None:
+                    retry_status_code = completion_status
 
-                if retry_result.is_complete and retry_status_code is not None:
+                # A retry may request help instead of completing the step. Reuse
+                # the caller's baton-first classification for the current result.
+                retry_checklist_required = (
+                    checklist_required_for_status(retry_status_code)
+                    if checklist_required_for_status is not None
+                    else validate_checklist_completion
+                )
+                retry_result = (
+                    validate_checklist(
+                        checklist_path, expected=getattr(self, "_effective_checklist", None)
+                    )
+                    if retry_checklist_required
+                    else ChecklistValidationResult(
+                        is_complete=True,
+                        unchecked_count=0,
+                        checklist_path=checklist_path,
+                    )
+                )
+
+                validation_detail = retry_result.detail
+                if (
+                    retry_checklist_required
+                    and retry_result.is_complete
+                    and hasattr(self, "_validate_projected_todo_completion")
+                ):
+                    detailed_validator = getattr(
+                        self,
+                        "_validate_projected_todo_completion_detail",
+                        None,
+                    )
+                    if callable(detailed_validator):
+                        projected_passed, validation_detail = detailed_validator(
+                            checklist_path
+                        )
+                    else:
+                        projected_passed = self._validate_projected_todo_completion(
+                            checklist_path
+                        )
+                    if not projected_passed:
+                        retry_result = ChecklistValidationResult(
+                            is_complete=False,
+                            unchecked_count=0,
+                            checklist_path=checklist_path,
+                        )
+
+                if retry_result.is_complete and additional_validation is not None:
+                    additional_passed, validation_detail = additional_validation(
+                        retry_response,
+                        retry_status_code,
+                    )
+                    if not additional_passed:
+                        retry_result = ChecklistValidationResult(
+                            is_complete=False,
+                            unchecked_count=0,
+                            checklist_path=checklist_path,
+                        )
+
+                if retry_result.is_complete:
                     print(f"✅ Checklist validation passed after retry {retry_count}")
 
                     # Merge streaming logs
@@ -226,12 +346,6 @@ Do NOT return a status code until ALL checklist items are marked as complete [x]
                     print(
                         f"⚠️  Checklist still has {retry_result.unchecked_count} unchecked items after retry {retry_count}"
                     )
-                else:
-                    # Checklist is complete but no valid status code extracted
-                    print(
-                        f"⚠️  Checklist complete but failed to extract valid status code from retry response (attempt {retry_count}/{max_retries})"
-                    )
-
             except Exception as e:
                 print(f"⚠️  Failed to retry checklist completion: {e}")
                 # Continue to next retry

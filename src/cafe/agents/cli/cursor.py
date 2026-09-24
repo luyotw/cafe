@@ -42,9 +42,13 @@ class CursorCLI(AbstractCLI):
         if self.config.session_id:
             cmd.extend(["--resume", self.config.session_id])
 
-        # Preserve legacy auto-approval only when callers did not provide a
-        # capability scope. Decision-only callers pass an explicit empty list.
-        if allowed_tools is None or allowed_tools:
+        # Cursor treats workspace trust separately from tool approval. Keep
+        # decision-only calls non-interactive without granting tool execution:
+        # trust the disposable/current workspace, but do not add ``--force``
+        # when the caller supplied an explicit empty capability scope.
+        if allowed_tools is not None and not allowed_tools:
+            cmd.append("--trust")
+        elif allowed_tools is None or allowed_tools:
             cmd.append("--force")
 
         # Add output format parameter

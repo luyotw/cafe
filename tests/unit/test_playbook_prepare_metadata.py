@@ -335,8 +335,11 @@ def test_builtin_hotfix_disables_spec_plan_prompts() -> None:
     assert resolved.quick_setup.pr.post_todo_list_when_auto_create is True
 
 
-def test_builtin_direct_uses_its_declarative_input_fields() -> None:
-    loaded = PlaybookLoader().load_model("direct")
+@pytest.mark.parametrize("playbook_name", ["direct", "direct-subagent-review", "direct-qa"])
+def test_builtin_direct_playbooks_use_declarative_input_fields(
+    playbook_name: str,
+) -> None:
+    loaded = PlaybookLoader().load_model(playbook_name)
     resolved = resolve_prepare_config(loaded.model)
 
     assert resolved.fields is not None
@@ -359,6 +362,8 @@ def test_every_builtin_prepare_is_declarative_or_explicitly_promptless() -> None
 
     for name in (
         "direct",
+        "direct-subagent-review",
+        "direct-qa",
         "simple",
         "standard",
         "standard-qa",

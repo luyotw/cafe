@@ -1,6 +1,6 @@
 ---
 name: cafe-research_question
-description: 成形研究問題與假設邊界（非軟體研究流程）
+description: Define a research question and its assumption boundaries
 version: 1.1.0
 workflow:
   execution_profile:
@@ -13,6 +13,18 @@ workflow:
       pattern: revision_feedback
       prompt: Provide the clarification needed to refine the research question.
       input_schema: feedback
+  prompt_inputs:
+    - artifacts: [research_notes, causal_todo]
+      placeholder: correction_source
+      required: false
+  checklist:
+    variants:
+      - when: {feedback: true}
+        sections:
+          - todo_projection: {artifact: causal_todo, causal: true}
+      - when: {}
+        sections:
+          - reference: correction_contract.md
 ---
 
 # Research Question
@@ -21,10 +33,10 @@ workflow:
 Read your agent file: {agent_file}
 
 ## Instructions
-把主題收斂成可驗證的研究問題：範圍、成功定義、已知限制與待釐清假設。
+Narrow the topic into a testable research question with scope, success criteria, known limits, and unresolved assumptions. When a correction source is supplied, consume every canonical Todo item and preserve its ID.
 
 ## Output
 Write research question to: {output_file}
 
 ## Handoff
-- 依照本輪結果寫入 next-step baton；blackboard 由 runtime 更新。
+- Write the next-step baton for this result; the runtime updates the blackboard.

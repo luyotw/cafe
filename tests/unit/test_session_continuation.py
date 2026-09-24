@@ -25,6 +25,12 @@ from cafe.core.types import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _skip_transient_retry_delays():
+    with patch("cafe.agents.manager.time.sleep"):
+        yield
+
+
 def _manager(tmp_path: Path, monkeypatch) -> AgentManager:
     monkeypatch.chdir(tmp_path)
     manager = AgentManager(issue_name="issue-381")
@@ -366,6 +372,8 @@ def test_new_primary_fallback_is_also_fresh(tmp_path: Path, monkeypatch) -> None
     assert response == "fallback"
     assert created_sessions == [
         (AgentCLI.CODEX, None),
+        (AgentCLI.CODEX, None),
+        (AgentCLI.CODEX, None),
         (AgentCLI.GEMINI, None),
     ]
     assert manager.get_last_session_id() == "fresh-gemini"
@@ -396,7 +404,7 @@ def test_exact_primary_without_takeover_context_does_not_fallback(
             ),
         )
 
-    assert attempted_clis == [AgentCLI.CODEX]
+    assert attempted_clis == [AgentCLI.CODEX] * 3
 
 
 def test_phase_exact_retry_without_takeover_context_remains_on_primary(
@@ -439,7 +447,7 @@ def test_phase_exact_retry_without_takeover_context_remains_on_primary(
             phase_specific_data={"step_name": "develop"},
         )
 
-    assert attempted_clis == [AgentCLI.CODEX]
+    assert attempted_clis == [AgentCLI.CODEX] * 3
 
 
 def test_exact_primary_with_empty_takeover_context_does_not_run_fallback(
@@ -468,7 +476,7 @@ def test_exact_primary_with_empty_takeover_context_does_not_run_fallback(
             backup_context_callback=lambda _error: "   ",
         )
 
-    assert attempted_clis == [AgentCLI.CODEX]
+    assert attempted_clis == [AgentCLI.CODEX] * 3
 
 
 def test_exact_primary_fallback_is_a_fresh_context_takeover(
@@ -510,7 +518,8 @@ def test_exact_primary_fallback_is_a_fresh_context_takeover(
 
     assert response == "fallback"
     assert attempts[0] == (AgentCLI.CODEX, "exact-codex", "primary prompt", True)
-    backup_cli, backup_session, backup_prompt, backup_exact = attempts[1]
+    assert all(attempt == attempts[0] for attempt in attempts[:3])
+    backup_cli, backup_session, backup_prompt, backup_exact = attempts[3]
     assert backup_cli == AgentCLI.GEMINI
     assert backup_session is None
     assert backup_exact is False

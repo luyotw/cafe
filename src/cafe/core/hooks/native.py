@@ -123,10 +123,7 @@ def _publish_requested(
         context=context,
         step_def=step_def,
     )
-    if (
-        _hook_status_value(status_code) == PhaseStatusCode.CONFIRMED.value
-        and not baton_completion
-    ):
+    if _hook_status_value(status_code) == PhaseStatusCode.CONFIRMED.value and not baton_completion:
         return True
 
     baton_file: Optional[Path] = None
@@ -340,14 +337,22 @@ class UserInputCollector(NoOpHook):
 
         previous_status = _get_previous_iteration_status(phase)
         if previous_status == "no_changes_needed":
-            result = self._collect_declared_human_task(
-                phase=phase,
-                step_name=step_name,
-                step_def=step_def,
-                trigger="no_changes_needed",
+            if getattr(phase, "_checklist_continuation", None):
+                return HookResult()
+            from cafe.core.workflow_feedback import WorkflowFeedbackLedger
+
+            pending_feedback = WorkflowFeedbackLedger(phase.issue_dir).pending(
+                target_step=step_name
             )
-            if result is not None:
-                return result
+            if not pending_feedback:
+                result = self._collect_declared_human_task(
+                    phase=phase,
+                    step_name=step_name,
+                    step_def=step_def,
+                    trigger="no_changes_needed",
+                )
+                if result is not None:
+                    return result
 
         if previous_status not in {"need_clarification", "ready_for_review"}:
             return HookResult()
@@ -1020,9 +1025,7 @@ class GitHubIssueFetcher(NoOpHook):
         source = (
             "workflow_user_input"
             if prefilled is not None
-            else "github"
-            if provider == GITHUB_ISSUE_PROVIDER
-            else "manual"
+            else "github" if provider == GITHUB_ISSUE_PROVIDER else "manual"
         )
         return HookResult(
             continue_pipeline=result.continue_pipeline,
@@ -1183,16 +1186,11 @@ class GitHubPRCreator(NoOpHook):
             if not base_branch:
                 base_branch = str(phase.git_ops.get_default_base_branch())
             context = kwargs.get("context") or {}
-            remote_base = str(context.get("pr_comparison_base") or "").strip()
-            if not remote_base:
-                remote_base = phase.git_ops.ensure_remote_base_ancestor(
-                    base_branch,
-                    "HEAD",
-                )
+            comparison_base = str(context.get("pr_comparison_base") or base_branch).strip()
             context_updates.update(
                 {
-                    "commits": str(phase.git_ops.get_commits_between(remote_base, "HEAD")),
-                    "pr_comparison_base": remote_base,
+                    "commits": str(phase.git_ops.get_commits_between(comparison_base, "HEAD")),
+                    "pr_comparison_base": comparison_base,
                 }
             )
 
@@ -1284,9 +1282,7 @@ class GitHubPRCreator(NoOpHook):
         request_file = (
             capability_request_file
             if isinstance(capability_request_file, Path)
-            else publish_request_file
-            if isinstance(publish_request_file, Path)
-            else None
+            else publish_request_file if isinstance(publish_request_file, Path) else None
         )
         try:
             request_payload = self._load_publish_request(

@@ -25,7 +25,11 @@ from cafe.driver import (
 from cafe.driver.delivery import normalize_delivery_contract
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.loader import SkillLoader
-from tests.fixtures.delivery_contract import delivery_contract
+from tests.fixtures.delivery_contract import (
+    delivery_contract,
+    legacy_delivery_contract,
+    legacy_driver_contract,
+)
 from tests.unit.test_driver_contract_application import _activation, _fresh_policy_facts, _proposal
 
 SCRIPT = Path(__file__).parents[2] / (
@@ -87,7 +91,6 @@ def _context(
         key: list(names) if key == ownership else []
         for key in ("driver_confirmable", "user_required", "mandatory_human_stops")
     }
-    proposal["semantic_facts"] = _fresh_policy_facts(proposal)
     activation = _activation(tmp_path, proposal)
     activate_confirmed_contract(activation)
     entry = DriverEntryRequest(
@@ -95,8 +98,7 @@ def _context(
         activation.issue_name,
         activation.workflow_id,
         {
-            "semantic_facts": proposal["semantic_facts"],
-            "material_assumptions": proposal["material_assumptions"],
+            "semantic_facts": _fresh_policy_facts(proposal),
         },
     )
     context = {
@@ -170,6 +172,35 @@ def test_equivalent_smaller_implementation_uses_arbitrary_graph(tmp_path, names)
     }
 
 
+def test_delivery_comparison_uses_contributed_prompt_inputs(tmp_path):
+    context, _, _ = _context(tmp_path, names=("brief", "publish"))
+    skill_dir = tmp_path / ".cafe" / "skills" / "delivery-support"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: delivery-support
+description: delivery support
+workflow:
+  prompt_inputs:
+  - artifacts: [source_material]
+    placeholder: source_file
+    required: true
+---
+""",
+        encoding="utf-8",
+    )
+    model_data = context["model"].model_dump(mode="json", exclude_none=True)
+    model_data["skills"] = {"workflow": {"shared": ["delivery-support"]}}
+    context["model"] = PlaybookDefinition.model_validate(model_data)
+
+    packet = comparison.comparison_packet(**context)
+
+    assert packet["data"]["missing_artifacts"] == ["source_material"]
+    assert "source_file" in {
+        item["placeholder"] for item in packet["data"]["input_contract"]["prompt_inputs"]
+    }
+
+
 @pytest.mark.parametrize("status", ["material", "uncertain", "missing"])
 def test_nonclear_deviation_fails_closed(tmp_path, status):
     context, _, _ = _context(tmp_path)
@@ -187,12 +218,34 @@ def test_reduced_assessment_keeps_complete_contract_and_acceptance_paths(tmp_pat
         "in_scope[0]",
         "in_scope[1]",
         "acceptance_invariants[0]",
-        "required_evidence[0]",
     }
     assessment = _assessment(packet)
     assert comparison.decide(packet, assessment)["decision"] == "accept"
-    del assessment["coverage"]["required_evidence[0]"]
+    del assessment["coverage"]["in_scope[0]"]
     assert comparison.decide(packet, assessment)["decision"] == "user_handoff"
+
+
+def test_equivalent_alternate_direction_is_advisory_with_binding_authority(tmp_path):
+    context, _, _ = _context(tmp_path)
+    context["artifacts"]["result_0"] = (
+        "A separate serializer preserves text, every citation, empty-report handling, "
+        "the existing format and interface. Populated and empty file comparisons "
+        "verify complete output. It uses local files, with no dependencies, publication "
+        "or paid services."
+    )
+    packet = comparison.comparison_packet(**context)
+    instruction = " ".join(packet["instruction"].split())
+    assert "Implementation direction is advisory" in instruction
+    assert "An advisory direction never grants permission" in instruction
+    assessment = _assessment(packet)
+    assessment["coverage"]["acceptance_invariants[0]"]["implementation"] = (
+        "Use a separate serializer preserving all citations and empty reports."
+    )
+    assessment["deviation"]["reason"] = (
+        "Only the suggested implementation approach differs; scope, acceptance, "
+        "constraints and permissions remain preserved."
+    )
+    assert comparison.decide(packet, assessment)["decision"] == "accept"
 
 
 @pytest.mark.parametrize(
@@ -289,7 +342,6 @@ def test_cli_does_not_load_undeclared_paths(tmp_path, monkeypatch, capsys):
         "in_scope[0]",
         "in_scope[1]",
         "acceptance_invariants[0]",
-        "required_evidence[0]",
     ],
 )
 @pytest.mark.parametrize("status", ["missing", "partial", "uncertain"])
@@ -395,10 +447,8 @@ def test_delivery_resume_takeover_and_reconfirmation_are_digest_bound(tmp_path):
     assert first.contract_sha256 == backup.contract_sha256
     changed = deepcopy(proposal)
     changed["delivery_contract"]["in_scope"].append("Export an index.")
-    changed["semantic_facts"] = _fresh_policy_facts(changed)
     fresh = {
-        "semantic_facts": changed["semantic_facts"],
-        "material_assumptions": changed["material_assumptions"],
+        "semantic_facts": _fresh_policy_facts(changed),
     }
     assert (
         evaluate_driver_entry(replace(entry, fresh_facts=fresh)).freshness
@@ -439,9 +489,6 @@ def test_corrupt_delivery_cannot_resume(tmp_path, damage):
         document["delivery_contract"]["in_scope"] = []
     elif damage == "digest":
         document["delivery_contract"]["outcome"] = "Different outcome."
-        document["preflight"]["semantic_facts"]["effective_policy"]["delivery_contract"] = document[
-            "delivery_contract"
-        ]
     else:
         document["schema_version"] = 3
     path.write_text(json.dumps(document))
@@ -453,6 +500,115 @@ def test_corrupt_delivery_cannot_resume(tmp_path, damage):
 def test_delivery_requires_complete_versioned_facts(field):
     data = delivery_contract()
     del data[field]
+    with pytest.raises(ValueError):
+        normalize_delivery_contract(data)
+
+
+@pytest.mark.parametrize(
+    "field", ["motivation", "required_evidence", "allowed_variations", "deviation_triggers"]
+)
+def test_compact_delivery_rejects_retired_fields(field):
+    data = delivery_contract()
+    data[field] = ["Retired policy detail."]
+    with pytest.raises(ValueError):
+        normalize_delivery_contract(data)
+
+
+@pytest.mark.parametrize("field", ["in_scope", "acceptance_invariants"])
+def test_delivery_requires_nonempty_scope_and_acceptance(field):
+    data = delivery_contract()
+    data[field] = []
+    with pytest.raises(ValueError):
+        normalize_delivery_contract(data)
+
+
+@pytest.mark.parametrize("field", ["out_of_scope", "permissions", "constraints"])
+def test_delivery_preserves_explicit_empty_boundary_lists(field):
+    data = delivery_contract()
+    data[field] = []
+    assert normalize_delivery_contract(data)[field] == []
+
+
+@pytest.mark.parametrize("field", ["permissions", "constraints"])
+@pytest.mark.parametrize("value", [{"permissions": ["local"]}, "Local files only.", None])
+def test_delivery_boundaries_require_an_explicit_list(field, value):
+    data = delivery_contract()
+    data[field] = value
+    with pytest.raises(ValueError):
+        normalize_delivery_contract(data)
+
+
+def _delivery_with_closeout(schema_version):
+    data = (
+        delivery_contract()
+        if schema_version == 3
+        else legacy_delivery_contract(schema_version=2)
+    )
+    data["closeout_plan"] = {
+        "deliver": [
+            {"argv": ["git", "push", "origin", "feature/closeout"]},
+            {"argv": ["make", "deploy"]},
+        ],
+        "cleanup": [{"argv": ["git", "worktree", "remove", "/tmp/issue"]}],
+    }
+    return data
+
+
+@pytest.mark.parametrize("schema_version", [2, 3])
+def test_delivery_persists_exact_confirmed_closeout_commands(schema_version):
+    normalized = normalize_delivery_contract(_delivery_with_closeout(schema_version))
+
+    assert normalized["schema_version"] == schema_version
+    assert normalized["closeout_plan"]["deliver"] == [
+        {"argv": ["git", "push", "origin", "feature/closeout"]},
+        {"argv": ["make", "deploy"]},
+    ]
+    assert normalized["closeout_plan"]["cleanup"] == [
+        {"argv": ["git", "worktree", "remove", "/tmp/issue"]}
+    ]
+
+
+@pytest.mark.parametrize("schema_version", [2, 3])
+def test_delivery_allows_explicit_empty_closeout_stages(schema_version):
+    data = _delivery_with_closeout(schema_version)
+    data["closeout_plan"] = {"deliver": [], "cleanup": []}
+
+    assert normalize_delivery_contract(data)["closeout_plan"] == {"deliver": [], "cleanup": []}
+
+
+@pytest.mark.parametrize("schema_version", [2, 3])
+def test_delivery_preserves_literal_argv_arguments(schema_version):
+    data = _delivery_with_closeout(schema_version)
+    data["closeout_plan"]["deliver"] = [{"argv": ["tool", " release ", ""]}]
+
+    assert normalize_delivery_contract(data)["closeout_plan"]["deliver"] == [
+        {"argv": ["tool", " release ", ""]}
+    ]
+
+
+@pytest.mark.parametrize(
+    "path, value",
+    [
+        (
+            ("closeout_plan", "cleanup"),
+            [
+                {"argv": ["git", "worktree", "remove", "/tmp/issue"]},
+                {"argv": ["git", "worktree", "remove", "/tmp/issue"]},
+            ],
+        ),
+        (("closeout_plan", "deliver"), [{"argv": []}]),
+        (("closeout_plan", "deliver"), [{"argv": [""]}]),
+        (("closeout_plan", "deliver"), [{"argv": ["make", "${DEPLOY_TARGET}"]}]),
+    ],
+)
+@pytest.mark.parametrize("schema_version", [2, 3])
+def test_delivery_rejects_invalid_closeout_plan(path, value, schema_version):
+    data = _delivery_with_closeout(schema_version)
+    target = data
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+
     with pytest.raises(ValueError):
         normalize_delivery_contract(data)
 
@@ -551,8 +707,11 @@ def test_undeclared_active_user_task_is_not_skipped(tmp_path):
     assert comparison.decide(packet, _assessment(packet))["decision"] == "user_handoff"
 
 
+@pytest.mark.parametrize("schema_version", [3, 4])
 @pytest.mark.parametrize("damage", [None, "digest", "identity"])
-def test_v3_requires_explicit_reconfirmation_and_safe_atomic_upgrade(tmp_path, damage):
+def test_legacy_requires_explicit_reconfirmation_and_safe_atomic_upgrade(
+    tmp_path, damage, schema_version
+):
     import hashlib
 
     from cafe.core.packet_io import canonical_json
@@ -560,19 +719,10 @@ def test_v3_requires_explicit_reconfirmation_and_safe_atomic_upgrade(tmp_path, d
     context, proposal, activation = _context(tmp_path)
     entry = context["entry"]
     path = tmp_path / "driver/contract.json"
-    document = json.loads(path.read_text())
-    del document["delivery_contract"]
-    document["schema_version"] = 3
-    old_policy = document["preflight"]["semantic_facts"]["effective_policy"]
-    del old_policy["delivery_contract"]
-    projection = {
-        **old_policy,
-        "identity": document["identity"],
-        "material_assumptions": document["preflight"]["material_assumptions"],
-    }
-    document["provenance"]["proposal_digest"] = hashlib.sha256(
-        canonical_json(projection)
-    ).hexdigest()
+    document = legacy_driver_contract(
+        schema_version=schema_version,
+        identity={"issue_name": entry.issue_name, "workflow_id": entry.workflow_id},
+    )
     if damage == "digest":
         document["provenance"]["proposal_digest"] = "0" * 64
     elif damage == "identity":
@@ -601,4 +751,4 @@ def test_v3_requires_explicit_reconfirmation_and_safe_atomic_upgrade(tmp_path, d
         replacement = replace_confirmed_contract(command)
         assert replacement.revision == 2
         assert evaluate_driver_entry(entry).freshness is Freshness.SAME_SEMANTICS
-        assert json.loads(path.read_text())["schema_version"] == 4
+        assert json.loads(path.read_text())["schema_version"] == 5

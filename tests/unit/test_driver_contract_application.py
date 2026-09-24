@@ -7,10 +7,9 @@ import json
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Barrier, Thread
 
 import pytest
-
-from tests.fixtures.delivery_contract import delivery_contract
 
 from cafe.driver import (
     ActivateConfirmedContract,
@@ -23,6 +22,14 @@ from cafe.driver import (
     adopt_legacy_contract,
     evaluate_driver_entry,
     replace_confirmed_contract,
+    update_driver_settings,
+)
+from cafe.driver.settings import update_driver_setting
+from cafe.settings import SettingUpdateRequest
+from tests.fixtures.delivery_contract import (
+    delivery_contract,
+    legacy_delivery_contract,
+    legacy_driver_contract,
 )
 
 
@@ -43,18 +50,10 @@ def _proposal() -> dict[str, object]:
             "need_permission": "user_required",
             "alignment_checkpoint": "driver_resolvable_when_clear",
         },
-        "mandate": {"source": "strategic_context", "boundaries": ["issue scope"]},
-        "issue_assessment": {
-            "nature": "feature",
-            "scale": "medium",
-            "risks": ["integration"],
-            "rationale": "Durable authority is required for takeover.",
-        },
         "phases": [
             {
                 "name": "develop",
                 "chain": [{"cli": "codex", "model": "gpt-5.6-sol"}],
-                "rationale": "The confirmed implementation chain.",
             },
         ],
         "proactive_review": {
@@ -62,16 +61,12 @@ def _proposal() -> dict[str, object]:
                 {
                     "phase": "develop",
                     "decision": "not_required",
-                    "rationale": "No confirmed proactive review is needed for this phase.",
                 },
             ]
         },
         "driver": {"mode": "unattended"},
         "checkout": {"kind": "current_checkout"},
-        "semantic_facts": {},
-        "material_assumptions": {"provider": "codex", "permissions": ["local"]},
     }
-    proposal["semantic_facts"] = _fresh_policy_facts(proposal)
     return proposal
 
 
@@ -81,14 +76,28 @@ def _fresh_policy_facts(proposal: dict[str, object]) -> dict[str, object]:
         "locales",
         "confirmation_contract",
         "reactive_user_handoffs",
-        "mandate",
-        "issue_assessment",
         "phases",
         "proactive_review",
         "driver",
         "checkout",
     )
     return {"effective_policy": {name: deepcopy(proposal[name]) for name in fields}}
+
+
+def _legacy_confirmation_proposal() -> dict[str, object]:
+    document = legacy_driver_contract(
+        schema_version=4,
+        identity={"issue_name": "issue474", "workflow_id": "workflow-474"},
+    )
+    preflight = document.pop("preflight")
+    return {
+        **{
+            key: value
+            for key, value in document.items()
+            if key not in {"schema_version", "identity", "revision", "provenance"}
+        },
+        **preflight,
+    }
 
 
 def _activation(
@@ -126,6 +135,15 @@ def test_public_application_contract_persists_only_a_complete_valid_policy(tmp_p
     assert result.created is True
     assert result.revision == 1
     assert (tmp_path / "issue" / "driver" / "contract.json").is_file()
+    contract = json.loads((tmp_path / "issue" / "driver" / "contract.json").read_text())
+    assert set(contract) == set(_proposal()) | {
+        "schema_version",
+        "identity",
+        "revision",
+        "provenance",
+    }
+    assert set(contract["phases"][0]) == {"name", "chain"}
+    assert set(contract["proactive_review"]["phase_decisions"][0]) == {"phase", "decision"}
 
     for field, value in (
         ("pr", {"auto_create": False}),
@@ -139,7 +157,7 @@ def test_public_application_contract_persists_only_a_complete_valid_policy(tmp_p
 
     partial_facts = _proposal()
     partial_facts["semantic_facts"] = {"effective_graph": ["develop"]}
-    with pytest.raises(ValueError, match="complete effective policy"):
+    with pytest.raises(ValueError):
         activate_confirmed_contract(_activation(tmp_path / "partial", partial_facts))
 
     runtime_state = _proposal()
@@ -156,10 +174,60 @@ def test_contract_rejects_removed_model_adjustment_authority(tmp_path: Path) -> 
         "confirmed_by": "user",
         "confirmed_at": "2026-09-06T02:00:00+00:00",
     }
-    proposal["semantic_facts"] = _fresh_policy_facts(proposal)
 
     with pytest.raises(ValueError):
         activate_confirmed_contract(_activation(tmp_path / "legacy", proposal))
+
+
+@pytest.mark.parametrize(
+    "cleanup",
+    [
+        [{"argv": ["cafe", "close"]}, {"argv": ["true"]}],
+        [{"argv": ["/tmp/cafe", "close"]}],
+        [{"argv": ["cafe", "close", "--message", "missing squash"]}],
+    ],
+)
+def test_contract_rejects_invalid_cafe_close_policy(
+    tmp_path: Path, cleanup: list[dict[str, list[str]]]
+) -> None:
+    proposal = _proposal()
+    proposal["delivery_contract"]["closeout_plan"]["cleanup"] = cleanup
+
+    with pytest.raises(ValueError):
+        activate_confirmed_contract(_activation(tmp_path / "invalid-closeout", proposal))
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["mandate", "issue_assessment", "semantic_facts", "material_assumptions", "preflight"],
+)
+def test_compact_proposal_rejects_retired_authority_fields(tmp_path: Path, field: str) -> None:
+    proposal = _proposal()
+    proposal[field] = {"diagnostic": "Must not be stored as confirmed policy."}
+
+    with pytest.raises(ValueError):
+        activate_confirmed_contract(_activation(tmp_path, proposal))
+    assert not (tmp_path / "driver" / "contract.json").exists()
+
+
+@pytest.mark.parametrize("target", ["phases", "proactive_review"])
+def test_compact_proposal_rejects_persisted_rationales(tmp_path: Path, target: str) -> None:
+    proposal = _proposal()
+    records = proposal["phases"] if target == "phases" else proposal[target]["phase_decisions"]
+    records[0]["rationale"] = "Diagnostic explanation."
+
+    with pytest.raises(ValueError):
+        activate_confirmed_contract(_activation(tmp_path, proposal))
+
+
+@pytest.mark.parametrize("schema_version", [1, 2])
+def test_new_driver_contract_does_not_reinterpret_legacy_delivery(tmp_path, schema_version):
+    proposal = _proposal()
+    proposal["delivery_contract"] = legacy_delivery_contract(schema_version=schema_version)
+
+    with pytest.raises(ValueError, match="requires Delivery Contract version 3"):
+        activate_confirmed_contract(_activation(tmp_path, proposal))
+    assert not (tmp_path / "driver" / "contract.json").exists()
 
 
 def test_canonical_contract_without_model_adjustment_has_stable_activation_identity(
@@ -174,7 +242,7 @@ def test_canonical_contract_without_model_adjustment_has_stable_activation_ident
     assert first.created is True
     assert retry.created is False
     assert retry.contract_sha256 == first.contract_sha256
-    assert contract["schema_version"] == 4
+    assert contract["schema_version"] == 5
     assert "model_adjustment" not in contract
     assert contract["provenance"]["confirmed_by"] == "user"
     assert contract["provenance"]["confirmed_at"] == "2026-09-06T02:00:00+00:00"
@@ -192,7 +260,6 @@ def test_event_driver_contract_keeps_primary_model_implicit_and_fallback_exact(
 ) -> None:
     proposal = _proposal()
     proposal["driver"] = {"mode": "event-driven", "clis": clis}
-    proposal["semantic_facts"] = _fresh_policy_facts(proposal)
 
     with pytest.raises(ValueError):
         activate_confirmed_contract(_activation(tmp_path / "invalid-event-driver", proposal))
@@ -232,8 +299,7 @@ def test_semantic_freshness_ignores_metadata_but_fails_closed_for_unknown_or_mat
     activate_confirmed_contract(_activation(issue_dir))
     proposal = _proposal()
     facts = {
-        "semantic_facts": deepcopy(proposal["semantic_facts"]),
-        "material_assumptions": deepcopy(proposal["material_assumptions"]),
+        "semantic_facts": _fresh_policy_facts(proposal),
         "metadata": {"raw_digest": "new-source-copy", "checked_at": "later"},
     }
     same = evaluate_driver_entry(
@@ -266,16 +332,45 @@ def test_semantic_freshness_ignores_metadata_but_fails_closed_for_unknown_or_mat
     )
 
 
-def test_full_policy_freshness_detects_changed_model_chain(tmp_path: Path) -> None:
+def test_freshness_ignores_diagnostic_extras_without_persisting_them(tmp_path: Path) -> None:
+    proposal = _proposal()
+    activate_confirmed_contract(_activation(tmp_path, proposal))
+    contract_path = tmp_path / "driver" / "contract.json"
+    before = contract_path.read_bytes()
+    facts = {
+        "semantic_facts": _fresh_policy_facts(proposal),
+        "diagnostics": {"assessment": "A different explanation of unchanged choices."},
+        "material_assumptions": {"old_diagnostic": "No longer confirmed authority."},
+        "issue_assessment": {"scale": "large", "rationale": "Revised diagnostic."},
+        "metadata": {"checked_at": "later"},
+    }
+
+    result = evaluate_driver_entry(
+        DriverEntryRequest(tmp_path, "issue474", "workflow-474", facts)
+    )
+
+    assert result.freshness is Freshness.SAME_SEMANTICS
+    assert contract_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("change", ["model", "scope", "permissions", "closeout"])
+def test_full_policy_freshness_detects_changed_policy(tmp_path: Path, change: str) -> None:
     """Test List 2: fresh evidence contains every behavior-changing phase choice."""
     issue_dir = tmp_path / "issue"
     proposal = _proposal()
-    proposal["semantic_facts"] = _fresh_policy_facts(proposal)
     activate_confirmed_contract(_activation(issue_dir, proposal))
 
     live = deepcopy(proposal)
-    live["phases"][0]["chain"][0]["model"] = "new-exact-model"
-    live["semantic_facts"] = _fresh_policy_facts(live)
+    if change == "model":
+        live["phases"][0]["chain"][0]["model"] = "new-exact-model"
+    elif change == "scope":
+        live["delivery_contract"]["in_scope"].append("Export an index.")
+    elif change == "permissions":
+        live["delivery_contract"]["permissions"].append("Publish the report.")
+    else:
+        live["delivery_contract"]["closeout_plan"]["deliver"].append(
+            {"argv": ["git", "push", "origin", "feature/export"]}
+        )
     assert (
         evaluate_driver_entry(
             DriverEntryRequest(
@@ -283,8 +378,7 @@ def test_full_policy_freshness_detects_changed_model_chain(tmp_path: Path) -> No
                 "issue474",
                 "workflow-474",
                 {
-                    "semantic_facts": live["semantic_facts"],
-                    "material_assumptions": live["material_assumptions"],
+                    "semantic_facts": _fresh_policy_facts(live),
                 },
             )
         ).freshness
@@ -307,7 +401,6 @@ def test_contract_only_event_callback_derives_and_digest_binds_runtime_state(
         "mode": "event-driven",
         "clis": [{"cli": "claude"}, {"cli": "codex", "model": "exact"}],
     }
-    proposal["semantic_facts"] = _fresh_policy_facts(proposal)
     activation = activate_confirmed_contract(
         _activation(issue_dir, proposal, workflow_id=blackboard.workflow_id)  # type: ignore[arg-type]
     )
@@ -353,7 +446,6 @@ def test_contract_only_event_callback_derives_and_digest_binds_runtime_state(
 
     replacement = deepcopy(proposal)
     replacement["driver"]["clis"][1]["model"] = "reconfirmed-model"
-    replacement["semantic_facts"] = _fresh_policy_facts(replacement)
     replace_confirmed_contract(
         ReplaceConfirmedContract(
             issue_dir,
@@ -394,7 +486,6 @@ def test_unsafe_present_contract_cannot_fall_back_to_legacy_callback_policy(
         "mode": "event-driven",
         "clis": [{"cli": "claude"}],
     }
-    proposal["semantic_facts"] = _fresh_policy_facts(proposal)
     activate_confirmed_contract(
         _activation(issue_dir, proposal, workflow_id=blackboard.workflow_id)  # type: ignore[arg-type]
     )
@@ -432,8 +523,7 @@ def test_driver_entry_projections_are_deeply_immutable(tmp_path: Path) -> None:
             "issue474",
             "workflow-474",
             {
-                "semantic_facts": proposal["semantic_facts"],
-                "material_assumptions": proposal["material_assumptions"],
+                "semantic_facts": _fresh_policy_facts(proposal),
             },
         )
     )
@@ -501,7 +591,6 @@ def test_replacement_is_compare_and_swap_and_delegation_cannot_change_policy(
 
     reconfirmed = _proposal()
     reconfirmed["reactive_user_handoffs"]["alignment_checkpoint"] = "user_required"
-    reconfirmed["semantic_facts"] = _fresh_policy_facts(reconfirmed)
     replacement = replace_confirmed_contract(
         ReplaceConfirmedContract(
             issue_dir=issue_dir,
@@ -531,8 +620,243 @@ def test_replacement_is_compare_and_swap_and_delegation_cannot_change_policy(
         )
 
 
-def test_legacy_adoption_requires_complete_identity_bound_confirmation(tmp_path: Path) -> None:
-    """Test List 4: only deterministic legacy evidence can become sole authority."""
+@pytest.mark.parametrize("invalid_version", [[], {}, True, "5"])
+def test_driver_update_rejects_malformed_version_without_writing(
+    tmp_path: Path, invalid_version
+) -> None:
+    activate_confirmed_contract(_activation(tmp_path))
+    path = tmp_path / "driver" / "contract.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["schema_version"] = invalid_version
+    path.write_text(json.dumps(document), encoding="utf-8")
+    before = path.read_bytes()
+
+    with pytest.raises(ValueError):
+        update_driver_settings(
+            issue_dir=tmp_path,
+            issue_name="issue474",
+            workflow_id="workflow-474",
+            driver={"mode": "unattended"},
+        )
+
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("schema_version", [3, 4, 5])
+def test_targeted_driver_update_preserves_contract_version_and_confirmation(
+    tmp_path: Path, schema_version: int
+) -> None:
+    issue_dir = tmp_path / "issue"
+    activate_confirmed_contract(_activation(issue_dir))
+    path = issue_dir / "driver" / "contract.json"
+    original = json.loads(path.read_text(encoding="utf-8"))
+    if schema_version in (3, 4):
+        original = legacy_driver_contract(
+            schema_version=schema_version, identity=original["identity"]
+        )
+        path.write_text(json.dumps(original), encoding="utf-8")
+
+    preview = update_driver_settings(
+        issue_dir=issue_dir,
+        issue_name="issue474",
+        workflow_id="workflow-474",
+        driver={"mode": "event-driven", "clis": [{"cli": "claude"}]},
+        preview=True,
+    )
+    assert preview.status == "proposed"
+    assert json.loads(path.read_text(encoding="utf-8")) == original
+
+    result = update_driver_settings(
+        issue_dir=issue_dir,
+        issue_name="issue474",
+        workflow_id="workflow-474",
+        driver={"mode": "event-driven", "clis": [{"cli": "claude"}]},
+    )
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert result.status == "saved"
+    assert saved["schema_version"] == schema_version
+    assert saved["driver"] == {"mode": "event-driven", "clis": [{"cli": "claude"}]}
+    assert saved["phases"] == original["phases"]
+    assert saved["provenance"]["confirmed_by"] == original["provenance"]["confirmed_by"]
+    assert saved["revision"]["generation"] == original["revision"]["generation"] + 1
+
+    before_noop = path.read_bytes()
+    unchanged = update_driver_settings(
+        issue_dir=issue_dir,
+        issue_name="issue474",
+        workflow_id="workflow-474",
+        driver=saved["driver"],
+    )
+    assert unchanged.status == "unchanged"
+    assert path.read_bytes() == before_noop
+
+
+def test_driver_owned_settings_adapter_resolves_existing_contract_identity(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / "issue"
+    activate_confirmed_contract(_activation(issue_dir))
+
+    result = update_driver_setting(
+        SettingUpdateRequest(
+            config_path=issue_dir / "issue.yaml",
+            value={"mode": "event-driven", "clis": [{"cli": "claude"}]},
+            preview=True,
+        )
+    )
+
+    assert result.status == "proposed"
+    assert result.changes["driver"]["after"]["clis"] == ({"cli": "claude"},)
+
+
+def test_targeted_driver_update_rejects_invalid_settings_without_writing(tmp_path: Path) -> None:
+    issue_dir = tmp_path / "issue"
+    activate_confirmed_contract(_activation(issue_dir))
+    path = issue_dir / "driver" / "contract.json"
+    before = path.read_bytes()
+
+    with pytest.raises(ValueError, match="ordered CLI chain"):
+        update_driver_settings(
+            issue_dir=issue_dir,
+            issue_name="issue474",
+            workflow_id="workflow-474",
+            driver={"mode": "event-driven", "clis": []},
+        )
+    assert path.read_bytes() == before
+
+
+def test_targeted_driver_update_reports_stale_revision_and_atomic_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    issue_dir = tmp_path / "issue"
+    activated = activate_confirmed_contract(_activation(issue_dir))
+    path = issue_dir / "driver" / "contract.json"
+    before = path.read_bytes()
+
+    with pytest.raises(ValueError, match="conflicts"):
+        update_driver_settings(
+            issue_dir=issue_dir,
+            issue_name="issue474",
+            workflow_id="workflow-474",
+            driver={"mode": "unattended"},
+            expected_contract_sha256="0" * 64,
+        )
+    assert path.read_bytes() == before
+
+    def fail_before_replace(*_args, **_kwargs):
+        raise OSError("simulated write interruption")
+
+    monkeypatch.setattr("cafe.driver._store.atomic_write_bytes", fail_before_replace)
+    with pytest.raises(OSError, match="interruption"):
+        update_driver_settings(
+            issue_dir=issue_dir,
+            issue_name="issue474",
+            workflow_id="workflow-474",
+            driver={"mode": "event-driven", "clis": [{"cli": "claude"}]},
+            expected_contract_sha256=activated.contract_sha256,
+        )
+    assert path.read_bytes() == before
+
+
+def test_targeted_driver_update_does_not_mutate_runtime_owned_files(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / "issue"
+    activate_confirmed_contract(_activation(issue_dir))
+    runtime_files = {
+        issue_dir / "driver" / "dispatch_state.json": b'{"state":"unchanged"}\n',
+        issue_dir / "sessions" / "provider.json": b'{"session":"unchanged"}\n',
+        issue_dir / "checkpoint.json": b'{"step":"develop"}\n',
+        issue_dir / "artifacts" / "result.txt": b"unchanged\n",
+    }
+    for path, content in runtime_files.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+
+    update_driver_settings(
+        issue_dir=issue_dir,
+        issue_name="issue474",
+        workflow_id="workflow-474",
+        driver={"mode": "event-driven", "clis": [{"cli": "claude"}]},
+    )
+
+    assert {path: path.read_bytes() for path in runtime_files} == runtime_files
+    assert not any(issue_dir.rglob("*history*"))
+    assert not any(issue_dir.rglob("*amendment*"))
+
+
+def test_targeted_driver_update_serializes_and_conflicts_stale_writer(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / "issue"
+    activated = activate_confirmed_contract(_activation(issue_dir))
+    start = Barrier(3)
+    outcomes: list[str] = []
+
+    def update(driver):
+        start.wait()
+        try:
+            result = update_driver_settings(
+                issue_dir=issue_dir,
+                issue_name="issue474",
+                workflow_id="workflow-474",
+                driver=driver,
+                expected_contract_sha256=activated.contract_sha256,
+            )
+            outcomes.append(result.status)
+        except ValueError as exc:
+            outcomes.append(str(exc))
+
+    workers = [
+        Thread(target=update, args=({"mode": "attached", "poll_interval_seconds": 5},)),
+        Thread(
+            target=update,
+            args=({"mode": "event-driven", "clis": [{"cli": "claude"}]},),
+        ),
+    ]
+    for worker in workers:
+        worker.start()
+    start.wait()
+    for worker in workers:
+        worker.join(2)
+
+    assert all(not worker.is_alive() for worker in workers)
+    assert outcomes.count("saved") == 1
+    assert sum("conflicts with a newer contract" in outcome for outcome in outcomes) == 1
+
+
+def test_targeted_driver_update_invokes_no_provider_publication_or_helper_sync(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from cafe.agents.manager import AgentManager
+    from cafe.core.hooks.native import GitHubPRCreator
+    from cafe.skills import global_installer
+
+    calls = []
+    monkeypatch.setattr(AgentManager, "execute", lambda *_args, **_kwargs: calls.append("provider"))
+    monkeypatch.setattr(
+        GitHubPRCreator, "run", lambda *_args, **_kwargs: calls.append("publication")
+    )
+    monkeypatch.setattr(
+        global_installer,
+        "auto_sync_global_skills",
+        lambda *_args, **_kwargs: calls.append("helper-sync"),
+    )
+    issue_dir = tmp_path / "issue"
+    activate_confirmed_contract(_activation(issue_dir))
+
+    update_driver_settings(
+        issue_dir=issue_dir,
+        issue_name="issue474",
+        workflow_id="workflow-474",
+        driver={"mode": "event-driven", "clis": [{"cli": "claude"}]},
+    )
+
+    assert calls == []
+
+
+def test_legacy_confirmation_requires_explicit_reconfirmation(tmp_path: Path) -> None:
+    """A complete historical confirmation cannot silently become compact authority."""
     issue_dir = tmp_path / "legacy"
     confirmation = issue_dir / "driver" / "legacy_confirmation.json"
     confirmation.parent.mkdir(parents=True)
@@ -542,14 +866,15 @@ def test_legacy_adoption_requires_complete_identity_bound_confirmation(tmp_path:
                 "identity": {"issue_name": "issue474", "workflow_id": "workflow-474"},
                 "confirmed_by": "user",
                 "confirmed_at": "2026-09-06T02:00:00+00:00",
-                "proposal": _proposal(),
+                "proposal": _legacy_confirmation_proposal(),
             }
         ),
         encoding="utf-8",
     )
     adopted = adopt_legacy_contract(LegacyAdoptionRequest(issue_dir, "issue474", "workflow-474"))
-    assert adopted.adopted is True
-    assert adopted.revision == 1
+    assert adopted.adopted is False
+    assert adopted.disposition == "reconfirmation_required"
+    assert not (issue_dir / "driver" / "contract.json").exists()
 
     unresolved = adopt_legacy_contract(
         LegacyAdoptionRequest(tmp_path / "ambiguous", "issue474", "workflow-474")
@@ -558,15 +883,27 @@ def test_legacy_adoption_requires_complete_identity_bound_confirmation(tmp_path:
     assert unresolved.disposition == "reconfirmation_required"
 
 
-def test_legacy_adoption_discards_co_located_generic_fields(tmp_path: Path) -> None:
-    """Test List 4: legacy generic values never become Driver policy."""
+def test_adoption_of_current_contract_is_a_read_only_noop(tmp_path: Path) -> None:
+    activated = activate_confirmed_contract(_activation(tmp_path))
+    path = tmp_path / "driver" / "contract.json"
+    before = path.read_bytes()
+
+    result = adopt_legacy_contract(LegacyAdoptionRequest(tmp_path, "issue474", "workflow-474"))
+
+    assert result.adopted is True
+    assert result.disposition == "already_adopted"
+    assert result.contract_sha256 == activated.contract_sha256
+    assert path.read_bytes() == before
+
+
+def test_legacy_adoption_does_not_promote_co_located_generic_fields(tmp_path: Path) -> None:
+    """Legacy generic values never become Driver policy."""
     issue_dir = tmp_path / "legacy"
-    proposal = _proposal()
+    proposal = _legacy_confirmation_proposal()
     proposal["playbook"] = {"id": "standard"}
     proposal["pr"] = {"auto_create": False}
     proposal["confirmation_contract"]["pr_auto_create"] = False
     proposal["locales"]["repository_content"] = {"value": "en", "source": "legacy"}
-    proposal["semantic_facts"] = _fresh_policy_facts(proposal)
     confirmation = issue_dir / "driver" / "legacy_confirmation.json"
     confirmation.parent.mkdir(parents=True)
     confirmation.write_text(
@@ -583,11 +920,10 @@ def test_legacy_adoption_discards_co_located_generic_fields(tmp_path: Path) -> N
 
     result = adopt_legacy_contract(LegacyAdoptionRequest(issue_dir, "issue474", "workflow-474"))
 
-    assert result.adopted is True
-    contract = json.loads((issue_dir / "driver" / "contract.json").read_text(encoding="utf-8"))
-    assert "playbook" not in contract
-    assert "pr" not in contract
-    assert "pr_auto_create" not in contract["confirmation_contract"]
+    assert result.adopted is False
+    assert result.disposition == "reconfirmation_required"
+    assert not (issue_dir / "driver" / "contract.json").exists()
+    assert json.loads(confirmation.read_text())["proposal"] == proposal
 
 
 def test_mixed_experimental_contract_requires_reconfirmation(tmp_path: Path) -> None:
@@ -609,7 +945,7 @@ def test_mixed_experimental_contract_requires_reconfirmation(tmp_path: Path) -> 
 
 def test_legacy_adoption_ignores_generic_phase_projection(tmp_path: Path) -> None:
     """Test List 4: generic phase configuration is never migration evidence."""
-    proposal = _proposal()
+    proposal = _legacy_confirmation_proposal()
 
     def prepare_legacy_issue(name: str) -> Path:
         issue_dir = tmp_path / name / ".cafe" / "issues" / "issue474"
@@ -633,7 +969,9 @@ def test_legacy_adoption_ignores_generic_phase_projection(tmp_path: Path) -> Non
 
     matching = prepare_legacy_issue("matching")
     adopted = adopt_legacy_contract(LegacyAdoptionRequest(matching, "issue474", "workflow-474"))
-    assert adopted.adopted is True
+    assert adopted.adopted is False
+    assert adopted.disposition == "reconfirmation_required"
+    assert not (matching / "driver" / "contract.json").exists()
 
 
 def test_legacy_sidecar_conflict_and_ancestor_symlink_fail_closed(tmp_path: Path) -> None:
@@ -647,7 +985,7 @@ def test_legacy_sidecar_conflict_and_ancestor_symlink_fail_closed(tmp_path: Path
                 "identity": {"issue_name": "issue474", "workflow_id": "workflow-474"},
                 "confirmed_by": "user",
                 "confirmed_at": "2026-09-06T02:00:00+00:00",
-                "proposal": _proposal(),
+                "proposal": _legacy_confirmation_proposal(),
             }
         ),
         encoding="utf-8",
@@ -680,7 +1018,7 @@ def test_legacy_adoption_ignores_generic_issue_configuration(tmp_path: Path) -> 
                 "identity": {"issue_name": "issue474", "workflow_id": "workflow-474"},
                 "confirmed_by": "user",
                 "confirmed_at": "2026-09-06T02:00:00+00:00",
-                "proposal": _proposal(),
+                "proposal": _legacy_confirmation_proposal(),
             }
         ),
         encoding="utf-8",
@@ -698,8 +1036,9 @@ def test_legacy_adoption_ignores_generic_issue_configuration(tmp_path: Path) -> 
 
     result = adopt_legacy_contract(LegacyAdoptionRequest(legacy, "issue474", "workflow-474"))
 
-    assert result.adopted is True
-    assert (legacy / "driver" / "contract.json").is_file()
+    assert result.adopted is False
+    assert result.disposition == "reconfirmation_required"
+    assert not (legacy / "driver" / "contract.json").exists()
 
 
 def test_legacy_adoption_rejects_conflicting_driver_sidecar(
@@ -709,7 +1048,7 @@ def test_legacy_adoption_rejects_conflicting_driver_sidecar(
     legacy = tmp_path / "legacy"
     confirmation = legacy / "driver" / "legacy_confirmation.json"
     confirmation.parent.mkdir(parents=True)
-    proposal = _proposal()
+    proposal = _legacy_confirmation_proposal()
     confirmation.write_text(
         json.dumps(
             {
@@ -735,7 +1074,7 @@ def test_legacy_adoption_ignores_playbook_overrides(tmp_path: Path) -> None:
     legacy = tmp_path / "legacy"
     confirmation = legacy / "driver" / "legacy_confirmation.json"
     confirmation.parent.mkdir(parents=True)
-    proposal = _proposal()
+    proposal = _legacy_confirmation_proposal()
     confirmation.write_text(
         json.dumps(
             {
@@ -759,5 +1098,6 @@ def test_legacy_adoption_ignores_playbook_overrides(tmp_path: Path) -> None:
 
     result = adopt_legacy_contract(LegacyAdoptionRequest(legacy, "issue474", "workflow-474"))
 
-    assert result.adopted is True
-    assert (legacy / "driver" / "contract.json").is_file()
+    assert result.adopted is False
+    assert result.disposition == "reconfirmation_required"
+    assert not (legacy / "driver" / "contract.json").exists()

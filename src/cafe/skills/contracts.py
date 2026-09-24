@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +15,25 @@ from cafe.core.human_tasks import HumanTaskPolicy
 RUNTIME_OWNED_PROMPT_PLACEHOLDERS = frozenset(
     {
         "agent_file",
+        "authoritative_inputs",
+        "behavior_completion",
+        "current_step",
+        "input_loading_modes",
+        "issue_dir",
+        "iteration_dir",
+        "playbook_id",
+        "pr_auto_create",
+        "pr_comparison_base",
+        "publish_confirmation",
+        "review_base",
+        "review_head",
+        "review_required",
+        "session_recovery",
+        "valid_baton_intents",
+        "workflow_feedback_batch_file",
+        "workflow_feedback_batch_count",
+        "workflow_feedback_batch_todo_rows",
+        "workflow_metadata",
         "base_branch",
         "blackboard_digest",
         "blackboard_path",
@@ -25,9 +45,11 @@ RUNTIME_OWNED_PROMPT_PLACEHOLDERS = frozenset(
         "iteration",
         "next_step_path",
         "output_file",
+        "playbook_graph",
         "previous_output_file",
         "questions_xml_file",
         "resume_input_artifacts",
+        "route_catalog",
         "step_transitions",
         "template_catalog",
         "template_file",
@@ -182,6 +204,7 @@ class ChecklistSection(BaseModel):
     reference: Optional[str] = None
     optional_checklist: Optional[str] = None
     template_catalog: bool = False
+    todo_projection: Optional["TodoProjection"] = None
 
     @field_validator("reference", "optional_checklist")
     @classmethod
@@ -193,11 +216,49 @@ class ChecklistSection(BaseModel):
         if (
             sum(
                 value is not None and value is not False
-                for value in (self.reference, self.optional_checklist, self.template_catalog)
+                for value in (
+                    self.reference,
+                    self.optional_checklist,
+                    self.template_catalog,
+                    self.todo_projection,
+                )
             )
             != 1
         ):
             raise ValueError("checklist section requires exactly one source")
+        return self
+
+
+class TodoProjection(BaseModel):
+    """A strict declaration for projecting one immutable Todo artifact."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    artifact: str
+    source: Optional[str] = None
+    causal: bool = False
+
+    @field_validator("artifact")
+    @classmethod
+    def _validate_artifact(cls, value: str) -> str:
+        return _safe_token(value, field_name="todo projection artifact")
+
+    @field_validator("source")
+    @classmethod
+    def _validate_declared_source(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        source = value.strip()
+        if not re.fullmatch(r"[a-z][a-z0-9_]*", source):
+            raise ValueError("todo projection source must be a lowercase identifier")
+        return source
+
+    @model_validator(mode="after")
+    def _validate_source_strategy(self) -> "TodoProjection":
+        if (self.source is None) == (not self.causal):
+            raise ValueError(
+                "todo projection requires exactly one source strategy: source or causal"
+            )
         return self
 
 
@@ -216,6 +277,31 @@ class ChecklistVariant(BaseModel):
     ) -> Tuple[ChecklistSection, ...]:
         if not value:
             raise ValueError("checklist variant requires at least one section")
+        return value
+
+
+class ChecklistOverlay(BaseModel):
+    """An explicitly injected, source-local checklist contribution."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    when: ChecklistWhen = Field(default_factory=ChecklistWhen)
+    context_references: dict[str, str] = Field(default_factory=dict)
+    variants: Tuple[ChecklistVariant, ...]
+
+    @field_validator("context_references")
+    @classmethod
+    def _references(cls, value: dict[str, str]) -> dict[str, str]:
+        return {
+            _safe_placeholder(key, field_name="context reference placeholder"): _safe_reference(ref)
+            for key, ref in value.items()
+        }
+
+    @field_validator("variants")
+    @classmethod
+    def _variants(cls, value: Tuple[ChecklistVariant, ...]) -> Tuple[ChecklistVariant, ...]:
+        if not value:
+            raise ValueError("checklist overlay requires at least one variant")
         return value
 
 
@@ -305,7 +391,7 @@ class ExecutionProfile(BaseModel):
         return cleaned
 
 
-class SkillWorkflowContract(BaseModel):
+class SkillWorkflowDeclaration(BaseModel):
     """All optional workflow metadata carried in a skill frontmatter block."""
 
     model_config = ConfigDict(extra="forbid")
@@ -314,6 +400,7 @@ class SkillWorkflowContract(BaseModel):
     prompt_inputs: Tuple[PromptInputContract, ...] = ()
     prompt_references: dict[str, str] = Field(default_factory=dict)
     checklist: Optional[ChecklistContract] = None
+    checklist_overlay: Optional[ChecklistOverlay] = None
     output_templates: Optional[OutputTemplatesContract] = None
     human_tasks: Tuple[HumanTaskPolicy, ...] = ()
     execution_profile: Optional[ExecutionProfile] = None
@@ -339,7 +426,7 @@ class SkillWorkflowContract(BaseModel):
         }
 
     @model_validator(mode="after")
-    def _validate_unique_placeholders(self) -> "SkillWorkflowContract":
+    def _validate_unique_placeholders(self) -> "SkillWorkflowDeclaration":
         input_placeholders = [item.placeholder for item in self.prompt_inputs]
         if len(set(input_placeholders)) != len(input_placeholders):
             raise ValueError("prompt input placeholders must be unique")
@@ -354,8 +441,10 @@ class SkillWorkflowContract(BaseModel):
         task_ids = [task.id for task in self.human_tasks]
         if len(set(task_ids)) != len(task_ids):
             raise ValueError("human task ids must be unique")
-        if self.checklist is not None:
-            checklist_references = set(self.checklist.context_references)
+        for checklist in (self.checklist, self.checklist_overlay):
+            if checklist is None:
+                continue
+            checklist_references = set(checklist.context_references)
             overlap = input_placeholder_set & checklist_references
             if overlap:
                 raise ValueError(
@@ -369,6 +458,11 @@ class SkillWorkflowContract(BaseModel):
                     f"{', '.join(sorted(overlap))}"
                 )
         return self
+
+
+# Compatibility alias for integrations that still import the previous name.
+# TODO: remove me
+SkillWorkflowContract = SkillWorkflowDeclaration
 
 
 @dataclass(frozen=True)
@@ -406,7 +500,7 @@ def _artifact_version(value: Any) -> int:
 
 
 def resolve_prompt_inputs(
-    contract: SkillWorkflowContract,
+    contract: SkillWorkflowDeclaration,
     artifacts: Mapping[str, Any],
 ) -> dict[str, str]:
     """Resolve declared artifacts in order without any implicit fallback names."""
@@ -424,7 +518,7 @@ def resolve_prompt_inputs(
 
 
 def resolve_packet_requested_placeholders(
-    contract: SkillWorkflowContract,
+    contract: SkillWorkflowDeclaration,
     artifacts: Mapping[str, Any],
     *,
     step: str,
@@ -460,7 +554,7 @@ def resolve_packet_requested_placeholders(
 
 
 def resolve_effective_prompt_inputs(
-    contract: SkillWorkflowContract,
+    contract: SkillWorkflowDeclaration,
     artifacts: Mapping[str, Any],
     *,
     step: str,

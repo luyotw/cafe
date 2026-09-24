@@ -836,7 +836,6 @@ def workflow(
             blackboard_state: object,
             extra_prompt: Optional[str] = None,
             same_invocation_retry: bool = False,
-            validated_pr_auto_create: Optional[bool] = None,
         ) -> Any:
             iteration = next_runnable_iteration_number(issue_dir / step_name)
             console.print(f"[dim]Executing[/dim] step={step_name} iteration={iteration:03d}")
@@ -865,11 +864,6 @@ def workflow(
                 for parameter in execute_signature.parameters.values()
             ):
                 execute_kwargs["same_invocation_retry"] = same_invocation_retry
-            if "validated_pr_auto_create" in execute_signature.parameters or any(
-                parameter.kind == inspect.Parameter.VAR_KEYWORD
-                for parameter in execute_signature.parameters.values()
-            ):
-                execute_kwargs["validated_pr_auto_create"] = validated_pr_auto_create
             result = step_executor.execute_step(
                 step_name,
                 step_def,
@@ -971,12 +965,22 @@ def workflow(
                         f"[yellow]Detected external workflow feedback[/yellow] step={external_step}"
                     )
                     continue
-            if active_step in {"user", "done"}:
+            terminal_callback_resume = (
+                active_step == "done"
+                and not interactive
+                and validated_worker_id is not None
+                and callback_binding is not None
+            )
+            if active_step in {"user", "done"} and not terminal_callback_resume:
                 if active_step == "done" and not interactive:
                     console.print("[green]Workflow already completed[/green] step=done")
                     console.print("[yellow]Workflow is waiting for user input[/yellow] step=user")
                     return
-                # active_step in {"user", "done"} (done only reaches here in interactive mode)
+                # A validated callback worker observes done through the runtime
+                # below so the durable terminal callback follows the same path
+                # as every other workflow completion. Terminal observations are
+                # intentionally at-least-once: each authorized worker gets a new
+                # durable event identity, and the Driver must re-read state.
                 if not interactive:
                     if user_input and user_input.strip():
                         step_keys = list(playbook_data.get("steps", {}).keys())

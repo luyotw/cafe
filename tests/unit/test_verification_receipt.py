@@ -84,6 +84,28 @@ def test_run_and_check_verification_receipt_for_clean_head(tmp_path: Path) -> No
     assert checked.reasons == ()
 
 
+def test_check_verification_receipt_fails_closed_on_git_timeout(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo = _repo(tmp_path)
+    output = _output_file(repo)
+    assert run_verification(
+        output_file=output,
+        command=[sys.executable, "-c", "print('passed')"],
+        scope="targeted",
+        cwd=repo,
+    )[0] == 0
+
+    def timeout(*_args, **kwargs):
+        assert kwargs["timeout"] == 10
+        raise subprocess.TimeoutExpired("git", kwargs["timeout"])
+
+    monkeypatch.setattr("cafe.verification.receipt.subprocess.run", timeout)
+    checked = check_verification_receipt(output_file=output, required_scope="targeted", cwd=repo)
+    assert checked.valid is False
+    assert checked.reasons
+
+
 def test_verification_captures_combined_stdout_and_stderr(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     output = _output_file(repo)

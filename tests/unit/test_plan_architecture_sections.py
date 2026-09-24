@@ -112,7 +112,7 @@ def test_plan_uses_same_phase_solution_alignment_checkpoint() -> None:
     xml_instruction = (
         PLAN_SKILL.parent / "references" / "xml_questions_instruction.md"
     ).read_text(encoding="utf-8")
-    assert "do not route to `develop`" in xml_instruction
+    assert "do not select an agent route" in xml_instruction
 
 
 def test_solution_alignment_question_is_self_contained_and_has_one_option() -> None:

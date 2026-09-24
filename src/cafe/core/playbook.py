@@ -32,6 +32,11 @@ from cafe.core.prepare_fields import (
 from cafe.core.status_codes import PLAYBOOK_INTENT_KEYS, PhaseStatusCode
 from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.skills.loader import SkillLoader, canonical_skill_name
+from cafe.skills.selectors import skill_selector_names
+from cafe.skills.workflow_composition import (
+    StepWorkflowComposition,
+    resolve_step_workflow_composition,
+)
 from cafe.templates.manager import TemplateManager
 
 DONE_TARGET = "_done"
@@ -320,6 +325,41 @@ class InitialInputDeclaration(BaseModel):
 CompletionMode = Literal["status_code", "baton"]
 
 
+class FeedbackRouteDeclaration(BaseModel):
+    """One complete destination-scoped causal correction route."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    artifact: str
+    source_kind: str
+    todo_source: str
+    todo_id_prefix: str
+
+    @field_validator("artifact", "source_kind")
+    @classmethod
+    def _validate_artifact_identifiers(cls, value: str, info: Any) -> str:
+        token = value.strip()
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", token):
+            raise ValueError(f"feedback route {info.field_name} must be a safe identifier")
+        return token
+
+    @field_validator("todo_source")
+    @classmethod
+    def _validate_todo_source(cls, value: str) -> str:
+        token = value.strip()
+        if not re.fullmatch(r"[a-z][a-z0-9_]*", token):
+            raise ValueError("feedback route todo_source must be a lowercase identifier")
+        return token
+
+    @field_validator("todo_id_prefix")
+    @classmethod
+    def _validate_todo_prefix(cls, value: str) -> str:
+        token = value.strip()
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]*", token):
+            raise ValueError("feedback route todo_id_prefix must be an uppercase identifier")
+        return token
+
+
 class StepBehaviorDeclaration(BaseModel):
     """Optional behavior selectors declared by a playbook or one step.
 
@@ -333,8 +373,37 @@ class StepBehaviorDeclaration(BaseModel):
     completion: Optional[CompletionMode] = None
     publish_confirmation: Optional[bool] = None
     feedback_target: Optional[str] = None
+    feedback_artifact: Optional[str] = None
+    feedback_source_kind: Optional[str] = None
+    feedback_todo_source: Optional[str] = None
+    feedback_todo_id_prefix: Optional[str] = None
+    feedback_routes: Optional[Dict[str, FeedbackRouteDeclaration]] = None
     context_providers: Optional[List[str]] = None
     runtime_tool_grants: Optional[List[str]] = None
+
+    @field_validator(
+        "feedback_target",
+        "feedback_artifact",
+        "feedback_source_kind",
+        "feedback_todo_source",
+        "feedback_todo_id_prefix",
+    )
+    @classmethod
+    def _validate_feedback_identifiers(
+        cls, value: Optional[str], info: Any
+    ) -> Optional[str]:
+        if value is None:
+            return None
+        token = value.strip()
+        if info.field_name == "feedback_todo_source":
+            pattern = r"[a-z][a-z0-9_]*"
+        elif info.field_name == "feedback_todo_id_prefix":
+            pattern = r"[A-Z][A-Z0-9_]*"
+        else:
+            pattern = r"[A-Za-z][A-Za-z0-9_-]*"
+        if not re.fullmatch(pattern, token):
+            raise ValueError(f"{info.field_name} must be a safe identifier")
+        return token
 
     @field_validator("context_providers", "runtime_tool_grants")
     @classmethod
@@ -356,6 +425,30 @@ class StepBehaviorDeclaration(BaseModel):
             raise ValueError(f"{info.field_name} contains unknown runtime-owned id {unknown[0]!r}")
         return cleaned
 
+    @model_validator(mode="after")
+    def _validate_feedback_route(self) -> "StepBehaviorDeclaration":
+        route = (
+            self.feedback_target,
+            self.feedback_artifact,
+            self.feedback_source_kind,
+            self.feedback_todo_source,
+            self.feedback_todo_id_prefix,
+        )
+        if any(value is not None for value in route) and not all(
+            isinstance(value, str) and value.strip() for value in route
+        ):
+            raise ValueError(
+                "feedback routing requires target, artifact, source kind, Todo source, "
+                "and Todo ID prefix"
+            )
+        if self.feedback_routes is not None:
+            if not self.feedback_routes:
+                raise ValueError("feedback_routes must contain at least one destination")
+            for target in self.feedback_routes:
+                if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", target.strip()):
+                    raise ValueError("feedback route destinations must be safe identifiers")
+        return self
+
 
 class EffectiveStepBehavior(BaseModel):
     """Fully resolved, name-independent runtime behavior for one step."""
@@ -365,6 +458,11 @@ class EffectiveStepBehavior(BaseModel):
     completion: CompletionMode = "status_code"
     publish_confirmation: bool = False
     feedback_target: Optional[str] = None
+    feedback_artifact: Optional[str] = None
+    feedback_source_kind: Optional[str] = None
+    feedback_todo_source: Optional[str] = None
+    feedback_todo_id_prefix: Optional[str] = None
+    feedback_routes: Optional[Dict[str, FeedbackRouteDeclaration]] = None
     context_providers: List[str] = Field(default_factory=list)
     runtime_tool_grants: List[str] = Field(default_factory=list)
 
@@ -509,6 +607,9 @@ class StepConfig(BaseModel):
     # remains the opt-in isolated scope.
     input_artifacts: Optional[List[str]] = None
     output_artifact: Optional[str] = None
+    todo_identity_input_artifact: Optional[str] = None
+    workspace_artifact: Optional[str] = None
+    workspace_input_artifact: Optional[str] = None
     initial_input: Optional[InitialInputDeclaration] = None
     template: Optional[str] = None
     allowed_tools: List[str] = Field(default_factory=list)
@@ -554,6 +655,18 @@ class StepConfig(BaseModel):
     def _validate_input_artifact_scope(self) -> "StepConfig":
         if "input_artifacts" in self.model_fields_set and self.input_artifacts is None:
             raise ValueError("input_artifacts must be a list when specified")
+        if self.todo_identity_input_artifact is not None:
+            if not re.fullmatch(
+                r"[A-Za-z][A-Za-z0-9_-]*", self.todo_identity_input_artifact.strip()
+            ):
+                raise ValueError("todo_identity_input_artifact must be a safe identifier")
+            if (
+                self.input_artifacts is None
+                or self.todo_identity_input_artifact not in self.input_artifacts
+            ):
+                raise ValueError(
+                    "todo_identity_input_artifact must be listed in input_artifacts"
+                )
         if self.automatic is not None and self.assignee_type != "auto":
             raise ValueError("automatic requires matching assignee_type=auto")
         if self.hybrid is not None and self.assignee_type != "hybrid":
@@ -571,6 +684,24 @@ class StepConfig(BaseModel):
             raise ValueError("assignee_type=hybrid requires hybrid portion declaration")
         if self.assignee_type == "auto" and self.human_tasks:
             raise ValueError("assignee_type=auto cannot declare human_tasks")
+        if self.workspace_artifact is not None:
+            if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", self.workspace_artifact.strip()):
+                raise ValueError("workspace_artifact must be a safe identifier")
+            if self.output_artifact is None:
+                raise ValueError("workspace_artifact requires output_artifact")
+            if self.workspace_artifact == self.output_artifact:
+                raise ValueError("workspace_artifact must differ from output_artifact")
+        if self.workspace_input_artifact is not None:
+            if not re.fullmatch(
+                r"[A-Za-z][A-Za-z0-9_-]*", self.workspace_input_artifact.strip()
+            ):
+                raise ValueError("workspace_input_artifact must be a safe identifier")
+            if self.input_artifacts is None or self.workspace_input_artifact not in self.input_artifacts:
+                raise ValueError(
+                    "workspace_input_artifact must be listed in input_artifacts"
+                )
+            if self.output_artifact == self.workspace_input_artifact:
+                raise ValueError("workspace_input_artifact must differ from output_artifact")
         return self
 
     @field_validator("human_tasks")
@@ -888,8 +1019,8 @@ class PlaybookDefinition(BaseModel):
         if self.entry_point is None:
             self.entry_point = next(iter(self.steps.keys()))
 
-        def declares_workflow_feedback(step: StepConfig) -> bool:
-            return "input_artifacts" in step.model_fields_set and "workflow_feedback" in (
+        def declares_feedback_artifact(step: StepConfig, artifact: str) -> bool:
+            return "input_artifacts" in step.model_fields_set and artifact in (
                 step.input_artifacts or []
             )
 
@@ -909,8 +1040,51 @@ class PlaybookDefinition(BaseModel):
                 )
             ]
 
+        route_declarations_present = any(
+            resolve_step_behavior(self, step_name).feedback_routes
+            for step_name in self.steps
+        )
+        step_order = {name: index for index, name in enumerate(self.steps)}
+
         for step_name, step in self.steps.items():
             behavior = resolve_step_behavior(self, step_name)
+            routes = behavior.feedback_routes or {}
+            for destination, route in routes.items():
+                if destination not in self.steps:
+                    raise ValueError(
+                        f"steps.{step_name}.feedback route destination {destination!r} "
+                        "is not a declared transition"
+                    )
+                if destination not in (*step.on.values(), *step.allowed_goto):
+                    raise ValueError(
+                        f"steps.{step_name}.feedback route {destination!r} requires "
+                        "a matching transition"
+                    )
+                if step.output_artifact != route.artifact:
+                    raise ValueError(
+                        f"steps.{step_name}.feedback route {destination!r} artifact "
+                        "must match output_artifact"
+                    )
+                destination_step = self.steps[destination]
+                if (
+                    "input_artifacts" in destination_step.model_fields_set
+                    and route.artifact not in (destination_step.input_artifacts or [])
+                ):
+                    raise ValueError(
+                        f"steps.{step_name}.feedback route {destination!r} artifact "
+                        "must be declared in the destination input_artifacts"
+                    )
+            if route_declarations_present:
+                for target in (*step.on.values(), *step.allowed_goto):
+                    if (
+                        target in self.steps
+                        and step_order[target] < step_order[step_name]
+                        and target not in routes
+                    ):
+                        raise ValueError(
+                            f"steps.{step_name} backward transition to {target!r} "
+                            "requires a complete feedback route"
+                        )
             target = behavior.feedback_target
             feedback_source_stages = github_pr_feedback_source_stages(step)
             if feedback_source_stages:
@@ -929,10 +1103,16 @@ class PlaybookDefinition(BaseModel):
                 raise ValueError(
                     f"steps.{step_name}.behavior.feedback_target {target!r} is not a defined step"
                 )
-            if target is not None and not declares_workflow_feedback(self.steps[target]):
+            if (
+                target is not None
+                and behavior.feedback_artifact is not None
+                and not declares_feedback_artifact(
+                    self.steps[target], behavior.feedback_artifact
+                )
+            ):
                 raise ValueError(
                     f"steps.{step_name}.behavior.feedback_target {target!r} must declare "
-                    "workflow_feedback in input_artifacts"
+                    f"{behavior.feedback_artifact} in input_artifacts"
                 )
             for binding in step.human_tasks:
                 if binding.feedback_delivery is None:
@@ -944,11 +1124,14 @@ class PlaybookDefinition(BaseModel):
                     if (
                         delivery_target != DONE_TARGET
                         and delivery_target in self.steps
-                        and not declares_workflow_feedback(self.steps[delivery_target])
+                        and not declares_feedback_artifact(
+                            self.steps[delivery_target], binding.feedback_delivery.artifact
+                        )
                     ):
                         raise ValueError(
                             f"steps.{step_name}.human_tasks feedback_delivery target "
-                            f"{delivery_target!r} must declare workflow_feedback in input_artifacts"
+                            f"{delivery_target!r} must declare "
+                            f"{binding.feedback_delivery.artifact} in input_artifacts"
                         )
             if behavior.publish_confirmation and "cafe.pr.publish" not in step.capability_requests:
                 raise ValueError(
@@ -996,6 +1179,17 @@ def resolve_step_behavior(
         completion=_behavior_value(defaults, override, "completion", "status_code"),
         publish_confirmation=_behavior_value(defaults, override, "publish_confirmation", False),
         feedback_target=_behavior_value(defaults, override, "feedback_target", None),
+        feedback_artifact=_behavior_value(defaults, override, "feedback_artifact", None),
+        feedback_source_kind=_behavior_value(
+            defaults, override, "feedback_source_kind", None
+        ),
+        feedback_todo_source=_behavior_value(
+            defaults, override, "feedback_todo_source", None
+        ),
+        feedback_todo_id_prefix=_behavior_value(
+            defaults, override, "feedback_todo_id_prefix", None
+        ),
+        feedback_routes=_behavior_value(defaults, override, "feedback_routes", None),
         context_providers=_behavior_value(defaults, override, "context_providers", []),
         runtime_tool_grants=_behavior_value(defaults, override, "runtime_tool_grants", []),
     )
@@ -1213,18 +1407,24 @@ def validate_playbook(
     _validate_skill_environments(model, skill_loader=skill_loader, warnings=warnings)
 
     for step_name, step in steps.items():
+        _validate_step_skills(step_name, step, skill_loader)
+    compositions = {
+        step_name: _resolve_step_compositions(model, step_name, step, skill_loader)
+        for step_name, step in steps.items()
+    }
+
+    for step_name, step in steps.items():
         _validate_step_role(step_name, step, model.roles)
         _validate_step_chat_role(step_name, step, model.roles)
-        _validate_step_skills(step_name, step, skill_loader)
-        _validate_step_required_prompt_inputs(step_name, step, skill_loader)
-        _validate_step_required_tools(step_name, step, skill_loader)
-        _validate_step_human_tasks(step_name, step, steps, skill_loader)
+        _validate_step_required_prompt_inputs(step_name, step, compositions[step_name])
+        _validate_step_required_tools(step_name, step, compositions[step_name])
+        _validate_step_human_tasks(step_name, step, steps, compositions[step_name])
         _validate_ownership_contract(step_name, step, steps)
         _validate_script_hook_stages(step_name, step.hooks)
         _validate_targets(step_name, step.allowed_goto, steps, "allowed_goto")
         _validate_transition_targets(step_name, step.on, steps)
         warnings.extend(_collect_tool_warnings(step_name, step.allowed_tools))
-    _validate_feedback_target_prompt_inputs(model, skill_loader=skill_loader)
+    _validate_feedback_target_prompt_inputs(model, compositions=compositions)
     _validate_prepare_metadata(
         model,
         skill_loader=skill_loader,
@@ -1235,6 +1435,14 @@ def validate_playbook(
 
     if warnings and strict:
         raise ValueError("\n".join(warnings))
+
+    for step_name, step in steps.items():
+        if step.assignee_type == "hybrid":
+            warnings.append(
+                f"Step '{step_name}' uses deprecated assignee_type='hybrid'. "
+                "Model agent and human portions as ordinary top-level steps; hybrid support "
+                "is retained only for compatibility until the next breaking release."
+            )
     return warnings
 
 
@@ -1290,7 +1498,8 @@ def _validate_initial_input_declarations(model: PlaybookDefinition, *, source: s
             raise ValueError(f"{field_path} is only allowed on entry_point {model.entry_point!r}")
         if declaration.legacy_presentation and (
             source != "builtin"
-            or model.playbook.id not in {"standard", "standard-qa", "simple", "tdd", "tdd-qa"}
+            or model.playbook.id
+            not in {"standard", "standard-qa", "simple", "tdd", "tdd-qa"}
         ):
             raise ValueError(
                 f"{field_path}.legacy_presentation is reserved for bundled development playbooks"
@@ -1411,7 +1620,7 @@ def declared_template_managers(
     managers: Dict[str, TemplateManager] = {}
     for step_name, step in model.steps.items():
         selectors = [step.skill] if isinstance(step.skill, str) else list(step.skill.values())
-        contracts = [skill_loader.get_workflow_contract(skill) for skill in selectors]
+        contracts = [skill_loader.get_workflow_declaration(skill) for skill in selectors]
         catalogs = {
             contract.output_templates.catalog
             for contract in contracts
@@ -1488,23 +1697,45 @@ def _validate_step_skills(step_name: str, step: StepConfig, skill_loader: SkillL
             raise ValueError(f"Step '{step_name}' references unknown skill '{skill_name}'") from exc
 
 
-def _validate_step_required_prompt_inputs(
+def _resolve_step_compositions(
+    model: PlaybookDefinition,
     step_name: str,
     step: StepConfig,
     skill_loader: SkillLoader,
+) -> tuple[StepWorkflowComposition, ...]:
+    """Resolve every declared primary branch against one workflow environment."""
+    workflow_skills = resolve_playbook_skills(
+        model,
+        channel="workflow",
+        role=step.role,
+        step_name=step_name,
+    )
+    return tuple(
+        resolve_step_workflow_composition(
+            skill_loader,
+            primary_skill=skill_name,
+            workflow_skills=workflow_skills,
+            step_name=step_name,
+        )
+        for skill_name in skill_selector_names(step.skill)
+    )
+
+
+def _validate_step_required_prompt_inputs(
+    step_name: str,
+    step: StepConfig,
+    compositions: tuple[StepWorkflowComposition, ...],
 ) -> None:
     """Reject a step whose artifact graph cannot satisfy a required mapping."""
     if "input_artifacts" not in step.model_fields_set:
         return
-    selectors = [step.skill] if isinstance(step.skill, str) else list(step.skill.values())
     declared_artifacts = set(step.input_artifacts or [])
-    for skill_name in selectors:
-        contract = skill_loader.get_workflow_contract(skill_name)
-        for mapping in contract.prompt_inputs:
+    for composition in compositions:
+        for mapping in composition.prompt_inputs:
             if mapping.required and not declared_artifacts.intersection(mapping.artifacts):
                 candidates = ", ".join(mapping.artifacts)
                 raise ValueError(
-                    f"Step {step_name!r}, skill {canonical_skill_name(skill_name)!r}: "
+                    f"Step {step_name!r}, composition {composition.skill_names!r}: "
                     f"required prompt input {mapping.placeholder!r} expects one of "
                     f"[{candidates}], but input_artifacts declares "
                     f"{sorted(declared_artifacts)}"
@@ -1514,44 +1745,68 @@ def _validate_step_required_prompt_inputs(
 def _validate_feedback_target_prompt_inputs(
     model: PlaybookDefinition,
     *,
-    skill_loader: SkillLoader,
+    compositions: Mapping[str, tuple[StepWorkflowComposition, ...]],
 ) -> None:
     """Ensure routed feedback is exposed to every possible target skill."""
 
-    def receives_workflow_feedback(skill_name: str) -> bool:
+    def receives_feedback_artifact(composition: StepWorkflowComposition, artifact: str) -> bool:
         return any(
-            mapping.artifacts[0] == "workflow_feedback"
-            for mapping in skill_loader.get_workflow_contract(skill_name).prompt_inputs
+            mapping.artifacts == (artifact,)
+            for mapping in composition.prompt_inputs
+        )
+
+    def receives_causal_artifact(composition: StepWorkflowComposition, artifact: str) -> bool:
+        return any(
+            artifact in mapping.artifacts
+            for mapping in composition.prompt_inputs
         )
 
     for step_name, step in model.steps.items():
         behavior = resolve_step_behavior(model, step_name)
-        targets: List[tuple[str, str]] = []
-        if behavior.feedback_target is not None:
-            targets.append(("behavior.feedback_target", behavior.feedback_target))
+        targets: List[tuple[str, str, str]] = []
+        if behavior.feedback_target is not None and behavior.feedback_artifact is not None:
+            targets.append(
+                (
+                    "behavior.feedback_target",
+                    behavior.feedback_target,
+                    behavior.feedback_artifact,
+                )
+            )
+        for target_name, route in (behavior.feedback_routes or {}).items():
+            targets.append(
+                (
+                    "behavior.feedback_routes",
+                    target_name,
+                    route.artifact,
+                )
+            )
         for binding in step.human_tasks:
             if binding.feedback_delivery is None:
                 continue
             targets.extend(
-                ("human_tasks feedback_delivery", target)
+                (
+                    "human_tasks feedback_delivery",
+                    target,
+                    binding.feedback_delivery.artifact,
+                )
                 for target in [*binding.outcomes.values(), *binding.allowed_targets]
                 if target != DONE_TARGET
             )
 
-        for source, target_name in targets:
-            target = model.steps[target_name]
-            selectors = (
-                [target.skill] if isinstance(target.skill, str) else list(target.skill.values())
-            )
+        for source, target_name, artifact in targets:
             missing = [
-                canonical_skill_name(skill_name)
-                for skill_name in selectors
-                if not receives_workflow_feedback(skill_name)
+                composition.skill_names
+                for composition in compositions[target_name]
+                if not (
+                    receives_causal_artifact(composition, artifact)
+                    if source == "behavior.feedback_routes"
+                    else receives_feedback_artifact(composition, artifact)
+                )
             ]
             if missing:
                 raise ValueError(
                     f"Step {step_name!r} {source} target {target_name!r} must declare "
-                    "a prompt input for workflow_feedback; missing from "
+                    f"a prompt input for {artifact}; missing from "
                     f"{missing}"
                 )
 
@@ -1566,20 +1821,18 @@ def _tool_requirement_satisfied(required: str, allowed_tools: List[str]) -> bool
 def _validate_step_required_tools(
     step_name: str,
     step: StepConfig,
-    skill_loader: SkillLoader,
+    compositions: tuple[StepWorkflowComposition, ...],
 ) -> None:
     """Reject a step that cannot execute its selected skill's declared tools."""
-    selectors = [step.skill] if isinstance(step.skill, str) else list(step.skill.values())
-    for skill_name in selectors:
-        contract = skill_loader.get_workflow_contract(skill_name)
+    for composition in compositions:
         missing = [
             required
-            for required in contract.required_tools
+            for required in composition.required_tools
             if not _tool_requirement_satisfied(required, step.allowed_tools)
         ]
         if missing:
             raise ValueError(
-                f"Step {step_name!r}, skill {canonical_skill_name(skill_name)!r}: "
+                f"Step {step_name!r}, composition {composition.skill_names!r}: "
                 f"allowed_tools is missing required declarations {missing}"
             )
 
@@ -1588,7 +1841,7 @@ def _validate_step_human_tasks(
     step_name: str,
     step: StepConfig,
     steps: Dict[str, StepConfig],
-    skill_loader: SkillLoader,
+    compositions: tuple[StepWorkflowComposition, ...],
 ) -> None:
     """Ensure every policy binding names a skill task and declared destinations."""
     if not step.human_tasks:
@@ -1598,8 +1851,6 @@ def _validate_step_human_tasks(
         for portion in (step.hybrid.portions if step.hybrid is not None else ())
         if portion.owner == "human"
     }
-    selectors = [step.skill] if isinstance(step.skill, str) else list(step.skill.values())
-    contracts = [skill_loader.get_workflow_contract(skill) for skill in selectors]
     for binding in step.human_tasks:
         if (
             binding.trigger != "initial"
@@ -1610,13 +1861,13 @@ def _validate_step_human_tasks(
                 f"Step '{step_name}' human task trigger {binding.trigger!r} "
                 "is not declared in its transitions"
             )
-        for skill_name, contract in zip(selectors, contracts):
+        for composition in compositions:
             matching_policies = [
-                policy for policy in contract.human_tasks if policy.id == binding.task_id
+                policy for policy in composition.human_tasks if policy.id == binding.task_id
             ]
             if not matching_policies:
                 raise ValueError(
-                    f"Step '{step_name}', skill {canonical_skill_name(str(skill_name))!r}: "
+                    f"Step '{step_name}', composition {composition.skill_names!r}: "
                     f"unknown human task {binding.task_id!r}"
                 )
             policy = matching_policies[0]
@@ -1625,7 +1876,7 @@ def _validate_step_human_tasks(
                 or any(decision.requires_feedback for decision in policy.decisions)
             ):
                 raise ValueError(
-                    f"Step '{step_name}', skill {canonical_skill_name(str(skill_name))!r}: "
+                    f"Step '{step_name}', composition {composition.skill_names!r}: "
                     f"human task {binding.task_id!r} cannot deliver feedback because its policy "
                     "does not collect feedback"
                 )
@@ -1633,7 +1884,7 @@ def _validate_step_human_tasks(
                 binding.allowed_targets
             ):
                 raise ValueError(
-                    f"Step '{step_name}', skill {canonical_skill_name(str(skill_name))!r}: "
+                    f"Step '{step_name}', composition {composition.skill_names!r}: "
                     f"human task {binding.task_id!r} requires allowed_targets on the binding"
                 )
         for target in [*binding.outcomes.values(), *binding.allowed_targets]:

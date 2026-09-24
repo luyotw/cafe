@@ -3,10 +3,10 @@
 本文件是 **v0.2 的 implementation plan / spec**。  
 版本定位、產品邊界、以及 `v0.3+` 的長期演進方向以 [docs/roadmap.md](../roadmap.md) 為準；本文件只定義 `v0.2` 要做什麼、怎麼做、以及如何驗收。
 
-版本名稱在本文件中沿用 roadmap 的開發週期語意：`0.N.0` 表示進入
-`v0.N` 週期，該週期能力在 `0.N.x` 逐步交付，並在發布
-`0.(N+1).0` 前滿足完成標準。因此下文標示 `v0.3` 的項目，是
-`0.3.x` 開發週期的交付範圍。
+本檔是歷史 implementation plan，沿用當時把 `v0.N` 當開發週期的舊
+命名。現行 release number 已改由 [versioning policy](../versioning.md)
+依實際變更幅度決定；下文的 `v0.3`、`v0.4` 等標示只代表原始規劃中
+的產品階段，不再保留或承諾對應版號。
 
 > **備註：** 本檔為 v0.2 架構與驗收紀錄。內文主要 YAML 範例已對齊現行 **intent** 鍵（`on:` 轉移：`await_agent` / `confirm_output` / `need_clarification` / `need_permission` / `manual_handoff` / `no_changes_needed` 等）。下方 `CAFE_GOTO` 章節與「目前待執行項目」、「保留的相容層」段落仍提及 `CAFE_*` 字串，那是 v0.1 → v0.2 過渡的歷史對照，**不是現行操作介面**；請以 `src/cafe/data/playbooks/` 現行檔案為準。
 

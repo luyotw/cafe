@@ -7,6 +7,7 @@ from .api import (
     DriverContractUnsafeError,
     DriverEntryRequest,
     DriverEntryResult,
+    DriverSettingsUpdateResult,
     EventCallbackPolicy,
     EventCallbackRequest,
     Freshness,
@@ -19,6 +20,7 @@ from .api import (
     evaluate_driver_entry,
     event_callback_projection,
     replace_confirmed_contract,
+    update_driver_settings,
 )
 
 __all__ = [
@@ -28,6 +30,7 @@ __all__ = [
     "DriverContractUnsafeError",
     "DriverEntryRequest",
     "DriverEntryResult",
+    "DriverSettingsUpdateResult",
     "EventCallbackPolicy",
     "EventCallbackRequest",
     "Freshness",
@@ -40,4 +43,5 @@ __all__ = [
     "evaluate_driver_entry",
     "event_callback_projection",
     "replace_confirmed_contract",
+    "update_driver_settings",
 ]

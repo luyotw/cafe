@@ -356,6 +356,30 @@ class GitOperations:
         flag = "-D" if force else "-d"
         self.run_git("branch", flag, branch_name)
 
+    def delete_remote_branch_if_exists(
+        self, branch_name: str, *, remote: str = "origin"
+    ) -> bool:
+        """Delete a remote branch when it exists.
+
+        Returns ``True`` when a branch was deleted and ``False`` when the
+        remote branch was already absent. Transport and permission failures
+        remain errors so lifecycle cleanup can stop without discarding its
+        still-retryable local state.
+        """
+        remote_ref = f"refs/heads/{branch_name}"
+        if not self.run_git("ls-remote", "--heads", remote, remote_ref).strip():
+            return False
+        try:
+            self.run_git("push", remote, "--delete", branch_name)
+        except GitError:
+            # Another actor may have removed the branch after the initial
+            # lookup. Re-check before treating an already-achieved end state
+            # as a lifecycle failure.
+            if not self.run_git("ls-remote", "--heads", remote, remote_ref).strip():
+                return False
+            raise
+        return True
+
     def pull(self) -> None:
         """Pull latest changes from remote.
 
@@ -436,34 +460,6 @@ class GitOperations:
         except GitError:
             return False
         return True
-
-    def ensure_remote_base_ancestor(
-        self,
-        base_branch: str,
-        head_ref: str,
-        *,
-        remote: str = "origin",
-    ) -> str:
-        """Fetch a PR base and require the candidate history to contain it.
-
-        A local base may be ahead of its remote counterpart. A behind or
-        diverged base is unsafe because the eventual PR range would differ
-        from the range CAFE reviewed.
-        """
-        remote_ref = f"{remote}/{base_branch}"
-        self.run_git(
-            "fetch",
-            "--no-tags",
-            remote,
-            f"+refs/heads/{base_branch}:refs/remotes/{remote}/{base_branch}",
-        )
-        if not self.is_ancestor(remote_ref, head_ref):
-            raise GitError(
-                f"Remote base {remote_ref} is not contained in {head_ref}. "
-                f"Merge or rebase {remote_ref} into {head_ref}, resolve any conflicts, "
-                "then retry."
-            )
-        return remote_ref
 
     def get_commits_since(self, timestamp: str) -> List[dict]:
         """Get commits since a given timestamp.

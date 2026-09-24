@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from types import SimpleNamespace
 
-from cafe.core.blackboard import BlackboardStore
+from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardStore, EventEntry
 from cafe.core.downstream_contract import ContractValidationError
 from cafe.core.types import AgentCLI, TokenUsage
 from cafe.phases.generic_phase import GenericPhase
@@ -176,7 +176,12 @@ Read {evidence_file} and use {template_file}.
         playbook={
             "playbook": {"id": "synthesis"},
             "roles": {"researcher": {"default_agent": "Morgan"}},
-            "skills": {"workflow": {"shared": []}, "chat": {"shared": []}},
+            "skills": {
+                "workflow": {
+                    "shared": ["cafe-workflow-common", "cafe-github_sync"]
+                },
+                "chat": {"shared": []},
+            },
             "steps": {"synthesis": step},
         },
         generic_phase=generic_phase,
@@ -458,6 +463,10 @@ def test_packaged_workflow_uses_full_then_packet_then_legacy_fallback(
         skill_bridge=NativeSkillBridge(loader, project_root=tmp_path, home_dir=tmp_path / "home"),
     )
     playbook = PlaybookLoader().load("standard")
+    # This packet-loading journey predates the current workspace companion;
+    # keep it on the bounded legacy consumer path.
+    playbook["steps"]["review"].pop("workspace_input_artifact", None)
+    playbook["steps"]["pr"].pop("workspace_input_artifact", None)
     issue_dir = tmp_path / ".cafe" / "issues" / "packaged-packet-journey"
     spec = issue_dir / "spec" / "iteration_001" / "output.md"
     plan = issue_dir / "plan" / "iteration_001" / "output.md"
@@ -475,7 +484,12 @@ def test_packaged_workflow_uses_full_then_packet_then_legacy_fallback(
         encoding="utf-8",
     )
     code.write_text("implementation evidence", encoding="utf-8")
-    feedback.write_text("review evidence", encoding="utf-8")
+    feedback.write_text(
+        "## Todo List\n"
+        "- [ ] `BLK-001` — Source: `review` — Work: fix review finding — "
+        "Closure: corrected journey passes — Evidence: targeted regression\n",
+        encoding="utf-8",
+    )
     store = BlackboardStore(issue_dir)
     state = store.load_or_create("develop")
     for name, artifact in (("spec", spec), ("plan", plan), ("code", code)):
@@ -498,7 +512,22 @@ def test_packaged_workflow_uses_full_then_packet_then_legacy_fallback(
     assert "spec_file=full" in first_develop.prompts[0]
     assert "plan_file=full" in first_develop.prompts[0]
 
-    store.set_artifact(state, "review_feedback", str(feedback))
+    state.artifacts["review_feedback"] = ArtifactEntry(
+        name="review_feedback",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="review",
+        path=str(feedback),
+    )
+    state.events.append(
+        EventEntry(
+            timestamp="2026-01-01T00:00:00Z",
+            step="review",
+            event_type="transition",
+            message="",
+            data={"from": "review", "to": "develop"},
+        )
+    )
     correction_develop = run("develop")
     review = run("review")
     pr = run("pr")
@@ -528,6 +557,8 @@ def test_packaged_workflow_uses_full_then_packet_then_legacy_fallback(
     assert Path(final_host_inputs["plan_file"]).resolve() == plan
 
     spec.write_text("# Ordinary confirmed artifact\n", encoding="utf-8")
+    # This final probe is a normal entry; historical review feedback is not causal.
+    state.handoff_contract = None
     run("develop")
 
 

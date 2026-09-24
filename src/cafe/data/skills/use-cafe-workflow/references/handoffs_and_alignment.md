@@ -35,17 +35,26 @@ input`:
 
 Then route by intent:
 
-- An active declared non-advancing `revise` requiring feedback and marked
-  `correction: true` is the sole Driver correction exception: after complete
-  Driver review and `cafe chat` consensus, submit only that declared revise
-  through the existing correction route.
+- The unique active declared correction outcome is the sole Driver correction
+  exception only when it requires feedback, is marked `correction: true`, and
+  routes to a non-advancing correction continuation. Derive it from the active
+  HumanTask declaration regardless of outcome, phase, or target names. After
+  complete Driver review and one `cafe chat` consensus exchange, submit only
+  that outcome through the existing correction route. If zero or multiple
+  outcomes qualify, fail closed for user/playbook clarification.
 - `confirm_output` from a mandatory or `user_required` advancing `confirm`
   stops for the real user. Other user-owned decisions also stop for the user.
 - `confirm_output` from a `driver_confirmable` step: verify the output and
   required input artifacts are complete, in-mandate, and consistent with
   accepted upstream artifacts before confirming. Apply the Delivery comparison below.
-- `need_clarification`: stop unless the exact answer already exists in the
-  current thread. Strategic documents are not a substitute for the answer.
+- `need_clarification` with confirmed policy `driver_confirmable`: the Driver
+  may answer when the complete response stays within the confirmed Delivery
+  Contract's scope, constraints and existing authority, and triggers no
+  deviation. Multiple authorized reversible technical choices may be resolved
+  using repository precedent, smaller footprint, and reversibility. Contract
+  changes, new permission or external-effect authority, mandatory gates,
+  reserved product or strategy decisions, and uncertainty about whether
+  authority already exists remain user-owned.
 - `need_permission`: stop unless the exact permission already exists in the
   current thread. Never grant production access, destructive actions, or
   external side effects for the user.
@@ -83,15 +92,16 @@ strings, count keywords or accept a proposal merely because it says â€œsimplerâ€
 
 Build the assessment against that exact `snapshot_sha256`:
 
-- `coverage`: one entry for every `in_scope`, `acceptance_invariants`, and
-  `required_evidence` obligation key returned in the packet, with `status`
+- `coverage`: one entry for every `in_scope` and `acceptance_invariants`
+  obligation key returned in the packet, with `status`
   (`preserved` only with positive proof), `source` (actual artifact name), exact
   `quote`, and a substantive `reason`. For every acceptance invariant also
   provide concrete `implementation` and `verification` paths.
 - `deviation`: one overall record with `status`, `source`, `quote`, and `reason`.
-  Read the complete contract, including outcome, motivation, out-of-scope
-  behavior, implementation direction, every constraint, allowed variations and
-  deviation triggers. Explain how the proposal fits those boundaries, citing
+  Read the complete contract, including purpose, out-of-scope behavior, explicit
+  constraints, permissions and exact closeout commands. Implementation direction
+  is advisory; an equivalent approach is not a deviation unless it violates a
+  fixed constraint or another requirement. Explain how the proposal fits those boundaries, citing
   relevant evidence; a bare "no deviation" or the proposal's own claim of
   compliance is insufficient. Use `clear` only when absence of unauthorized
   changes is positively shown; otherwise use `material`, `uncertain` or
@@ -100,10 +110,10 @@ Build the assessment against that exact `snapshot_sha256`:
 
 Check all confirmed behavior and acceptance coverage, including edge cases,
 compatibility and integrations. Fewer files, less abstraction or fewer
-unnecessary dependencies may be acceptable only within allowed variations,
-with every requirement and verification path preserved. Unapproved additions,
-architecture substitutions, new dependencies/costs, authority or external
-changes require a user handoff. Planning/refinement can elaborate existing
+unnecessary dependencies may be acceptable with every requirement and
+verification path preserved. Changes to scope, fixed constraints, permissions,
+or external effects require a user handoff. Implementation-only substitutions
+within those boundaries do not. Planning/refinement can elaborate existing
 facts; it cannot change the confirmed feature boundary in either direction.
 
 Refresh the context from current task/baton and preflight evidence, then run:
@@ -143,12 +153,13 @@ Use this outcome-sensitive authority matrix after due review/chat consensus:
 
 | Active outcome | Driver authority |
 | --- | --- |
-| Active declared non-advancing `revise` requiring feedback and marked `correction: true` | Driver may submit only a declared non-advancing `revise`, with consolidated findings, consensus, and acceptance conditions, to create the formal correction iteration. |
+| Unique active declared correction outcome requiring feedback, marked `correction: true`, and routing to a non-advancing correction continuation | Driver may submit only that derived outcome, with consolidated findings, consensus, acceptance conditions, and any relevant current user-confirmed direction missing from the target's declared inputs, to create the formal correction iteration. Zero or multiple eligible outcomes fail closed for user/playbook clarification. |
 | `user_required` or mandatory confirmation gate advancing `confirm` | user_required and mandatory confirmation gates keep advancing `confirm` user-owned. |
 | Clean `driver_confirmable` confirmation | driver_confirmable clean confirm remains driver-permitted after independent review. |
-| Clarification, permission, capability, scope, strategic, or unknown decision | clarification, permission, capability, scope, strategic, and unknown decisions remain user-owned. |
+| `driver_confirmable` clarification within the confirmed contract and existing authority | Driver may submit the schema-valid answer with a concise contract basis; multiple authorized technical choices may use repository precedent, smaller footprint, and reversibility. |
+| Clarification that changes the contract, needs new authority, is reserved to the user, or has uncertain authority; permission, capability, scope, strategic, or unknown decision | These decisions remain user-owned. |
 
-Driver-triggered revise is correction, never approval. No user prompt occurs
+Driver-triggered correction is correction, never approval. No user prompt occurs
 during an autonomous correction loop. Only user-owned clean advancement
 candidates receive a user confirmation; a clean `driver_confirmable` candidate
 is completed by the Driver after its independent review. Present one final user
@@ -229,6 +240,12 @@ revision, include its required `feedback` instead of sending plain text. Stop fo
 approval would change requirements beyond authority, public positioning,
 business/legal/pricing decisions, production access, destructive operations,
 or an ambiguous strategic tradeoff.
+
+When the Driver performed relevant work before completing the task, it may add
+`"work_report":{"summary":"<work done>","outcome":"<observed result>","evidence":["<reference>"]}`
+to the same JSON object. This records provenance for the declared continuation;
+it does not approve the output, grant authority, or replace the required
+decision, answer, feedback, or target.
 
 ## Driver-owned alignment
 
@@ -330,12 +347,17 @@ For an explicit `alignment_checkpoint`:
 1. Read the latest
    `.cafe/issues/<issue>/<step>/iteration_*/alignment_request.json`.
 2. Apply the same evidence tuple.
-3. For `within` + `agent`, resume with explicit JSON; plain text must not
-   approve the checkpoint:
+3. For `within` + `agent`, resume through the required wrapper with explicit
+   JSON; plain text must not approve the checkpoint. The wrapper verifies the
+   current alignment handoff, confirmed Driver authority, and the durable
+   request's allowed decision before forwarding the input:
 
    ```bash
-   cafe workflow --execute --mute-agent-output \
-     --user-input '{"decision":"approve","reason":"Within confirmed roadmap and mandate."}'
+   python3 <skill-dir>/scripts/run_workflow.py \
+     --issue <issue> --playbook <confirmed-playbook> \
+     --driver-mode <confirmed-mode> \
+     --fresh-facts '<rebuilt-current-driver-facts-json>' \
+     --alignment-input '{"decision":"approve","reason":"Within confirmed roadmap and mandate."}'
    ```
 
 4. For `within` + `propose`, use the playbook's grounded recommendation flow.

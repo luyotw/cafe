@@ -1,6 +1,6 @@
 ---
 name: cafe-draft
-description: 依核定大綱撰寫初稿
+description: Draft an article from an approved editorial brief
 version: 1.1.0
 workflow:
   execution_profile:
@@ -13,6 +13,18 @@ workflow:
       pattern: revision_feedback
       prompt: Provide the clarification needed to continue drafting.
       input_schema: feedback
+  prompt_inputs:
+    - artifacts: [review_feedback, causal_todo]
+      placeholder: correction_source
+      required: false
+  checklist:
+    variants:
+      - when: {feedback: true}
+        sections:
+          - todo_projection: {artifact: causal_todo, causal: true}
+      - when: {}
+        sections:
+          - reference: correction_contract.md
 ---
 
 # Draft Article
@@ -21,10 +33,10 @@ workflow:
 Read your agent file: {agent_file}
 
 ## Instructions
-依大綱撰寫初稿：結構清楚、論述具體、符合讀者情境。
+Write the draft from the brief or complete editorial correction source with a clear structure, concrete reasoning, and audience-appropriate detail. Preserve every incoming Todo item ID.
 
 ## Output
 Write draft to: {output_file}
 
 ## Handoff
-- 依照本輪結果寫入 next-step baton；blackboard 由 runtime 更新。
+- Write the next-step baton for this result; the runtime updates the blackboard.

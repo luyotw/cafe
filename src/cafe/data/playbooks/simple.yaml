@@ -72,10 +72,12 @@ steps:
   develop:
     type: skill
     skill: cafe-develop
+    handoff_label: Continue implementation
     role: developer
     assignee_type: agent
     input_artifacts: [spec, qa_feedback, workflow_feedback]
     output_artifact: code
+    workspace_artifact: workspace
     human_tasks:
       - trigger: need_clarification
         task_id: clarification-feedback
@@ -101,7 +103,8 @@ steps:
     skill: cafe-qa
     role: qa
     assignee_type: agent
-    input_artifacts: [spec, code]
+    input_artifacts: [spec, code, workspace]
+    workspace_input_artifact: workspace
     output_artifact: qa_feedback
     human_tasks:
       - trigger: need_clarification
@@ -126,12 +129,17 @@ steps:
     skill: cafe-pr
     role: developer
     assignee_type: agent
-    input_artifacts: [spec, code, qa_feedback, workflow_feedback]
+    input_artifacts: [spec, code, workspace, qa_feedback, workflow_feedback]
+    workspace_input_artifact: workspace
     output_artifact: pr_result
     behavior:
       completion: baton
       publish_confirmation: true
-      feedback_target: develop
+      feedback_target: pr
+      feedback_artifact: workflow_feedback
+      feedback_source_kind: github_pr
+      feedback_todo_source: pr_comment
+      feedback_todo_id_prefix: PRC
       context_providers: [git_history, local_review]
     capability_requests: [cafe.pr.publish]
     allowed_tools: [Read, Edit, Write, Grep, Glob]
@@ -142,8 +150,8 @@ steps:
     human_tasks:
       - trigger: confirm_output
         task_id: local-review
-        outcomes: {fix_now: develop, create_follow_up: _done, continue_without_issue: _done}
-        feedback_delivery: {artifact: workflow_feedback, source_kind: local_review}
+        outcomes: {fix_now: pr, create_follow_up: _done, continue_without_issue: _done}
+        feedback_delivery: {artifact: workflow_feedback, source_kind: local_review, todo_source: workflow_feedback, todo_id_prefix: WF}
     "on":
       confirm_output: pr
       need_permission: pr

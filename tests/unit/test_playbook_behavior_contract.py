@@ -48,6 +48,14 @@ def _playbook(*, build_behavior=None, defaults=None):
     if defaults is not None:
         payload["behavior"] = defaults
     if build_behavior is not None:
+        if build_behavior.get("feedback_target"):
+            build_behavior = {
+                "feedback_artifact": "workflow_feedback",
+                "feedback_source_kind": "github_pr",
+                "feedback_todo_source": "pr_comment",
+                "feedback_todo_id_prefix": "PRC",
+                **build_behavior,
+            }
         payload["steps"]["build"]["behavior"] = build_behavior
         if build_behavior.get("publish_confirmation"):
             payload["steps"]["build"]["capability_requests"] = ["cafe.pr.publish"]
@@ -155,6 +163,26 @@ def test_behavior_contract_rejects_unknown_grant_and_unknown_feedback_target():
         )
 
 
+def test_feedback_route_preserves_custom_topology_identifiers():
+    payload = _playbook()
+    payload["steps"]["verify"]["input_artifacts"] = ["signals"]
+    payload["steps"]["build"]["behavior"] = {
+        "feedback_target": "verify",
+        "feedback_artifact": "signals",
+        "feedback_source_kind": "inspection_note",
+        "feedback_todo_source": "bespoke",
+        "feedback_todo_id_prefix": "TASK",
+    }
+
+    behavior = resolve_step_behavior(PlaybookDefinition.model_validate(payload), "build")
+
+    assert behavior.feedback_target == "verify"
+    assert behavior.feedback_artifact == "signals"
+    assert behavior.feedback_source_kind == "inspection_note"
+    assert behavior.feedback_todo_source == "bespoke"
+    assert behavior.feedback_todo_id_prefix == "TASK"
+
+
 def test_feedback_targets_require_an_explicit_workflow_feedback_consumer():
     """UT-003: feedback routing fails closed when its target cannot receive it."""
     payload = _playbook(build_behavior={"feedback_target": "verify"})
@@ -175,6 +203,8 @@ def test_human_feedback_delivery_requires_an_explicit_workflow_feedback_consumer
             "feedback_delivery": {
                 "artifact": "workflow_feedback",
                 "source_kind": "local_review",
+                "todo_source": "workflow_feedback",
+                "todo_id_prefix": "WF",
             },
         }
     ]
@@ -235,8 +265,8 @@ def test_baton_completion_requires_workflow_complete_for_terminal_transition():
     assert model.steps["publish"].on == {"workflow_complete": "_done"}
 
 
-def test_custom_named_publish_step_uses_declared_baton_and_receipt_contract(tmp_path):
-    """UT-003/UT-004: completion and publish gates have no reserved step name."""
+def test_custom_named_publish_step_uses_declared_baton_without_core_receipt_gate(tmp_path):
+    """UT-003/UT-004: publication does not make a remote receipt a core gate."""
     playbook = _playbook(
         build_behavior={"completion": "baton", "publish_confirmation": True}
     )
@@ -254,7 +284,7 @@ def test_custom_named_publish_step_uses_declared_baton_and_receipt_contract(tmp_
     )
 
     assert runtime._is_baton_driven_step("build") is True
-    assert runtime._required_capability_ids("build") == ["cafe.pr.publish"]
+    assert runtime._required_capability_ids("build") == []
     assert runtime._is_baton_driven_step("verify") is False
 
 

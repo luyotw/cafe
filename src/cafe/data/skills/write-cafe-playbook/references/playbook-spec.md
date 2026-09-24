@@ -122,6 +122,30 @@ contract and every other warning are resolved.
 
 ## 3. Step Fields
 
+### Current artifact contract
+
+- Declare each backward correction route on its producing step with
+  `feedback_routes` keyed by destination. Each route names the producer output
+  artifact, source kind, Todo source, and stable ID prefix; the destination
+  lists the artifact and exposes one causal Todo projection.
+- Resolve routes from the persisted sender/destination edge, including dynamic
+  `allowed_goto` targets. Never infer correction mode from destination, artifact
+  name, chat, baton summaries, or session memory. Strict validation rejects
+  incomplete or ambiguous declarations.
+- A current workspace is one declared companion beside the summary. The
+  producer uses `workspace_artifact`; current consumers use
+  `workspace_input_artifact`, and that key must also appear in
+  `input_artifacts`. Summary and workspace names must differ.
+- Workspace records are schema-versioned, atomically written, bound to
+  repository state, and verified with repository-relative nonsymlink
+  `verification.json` receipts. An unchanged verified snapshot keeps its
+  version. Legacy v0.2 mixed records remain bounded compatibility data and are
+  not current verification.
+- Plan and correction sources use one canonical `## Todo List` of at most 100
+  items, stable identities, and the exact intentional-empty marker
+  `No actionable work.`. Consumers write progress only to their own output
+  under `## Todo Progress`.
+
 | Field | Rule |
 | --- | --- |
 | `type` | Usually `skill`; use `subflow` only when an actual subflow exists |
@@ -130,13 +154,15 @@ contract and every other warning are resolved.
 | `assignee_type` | `agent` (or a v0.2-compatible omission), `human`, `auto`, or `hybrid` |
 | `input_artifacts` | Artifact keys already produced by earlier or conditional paths |
 | `output_artifact` | The key registered when `{output_file}` exists |
+| `todo_identity_input_artifact` | Optional declared prior Todo authority for a plan revision; it must also appear in `input_artifacts`, and the runtime verifies or materializes its durable Work fingerprints before the author runs |
 | `initial_input` | Entry-step-only trusted input providers and explicit artifact/prompt bindings |
 | `template` | Optional default selected from the step skill's declared output-template catalog |
 | `valid_intents` | Supported `PhaseStatusCode` tokens the phase may return |
 | `allowed_tools` | Least broad set that still allows the skill to complete |
 | `hooks` | Runtime-supported prepare/execute/publish hooks only |
-| `allowed_goto` | Explicit non-default routes; do not use as the happy path |
-| `"on"` | Complete intent-key → step transition map |
+| `allowed_goto` | Ordered discretionary routes exposed in the injected route catalog; do not use as the happy path |
+| `handoff_label` | Useful destination label preferred by the injected route catalog |
+| `"on"` | Complete intent-key → default transition map |
 | `human_tasks` | Explicit user-task bindings for user-facing handoff triggers |
 
 Quote `"on"`; unquoted YAML 1.1 may parse it as a boolean before normalization.
@@ -300,6 +326,12 @@ Use a self-loop when the user is reviewing the current phase's output:
 
 ## 6. Artifact Matrix
 
+Current steps keep the singular `output_artifact` as the primary output. At
+most one optional declared workspace companion may be published. Ordinary
+`artifact.json` behavior remains unchanged, and a workspace is registered as a
+declared artifact rather than an implicit sidecar. Consumer inputs must name
+the summary, workspace, or both explicitly.
+
 Build this table before writing YAML:
 
 | Producer | Output key | Artifact meaning | Consumer | Consumer input |
@@ -326,11 +358,11 @@ Use `plan` only when the artifact itself contains the executable worklist, inclu
 
 The bridge receives the old plan as `{plan_file}` and writes the next plan to `{output_file}`. Runtime resolves the incoming artifact before registering the new one, so these are separate versioned files. The bridge must:
 
-1. Complete and check the incoming plan.
+1. Complete the incoming plan while keeping the accepted source immutable, and record progress in the phase-owned ledger.
 2. Obtain user acceptance of its result.
 3. Produce and confirm the next plan, or produce `not_required` with no unchecked tasks.
 
-Do not duplicate plan tasks in a sidecar checklist. Runtime `checklist.md` is procedural; the plan checkboxes are the cross-phase implementation worklist.
+Do not duplicate plan tasks in an ad hoc sidecar. The incoming plan remains immutable; runtime `checklist.md` projects its work items, and completion belongs in the consumer output's `## Todo Progress` ledger.
 
 ## 7. Optional Phases And Skips
 

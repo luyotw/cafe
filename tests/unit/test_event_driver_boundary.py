@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import re
+from pathlib import Path
 
 
 def test_cafe_core_has_no_driver_mode_implementation() -> None:
@@ -41,8 +41,8 @@ def test_event_driver_status_projection_stays_in_the_skill_boundary() -> None:
         assert "read_status" not in path.read_text(encoding="utf-8")
 
 
-def test_driver_contract_application_has_one_production_skill_boundary() -> None:
-    """Test List 6: generic runtime and phases stay independent of #474 authority."""
+def test_driver_contract_application_has_only_driver_owned_production_boundaries() -> None:
+    """Generic core, runtime, phases, and UI stay independent of Driver authority."""
     source_root = Path(__file__).parents[2] / "src" / "cafe"
     driver_root = source_root / "driver"
     skill_root = source_root / "data" / "skills" / "use-cafe-workflow"

@@ -50,7 +50,9 @@ def test_build_repo_entrypoint_mismatch_message_returns_none_when_import_matches
     assert message is None
 
 
-def test_build_repo_entrypoint_mismatch_message_reports_external_install(tmp_path: Path) -> None:
+def test_build_repo_entrypoint_mismatch_message_reports_external_install(
+    monkeypatch, tmp_path: Path
+) -> None:
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     _write_repo_marker(repo_root)
@@ -58,6 +60,8 @@ def test_build_repo_entrypoint_mismatch_message_reports_external_install(tmp_pat
     external_cli = tmp_path / "site-packages" / "cafe" / "ui" / "cli.py"
     external_cli.parent.mkdir(parents=True, exist_ok=True)
     external_cli.write_text('print("external")\n', encoding="utf-8")
+    venv_python = tmp_path / ".venv" / "bin" / "python"
+    monkeypatch.setattr(cli.sys, "executable", str(venv_python))
 
     message = _build_repo_entrypoint_mismatch_message(
         cwd=repo_root,
@@ -68,6 +72,7 @@ def test_build_repo_entrypoint_mismatch_message_reports_external_install(tmp_pat
     assert str(repo_root.resolve()) in message
     assert str(external_cli.resolve()) in message
     assert "pip install -e ." in message
+    assert f"{venv_python.absolute()} -m pip install -e ." in message
 
 
 def test_reexec_command_preserves_cli_args(monkeypatch, tmp_path: Path) -> None:
@@ -79,6 +84,24 @@ def test_reexec_command_preserves_cli_args(monkeypatch, tmp_path: Path) -> None:
     assert command[1:] == ["-m", "cafe.ui.cli", "make", "--user-input", "hello"]
 
 
+def test_reexec_command_preserves_virtualenv_interpreter_symlink(
+    monkeypatch, tmp_path: Path
+) -> None:
+    repo_root = tmp_path / "repo"
+    base_python = tmp_path / "base" / "python"
+    base_python.parent.mkdir()
+    base_python.touch()
+    venv_python = tmp_path / ".venv" / "bin" / "python"
+    venv_python.parent.mkdir(parents=True)
+    venv_python.symlink_to(base_python)
+    monkeypatch.setattr(cli.sys, "executable", str(venv_python))
+
+    command = _build_repo_entrypoint_reexec_command(repo_root)
+
+    assert command[0] == str(venv_python.absolute())
+    assert Path(command[0]).resolve() == base_python.resolve()
+
+
 def test_reexec_env_prefers_checkout_src(monkeypatch, tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     (repo_root / "src").mkdir(parents=True)
@@ -88,6 +111,17 @@ def test_reexec_env_prefers_checkout_src(monkeypatch, tmp_path: Path) -> None:
 
     assert env["PYTHONPATH"].split(":")[0] == str((repo_root / "src").resolve())
     assert "/existing/path" in env["PYTHONPATH"].split(":")
+
+
+def test_entrypoint_check_honors_explicit_internal_skip(monkeypatch) -> None:
+    monkeypatch.setenv("CAFE_SKIP_ENTRYPOINT_CHECK", "1")
+    monkeypatch.setattr(
+        cli,
+        "_resolve_repo_entrypoint_mismatch",
+        lambda **_: pytest.fail("internal workflow launch must not re-exec into its worktree"),
+    )
+
+    assert cli._check_repo_entrypoint_alignment() is True
 
 
 def test_main_returns_error_code_without_traceback_when_auto_reexec_fails(

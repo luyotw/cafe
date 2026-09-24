@@ -1,6 +1,6 @@
 ---
 name: cafe-incident_detect
-description: 偵測與通報事件徵兆（維運應變流程）
+description: Detect and report incident signals for operational response
 version: 1.1.0
 workflow:
   execution_profile:
@@ -13,6 +13,18 @@ workflow:
       pattern: revision_feedback
       prompt: Provide the incident details needed to continue detection.
       input_schema: feedback
+  prompt_inputs:
+    - artifacts: [incident_plan, incident_learning, causal_todo]
+      placeholder: correction_source
+      required: false
+  checklist:
+    variants:
+      - when: {feedback: true}
+        sections:
+          - todo_projection: {artifact: causal_todo, causal: true}
+      - when: {}
+        sections:
+          - reference: correction_contract.md
 ---
 
 # Incident Detect
@@ -21,10 +33,10 @@ workflow:
 Read your agent file: {agent_file}
 
 ## Instructions
-記錄事件現象、影響範圍、時間線與初步嚴重度，準備交給分類／處置決策。
+Record the symptoms, impact, timeline, and initial severity for triage. When a correction source is supplied, consume every canonical Todo item and preserve its ID.
 
 ## Output
 Write incident report to: {output_file}
 
 ## Handoff
-- 依照本輪結果寫入 next-step baton；blackboard 由 runtime 更新。
+- Write the next-step baton for this result; the runtime updates the blackboard.

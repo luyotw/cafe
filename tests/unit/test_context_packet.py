@@ -11,7 +11,7 @@ from cafe.core.context_packet import (
     validate_effective_input_bindings,
 )
 from cafe.core.downstream_contract import ContractValidationError
-from cafe.skills.contracts import SkillWorkflowContract, resolve_effective_prompt_inputs
+from cafe.skills.contracts import SkillWorkflowDeclaration, resolve_effective_prompt_inputs
 
 
 def _spec() -> str:
@@ -50,7 +50,7 @@ GOAL-001 NONGOAL-001 AC-001 INV-001 TRUST-001
 def test_packet_relationship_falls_back_without_affecting_other_inputs(tmp_path: Path) -> None:
     source = tmp_path / "spec.md"
     source.write_text(_spec(), encoding="utf-8")
-    contract = SkillWorkflowContract.model_validate(
+    contract = SkillWorkflowDeclaration.model_validate(
         {
             "prompt_inputs": [
                 {
@@ -192,7 +192,7 @@ def test_paired_placeholders_share_one_effective_packet_binding(tmp_path: Path) 
     """One source relationship must not produce divergent paired packet inputs."""
     source = tmp_path / "spec.md"
     source.write_text(_spec(), encoding="utf-8")
-    contract = SkillWorkflowContract.model_validate(
+    contract = SkillWorkflowDeclaration.model_validate(
         {
             "prompt_inputs": [
                 {
@@ -234,7 +234,7 @@ def test_paired_placeholders_reject_a_full_and_packet_split(tmp_path: Path) -> N
     """UT-004: a declared alias pair owns one effective-input decision."""
     source = tmp_path / "spec.md"
     source.write_text(_spec(), encoding="utf-8")
-    contract = SkillWorkflowContract.model_validate(
+    contract = SkillWorkflowDeclaration.model_validate(
         {
             "prompt_inputs": [
                 {"artifacts": ["spec"], "placeholder": "spec_file"},

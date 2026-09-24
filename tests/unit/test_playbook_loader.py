@@ -6,7 +6,12 @@ import pytest
 import yaml
 
 from cafe.core.human_tasks import HumanTaskCompletion
-from cafe.core.playbook import PlaybookDefinition, StepConfig, resolve_playbook_skills
+from cafe.core.playbook import (
+    PlaybookDefinition,
+    StepConfig,
+    resolve_playbook_skills,
+    resolve_step_behavior,
+)
 from cafe.playbooks.loader import PlaybookLoader, apply_issue_playbook_overrides
 from cafe.skills.loader import SkillLoader
 from cafe.ui.human_tasks import (
@@ -33,6 +38,266 @@ def _write_skill(root: Path, name: str) -> None:
     (skill_dir / "SKILL.md").write_text(
         f"---\nname: {name}\ndescription: desc-{name}\n---\n\n# {name}\n",
         encoding="utf-8",
+    )
+
+
+def _write_workflow_skill(root: Path, name: str, workflow: str) -> None:
+    skill_dir = root / name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: desc-{name}\nworkflow:\n{workflow}\n---\n",
+        encoding="utf-8",
+    )
+
+
+def test_strict_validation_applies_contributor_tools_without_granting_permission(
+    tmp_path: Path,
+) -> None:
+    builtin_root = tmp_path / "builtin"
+    _write_skill(builtin_root / "skills", "primary")
+    _write_workflow_skill(
+        builtin_root / "skills", "support", "  required_tools: [Write]\n"
+    )
+    _write_playbook(
+        builtin_root / "playbooks",
+        "composed-tools",
+        """
+playbook: {id: composed-tools}
+roles: {operator: {}}
+commands: {prepare: {prompt_for_spec_plan_config: false}}
+skills:
+  workflow: {shared: [support]}
+  chat: {shared: []}
+steps:
+  run:
+    role: operator
+    skill: primary
+    allowed_tools: [Read]
+    on: {await_agent: _done}
+""",
+    )
+
+    loader = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError, match="allowed_tools.*Write"):
+        loader.load_model("composed-tools", strict=True)
+
+
+def test_strict_validation_checks_inactive_primary_branch_with_same_composition_rules(
+    tmp_path: Path,
+) -> None:
+    builtin_root = tmp_path / "builtin"
+    _write_workflow_skill(
+        builtin_root / "skills",
+        "first",
+        "  prompt_inputs:\n  - {artifacts: [spec], placeholder: spec_file}\n",
+    )
+    _write_workflow_skill(
+        builtin_root / "skills",
+        "later",
+        "  prompt_inputs:\n  - {artifacts: [plan], placeholder: spec_file}\n",
+    )
+    _write_workflow_skill(
+        builtin_root / "skills",
+        "support",
+        "  prompt_inputs:\n  - {artifacts: [spec], placeholder: spec_file}\n",
+    )
+    _write_playbook(
+        builtin_root / "playbooks",
+        "composed-branches",
+        """
+playbook: {id: composed-branches}
+roles: {operator: {}}
+commands: {prepare: {prompt_for_spec_plan_config: false}}
+skills:
+  workflow: {shared: [support]}
+  chat: {shared: []}
+steps:
+  run:
+    role: operator
+    skill: {'1': first, default: later}
+    input_artifacts: [spec, plan]
+    on: {await_agent: _done}
+""",
+    )
+
+    loader = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        loader.load_model("composed-branches", strict=True)
+    message = str(exc_info.value)
+    assert all(token in message for token in ("run", "prompt_inputs", "spec_file"))
+    assert "later" in message and "support" in message
+
+
+def test_strict_validation_activates_project_contributor_metadata_and_ignores_chat(
+    tmp_path: Path,
+) -> None:
+    builtin_root = tmp_path / "builtin"
+    project_root = tmp_path / "project"
+    _write_skill(builtin_root / "skills", "primary")
+    _write_skill(builtin_root / "skills", "neutral")
+    _write_workflow_skill(
+        tmp_path / "global" / "skills",
+        "support",
+        "  required_tools: [ForbiddenGlobal]\n",
+    )
+    _write_workflow_skill(
+        project_root / ".cafe" / "skills",
+        "support",
+        """  required_tools: [Read]
+  prompt_inputs:
+  - {artifacts: [spec], placeholder: spec_file, required: true}
+  human_tasks:
+  - id: approve
+    pattern: confirm_output
+    prompt: Approve?
+    input_schema: decision
+    decisions:
+    - {id: accept, label: Accept}
+""",
+    )
+    _write_workflow_skill(
+        project_root / ".cafe" / "skills",
+        "chat-only",
+        "  required_tools: [ForbiddenChat]\n",
+    )
+    _write_playbook(
+        project_root / ".cafe" / "playbooks",
+        "supported-contributor",
+        """
+playbook: {id: supported-contributor}
+roles: {operator: {}}
+commands: {prepare: {prompt_for_spec_plan_config: false}}
+skills:
+  workflow: {shared: [neutral, support]}
+  chat: {shared: [chat-only]}
+steps:
+  run:
+    role: operator
+    skill: primary
+    input_artifacts: [spec]
+    allowed_tools: [Read]
+    human_tasks:
+    - trigger: confirm_output
+      task_id: approve
+      outcomes: {accept: _done}
+    on: {confirm_output: run, await_agent: _done}
+""",
+    )
+
+    loaded = PlaybookLoader(
+        project_root=project_root,
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    ).load_model("supported-contributor", strict=True)
+
+    assert loaded.model.steps["run"].allowed_tools == ["Read"]
+
+
+@pytest.mark.parametrize(
+    ("field", "declaration", "resource_error"),
+    [
+        (
+            "prompt_references",
+            "  prompt_references: {guide: missing.md}\n",
+            "workflow reference not found: missing.md",
+        ),
+        (
+            "output_templates",
+            "  output_templates: {catalog: missing}\n",
+            "template catalog 'missing' is unavailable",
+        ),
+    ],
+)
+def test_strict_validation_rejects_missing_resource_on_primary_owned_contributor_field(
+    tmp_path: Path,
+    field: str,
+    declaration: str,
+    resource_error: str,
+) -> None:
+    builtin_root = tmp_path / "builtin"
+    _write_workflow_skill(
+        builtin_root / "skills",
+        "support",
+        declaration,
+    )
+    _write_skill(builtin_root / "skills", "primary")
+    _write_playbook(
+        builtin_root / "playbooks",
+        "unsupported-contributor",
+        """
+playbook: {id: unsupported-contributor}
+roles: {operator: {}}
+commands: {prepare: {prompt_for_spec_plan_config: false}}
+skills:
+  workflow: {shared: [support]}
+  chat: {shared: []}
+steps:
+  run: {role: operator, skill: primary, on: {await_agent: _done}}
+""",
+    )
+
+    loader = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        loader.load_model("unsupported-contributor", strict=True)
+    message = str(exc_info.value)
+    assert all(
+        token in message
+        for token in ("run", field, "support", "SKILL.md", "primary-owned", resource_error)
+    )
+
+
+def test_strict_validation_adds_step_and_source_to_malformed_contributor(
+    tmp_path: Path,
+) -> None:
+    builtin_root = tmp_path / "builtin"
+    _write_workflow_skill(
+        builtin_root / "skills",
+        "support",
+        "  execution_profile: {reasoning: impossible}\n",
+    )
+    _write_skill(builtin_root / "skills", "primary")
+    _write_playbook(
+        builtin_root / "playbooks",
+        "malformed-contributor",
+        """
+playbook: {id: malformed-contributor}
+roles: {operator: {}}
+commands: {prepare: {prompt_for_spec_plan_config: false}}
+skills:
+  workflow: {shared: [support]}
+  chat: {shared: []}
+steps:
+  run: {role: operator, skill: primary, on: {await_agent: _done}}
+""",
+    )
+
+    loader = PlaybookLoader(
+        project_root=tmp_path / "project",
+        global_root=tmp_path / "global",
+        builtin_root=builtin_root,
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        loader.load_model("malformed-contributor", strict=True)
+    message = str(exc_info.value)
+    assert all(
+        token in message
+        for token in ("run", "support", "SKILL.md", "execution_profile.reasoning", "impossible")
     )
 
 
@@ -110,6 +375,89 @@ def test_step_corrections_resume_sessions_by_default() -> None:
     step = StepConfig.model_validate({"skill": "phase", "role": "reviewer", "on": {}})
 
     assert step.correction_session == "resume"
+
+
+def _route_playbook(*, route_target: str = "receiver", route_overrides: dict | None = None) -> dict:
+    route = {
+        "artifact": "review_doc",
+        "source_kind": "editorial_review",
+        "todo_source": "review",
+        "todo_id_prefix": "REV",
+    }
+    if route_overrides:
+        route.update(route_overrides)
+    return {
+        "playbook": {"id": "custom-route"},
+        "steps": {
+            "producer": {
+                "skill": "source-skill",
+                "role": "writer",
+                "output_artifact": "review_doc",
+                "behavior": {"feedback_routes": {route_target: route}},
+                "on": {"manual_handoff": route_target},
+            },
+            "receiver": {
+                "skill": "receiver-skill",
+                "role": "writer",
+                "input_artifacts": ["review_doc"],
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+
+
+def test_destination_keyed_feedback_routes_are_name_neutral() -> None:
+    model = PlaybookDefinition.model_validate(_route_playbook())
+
+    behavior = resolve_step_behavior(model, "producer")
+
+    assert behavior.feedback_routes is not None
+    assert behavior.feedback_routes["receiver"].artifact == "review_doc"
+
+
+def test_feedback_route_requires_a_real_transition_and_matching_output() -> None:
+    missing_edge = _route_playbook(route_target="other")
+    with pytest.raises(ValueError, match="feedback route.*transition"):
+        PlaybookDefinition.model_validate(missing_edge)
+
+    mismatched_output = _route_playbook(route_overrides={"artifact": "other_doc"})
+    with pytest.raises(ValueError, match="feedback route.*output_artifact"):
+        PlaybookDefinition.model_validate(mismatched_output)
+
+
+def test_backward_allowed_goto_requires_a_complete_feedback_route() -> None:
+    playbook = _route_playbook()
+    playbook["steps"]["receiver"]["allowed_goto"] = ["producer"]
+    with pytest.raises(ValueError, match="backward transition.*producer"):
+        PlaybookDefinition.model_validate(playbook)
+
+
+def test_step_can_declare_one_arbitrary_named_workspace_companion() -> None:
+    step = StepConfig.model_validate(
+        {
+            "skill": "developer",
+            "role": "developer",
+            "output_artifact": "summary_doc",
+            "workspace_artifact": "verified_snapshot",
+            "on": {},
+        }
+    )
+
+    assert step.output_artifact == "summary_doc"
+    assert step.workspace_artifact == "verified_snapshot"
+
+
+def test_workspace_companion_cannot_collide_with_summary() -> None:
+    with pytest.raises(ValueError, match="differ from output_artifact"):
+        StepConfig.model_validate(
+            {
+                "skill": "developer",
+                "role": "developer",
+                "output_artifact": "summary_doc",
+                "workspace_artifact": "summary_doc",
+                "on": {},
+            }
+        )
 
 
 @pytest.mark.parametrize(
@@ -216,7 +564,7 @@ steps:
   source:
     role: operator
     skill: source
-    behavior: {feedback_target: receiver}
+    behavior: {feedback_target: receiver, feedback_artifact: workflow_feedback, feedback_source_kind: github_pr, feedback_todo_source: pr_comment, feedback_todo_id_prefix: PRC}
     hooks: {prepare_input: [GitHubPRFeedbackSource]}
     on: {await_agent: receiver}
   receiver:
@@ -308,7 +656,7 @@ workflow:
         "custom",
         """
 playbook: {id: custom}
-behavior: {feedback_target: receiver}
+behavior: {feedback_target: receiver, feedback_artifact: workflow_feedback, feedback_source_kind: github_pr, feedback_todo_source: pr_comment, feedback_todo_id_prefix: PRC}
 steps:
   source:
     role: operator
@@ -364,7 +712,7 @@ steps:
   source:
     role: operator
     skill: source
-    behavior: {{feedback_target: receiver}}
+    behavior: {{feedback_target: receiver, feedback_artifact: workflow_feedback, feedback_source_kind: github_pr, feedback_todo_source: pr_comment, feedback_todo_id_prefix: PRC}}
     hooks: {{{stage}: [GitHubPRFeedbackSource]}}
     on: {{await_agent: receiver}}
   receiver:
@@ -430,7 +778,7 @@ steps:
         outcomes:
           {fix_now: repair, create_follow_up: _done,
            continue_without_issue: _done}
-        feedback_delivery: {artifact: workflow_feedback, source_kind: local_review}
+        feedback_delivery: {artifact: workflow_feedback, source_kind: local_review, todo_source: workflow_feedback, todo_id_prefix: WF}
     on: {confirm_output: fixed-review, await_agent: _done}
   target-review:
     role: developer
@@ -440,7 +788,7 @@ steps:
         task_id: choose-repair
         outcomes: {approve: _done}
         allowed_targets: [repair]
-        feedback_delivery: {artifact: workflow_feedback, source_kind: local_review}
+        feedback_delivery: {artifact: workflow_feedback, source_kind: local_review, todo_source: workflow_feedback, todo_id_prefix: WF}
     on: {confirm_output: target-review, await_agent: _done}
   repair:
     role: developer
@@ -732,6 +1080,8 @@ steps:
     "playbook_id",
     [
         "direct",
+        "direct-subagent-review",
+        "direct-qa",
         "simple",
         "standard",
         "standard-qa",
@@ -762,13 +1112,19 @@ def test_bundled_playbooks_preserve_declared_skill_environment_parity(
         "cafe-workflow-common",
         "cafe-github_sync",
     ]
-    assert resolve_playbook_skills(model, channel="chat", role=None, step_name=None) == [
+    expected_chat_skills = [
         "cafe-common-chat-handoff",
         "cafe-chat-develop-change",
         "cafe-chat-spec-revision",
         "cafe-chat-plan-revision",
         "cafe-chat-alignment-decision",
     ]
+    if playbook_id == "direct-qa":
+        expected_chat_skills.remove("cafe-chat-spec-revision")
+        expected_chat_skills.remove("cafe-chat-plan-revision")
+    assert resolve_playbook_skills(
+        model, channel="chat", role=None, step_name=None
+    ) == expected_chat_skills
 
 
 def test_playbook_rejects_human_task_outcome_outside_declared_steps(tmp_path: Path) -> None:
@@ -1241,7 +1597,10 @@ steps:
         loader.load_model("intake-flow")
 
 
-@pytest.mark.parametrize("playbook_name", ["standard", "standard-qa", "simple", "tdd", "tdd-qa"])
+@pytest.mark.parametrize(
+    "playbook_name",
+    ["standard", "standard-qa", "simple", "tdd", "tdd-qa"],
+)
 def test_builtin_entry_steps_use_declared_initial_input_resolver(
     playbook_name: str, tmp_path: Path
 ) -> None:
@@ -1263,6 +1622,32 @@ def test_builtin_entry_steps_use_declared_initial_input_resolver(
     assert entry.initial_input.legacy_presentation is True
     assert "InitialInputProviderResolver" in entry.hooks.prepare_input
     assert "GitHubIssueFetcher" not in entry.hooks.prepare_input
+
+
+@pytest.mark.parametrize(
+    ("playbook_name", "bound_artifact"),
+    [("direct", None), ("direct-subagent-review", None), ("direct-qa", None)],
+)
+def test_builtin_direct_entry_steps_bind_initial_input_to_prompt_context(
+    playbook_name: str, bound_artifact: str | None, tmp_path: Path
+) -> None:
+    builtin_root = Path(__file__).resolve().parents[2] / "src" / "cafe" / "data"
+    model = (
+        PlaybookLoader(
+            project_root=tmp_path,
+            global_root=tmp_path / "global",
+            builtin_root=builtin_root,
+        )
+        .load_model(playbook_name)
+        .model
+    )
+    entry = model.steps[model.entry_point]
+
+    assert entry.initial_input.providers == ["manual_text", "github_issue"]
+    assert entry.initial_input.bind.artifact == bound_artifact
+    assert entry.initial_input.bind.prompt_context == "user_input"
+    assert entry.initial_input.legacy_presentation is False
+    assert "InitialInputProviderResolver" in entry.hooks.prepare_input
 
 
 def test_initial_input_declaration_requires_generic_resolver_hook(tmp_path: Path) -> None:
@@ -1985,6 +2370,8 @@ def test_builtin_playbooks_declare_en_us_conversation_locale(
 
     for playbook_id in (
         "direct",
+        "direct-subagent-review",
+        "direct-qa",
         "simple",
         "standard",
         "standard-qa",
@@ -2113,6 +2500,8 @@ def test_builtin_user_handoffs_resolve_nonempty_declared_policies(
 
     for playbook_id in (
         "direct",
+        "direct-subagent-review",
+        "direct-qa",
         "simple",
         "standard",
         "standard-qa",

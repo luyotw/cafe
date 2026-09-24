@@ -161,6 +161,8 @@ requirements and delivery rigor:
 | Playbook | Path | Use when |
 | --- | --- | --- |
 | `direct` | develop → review → PR | The requested change is already clear and still needs independent review. |
+| `direct-qa` | spec → develop → review → QA → PR | Requirements need confirmation and acceptance needs both independent review and QA, but implementation does not need a separate plan. |
+| `direct-subagent-review` | develop + two subagent reviews → PR | The implementation boundary is already confirmed and focused detail and scope reviews can run inside Develop. |
 | `simple` | spec → develop → QA → PR | The outcome needs confirmation and independent acceptance, but a low-risk docs, data, or config change does not need a separate plan or code review. |
 | `standard` | spec → plan → develop → review → PR | The standard development path and built-in default. |
 | `standard-qa` | spec → plan → develop → review → QA → PR | Standard development needs independent product acceptance. |
@@ -258,6 +260,13 @@ operations from CAFE.
 | Phase chain | Ordered primary and fallback CLI/model entries for one agent step |
 | Worktree | An isolated Git checkout for one issue's code and workflow state |
 
+Artifact naming, verified workspace companions, correction routes, and receipt
+binding are documented in [Artifact contracts](docs/artifact-contracts.md).
+
+Custom playbooks should express ownership boundaries as top-level steps.
+`assignee_type: hybrid` is deprecated; see
+[Migrating hybrid workflow steps](docs/hybrid-workflow-migration.md).
+
 The repository is the definition layer; chat history is not the source of
 truth. Runtime state currently lives under `.cafe/issues/`, while project
 playbooks, skills, strategy, and settings remain versionable alongside the
@@ -307,6 +316,20 @@ cafe task complete 7fe1a9e8-66fa-4df2-88d4-cd6af87fae43 \
 cafe task complete 7fe1a9e8-66fa-4df2-88d4-cd6af87fae43 \
   --result-file response.json
 ```
+
+A supervising user may explicitly override the declared continuation and hand
+the completed task to any phase that exists in the owning playbook. The task's
+declared response is still required and validated:
+
+```bash
+cafe task complete 7fe1a9e8-66fa-4df2-88d4-cd6af87fae43 \
+  --result '{"decision":"confirm","work_report":{"summary":"Implemented the requested change.","outcome":"The change is ready for review."}}' \
+  --handoff-to review
+```
+
+The override, original continuation, and optional work report are retained in
+the TaskResult. `--handoff-to` does not accept arbitrary names or terminate the
+workflow; its value must be a phase declared by the playbook.
 
 Add `--json` to list, inspect, or complete to receive one result object with
 `ok`, `operation`, `data`, and `error` fields. Filters combine with AND
@@ -391,13 +414,13 @@ an agent additional system privileges.
 
 ### Project status and compatibility
 
-CAFE is actively evolving. Roadmap version labels describe development cycles;
-the changelog and release notes describe what a particular release actually
-ships.
+CAFE is actively evolving. Release numbers follow the documented Semantic
+Versioning policy, while roadmap stages describe product direction independently.
 
 - [Roadmap](docs/roadmap.md)
+- [Versioning policy](docs/versioning.md)
 - [Changelog](CHANGELOG.md)
-- [Latest release notes](docs/releases/v0.3.3.md)
+- [Latest release notes](docs/releases/v0.4.0.md)
 - [Strategic positioning](docs/positioning.md)
 
 ## Contributing

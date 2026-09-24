@@ -27,7 +27,7 @@ def test_simulate_unknown_playbook_no_transition_report(monkeypatch: pytest.Monk
     result = runner.invoke(app, ["playbook", "simulate", "does_not_exist_252"])
     assert result.exit_code == 1
     assert "Error:" in result.stdout
-    assert "Transitions (intent -> next step)" not in result.stdout
+    assert "Default routes (intent -> next step)" not in result.stdout
 
 
 def test_simulate_bad_entry_point_after_load(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -56,7 +56,7 @@ entry_point: not_a_step
     result = runner.invoke(app, ["playbook", "simulate", "sim_bad_entry"])
     assert result.exit_code == 1
     assert "entry_point" in result.stdout
-    assert "Transitions (intent -> next step)" not in result.stdout
+    assert "Default routes (intent -> next step)" not in result.stdout
 
 
 def test_simulate_cycle_detection(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -92,6 +92,58 @@ entry_point: a
     res = analyze_playbook(loader.load_model("sim_cycle").model)
     assert res.cycles
     assert "a" in res.cycles[0] and "b" in res.cycles[0]
+
+
+def test_simulate_distinguishes_discretionary_routes_in_reachability_and_cycles(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _write_playbook(
+        tmp_path,
+        "sim_discretionary",
+        """
+playbook:
+  id: sim_discretionary
+  name: Sim discretionary
+roles:
+  pm:
+    description: PM
+steps:
+  compose:
+    type: skill
+    skill: spec_first
+    role: pm
+    allowed_goto: [revise]
+    on:
+      await_agent: _done
+  revise:
+    type: skill
+    skill: spec_first
+    role: pm
+    on:
+      await_agent: compose
+entry_point: compose
+""".strip()
+        + "\n",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = analyze_playbook(
+        PlaybookLoader(project_root=tmp_path).load_model("sim_discretionary").model
+    )
+
+    assert result.edges == [
+        ("compose", "await_agent", "done"),
+        ("revise", "await_agent", "compose"),
+    ]
+    assert result.discretionary_edges == [("compose", "revise")]
+    assert result.reachable_steps == {"compose", "revise"}
+    assert result.cycles == ("directed cycle among steps: compose, revise",)
+    text = format_text_report(result)
+    assert "Default routes (intent -> next step)" in text
+    assert "Discretionary routes (goto -> next step)" in text
+    assert "goto -> revise" in text
+    dot = format_dot(result)
+    assert '"compose" -> "revise" [label="goto"]' in dot
 
 
 def test_simulate_unreachable_step(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -194,7 +246,8 @@ def test_simulate_builtin_default_and_dot(monkeypatch: pytest.MonkeyPatch, tmp_p
     result = runner.invoke(app, ["playbook", "simulate", "standard", "--dot"])
     assert result.exit_code == 0
     out = result.stdout
-    assert "Transitions (intent -> next step)" in out
+    assert "Default routes (intent -> next step)" in out
+    assert "Discretionary routes (goto -> next step)" in out
     assert "Unreachable steps (from entry)" in out
     assert "(no findings)" in out
     assert "digraph playbook" in out
@@ -229,7 +282,7 @@ entry_point: only
     assert dot.count(" -> ") == len(res.edges)
     text = format_text_report(res)
     assert "Dead-end steps" in text
-    assert "_done" in text
+    assert "done" in text
 
 
 def test_simulate_simple_builtin(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

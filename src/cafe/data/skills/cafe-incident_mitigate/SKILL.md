@@ -1,6 +1,6 @@
 ---
 name: cafe-incident_mitigate
-description: 緩解與復原（維運應變流程）
+description: Mitigate and recover from an operational incident
 version: 1.1.0
 workflow:
   execution_profile:
@@ -13,6 +13,18 @@ workflow:
       pattern: revision_feedback
       prompt: Provide the incident details needed to continue mitigation.
       input_schema: feedback
+  prompt_inputs:
+    - artifacts: [incident_recovery, causal_todo]
+      placeholder: correction_source
+      required: false
+  checklist:
+    variants:
+      - when: {feedback: true}
+        sections:
+          - todo_projection: {artifact: causal_todo, causal: true}
+      - when: {}
+        sections:
+          - reference: correction_contract.md
 ---
 
 # Incident Mitigate
@@ -21,10 +33,10 @@ workflow:
 Read your agent file: {agent_file}
 
 ## Instructions
-執行緩解措施、驗證服務恢復，並記錄變更與回滾點；狀況變更時可回到分類或偵測。
+Execute mitigation, verify service recovery, and record changes and rollback points. If conditions change, return to triage or detection. When returning to triage, emit canonical correction Todo items.
 
 ## Output
 Write mitigation log to: {output_file}
 
 ## Handoff
-- 依照本輪結果寫入 next-step baton；blackboard 由 runtime 更新。
+- Write the next-step baton for this result; the runtime updates the blackboard.

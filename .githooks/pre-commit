@@ -1,7 +1,8 @@
 #!/bin/bash
 
 # Pre-commit hook: Run a bounded smoke suite plus tests related to staged files.
-# The complete suite is owned by pre-push.
+# Pre-push and CI own their configured correctness suites; release-only artifact
+# verification belongs to an explicitly authorized release gate.
 
 set -e
 

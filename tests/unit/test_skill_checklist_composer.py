@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from cafe.agents.manager import AgentManager
+from cafe.core.todo import parse_todo_list
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.bridge import load_skill_reference
 from cafe.skills.checklist_composer import (
@@ -20,7 +21,7 @@ from cafe.skills.checklist_composer import (
     generate_spec_checklist,
     select_checklist_variant,
 )
-from cafe.skills.contracts import SkillWorkflowContract
+from cafe.skills.contracts import SkillWorkflowDeclaration
 from cafe.skills.loader import SkillLoader
 
 pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
@@ -84,7 +85,7 @@ REQUIRED_SKILL_REFERENCES = {
 
 
 def test_checklist_variant_honors_declared_arbitrary_step() -> None:
-    contract = SkillWorkflowContract.model_validate(
+    contract = SkillWorkflowDeclaration.model_validate(
         {
             "checklist": {
                 "variants": [
@@ -104,6 +105,40 @@ def test_checklist_variant_honors_declared_arbitrary_step() -> None:
     )
 
     assert selected.when.step == "assemble"
+
+
+def test_declared_todo_projection_preserves_one_authoritative_row(tmp_path: Path) -> None:
+    todo_file = tmp_path / "plan.md"
+    todo_file.write_text(
+        "## Todo List\n"
+        "- [ ] `PLAN-001` — Source: `plan` — Work: add parser — "
+        "Closure: valid rows parse — Evidence: targeted pytest\n",
+        encoding="utf-8",
+    )
+    contract = SkillWorkflowDeclaration.model_validate(
+        {
+            "checklist": {
+                "variants": [
+                    {
+                        "when": {},
+                        "sections": [{"todo_projection": {"artifact": "plan", "source": "plan"}}],
+                    }
+                ]
+            }
+        }
+    )
+    output = tmp_path / "checklist.md"
+    compose_declared_checklist(
+        skill_name="cafe-develop",
+        contract=contract,
+        agent_name="Nick",
+        role="developer",
+        checklist_file_path=output,
+        iteration=1,
+        context={},
+        artifacts={"plan": todo_file},
+    )
+    assert "`PLAN-001` — add parser" in output.read_text(encoding="utf-8")
 
 
 GOLDEN_RUNNERS = {
@@ -404,15 +439,41 @@ def test_production_composer_golden_checklist_matches_fixture(
     AgentManager.read_agent_file = classmethod(_builtin_agent_file)  # type: ignore[assignment]
     try:
         output_path = tmp_path / f"production-{case_name}.md"
+        artifacts = {}
+        expected_extra = ""
+        if case_name == "develop_normal":
+            plan = tmp_path / "plan.md"
+            plan.write_text(
+                "## Todo List\n"
+                "- [ ] `PLAN-001` — Source: `plan` — Work: add parser — "
+                "Closure: valid rows parse — Evidence: targeted pytest\n",
+                encoding="utf-8",
+            )
+            artifacts = {"plan": plan}
+            expected_extra = (
+                "[ ] `PLAN-001` — add parser "
+                "(source fingerprint: 28653ad28cd864d9309af4159d4cd2c9d2df5bfdf1b124301b5d9b79f7125597)\n"
+            )
+        elif case_name == "develop_correction":
+            feedback = tmp_path / "review.md"
+            feedback.write_text(
+                "## Todo List\n"
+                "- [ ] `BLK-001` — Source: `review` — Work: fix wiring — "
+                "Closure: production path works — Evidence: targeted pytest\n",
+                encoding="utf-8",
+            )
+            artifacts = {"causal_todo": feedback}
+            item = parse_todo_list(feedback.read_text(encoding="utf-8"))[0]
+            expected_extra = item.checklist_row() + "\n"
         assert compose_declared_checklist(
             skill_name=case["skill"],
-            contract=SkillLoader().get_workflow_contract(case["skill"]),
+            contract=SkillLoader().get_workflow_declaration(case["skill"]),
             agent_name=case["agent"],
             role=case["role"],
             checklist_file_path=output_path,
             iteration=case["iteration"],
             context=case["context"],
-            artifacts={},
+            artifacts=artifacts,
             feedback=case.get("feedback", False),
             template_mode="manual",
         )
@@ -420,6 +481,10 @@ def test_production_composer_golden_checklist_matches_fixture(
         expected = (FIXTURES_DIR / f"{case_name}.md").read_text(encoding="utf-8")
         for line in case.get("omitted_optional_lines", ()):
             expected = expected.replace(f"{line}\n", "")
+        if expected_extra:
+            expected = expected.replace(
+                "## Basic Principles", expected_extra + "## Basic Principles"
+            )
         assert actual == expected
     finally:
         AgentManager.read_agent_file = saved
@@ -439,16 +504,23 @@ def test_declared_checklist_uses_readable_builtin_agent_path_outside_checkout(
     )
     case = PRODUCTION_GOLDEN_CASES["develop_normal"]
     checklist = tmp_path / "develop.md"
+    plan = tmp_path / "plan.md"
+    plan.write_text(
+        "## Todo List\n"
+        "- [ ] `PLAN-001` — Source: `plan` — Work: add parser — "
+        "Closure: valid rows parse — Evidence: targeted pytest\n",
+        encoding="utf-8",
+    )
 
     assert compose_declared_checklist(
         skill_name=case["skill"],
-        contract=SkillLoader().get_workflow_contract(case["skill"]),
+        contract=SkillLoader().get_workflow_declaration(case["skill"]),
         agent_name="David",
         role="developer",
         checklist_file_path=checklist,
         iteration=case["iteration"],
         context=case["context"],
-        artifacts={},
+        artifacts={"plan": plan},
         feedback=False,
         template_mode="manual",
     )
@@ -472,7 +544,7 @@ def test_review_correction_runtime_composes_planless_closure_contract(
 
     assert compose_declared_checklist(
         skill_name="cafe-review",
-        contract=SkillLoader().get_workflow_contract("cafe-review"),
+        contract=SkillLoader().get_workflow_declaration("cafe-review"),
         agent_name="Richard",
         role="reviewer",
         checklist_file_path=output_path,
@@ -571,7 +643,7 @@ def test_review_composed_checklists_stay_within_budget_and_keep_role_guidance(
         "get_agent_file_path",
         classmethod(lambda cls, *_args, **_kwargs: str(agent_file)),
     )
-    contract = SkillLoader().get_workflow_contract("cafe-review")
+    contract = SkillLoader().get_workflow_declaration("cafe-review")
     assert contract.checklist is not None
     assert contract.checklist.include_role_guidance is True
 
@@ -681,6 +753,15 @@ def test_review_composed_checklists_stay_within_budget_and_keep_role_guidance(
             },
         ),
         (
+            "direct-qa",
+            "pr",
+            {
+                "code": "code.md",
+                "review_feedback": "review.md",
+                "qa_feedback": "qa.md",
+            },
+        ),
+        (
             "standard-qa",
             "pr",
             {
@@ -724,7 +805,7 @@ def test_short_builtin_playbook_checklists_compose_with_declared_artifact_scope(
     checklist = tmp_path / f"{playbook_id}-{step_name}.md"
     assert compose_declared_checklist(
         skill_name=step.skill,
-        contract=SkillLoader().get_workflow_contract(step.skill),
+        contract=SkillLoader().get_workflow_declaration(step.skill),
         agent_name="Ada",
         role=step.role,
         checklist_file_path=checklist,
@@ -794,6 +875,30 @@ def test_develop_correction_checklist_uses_feedback_file_path(tmp_path: Path) ->
     assert "Read feedback todo list" in content
     assert "{review_file_path}" not in content
     assert "{pr_feedback_file_path}" not in content
+
+
+def test_develop_normal_checklist_keeps_accepted_plan_immutable(tmp_path: Path) -> None:
+    checklist_path = tmp_path / "checklist.md"
+    plan = ".cafe/issues/test/plan/iteration_001/output.md"
+
+    generate_develop_checklist(
+        agent_name="David",
+        spec_file_path=".cafe/issues/test/spec/iteration_001/output.md",
+        plan_file_path=plan,
+        develop_file=None,
+        checklist_file_path=checklist_path,
+        correction_mode=False,
+    )
+
+    content = checklist_path.read_text(encoding="utf-8")
+    assert plan in content
+    assert "accepted Plan as an immutable source" in content
+    assert "`## Todo Progress` ledger" in content
+    assert "change - [ ] to - [x]" not in content
+    assert "set matching `Task Status` rows" not in content
+    assert "update the authoritative plan progress" not in content
+    assert f"All tasks in {plan} are marked [x]" not in content
+    assert "All projected Plan Todo rows" in content
 
 
 def test_spec_checklist_includes_dod_instruction(tmp_path: Path) -> None:
@@ -896,10 +1001,10 @@ def test_write_cafe_phase_spec_documents_basic_principles_reference() -> None:
     )
     skill = Path("src/cafe/data/skills/write-cafe-phase/SKILL.md").read_text(encoding="utf-8")
 
-    assert "references/basic_principles.md" in spec
-    assert "## Basic Principles" in spec
-    assert "references/execution_steps_*.md" in spec
-    assert "agent 檔 guidelines" in spec
+    assert "`references/basic_principles.md`" in spec
+    assert "`## Basic Principles`" in spec
+    assert "`references/execution_steps_*.md`" in spec
+    assert "Agent-file guidelines" in spec
     assert "references/basic_principles.md" in skill
 
 
@@ -916,15 +1021,246 @@ def test_write_cafe_phase_requires_playbook_declared_confirmation_gates() -> Non
     assert "Neither side alone is a complete contract" in normalized_skill
     assert "cafe playbook confirmation-gates <id>" in skill
     assert "mandatory user-owned HumanTask" in normalized_skill
-    assert "mandatory HumanTask gates" in spec
+    assert "mandatory HumanTask gates" in normalized_spec
     assert "The stop contract is step-level" in normalized_skill
-    assert "Planned user confirmation gate" in spec
+    assert "### Planned User Confirmation Gates" in spec
     assert "skill-only pause" in spec
     assert "playbook-only gate" in spec
     assert "`confirm_output: <current-step>`" in normalized_spec
-    assert "`need_clarification`、`need_permission`、`alignment_checkpoint`" in spec
-    assert "同一 phase 內的多階段 checkpoint" in spec
+    assert "Clarification, permission, and alignment checkpoints" in normalized_spec
+    assert "### Multi-stage checkpoints within one phase" in spec
     assert "mandatory user-owned" in normalized_skill
     assert "durable stage evidence" in normalized_skill
     assert "first-entry/resume routing" in normalized_skill
     assert "final `confirm_output`" in normalized_skill
+
+
+@pytest.mark.parametrize(
+    "iteration,feedback,selected",
+    [(1, False, "normal"), (2, False, "later"), (2, True, "correction")],
+)
+def test_effective_contributors_select_independently_and_keep_local_roots(
+    tmp_path, iteration, feedback, selected
+):
+    """U05–U08: each source first-matches and renders its own local context."""
+    from cafe.skills.checklist_composer import compose_effective_checklist
+    from cafe.skills.workflow_composition import resolve_step_workflow_composition
+    from tests.integration.test_checklist_overlay_workflow import overlay, write_skill
+
+    root = tmp_path / ".cafe/skills"
+    primary = {
+        "checklist": {
+            "context_references": {"local": "context.md"},
+            "variants": [
+                {"when": {"feedback": True}, "sections": [{"reference": "correction.md"}]},
+                {"when": {"min_iteration": 2}, "sections": [{"reference": "later.md"}]},
+                {"sections": [{"reference": "review.md"}]},
+            ],
+        }
+    }
+    write_skill(
+        root,
+        "primary",
+        primary,
+        {
+            "context.md": "primary",
+            "review.md": "[ ] normal {local}\n",
+            "later.md": "[ ] later {local}\n",
+            "correction.md": "[ ] correction {local}\n",
+        },
+    )
+    for name in ("shared", "role", "step"):
+        write_skill(
+            root,
+            name,
+            overlay(context_references={"local": "context.md"}),
+            {"context.md": name, "review.md": "[ ] universal {local}\n"},
+        )
+    write_skill(
+        root,
+        "inert",
+        {"checklist": {"variants": [{"sections": [{"reference": "review.md"}]}]}},
+        {"review.md": "[ ] must not appear\n"},
+    )
+    loader = SkillLoader(
+        project_root=tmp_path, global_root=tmp_path / "global", builtin_root=tmp_path / "builtin"
+    )
+    composition = resolve_step_workflow_composition(
+        loader,
+        primary_skill="primary",
+        workflow_skills=["shared", "role", "step", "shared", "primary", "inert"],
+        step_name="assemble",
+    )
+    path = tmp_path / "checklist.md"
+    materialized = compose_effective_checklist(
+        composition=composition,
+        agent_name="David",
+        role="developer",
+        checklist_file_path=path,
+        iteration=iteration,
+        artifacts={},
+        context={},
+        feedback=feedback,
+    )
+    gates = [line for line in path.read_text().splitlines() if line.startswith("[ ]")]
+    assert gates == [
+        f"[ ] {selected} primary",
+        "[ ] universal shared",
+        "[ ] universal role",
+        "[ ] universal step",
+    ]
+    assert len(materialized.gates) == 4
+
+
+def test_applicable_overlay_without_match_fails_with_source(tmp_path):
+    """U05: an inactive overlay skips; an applicable unmatched overlay fails."""
+    from cafe.skills.checklist_composer import compose_effective_checklist
+    from cafe.skills.workflow_composition import resolve_step_workflow_composition
+    from tests.integration.test_checklist_overlay_workflow import write_skill
+
+    root = tmp_path / ".cafe/skills"
+    write_skill(root, "primary")
+    write_skill(
+        root,
+        "policy",
+        {
+            "checklist_overlay": {
+                "when": {"min_iteration": 2},
+                "variants": [
+                    {"when": {"feedback": True}, "sections": [{"reference": "review.md"}]}
+                ],
+            }
+        },
+        {"review.md": "[ ] review\n"},
+    )
+    loader = SkillLoader(
+        project_root=tmp_path, global_root=tmp_path / "global", builtin_root=tmp_path / "builtin"
+    )
+    composition = resolve_step_workflow_composition(
+        loader, primary_skill="primary", workflow_skills=["policy"], step_name="assemble"
+    )
+    kwargs = dict(
+        composition=composition,
+        agent_name="David",
+        role="developer",
+        checklist_file_path=tmp_path / "checklist.md",
+        artifacts={},
+        context={},
+    )
+    compose_effective_checklist(**kwargs, iteration=1)
+    with pytest.raises(ValueError) as error:
+        compose_effective_checklist(**kwargs, iteration=2)
+    assert all(token in str(error.value) for token in ("assemble", "policy", "checklist_overlay"))
+
+
+def test_overlay_templates_belong_to_primary_and_locals_cannot_leak(tmp_path):
+    """U07/U08: template requests use primary settings and required locals stay isolated."""
+    from cafe.skills.checklist_composer import compose_effective_checklist
+    from cafe.skills.workflow_composition import resolve_step_workflow_composition
+    from tests.integration.test_checklist_overlay_workflow import overlay, write_skill
+
+    root = tmp_path / ".cafe/skills"
+    directory = write_skill(root, "primary", {"output_templates": {"catalog": "notes"}})
+    (directory / "assets/templates").mkdir(parents=True)
+    write_skill(
+        root,
+        "policy",
+        {
+            "checklist_overlay": {
+                "variants": [
+                    {"sections": [{"template_catalog": True}, {"optional_checklist": "absent.md"}]}
+                ]
+            }
+        },
+    )
+    loader = SkillLoader(
+        project_root=tmp_path, global_root=tmp_path / "global", builtin_root=tmp_path / "builtin"
+    )
+    kwargs = dict(
+        agent_name="David",
+        role="developer",
+        checklist_file_path=tmp_path / "checklist.md",
+        iteration=1,
+        artifacts={},
+        context={},
+        template_mode="explicit",
+        template_file="primary-template.md",
+    )
+    composition = resolve_step_workflow_composition(
+        loader, primary_skill="primary", workflow_skills=["policy"], step_name="assemble"
+    )
+    compose_effective_checklist(composition=composition, **kwargs)
+    assert "primary-template.md" in kwargs["checklist_file_path"].read_text()
+    write_skill(root, "policy", overlay(), {"review.md": "[ ] {foreign_local}\n"})
+    composition = resolve_step_workflow_composition(
+        loader, primary_skill="primary", workflow_skills=["policy"], step_name="assemble"
+    )
+    with pytest.raises(ValueError, match="foreign_local"):
+        compose_effective_checklist(composition=composition, **kwargs)
+
+
+def test_no_overlay_materialization_preserves_declared_output(tmp_path):
+    """U08: source metadata must not alter established no-overlay output."""
+    from cafe.skills.checklist_composer import compose_effective_checklist
+    from cafe.skills.workflow_composition import resolve_step_workflow_composition
+    from tests.integration.test_checklist_overlay_workflow import write_skill
+
+    root = tmp_path / ".cafe/skills"
+    write_skill(
+        root,
+        "primary",
+        {
+            "checklist": {
+                "variants": [{"sections": [{"reference": "work.md"}]}],
+                "include_role_guidance": True,
+            }
+        },
+        {"work.md": "[ ] Check result\n"},
+    )
+    loader = SkillLoader(
+        project_root=tmp_path, global_root=tmp_path / "global", builtin_root=tmp_path / "builtin"
+    )
+    composition = resolve_step_workflow_composition(
+        loader, primary_skill="primary", step_name="assemble"
+    )
+    kwargs = dict(agent_name="David", role="developer", iteration=1, artifacts={}, context={})
+    # Direct source-local no-overlay output follows the existing declared format.
+    result = compose_effective_checklist(
+        composition=composition, checklist_file_path=tmp_path / "checklist.md", **kwargs
+    )
+    assert result.content.startswith("[ ] Check result\n\n\n## Agent Guidelines Checklist")
+    assert "Checklist source:" not in result.content
+
+
+def test_overlay_auto_template_catalog_uses_resolved_primary_loader(tmp_path):
+    """U07: auto catalogs retain the primary root when the caller uses custom catalogs."""
+    from cafe.skills.checklist_composer import compose_effective_checklist
+    from cafe.skills.workflow_composition import resolve_step_workflow_composition
+    from tests.integration.test_checklist_overlay_workflow import write_skill
+
+    root = tmp_path / ".cafe/skills"
+    primary = write_skill(root, "primary", {"output_templates": {"catalog": "report"}})
+    (primary / "assets/templates").mkdir(parents=True)
+    (primary / "assets/templates/owned.md").write_text("# Primary template\n")
+    write_skill(
+        root,
+        "policy",
+        {"checklist_overlay": {"variants": [{"sections": [{"template_catalog": True}]}]}},
+    )
+    loader = SkillLoader(
+        project_root=tmp_path, global_root=tmp_path / "global", builtin_root=tmp_path / "builtin"
+    )
+    composition = resolve_step_workflow_composition(
+        loader, primary_skill="primary", workflow_skills=["policy"], step_name="assemble"
+    )
+    result = compose_effective_checklist(
+        composition=composition,
+        skill_loader=loader,
+        agent_name="David",
+        role="developer",
+        checklist_file_path=tmp_path / "checklist.md",
+        iteration=1,
+        context={},
+        artifacts={},
+    )
+    assert str(primary / "assets/templates/owned.md") in result.content

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import hashlib
 import importlib.util
 import json
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -16,7 +16,7 @@ import yaml
 
 from cafe.core.packet_io import canonical_json
 from cafe.core.types import AgentCLI, AgentResponse, TokenUsage
-from tests.fixtures.delivery_contract import delivery_contract
+from tests.fixtures.delivery_contract import delivery_contract, legacy_driver_contract
 
 
 def _callback_module():
@@ -61,18 +61,10 @@ def _activate_event_contract(
             "need_permission": "user_required",
             "alignment_checkpoint": "driver_resolvable_when_clear",
         },
-        "mandate": {"source": "test", "boundaries": ["issue scope"]},
-        "issue_assessment": {
-            "nature": "feature",
-            "scale": "small",
-            "risks": [],
-            "rationale": "Exercise contract-managed callback transport.",
-        },
         "phases": [
             {
                 "name": "develop",
                 "chain": phase_clis,
-                "rationale": "The confirmed event-driven callback chain.",
             }
         ],
         "proactive_review": {
@@ -80,29 +72,11 @@ def _activate_event_contract(
                 {
                     "phase": "develop",
                     "decision": "not_required",
-                    "rationale": "No review is required for this callback fixture.",
                 }
             ]
         },
         "driver": {"mode": "event-driven", "clis": driver_clis},
         "checkout": {"kind": "current_checkout"},
-        "semantic_facts": {},
-        "material_assumptions": {"provider": "test", "permissions": ["local"]},
-    }
-    policy_fields = (
-        "delivery_contract",
-        "locales",
-        "confirmation_contract",
-        "reactive_user_handoffs",
-        "mandate",
-        "issue_assessment",
-        "phases",
-        "proactive_review",
-        "driver",
-        "checkout",
-    )
-    proposal["semantic_facts"] = {
-        "effective_policy": {name: proposal[name] for name in policy_fields}
     }
     activate_confirmed_contract(
         ActivateConfirmedContract(
@@ -120,6 +94,23 @@ def _activate_event_contract(
 def _clear_host_session_binding(monkeypatch) -> None:
     """Keep the test process's Codex App thread out of ordinary callback tests."""
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+
+
+def test_callback_prompt_allows_only_bounded_driver_confirmable_clarification(
+    tmp_path: Path,
+) -> None:
+    callback = _callback_module()
+    prompt = callback._callback_prompt(
+        {"event_id": "event-1", "event_type": "human_task"},
+        repository_root=tmp_path,
+    )
+
+    assert "including need_clarification" in prompt
+    assert "within confirmed scope, constraints and authority" in prompt
+    assert "trigger no contract deviation" in prompt
+    assert "otherwise leave it for the user" in prompt
+    assert "Do not answer mandatory, user-required, permission, or capability tasks" in prompt
+    assert "user-required, clarification" not in prompt
 
 
 def test_event_driver_config_is_per_issue_and_cannot_replace_session(tmp_path: Path) -> None:
@@ -362,6 +353,36 @@ def test_version_three_state_rejects_accepted_event_without_accepted_attempt(
         )
 
 
+def test_historical_attempt_session_does_not_pin_current_callback_session() -> None:
+    callback = _callback_module()
+    attempt = {
+        "index": 0,
+        "stage": "delivery",
+        "status": "accepted",
+        "outcome": "durable_acceptance",
+        "reason": "provider_acknowledgement",
+        "session_id": "historical-session",
+        "started_at": "2026-09-09T00:00:00+00:00",
+        "finished_at": "2026-09-09T00:00:01+00:00",
+    }
+    entries = [
+        {
+            "index": 0,
+            "session": {
+                "id": "current-session",
+                "source": "host_session",
+                "acquired_at": "2026-09-10T00:00:00+00:00",
+            },
+        }
+    ]
+
+    assert callback._validate_dispatch_attempt(attempt, entries=entries) == (
+        0,
+        "delivery",
+        "accepted",
+    )
+
+
 @pytest.mark.parametrize(
     "corruption",
     ["status", "accepted_index", "attempt_history", "takeover", "recovery"],
@@ -496,27 +517,24 @@ def _contract_event_context(
     return driver_dir, state, event
 
 
-def _downgrade_contract_to_v3(contract_path: Path) -> bytes:
-    """Create the exact validated v3 predecessor shape without migrating it."""
-    document = json.loads(contract_path.read_text(encoding="utf-8"))
-    del document["delivery_contract"]
-    document["schema_version"] = 3
-    policy = document["preflight"]["semantic_facts"]["effective_policy"]
-    del policy["delivery_contract"]
-    projection = {
-        **policy,
-        "identity": document["identity"],
-        "material_assumptions": document["preflight"]["material_assumptions"],
-    }
-    document["provenance"]["proposal_digest"] = hashlib.sha256(
-        canonical_json(projection)
-    ).hexdigest()
+def _write_legacy_contract(contract_path: Path, *, schema_version: int) -> bytes:
+    """Install an explicit historical fixture using the confirmed transport identity."""
+    current = json.loads(contract_path.read_text(encoding="utf-8"))
+    document = legacy_driver_contract(
+        schema_version=schema_version,
+        identity=current["identity"],
+        driver=current["driver"],
+    )
     predecessor = canonical_json(document)
     contract_path.write_bytes(predecessor)
     return predecessor
 
 
-def test_contract_callback_reads_verified_v3_transport_without_upgrading(tmp_path: Path) -> None:
+@pytest.mark.parametrize("schema_version", [3, 4])
+@pytest.mark.parametrize("damage", [None, "digest", "identity", "missing_rationale"])
+def test_contract_callback_validates_legacy_transport_without_upgrading(
+    tmp_path: Path, schema_version: int, damage: str | None
+) -> None:
     """A delivery-schema upgrade must not break an already-confirmed callback."""
     callback = _callback_module()
     issue_dir = tmp_path / ".cafe" / "issues" / "v3-event-contract"
@@ -527,7 +545,25 @@ def test_contract_callback_reads_verified_v3_transport_without_upgrading(tmp_pat
         clis=[("codex", "primary"), ("claude", "fallback")],
     )
     contract_path = issue_dir / "driver" / "contract.json"
-    predecessor = _downgrade_contract_to_v3(contract_path)
+    predecessor = _write_legacy_contract(contract_path, schema_version=schema_version)
+    if damage:
+        document = json.loads(predecessor)
+        if damage == "digest":
+            document["provenance"]["proposal_digest"] = "0" * 64
+        elif damage == "identity":
+            document["identity"]["workflow_id"] = "different-workflow"
+        else:
+            del document["phases"][0]["rationale"]
+        predecessor = canonical_json(document)
+        contract_path.write_bytes(predecessor)
+        with pytest.raises(ValueError):
+            callback._contract_callback_config(
+                issue_dir=issue_dir,
+                issue_name=issue_dir.name,
+                workflow_id=blackboard.workflow_id,
+            )
+        assert contract_path.read_bytes() == predecessor
+        return
 
     config = callback._contract_callback_config(
         issue_dir=issue_dir,

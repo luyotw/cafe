@@ -237,14 +237,23 @@ class ArtifactEntry:
     summary: str = ""
     base_sha: Optional[str] = None
     head_sha: Optional[str] = None
+    content_sha256: Optional[str] = None
+    todo_identities: Optional[Dict[str, str]] = None
+    todo_work_identities: Optional[Dict[str, str]] = None
+    todo_identity_baseline: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
         data["kind"] = self.kind.value
+        if self.todo_identity_baseline is None:
+            data.pop("todo_identity_baseline", None)
         return data
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ArtifactEntry":
+        raw_baseline = data.get("todo_identity_baseline")
+        if "todo_identity_baseline" in data and not isinstance(raw_baseline, dict):
+            raise ValueError("todo_identity_baseline must be an object when present")
         return cls(
             name=str(data["name"]),
             kind=ArtifactKind(str(data["kind"])),
@@ -255,6 +264,23 @@ class ArtifactEntry:
             summary=str(data.get("summary", "")),
             base_sha=data.get("base_sha"),
             head_sha=data.get("head_sha"),
+            content_sha256=data.get("content_sha256"),
+            todo_identities=(
+                {str(key): str(value) for key, value in data["todo_identities"].items()}
+                if isinstance(data.get("todo_identities"), dict)
+                else None
+            ),
+            todo_work_identities=(
+                {
+                    str(key): str(value)
+                    for key, value in data["todo_work_identities"].items()
+                }
+                if isinstance(data.get("todo_work_identities"), dict)
+                else None
+            ),
+            todo_identity_baseline=(
+                dict(raw_baseline) if isinstance(raw_baseline, dict) else None
+            ),
         )
 
 
@@ -544,6 +570,57 @@ class HandoffContract:
                 invalid_value=self.intent.value,
                 valid_values=sorted(intent.value for intent in valid_intents),
             )
+
+
+@dataclass(frozen=True)
+class OutcomeOnlyHandoff:
+    """The agent result for an ordinary successful step completion.
+
+    It deliberately has no target or owner.  The runtime resolves both from
+    the active playbook step so reusable phase instructions do not carry
+    topology knowledge.
+    """
+
+    version: int
+    intent: HandoffIntent
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "OutcomeOnlyHandoff":
+        if set(data) != {"version", "intent"}:
+            raise BatonRejected(
+                field="payload",
+                invalid_value=", ".join(sorted(str(key) for key in data)),
+                valid_values=["version", "intent"],
+            )
+        try:
+            version = int(data["version"])
+        except (TypeError, ValueError) as exc:
+            raise BatonRejected(
+                field="version",
+                invalid_value=str(data["version"]),
+                valid_values=[str(HANDOFF_CONTRACT_VERSION)],
+            ) from exc
+        if version != HANDOFF_CONTRACT_VERSION:
+            raise BatonRejected(
+                field="version",
+                invalid_value=str(version),
+                valid_values=[str(HANDOFF_CONTRACT_VERSION)],
+            )
+        try:
+            intent = HandoffIntent(str(data["intent"]))
+        except ValueError as exc:
+            raise BatonRejected(
+                field="intent",
+                invalid_value=str(data["intent"]),
+                valid_values=[HandoffIntent.AWAIT_AGENT.value],
+            ) from exc
+        if intent is not HandoffIntent.AWAIT_AGENT:
+            raise BatonRejected(
+                field="intent",
+                invalid_value=intent.value,
+                valid_values=[HandoffIntent.AWAIT_AGENT.value],
+            )
+        return cls(version=version, intent=intent)
 
 
 @dataclass
@@ -942,6 +1019,32 @@ class BlackboardStore:
             contract.validate(allowed_steps=allowed_steps)
         return contract
 
+    def load_outcome_only_handoff(self) -> OutcomeOnlyHandoff | None:
+        """Read an intent-only ordinary-success result, if one was written.
+
+        Full batons retain their historical parser and are deliberately not
+        interpreted here.  The caller that owns the current playbook step
+        resolves this result to a concrete baton.
+        """
+        if not self.next_step_path.exists():
+            raise ValueError(f"Baton file is missing: {self.next_step_path}")
+        raw = self.next_step_path.read_text(encoding="utf-8").strip()
+        if not raw:
+            raise ValueError(f"Baton file is empty: {self.next_step_path}")
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid baton contract payload: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise BatonRejected(
+                field="payload",
+                invalid_value=type(payload).__name__,
+                valid_values=["JSON object"],
+            )
+        if "to_owner" in payload or "to_step" in payload:
+            return None
+        return OutcomeOnlyHandoff.from_dict(payload)
+
     def write_handoff_contract(self, state: BlackboardState, contract: HandoffContract) -> None:
         """Persist baton contract to next_step.txt and blackboard."""
         self.issue_dir.mkdir(parents=True, exist_ok=True)
@@ -1253,13 +1356,35 @@ class BlackboardStore:
         latest_step = initial_step
         latest_timestamp = ""
 
-        for artifact_file in sorted(self.issue_dir.glob("*/iteration_*/artifact.json")):
+        artifact_files = [
+            *self.issue_dir.glob("*/iteration_*/artifact.json"),
+            *self.issue_dir.glob("*/iteration_*/workspace.json"),
+        ]
+        for artifact_file in sorted(artifact_files):
             raw = json.loads(artifact_file.read_text(encoding="utf-8"))
-            entry = ArtifactEntry.from_dict(raw)
+            if artifact_file.name == "workspace.json":
+                from cafe.core.workspace_artifact import WorkspaceArtifact
+
+                workspace = WorkspaceArtifact.from_dict(raw)
+                entry = ArtifactEntry(
+                    name=workspace.name,
+                    kind=ArtifactKind.WORKSPACE,
+                    version=workspace.version,
+                    updated_by=workspace.producer_step or artifact_file.parent.parent.name,
+                    path=str(artifact_file),
+                    # A legacy workspace without ordering metadata is not a
+                    # newly published artifact.  Never promote it above a
+                    # later, timestamped artifact by inventing "now" here.
+                    updated_at=workspace.updated_at,
+                    base_sha=workspace.base_sha,
+                    head_sha=workspace.head_sha,
+                )
+            else:
+                entry = ArtifactEntry.from_dict(raw)
             current = state.artifacts.get(entry.name)
             if current is None or entry.version >= current.version:
                 state.artifacts[entry.name] = entry
-            if entry.updated_at >= latest_timestamp:
+            if entry.updated_at and entry.updated_at >= latest_timestamp:
                 latest_timestamp = entry.updated_at
                 latest_step = artifact_file.parent.parent.name
 

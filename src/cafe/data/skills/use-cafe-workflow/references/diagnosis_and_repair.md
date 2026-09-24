@@ -6,16 +6,25 @@ choose a safe disposition. Bound inspection to the failing command, active
 playbook and step, supplied artifacts, blackboard and baton state, relevant
 sanitized logs, and installed CAFE version.
 
+First apply `supervision_and_recovery.md`. Enter diagnosis only when its
+non-intervention envelope has been left and the selected disposition requires
+classification of incorrect or ambiguous behavior. When the same failure keeps
+returning without a concrete reason another retry will differ, use the
+supervision reference's consultation boundary before recommending another
+retry. Treat a materially different visible failure as a new incident.
+
 ## Classification checklist
 
-- [ ] Reproduce read-only or, only when continuous execution itself is the
-  suspected failure boundary, with one safe focused `--single-step` run. Treat
-  this as a diagnostic override and never persist it as a contract change
-  without user confirmation.
+- [ ] Reproduce read-only. A focused `--single-step` run is permitted only when
+  continuous execution itself is the suspected failure boundary, no user-owned
+  task is pending, and existing explicit action-specific authority covers that
+  exact diagnostic execution. Treat it as a diagnostic override and never
+  persist it as a contract change without user confirmation.
 - [ ] Rule out project configuration, malformed project artifacts, stale
   installed skills, CLI/model mismatch, transient provider/network failures,
   rate limits, and an agent failing an otherwise valid contract.
-- [ ] Choose exactly one disposition:
+- [ ] Preserve every relevant blocker, then choose the highest-priority
+  applicable disposition for one next action:
   - **Playbook declarative defect:** wrong graph, artifact binding, intent,
     hook/tool declaration, or planned confirmation gate.
   - **Phase declarative defect:** wrong phase/shared/chat skill contract,
@@ -51,8 +60,12 @@ hooks synchronize installed copies. CLI startup performs a per-machine
 fingerprint repair. If synchronization fails, recover explicitly with:
 
 ```bash
-cafe skill sync-global
+python3 <skill-dir>/scripts/sync_helper_with_preflight.py \
+  --cli <approved-cli> <approved-skill>
 ```
+
+Use only the user's exact approved scope and require the successful post-change
+receipt; do not diagnose by bypassing the wrapper with a direct sync command.
 
 Do not use writer skills to change driver/meta skills, CAFE runtime Python,
 workflow state machinery, or host infrastructure. Do not invent a
@@ -75,6 +88,10 @@ Before recommending a new issue:
 - [ ] Do not create, comment on, or close an upstream issue without explicit
   user authorization.
 
-For unconfirmed or transient failures, retry once when safe or ask one focused
-diagnostic question. Continue through a workaround only when it is reversible,
-within mandate, preserves the kickoff contract, and the user has been informed.
+For unconfirmed or transient failures of a phase agent, follow the bounded retry
+rules in `supervision_and_recovery.md`. The Driver
+does not answer the user-owned interruption task or treat a recommendation as
+retry authority. Continue through a workaround only through an existing legal
+task, input, correction, or authorization path, and only when explicit
+action-specific authority permits it, it is reversible and within mandate, and
+it preserves the kickoff contract.

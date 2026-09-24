@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import json
+import re
+import subprocess
+from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
-from cafe.core.hooks import HookResult
 from cafe.core.human_task_records import HumanTaskRecordStore
-from cafe.core.status_codes import PhaseStatusCode
 from cafe.core.types import AgentCLI, TokenUsage
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
@@ -21,6 +22,7 @@ from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
 from cafe.utils.phase_config import PhaseStepModelResolution
+from cafe.verification import run_verification
 
 pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
@@ -133,7 +135,7 @@ def _seed_pr_artifacts(issue_dir: Path, *, auto_create: bool = True) -> None:
 
 
 @pytest.mark.e2e
-def test_pr_runtime_rejects_generic_success_receipt_without_verified_url(
+def test_pr_runtime_routes_generic_success_receipt_without_verified_url(
     tmp_path: Path,
 ) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-pr-e2e"
@@ -175,7 +177,8 @@ def test_pr_runtime_rejects_generic_success_receipt_without_verified_url(
 
     assert result.completed is False
     assert result.final_step == "pr"
-    assert result.final_status_code == "MISSING_CAPABILITY_RECEIPT"
+    assert result.final_status_code == "BATON_CONFIRM_OUTPUT"
+    assert len(HumanTaskRecordStore(issue_dir).tasks()) == 1
 
 
 @pytest.mark.e2e
@@ -226,21 +229,72 @@ def test_pr_review_handoff_tracks_published_or_local_only_journey(
     if auto_create:
         assert f"Verified PR URL: {verified_url}" in task.prompt
     else:
-        assert "Publication mode: local-only. No PR URL exists." in task.prompt
+        assert "Publication mode:" not in task.prompt
 
 
 @pytest.mark.e2e
-def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("seed_local_review", "comments", "expected_source"),
+    [
+        (
+            None,
+            [
+                {"id": "100", "body": "Handle the first boundary.", "is_resolved": False},
+                {"id": "101", "body": "Handle the second boundary.", "is_resolved": False},
+            ],
+            "pr_comment",
+        ),
+        (
+            (
+                "local_review:pr:local-review:1",
+                "Handle the local review boundary.",
+            ),
+            [],
+            "workflow_feedback",
+        ),
+    ],
+    ids=["github_pr", "local_review"],
+)
+def test_declared_pr_feedback_source_records_and_delivers_each_item_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    seed_local_review: tuple[str, str] | None,
+    comments: list[dict[str, object]],
+    expected_source: str,
 ) -> None:
-    """IT-001: feedback survives a pre-agent pause and reaches the target prompt once."""
-    from unittest.mock import MagicMock, patch
+    """IT-001: each declared PR feedback source is curated and consumed once."""
+    from unittest.mock import patch
 
-    from cafe.core.hooks.feedback import GitHubPRFeedbackSource
     from cafe.core.workflow_feedback import WorkflowFeedbackLedger
     from cafe.ui.cli_shared import _find_external_resume_step
 
     monkeypatch.chdir(tmp_path)
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "config", "user.email", "test@example.com"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "config", "user.name", "Test User"],
+        check=True,
+    )
+    (tmp_path / ".gitignore").write_text(".cafe/\n.pytest_cache/\n__pycache__/\n", encoding="utf-8")
+    source_file = tmp_path / "src" / "feedback.py"
+    test_file = tmp_path / "tests" / "test_feedback.py"
+    source_file.parent.mkdir()
+    test_file.parent.mkdir()
+    source_file.write_text("DELIVERED = True\n", encoding="utf-8")
+    test_file.write_text(
+        "from pathlib import Path\n\n"
+        "def test_feedback_delivery_evidence() -> None:\n"
+        "    assert Path('src/feedback.py').read_text().strip() == 'DELIVERED = True'\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "commit", "-qm", "Add feedback fixture"],
+        check=True,
+    )
     monkeypatch.setattr(
         "cafe.phases.generic_workflow_step.load_phase_step_model",
         lambda **_kwargs: PhaseStepModelResolution(
@@ -258,79 +312,22 @@ def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(
     issue_dir = tmp_path / ".cafe" / "issues" / "pr-feedback"
     issue_dir.mkdir(parents=True)
     (issue_dir / "issue.yaml").write_text(
-        "pr:\n  auto_create: true\n",
+        "{}\n",
         encoding="utf-8",
     )
     playbook = _load_default_playbook()
-    store = BlackboardStore(issue_dir)
-    state = store.load_or_create("pr", playbook_id="standard")
-
-    class Phase:
-        def __init__(self) -> None:
-            self.issue_dir = issue_dir
-            self.git_ops = MagicMock()
-            self.git_ops.get_current_branch.return_value = "pr-feedback"
-            self.step_user_inputs: dict[str, str] = {}
-
-    phase = Phase()
-    source = GitHubPRFeedbackSource()
-    with (
-        patch("cafe.core.hooks.feedback.GitHubOps") as github_ops,
-        patch(
-            "cafe.core.hooks.feedback.get_all_pr_comments",
-            return_value=[
-                {"id": "100", "body": "Handle the first boundary.", "is_resolved": False},
-                {"id": "101", "body": "Handle the second boundary.", "is_resolved": False},
-            ],
-        ),
-    ):
-        github_ops.return_value.get_pr_for_branch.return_value = {
-            "number": 101,
-            "url": "https://example.test/pr/101",
-        }
-        first = source.run(
-            stage="prepare_input",
-            phase=phase,
-            blackboard_state=state,
-            step_def=playbook["steps"]["pr"],
-            step_name="pr",
-        )
-        second = source.run(
-            stage="prepare_input",
-            phase=phase,
-            blackboard_state=state,
-            step_def=playbook["steps"]["pr"],
-            step_name="pr",
-        )
-
+    playbook["steps"]["pr"]["capability_requests"] = []
+    playbook["steps"]["pr"]["behavior"]["publish_confirmation"] = False
+    playbook["steps"]["pr"].pop("workspace_input_artifact", None)
     ledger = WorkflowFeedbackLedger(issue_dir)
-    assert [entry.content for entry in ledger.pending()] == [
-        "Handle the first boundary.",
-        "Handle the second boundary.",
-    ]
-    assert any(event["type"] == "workflow_feedback_recorded" for event in first.events)
-    assert second.events == []
-
-    phase.git_ops.reset_mock()
-    assert (
-        _find_external_resume_step(
-            issue_dir=issue_dir,
-            playbook_data=playbook,
-            git_ops=phase.git_ops,
+    if seed_local_review is not None:
+        source_identity, content = seed_local_review
+        ledger.record(
+            source_identity=source_identity,
+            source_kind="local_review",
+            target_step="pr",
+            content=content,
         )
-        == "develop"
-    )
-    assert len(ledger.pending(target_step="develop")) == 2
-    phase.git_ops.get_current_branch.assert_not_called()
-
-    class PauseBeforeAgent:
-        name = "PauseBeforeAgent"
-
-        def run(self, **_kwargs):
-            return HookResult(
-                continue_pipeline=False,
-                override_status_code=PhaseStatusCode.NEED_CLARIFICATION,
-            )
 
     class AgentManager:
         def __init__(self) -> None:
@@ -344,16 +341,80 @@ def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(
 
         def execute(self, _name: str, prompt: str, **_kwargs):
             self.prompts.append(prompt)
+            iteration_dir = Path(_kwargs["streaming_output_file"]).parent
+            checklist = iteration_dir / "checklist.md"
+            content = checklist.read_text(encoding="utf-8").replace("[ ]", "[x]")
+            checklist.write_text(content, encoding="utf-8")
+            projected = re.findall(
+                r"^\[x\] `([^`]+)` .*source fingerprint: ([0-9a-f]{64}\)?)$",
+                content,
+                flags=re.MULTILINE,
+            )
+            entries = []
+            head = subprocess.check_output(
+                ["git", "-C", str(tmp_path), "rev-parse", "HEAD"], text=True
+            ).strip()
+            command = ["pytest", "-q", "tests/test_feedback.py"]
+            for item_id, fingerprint in projected:
+                entries.append(
+                    f"### {item_id}\n\n- Status: completed\n"
+                    f"- Source fingerprint: `{fingerprint.rstrip(')')}`\n"
+                    "- Files: `src/feedback.py`, `tests/test_feedback.py`\n"
+                    f"- Commit: `{head}`\n"
+                    f"- Targeted evidence: command=`{' '.join(command)}`; exit=0; "
+                    f"head=`{head}`\n- Remaining work: None.\n"
+                    "- Next action: Review."
+                )
+            output = iteration_dir / "output.md"
+            canonical_rows = re.findall(
+                r"^- Batch entry \d+: use ID `([^`]+)` and Source `([^`]+)`\.$",
+                prompt,
+                flags=re.MULTILINE,
+            )
+            assert canonical_rows
+            assert {source for _item_id, source in canonical_rows} == {expected_source}
+            todo_rows = "".join(
+                f"- [ ] `{item_id}` — Source: `{source}` — Work: Curate a feedback boundary — "
+                "Closure: addressed — Evidence: targeted pytest\n"
+                for item_id, source in canonical_rows
+            )
+            output.write_text(
+                "## Todo List\n" + todo_rows + "\n"
+                "## Todo Progress\n\n" + "\n\n".join(entries) + "\n",
+                encoding="utf-8",
+            )
+            assert (
+                run_verification(
+                    output_file=output,
+                    command=command,
+                    scope="targeted",
+                    cwd=tmp_path,
+                )[0]
+                == 0
+            )
+            _write_baton(
+                issue_dir,
+                from_step="pr",
+                to_owner=HandoffOwner.AGENT,
+                to_step="develop",
+                intent=HandoffIntent.MANUAL_HANDOFF,
+            )
             return "await_agent", TokenUsage(), [], [], [], None
 
     class GitOperations:
+        def get_current_branch(self) -> str:
+            return "pr-feedback"
+
+        def get_commits_between(self, *_args, **_kwargs) -> list[object]:
+            return []
+
         def get_default_base_branch(self) -> str:
             return "main"
 
         def get_repo_root(self) -> Path:
             return tmp_path
 
-    def build_phase(*, paused: bool) -> GenericPhase:
+    def build_phase() -> GenericPhase:
         data_root = Path(__file__).resolve().parents[2] / "src" / "cafe" / "data"
         skill_loader = SkillLoader(
             project_root=tmp_path,
@@ -363,7 +424,6 @@ def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(
         skill_loader.discover()
         return GenericPhase(
             skill_loader,
-            hook_registry={"PauseBeforeAgent": PauseBeforeAgent} if paused else None,
             skill_bridge=NativeSkillBridge(
                 skill_loader,
                 project_root=tmp_path,
@@ -371,47 +431,52 @@ def test_declared_pr_feedback_source_records_and_delivers_each_comment_once(
             ),
         )
 
-    paused_playbook = json.loads(json.dumps(playbook))
-    paused_playbook["steps"]["develop"]["hooks"] = {"before_execute": ["PauseBeforeAgent"]}
-    paused_manager = AgentManager()
-    paused_executor = GenericWorkflowStepExecutor(
-        issue_dir=issue_dir,
-        issue_name="pr-feedback",
-        playbook=paused_playbook,
-        generic_phase=build_phase(paused=True),
-        agent_manager=paused_manager,
-        git_ops=GitOperations(),
-        role_agent_map={"developer": "David"},
-    )
-    BlackboardWorkflowRuntime(
-        issue_dir=issue_dir,
-        playbook=paused_playbook,
-        executor=paused_executor.execute_step,
-    ).run(start_step="develop", single_step=True)
-
-    assert paused_manager.prompts == []
-    assert [entry.content for entry in ledger.pending(target_step="develop")] == [
-        "Handle the first boundary.",
-        "Handle the second boundary.",
-    ]
-
     delivery_manager = AgentManager()
     delivery_executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name="pr-feedback",
         playbook=playbook,
-        generic_phase=build_phase(paused=False),
+        generic_phase=build_phase(),
         agent_manager=delivery_manager,
         git_ops=GitOperations(),
         role_agent_map={"developer": "David"},
     )
-    BlackboardWorkflowRuntime(
-        issue_dir=issue_dir,
-        playbook=playbook,
-        executor=delivery_executor.execute_step,
-    ).run(start_step="develop", single_step=True)
+    with (
+        patch("cafe.core.hooks.feedback.GitHubOps") as github_ops,
+        patch(
+            "cafe.core.hooks.feedback.get_all_pr_comments",
+            return_value=comments,
+        ),
+    ):
+        github_ops.return_value.get_pr_for_branch.return_value = {
+            "number": 101,
+            "url": "https://example.test/pr/101",
+        }
+        runtime_result = BlackboardWorkflowRuntime(
+            issue_dir=issue_dir,
+            playbook=playbook,
+            executor=delivery_executor.execute_step,
+        ).run(start_step="pr", single_step=True)
 
-    assert len(delivery_manager.prompts) == 1
-    assert "workflow_feedback_file=" in delivery_manager.prompts[0]
-    assert "artifacts/workflow_feedback.json" in delivery_manager.prompts[0]
-    assert ledger.pending(target_step="develop") == []
+    assert len(delivery_manager.prompts) == 1, runtime_result
+    for comment in comments:
+        assert str(comment["body"]) in delivery_manager.prompts[0]
+    assert "Canonical Todo fields for this batch:" in delivery_manager.prompts[0]
+    assert f"Source `{expected_source}`" in delivery_manager.prompts[0]
+    assert ledger.pending(target_step="pr") == []
+    state = BlackboardStore(issue_dir).load_or_create("pr")
+    assert state.artifacts["pr_result"].updated_by == "pr"
+    assert any(
+        event.event_type == "transition"
+        and event.data.get("from") == "pr"
+        and event.data.get("to") == "develop"
+        for event in state.events
+    )
+    assert (
+        _find_external_resume_step(
+            issue_dir=issue_dir,
+            playbook_data=playbook,
+            git_ops=GitOperations(),
+        )
+        is None
+    )

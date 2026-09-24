@@ -2,7 +2,7 @@
 
 import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -503,6 +503,52 @@ class TestGitOperations:
             with pytest.raises(GitError, match="Branch deletion failed"):
                 git.delete_branch("feature-branch")
 
+    def test_delete_remote_branch_if_exists(self) -> None:
+        git = GitOperations()
+
+        with patch.object(git, "run_git", side_effect=["remote sha\n", ""]) as mock_run:
+            assert git.delete_remote_branch_if_exists("feature-branch") is True
+
+        assert mock_run.call_args_list == [
+            call("ls-remote", "--heads", "origin", "refs/heads/feature-branch"),
+            call("push", "origin", "--delete", "feature-branch"),
+        ]
+
+    def test_delete_remote_branch_if_exists_is_idempotent(self) -> None:
+        git = GitOperations()
+
+        with patch.object(git, "run_git", return_value="") as mock_run:
+            assert git.delete_remote_branch_if_exists("feature-branch") is False
+
+        mock_run.assert_called_once_with(
+            "ls-remote", "--heads", "origin", "refs/heads/feature-branch"
+        )
+
+    def test_delete_remote_branch_if_exists_accepts_concurrent_deletion(self) -> None:
+        git = GitOperations()
+
+        with patch.object(
+            git,
+            "run_git",
+            side_effect=["remote sha\n", GitError("remote ref missing"), ""],
+        ) as mock_run:
+            assert git.delete_remote_branch_if_exists("feature-branch") is False
+
+        assert mock_run.call_args_list[-1] == call(
+            "ls-remote", "--heads", "origin", "refs/heads/feature-branch"
+        )
+
+    def test_delete_remote_branch_if_exists_preserves_real_failure(self) -> None:
+        git = GitOperations()
+
+        with patch.object(
+            git,
+            "run_git",
+            side_effect=["remote sha\n", GitError("permission denied"), "remote sha\n"],
+        ):
+            with pytest.raises(GitError, match="permission denied"):
+                git.delete_remote_branch_if_exists("feature-branch")
+
     def test_merge_squash(self) -> None:
         """測試 squash merge 只 stage 不 commit"""
         git = GitOperations()
@@ -760,98 +806,3 @@ class TestGitOperations:
             mock_run.side_effect = GitError("not found")
             with patch.object(git, "get_main_branch", return_value="main"):
                 assert git.get_default_base_branch() == "main"
-
-    def test_ensure_remote_base_ancestor_fetches_exact_base_and_accepts_local_ahead(
-        self,
-    ) -> None:
-        git = GitOperations()
-        with (
-            patch.object(git, "run_git") as mock_run,
-            patch.object(git, "is_ancestor", return_value=True) as mock_is_ancestor,
-        ):
-            remote_ref = git.ensure_remote_base_ancestor("develop", "HEAD")
-
-        assert remote_ref == "origin/develop"
-        mock_run.assert_called_once_with(
-            "fetch",
-            "--no-tags",
-            "origin",
-            "+refs/heads/develop:refs/remotes/origin/develop",
-        )
-        mock_is_ancestor.assert_called_once_with("origin/develop", "HEAD")
-
-    def test_ensure_remote_base_ancestor_rejects_remote_drift(self) -> None:
-        git = GitOperations()
-        with (
-            patch.object(git, "run_git"),
-            patch.object(git, "is_ancestor", return_value=False),
-            pytest.raises(GitError, match="origin/develop.*not contained in HEAD"),
-        ):
-            git.ensure_remote_base_ancestor("develop", "HEAD")
-
-    def test_ensure_remote_base_ancestor_accepts_ahead_then_rejects_diverged_history(
-        self, tmp_path: Path
-    ) -> None:
-        origin = tmp_path / "origin.git"
-        seed = tmp_path / "seed"
-        local = tmp_path / "local"
-        subprocess.run(
-            ["git", "init", "--bare", str(origin)],
-            check=True,
-            capture_output=True,
-        )
-        seed.mkdir()
-        subprocess.run(
-            ["git", "init", "-b", "develop"],
-            cwd=seed,
-            check=True,
-            capture_output=True,
-        )
-        subprocess.run(
-            ["git", "config", "user.name", "CAFE Test"],
-            cwd=seed,
-            check=True,
-        )
-        subprocess.run(
-            ["git", "config", "user.email", "cafe@example.invalid"],
-            cwd=seed,
-            check=True,
-        )
-        (seed / "base.txt").write_text("base\n", encoding="utf-8")
-        subprocess.run(["git", "add", "base.txt"], cwd=seed, check=True)
-        subprocess.run(["git", "commit", "-m", "base"], cwd=seed, check=True)
-        subprocess.run(
-            ["git", "remote", "add", "origin", str(origin)],
-            cwd=seed,
-            check=True,
-        )
-        subprocess.run(["git", "push", "-u", "origin", "develop"], cwd=seed, check=True)
-        subprocess.run(
-            ["git", "clone", "-b", "develop", str(origin), str(local)],
-            check=True,
-            capture_output=True,
-        )
-        subprocess.run(
-            ["git", "config", "user.name", "CAFE Test"],
-            cwd=local,
-            check=True,
-        )
-        subprocess.run(
-            ["git", "config", "user.email", "cafe@example.invalid"],
-            cwd=local,
-            check=True,
-        )
-        (local / "local.txt").write_text("ahead\n", encoding="utf-8")
-        subprocess.run(["git", "add", "local.txt"], cwd=local, check=True)
-        subprocess.run(["git", "commit", "-m", "local ahead"], cwd=local, check=True)
-
-        git = GitOperations(str(local))
-        assert git.ensure_remote_base_ancestor("develop", "HEAD") == "origin/develop"
-
-        (seed / "remote.txt").write_text("advanced\n", encoding="utf-8")
-        subprocess.run(["git", "add", "remote.txt"], cwd=seed, check=True)
-        subprocess.run(["git", "commit", "-m", "remote ahead"], cwd=seed, check=True)
-        subprocess.run(["git", "push", "origin", "develop"], cwd=seed, check=True)
-
-        with pytest.raises(GitError, match="origin/develop.*not contained in HEAD"):
-            git.ensure_remote_base_ancestor("develop", "HEAD")

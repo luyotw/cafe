@@ -548,14 +548,6 @@ def _validate_dispatch_attempt(
     if not valid_transition:
         raise ValueError("event-driven dispatch attempt transition is invalid")
 
-    if status in {"acquired", "accepted", "failed", "ambiguous"} and stage == "delivery":
-        session = entries[index].get("session")
-        if not isinstance(session, dict) or session.get("id") != session_id:
-            raise ValueError("event-driven delivery session provenance is invalid")
-    if status == "acquired":
-        session = entries[index].get("session")
-        if not isinstance(session, dict) or session.get("id") != session_id:
-            raise ValueError("event-driven bootstrap session provenance is invalid")
     return index, stage, status
 
 
@@ -1505,11 +1497,13 @@ def _callback_prompt(event: dict[str, Any], *, repository_root: Path) -> str:
             "Read the builtin use-cafe-workflow skill and follow its current confirmed contract.",
             "First inspect current durable state with cafe status/show before acting; "
             "the event may be stale.",
-            "Do not answer mandatory, user-required, clarification, permission, or "
-            "capability tasks; only a user-facing driver turn may relay an explicit answer.",
-            "You may complete a declared driver_confirmable task only after verifying its "
-            "confirmed contract and evidence. Do not grant permissions/capabilities or wait "
-            "for this callback.",
+            "Do not answer mandatory, user-required, permission, or capability tasks; only "
+            "a user-facing driver turn may relay an explicit user-owned answer.",
+            "You may complete a declared driver_confirmable task, including "
+            "need_clarification, only after verifying its confirmed contract and evidence. "
+            "A clarification answer must stay within confirmed scope, constraints and authority "
+            "and trigger no contract deviation; otherwise leave it for the user. Do not grant "
+            "permissions/capabilities or wait for this callback.",
             "Do not assume you own a running background process. Only use an already "
             "reliable, authorized control path.",
             f"Repository: {repository_root}",

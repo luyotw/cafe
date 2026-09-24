@@ -23,6 +23,7 @@ from cafe.ui.commands import audit as audit_commands
 from cafe.ui.commands import verification as verification_commands
 from cafe.ui.commands import trust as trust_commands
 from cafe.ui.commands import update as update_commands
+from cafe.ui.commands import settings as settings_commands
 from cafe.ui.cli_shared import (
     CONTENT_TYPE_FILE_MAP as _SHARED_CONTENT_TYPE_FILE_MAP,
     VALID_CONTENT_TYPES as _SHARED_VALID_CONTENT_TYPES,
@@ -116,7 +117,7 @@ def _build_repo_entrypoint_mismatch_message(
 
     repo_root, expected_cli, actual_cli = mismatch
 
-    python_bin = Path(sys.executable).resolve()
+    python_bin = Path(sys.executable).absolute()
     return textwrap.dedent(
         f"""
         Error: `cafe` is running from a different installation than this checkout.
@@ -156,7 +157,7 @@ def _resolve_repo_entrypoint_mismatch(
 
 def _build_repo_entrypoint_reexec_command(repo_root: Path) -> list[str]:
     """Build a command that runs the CLI from the detected checkout."""
-    return [str(Path(sys.executable).resolve()), "-m", "cafe.ui.cli", *sys.argv[1:]]
+    return [str(Path(sys.executable).absolute()), "-m", "cafe.ui.cli", *sys.argv[1:]]
 
 
 def _build_repo_entrypoint_reexec_env(repo_root: Path) -> dict[str, str]:
@@ -620,7 +621,10 @@ def setup(
     playbook: Optional[str] = typer.Option(
         None,
         "--playbook",
-        help="Set the playbook (standard, standard-qa, tdd, tdd-qa, direct, simple, hotfix).",
+        help=(
+            "Set the playbook (standard, standard-qa, tdd, tdd-qa, direct, "
+            "direct-qa, simple, hotfix)."
+        ),
     ),
     rigor: Optional[str] = typer.Option(
         None,
@@ -834,6 +838,7 @@ app.add_typer(catalog_commands.playbook_app, name="playbook")
 app.add_typer(catalog_commands.skill_app, name="skill")
 app.add_typer(catalog_commands.catalog_app, name="catalog")
 app.add_typer(update_commands.update_app, name="update")
+app.add_typer(settings_commands.settings_app, name="settings")
 
 # Workflow verification receipts
 app.add_typer(verification_commands.verification_app, name="verification")
@@ -1229,6 +1234,11 @@ def agent_sync() -> None:
 def chat_with_agent(
     ctx: typer.Context,
     role: str = typer.Argument(..., help="Playbook-declared role"),
+    phase: Optional[str] = typer.Option(
+        None,
+        "--phase",
+        help="Use the session for this playbook phase",
+    ),
     prompt: Optional[str] = typer.Option(
         None,
         "--prompt",
@@ -1246,6 +1256,7 @@ def chat_with_agent(
     \b
     Examples:
         cafe chat developer
+        cafe chat developer --phase pr
         cafe chat developer -p "Summarize the current implementation"
         cafe chat qa
         cafe chat researcher
@@ -1257,9 +1268,12 @@ def chat_with_agent(
         console.print(f"[red]Error: Invalid role '{role}'. Must be one of: {', '.join(valid_roles)}[/red]")
         raise typer.Exit(1)
 
-    if prompt is None:
-        raise typer.Exit(launch_chat_session(role, issue_name))
-    raise typer.Exit(launch_chat_session(role, issue_name, prompt=prompt))
+    launch_kwargs = {}
+    if phase is not None:
+        launch_kwargs["phase_name"] = phase
+    if prompt is not None:
+        launch_kwargs["prompt"] = prompt
+    raise typer.Exit(launch_chat_session(role, issue_name, **launch_kwargs))
 
 
 def _load_issue_playbook_roles(issue_name: str) -> list[str]:

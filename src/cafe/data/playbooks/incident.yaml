@@ -1,6 +1,6 @@
 playbook:
   id: incident
-  name: "Incident Response Workflow（偵測 → 分類 → 緩解 → 事後檢討）"
+  name: "Incident Response Workflow (detect -> triage -> mitigate -> postmortem)"
   conversation_locale: en-US
   applicability:
     summary: "Operational incident response for active impact, mitigation, and accountable follow-up."
@@ -22,7 +22,7 @@ skills:
 
 roles:
   ops:
-    description: "值班／維運應變"
+    description: "Operational incident response"
     default_agent: "Casey"
     default_cli: "claude"
 
@@ -36,6 +36,7 @@ steps:
     skill: cafe-incident_detect
     role: ops
     assignee_type: agent
+    input_artifacts: [incident_plan, incident_learning]
     output_artifact: incident_signal
     human_tasks:
       - trigger: need_clarification
@@ -54,8 +55,11 @@ steps:
     skill: cafe-incident_triage
     role: ops
     assignee_type: agent
-    input_artifacts: [incident_signal]
+    input_artifacts: [incident_signal, incident_recovery, incident_learning]
     output_artifact: incident_plan
+    behavior:
+      feedback_routes:
+        detect: {artifact: incident_plan, source_kind: incident_plan, todo_source: plan, todo_id_prefix: PLAN}
     human_tasks:
       - trigger: need_clarification
         task_id: clarification-feedback
@@ -76,6 +80,9 @@ steps:
     assignee_type: agent
     input_artifacts: [incident_signal, incident_plan]
     output_artifact: incident_recovery
+    behavior:
+      feedback_routes:
+        triage: {artifact: incident_recovery, source_kind: incident_recovery, todo_source: recovery, todo_id_prefix: IREC}
     human_tasks:
       - trigger: need_clarification
         task_id: clarification-feedback
@@ -96,6 +103,9 @@ steps:
     assignee_type: agent
     input_artifacts: [incident_signal, incident_plan, incident_recovery]
     output_artifact: incident_learning
+    behavior:
+      feedback_routes:
+        triage: {artifact: incident_learning, source_kind: incident_learning, todo_source: learning, todo_id_prefix: ILEARN}
     human_tasks:
       - trigger: need_clarification
         task_id: clarification-feedback

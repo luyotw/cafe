@@ -1,6 +1,6 @@
 ---
 name: cafe-editorial_review
-description: 審閱稿件品質與對齊大綱
+description: Review editorial quality and alignment with the brief
 version: 1.1.0
 workflow:
   execution_profile:
@@ -8,6 +8,10 @@ workflow:
     reasoning: standard
     risk_domains: [source-fidelity, audience-alignment]
     fallback_strength: equivalent_or_stronger
+  prompt_inputs:
+    - artifacts: [review_feedback]
+      placeholder: correction_source
+      required: false
 ---
 
 # Editorial Review
@@ -16,10 +20,10 @@ workflow:
 Read your agent file: {agent_file}
 
 ## Instructions
-檢視初稿的清晰度、依據與結構；若需修改，提出可執行的修訂方向。
+Review the draft's clarity, support, and structure. If changes are needed, provide actionable revision directions. Keep every backward revision request in the canonical `## Todo List`; when no actionable revision exists, write only `No actionable work.`.
 
 ## Output
 Write review to: {output_file}
 
 ## Handoff
-- 依照本輪結果寫入 next-step baton；blackboard 由 runtime 更新。
+- Write the next-step baton for this result; the runtime updates the blackboard.

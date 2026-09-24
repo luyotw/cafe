@@ -117,6 +117,8 @@ def test_builtin_playbooks_publish_pr_through_sync_hook() -> None:
     project_root = Path(__file__).resolve().parents[2]
     for rel_path in [
         "src/cafe/data/playbooks/direct.yaml",
+        "src/cafe/data/playbooks/direct-subagent-review.yaml",
+        "src/cafe/data/playbooks/direct-qa.yaml",
         "src/cafe/data/playbooks/simple.yaml",
         "src/cafe/data/playbooks/standard.yaml",
         "src/cafe/data/playbooks/standard-qa.yaml",
@@ -176,7 +178,7 @@ def test_sync_pr_fails_when_branch_push_fails(tmp_path: Path) -> None:
     assert not log_file.exists()
 
 
-def test_sync_pr_stops_before_push_when_remote_base_advanced(tmp_path: Path) -> None:
+def test_sync_pr_continues_when_remote_base_advanced(tmp_path: Path) -> None:
     project_root = Path(__file__).resolve().parents[2]
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     pr_iter = issue_dir / "pr" / "iteration_010"
@@ -196,10 +198,10 @@ def test_sync_pr_stops_before_push_when_remote_base_advanced(tmp_path: Path) -> 
 
     result = _run_sync_pr(project_root, output_file, env)
 
-    assert result.returncode == 1
-    assert "does not contain the latest origin/main" in result.stderr
-    assert "Pushing branch" not in result.stderr
-    assert not log_file.exists()
+    assert result.returncode == 0
+    assert "Pushing branch: feature/test" in result.stderr
+    assert "does not contain the latest origin/main" not in result.stderr
+    assert "edit:pr edit" in log_file.read_text(encoding="utf-8")
 
 
 def test_sync_pr_uses_pushed_head_when_creating_pr(tmp_path: Path) -> None:

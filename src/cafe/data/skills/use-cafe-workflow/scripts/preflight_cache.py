@@ -221,6 +221,15 @@ def candidate_record(
     }
 
 
+def _canonical_resolved_model(*, requested_model: str, reported_model: str | None) -> str:
+    """Preserve the accepted CLI identifier when a provider only changes casing."""
+    requested = requested_model.strip()
+    reported = (reported_model or requested).strip()
+    if reported.casefold() == requested.casefold():
+        return requested
+    return reported
+
+
 def candidate_probe(
     *, cache_file: Path, cli: str, model: str, max_age_seconds: int, now: float
 ) -> dict[str, Any]:
@@ -275,7 +284,10 @@ def candidate_probe(
         raise PreflightCacheError(
             f"candidate probe returned an unexpected response for {cli}:{model}"
         )
-    resolved_model = response.model or model
+    resolved_model = _canonical_resolved_model(
+        requested_model=model,
+        reported_model=response.model,
+    )
     candidate_record(
         cache_file=cache_file,
         cli=cli,

@@ -87,7 +87,7 @@ class GenericPhase:
     ) -> str:
         """Install one skill for the target CLI and return its invocation syntax."""
         installed_dir = self.skill_bridge.install_skill(skill_name, agent_cli, context=context)
-        contract = self.skill_loader.get_workflow_contract(skill_name)
+        contract = self.skill_loader.get_workflow_declaration(skill_name)
         prompt_references = self._render_prompt_references(
             skill_name=skill_name,
             references=contract.prompt_references,
@@ -190,7 +190,14 @@ class GenericPhase:
         )
         runtime_context.append("Baton contract (single source of truth):")
         runtime_context.append(
-            "- write next_step_file as JSON with exactly these required fields: "
+            "- for an ordinary successful handoff, write next_step_file as "
+            "JSON with exactly these required fields: "
+            '{"version":1,"intent":"await_agent"}; the runtime resolves the concrete '
+            "target from this step's on declaration"
+        )
+        runtime_context.append(
+            "- for legacy or exceptional routes, write next_step_file as JSON with "
+            "exactly these required fields: "
             '{"version":1,"to_owner":"<agent|user|done>",'
             '"to_step":"<target>","intent":"<intent>"}'
         )
@@ -199,17 +206,38 @@ class GenericPhase:
             "and updates the blackboard"
         )
         runtime_context.append(f"- valid intent values: [{baton_intents}]")
-        # 列出本 playbook 實際合法的 to_step，避免 agent 沿用共用 skill 範例裡的 step
-        # （如 pr）而寫出此 playbook 不存在的目標導致 baton 被拒。
-        if context and context.get("valid_to_steps"):
-            runtime_context.append(
-                f"- valid to_step values: [{context['valid_to_steps']}] "
-                "— use ONLY these; this playbook has no other steps (e.g. do not assume 'pr')"
+        has_route_projection = bool(
+            context and context.get("playbook_graph") and context.get("route_catalog")
+        )
+        if has_route_projection:
+            runtime_context.extend(
+                [
+                    "Active playbook graph (bounded topology projection):",
+                    context["playbook_graph"],
+                    "Routes available from the current step:",
+                    context["route_catalog"],
+                    "Use an outcome-only baton for a default route. Use an explicit baton "
+                    "only to select a listed discretionary `goto` target; a step that merely "
+                    "appears in the graph is not authorized.",
+                    "Route readiness is advisory context. The runtime revalidates required "
+                    "inputs and every ownership, human, permission, capability, publication, "
+                    "external-mutation, and terminal gate before entering the target.",
+                ]
             )
-        if context and context.get("step_transitions"):
-            runtime_context.append(
-                f"- this step's defined transitions (intent→to_step): {context['step_transitions']}"
-            )
+        else:
+            # Legacy callers may not yet supply the route projection. Keep the
+            # earlier bounded hints for those direct integrations only.
+            if context and context.get("valid_to_steps"):
+                runtime_context.append(
+                    f"- valid to_step values: [{context['valid_to_steps']}] "
+                    "— use ONLY these; this playbook has no other steps "
+                    "(e.g. do not assume 'pr')"
+                )
+            if context and context.get("step_transitions"):
+                runtime_context.append(
+                    "- this step's defined transitions (intent→to_step): "
+                    f"{context['step_transitions']}"
+                )
         if "confirm_output" in {
             intent.strip() for intent in baton_intents.split(",") if intent.strip()
         }:
@@ -287,6 +315,28 @@ class GenericPhase:
                     "A packet is a validated exact Downstream Contract; full and full_fallback paths remain complete authoritative sources.",
                 ]
             )
+        if context and context.get("workflow_feedback_batch_file"):
+            runtime_context.extend(
+                [
+                    "Authoritative curated feedback batch:",
+                    "- Read only the immutable current-cycle batch at "
+                    + context["workflow_feedback_batch_file"],
+                    "- This batch contains "
+                    + context.get("workflow_feedback_batch_count", "0")
+                    + " source identities; do not classify feedback outside it.",
+                    "- Sources observed after this snapshot remain pending for a later cycle.",
+                ]
+            )
+            if context.get("workflow_feedback_batch_todo_rows"):
+                runtime_context.extend(
+                    [
+                        "Canonical Todo fields for this batch:",
+                        "- Each line corresponds to the same-numbered immutable batch entry.",
+                        "- Copy its ID and Source exactly; do not derive or substitute "
+                        "generic PR-comment values.",
+                        context["workflow_feedback_batch_todo_rows"],
+                    ]
+                )
         if context and context.get("delta_packet"):
             runtime_context.extend(
                 [
@@ -307,6 +357,9 @@ class GenericPhase:
 
         if checklist_file is not None:
             lines.append("Do NOT finish this step until ALL checklist items are marked as [x].")
+            lines.append(
+                "Before a successful handoff, complete ALL applicable primary and overlay checklist gates and revalidate their Todo evidence. Do not delete or rewrite required gates to mark completion. Existing clarification, permission and manual handoff routes remain available."
+            )
 
         return "\n".join(lines).strip()
 
@@ -355,6 +408,60 @@ class GenericPhase:
         checklist_file: Optional[Path] = None,
         questions_xml_file: Optional[Path] = None,
         hook_context: Optional[Dict[str, Any]] = None,
+        prepare_agent_context: Optional[Callable[[Dict[str, str]], Dict[str, str]]] = None,
+        execution_guard: Optional[Callable[[], None]] = None,
+        execution_lease: Optional[Callable[[], Any]] = None,
+        max_retries: int = 3,
+    ) -> GenericPhaseExecution:
+        """Execute one phase while holding the caller's workspace-use lease."""
+        if execution_lease is None:
+            return self._execute(
+                skill_name=skill_name,
+                step_def=step_def,
+                agent_executor=agent_executor,
+                skill_invocation=skill_invocation,
+                shared_skill_invocations=shared_skill_invocations,
+                context=context,
+                output_file=output_file,
+                checklist_file=checklist_file,
+                questions_xml_file=questions_xml_file,
+                hook_context=hook_context,
+                prepare_agent_context=prepare_agent_context,
+                execution_guard=execution_guard,
+                max_retries=max_retries,
+            )
+        with execution_lease():
+            return self._execute(
+                skill_name=skill_name,
+                step_def=step_def,
+                agent_executor=agent_executor,
+                skill_invocation=skill_invocation,
+                shared_skill_invocations=shared_skill_invocations,
+                context=context,
+                output_file=output_file,
+                checklist_file=checklist_file,
+                questions_xml_file=questions_xml_file,
+                hook_context=hook_context,
+                prepare_agent_context=prepare_agent_context,
+                execution_guard=execution_guard,
+                max_retries=max_retries,
+            )
+
+    def _execute(
+        self,
+        *,
+        skill_name: str,
+        step_def: Dict[str, Any],
+        agent_executor: AgentExecutor,
+        skill_invocation: str,
+        shared_skill_invocations: Optional[List[str]] = None,
+        context: Optional[Dict[str, str]] = None,
+        output_file: Optional[Path] = None,
+        checklist_file: Optional[Path] = None,
+        questions_xml_file: Optional[Path] = None,
+        hook_context: Optional[Dict[str, Any]] = None,
+        prepare_agent_context: Optional[Callable[[Dict[str, str]], Dict[str, str]]] = None,
+        execution_guard: Optional[Callable[[], None]] = None,
         max_retries: int = 3,
     ) -> GenericPhaseExecution:
         runtime_context = dict(context or {})
@@ -363,6 +470,22 @@ class GenericPhase:
         hook_kwargs = dict(hook_context or {})
         hook_kwargs["shared_skill_invocations"] = list(shared_skill_invocations or [])
 
+        def guard_stable_boundary() -> None:
+            """Require two consecutive checks before a side-effecting boundary.
+
+            Workspace verification is a check-to-use contract.  The second
+            immediate check closes the small interval in which a guard itself
+            observes or causes a replacement before a hook or agent begins.
+            Hooks are checked again after they return so a replacement during a
+            hook cannot flow into the next boundary.
+            """
+            if execution_guard is not None:
+                execution_guard()
+                execution_guard()
+
+        hook_kwargs["_execution_guard"] = guard_stable_boundary
+
+        guard_stable_boundary()
         before = self._run_hook_stage(
             "before_execute",
             step_def=step_def,
@@ -373,6 +496,7 @@ class GenericPhase:
         runtime_context.update(before.context_updates)
         events.extend(before.events)
         artifact_ready = artifact_ready and before.artifact_ready
+        guard_stable_boundary()
         if not before.continue_pipeline:
             return GenericPhaseExecution(
                 response="",
@@ -384,6 +508,7 @@ class GenericPhase:
                 published=False,
             )
 
+        guard_stable_boundary()
         prepared = self._run_hook_stage(
             "prepare_input",
             step_def=step_def,
@@ -394,6 +519,7 @@ class GenericPhase:
         runtime_context.update(prepared.context_updates)
         events.extend(prepared.events)
         artifact_ready = artifact_ready and prepared.artifact_ready
+        guard_stable_boundary()
         if not prepared.continue_pipeline:
             return GenericPhaseExecution(
                 response="",
@@ -405,9 +531,16 @@ class GenericPhase:
                 published=False,
             )
 
+        if prepare_agent_context is not None:
+            guard_stable_boundary()
+            runtime_context = prepare_agent_context(runtime_context)
+            guard_stable_boundary()
+
         transform_runtime_context = hook_kwargs.get("transform_runtime_context")
         if callable(transform_runtime_context):
+            guard_stable_boundary()
             runtime_context = transform_runtime_context(runtime_context)
+            guard_stable_boundary()
 
         response = ""
         status_code: Optional[PhaseStatusCode] = None
@@ -415,6 +548,7 @@ class GenericPhase:
         agent_invoked = False
         attempt = 0
         while True:
+            guard_stable_boundary()
             prompt = self.build_prompt(
                 skill_name=skill_name,
                 skill_invocation=skill_invocation,
@@ -430,6 +564,7 @@ class GenericPhase:
             response = agent_executor(prompt)
             agent_invoked = True
 
+            guard_stable_boundary()
             after = self._run_hook_stage(
                 "after_execute",
                 step_def=step_def,
@@ -443,6 +578,7 @@ class GenericPhase:
             runtime_context.update(after.context_updates)
             events.extend(after.events)
             artifact_ready = artifact_ready and after.artifact_ready
+            guard_stable_boundary()
             if after.override_status_code is not None:
                 status_code = after.override_status_code
             if not after.continue_pipeline:
@@ -465,6 +601,7 @@ class GenericPhase:
 
         published = False
         if artifact_ready:
+            guard_stable_boundary()
             publish = self._run_hook_stage(
                 "publish_output",
                 step_def=step_def,
@@ -478,6 +615,7 @@ class GenericPhase:
             runtime_context.update(publish.context_updates)
             events.extend(publish.events)
             published = publish.continue_pipeline
+            guard_stable_boundary()
             if publish.override_status_code is not None:
                 status_code = publish.override_status_code
 
@@ -525,6 +663,9 @@ class GenericPhase:
         aggregate = HookResult()
 
         for hook_entry in hook_entries:
+            before_use_guard = kwargs.get("_execution_guard")
+            if callable(before_use_guard):
+                before_use_guard()
             result: HookResult
             if hook_entry is self._CONFIRMED_ARTIFACT_SYNC_HOOK:
                 result = self._run_confirmed_artifact_sync_hook(

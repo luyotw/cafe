@@ -922,7 +922,7 @@ def test_github_issue_fetcher_uses_phase_step_user_input_without_prompting(tmp_p
     mock_fetch_issue.assert_not_called()
 
 
-def test_execute_step_skips_checklist_validation_when_confirmed_without_agent_run(
+def test_execute_step_validates_existing_checklist_when_confirmed_without_agent_run(
     tmp_path: Path,
 ) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
@@ -952,7 +952,9 @@ def test_execute_step_skips_checklist_validation_when_confirmed_without_agent_ru
     executor._build_context = MagicMock(return_value={})
     executor._generate_checklist = MagicMock()
     executor._persist_final_status = MagicMock()
-    executor._validate_and_retry_checklist_completion = MagicMock()
+    executor._validate_and_retry_checklist_completion = MagicMock(
+        return_value=("", PhaseStatusCode.CONFIRMED, True)
+    )
 
     result = executor.execute_step(
         "spec",
@@ -962,7 +964,7 @@ def test_execute_step_skips_checklist_validation_when_confirmed_without_agent_ru
 
     assert isinstance(result, StepExecutionResult)
     assert result.status_code == "confirmed"
-    executor._validate_and_retry_checklist_completion.assert_not_called()
+    executor._validate_and_retry_checklist_completion.assert_called_once()
 
 
 def test_pr_link_opener_opens_current_pr_url_when_confirmed() -> None:
@@ -1131,7 +1133,9 @@ def test_github_pr_creator_publish_output_runs_sync_pr_script(tmp_path: Path) ->
     assert result.events[1]["success"] is True
 
 
-def test_github_pr_creator_prepares_history_from_fetched_remote_base(tmp_path: Path) -> None:
+def test_github_pr_creator_prepares_history_from_configured_base_without_updating_it(
+    tmp_path: Path,
+) -> None:
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"
     _enable_remote_pr(issue_dir)
     (issue_dir / "issue.yaml").write_text(
@@ -1141,15 +1145,14 @@ def test_github_pr_creator_prepares_history_from_fetched_remote_base(tmp_path: P
     phase = _FakePhase(phase_dir=issue_dir / "pr", iteration=1)
     phase.git_ops = MagicMock()
     phase.git_ops.get_current_branch.return_value = "feature/demo"
-    phase.git_ops.ensure_remote_base_ancestor.return_value = "origin/develop"
     phase.git_ops.get_commits_between.return_value = "abc123 local base commit"
 
     with patch("cafe.core.hooks.native.GitHubOps") as mock_github_ops:
         mock_github_ops.return_value.get_pr_for_branch.return_value = None
         result = GitHubPRCreator().run(stage="prepare_input", phase=phase)
 
-    phase.git_ops.ensure_remote_base_ancestor.assert_called_once_with("develop", "HEAD")
-    phase.git_ops.get_commits_between.assert_called_once_with("origin/develop", "HEAD")
+    phase.git_ops.merge_remote_base_into_head.assert_not_called()
+    phase.git_ops.get_commits_between.assert_called_once_with("develop", "HEAD")
     assert result.context_updates["commits"] == "abc123 local base commit"
 
 
@@ -1173,7 +1176,7 @@ def test_github_pr_creator_local_mode_keeps_existing_pr_metadata_without_fetch(
         }
         result = GitHubPRCreator().run(stage="prepare_input", phase=phase)
 
-    phase.git_ops.ensure_remote_base_ancestor.assert_not_called()
+    phase.git_ops.merge_remote_base_into_head.assert_not_called()
     phase.git_ops.get_commits_between.assert_not_called()
     assert result.context_updates == {
         "pr_number": "42",

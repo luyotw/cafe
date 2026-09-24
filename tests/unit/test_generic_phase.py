@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path
 from threading import Event, Thread
 
@@ -11,6 +12,7 @@ from cafe.catalogs.resolver import global_catalog_lock
 from cafe.core.hooks import HookResult
 from cafe.core.status_codes import PhaseStatusCode
 from cafe.core.types import AgentCLI
+from cafe.core.workspace_lock import workspace_execution_lock
 from cafe.phases.generic_phase import GenericPhase
 from cafe.skills.loader import SkillLoader
 from cafe.skills.native_bridge import NativeSkillBridge
@@ -120,6 +122,63 @@ def test_build_prompt_distinguishes_confirmation_baton_from_continuation(tmp_pat
     assert "continuation after the human task is completed, not the baton target" in prompt
 
 
+def test_build_prompt_injects_graph_once_and_current_route_catalog(tmp_path: Path) -> None:
+    phase = GenericPhase(_setup_loader(tmp_path))
+    graph = json.dumps(
+        {
+            "entry": "compose",
+            "steps": [
+                {
+                    "from": "compose",
+                    "defaults": [{"intent": "await_agent", "to": "inspect"}],
+                    "goto": ["revise"],
+                }
+            ],
+        },
+        separators=(",", ":"),
+    )
+    routes = json.dumps(
+        {
+            "defaults": {
+                "await_agent": {
+                    "to": "inspect",
+                    "label": "Inspect draft",
+                    "ready": False,
+                    "missing": ["accepted_draft"],
+                }
+            },
+            "goto": [
+                {
+                    "to": "revise",
+                    "label": "Revise draft",
+                    "ready": True,
+                    "carries_feedback": True,
+                }
+            ],
+        },
+        separators=(",", ":"),
+    )
+
+    prompt = phase.build_prompt(
+        skill_name="cafe-plan",
+        skill_invocation="/plan",
+        context={
+            "valid_baton_intents": "await_agent, manual_handoff",
+            "valid_to_steps": "compose, inspect, revise, user, done",
+            "step_transitions": "await_agent→inspect",
+            "playbook_graph": graph,
+            "route_catalog": routes,
+        },
+    )
+
+    assert prompt.count("Active playbook graph (bounded topology projection):") == 1
+    assert prompt.count(graph) == 1
+    assert prompt.count("Routes available from the current step:") == 1
+    assert prompt.count(routes) == 1
+    assert "valid to_step values:" not in prompt
+    assert "this step's defined transitions" not in prompt
+
+
 def test_build_prompt_includes_files_and_checklist_guard(tmp_path: Path) -> None:
     phase = GenericPhase(_setup_loader(tmp_path))
     prompt = phase.build_prompt(
@@ -148,11 +207,13 @@ def test_build_prompt_includes_files_and_checklist_guard(tmp_path: Path) -> None
     assert "next_step_file=.cafe/issues/demo/next_step.txt" in prompt
     assert "Runtime context:" in prompt
     assert "Baton contract (single source of truth):" in prompt
-    compact_baton = (
+    legacy_baton = (
         '{"version":1,"to_owner":"<agent|user|done>",'
         '"to_step":"<target>","intent":"<intent>"}'
     )
-    assert compact_baton in prompt
+    assert '{"version":1,"intent":"await_agent"}' in prompt
+    assert legacy_baton in prompt
+    assert "runtime resolves the concrete target from this step's on declaration" in prompt
     assert "never write blackboard_file" in prompt
     assert "valid intent values: [await_agent, confirm_output, alignment_checkpoint, need_clarification, need_permission, no_changes_needed, manual_handoff, workflow_complete]" in prompt
     assert "do not invoke external workflow-driving skills (e.g. use-cafe-workflow)" in prompt
@@ -311,6 +372,31 @@ def test_build_prompt_pr_phase_identifies_local_only_workflow_mode(tmp_path: Pat
     assert "No PR URL will exist" in prompt
 
 
+def test_build_prompt_renders_canonical_feedback_todo_fields(tmp_path: Path) -> None:
+    phase = GenericPhase(_setup_loader(tmp_path))
+    prompt = phase.build_prompt(
+        skill_name="cafe-pr",
+        skill_invocation="/cafe-pr",
+        context={
+            "workflow_feedback_batch_file": (
+                ".cafe/issues/demo/pr/iteration_002/workflow_feedback_batch.json"
+            ),
+            "workflow_feedback_batch_count": "2",
+            "workflow_feedback_batch_todo_rows": (
+                "- Batch entry 1: use ID `WF-ABC123` and Source `workflow_feedback`.\n"
+                "- Batch entry 2: use ID `PRC-DEF456` and Source `pr_comment`."
+            ),
+        },
+    )
+
+    assert "Authoritative curated feedback batch:" in prompt
+    assert "Canonical Todo fields for this batch:" in prompt
+    assert "same-numbered immutable batch entry" in prompt
+    assert "do not derive or substitute generic PR-comment values" in prompt
+    assert "Batch entry 1: use ID `WF-ABC123` and Source `workflow_feedback`" in prompt
+    assert "Batch entry 2: use ID `PRC-DEF456` and Source `pr_comment`" in prompt
+
+
 def assert_runtime_handoff_guardrails_persist(prompt: str) -> None:
     """When ``handoff_summary`` is injected, these lines must stay in the runtime prompt.
 
@@ -459,6 +545,110 @@ def test_execute_short_circuits_when_before_execute_stops(tmp_path: Path) -> Non
     assert calls == []
     assert result.status_code == PhaseStatusCode.NEED_CLARIFICATION
     assert result.events == [{"type": "stopped"}]
+
+
+def test_execute_guard_runs_at_each_agent_and_hook_boundary(tmp_path: Path) -> None:
+    phase = GenericPhase(_setup_loader(tmp_path))
+    checks: list[str] = []
+
+    result = phase.execute(
+        skill_name="cafe-plan",
+        skill_invocation="/plan",
+        step_def={"valid_intents": ["confirmed"]},
+        agent_executor=lambda prompt: "confirmed",
+        execution_guard=lambda: checks.append("guard"),
+    )
+
+    assert result.agent_invoked is True
+    assert len(checks) >= 4
+
+
+def test_execute_holds_workspace_lease_across_agent_and_host_hooks(tmp_path: Path) -> None:
+    """A workspace writer cannot interleave between validation and use."""
+    writer_entered = Event()
+    release_writer = Event()
+    observed: list[str] = []
+    writer_threads: list[Thread] = []
+
+    @contextmanager
+    def workspace_lease():
+        with workspace_execution_lock(tmp_path):
+            observed.append("lease-enter")
+            yield
+            observed.append("lease-exit")
+
+    class LeaseAwareHook:
+        def run(self, **_kwargs):
+            assert not writer_entered.is_set()
+            observed.append("hook")
+            return HookResult()
+
+    def writer() -> None:
+        with workspace_execution_lock(tmp_path):
+            writer_entered.set()
+            release_writer.wait(timeout=5)
+
+    phase = GenericPhase(_setup_loader(tmp_path), hook_registry={"LeaseAwareHook": LeaseAwareHook})
+
+    def agent(_prompt: str) -> str:
+        thread = Thread(target=writer)
+        thread.start()
+        writer_threads.append(thread)
+        assert not writer_entered.wait(timeout=0.2)
+        observed.append("agent")
+        release_writer.set()
+        return "confirmed"
+
+    result = phase.execute(
+        skill_name="cafe-plan",
+        skill_invocation="/plan",
+        step_def={
+            "hooks": {"after_execute": ["LeaseAwareHook"]},
+            "valid_intents": ["confirmed"],
+        },
+        agent_executor=agent,
+        execution_lease=workspace_lease,
+    )
+
+    assert result.agent_invoked is True
+    assert observed[0] == "lease-enter"
+    assert observed[-1] == "lease-exit"
+    assert observed.index("agent") < observed.index("hook")
+    assert writer_entered.wait(timeout=5)
+    for thread in writer_threads:
+        thread.join(timeout=5)
+
+    with workspace_execution_lock(tmp_path):
+        assert (tmp_path / ".cafe" / "workspace-use.lock").is_file()
+
+
+def test_execute_stability_guard_rejects_replacement_before_first_hook(
+    tmp_path: Path,
+) -> None:
+    calls: list[str] = []
+    phase = GenericPhase(_setup_loader(tmp_path), hook_registry={"StopHook": StopHook})
+    guard_calls = 0
+
+    def guard() -> None:
+        nonlocal guard_calls
+        guard_calls += 1
+        if guard_calls == 2:
+            raise ValueError("workspace changed during the check-to-use interval")
+
+    with pytest.raises(ValueError, match="check-to-use interval"):
+        phase.execute(
+            skill_name="cafe-plan",
+            skill_invocation="/plan",
+            step_def={
+                "hooks": {"before_execute": ["StopHook"]},
+                "valid_intents": ["need_clarification"],
+            },
+            agent_executor=lambda _prompt: calls.append("agent") or "confirmed",
+            execution_guard=guard,
+        )
+
+    assert calls == []
+    assert guard_calls == 2
 
 
 def test_execute_runs_prepare_input_and_after_execute_retry(tmp_path: Path) -> None:
@@ -749,7 +939,7 @@ def test_prepare_builtin_pr_skill_omits_unavailable_contexts(tmp_path: Path) -> 
     assert "{plan_file}" not in installed
 
 
-def test_prepare_builtin_qa_skill_omits_optional_plan_and_review_contexts(
+def test_prepare_builtin_qa_skill_omits_unavailable_optional_contexts(
     tmp_path: Path,
 ) -> None:
     """The shipped QA skill supports simple while preserving richer QA context."""
@@ -772,12 +962,12 @@ def test_prepare_builtin_qa_skill_omits_optional_plan_and_review_contexts(
     phase.prepare_skill(
         skill_name="cafe-qa",
         agent_cli=AgentCLI.CODEX,
-        context={"spec_file": "spec.md", "develop_file": "code.md"},
+        context={"develop_file": "code.md"},
     )
 
     installed_path = project_root / ".codex" / "skills" / "cafe-qa" / "SKILL.md"
     installed = installed_path.read_text(encoding="utf-8")
-    assert "Requirements Specification: spec.md" in installed
+    assert "Requirements Specification:" not in installed
     assert "Development Summary: code.md" in installed
     assert "Implementation Plan:" not in installed
     assert "Review Result:" not in installed
@@ -794,6 +984,7 @@ def test_prepare_builtin_qa_skill_omits_optional_plan_and_review_contexts(
     )
 
     installed = installed_path.read_text(encoding="utf-8")
+    assert "Requirements Specification: spec.md" in installed
     assert "Implementation Plan: plan.md" in installed
     assert "Review Result: review.md" in installed
 

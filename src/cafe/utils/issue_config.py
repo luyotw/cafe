@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import fcntl
+import stat
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterator, Mapping, Optional
 
 import yaml
+
+from cafe.core.packet_io import atomic_write_bytes
 
 
 def read_issue_config(config_path: Path) -> Optional[Dict[str, Any]]:
@@ -19,6 +24,37 @@ def read_issue_config(config_path: Path) -> Optional[Dict[str, Any]]:
         return config_data if config_data else None
     except (yaml.YAMLError, OSError):
         return None
+
+
+def read_issue_config_strict(config_path: Path) -> Dict[str, Any]:
+    """Read mutable issue authority without hiding malformed or nonmapping data."""
+    try:
+        loaded = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise ValueError("issue.yaml is unreadable") from exc
+    if not isinstance(loaded, dict):
+        raise ValueError("issue.yaml must contain a mapping")
+    return loaded
+
+
+@contextmanager
+def issue_config_lock(config_path: Path) -> Iterator[None]:
+    """Serialize cooperating settings writers for one issue authority."""
+    lock_path = config_path.with_name("issue-settings.lock")
+    if lock_path.is_symlink():
+        raise ValueError("issue settings lock must not be a symlink")
+    with lock_path.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def write_issue_config_atomic(config_path: Path, config: Mapping[str, Any]) -> None:
+    """Replace a validated issue mapping through the shared atomic-write primitive."""
+    content = yaml.safe_dump(dict(config), sort_keys=False, allow_unicode=True).encode("utf-8")
+    atomic_write_bytes(config_path, content)
 
 
 def _repository_root_for_config(config_path: Path) -> Path:
@@ -58,19 +94,42 @@ def _issue_authority_worktree(config_path: Path) -> Optional[Path]:
     return None
 
 
+def _require_registered_issue_authority(
+    config_path: Path, registered_worktrees: tuple[Path, ...]
+) -> Path:
+    worktree = _issue_authority_worktree(config_path)
+    issue_name = config_path.parent.name
+    if (
+        worktree not in registered_worktrees
+        or not issue_name
+        or issue_name in {".", ".."}
+        or Path(issue_name).name != issue_name
+    ):
+        raise ValueError("issue configuration is outside a registered worktree authority")
+    return config_path
+
+
+def _reject_issue_authority_symlinks(config_path: Path) -> None:
+    """Reject aliases in the issue authority suffix before canonicalization."""
+    lexical = config_path.absolute()
+    for candidate in (lexical, lexical.parent, lexical.parent.parent, lexical.parent.parent.parent):
+        try:
+            metadata = candidate.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(metadata.st_mode):
+            raise ValueError("issue configuration paths must not traverse a symlink")
+
+
 def resolve_issue_config_path(
     config_path: Path,
     *,
     require_registered_worktree: bool = False,
 ) -> Path:
     """Resolve a repo inventory pointer to the active-worktree authority."""
+    if require_registered_worktree:
+        _reject_issue_authority_symlinks(Path(config_path))
     path = Path(config_path).resolve()
-    config = read_issue_config(path)
-    if not config:
-        return path
-    raw_worktree = config.get("worktree_path")
-    if not isinstance(raw_worktree, str) or not raw_worktree.strip():
-        return path
     registered_worktrees: tuple[Path, ...] = ()
     repository_root = _repository_root_for_config(path)
     authority_worktree = _issue_authority_worktree(path)
@@ -80,12 +139,23 @@ def resolve_issue_config_path(
         except ValueError:
             if require_registered_worktree:
                 raise
-        main_worktree = registered_worktrees[0] if registered_worktrees else None
-        if (
-            authority_worktree in registered_worktrees
-            and authority_worktree != main_worktree
-        ):
-            return path
+    config = read_issue_config(path)
+    if not config:
+        return (
+            _require_registered_issue_authority(path, registered_worktrees)
+            if require_registered_worktree
+            else path
+        )
+    raw_worktree = config.get("worktree_path")
+    if not isinstance(raw_worktree, str) or not raw_worktree.strip():
+        return (
+            _require_registered_issue_authority(path, registered_worktrees)
+            if require_registered_worktree
+            else path
+        )
+    main_worktree = registered_worktrees[0] if registered_worktrees else None
+    if authority_worktree in registered_worktrees and authority_worktree != main_worktree:
+        return _require_registered_issue_authority(path, registered_worktrees)
     worktree = Path(raw_worktree)
     if not worktree.is_absolute():
         worktree = repository_root / worktree
@@ -97,18 +167,23 @@ def resolve_issue_config_path(
     if not isinstance(issue_name, str) or not issue_name.strip():
         issue_name = path.parent.name
     issue_path = Path(issue_name)
-    if (
-        issue_path.is_absolute()
-        or len(issue_path.parts) != 1
-        or issue_name in {"", ".", ".."}
-    ):
+    if issue_path.is_absolute() or len(issue_path.parts) != 1 or issue_name in {"", ".", ".."}:
         raise ValueError("inventory issue name must identify one directory")
-    issues_root = (worktree / ".cafe" / "issues").resolve()
-    candidate = (issues_root / issue_name / "issue.yaml").resolve()
+    lexical_issues_root = worktree / ".cafe" / "issues"
+    lexical_candidate = lexical_issues_root / issue_name / "issue.yaml"
+    if require_registered_worktree:
+        _reject_issue_authority_symlinks(lexical_candidate)
+    issues_root = lexical_issues_root.resolve()
+    candidate = lexical_candidate.resolve()
     if not candidate.is_relative_to(issues_root):
         raise ValueError("inventory issue configuration escapes its worktree issue root")
     if candidate.exists():
-        return candidate.resolve()
+        resolved_candidate = candidate.resolve()
+        return (
+            _require_registered_issue_authority(resolved_candidate, registered_worktrees)
+            if require_registered_worktree
+            else resolved_candidate
+        )
     if require_registered_worktree:
         raise ValueError("registered inventory worktree has no issue policy authority")
     return path

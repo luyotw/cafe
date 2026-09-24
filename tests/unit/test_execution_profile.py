@@ -77,3 +77,43 @@ def test_legacy_custom_skill_is_explicitly_defaulted(tmp_path: Path) -> None:
     assert profile.workloads == ("general",)
     assert profile.reasoning == "standard"
     assert profile.fallback_strength == "equivalent"
+
+
+def test_workflow_contributor_profile_is_aggregated_without_empty_overlay_default(
+    tmp_path: Path,
+) -> None:
+    _write_skill(
+        tmp_path,
+        "primary",
+        """  execution_profile:
+    workload: implementation
+    reasoning: routine
+    risk_domains: [state-change]
+    fallback_strength: equivalent
+""",
+    )
+    _write_skill(tmp_path, "empty")
+    _write_skill(
+        tmp_path,
+        "support",
+        """  execution_profile:
+    workload: review
+    reasoning: high
+    risk_domains: [integration]
+    fallback_strength: equivalent_or_stronger
+""",
+    )
+
+    profile = resolve_execution_profile(
+        SkillLoader(project_root=tmp_path),
+        "primary",
+        workflow_skills=["empty", "support"],
+        step_name="develop",
+    )
+
+    assert profile.skill_names == ("primary", "empty", "support")
+    assert profile.workloads == ("implementation", "review")
+    assert profile.reasoning == "high"
+    assert profile.risk_domains == ("state-change", "integration")
+    assert profile.fallback_strength == "equivalent_or_stronger"
+    assert not profile.uses_default

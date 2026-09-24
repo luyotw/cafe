@@ -104,6 +104,19 @@ def test_is_resume_iteration_interrupted_reuse() -> None:
     )
 
 
+def test_is_resume_iteration_when_process_ended_without_trusted_handoff() -> None:
+    assert is_resume_iteration(
+        iteration=1,
+        previous_iteration_data=None,
+        current_iteration_data={
+            "cli": "codex",
+            "session_id": "a",
+            "end_time": "2026-09-12T09:26:54+08:00",
+            "workflow_completion_trusted": False,
+        },
+    )
+
+
 def test_load_prior_run_context_does_not_treat_completed_correction_as_resume() -> None:
     prev = {"cli": "codex", "session_id": "abc", "end_time": "done"}
     assert (
@@ -125,6 +138,32 @@ def test_load_prior_run_context_from_current_partial() -> None:
             current_iteration_data=current,
         )
         == current
+    )
+
+
+def test_untrusted_ended_iteration_resolves_placeholder_as_same_session_resume() -> None:
+    current = {
+        "cli": "codex",
+        "session_id": "abc",
+        "end_time": "2026-09-12T09:26:54+08:00",
+        "workflow_completion_trusted": False,
+    }
+    prior = load_prior_run_context(
+        iteration=1,
+        previous_iteration_data=None,
+        current_iteration_data=current,
+    )
+    prior_cli, prior_session = prior_cli_and_session(prior)
+
+    assert (
+        resolve_resume_user_input(
+            candidate="workflow execute",
+            prior_cli=prior_cli,
+            prior_session_id=prior_session,
+            current_cli="codex",
+            current_session_id="abc",
+        )
+        == CONTINUE_USER_INPUT
     )
 
 

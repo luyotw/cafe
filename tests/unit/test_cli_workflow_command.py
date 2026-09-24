@@ -33,6 +33,7 @@ from cafe.ui.cli_shared import (
 )
 from cafe.ui.human_tasks import resolve_step_human_task
 from cafe.utils.config import ConfigManager
+from cafe.workflow_execution.worker_launch import WorkerLaunchStore
 
 pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
@@ -93,6 +94,84 @@ def test_background_forwards_trusted_event_callback_to_the_fixed_worker(
         "--on-workflow-event",
         "builtin:use-cafe-workflow:workflow_event_callback",
     ]
+
+
+def test_callback_worker_observes_done_through_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "terminal-callback"
+    _write_local_only_publication_contract(issue_dir)
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("pr", playbook_id="standard")
+    store.set_current_step(blackboard, "done")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="pr",
+        to_owner=HandoffOwner.DONE,
+        to_step="done",
+        intent=HandoffIntent.WORKFLOW_COMPLETE,
+        status_code="BATON_CONFIRM_OUTPUT",
+        source="test",
+    )
+    launch_store = WorkerLaunchStore(issue_dir)
+    launch = launch_store.start()
+    launch_store.mark(launch["worker_id"], "started")
+    observed: dict[str, object] = {}
+
+    class CapturingRuntime:
+        def __init__(self, **kwargs: object) -> None:
+            observed["callback"] = kwargs.get("workflow_event_callback")
+
+        def run(self, *, start_step: str | None = None, single_step: bool = False):
+            observed["start_step"] = start_step
+            observed["single_step"] = single_step
+            return PlaybookRunResult(
+                final_step="pr",
+                final_status_code="BATON_CONFIRM_OUTPUT",
+                completed=True,
+            )
+
+    callback = SimpleNamespace(
+        callback_id="builtin:use-cafe-workflow:workflow_event_callback",
+        script=tmp_path / "callback.py",
+    )
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.commands.workflow.BlackboardWorkflowRuntime", CapturingRuntime),
+        patch(
+            "cafe.ui.commands.workflow.resolve_builtin_workflow_event_callback",
+            return_value=callback,
+        ),
+        patch("cafe.ui.cli._find_incomplete_workflow_step", return_value=None),
+        patch("cafe.ui.cli._find_external_resume_step", return_value=None),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "terminal-callback"
+        mock_git_cls.return_value = git
+        result = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--issue",
+                "terminal-callback",
+                "--playbook",
+                "standard",
+                "--execute",
+                "--internal-worker-id",
+                launch["worker_id"],
+                "--internal-worker-token",
+                launch["worker_token"],
+                "--on-workflow-event",
+                callback.callback_id,
+            ],
+        )
+
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    assert callable(observed["callback"])
+    assert observed["start_step"] == "done"
+    assert observed["single_step"] is False
+    assert "Workflow completed" in result.stdout
 
 
 def test_background_persists_cold_start_input_before_worker_launch(
@@ -476,8 +555,8 @@ def test_workflow_command_runs_execute_mode(tmp_path: Path, monkeypatch) -> None
                     state=blackboard_state,
                     from_step="pr",
                     to_step="user",
-                    status_code="confirmed",
-                    intent=HandoffIntent.MANUAL_HANDOFF,
+                    status_code="need_permission",
+                    intent=HandoffIntent.NEED_PERMISSION,
                 )
             return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
 
@@ -523,7 +602,7 @@ def test_single_step_uses_the_mode_neutral_core_in_the_foreground(
 
     class FakeExecutor:
         def execute_step(self, step_name, step_def, blackboard_state, **kwargs):
-            captured["validated_pr_auto_create"] = kwargs.get("validated_pr_auto_create")
+            captured["has_validated_pr_auto_create"] = "validated_pr_auto_create" in kwargs
             return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
 
     class CapturingWorkflowHost:
@@ -554,7 +633,7 @@ def test_single_step_uses_the_mode_neutral_core_in_the_foreground(
 
     assert result.exit_code == 0, (result.stdout, result.exception)
     assert captured["hosting"] == "foreground"
-    assert captured["validated_pr_auto_create"] is False
+    assert captured["has_validated_pr_auto_create"] is False
 
 
 @pytest.mark.parametrize(
@@ -2725,8 +2804,8 @@ def test_workflow_command_rejects_plain_text_chat_baton_before_execution(
                     state=blackboard_state,
                     from_step="pr",
                     to_step="user",
-                    status_code="confirmed",
-                    intent=HandoffIntent.MANUAL_HANDOFF,
+                    status_code="need_permission",
+                    intent=HandoffIntent.NEED_PERMISSION,
                 )
             return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
 
@@ -3110,14 +3189,19 @@ def test_workflow_command_prints_recovery_guidance_for_pr_baton_pause(
     )
 
     class FakeExecutor:
+        def __init__(self) -> None:
+            self.prompts: list[str | None] = []
+
         def execute_step(
             self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
         ) -> StepExecutionResult:
+            self.prompts.append(kwargs.get("extra_prompt"))
             return StepExecutionResult(response="no baton", artifacts={}, status_code=None)
 
+    executor = FakeExecutor()
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
-        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=executor),
     ):
         git = MagicMock()
         git.get_current_branch.return_value = "issue-233"
@@ -3125,9 +3209,14 @@ def test_workflow_command_prints_recovery_guidance_for_pr_baton_pause(
 
         result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
-    assert result.exit_code == 1
-    assert "wrote invalid baton 3 times" in result.stdout
-    assert "field 'to_step' got 'pr'" in result.stdout
+    assert result.exit_code == 0
+    assert len(executor.prompts) == 3
+    assert executor.prompts[0] is None
+    assert all("[COMPLETION ERROR]" in (prompt or "") for prompt in executor.prompts[1:])
+    assert "Workflow is waiting for user input" in result.stdout
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    assert task.trigger == "agent_execution_interrupted"
+    assert task.status is HumanTaskStatus.PENDING
 
 
 def test_workflow_command_offers_recovery_menu_for_baton_pause_in_interactive_mode(
@@ -3153,14 +3242,19 @@ def test_workflow_command_offers_recovery_menu_for_baton_pause_in_interactive_mo
     )
 
     class FakeExecutor:
+        def __init__(self) -> None:
+            self.prompts: list[str | None] = []
+
         def execute_step(
             self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
         ) -> StepExecutionResult:
+            self.prompts.append(kwargs.get("extra_prompt"))
             return StepExecutionResult(response="no baton", artifacts={}, status_code=None)
 
+    executor = FakeExecutor()
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
-        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=executor),
         patch("cafe.ui.cli.prompt_list", return_value="Leave it for now") as mock_prompt_list,
     ):
         git = MagicMock()
@@ -3169,10 +3263,15 @@ def test_workflow_command_offers_recovery_menu_for_baton_pause_in_interactive_mo
 
         result = runner.invoke(app, ["workflow", "--playbook", "standard", "--execute"])
 
-    assert result.exit_code == 1
-    assert not mock_prompt_list.called
-    assert "wrote invalid baton 3 times" in result.stdout
-    assert "field 'to_step' got 'pr'" in result.stdout
+    assert result.exit_code == 0
+    assert len(executor.prompts) == 3
+    assert executor.prompts[0] is None
+    assert all("[COMPLETION ERROR]" in (prompt or "") for prompt in executor.prompts[1:])
+    assert mock_prompt_list.called
+    assert "Workflow is waiting for user input" in result.stdout
+    task = HumanTaskRecordStore(issue_dir).tasks()[0]
+    assert task.trigger == "agent_execution_interrupted"
+    assert task.status is HumanTaskStatus.PENDING
 
 
 def test_workflow_command_user_owner_can_set_next_phase(tmp_path: Path, monkeypatch) -> None:
@@ -3209,8 +3308,8 @@ def test_workflow_command_user_owner_can_set_next_phase(tmp_path: Path, monkeypa
                     state=blackboard_state,
                     from_step="pr",
                     to_step="user",
-                    status_code="confirmed",
-                    intent=HandoffIntent.MANUAL_HANDOFF,
+                    status_code="need_permission",
+                    intent=HandoffIntent.NEED_PERMISSION,
                 )
             return _result(
                 status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={}
@@ -3561,8 +3660,8 @@ def test_workflow_command_user_owner_can_chat_and_resume_from_baton(
                     state=blackboard_state,
                     from_step="pr",
                     to_step="user",
-                    status_code="confirmed",
-                    intent=HandoffIntent.MANUAL_HANDOFF,
+                    status_code="need_permission",
+                    intent=HandoffIntent.NEED_PERMISSION,
                 )
             return _result(
                 status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={}
@@ -3640,8 +3739,8 @@ def test_workflow_command_enters_user_phase_immediately_after_agent_handoff(
                 state=blackboard_state,
                 from_step="pr",
                 to_step="user",
-                status_code="confirmed",
-                intent=HandoffIntent.MANUAL_HANDOFF,
+                status_code="need_permission",
+                intent=HandoffIntent.NEED_PERMISSION,
             )
             return _result(
                 status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={}
@@ -3699,8 +3798,8 @@ def test_workflow_command_noninteractive_stops_after_agent_handoff_to_user(
                 state=blackboard_state,
                 from_step="pr",
                 to_step="user",
-                status_code="confirmed",
-                intent=HandoffIntent.MANUAL_HANDOFF,
+                status_code="need_permission",
+                intent=HandoffIntent.NEED_PERMISSION,
             )
             return _result(
                 status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={}
@@ -3900,8 +3999,8 @@ def test_workflow_command_done_phase_can_restart_workflow(tmp_path: Path, monkey
                     state=blackboard_state,
                     from_step="pr",
                     to_step="user",
-                    status_code="confirmed",
-                    intent=HandoffIntent.MANUAL_HANDOFF,
+                    status_code="need_permission",
+                    intent=HandoffIntent.NEED_PERMISSION,
                 )
             return _result(
                 status_code="confirmed", step_name=step_name, step_def=step_def, artifacts={}

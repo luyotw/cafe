@@ -35,6 +35,7 @@ def mock_git_ops(monkeypatch):
         mock.pull.return_value = None
         mock.merge.return_value = None  # Add merge mock
         mock.delete_branch.return_value = None
+        mock.delete_remote_branch_if_exists.return_value = True
         mock.get_current_branch.return_value = "test-issue"
         yield mock
 
@@ -116,6 +117,7 @@ class TestCloseCommandPRMode:
         assert result.exit_code == 0
         mock_git_ops.pull.assert_called_once()
         mock_git_ops.merge.assert_not_called()
+        mock_git_ops.delete_branch.assert_called_once_with("test-issue", force=True)
 
     def test_close_with_pr_auto_create_false_uses_git_merge(
         self, temp_repo_dir, mock_git_ops, mock_github_ops_no_pr
@@ -168,6 +170,7 @@ class TestCloseCommandPRMode:
     ):
         """測試 worktree 模式下 pr.auto_create: false 時使用 git merge"""
         # Setup worktree
+        (temp_repo_dir / ".git").mkdir()
         worktree_path = temp_repo_dir / "worktrees" / "test-issue"
         worktree_path.mkdir(parents=True)
 
@@ -182,6 +185,10 @@ class TestCloseCommandPRMode:
             "pr": {"auto_create": False},
         }
         with open(config_file, "w", encoding="utf-8") as f:
+            yaml.dump(config_data, f)
+        worktree_issue_dir = worktree_path / ".cafe" / "issues" / "test-issue"
+        worktree_issue_dir.mkdir(parents=True)
+        with open(worktree_issue_dir / "issue.yaml", "w", encoding="utf-8") as f:
             yaml.dump(config_data, f)
 
         mock_git_ops.get_current_branch.return_value = "test-issue"

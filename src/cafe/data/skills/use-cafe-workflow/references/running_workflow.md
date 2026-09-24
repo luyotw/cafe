@@ -4,6 +4,10 @@ Read this reference after kickoff and whenever starting, resuming, inspecting,
 or retrying ordinary workflow work. Read `model_selection.md` before the first
 execution and whenever agent work remains.
 
+For active supervision, interruption classification, or recovery, read
+`supervision_and_recovery.md`. Its non-intervention envelope decides whether
+the Driver remains passive before the ordinary commands below are considered.
+
 Before every start or resume, follow `project_global_skill_sync.md`: validate
 the persisted runtime/catalog preflight against fresh read-only checks. A
 changed comparison token triggers the reference's bounded semantic comparison,
@@ -16,35 +20,76 @@ contract. Reconfirm kickoff only for a material difference found by the semantic
 comparison. Verified metadata-only churn may continue, while uncertain
 differences fail closed.
 
-## Operating modes
+The Driver must never execute `release-check` while a workflow is active. Defer
+an in-workflow request until the workflow is complete; the user may run it
+before release.
+
+Whenever an existing supervision rule already requires a user-facing reply,
+append the localized renderer output required by `workflow_progress.md`.
+Rendering that reply must not add a status poll, resume, task completion, or other
+intervention.
+
+For Driver-managed preparation, resolve the user-facing runtime-update decision
+from `project_global_skill_sync.md` before invoking `cafe prepare
+--no-interactive`; callbacks never supply this answer.
+
+## Required Driver launch entrypoint
 
 The kickoff records one mode; it is a skill operating contract, not a CAFE-core
 policy.
 
-- **attached** runs `cafe workflow --execute --mute-agent-output` in the
-  foreground. Poll only at the confirmed positive interval. An empty terminal
-  yield is transport state, not a reason to inspect early.
-- **unattended** runs the continuous worker in the background. It has no
-  proactive callback; inspect durable state when a user returns.
-- **event-driven** runs that same continuous background worker, adding the
-  trusted builtin callback below. It is not `--single-step`: phases continue
-  normally whether the callback succeeds, fails, or never starts.
-
-For event-driven mode, activate the confirmed Driver contract after
-`cafe prepare`, validate the Driver-only entry, and then launch generic CAFE
-through its existing event callback path:
+Every Driver-managed start and ordinary resume must use the same wrapper:
 
 ```bash
-python3 <skill-dir>/scripts/validate_driver_entry.py \
-  --issue-name <issue> \
-  --issue-dir .cafe/issues/<issue> \
-  --workflow-id <prepared-workflow-id> \
-  --fresh-facts '<fresh-driver-policy-facts-json>'
-
-cafe workflow --issue <issue> --execute --mute-agent-output \
-  --background \
-  --on-workflow-event builtin:use-cafe-workflow:workflow_event_callback
+python3 <skill-dir>/scripts/run_workflow.py \
+  --issue <issue> \
+  --playbook <confirmed-playbook> \
+  --driver-mode <attached|unattended|event-driven> \
+  --fresh-facts '<rebuilt-current-driver-facts-json>'
 ```
+
+`--driver-mode` is an assertion against the confirmed contract. The wrapper
+fails closed for missing, unreadable, stale, or conflicting workflow identity,
+playbook, mode, callback binding, CLI order, or checkout identity. It reads the
+prepared workflow and persisted baton for both start and resume; never add
+`--start-step` for an ordinary resume.
+
+Rebuild `--fresh-facts` from the current bounded runtime and catalog checks as
+an object containing `semantic_facts.effective_policy`, rebuilt from the current
+complete Driver policy. Runtime/catalog diagnostics stay outside the contract;
+do not add `material_assumptions` or copy stale policy merely to make it match.
+The wrapper validates that
+payload through `evaluate_driver_entry` and rejects `material_change` and
+`unknown` before launching any attached, unattended, or event-driven worker.
+Continue only after the existing contract reconfirmation path establishes
+`same_semantics`.
+
+- **attached** launches foreground continuous execution and returns an
+  `action: wait` directive containing the confirmed positive
+  `poll_interval_seconds`. Poll only at the confirmed positive interval. An
+  empty terminal yield is transport state, not a reason to inspect early.
+- **unattended** launches background continuous execution without a callback
+  and returns `action: yield`. That directive is terminal for the current
+  Driver turn; inspect durable state only when the user returns.
+- **event-driven** validates the trusted builtin callback and confirmed ordered
+  Driver CLI chain, launches background continuous execution with the callback,
+  and returns `action: yield`. That directive is terminal for the current
+  Driver turn: do not poll with sleep, `ps`, `write_stdin`, `cafe status`, or
+  `cafe task ls`; wait for a callback wake or user input.
+
+None of the modes uses `--single-step`. The wrapper always supplies `--execute`
+and `--mute-agent-output`, supplies `--background` only for unattended and
+event-driven operation, and supplies the callback only for event-driven mode.
+It never infers HumanTask answers, permissions, `--open-pr`, model or playbook
+changes, `--add-dir`, `--no-verify`, or retry/fresh-session choices.
+The only separately authorized continuation input is `--alignment-input`: it
+requires explicit JSON and is accepted only when the current durable handoff,
+confirmed Driver policy, and latest alignment request all authorize that exact
+decision. It is not a HumanTask answer or a general phase-input channel.
+
+The wrapper also emits stable `CAFE_DRIVER_DIRECTIVE` records for launch
+failure and a durable user-owned boundary. Do not launch through a user-owned
+boundary or infer its answer.
 
 The callback reads the issue-scoped `driver/contract.json` and projects the
 primary CLI plus fallback CLI/model order only in memory. Waking the primary
@@ -57,13 +102,10 @@ only; when a contract exists it is neither read as callback authority nor a
 writer target. The event-driver lifecycle uses no session-file discovery,
 directory diff, sleep, polling, or watcher.
 
-For attached or unattended Driver-managed work, invoke the same validator,
-then start generic CAFE through its ordinary command. The supplied fresh facts are
-the current bounded semantic policy rebuilt by the skill's loaders and the
-current material assumptions; they are not a caller-selected subset. The
-validator does not inspect `issue.yaml`, phase chains, or capability choices. Generic
-CAFE validates and consumes those ordinary inputs under the existing #467
-contract, with identical behavior whether a Driver exists or not.
+The wrapper validates only launch authority and invocation identity. It does
+not become a workflow state inspector or decision engine. After a callback wake
+notice, continue to inspect `cafe status`, `cafe show`, and durable tasks before
+deciding what the Driver may do.
 
 Session acquisition and actual delivery are separate boundaries. Every
 unacquired, unbound entry first runs a provider request exactly equivalent to
@@ -94,6 +136,13 @@ back completed phase work or block normal phase advancement. A cross-provider
 takeover is transport-local and does not merge conversations or promise that
 the initiating conversation continues elsewhere.
 
+Historical callback attempts retain their recorded session IDs and do not pin
+the current primary binding. Only during an explicitly authorized repair of a
+confirmed misrouted callback, preserve every event and attempt record and update
+only the current primary entry's session binding. This is a repair constraint,
+not a public rebind command or general permission to edit dispatch state; when
+no existing legal repair path applies, retain the pause.
+
 Inspect this state without acquiring a callback lock or modifying any driver
 file:
 
@@ -109,14 +158,49 @@ continuity. The callback remains an ordinary driver and uses only existing
 kickoff authority: confirmation contract, mandatory HumanTask stops, reactive
 user handoffs, and mandate. It cannot change confirmed models.
 
+## Project confirmed user context into agent input
+
+Before any agent step, derive its inputs from the effective graph and project
+one bounded delta only for facts that are user-confirmed in the current turn,
+a completed HumanTask, or the current Driver contract; belong to this workflow;
+remain current and relevant; and are not already visible through declared
+artifacts, iteration input, or durable task results. This applies to every
+playbook. Preserve exact wording when paraphrase could alter meaning.
+
+Use a routing HumanTask only within its declared schema **and semantic purpose**;
+correction feedback includes missing confirmed direction with the findings and
+acceptance conditions. Otherwise use workflow `--user-input` only when the
+current command and target step support it. Never replace a task-required
+answer, use `--start-step` just to carry context, or edit artifacts, blackboard,
+or baton state. If no legal input path exists, retain the pause and report it.
+
+`cafe chat` is discussion evidence, not delivery to another iteration or step.
+Supplemental context cannot replace required artifacts, ownership, review, or
+authorization. Exclude inferred, superseded, unrelated, secret, credential, or
+cross-task content; handle existing permission/capability grants only through
+their exact declared boundary. Mandatory and `user_required` answers still need
+the explicit user-facing relay, and callbacks may use only already durable facts.
+
 The callback receives only an asynchronous durable-event notice. It must
 re-check `cafe status`/`cafe show`; a notice can be stale. It may diagnose and
 perform actions already authorized by the kickoff. It cannot wait for, collect,
-infer, or choose a user answer for a mandatory, `user_required`, clarification,
-permission, or capability task, nor grant permissions or capabilities. The
-correction revise is not a user answer: only this declared correction outcome
-is excepted from the callback prohibition, and only after due review/chat
-consensus. It may complete a declared `driver_confirmable` task only after
+infer, or choose a user answer for a mandatory, `user_required`, permission, or
+capability task, nor grant permissions or capabilities. A `need_clarification`
+task whose confirmed reactive policy is `driver_confirmable` may be answered
+only when the complete answer stays within the confirmed Delivery Contract,
+its scope, explicit constraints and existing authority, and triggers no deviation.
+Contract changes, new permission or external-effect authority, mandatory
+gates, reserved product or strategy decisions, and uncertainty about whether
+authority already exists remain user-owned. Authorized reversible technical
+choices may use repository precedent, smaller footprint, and reversibility as
+tie-breakers; normal engineering uncertainty is not itself a user handoff. A
+unique active declared correction outcome is not a user answer only when it
+requires feedback, is marked `correction: true`, and routes to a
+non-advancing correction continuation. Derive it solely from the active
+HumanTask declaration regardless of outcome, phase, or target names; zero or
+multiple eligible outcomes fail closed for user/playbook clarification. The
+exception applies only after complete review and one `cafe chat` consensus
+exchange. It may complete a declared `driver_confirmable` task only after
 verifying the current confirmation contract and evidence. It does not own the background worker or
 gain a safe stop channel. An existing reliable, authorized control may be used
 only after verification; this feature creates no PID registry, cancellation API,
@@ -124,16 +208,18 @@ recovery protocol, or stop guarantee.
 
 ## Completing a HumanTask
 
-The callback is not an interaction channel. Except for an active declared
-non-advancing correction revise, a mandatory, `user_required`, clarification,
+The callback is not an interaction channel. A mandatory, `user_required`,
 permission, or capability task requires a **user-facing driver turn** to
-receive the user's explicit answer. The exception for an active declared
-non-advancing correction revise permits the current Driver, including an
-event-driven callback, to submit only that revise after due review/chat
-consensus; it never permits confirmation or another user-owned decision. A
-`driver_confirmable` task may instead be completed by any Driver, including an
-event-driven callback, after it verifies the confirmed contract and evidence.
-Both cases use the same durable task flow:
+receive the user's explicit answer. The unique active declared correction
+outcome exception permits the current Driver, including an event-driven
+callback, to submit only that eligible outcome after complete review and one
+`cafe chat` consensus exchange; it never permits confirmation or another
+user-owned decision. A `need_clarification` task whose confirmed reactive
+policy is `driver_confirmable` may be completed by any Driver, including an
+event-driven callback, only within the confirmed Delivery Contract and existing
+authority. Any other `driver_confirmable` task may likewise be completed after
+the Driver verifies its confirmed contract and task-specific evidence. These
+Driver-owned cases use the same durable task flow:
 
 On every later user-facing turn, inspect current durable state first. If a
 user-owned HumanTask is still pending and no adequate handoff has been given in
@@ -143,22 +229,33 @@ repeat it when the user already has the same task and options unless they ask.
 
 1. Inspect the exact pending task with `cafe task inspect <task-id>` and read
    its declared input schema. Never reuse a stale task ID.
-2. Classify the task before serializing its result. For an active declared
-   non-advancing `revise` requiring feedback and marked `correction: true`, the
-   Driver may serialize the correction result only after complete review and
-   `cafe chat` consensus, including the consolidated findings, consensus, and
-   acceptance conditions. For a user-owned task, serialize only the user's
+2. Classify the task before serializing its result. The Driver may serialize a
+   correction result only for the unique active declared correction outcome that
+   requires feedback, is marked `correction: true`, and routes to a
+   non-advancing correction continuation, and only after complete review and one
+   `cafe chat` consensus exchange, including the consolidated findings,
+   consensus, and acceptance conditions. If zero or multiple outcomes qualify,
+   fail closed for user/playbook clarification. For a user-owned task, serialize only the user's
    supplied answer into that schema; the Driver may add the task ID required by
    the schema, but must not infer a decision, approval, permission, or missing
    answer. For a `driver_confirmable` task, use only its declared response after
-   the required contract and evidence verification.
-3. Run `cafe task complete <task-id> --result '<json>' --no-resume --json`.
+   the required contract and evidence verification. For `need_clarification`,
+   record a concise contract basis and do not submit when the answer changes
+   the contract, triggers a deviation, needs new authority, is reserved to the
+   user, or its authority is uncertain.
+3. Run `cafe task complete <task-id> --result '<json>' --no-resume --json` only
+   after the Driver-owned rules above authorize relaying or completing the
+   response. The generic task command does not interpret or grant Driver
+   authority. The response may include `work_report` with non-empty `summary`
+   and `outcome`, plus optional `evidence` references, when recording work
+   already performed. The report is metadata only: it cannot replace the task's
+   required response or select a continuation.
    Treat an uncertain command result as unconfirmed: inspect durable task and
-   handoff state before retrying. If the task is already complete, do not submit
-   another answer.
-4. After durable completion, continue with the confirmed mode: attached starts
-   the foreground continuous workflow; unattended starts the ordinary background
-   worker; event-driven starts the background worker with its trusted callback.
+   handoff state before retrying. Repeating the exact normalized response is
+   safe and does not resume twice; a different response conflicts.
+4. After durable completion, rebuild fresh facts and invoke
+   `scripts/run_workflow.py` with the confirmed issue, playbook, Driver mode,
+   and `--fresh-facts`. The wrapper follows the persisted continuation.
 
 `--no-resume` is an internal driver control that separates durable task
 completion from mode-specific continuation. Direct `cafe task complete` users
@@ -168,19 +265,25 @@ this two-step flow.
 ## Commands and handoffs
 
 - Resolve the current phase from `cafe status` and the structured baton, then
-  use `--start-step` only for initial entry or bounded diagnosis.
-- Resume the persisted baton with `cafe workflow --execute --mute-agent-output`.
-  `cafe make` is valid when direct workflow controls are not required.
+  use the wrapper for every Driver-managed start or resume.
+- Ordinary resume follows the persisted baton and completed durable task. Do
+  not select or reconstruct a step with `--start-step`.
 - Use `--single-step` only for manual, bounded diagnosis. No ordinary operating
   mode uses it.
-- A background invocation cannot carry `--single-step`, `--start-step`, or
-  `--add-dir`. It may stage an exact `--user-input` before spawning the worker.
+- The wrapper has no input that grants user-owned decisions or separately
+  authorized options. Complete those through their existing explicit boundary
+  before invoking the wrapper.
 - For a HumanTask, read `handoffs_and_alignment.md`, resolve the active
   HumanTask and its input schema, including current `human_task_id`, then follow
   **Completing a HumanTask** above. Never turn an unknown or stale task into
   phase input.
   Plain text is valid only for a task that explicitly declares the `feedback`
   schema.
+
+Direct `cafe workflow` invocation is an explicit manual bypass only, never the
+normal Driver path. Use it only when the user explicitly requests that bypass;
+the caller then owns every argument and the wrapper's validation/directive
+contract does not apply.
 
 ## Inspection
 
@@ -250,7 +353,8 @@ environment mechanism.
 The Driver must complete all applicable review passes before producing one
 bounded findings batch. It names the reviewed phase and role, the exact current artifact
 identity, every observable blocker, its requirement or boundary, and concise
-evidence. Deliver that one batch through `cafe chat <role> -p` to the existing
+evidence. Deliver that one batch through
+`cafe chat <role> --phase <step> -p "<bounded findings batch>"` to the existing
 responsible phase-agent session. Ask the agent to accept or rebut each finding.
 Chat must not edit the current phase output: the prompt is discussion only,
 and the chat response is discussion evidence, not workflow authority.
@@ -266,15 +370,26 @@ closed. The Driver must not truncate, split, or silently omit findings or
 evidence to fit a limit; retain the pause and obtain the applicable user-owned
 scope decision before a new full review can form a compliant batch.
 
+A host-tool yield or empty output with a live execution handle is not a
+completed `cafe chat`. Continue waiting on the same process for up to 120
+seconds cumulatively; never launch a duplicate chat or infer a missing response.
+Only a completed process with a usable agent response satisfies the exchange.
+If the process ends without one, the handle is lost, or the limit expires,
+retain the pause and classify the result as ambiguous. Verify termination before
+the single safe retry of this chat exchange.
+
 Findings, chat attempts, disagreements, and rebuttals do not create an
 iteration. Independently verify a rebuttal against the same unchanged artifact.
 An accepted finding without a durable correction remains blocking. If the
 Driver and phase agent agree that an artifact correction is necessary, the
 Driver may intentionally create one formal correction iteration only through
-the active declared `revise` outcome. First verify that the decision requires
-feedback, declares `correction: true`, and routes to correction rather than
-downstream advancement. Submit `cafe task complete ... --no-resume --json` with
-consolidated findings, reached consensus, and acceptance conditions; then verify
+the unique active declared correction outcome. First verify that it requires
+feedback, declares `correction: true`, and routes to a non-advancing correction
+continuation. If zero or multiple outcomes qualify, fail closed for
+user/playbook clarification. Submit `cafe task complete ... --no-resume --json` with
+consolidated findings, reached consensus, and acceptance conditions, plus any
+relevant current user-confirmed direction missing from the target's declared
+inputs; then verify
 the durable task result and correction continuation before resuming in the
 configured mode. Only the resumed runtime materializes and executes the next
 formal iteration. Inspect its durable input, delta, and output only at the next
@@ -303,8 +418,11 @@ modes, but only at the existing scheduled pause. Attached mode reviews before
 its paused handoff resumes, unattended mode reviews when the user returns while
 that pause is still pending, and an event-driven callback may begin after the
 durable pause notification. A callback acting as the current Driver may submit
-the same pre-authorized declared correction revise after due review/chat
-consensus, but may not choose advancing confirmation or a user-owned decision.
+the same unique eligible correction outcome after complete review and one
+`cafe chat` consensus exchange. It may also complete a confirmed
+`driver_confirmable` clean advancement after the required review and evidence
+verification, but may not choose an advancing mandatory or `user_required`
+confirmation or any other user-owned decision.
 A phase-terminal callback that did not pause cannot make the review gating and
 must not be treated as a valid review opportunity. Callback failure must fail
 closed at the existing pause; callbacks remain asynchronous, best-effort, and
@@ -312,7 +430,8 @@ non-gating for workflow advancement.
 
 Do not edit workflow artifacts, blackboard, or `next_step.txt` by hand except
 when repairing confirmed broken workflow state. Do not bypass CAFE by directly
-asking an agent to implement the issue.
+implementing the issue, except through the explicit, user-approved bounded
+closeout route in `completion_and_authority.md`.
 
 ## Delivery evidence during execution and takeover
 
@@ -321,7 +440,9 @@ Before Driver-owned work, the entry adapter returns the confirmed
 user decisions and current bounded evidence; never echo persisted facts merely
 to force a freshness match. Reuse the same product contract across providers.
 A missing, malformed, stale or digest-mismatched contract stops Driver-owned
-work for the existing reconfirmation handoff.
+work for the existing reconfirmation handoff. An older full contract must be
+explicitly reconfirmed before becoming a compact contract; do not drop its
+restrictions or turn its advisory inputs into new authority during conversion.
 
 At each existing eligible output confirmation, use the Delivery comparison in
 `handoffs_and_alignment.md`. Derive the step and artifact names from the loaded
