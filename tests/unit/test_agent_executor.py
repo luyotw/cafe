@@ -884,10 +884,19 @@ class TestEventDriverObservation:
             stream_output=False,
         )
 
-        command = executor.preview_cli_command_args(
-            'say "HI"',
-            execution_control=AgentExecutionControl(working_directory=tmp_path),
-        )
+        with patch.object(
+            executor,
+            "_execute_with_streaming",
+            return_value=AgentResponse(response="HI", token_usage=TokenUsage()),
+        ) as run:
+            executor.execute_event_driver(
+                'say "HI"',
+                allowed_tools=[],
+                allowed_directories=[],
+                execution_control=AgentExecutionControl(working_directory=tmp_path),
+            )
+
+        command = run.call_args.kwargs["cmd"]
 
         assert "--tools" not in command
         assert "--strict-mcp-config" not in command

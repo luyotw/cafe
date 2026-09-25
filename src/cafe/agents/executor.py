@@ -541,6 +541,10 @@ class AgentExecutor:
             raise ValueError("an explicit empty capability scope requires an isolated directory")
 
         if self.config.cli == AgentCLI.CLAUDE:
+            # A fresh event-driver call only acquires a session. Its bootstrap
+            # prompt needs no extra tool or MCP configuration flags.
+            if event_driver and self.config.session_id is None:
+                return cmd, process_cwd
             cmd.extend(
                 [
                     "--tools",
