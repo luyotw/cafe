@@ -903,7 +903,7 @@ class TestEventDriverObservation:
         assert "--mcp-config" not in command
         assert "--disable-slash-commands" not in command
 
-    def test_claude_decision_only_uses_valid_empty_mcp_configuration(self, tmp_path: Path) -> None:
+    def test_claude_empty_scope_omits_tool_restriction_flags(self, tmp_path: Path) -> None:
         executor = AgentExecutor(
             AgentConfig(name="driver", cli=AgentCLI.CLAUDE),
             stream_output=False,
@@ -916,9 +916,10 @@ class TestEventDriverObservation:
             execution_control=AgentExecutionControl(working_directory=tmp_path),
         )
 
-        assert command[command.index("--mcp-config") + 1] == '{"mcpServers":{}}'
-        assert "--strict-mcp-config" in command
-        assert command[command.index("--tools") + 1] == ""
+        assert "--tools" not in command
+        assert "--strict-mcp-config" not in command
+        assert "--mcp-config" not in command
+        assert "--disable-slash-commands" not in command
 
     def test_claude_default_model_session_can_be_acquired_and_accepted(self) -> None:
         executor = AgentExecutor(
