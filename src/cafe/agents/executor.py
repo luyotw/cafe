@@ -522,7 +522,7 @@ class AgentExecutor:
         *,
         event_driver: bool = False,
     ) -> tuple[List[str], Path | None]:
-        """Build a command and preserve an explicit empty capability scope."""
+        """Build a command with provider-specific empty-scope controls."""
         builder = (
             cli_strategy.build_event_driver_command
             if event_driver
@@ -540,18 +540,7 @@ class AgentExecutor:
         if process_cwd is None:
             raise ValueError("an explicit empty capability scope requires an isolated directory")
 
-        if self.config.cli == AgentCLI.CLAUDE:
-            cmd.extend(
-                [
-                    "--tools",
-                    "",
-                    "--strict-mcp-config",
-                    "--mcp-config",
-                    "{}",
-                    "--disable-slash-commands",
-                ]
-            )
-        elif self.config.cli == AgentCLI.CODEX:
+        if self.config.cli == AgentCLI.CODEX:
             cwd_index = cmd.index("-C") + 1
             cmd[cwd_index] = str(process_cwd)
             exec_index = cmd.index("exec")

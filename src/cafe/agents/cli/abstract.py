@@ -211,7 +211,11 @@ class AbstractCLI(ABC):
             if not isinstance(record, Mapping) or not matches(record):
                 continue
             model = record.get("model")
-            if model is not None and model != self.config.model:
+            if (
+                self.config.model is not None
+                and model is not None
+                and model != self.config.model
+            ):
                 return None
             session_id = record.get(field)
             if not isinstance(session_id, str) or not session_id.strip():
