@@ -1316,10 +1316,14 @@ def _acquire_v3_session(
     )
     try:
         with tempfile.TemporaryDirectory(prefix="cafe-event-bootstrap-") as temporary:
+            bootstrap_scope = (
+                {}
+                if entry["cli"] == AgentCLI.CLAUDE.value
+                else {"allowed_tools": [], "allowed_directories": []}
+            )
             result = executor.execute_event_driver(
                 'say "HI"',
-                allowed_tools=[],
-                allowed_directories=[],
+                **bootstrap_scope,
                 execution_control=AgentExecutionControl(
                     working_directory=Path(temporary),
                     max_duration_seconds=60,

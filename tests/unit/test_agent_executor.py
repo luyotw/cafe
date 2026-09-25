@@ -878,7 +878,7 @@ class TestCopilotTokenUsageExtraction:
 class TestEventDriverObservation:
     """測試 callback-only provider evidence 觀察邊界。"""
 
-    def test_claude_bootstrap_uses_valid_empty_mcp_configuration(self, tmp_path: Path) -> None:
+    def test_claude_bootstrap_omits_tool_restriction_flags(self, tmp_path: Path) -> None:
         executor = AgentExecutor(
             AgentConfig(name="driver", cli=AgentCLI.CLAUDE),
             stream_output=False,
@@ -886,6 +886,22 @@ class TestEventDriverObservation:
 
         command = executor.preview_cli_command_args(
             'say "HI"',
+            execution_control=AgentExecutionControl(working_directory=tmp_path),
+        )
+
+        assert "--tools" not in command
+        assert "--strict-mcp-config" not in command
+        assert "--mcp-config" not in command
+        assert "--disable-slash-commands" not in command
+
+    def test_claude_decision_only_uses_valid_empty_mcp_configuration(self, tmp_path: Path) -> None:
+        executor = AgentExecutor(
+            AgentConfig(name="driver", cli=AgentCLI.CLAUDE),
+            stream_output=False,
+        )
+
+        command = executor.preview_cli_command_args(
+            "Classify the event",
             allowed_tools=[],
             allowed_directories=[],
             execution_control=AgentExecutionControl(working_directory=tmp_path),

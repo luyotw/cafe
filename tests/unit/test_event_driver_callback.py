@@ -610,8 +610,12 @@ def test_every_unbound_entry_bootstraps_without_event_authority(
 
     assert outcome == "acquired"
     assert calls[0][1] == 'say "HI"'
-    assert calls[0][2]["allowed_tools"] == []
-    assert calls[0][2]["allowed_directories"] == []
+    if cli == AgentCLI.CLAUDE:
+        assert "allowed_tools" not in calls[0][2]
+        assert "allowed_directories" not in calls[0][2]
+    else:
+        assert calls[0][2]["allowed_tools"] == []
+        assert calls[0][2]["allowed_directories"] == []
     assert event["event_id"] not in calls[0][1]
     persisted = json.loads((driver_dir / "dispatch_state.json").read_text())
     assert persisted["entries"][0]["session"]["id"] == updated["entries"][0]["session"]["id"]
