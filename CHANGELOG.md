@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.4.1] - 2026-09-25
+
+### Fixed
+
+- Recorded each confirmed deliver and cleanup command's outcome outside the
+  issue worktree so an interrupted closeout cannot silently replay a command.
+  Closeout plans are bounded to fit their durable evidence record.
+- Removed Claude's extra tool and MCP configuration flags from empty-scope
+  execution and accepted the provider's default model when the Driver did not
+  pin one, restoring event-driven session bootstrap and callback acceptance.
+
+### Packaging
+
+- Added a trusted GitHub Actions publisher that builds and publishes tagged
+  GitHub releases to PyPI without a long-lived package token.
+
+See [the v0.4.1 release notes](docs/releases/v0.4.1.md) for upgrade guidance and
+details.
+
 ## [0.4.0] - 2026-09-24
 
 ### Added
