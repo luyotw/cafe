@@ -237,6 +237,9 @@ def test_script_launcher_inventory_covers_workflow_process_calls() -> None:
         "src/cafe/data/skills/use-cafe-workflow/scripts/run_workflow.py::run": (
             "Internal fixed CAFE workflow bootstrap"
         ),
+        "src/cafe/data/skills/use-cafe-workflow/scripts/execute_closeout.py::main": (
+            "Explicit confirmed closeout command adapter"
+        ),
         "src/cafe/verification/receipt.py::_run_with_output_log": ("Explicit verification runner"),
         "src/cafe/verification/receipt.py::run_focused_verification": (
             "Explicit verification runner"
