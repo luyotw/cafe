@@ -9,7 +9,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Iterator, Mapping, Optional, Sequence
+from typing import Any, Callable, Iterator, Mapping, Optional, Sequence
 from uuid import uuid4
 
 try:
@@ -691,6 +691,7 @@ class HumanTaskRecordStore:
         task_id: str,
         payload: Mapping[str, Any],
         source: str,
+        precondition: Callable[[], None] | None = None,
     ) -> TaskResult:
         with self.transaction():
             envelope = self._load_for_workflow(workflow_id, create=False)
@@ -703,6 +704,8 @@ class HumanTaskRecordStore:
             wait_state = envelope.wait_states[task.id]
             if wait_state.released_at is not None:
                 raise HumanTaskCorrelationError(f"task {task.id} has no active wait state")
+            if precondition is not None:
+                precondition()
             now = _now_iso()
             result = TaskResult(
                 id=str(uuid4()),

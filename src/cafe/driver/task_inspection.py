@@ -115,11 +115,18 @@ def inspect_task_authority(
     handoff = handoff if isinstance(handoff, Mapping) else {}
     task = detail.to_dict()
     questions = None
+    questions_sha256 = None
     if detail.expected_result.get("questions_from_xml") is True:
         questions_file = (
             issue_dir / detail.step / f"iteration_{detail.iteration:03d}" / "questions.xml"
         )
-        if questions_file.is_file() and validate_questions_xml(questions_file):
+        if (
+            not questions_file.is_symlink()
+            and questions_file.is_file()
+            and questions_file.stat().st_size <= 256 * 1024
+            and validate_questions_xml(questions_file)
+        ):
+            questions_sha256 = hashlib.sha256(questions_file.read_bytes()).hexdigest()
             questions = tuple(
                 HumanTaskQuestion(
                     id=item.id,
@@ -145,6 +152,12 @@ def inspect_task_authority(
         or handoff.get("to_owner") != "user"
     ):
         result = {**result, "allowed": False, "evidence_reason": "stale_handoff"}
+    decision_inputs = {
+        "sources": sources,
+        "task": task,
+        "handoff": handoff,
+        "questions_sha256": questions_sha256,
+    }
     return {
         **result,
         "task_id": detail.id,
@@ -153,6 +166,6 @@ def inspect_task_authority(
         "pause_status": handoff.get("status_code") or "unknown",
         "contract_sha256": digest,
         "sources_sha256": hashlib.sha256(
-            json.dumps(sources, ensure_ascii=False, sort_keys=True).encode("utf-8")
+            json.dumps(decision_inputs, ensure_ascii=False, sort_keys=True).encode("utf-8")
         ).hexdigest(),
     }

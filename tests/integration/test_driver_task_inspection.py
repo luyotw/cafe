@@ -145,6 +145,30 @@ def test_custom_clarification_current_task_has_independent_driver_facts(
     allowed = inspect_task_authority(issue_dir, task.id, response=response, evidence=evidence)
     assert allowed["allowed"] is True
     assert allowed["evidence_reason"] == "confirmed_exact_evidence"
+    original_questions = questions_file.read_text(encoding="utf-8")
+    questions_file.write_text(
+        original_questions.replace("Which outcomes?", "Which confirmed outcomes?"),
+        encoding="utf-8",
+    )
+    revised_questions = inspect_task_authority(
+        issue_dir, task.id, response=response, evidence=evidence
+    )
+    assert revised_questions["allowed"] is True
+    assert revised_questions["sources_sha256"] != allowed["sources_sha256"]
+    questions_file.write_text(original_questions, encoding="utf-8")
+    precedent = tmp_path / "pattern.py"
+    precedent.write_text("first", encoding="utf-8")
+    with_repository = {**evidence, "repository_sources": ["pattern.py"]}
+    first_repository = inspect_task_authority(
+        issue_dir, task.id, response=response, evidence=with_repository
+    )
+    precedent.write_text("second", encoding="utf-8")
+    second_repository = inspect_task_authority(
+        issue_dir, task.id, response=response, evidence=with_repository
+    )
+    assert first_repository["allowed"] is True
+    assert second_repository["allowed"] is True
+    assert first_repository["sources_sha256"] != second_repository["sources_sha256"]
     draft_only = deepcopy(evidence)
     for citation in draft_only["citations"]:
         citation["source"] = "artifact:code"
@@ -268,7 +292,9 @@ def test_custom_clarification_current_task_has_independent_driver_facts(
     assert unavailable["evidence_reason"] == "authority_inspection_unavailable"
 
 
-@pytest.mark.parametrize("change", ["none", "reconfirm", "source"])
+@pytest.mark.parametrize(
+    "change", ["none", "reconfirm", "source", "last_source", "last_handoff", "large", "oversize"]
+)
 def test_known_clarification_uses_structured_completion_and_rejects_stale_id(
     tmp_path: Path, change: str
 ):
@@ -279,7 +305,15 @@ def test_known_clarification_uses_structured_completion_and_rejects_stale_id(
     board = store.load_or_create("develop", playbook_id="standard")
     source = issue_dir / "spec" / "iteration_001" / "output.md"
     source.parent.mkdir(parents=True)
-    source.write_text("Confirmed answer: A", encoding="utf-8")
+    answer = "A" * 112_000 if change == "large" else "A"
+    source.write_text(
+        (
+            "Reversible technical choice allowed"
+            if change == "large"
+            else "Confirmed answer: " + answer
+        ),
+        encoding="utf-8",
+    )
     board.artifacts["spec"] = ArtifactEntry(
         name="spec",
         kind=ArtifactKind.DOCUMENT,
@@ -325,19 +359,44 @@ def test_known_clarification_uses_structured_completion_and_rejects_stale_id(
         continuations=binding.outcomes,
         assignee_type="user",
     )
-    response = {"task": policy.id, "feedback": "A", "human_task_id": task.id}
+    response = {"task": policy.id, "feedback": answer, "human_task_id": task.id}
+    if change == "large":
+        response["work_report"] = {
+            "summary": "s" * 2_000,
+            "outcome": "o" * 2_000,
+            "evidence": [f"{index}:" + "x" * 890 for index in range(20)],
+        }
     evidence = {
         "basis": "confirmed_exact",
         "exhaustive": True,
         "citations": [
             {
                 "field": "feedback",
-                "value": "A",
+                "value": answer,
                 "source": "artifact:spec",
-                "excerpt": "Confirmed answer: A",
+                "excerpt": "Confirmed answer: " + answer,
             }
         ],
     }
+    if change == "large":
+        evidence = {
+            "basis": "reversible_technical",
+            "category": "technical",
+            "exhaustive": True,
+            "authority": {
+                "source": "artifact:spec",
+                "excerpt": "Reversible technical choice allowed",
+            },
+            "candidates": [
+                {
+                    "field": "feedback",
+                    "value": answer,
+                    "precedent": False,
+                    "footprint": 1,
+                    "reversible": True,
+                }
+            ],
+        }
     facts = inspect_task_authority(
         issue_dir,
         task.id,
@@ -368,7 +427,36 @@ def test_known_clarification_uses_structured_completion_and_rejects_stale_id(
     assessment.write_text(
         json.dumps({"response": response, "evidence": evidence}), encoding="utf-8"
     )
+    if change == "oversize":
+        assessment.write_bytes(assessment.read_bytes().ljust(256 * 1024 + 1, b" "))
+    if change == "large":
+        assert assessment.stat().st_size < 256 * 1024
+        assert len(json.dumps(response).encode("utf-8")) > 128 * 1024
     env = {**os.environ, "PYTHONPATH": str(Path(__file__).parents[2] / "src")}
+    if change in {"last_source", "last_handoff"}:
+        instrumentation = tmp_path / "instrumentation"
+        instrumentation.mkdir()
+        (instrumentation / "sitecustomize.py").write_text(
+            "from pathlib import Path\n"
+            "import json, os\n"
+            "from cafe.core.human_task_records import HumanTaskRecordStore\n"
+            "original = HumanTaskRecordStore.complete\n"
+            "def change_source(self, *args, **kwargs):\n"
+            "    if os.environ['CAFE_TEST_CHANGE'] == 'last_source':\n"
+            "        Path(os.environ['CAFE_TEST_SOURCE_PATH']).write_text('Confirmed answer: B')\n"
+            "    else:\n"
+            "        board = Path(os.environ['CAFE_TEST_BOARD_PATH'])\n"
+            "        value = json.loads(board.read_text())\n"
+            "        value['handoff_contract']['status_code'] = 'changed'\n"
+            "        board.write_text(json.dumps(value))\n"
+            "    return original(self, *args, **kwargs)\n"
+            "HumanTaskRecordStore.complete = change_source\n",
+            encoding="utf-8",
+        )
+        env["PYTHONPATH"] = str(instrumentation) + os.pathsep + env["PYTHONPATH"]
+        env["CAFE_TEST_SOURCE_PATH"] = str(source)
+        env["CAFE_TEST_BOARD_PATH"] = str(issue_dir / "blackboard.json")
+        env["CAFE_TEST_CHANGE"] = change
     command = [
         sys.executable,
         str(
@@ -395,12 +483,15 @@ def test_known_clarification_uses_structured_completion_and_rejects_stale_id(
         capture_output=True,
         check=False,
     )
-    if change != "none":
+    if change in {"reconfirm", "source", "last_source", "last_handoff", "oversize"}:
         assert completed.returncode != 0
         assert HumanTaskRecordStore(issue_dir).get_task(task.id).status.value == "pending"
         return
     assert completed.returncode == 0, completed.stderr
     assert HumanTaskRecordStore(issue_dir).get_task(task.id).status.value == "completed"
+    if change == "large":
+        assert json.loads(completed.stdout)["status"] == "completed"
+        assert len(completed.stdout.encode("utf-8")) < 4 * 1024
     stale = subprocess.run(
         command,
         cwd=tmp_path,

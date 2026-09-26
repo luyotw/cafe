@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import json
-import subprocess
 from pathlib import Path
 from typing import Any, Mapping
+
+from cafe.core.task_inbox import TaskInboxService
+from cafe.ui.commands.tasks import apply_structured_task
 
 from ._store import contract_lock
 from .task_inspection import inspect_task_authority
@@ -20,9 +21,11 @@ def complete_driver_task(
     contract_sha256: str,
     sources_sha256: str,
 ) -> dict[str, Any]:
-    """Recheck the exact decision under the replacement lock before durable use."""
+    """Bind Driver authority to the neutral durable completion transaction."""
     issue_dir = Path(issue_dir).resolve()
-    with contract_lock(issue_dir):
+    project_root = issue_dir.parent.parent.parent
+
+    def require_current_authority() -> None:
         facts = inspect_task_authority(issue_dir, task_id, response=response, evidence=evidence)
         if (
             not facts["allowed"]
@@ -30,25 +33,29 @@ def complete_driver_task(
             or facts["sources_sha256"] != sources_sha256
         ):
             raise ValueError("Driver task authority changed or is insufficient")
-        result = subprocess.run(
-            [
-                "cafe",
-                "task",
-                "complete",
-                task_id,
-                "--result",
-                json.dumps(response, ensure_ascii=False),
-                "--no-resume",
-                "--json",
-            ],
-            cwd=issue_dir.parent.parent.parent,
-            text=True,
-            capture_output=True,
-            check=False,
+
+    with contract_lock(issue_dir):
+        require_current_authority()
+        service = TaskInboxService(project_root / ".cafe")
+        preflight = service.preflight_completion(task_id)
+        if (
+            preflight.issue_dir.resolve() != issue_dir
+            or preflight.task.capability_approval is not None
+        ):
+            raise ValueError("task is outside the Driver completion boundary")
+        _, applied = apply_structured_task(
+            service,
+            task_id,
+            response,
+            project_root=project_root,
+            source="command",
+            completion_precondition=require_current_authority,
         )
-        if result.returncode != 0:
-            raise ValueError("durable task completion failed: " + result.stderr.strip()[:500])
-        completed = json.loads(result.stdout)
-        if not isinstance(completed, dict):
-            raise ValueError("task completion returned an invalid result")
-        return completed
+        detail = service.inspect_read_only(task_id)
+        return {
+            "ok": True,
+            "task_id": detail.id,
+            "status": detail.status,
+            "workflow_id": detail.workflow_id,
+            "continuation": applied.target,
+        }

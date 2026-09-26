@@ -24,9 +24,13 @@ def main() -> None:
     parser.add_argument("--sources-sha256", required=True)
     parser.add_argument("--json", action="store_true", required=True)
     args = parser.parse_args()
-    if args.assessment.is_symlink() or args.assessment.stat().st_size > 256 * 1024:
+    if args.assessment.is_symlink() or not args.assessment.is_file():
         raise ValueError("assessment file is unsafe or oversized")
-    assessment = json.loads(args.assessment.read_text(encoding="utf-8"))
+    with args.assessment.open("rb") as handle:
+        content = handle.read(256 * 1024 + 1)
+    if len(content) > 256 * 1024:
+        raise ValueError("assessment file is unsafe or oversized")
+    assessment = json.loads(content.decode("utf-8"))
     if (
         not isinstance(assessment, dict)
         or not isinstance(assessment.get("response"), dict)

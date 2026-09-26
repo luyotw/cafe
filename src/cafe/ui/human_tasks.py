@@ -6,7 +6,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Callable, Optional, Sequence
 
 from cafe.core.blackboard import (
     ArtifactEntry,
@@ -273,6 +273,7 @@ def apply_human_task_payload(
     raw_payload: str | Mapping[str, Any],
     source: str,
     supervisor_handoff_to: Optional[str] = None,
+    completion_precondition: Callable[[], None] | None = None,
 ) -> HumanTaskApplication:
     """Validate and apply one response while retaining a pause on rejection."""
     record_store = HumanTaskRecordStore(issue_dir)
@@ -308,6 +309,7 @@ def apply_human_task_payload(
             source=source,
             record_store=record_store,
             supervisor_handoff_to=supervisor_handoff_to,
+            completion_precondition=completion_precondition,
         )
 
 
@@ -465,6 +467,7 @@ def _apply_human_task_payload(
     source: str,
     record_store: HumanTaskRecordStore,
     supervisor_handoff_to: Optional[str] = None,
+    completion_precondition: Callable[[], None] | None = None,
 ) -> HumanTaskApplication:
     """Apply a response while holding the matching durable-record transaction."""
     store = BlackboardStore(issue_dir)
@@ -784,6 +787,7 @@ def _apply_human_task_payload(
                     task_id=durable_task.id,
                     payload=completion_payload,
                     source=source,
+                    precondition=completion_precondition,
                 )
             except (HumanTaskCorrelationError, OSError, ValueError) as exc:
                 rejection = HumanTaskRejection(
@@ -1095,10 +1099,13 @@ def _recorded_result_continuation(
     payload = result.payload
     continuation = payload.get("continuation")
     if payload.get("task") != policy.id or not isinstance(continuation, str) or not continuation:
-        return HumanTaskRejection(
-            message="The completed durable human task has an invalid continuation.",
-            correction_guidance=policy.correction_guidance,
-        ), ""
+        return (
+            HumanTaskRejection(
+                message="The completed durable human task has an invalid continuation.",
+                correction_guidance=policy.correction_guidance,
+            ),
+            "",
+        )
     feedback = payload.get("feedback")
     if isinstance(feedback, str) and feedback:
         return continuation, feedback
@@ -1106,10 +1113,13 @@ def _recorded_result_continuation(
     if answers is None:
         return continuation, ""
     if not isinstance(answers, Mapping):
-        return HumanTaskRejection(
-            message="The completed durable human task has invalid recorded answers.",
-            correction_guidance=policy.correction_guidance,
-        ), ""
+        return (
+            HumanTaskRejection(
+                message="The completed durable human task has invalid recorded answers.",
+                correction_guidance=policy.correction_guidance,
+            ),
+            "",
+        )
     lines = []
     for question, answer in answers.items():
         if (
@@ -1117,10 +1127,13 @@ def _recorded_result_continuation(
             or not isinstance(answer, list)
             or not all(isinstance(item, str) for item in answer)
         ):
-            return HumanTaskRejection(
-                message="The completed durable human task has invalid recorded answers.",
-                correction_guidance=policy.correction_guidance,
-            ), ""
+            return (
+                HumanTaskRejection(
+                    message="The completed durable human task has invalid recorded answers.",
+                    correction_guidance=policy.correction_guidance,
+                ),
+                "",
+            )
         lines.append(f"{question}: {', '.join(answer)}")
     return continuation, "\n".join(lines)
 
