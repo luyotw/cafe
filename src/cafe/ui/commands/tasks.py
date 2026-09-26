@@ -44,6 +44,7 @@ def apply_structured_task(
     source: str,
     supervisor_handoff_to: str | None = None,
     completion_precondition: Callable[[], None] | None = None,
+    completion_postcondition: Callable[[], None] | None = None,
 ) -> tuple[CompletionPreflight, HumanTaskApplication]:
     """Use the same neutral validator and durable transition for both callers."""
     preflight = service.preflight_completion(task_id)
@@ -61,6 +62,7 @@ def apply_structured_task(
         source=source,
         supervisor_handoff_to=supervisor_handoff_to,
         completion_precondition=completion_precondition,
+        completion_postcondition=completion_postcondition,
     )
     if applied.rejection is not None or applied.target is None:
         message = (

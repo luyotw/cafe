@@ -24,8 +24,10 @@ def complete_driver_task(
     """Bind Driver authority to the neutral durable completion transaction."""
     issue_dir = Path(issue_dir).resolve()
     project_root = issue_dir.parent.parent.parent
+    current_context_sha256: str | None = None
 
     def require_current_authority() -> None:
+        nonlocal current_context_sha256
         facts = inspect_task_authority(issue_dir, task_id, response=response, evidence=evidence)
         if (
             not facts["allowed"]
@@ -33,6 +35,15 @@ def complete_driver_task(
             or facts["sources_sha256"] != sources_sha256
         ):
             raise ValueError("Driver task authority changed or is insufficient")
+        current_context_sha256 = facts["context_sha256"]
+
+    def require_unchanged_context() -> None:
+        facts = inspect_task_authority(issue_dir, task_id, response=response, evidence=evidence)
+        if (
+            facts["contract_sha256"] != contract_sha256
+            or facts["context_sha256"] != current_context_sha256
+        ):
+            raise ValueError("Driver task authority changed during durable completion")
 
     with contract_lock(issue_dir):
         require_current_authority()
@@ -50,6 +61,7 @@ def complete_driver_task(
             project_root=project_root,
             source="command",
             completion_precondition=require_current_authority,
+            completion_postcondition=require_unchanged_context,
         )
         detail = service.inspect_read_only(task_id)
         return {

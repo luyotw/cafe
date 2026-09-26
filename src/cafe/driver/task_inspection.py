@@ -158,6 +158,27 @@ def inspect_task_authority(
         "handoff": handoff,
         "questions_sha256": questions_sha256,
     }
+    stable_task = {
+        key: task[key]
+        for key in (
+            "id",
+            "issue",
+            "workflow_id",
+            "provenance",
+            "prompt",
+            "expected_result",
+            "continuations",
+            "assignment",
+            "capability_approval",
+        )
+    }
+    stable_task["created_at"] = task["timestamps"]["created_at"]
+    context_inputs = {
+        "sources": sources,
+        "task": stable_task,
+        "handoff": handoff,
+        "questions_sha256": questions_sha256,
+    }
     return {
         **result,
         "task_id": detail.id,
@@ -167,5 +188,8 @@ def inspect_task_authority(
         "contract_sha256": digest,
         "sources_sha256": hashlib.sha256(
             json.dumps(decision_inputs, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest(),
+        "context_sha256": hashlib.sha256(
+            json.dumps(context_inputs, ensure_ascii=False, sort_keys=True).encode("utf-8")
         ).hexdigest(),
     }

@@ -692,6 +692,7 @@ class HumanTaskRecordStore:
         payload: Mapping[str, Any],
         source: str,
         precondition: Callable[[], None] | None = None,
+        postcondition: Callable[[], None] | None = None,
     ) -> TaskResult:
         with self.transaction():
             envelope = self._load_for_workflow(workflow_id, create=False)
@@ -704,6 +705,7 @@ class HumanTaskRecordStore:
             wait_state = envelope.wait_states[task.id]
             if wait_state.released_at is not None:
                 raise HumanTaskCorrelationError(f"task {task.id} has no active wait state")
+            previous_content = canonical_json(envelope.to_dict()) if postcondition else None
             now = _now_iso()
             result = TaskResult(
                 id=str(uuid4()),
@@ -721,7 +723,12 @@ class HumanTaskRecordStore:
             self._append_event(
                 envelope, "completed", task_id=task.id, context={"result_id": result.id}
             )
-            self._save(envelope, precondition=precondition)
+            self._save(
+                envelope,
+                precondition=precondition,
+                postcondition=postcondition,
+                previous_content=previous_content,
+            )
             return result
 
     def record_rejection(self, *, workflow_id: str, task_id: str, reason: str) -> None:
@@ -846,12 +853,27 @@ class HumanTaskRecordStore:
             )
         )
 
-    def _save(self, envelope: _Envelope, *, precondition: Callable[[], None] | None = None) -> None:
+    def _save(
+        self,
+        envelope: _Envelope,
+        *,
+        precondition: Callable[[], None] | None = None,
+        postcondition: Callable[[], None] | None = None,
+        previous_content: bytes | None = None,
+    ) -> None:
         envelope.validate()
         content = canonical_json(envelope.to_dict())
         if precondition is not None:
             precondition()
         atomic_write_bytes(self.file_path, content)
+        if postcondition is not None:
+            try:
+                postcondition()
+            except BaseException:
+                if previous_content is None:
+                    raise HumanTaskRecordError("missing rollback content for guarded completion")
+                atomic_write_bytes(self.file_path, previous_content)
+                raise
 
 
 def _records_by_task_id(data: Mapping[str, Any], field_name: str, parser: Any) -> dict[str, Any]:

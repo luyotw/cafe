@@ -301,6 +301,8 @@ def test_custom_clarification_current_task_has_independent_driver_facts(
         "last_source",
         "last_handoff",
         "save_source",
+        "atomic_source",
+        "atomic_handoff",
         "large",
         "oversize",
     ],
@@ -443,25 +445,42 @@ def test_known_clarification_uses_structured_completion_and_rejects_stale_id(
         assert assessment.stat().st_size < 256 * 1024
         assert len(json.dumps(response).encode("utf-8")) > 128 * 1024
     env = {**os.environ, "PYTHONPATH": str(Path(__file__).parents[2] / "src")}
-    if change in {"last_source", "last_handoff", "save_source"}:
+    if change in {"last_source", "last_handoff", "save_source", "atomic_source", "atomic_handoff"}:
         instrumentation = tmp_path / "instrumentation"
         instrumentation.mkdir()
         (instrumentation / "sitecustomize.py").write_text(
             "from pathlib import Path\n"
             "import json, os\n"
-            "from cafe.core.human_task_records import HumanTaskRecordStore\n"
-            "method = '_save' if os.environ['CAFE_TEST_CHANGE'] == 'save_source' else 'complete'\n"
-            "original = getattr(HumanTaskRecordStore, method)\n"
-            "def change_source(self, *args, **kwargs):\n"
-            "    if os.environ['CAFE_TEST_CHANGE'] in {'last_source', 'save_source'}:\n"
-            "        Path(os.environ['CAFE_TEST_SOURCE_PATH']).write_text('Confirmed answer: B')\n"
-            "    else:\n"
-            "        board = Path(os.environ['CAFE_TEST_BOARD_PATH'])\n"
-            "        value = json.loads(board.read_text())\n"
-            "        value['handoff_contract']['status_code'] = 'changed'\n"
-            "        board.write_text(json.dumps(value))\n"
-            "    return original(self, *args, **kwargs)\n"
-            "setattr(HumanTaskRecordStore, method, change_source)\n",
+            "import cafe.core.human_task_records as records\n"
+            "if os.environ['CAFE_TEST_CHANGE'] in {'atomic_source', 'atomic_handoff'}:\n"
+            "    original = records.atomic_write_bytes\n"
+            "    changed = False\n"
+            "    def change_at_write(path, content):\n"
+            "        global changed\n"
+            "        if not changed:\n"
+            "            changed = True\n"
+            "            if os.environ['CAFE_TEST_CHANGE'] == 'atomic_source':\n"
+            "                Path(os.environ['CAFE_TEST_SOURCE_PATH']).write_text('Confirmed answer: B')\n"
+            "            else:\n"
+            "                board = Path(os.environ['CAFE_TEST_BOARD_PATH'])\n"
+            "                value = json.loads(board.read_text())\n"
+            "                value['handoff_contract']['status_code'] = 'changed'\n"
+            "                board.write_text(json.dumps(value))\n"
+            "        return original(path, content)\n"
+            "    records.atomic_write_bytes = change_at_write\n"
+            "else:\n"
+            "    method = '_save' if os.environ['CAFE_TEST_CHANGE'] == 'save_source' else 'complete'\n"
+            "    original = getattr(records.HumanTaskRecordStore, method)\n"
+            "    def change_source(self, *args, **kwargs):\n"
+            "        if os.environ['CAFE_TEST_CHANGE'] in {'last_source', 'save_source'}:\n"
+            "            Path(os.environ['CAFE_TEST_SOURCE_PATH']).write_text('Confirmed answer: B')\n"
+            "        else:\n"
+            "            board = Path(os.environ['CAFE_TEST_BOARD_PATH'])\n"
+            "            value = json.loads(board.read_text())\n"
+            "            value['handoff_contract']['status_code'] = 'changed'\n"
+            "            board.write_text(json.dumps(value))\n"
+            "        return original(self, *args, **kwargs)\n"
+            "    setattr(records.HumanTaskRecordStore, method, change_source)\n",
             encoding="utf-8",
         )
         env["PYTHONPATH"] = str(instrumentation) + os.pathsep + env["PYTHONPATH"]
@@ -494,9 +513,20 @@ def test_known_clarification_uses_structured_completion_and_rejects_stale_id(
         capture_output=True,
         check=False,
     )
-    if change in {"reconfirm", "source", "last_source", "last_handoff", "save_source", "oversize"}:
+    if change in {
+        "reconfirm",
+        "source",
+        "last_source",
+        "last_handoff",
+        "save_source",
+        "atomic_source",
+        "atomic_handoff",
+        "oversize",
+    }:
         assert completed.returncode != 0
         assert HumanTaskRecordStore(issue_dir).get_task(task.id).status.value == "pending"
+        if change in {"atomic_source", "atomic_handoff"}:
+            assert HumanTaskRecordStore(issue_dir).get_result(task.id) is None
         return
     assert completed.returncode == 0, completed.stderr
     assert HumanTaskRecordStore(issue_dir).get_task(task.id).status.value == "completed"
