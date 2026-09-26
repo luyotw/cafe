@@ -376,7 +376,7 @@ def test_historical_attempt_session_does_not_pin_current_callback_session() -> N
         }
     ]
 
-    assert callback._validate_dispatch_attempt(attempt, entries=entries) == (
+    assert callback._validate_dispatch_attempt(attempt, route_length=len(entries)) == (
         0,
         "delivery",
         "accepted",
@@ -515,6 +515,294 @@ def _contract_event_context(
     )
     state = callback._ensure_dispatch_event(driver_dir, state, event)
     return driver_dir, state, event
+
+
+def test_contract_chain_update_keeps_sessions_and_historical_routes(tmp_path: Path) -> None:
+    callback = _callback_module()
+    driver_dir, state, event = _contract_event_context(
+        callback,
+        tmp_path,
+        [("codex", "implicit"), ("claude", "one"), ("gemini", "two")],
+    )
+    for index, name in enumerate(("codex", "claude", "gemini")):
+        state["entries"][index]["session"] = {
+            "id": f"{name}-session",
+            "source": "provider",
+            "acquired_at": "2026-09-07T00:00:00+00:00",
+        }
+    state["active_index"] = 2
+    state["events"][event["event_id"]]["starting_index"] = 2
+    state = callback._append_pending_attempt(
+        driver_dir, state, event_id=event["event_id"], index=2, stage="delivery"
+    )
+    state = callback._accept_delivery(
+        driver_dir, state, event_id=event["event_id"], index=2, session_id="gemini-session"
+    )
+    config = callback._contract_callback_config(
+        issue_dir=driver_dir.parent,
+        issue_name=driver_dir.parent.name,
+        workflow_id=state["workflow_id"],
+    )
+    same = callback._load_or_initialize_dispatch_state(
+        driver_dir, workflow_id=state["workflow_id"], config=config
+    )
+    assert same["active_index"] == 2
+    assert [entry["session"]["id"] for entry in same["entries"]] == [
+        "codex-session",
+        "claude-session",
+        "gemini-session",
+    ]
+    reordered = {
+        **config,
+        "clis": [
+            {"cli": "codex"},
+            {"cli": "gemini", "model": "two"},
+            {"cli": "claude", "model": "one"},
+        ],
+    }
+    loaded = callback._load_or_initialize_dispatch_state(
+        driver_dir, workflow_id=state["workflow_id"], config=reordered
+    )
+    assert [entry["session"]["id"] for entry in loaded["entries"]] == [
+        "codex-session",
+        "gemini-session",
+        "claude-session",
+    ]
+    assert loaded["active_index"] == 0
+    assert callback._project_v3_events(loaded)[0]["attempts"][0]["cli"] == "gemini"
+
+    removed = {**config, "clis": [{"cli": "codex"}]}
+    loaded = callback._load_or_initialize_dispatch_state(
+        driver_dir, workflow_id=state["workflow_id"], config=removed
+    )
+    assert len(loaded["entries"]) == 1
+    assert loaded["events"][event["event_id"]]["accepted_index"] == 2
+    assert callback._project_v3_events(loaded)[0]["attempts"][0]["cli"] == "gemini"
+    with patch.object(callback, "_contract_callback_config", return_value=removed):
+        status = callback.read_status(driver_dir.parent)
+    assert len(status["entries"]) == 1
+    assert status["events"][0]["attempts"][0]["cli"] == "gemini"
+
+
+def test_unknown_legacy_sessions_are_rebuilt_without_misrouting_host(tmp_path: Path) -> None:
+    callback = _callback_module()
+    driver_dir, state, event = _contract_event_context(
+        callback, tmp_path, [("codex", "implicit"), ("claude", "one")]
+    )
+    state["entries"][0]["session"] = {
+        "id": "old-codex-host",
+        "source": "host_session",
+        "acquired_at": "2026-09-07T00:00:00+00:00",
+    }
+    state["entries"][1]["session"] = {
+        "id": "unknown-provider",
+        "source": "provider",
+        "acquired_at": "2026-09-07T00:00:00+00:00",
+    }
+    state["entries"] = [
+        {"index": entry["index"], "session": entry["session"]} for entry in state["entries"]
+    ]
+    del state["events"][event["event_id"]]["routing_chain"]
+    (driver_dir / "dispatch_state.json").write_text(json.dumps(state), encoding="utf-8")
+    config = callback._contract_callback_config(
+        issue_dir=driver_dir.parent,
+        issue_name=driver_dir.parent.name,
+        workflow_id=state["workflow_id"],
+    )
+    changed = {**config, "clis": [{"cli": "claude"}, {"cli": "codex", "model": "one"}]}
+    loaded = callback._load_or_initialize_dispatch_state(
+        driver_dir, workflow_id=state["workflow_id"], config=changed
+    )
+    assert [entry["session"] for entry in loaded["entries"]] == [None, None]
+    assert event["event_id"] in loaded["events"]
+
+    from cafe.core.blackboard import BlackboardStore
+
+    store = BlackboardStore(driver_dir.parent)
+    later_event = store.prepare_workflow_callback_event(
+        store.load_or_create("spec"),
+        {
+            "workflow_id": state["workflow_id"],
+            "issue": driver_dir.parent.name,
+            "event_type": "workflow_completed",
+            "step": "review",
+            "status_code": "ok",
+        },
+    )
+    loaded = callback._ensure_dispatch_event(driver_dir, loaded, later_event)
+
+    class FakeExecutor:
+        def __init__(self, config, **_kwargs):
+            assert config.cli == AgentCLI.CLAUDE
+
+        def execute_event_driver(self, _prompt, **kwargs):
+            session_id = kwargs.get("expected_session_id")
+            return SimpleNamespace(
+                session_id=session_id or "new-claude-session",
+                accepted=session_id is not None,
+                records=(),
+            )
+
+    with patch.object(callback, "_queue_host_callback", side_effect=AssertionError("wrong CLI")):
+        delivered = callback._run_v3_callback(
+            driver_dir,
+            loaded,
+            later_event,
+            repository_root=tmp_path,
+            executor_factory=FakeExecutor,
+        )
+    assert delivered["events"][later_event["event_id"]]["status"] == "accepted"
+    assert delivered["entries"][0]["session"]["id"] == "new-claude-session"
+
+
+def test_changed_chain_does_not_continue_an_attempt_at_an_old_index(tmp_path: Path) -> None:
+    callback = _callback_module()
+    driver_dir, state, event = _contract_event_context(callback, tmp_path, [("codex", "implicit")])
+    state = callback._append_pending_attempt(
+        driver_dir, state, event_id=event["event_id"], index=0, stage="bootstrap"
+    )
+    state = callback._finish_pending_attempt(
+        driver_dir,
+        state,
+        event_id=event["event_id"],
+        status="failed",
+        outcome="conclusive_nonacceptance",
+        reason="cli_unavailable",
+    )
+    config = callback._contract_callback_config(
+        issue_dir=driver_dir.parent,
+        issue_name=driver_dir.parent.name,
+        workflow_id=state["workflow_id"],
+    )
+    expanded = {
+        **config,
+        "clis": [{"cli": "codex"}, {"cli": "claude", "model": "one"}],
+    }
+    loaded = callback._load_or_initialize_dispatch_state(
+        driver_dir, workflow_id=state["workflow_id"], config=expanded
+    )
+
+    def unexpected_executor(*_args, **_kwargs):
+        raise AssertionError("old index was reused")
+
+    assert (
+        callback._run_v3_callback(
+            driver_dir,
+            loaded,
+            event,
+            repository_root=tmp_path,
+            executor_factory=unexpected_executor,
+        )
+        == loaded
+    )
+    assert (
+        loaded["events"][event["event_id"]]["attempts"]
+        == state["events"][event["event_id"]]["attempts"]
+    )
+
+    from cafe.core.blackboard import BlackboardStore
+
+    store = BlackboardStore(driver_dir.parent)
+    later_event = store.prepare_workflow_callback_event(
+        store.load_or_create("spec"),
+        {
+            "workflow_id": state["workflow_id"],
+            "issue": driver_dir.parent.name,
+            "event_type": "workflow_completed",
+            "step": "review",
+            "status_code": "ok",
+        },
+    )
+    later = callback._ensure_dispatch_event(driver_dir, loaded, later_event)
+    assert later["events"][later_event["event_id"]]["routing_chain"] == [
+        {"cli": "codex", "model": None},
+        {"cli": "claude", "model": "one"},
+    ]
+
+
+def test_returning_to_an_old_chain_does_not_repeat_acquired_bootstrap(tmp_path: Path) -> None:
+    callback = _callback_module()
+    driver_dir, state, event = _contract_event_context(callback, tmp_path, [("codex", "implicit")])
+    state = callback._append_pending_attempt(
+        driver_dir, state, event_id=event["event_id"], index=0, stage="bootstrap"
+    )
+    state["entries"][0]["session"] = {
+        "id": "old-codex-session",
+        "source": "provider",
+        "acquired_at": "2026-09-07T00:00:00+00:00",
+    }
+    state["events"][event["event_id"]]["attempts"][-1].update(
+        status="acquired",
+        outcome="session_acquired",
+        reason="provider_evidence",
+        session_id="old-codex-session",
+        finished_at="2026-09-07T00:00:01+00:00",
+    )
+    callback._write_dispatch_state(driver_dir, state)
+    config = callback._contract_callback_config(
+        issue_dir=driver_dir.parent,
+        issue_name=driver_dir.parent.name,
+        workflow_id=state["workflow_id"],
+    )
+    other = {**config, "clis": [{"cli": "claude"}]}
+    changed = callback._load_or_initialize_dispatch_state(
+        driver_dir, workflow_id=state["workflow_id"], config=other
+    )
+    callback._write_dispatch_state(driver_dir, changed)
+    restored = callback._load_or_initialize_dispatch_state(
+        driver_dir, workflow_id=state["workflow_id"], config=config
+    )
+    assert restored["entries"][0]["session"] is None
+    before = (driver_dir / "dispatch_state.json").read_bytes()
+    assert (
+        callback._run_v3_callback(
+            driver_dir,
+            restored,
+            event,
+            repository_root=tmp_path,
+            executor_factory=lambda *_args, **_kwargs: pytest.fail("repeated bootstrap"),
+        )
+        == restored
+    )
+    assert (driver_dir / "dispatch_state.json").read_bytes() == before
+    callback._load_or_initialize_dispatch_state(
+        driver_dir, workflow_id=state["workflow_id"], config=config
+    )
+
+
+def test_status_does_not_attribute_old_model_bootstrap_to_current_model(
+    tmp_path: Path, monkeypatch
+) -> None:
+    callback = _callback_module()
+    driver_dir, state, event = _contract_event_context(
+        callback, tmp_path, [("codex", "implicit"), ("claude", "old")]
+    )
+    state["active_index"] = 1
+    state["events"][event["event_id"]]["starting_index"] = 1
+    state = callback._append_pending_attempt(
+        driver_dir, state, event_id=event["event_id"], index=1, stage="bootstrap"
+    )
+    callback._finish_pending_attempt(
+        driver_dir,
+        state,
+        event_id=event["event_id"],
+        status="failed",
+        outcome="conclusive_nonacceptance",
+        reason="model_not_found",
+    )
+    config = callback._contract_callback_config(
+        issue_dir=driver_dir.parent,
+        issue_name=driver_dir.parent.name,
+        workflow_id=state["workflow_id"],
+    )
+    changed = {
+        **config,
+        "clis": [{"cli": "codex"}, {"cli": "claude", "model": "new"}],
+    }
+    monkeypatch.setattr(callback, "_contract_callback_config", lambda **_kwargs: changed)
+    status = callback.read_status(driver_dir.parent)
+    assert status["entries"][1]["acquisition"] == {"status": "unacquired", "session": None}
+    assert status["events"][0]["attempts"][0]["model"] == "old"
 
 
 def _write_legacy_contract(contract_path: Path, *, schema_version: int) -> bytes:

@@ -440,8 +440,8 @@ def test_contract_only_event_callback_continues_after_equivalent_reconfirmation(
     }
     assert persisted["schema_version"] == 2
     assert persisted["entries"] == [
-        {"index": 0, "session": None},
-        {"index": 1, "session": None},
+        {"index": 0, "cli": "claude", "session": None},
+        {"index": 1, "cli": "codex", "model": "exact", "session": None},
     ]
 
     replacement = replace_confirmed_contract(

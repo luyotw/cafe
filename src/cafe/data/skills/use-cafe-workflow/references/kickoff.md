@@ -660,8 +660,9 @@ for confirmation rather than asking again.
   memory. Do not
   create `driver/config.yaml`: that file is legacy migration evidence only and
   cannot override a contract-managed callback. Its mutable
-  `dispatch_state.json` records only the active contract digest, sessions, and
-  delivery progress.
+  `dispatch_state.json` records session CLI/model identities, event routing
+  history, and delivery progress. Its legacy digest field does not control
+  callback continuation; the current contract controls new dispatch.
 
   Do not put the mode, CLI, model, session, callback, or any driver control
   setting in `issue.yaml`. Confirm that every entry reports `event-driven

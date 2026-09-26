@@ -389,8 +389,8 @@ def _contract_callback_config(
     """Derive one callback-only transport view from the durable contract.
 
     This value is intentionally never written as ``config.yaml``.  Mutable
-    dispatch state retains only its sessions and event history and binds itself
-    to the digest returned by this immediately preceding contract read.
+    dispatch state retains session identities and event history; the current
+    contract remains the authority for callback routing.
     """
     from cafe.driver import EventCallbackRequest, event_callback_projection
 
@@ -487,7 +487,7 @@ def _valid_nonempty_string(value: Any) -> bool:
 def _validate_dispatch_attempt(
     attempt: Any,
     *,
-    entries: list[dict[str, Any]],
+    route_length: int | None,
 ) -> tuple[int, str, str]:
     expected = {
         "index",
@@ -507,7 +507,8 @@ def _validate_dispatch_attempt(
     if (
         not isinstance(index, int)
         or isinstance(index, bool)
-        or not 0 <= index < len(entries)
+        or index < 0
+        or (route_length is not None and index >= route_length)
         or stage not in {"bootstrap", "delivery"}
         or status not in {"pending", "acquired", "accepted", "failed", "ambiguous"}
         or not _valid_nonempty_string(attempt.get("started_at"))
@@ -566,12 +567,39 @@ def _validate_dispatch_events(state: dict[str, Any]) -> None:
         "recovery_pending",
     }
     for event_id, event_state in state["events"].items():
+        fields = frozenset(event_state) if isinstance(event_state, dict) else frozenset()
         if (
             not _valid_nonempty_string(event_id)
             or not isinstance(event_state, dict)
-            or set(event_state) != expected_event_fields
+            or fields
+            not in {
+                frozenset(expected_event_fields),
+                frozenset(expected_event_fields | {"routing_chain"}),
+            }
         ):
             raise ValueError("event-driven dispatch event is invalid")
+        routing_chain = event_state.get("routing_chain")
+        if "routing_chain" in event_state and (
+            state["schema_version"] != 2
+            or not isinstance(routing_chain, list)
+            or not routing_chain
+            or any(
+                not isinstance(entry, dict)
+                or set(entry) != {"cli", "model"}
+                or entry["cli"] not in {cli.value for cli in AgentCLI}
+                or (entry["model"] is not None and not _valid_nonempty_string(entry["model"]))
+                for entry in routing_chain
+            )
+            or len({entry["cli"] for entry in routing_chain}) != len(routing_chain)
+        ):
+            raise ValueError("event-driven dispatch route is invalid")
+        route_length = (
+            len(routing_chain)
+            if routing_chain is not None
+            else len(entries)
+            if state["schema_version"] == 1
+            else None
+        )
         event = event_state.get("event")
         sequence = event.get("sequence") if isinstance(event, dict) else None
         if (
@@ -593,7 +621,8 @@ def _validate_dispatch_events(state: dict[str, Any]) -> None:
         if (
             not isinstance(starting_index, int)
             or isinstance(starting_index, bool)
-            or not 0 <= starting_index < len(entries)
+            or starting_index < 0
+            or (route_length is not None and starting_index >= route_length)
             or not isinstance(attempts, list)
             or status not in {"routing", "accepted", "recovery_pending", "exhausted"}
             or not isinstance(event_state.get("recovery_pending"), bool)
@@ -602,7 +631,7 @@ def _validate_dispatch_events(state: dict[str, Any]) -> None:
 
         previous: tuple[int, str, str] | None = None
         for position, attempt in enumerate(attempts):
-            current = _validate_dispatch_attempt(attempt, entries=entries)
+            current = _validate_dispatch_attempt(attempt, route_length=route_length)
             index, stage, attempt_status = current
             if previous is None:
                 valid_order = index == starting_index
@@ -675,13 +704,17 @@ def _validate_dispatch_events(state: dict[str, Any]) -> None:
             if last_status != "ambiguous" or not recovery_pending:
                 raise ValueError("event-driven recovery event is inconsistent")
         elif status == "exhausted":
-            if last_status != "failed" or last_index != len(entries) - 1 or not recovery_pending:
+            if (
+                last_status != "failed"
+                or (route_length is not None and last_index != route_length - 1)
+                or not recovery_pending
+            ):
                 raise ValueError("event-driven exhausted event is inconsistent")
         elif recovery_pending or last_status in {"accepted", "ambiguous"}:
             raise ValueError("event-driven routing event is inconsistent")
 
     expected_active = max(accepted_indexes, default=0)
-    if state["active_index"] != expected_active:
+    if state["schema_version"] == 1 and state["active_index"] != expected_active:
         raise ValueError("event-driven active entry is inconsistent")
 
 
@@ -733,19 +766,38 @@ def _load_or_initialize_dispatch_state(
         if not contract_managed and state.get("policy") != config:
             raise ValueError("event-driven dispatch policy cannot change within a workflow")
         entries = state.get("entries")
-        if not isinstance(entries, list) or len(entries) != len(config["clis"]):
+        if (
+            not isinstance(entries, list)
+            or not entries
+            or (not contract_managed and len(entries) != len(config["clis"]))
+        ):
             raise ValueError("event-driven dispatch state is invalid")
-        for index, (entry, policy_entry) in enumerate(zip(entries, config["clis"])):
-            expected_entry_fields = (
-                {"index", "session"} if contract_managed else {"index", "cli", "model", "session"}
-            )
-            if not isinstance(entry, dict) or set(entry) != expected_entry_fields:
+        recorded_route: list[dict[str, Any]] = []
+        for index, entry in enumerate(entries):
+            if not isinstance(entry, dict):
                 raise ValueError("event-driven dispatch state is invalid")
+            fields = set(entry)
+            if fields not in (
+                (
+                    {"index", "session"},
+                    {"index", "cli", "session"},
+                    {"index", "cli", "model", "session"},
+                )
+                if contract_managed
+                else ({"index", "cli", "model", "session"},)
+            ):
+                raise ValueError("event-driven dispatch state is invalid")
+            if "cli" in entry:
+                if entry["cli"] not in {cli.value for cli in AgentCLI} or (
+                    entry.get("model") is not None and not _valid_nonempty_string(entry["model"])
+                ):
+                    raise ValueError("event-driven dispatch session provenance is invalid")
+                recorded_route.append({"cli": entry["cli"], "model": entry.get("model")})
             if entry.get("index") != index or (
                 not contract_managed
                 and (
-                    entry.get("cli") != policy_entry["cli"]
-                    or entry.get("model") != policy_entry["model"]
+                    entry.get("cli") != config["clis"][index]["cli"]
+                    or entry.get("model") != config["clis"][index].get("model")
                 )
             ):
                 raise ValueError("event-driven dispatch session provenance is invalid")
@@ -760,8 +812,15 @@ def _load_or_initialize_dispatch_state(
                 or not session["acquired_at"]
             ):
                 raise ValueError("event-driven dispatch session provenance is invalid")
+            if (
+                contract_managed
+                and isinstance(session, dict)
+                and session["source"] == "host_session"
+                and (index != 0 or ("cli" in entry and entry["cli"] != AgentCLI.CODEX.value))
+            ):
+                raise ValueError("event-driven host session provenance is invalid")
             host_session = config.get("host_session")
-            if index == 0 and isinstance(host_session, dict):
+            if not contract_managed and index == 0 and isinstance(host_session, dict):
                 if (
                     session is None
                     or session.get("id") != host_session["thread_id"]
@@ -769,14 +828,17 @@ def _load_or_initialize_dispatch_state(
                 ):
                     raise ValueError("event-driven host session conflicts with dispatch state")
             elif (
-                index != 0 and isinstance(session, dict) and session.get("source") == "host_session"
+                not contract_managed
+                and index != 0
+                and isinstance(session, dict)
+                and session.get("source") == "host_session"
             ):
                 raise ValueError("event-driven host session cannot bind a fallback")
         if contract_managed:
-            state["entries"] = [
-                {"index": entry["index"], **policy_entry, "session": entry["session"]}
-                for entry, policy_entry in zip(entries, config["clis"])
-            ]
+            if recorded_route and len(recorded_route) != len(entries):
+                raise ValueError("event-driven dispatch state is invalid")
+            if len({item["cli"] for item in recorded_route}) != len(recorded_route):
+                raise ValueError("event-driven dispatch session provenance is invalid")
         active_index = state.get("active_index")
         if (
             not isinstance(active_index, int)
@@ -788,6 +850,42 @@ def _load_or_initialize_dispatch_state(
         if not isinstance(state.get("events"), dict):
             raise ValueError("event-driven dispatch state is invalid")
         _validate_dispatch_events(state)
+        if contract_managed:
+            available = {
+                (entry["cli"], entry.get("model")): entry["session"]
+                for entry in entries
+                if "cli" in entry
+                and isinstance(entry["session"], dict)
+                and entry["session"]["source"] == "provider"
+            }
+            host = next(
+                (
+                    entry["session"]
+                    for entry in entries
+                    if isinstance(entry["session"], dict)
+                    and entry["session"]["source"] == "host_session"
+                    and ("cli" not in entry or entry["cli"] == AgentCLI.CODEX.value)
+                ),
+                None,
+            )
+            current_host = config.get("host_session")
+            state["entries"] = []
+            for index, policy_entry in enumerate(config["clis"]):
+                session = available.get((policy_entry["cli"], policy_entry.get("model")))
+                if index == 0 and policy_entry["cli"] == AgentCLI.CODEX.value:
+                    session = session or host
+                    if session is None and isinstance(current_host, dict):
+                        session = {
+                            "id": current_host["thread_id"],
+                            "source": "host_session",
+                            "acquired_at": _now(),
+                        }
+                state["entries"].append({"index": index, **policy_entry, "session": session})
+            current_route = [
+                {"cli": entry["cli"], "model": entry.get("model")} for entry in config["clis"]
+            ]
+            if recorded_route != current_route:
+                state["active_index"] = 0
         return state
     if path.exists():
         raise ValueError("event-driven dispatch state is invalid")
@@ -823,17 +921,9 @@ def _load_or_initialize_dispatch_state(
 def _write_dispatch_state(driver_dir: Path, state: dict[str, Any]) -> dict[str, Any]:
     updated = copy.deepcopy(state)
     updated["updated_at"] = _now()
-    durable = copy.deepcopy(updated)
-    if durable.get("schema_version") == 2:
-        entries = durable.get("entries")
-        if not isinstance(entries, list):
-            raise ValueError("event-driven dispatch state is invalid")
-        durable["entries"] = [
-            {"index": entry.get("index"), "session": entry.get("session")} for entry in entries
-        ]
     _atomic_write(
         driver_dir / DISPATCH_STATE_FILENAME,
-        json.dumps(durable, sort_keys=True).encode("utf-8"),
+        json.dumps(updated, sort_keys=True).encode("utf-8"),
     )
     return updated
 
@@ -895,7 +985,7 @@ def _read_legacy_session(
 def _project_attempt(
     attempt: Any,
     *,
-    entries: list[dict[str, Any]],
+    routing_chain: list[dict[str, Any]] | None,
 ) -> dict[str, Any]:
     expected = {
         "index",
@@ -910,7 +1000,12 @@ def _project_attempt(
     if not isinstance(attempt, dict) or set(attempt) != expected:
         raise ValueError("event-driven dispatch attempt is invalid")
     index = attempt.get("index")
-    if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < len(entries):
+    if (
+        not isinstance(index, int)
+        or isinstance(index, bool)
+        or index < 0
+        or (routing_chain is not None and index >= len(routing_chain))
+    ):
         raise ValueError("event-driven dispatch attempt is invalid")
     if attempt.get("stage") not in {"bootstrap", "delivery"}:
         raise ValueError("event-driven dispatch attempt is invalid")
@@ -918,7 +1013,8 @@ def _project_attempt(
         raise ValueError("event-driven dispatch attempt is invalid")
     return {
         "index": index,
-        "cli": entries[index]["cli"],
+        "cli": routing_chain[index]["cli"] if routing_chain is not None else None,
+        "model": routing_chain[index].get("model") if routing_chain is not None else None,
         "stage": attempt["stage"],
         "status": attempt["status"],
         "outcome": attempt.get("outcome"),
@@ -944,8 +1040,14 @@ def _project_v3_events(state: dict[str, Any]) -> list[dict[str, Any]]:
     for event_id, event_state in state["events"].items():
         if not isinstance(event_id, str) or not event_id:
             raise ValueError("event-driven dispatch event is invalid")
-        if not isinstance(event_state, dict) or set(event_state) != expected:
+        if not isinstance(event_state, dict) or set(event_state) not in (
+            expected,
+            expected | {"routing_chain"},
+        ):
             raise ValueError("event-driven dispatch event is invalid")
+        routing_chain = event_state.get("routing_chain")
+        if state["schema_version"] == 1:
+            routing_chain = entries
         event = event_state.get("event")
         attempts = event_state.get("attempts")
         if (
@@ -962,13 +1064,15 @@ def _project_v3_events(state: dict[str, Any]) -> list[dict[str, Any]]:
         if (
             not isinstance(starting_index, int)
             or isinstance(starting_index, bool)
-            or not 0 <= starting_index < len(entries)
+            or starting_index < 0
+            or (routing_chain is not None and starting_index >= len(routing_chain))
             or (
                 accepted_index is not None
                 and (
                     not isinstance(accepted_index, int)
                     or isinstance(accepted_index, bool)
-                    or not 0 <= accepted_index < len(entries)
+                    or accepted_index < 0
+                    or (routing_chain is not None and accepted_index >= len(routing_chain))
                 )
             )
             or not isinstance(event_state.get("recovery_pending"), bool)
@@ -983,7 +1087,9 @@ def _project_v3_events(state: dict[str, Any]) -> list[dict[str, Any]]:
                 "status": event_state.get("status"),
                 "starting_index": starting_index,
                 "accepted_index": accepted_index,
-                "attempts": [_project_attempt(attempt, entries=entries) for attempt in attempts],
+                "attempts": [
+                    _project_attempt(attempt, routing_chain=routing_chain) for attempt in attempts
+                ],
                 "takeover": copy.deepcopy(event_state.get("takeover")),
                 "recovery_pending": event_state["recovery_pending"],
             }
@@ -1097,7 +1203,10 @@ def read_status(issue_dir: Path) -> dict[str, Any]:
                 attempt
                 for event in events
                 for attempt in event["attempts"]
-                if attempt["index"] == index and attempt["stage"] == "bootstrap"
+                if attempt["index"] == index
+                and attempt["cli"] == policy["cli"]
+                and attempt["model"] == policy.get("model")
+                and attempt["stage"] == "bootstrap"
             ]
             if bootstrap_attempts:
                 acquisition_status = f"bootstrap_{bootstrap_attempts[-1]['status']}"
@@ -1181,6 +1290,10 @@ def _ensure_dispatch_event(
         "takeover": None,
         "recovery_pending": False,
     }
+    if state["schema_version"] == 2:
+        updated["events"][event_id]["routing_chain"] = [
+            {"cli": entry["cli"], "model": entry.get("model")} for entry in state["entries"]
+        ]
     return _write_dispatch_state(driver_dir, updated)
 
 
@@ -1629,7 +1742,11 @@ def _deliver_v3_callback(
         acceptance_persisted = True
 
     try:
-        if index == 0 and session.get("source") == "host_session":
+        if (
+            index == 0
+            and entry["cli"] == AgentCLI.CODEX.value
+            and session.get("source") == "host_session"
+        ):
             _queue_host_callback(
                 _callback_prompt(event, repository_root=repository_root),
                 thread_id=session_id,
@@ -1746,6 +1863,23 @@ def _run_v3_callback(
     attempts = event_state["attempts"]
     if attempts and attempts[-1].get("status") == "pending":
         return state
+    if state["schema_version"] == 2:
+        current_route = [
+            {"cli": entry["cli"], "model": entry.get("model")} for entry in state["entries"]
+        ]
+        if event_state.get("routing_chain") != current_route:
+            if attempts:
+                return state
+            updated = copy.deepcopy(state)
+            updated["events"][event_id]["routing_chain"] = current_route
+            updated["events"][event_id]["starting_index"] = state["active_index"]
+            state = _write_dispatch_state(driver_dir, updated)
+            event_state = state["events"][event_id]
+    if attempts and attempts[-1].get("status") == "acquired":
+        acquired = attempts[-1]
+        session = state["entries"][acquired["index"]]["session"]
+        if not isinstance(session, dict) or session["id"] != acquired["session_id"]:
+            return state
     index = event_state["starting_index"]
     if attempts:
         last = attempts[-1]
