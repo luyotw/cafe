@@ -94,11 +94,12 @@ boundary or infer its answer.
 The callback reads the issue-scoped `driver/contract.json` and projects the
 primary CLI plus fallback CLI/model order only in memory. Waking the primary
 session never includes a model override. `dispatch_state.json` is mutable runtime
-state bound to that contract's digest: it contains sessions, attempt history,
+state that records the contract digest: it contains sessions, attempt history,
 the sticky active index, takeover, exhaustion, recovery, and timestamps, but
-never a copy of mode, model-chain, or other confirmed policy. A changed digest
-fails closed before dispatch. `driver/config.yaml` is a legacy migration input
-only; when a contract exists it is neither read as callback authority nor a
+never a copy of mode, model-chain, or other confirmed policy. The stored digest
+does not block dispatch after a confirmed contract update; the callback uses the
+current contract. `driver/config.yaml` is a legacy migration input only; when
+a contract exists it is neither read as callback authority nor a
 writer target. The event-driver lifecycle uses no session-file discovery,
 directory diff, sleep, polling, or watcher.
 

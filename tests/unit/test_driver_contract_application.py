@@ -386,7 +386,7 @@ def test_full_policy_freshness_detects_changed_policy(tmp_path: Path, change: st
     )
 
 
-def test_contract_only_event_callback_derives_and_digest_binds_runtime_state(
+def test_contract_only_event_callback_continues_after_equivalent_reconfirmation(
     tmp_path: Path, monkeypatch
 ) -> None:
     """Test List 2/5: automatic callback derives no competing transport policy."""
@@ -444,16 +444,14 @@ def test_contract_only_event_callback_derives_and_digest_binds_runtime_state(
         {"index": 1, "session": None},
     ]
 
-    replacement = deepcopy(proposal)
-    replacement["driver"]["clis"][1]["model"] = "reconfirmed-model"
-    replace_confirmed_contract(
+    replacement = replace_confirmed_contract(
         ReplaceConfirmedContract(
             issue_dir,
             "issue474",
             blackboard.workflow_id,
             "user",
             datetime(2026, 9, 6, 3, tzinfo=timezone.utc),
-            replacement,
+            proposal,
             activation.contract_sha256,
             "user_reconfirmation",
         )
@@ -468,8 +466,10 @@ def test_contract_only_event_callback_derives_and_digest_binds_runtime_state(
             "status_code": "ok",
         },
     )
-    with pytest.raises(ValueError, match="stale Driver contract"):
-        callback.run_callback(later_event, repository_root=tmp_path)
+    assert replacement.contract_sha256 != activation.contract_sha256
+    callback.run_callback(later_event, repository_root=tmp_path)
+    assert later_event["event_id"] in observed["state"]["events"]
+    assert callback.read_status(issue_dir)["entries"][0]["cli"] == "claude"
 
 
 def test_unsafe_present_contract_cannot_fall_back_to_legacy_callback_policy(

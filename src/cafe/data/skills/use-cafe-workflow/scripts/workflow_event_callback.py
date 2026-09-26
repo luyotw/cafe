@@ -732,8 +732,6 @@ def _load_or_initialize_dispatch_state(
             raise ValueError("event-driven dispatch state belongs to another workflow")
         if not contract_managed and state.get("policy") != config:
             raise ValueError("event-driven dispatch policy cannot change within a workflow")
-        if contract_managed and state.get("contract_sha256") != config.get("contract_sha256"):
-            raise ValueError("event-driven dispatch state belongs to a stale Driver contract")
         entries = state.get("entries")
         if not isinstance(entries, list) or len(entries) != len(config["clis"]):
             raise ValueError("event-driven dispatch state is invalid")

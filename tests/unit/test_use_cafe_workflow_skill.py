@@ -3790,9 +3790,8 @@ def test_event_driver_documentation_defines_the_contract_managed_lifecycle() -> 
     assert "bootstrap never counts as event delivery or acceptance" in contract
     assert "actual callback durable acceptance" in contract
     assert "Copilot never receives a caller-selected new-session ID" in contract
-    assert (
-        "`dispatch_state.json` is mutable runtime state bound to that contract's digest" in contract
-    )
+    assert "`dispatch_state.json` is mutable runtime state" in contract
+    assert "The stored digest does not block dispatch" in contract
     assert "callback reads the issue-scoped `driver/contract.json`" in contract
     assert "provider acknowledgement is bound to the exact event identity" in contract
     assert "no session-file discovery, directory diff, sleep, polling, or watcher" in contract
