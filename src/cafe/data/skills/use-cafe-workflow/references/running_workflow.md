@@ -246,10 +246,18 @@ repeat it when the user already has the same task and options unless they ask.
    record a concise contract basis and do not submit when the answer changes
    the contract, triggers a deviation, needs new authority, is reserved to the
    user, or its authority is uncertain.
-3. Run `cafe task complete <task-id> --result '<json>' --no-resume --json` only
-   after the Driver-owned rules above authorize relaying or completing the
-   response. The generic task command does not interpret or grant Driver
-   authority. The response may include `work_report` with non-empty `summary`
+3. For a `driver_confirmable` answer, save `{"response": ..., "evidence": ...}`
+   as an assessment file. Inspect that exact assessment with
+   `inspect_task_authority.py --assessment <file>` and pass its
+   `contract_sha256` and `sources_sha256` to
+   `complete_driver_task.py --issue-dir <issue-dir> --task-id <task-id>
+   --assessment <file> --contract-sha256 <digest> --sources-sha256 <digest> --json`.
+   This Driver-owned entry rechecks authority while holding the contract
+   replacement lock, then invokes `cafe task complete --no-resume --json`.
+   A changed contract, task, evidence source, or answer must be reinspected.
+   For an explicit user-owned answer or the separately authorized correction
+   outcome, use the generic command only after their respective rules above
+   authorize it. The response may include `work_report` with non-empty `summary`
    and `outcome`, plus optional `evidence` references, when recording work
    already performed. The report is metadata only: it cannot replace the task's
    required response or select a continuation.

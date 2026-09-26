@@ -57,6 +57,8 @@ def _supported_exact(
         )
         if not all(isinstance(item, str) and item for item in (field, value, source, excerpt)):
             return False
+        if source.startswith("repo:"):
+            return False
         text = sources.get(source)
         if not isinstance(text, str) or excerpt not in text or value not in excerpt:
             return False

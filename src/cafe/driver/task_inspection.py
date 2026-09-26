@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, Mapping
@@ -14,7 +15,7 @@ from ._store import load_contract
 from .task_authority import decide_task_authority
 
 
-def _read_json(path: Path, *, limit: int = 4 * 1024 * 1024) -> dict[str, Any]:
+def _read_json(path: Path, *, limit: int = 64 * 1024 * 1024) -> dict[str, Any]:
     if path.is_symlink() or not path.is_file() or path.stat().st_size > limit:
         raise ValueError(f"unsafe or missing Driver inspection input: {path.name}")
     value = json.loads(path.read_text(encoding="utf-8"))
@@ -28,6 +29,7 @@ def _sources(
     contract: Mapping[str, Any],
     board: Mapping[str, Any],
     evidence: Mapping[str, Any] | None,
+    active_step: str,
 ) -> dict[str, str]:
     sources = {
         "contract": json.dumps(contract["delivery_contract"], ensure_ascii=False, sort_keys=True)
@@ -53,6 +55,8 @@ def _sources(
         for raw_path in repository_sources:
             if not isinstance(raw_path, str) or not raw_path or Path(raw_path).is_absolute():
                 continue
+            if Path(raw_path).parts[:1] == (".cafe",):
+                continue
             lexical_path = root / raw_path
             path = lexical_path.resolve()
             if not path.is_relative_to(root):
@@ -65,6 +69,9 @@ def _sources(
     for name, entry in list(artifacts.items())[:32]:
         if not isinstance(name, str) or not isinstance(entry, Mapping):
             continue
+        # The output of the paused phase has not been accepted yet.
+        if entry.get("updated_by") == active_step:
+            continue
         raw_path = entry.get("path")
         if not isinstance(raw_path, str):
             continue
@@ -75,8 +82,11 @@ def _sources(
         if any(candidate.is_symlink() for candidate in (lexical_path, *lexical_path.parents)):
             continue
         if path.is_file() and path.stat().st_size <= min(256 * 1024, remaining_bytes):
-            sources[f"artifact:{name}"] = path.read_text(encoding="utf-8")
-            remaining_bytes -= path.stat().st_size
+            content = path.read_bytes()
+            if entry.get("content_sha256") != hashlib.sha256(content).hexdigest():
+                continue
+            sources[f"artifact:{name}"] = content.decode("utf-8")
+            remaining_bytes -= len(content)
     return sources
 
 
@@ -119,13 +129,14 @@ def inspect_task_authority(
                 )
                 for item in parse_questions_xml(questions_file)
             )
+    sources = _sources(issue_dir, contract, board, evidence, detail.step)
     result = decide_task_authority(
         task=task,
         contract=contract,
         current_task_id=task_id,
         response=response,
         evidence=evidence,
-        confirmed_sources=_sources(issue_dir, contract, board, evidence),
+        confirmed_sources=sources,
         questions=questions,
     )
     if (
@@ -141,4 +152,7 @@ def inspect_task_authority(
         "step": detail.step,
         "pause_status": handoff.get("status_code") or "unknown",
         "contract_sha256": digest,
+        "sources_sha256": hashlib.sha256(
+            json.dumps(sources, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest(),
     }

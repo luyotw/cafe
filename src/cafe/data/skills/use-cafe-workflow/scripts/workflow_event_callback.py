@@ -1509,6 +1509,8 @@ def _callback_prompt(event: dict[str, Any], *, repository_root: Path) -> str:
             "a user-facing driver turn may relay an explicit user-owned answer.",
             "You may complete a declared driver_confirmable task, including "
             "need_clarification, only after verifying its confirmed contract and evidence. "
+            "Use complete_driver_task.py with the same assessment and inspected digests "
+            "so authority is rechecked at durable completion. "
             "A clarification answer must stay within confirmed scope, constraints and authority "
             "and trigger no contract deviation; otherwise leave it for the user. Do not grant "
             "permissions/capabilities or wait for this callback.",
@@ -1532,7 +1534,12 @@ def _with_current_task_authority(
             return event
         facts = inspect_task_authority(issue_dir, task_id)
     except (TaskInboxError, OSError, ValueError):
-        return event
+        return {
+            **event,
+            "route_status": event.get("trigger") or "unknown",
+            "resolution_owner": "user_required",
+            "evidence_reason": "authority_inspection_unavailable",
+        }
     return {
         **event,
         **{key: facts[key] for key in ("route_status", "resolution_owner", "evidence_reason")},

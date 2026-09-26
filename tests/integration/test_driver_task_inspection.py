@@ -1,12 +1,14 @@
 """Current task inspection keeps route, owner and evidence separate."""
 
 import importlib.util
+import hashlib
 import json
 import os
 import subprocess
 import sys
 from copy import deepcopy
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -56,6 +58,25 @@ def test_custom_clarification_current_task_has_independent_driver_facts(
         version=1,
         updated_by="spec",
         path=".cafe/issues/issue500/spec/iteration_001/output.md",
+        content_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+    )
+    draft = issue_dir / "develop" / "iteration_001" / "output.md"
+    draft.parent.mkdir(parents=True)
+    draft.write_text("All required outcomes: A and B", encoding="utf-8")
+    board.artifacts["code"] = ArtifactEntry(
+        name="code",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="develop",
+        path=".cafe/issues/issue500/develop/iteration_001/output.md",
+    )
+    board.artifacts["unaccepted"] = ArtifactEntry(
+        name="unaccepted",
+        kind=ArtifactKind.DOCUMENT,
+        version=1,
+        updated_by="spec",
+        path=".cafe/issues/issue500/develop/iteration_001/output.md",
+        content_sha256="0" * 64,
     )
     store.save(board)
     store.set_current_step(board, "user")
@@ -78,7 +99,7 @@ def test_custom_clarification_current_task_has_independent_driver_facts(
     )
     write_contract(issue_dir, contract, expected_predecessor_sha256=None)
     questions_file = issue_dir / "develop" / "iteration_001" / "questions.xml"
-    questions_file.parent.mkdir(parents=True)
+    questions_file.parent.mkdir(parents=True, exist_ok=True)
     questions_file.write_text(
         '<questions><question id="q1" type="checkbox"><title>Which outcomes?</title>'
         "<options><option>A</option><option>B</option></options></question></questions>",
@@ -124,6 +145,36 @@ def test_custom_clarification_current_task_has_independent_driver_facts(
     allowed = inspect_task_authority(issue_dir, task.id, response=response, evidence=evidence)
     assert allowed["allowed"] is True
     assert allowed["evidence_reason"] == "confirmed_exact_evidence"
+    draft_only = deepcopy(evidence)
+    for citation in draft_only["citations"]:
+        citation["source"] = "artifact:code"
+    assert (
+        inspect_task_authority(issue_dir, task.id, response=response, evidence=draft_only)[
+            "allowed"
+        ]
+        is False
+    )
+    unaccepted = deepcopy(draft_only)
+    for citation in unaccepted["citations"]:
+        citation["source"] = "artifact:unaccepted"
+    assert (
+        inspect_task_authority(issue_dir, task.id, response=response, evidence=unaccepted)[
+            "allowed"
+        ]
+        is False
+    )
+    draft_as_repository = deepcopy(draft_only)
+    draft_as_repository["repository_sources"] = [
+        ".cafe/issues/issue500/develop/iteration_001/output.md"
+    ]
+    for citation in draft_as_repository["citations"]:
+        citation["source"] = "repo:.cafe/issues/issue500/develop/iteration_001/output.md"
+    assert (
+        inspect_task_authority(issue_dir, task.id, response=response, evidence=draft_as_repository)[
+            "allowed"
+        ]
+        is False
+    )
 
     scripts = (
         Path(__file__).parents[2]
@@ -192,9 +243,35 @@ def test_custom_clarification_current_task_has_independent_driver_facts(
     assert event["route_status"] == "need_clarification"
     assert event["resolution_owner"] == "driver_confirmable"
     assert event["evidence_reason"] == "evidence_unevaluated"
+    board_file = issue_dir / "blackboard.json"
+    padded = json.loads(board_file.read_text(encoding="utf-8"))
+    padded["review_padding"] = "x" * (4 * 1024 * 1024)
+    board_file.write_text(json.dumps(padded), encoding="utf-8")
+    large_event = callback._with_current_task_authority(
+        {"task_id": task.id, "event_type": "human_task_materialized"},
+        issue_dir=issue_dir,
+        repository_root=tmp_path,
+    )
+    assert large_event["route_status"] == "need_clarification"
+    assert large_event["resolution_owner"] == "driver_confirmable"
+    assert large_event["evidence_reason"] == "evidence_unevaluated"
+    with patch.object(
+        callback, "inspect_task_authority", side_effect=ValueError("board too large")
+    ):
+        unavailable = callback._with_current_task_authority(
+            {"task_id": task.id, "event_type": "human_task_materialized"},
+            issue_dir=issue_dir,
+            repository_root=tmp_path,
+        )
+    assert unavailable["route_status"] == "unknown"
+    assert unavailable["resolution_owner"] == "user_required"
+    assert unavailable["evidence_reason"] == "authority_inspection_unavailable"
 
 
-def test_known_clarification_uses_structured_completion_and_rejects_stale_id(tmp_path: Path):
+@pytest.mark.parametrize("change", ["none", "reconfirm", "source"])
+def test_known_clarification_uses_structured_completion_and_rejects_stale_id(
+    tmp_path: Path, change: str
+):
     issue_dir = tmp_path / ".cafe" / "issues" / "issue500"
     issue_dir.mkdir(parents=True)
     (issue_dir / "issue.yaml").write_text("playbook: standard\n", encoding="utf-8")
@@ -209,6 +286,7 @@ def test_known_clarification_uses_structured_completion_and_rejects_stale_id(tmp
         version=1,
         updated_by="spec",
         path=".cafe/issues/issue500/spec/iteration_001/output.md",
+        content_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
     )
     store.save(board)
     store.set_current_step(board, "user")
@@ -230,7 +308,7 @@ def test_known_clarification_uses_structured_completion_and_rejects_stale_id(tmp
         confirmed_by="user",
         confirmed_at="2026-09-26T12:00:00+00:00",
     )
-    write_contract(issue_dir, contract, expected_predecessor_sha256=None)
+    digest = write_contract(issue_dir, contract, expected_predecessor_sha256=None)
     policy, binding = resolve_step_human_task(
         playbook_data=PlaybookLoader().load("standard"),
         step_name="develop",
@@ -248,33 +326,65 @@ def test_known_clarification_uses_structured_completion_and_rejects_stale_id(tmp
         assignee_type="user",
     )
     response = {"task": policy.id, "feedback": "A", "human_task_id": task.id}
+    evidence = {
+        "basis": "confirmed_exact",
+        "exhaustive": True,
+        "citations": [
+            {
+                "field": "feedback",
+                "value": "A",
+                "source": "artifact:spec",
+                "excerpt": "Confirmed answer: A",
+            }
+        ],
+    }
     facts = inspect_task_authority(
         issue_dir,
         task.id,
         response=response,
-        evidence={
-            "basis": "confirmed_exact",
-            "exhaustive": True,
-            "citations": [
-                {
-                    "field": "feedback",
-                    "value": "A",
-                    "source": "artifact:spec",
-                    "excerpt": "Confirmed answer: A",
-                }
-            ],
-        },
+        evidence=evidence,
     )
     assert facts["allowed"] is True
+    if change == "reconfirm":
+        revised = deepcopy(proposal)
+        revised["task_contract"]["driver_confirmable"] = []
+        revised["task_contract"]["user_required"] = [
+            {"phase": "develop", "task_id": "clarification-feedback"}
+        ]
+        replacement = build_initial_contract(
+            proposal=revised,
+            issue_name="issue500",
+            workflow_id=board.workflow_id,
+            confirmed_by="user",
+            confirmed_at="2026-09-26T12:30:00+00:00",
+            revision=2,
+            previous_contract_sha256=digest,
+            provenance_kind="user_reconfirmation",
+        )
+        write_contract(issue_dir, replacement, expected_predecessor_sha256=digest)
+    elif change == "source":
+        source.write_text("Confirmed answer: A; revised upstream context", encoding="utf-8")
+    assessment = tmp_path / "assessment.json"
+    assessment.write_text(
+        json.dumps({"response": response, "evidence": evidence}), encoding="utf-8"
+    )
     env = {**os.environ, "PYTHONPATH": str(Path(__file__).parents[2] / "src")}
     command = [
-        "cafe",
-        "task",
-        "complete",
+        sys.executable,
+        str(
+            Path(__file__).parents[2]
+            / "src/cafe/data/skills/use-cafe-workflow/scripts/complete_driver_task.py"
+        ),
+        "--issue-dir",
+        str(issue_dir),
+        "--task-id",
         task.id,
-        "--result",
-        json.dumps(response),
-        "--no-resume",
+        "--assessment",
+        str(assessment),
+        "--contract-sha256",
+        digest,
+        "--sources-sha256",
+        facts["sources_sha256"],
         "--json",
     ]
     completed = subprocess.run(
@@ -285,6 +395,10 @@ def test_known_clarification_uses_structured_completion_and_rejects_stale_id(tmp
         capture_output=True,
         check=False,
     )
+    if change != "none":
+        assert completed.returncode != 0
+        assert HumanTaskRecordStore(issue_dir).get_task(task.id).status.value == "pending"
+        return
     assert completed.returncode == 0, completed.stderr
     assert HumanTaskRecordStore(issue_dir).get_task(task.id).status.value == "completed"
     stale = subprocess.run(

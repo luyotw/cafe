@@ -68,8 +68,11 @@ After `cafe task inspect <task-id> --json`, run
 `python3 <skill-dir>/scripts/inspect_task_authority.py --issue-dir
 .cafe/issues/<issue> --task-id <task-id> --json`. Its `route_status`,
 `resolution_owner`, and `evidence_reason` are separate facts. Supply a complete
-response and a grounded assessment to the same read-only entry before using
-`cafe task complete <task-id> --result '<json>' --no-resume --json`. A v5
+response and a grounded assessment to the same read-only entry. For a
+`driver_confirmable` response, pass that same assessment and the returned
+`contract_sha256` and `sources_sha256` to `complete_driver_task.py`; it
+rechecks authority before invoking `cafe task complete --no-resume --json`.
+A v5
 contract's `reactive_user_handoffs.need_clarification` value alone grants no
 Driver completion authority; reconfirm task ownership when needed.
 
@@ -240,9 +243,10 @@ phase, keep its existing model chain unless the user explicitly requested a
 different one. Then submit the exact HumanTask response, for example:
 
 ```bash
-cafe task complete <active-human-task-id> \
-  --result '{"task":"output-review","decision":"confirm","human_task_id":"<active-human-task-id>"}' \
-  --no-resume --json
+python3 <skill-dir>/scripts/complete_driver_task.py \
+  --issue-dir .cafe/issues/<issue> --task-id <active-human-task-id> \
+  --assessment <assessment.json> --contract-sha256 <inspected-contract-sha256> \
+  --sources-sha256 <inspected-sources-sha256> --json
 ```
 
 Use the active task's declared decision ID. Verify the durable result, then
