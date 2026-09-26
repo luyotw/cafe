@@ -49,7 +49,7 @@ class TestStatusCommand:
         result = runner.invoke(app, ["status", "--help"])
 
         assert result.exit_code == 0
-        assert "Display a comprehensive timeline" in result.stdout
+        assert "current workflow state" in result.stdout
         assert "cafe status" in result.stdout
 
 

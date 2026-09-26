@@ -16,8 +16,8 @@ from cafe.core.human_task_notifications import SlackNotificationError
 from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.workflow_models import PlaybookRunResult, StepExecutionResult
 from cafe.playbooks.loader import PlaybookLoader
-from cafe.services.summary_display import SummaryDisplay
-from cafe.services.summary_service import SummaryService
+from cafe.services.status_display import StatusDisplay
+from cafe.services.status_service import StatusService
 from cafe.ui.cli import (
     _execute_single_step_alias,
     _find_external_resume_step,
@@ -706,13 +706,13 @@ def test_workflow_command_refreshes_notification_guidance_for_later_inspection(
 
     assert result.exit_code == 0, (result.stdout, result.exception)
     assert repository_roots == ([tmp_path.resolve()] if notifications_enabled else [])
-    status = SummaryService(issues_root=issues_root).load_driver_status("issue-guidance")
+    status = StatusService(issues_root=issues_root).load_driver_status("issue-guidance")
     guidance = status["notification_guidance"]
     expected_events = ["human_task"] if human_task_delivery_available else []
     assert guidance["proactive_events"] == expected_events
     assert guidance["inspection_available"] is True
     assert guidance["inspection_command"] == "cafe status"
-    rendered = SummaryDisplay().format_driver_status(status)
+    rendered = StatusDisplay().format_driver_status(status)
     assert "Notifications:" in rendered
     assert "cafe status" in rendered
 
@@ -814,7 +814,7 @@ def test_workflow_command_guidance_uses_project_only_slack_route(
         )
 
     assert result.exit_code == 0, (result.stdout, result.exception)
-    status = SummaryService(issues_root=issues_root).load_driver_status(issue_name)
+    status = StatusService(issues_root=issues_root).load_driver_status(issue_name)
     assert status["notification_guidance"]["proactive_events"] == ["human_task"]
 
 
@@ -876,7 +876,7 @@ def test_workflow_command_guidance_uses_fallback_with_malformed_sibling_route(
         )
 
     assert result.exit_code == 0, (result.stdout, result.exception)
-    status = SummaryService(issues_root=issues_root).load_driver_status(issue_name)
+    status = StatusService(issues_root=issues_root).load_driver_status(issue_name)
     assert status["notification_guidance"]["proactive_events"] == ["human_task"]
 
 
@@ -920,7 +920,7 @@ def test_workflow_command_records_guidance_when_machine_config_is_fifo(
         )
 
     assert result.exit_code == 0, (result.stdout, result.exception)
-    status = SummaryService(issues_root=issues_root).load_driver_status(issue_name)
+    status = StatusService(issues_root=issues_root).load_driver_status(issue_name)
     guidance = status["notification_guidance"]
     assert guidance["proactive_events"] == []
     assert guidance["inspection_available"] is True

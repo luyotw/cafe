@@ -403,9 +403,9 @@ def show(
         # Check if file exists
         if not file_path.exists():
             if content_type == "status":
-                from cafe.services.summary_service import SummaryService
+                from cafe.services.status_service import StatusService
 
-                status = SummaryService(issues_root=cafe_dir / "issues").load_phase_status(
+                status = StatusService(issues_root=cafe_dir / "issues").load_phase_status(
                     issue_name, phase_name
                 )
                 if status:
@@ -460,7 +460,7 @@ def show(
 
 
 def status() -> None:
-    """Display a comprehensive timeline of all workflow phases and iterations.
+    """Display the current workflow state, next inspection action, and timeline.
 
     Shows the start time, end time, duration, and current status for each phase
     and iteration in the current issue's workflow.
@@ -469,15 +469,21 @@ def status() -> None:
     Examples:
         cafe status
     """
-    from cafe.services.summary_display import SummaryDisplay
-    from cafe.services.summary_service import SummaryService
+    from cafe.services.status_display import StatusDisplay
+    from cafe.services.status_service import StatusService
     from cafe.services.timeline_builder import TimelineBuilder
 
     try:
         # Get current issue from git context
-        service = SummaryService()
+        service = StatusService()
         issue_name = service.get_current_issue()
         phase_names = _load_issue_step_names(issue_name)
+
+        display = StatusDisplay()
+        console.print(
+            display.format_current_state(service.load_current_state(issue_name, phase_names)),
+            markup=False,
+        )
 
         # Load phase and iteration data
         phase_statuses = {}
@@ -497,7 +503,6 @@ def status() -> None:
         entries = builder.build_timeline_entries(phase_statuses, iteration_data)
 
         # Display as table
-        display = SummaryDisplay()
         display.render_table(entries)
 
         load_context_packets = getattr(service, "load_context_packets", None)
@@ -507,17 +512,12 @@ def status() -> None:
         if context_packets:
             console.print(context_packets)
 
-        # Display aggregated model token usage summary
-        display.render_model_summary_table(entries)
+        # Display aggregated model token usage status
+        display.render_model_status_table(entries)
 
     except Exception as e:
-        console.print(f"[red]Error: Failed to display summary: {e}[/red]")
+        console.print(f"[red]Error: Failed to display status: {e}[/red]")
         raise typer.Exit(1)
-
-
-def summary() -> None:
-    """Backward-compatible alias for the previous `cafe summary` command."""
-    status()
 
 
 def _is_baton_contract_error(error: Exception) -> bool:

@@ -1,24 +1,26 @@
-"""Service layer for cafe summary command."""
+"""Service layer for cafe status command."""
 
 import json
 import re
+import shlex
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from cafe.core.blackboard import BlackboardState, HandoffContract, HandoffOwner
+from cafe.core.blackboard import BlackboardState, HandoffContract, HandoffIntent, HandoffOwner
 from cafe.core.git import GitOperations
+from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.types import PhaseStatus
-from cafe.utils.issue_config import read_authoritative_issue_config, resolve_issue_config_path
+from cafe.core.workflow_models import BatonRejected
 
 _RUNTIME_PHASE_NAME = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 _RUNTIME_ITERATION_DIR = re.compile(r"^iteration_(0*[1-9][0-9]{0,5})$")
 
 
-class SummaryService:
-    """Service for building workflow summary timeline data."""
+class StatusService:
+    """Service for building workflow status timeline data."""
 
     def __init__(self, git_ops: Optional[GitOperations] = None, issues_root: Optional[Path] = None):
-        """Initialize summary service.
+        """Initialize status service.
 
         Args:
             git_ops: GitOperations instance for git context detection
@@ -44,6 +46,168 @@ class SummaryService:
             return branch_name
         except Exception as e:
             raise RuntimeError(f"Failed to detect current issue from git context: {e}")
+
+    def load_current_state(self, issue_name: str, phase_names: List[str]) -> Dict[str, str]:
+        """Project the current handoff and task without creating or repairing records."""
+        issue_dir = self.issues_root / issue_name
+        status = {"Issue": issue_name, "State": "Unknown"}
+        source = issue_dir / "blackboard.json"
+        try:
+            raw = json.loads(source.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict) or any(
+                not isinstance(raw.get(key), str) or not raw[key].strip()
+                for key in ("workflow_id", "current_step")
+            ):
+                raise ValueError("missing workflow identity")
+            state = BlackboardState.from_dict(raw, initial_step=raw["current_step"])
+            status["Workflow"] = state.workflow_id
+            source = issue_dir / "next_step.txt"
+            baton = HandoffContract.from_dict_with_current_step(
+                json.loads(source.read_text(encoding="utf-8")), current_step=state.current_step
+            )
+            recorded = state.handoff_contract
+            if recorded and recorded.to_next_step_dict() != baton.to_next_step_dict():
+                raise ValueError("conflicting handoffs")
+            if recorded:
+                recorded.validate(allowed_steps=phase_names)
+                baton.from_step = recorded.from_step
+            baton.validate(allowed_steps=phase_names)
+            if state.current_step not in {baton.to_step, baton.from_step}:
+                raise ValueError("current step and handoff disagree")
+            step = (recorded.from_step if recorded else "") or state.current_step
+            if baton.to_owner is not HandoffOwner.USER:
+                step = baton.to_step
+            status.update({"Step": step, "Owner": baton.to_owner.value})
+
+            source = issue_dir / "human_tasks.json"
+            store = HumanTaskRecordStore(issue_dir)
+            tasks = store.tasks()
+            if any(task.workflow_id != state.workflow_id for task in tasks):
+                raise ValueError("task belongs to another workflow")
+            pending = [task for task in tasks if task.status is HumanTaskStatus.PENDING]
+            if pending:
+                if len(pending) != 1 or baton.to_owner is not HandoffOwner.USER:
+                    raise ValueError("task and handoff disagree")
+                task = pending[0]
+                wait = store.get_wait_state(task.id)
+                if wait.released_at is not None or task.step != step:
+                    raise ValueError("task is not the current wait")
+                if (
+                    baton.intent is not HandoffIntent.MANUAL_HANDOFF
+                    and task.trigger != baton.intent.value
+                ):
+                    raise ValueError("task and handoff require different actions")
+                iterations = [
+                    int(match.group(1))
+                    for directory in (issue_dir / step).glob("iteration_*")
+                    if directory.is_dir()
+                    and (match := _RUNTIME_ITERATION_DIR.fullmatch(directory.name))
+                ]
+                if task.iteration != max(iterations, default=1):
+                    raise ValueError("task belongs to a different iteration")
+                materialized = next(
+                    (
+                        event
+                        for event in reversed(state.events)
+                        if event.event_type
+                        in {"human_task_materialized", "agent_execution_task_materialized"}
+                        and event.step == step
+                    ),
+                    None,
+                )
+                # Runtime may reuse a pending task after refreshing the handoff.
+                # Its recorded materialization also supports legacy task keys.
+                handoff_key = ":".join(
+                    (
+                        "user-handoff",
+                        state.workflow_id,
+                        step,
+                        baton.intent.value,
+                        recorded.created_at if recorded else baton.created_at,
+                    )
+                )
+                if task.handoff_key != handoff_key and (
+                    materialized is None or materialized.data.get("task_id") != task.id
+                ):
+                    raise ValueError("task has no current handoff identity")
+                status.update(
+                    {
+                        "State": "Waiting for user",
+                        "Reason": task.trigger.replace("_", " "),
+                        "Task": task.id,
+                        "Next": f"cafe task inspect {shlex.quote(task.id)}",
+                    }
+                )
+                return status
+            if any(task.status is HumanTaskStatus.CONFIGURATION_ERROR for task in tasks):
+                raise ValueError("task configuration error")
+
+            source = issue_dir / "blackboard.json"
+            if baton.to_owner is HandoffOwner.DONE:
+                if state.current_step != "done":
+                    raise ValueError("completion and current step disagree")
+                status.update({"State": "Completed", "Reason": "Workflow completed"})
+                return status
+            if state.current_step == "done":
+                raise ValueError("completed pointer has a nonterminal handoff")
+            if baton.to_owner is HandoffOwner.USER:
+                status.update(
+                    {
+                        "State": "Waiting for user",
+                        "Reason": f"{baton.intent.value}; no current HumanTask is available",
+                        "Next": f"cafe task ls --issue {shlex.quote(issue_name)}",
+                    }
+                )
+                return status
+
+            # Ignore notification/callback events, and do not let an old pause
+            # override a subsequent start, transition, or completed human task.
+            boundaries = {
+                "workflow_paused",
+                "workflow_interruption",
+                "workflow_blocked",
+                "step_started",
+                "step_completed",
+                "single_step_completed",
+                "human_task_completed",
+                "transition",
+                "workflow_completed",
+            }
+            latest = next(
+                (event for event in reversed(state.events) if event.event_type in boundaries), None
+            )
+            status.update(
+                {
+                    "State": "Awaiting agent",
+                    "Reason": baton.intent.value,
+                    "Next": f"cafe show {shlex.quote(step)} output",
+                }
+            )
+            if latest and latest.step == step:
+                if latest.event_type in {
+                    "workflow_paused",
+                    "workflow_interruption",
+                    "workflow_blocked",
+                }:
+                    status.update(
+                        {
+                            "State": "Paused",
+                            "Reason": str(
+                                latest.data.get("reason")
+                                or latest.data.get("status_code")
+                                or latest.event_type
+                            ),
+                        }
+                    )
+                elif latest.event_type == "step_started":
+                    status["State"] = "Agent step in progress"
+            return status
+        except (OSError, ValueError, TypeError, KeyError, AttributeError, BatonRejected):
+            # Do not expose raw parser text or manufacture a task/recovery choice.
+            status["State"] = "Unknown"
+            status["Reason"] = f"Missing, invalid, or conflicting workflow records: {source}"
+            status["Next"] = "Inspect the recorded state before continuing; no action was taken."
+            return status
 
     def load_phase_status(self, issue_name: str, phase_name: str) -> Optional[Dict[str, Any]]:
         """Load phase status from status.json or synthesize it from workflow state.
@@ -104,7 +268,7 @@ class SummaryService:
             try:
                 with open(context_file, "r") as f:
                     context_data = json.load(f)
-                    # Extract fields needed for summary display including token usage
+                    # Extract fields needed for status display including token usage
                     iteration_info = {
                         "iteration": context_data.get("iteration"),
                         "timestamp": context_data.get("timestamp"),

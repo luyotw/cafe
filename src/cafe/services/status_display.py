@@ -1,4 +1,4 @@
-"""Display formatter for cafe summary timeline."""
+"""Display formatter for cafe status timeline."""
 
 from typing import Any, List, Mapping, Optional
 
@@ -25,7 +25,7 @@ except ImportError:
 console = Console() if RICH_AVAILABLE else None
 
 
-class SummaryDisplay:
+class StatusDisplay:
     """Formatter for rendering workflow timeline."""
 
     # Status symbols and colors
@@ -53,6 +53,14 @@ class SummaryDisplay:
         if count is None or count == 0:
             return "--"
         return f"{count:,}"
+
+    def format_current_state(self, status: Mapping[str, str]) -> str:
+        """Keep the actionable state separate from historical timing/usage tables."""
+        return "Current workflow\n" + "\n".join(
+            f"{key}: {status[key]}"
+            for key in ("Issue", "Workflow", "State", "Step", "Owner", "Reason", "Task", "Next")
+            if key in status
+        )
 
     def format_context_packets(self, packets: List[Mapping[str, Any]]) -> str:
         """Render the independent, narrow Context Packets read model."""
@@ -204,7 +212,7 @@ class SummaryDisplay:
 
         # Create table
         table = Table(
-            title="📋 CAFE Workflow Summary",
+            title="📋 CAFE Workflow Status",
             show_header=True,
             header_style="bold cyan"
         )
@@ -265,7 +273,7 @@ class SummaryDisplay:
         # Print table
         console.print(table)
 
-    def render_model_summary_table(self, entries: List[TimelineEntry]) -> None:
+    def render_model_status_table(self, entries: List[TimelineEntry]) -> None:
         """Render token usage aggregated by phase, CLI, and model.
 
         Args:
@@ -277,8 +285,8 @@ class SummaryDisplay:
             return
 
         if not RICH_AVAILABLE:
-            # Fallback - print simple text summary
-            print("\n📊 Model Token Usage Summary")
+            # Fallback - print simple text status
+            print("\n📊 Model Token Usage Status")
             print("=" * 50)
 
             # Print simple text table
@@ -297,9 +305,9 @@ class SummaryDisplay:
             print()
             return
 
-        # Create summary table
+        # Create status table
         table = Table(
-            title="📊 Model Token Usage Summary",
+            title="📊 Model Token Usage Status",
             show_header=True,
             header_style="bold cyan"
         )
@@ -331,7 +339,7 @@ class SummaryDisplay:
                 f"${stats['cost_usd']:.4f}" if stats['cost_usd'] > 0 else "--",
             )
 
-        # Print summary table
+        # Print status table
         console.print()
         console.print(table)
 

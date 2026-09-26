@@ -1,4 +1,4 @@
-"""Timeline building and filtering logic for cafe summary."""
+"""Timeline building and filtering logic for cafe status."""
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone

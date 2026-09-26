@@ -1,16 +1,16 @@
-"""Unit tests for summary display formatter."""
+"""Unit tests for status display formatter."""
 
 import pytest
 from datetime import datetime, timezone
 
 from cafe.core.types import PhaseStatus
 from cafe.services.timeline_builder import TimelineEntry
-from cafe.services.summary_display import SummaryDisplay
+from cafe.services.status_display import StatusDisplay
 
 
 def test_context_packet_status_uses_the_shared_sanitized_diagnostic() -> None:
     """UT-006: status and workflow context expose the same fallback detail."""
-    rendered = SummaryDisplay().format_context_packets(
+    rendered = StatusDisplay().format_context_packets(
         [
             {
                 "consumer": "develop",
@@ -30,7 +30,7 @@ def test_context_packet_status_uses_the_shared_sanitized_diagnostic() -> None:
 
 
 def test_context_packet_status_omits_untrusted_diagnostic_detail() -> None:
-    assert SummaryDisplay().format_context_packets(
+    assert StatusDisplay().format_context_packets(
         [{"detail": "raw secret from an agent"}]
     ) == ""
 
@@ -40,7 +40,7 @@ class TestFormatPhaseEntry:
 
     def test_format_phase_entry_completed(self):
         """Test formatting completed phase entry."""
-        display = SummaryDisplay()
+        display = StatusDisplay()
         entry = TimelineEntry(
             entry_type="phase",
             name="Spec",
@@ -54,7 +54,7 @@ class TestFormatPhaseEntry:
 
     def test_format_phase_entry_in_progress(self):
         """Test formatting in_progress phase entry."""
-        display = SummaryDisplay()
+        display = StatusDisplay()
         entry = TimelineEntry(
             entry_type="phase",
             name="Plan",
@@ -67,7 +67,7 @@ class TestFormatPhaseEntry:
 
     def test_format_phase_entry_failed(self):
         """Test formatting failed phase entry."""
-        display = SummaryDisplay()
+        display = StatusDisplay()
         entry = TimelineEntry(
             entry_type="phase",
             name="Develop",
@@ -84,7 +84,7 @@ class TestFormatIterationEntry:
 
     def test_format_iteration_entry_completed(self):
         """Test formatting completed iteration entry."""
-        display = SummaryDisplay()
+        display = StatusDisplay()
         entry = TimelineEntry(
             entry_type="iteration",
             name="Iteration 1",
@@ -99,7 +99,7 @@ class TestFormatIterationEntry:
 
     def test_format_iteration_entry_in_progress(self):
         """Test formatting in_progress iteration entry."""
-        display = SummaryDisplay()
+        display = StatusDisplay()
         entry = TimelineEntry(
             entry_type="iteration",
             name="Iteration 2",
@@ -117,13 +117,13 @@ class TestApplyStatusStyling:
 
     def test_apply_status_styling_completed(self):
         """Test status styling for completed items."""
-        display = SummaryDisplay()
+        display = StatusDisplay()
         result = display.apply_status_styling("Test", PhaseStatus.COMPLETED)
         assert isinstance(result, str)
 
     def test_apply_status_styling_in_progress(self):
         """Test status styling for in_progress items."""
-        display = SummaryDisplay()
+        display = StatusDisplay()
         result = display.apply_status_styling("Test", PhaseStatus.IN_PROGRESS)
         assert isinstance(result, str)
         # Check for either rich or fallback styling
@@ -131,7 +131,7 @@ class TestApplyStatusStyling:
 
     def test_apply_status_styling_failed(self):
         """Test status styling for failed items."""
-        display = SummaryDisplay()
+        display = StatusDisplay()
         result = display.apply_status_styling("Test", PhaseStatus.FAILED)
         assert isinstance(result, str)
 
@@ -141,13 +141,13 @@ class TestRenderVerticalTimeline:
 
     def test_render_vertical_timeline_empty(self):
         """Test rendering empty timeline."""
-        display = SummaryDisplay()
+        display = StatusDisplay()
         result = display.render_vertical_timeline([])
         assert isinstance(result, str)
 
     def test_render_vertical_timeline_single_entry(self):
         """Test rendering single entry timeline."""
-        display = SummaryDisplay()
+        display = StatusDisplay()
         entry = TimelineEntry(
             entry_type="phase",
             name="Spec",
@@ -161,7 +161,7 @@ class TestRenderVerticalTimeline:
 
     def test_render_vertical_timeline_multiple_entries(self):
         """Test rendering multiple entries in chronological order."""
-        display = SummaryDisplay()
+        display = StatusDisplay()
         entries = [
             TimelineEntry(
                 entry_type="phase",
@@ -189,13 +189,13 @@ class TestRenderTable:
 
     def test_render_table_with_empty_entries(self):
         """Test rendering table with empty entries."""
-        display = SummaryDisplay()
+        display = StatusDisplay()
         # Empty list should not crash, should display message or empty table
         display.render_table([])  # Should not raise exception
 
     def test_render_table_with_single_entry(self):
         """Test rendering table with single entry."""
-        display = SummaryDisplay()
+        display = StatusDisplay()
         entry = TimelineEntry(
             entry_type="iteration",
             name="Iteration 1",
@@ -211,7 +211,7 @@ class TestRenderTable:
 
     def test_render_table_with_multiple_entries(self):
         """Test rendering table with multiple entries."""
-        display = SummaryDisplay()
+        display = StatusDisplay()
         entries = [
             TimelineEntry(
                 entry_type="iteration",
@@ -239,7 +239,7 @@ class TestRenderTable:
 
     def test_render_table_with_missing_end_time(self):
         """Test rendering entry with missing end_time (in-progress iteration)."""
-        display = SummaryDisplay()
+        display = StatusDisplay()
         entry = TimelineEntry(
             entry_type="iteration",
             name="Iteration 1",
@@ -255,7 +255,7 @@ class TestRenderTable:
 
     def test_render_table_with_multiple_phases(self):
         """Test rendering table with multiple phases."""
-        display = SummaryDisplay()
+        display = StatusDisplay()
         entries = [
             TimelineEntry(
                 entry_type="iteration",
@@ -287,7 +287,7 @@ class TestRenderTableWithTokenUsage:
 
     def test_render_table_with_token_usage(self):
         """Test that render_table() displays token usage columns"""
-        display = SummaryDisplay()
+        display = StatusDisplay()
         entry = TimelineEntry(
             entry_type="iteration",
             name="Iteration 1",
@@ -308,7 +308,7 @@ class TestRenderTableWithTokenUsage:
 
     def test_render_table_with_missing_token_usage(self):
         """Test that render_table() handles missing token usage fields"""
-        display = SummaryDisplay()
+        display = StatusDisplay()
         entry = TimelineEntry(
             entry_type="iteration",
             name="Iteration 1",
@@ -324,7 +324,7 @@ class TestRenderTableWithTokenUsage:
 
     def test_render_table_with_mixed_token_usage(self):
         """Test rendering table with some entries having token usage and some not"""
-        display = SummaryDisplay()
+        display = StatusDisplay()
         entries = [
             TimelineEntry(
                 entry_type="iteration",
@@ -362,36 +362,36 @@ class TestFormatTokenCount:
 
     def test_format_token_count_with_commas(self):
         """Test that format_token_count() adds comma separators"""
-        display = SummaryDisplay()
+        display = StatusDisplay()
         result = display.format_token_count(109260)
         assert result == "109,260"
 
     def test_format_token_count_small_number(self):
         """Test formatting small token count without commas"""
-        display = SummaryDisplay()
+        display = StatusDisplay()
         result = display.format_token_count(1607)
         assert result == "1,607"
 
     def test_format_token_count_zero(self):
         """Test that zero is displayed as '--'"""
-        display = SummaryDisplay()
+        display = StatusDisplay()
         result = display.format_token_count(0)
         assert result == "--"
 
     def test_format_token_count_none(self):
         """Test that None is displayed as '--'"""
-        display = SummaryDisplay()
+        display = StatusDisplay()
         result = display.format_token_count(None)
         assert result == "--"
 
 
-class TestRenderModelSummaryTable:
-    """Test render_model_summary_table() method"""
+class TestRenderModelStatusTable:
+    """Test render_model_status_table() method"""
 
-    def test_render_model_summary_table_with_single_model(self, capsys, monkeypatch):
-        """Test rendering aggregated summary with single model"""
-        monkeypatch.setattr("cafe.services.summary_display.RICH_AVAILABLE", False)
-        display = SummaryDisplay()
+    def test_render_model_status_table_with_single_model(self, capsys, monkeypatch):
+        """Test rendering aggregated status with single model"""
+        monkeypatch.setattr("cafe.services.status_display.RICH_AVAILABLE", False)
+        display = StatusDisplay()
         entries = [
             TimelineEntry(
                 entry_type="iteration",
@@ -411,16 +411,16 @@ class TestRenderModelSummaryTable:
                 reasoning_output_tokens=654,
             )
         ]
-        display.render_model_summary_table(entries)
+        display.render_model_status_table(entries)
         output = capsys.readouterr().out
         assert "Cache Write" in output
         assert "Reasoning" in output
         assert "321" in output
         assert "654" in output
 
-    def test_render_model_summary_table_with_multiple_models(self):
+    def test_render_model_status_table_with_multiple_models(self):
         """Test aggregating statistics across multiple models"""
-        display = SummaryDisplay()
+        display = StatusDisplay()
         entries = [
             TimelineEntry(
                 entry_type="iteration",
@@ -452,11 +452,11 @@ class TestRenderModelSummaryTable:
             ),
         ]
         # Should aggregate and display both models
-        display.render_model_summary_table(entries)
+        display.render_model_status_table(entries)
 
-    def test_render_model_summary_table_aggregates_same_model(self):
+    def test_render_model_status_table_aggregates_same_model(self):
         """Test aggregating multiple iterations with same model"""
-        display = SummaryDisplay()
+        display = StatusDisplay()
         entries = [
             TimelineEntry(
                 entry_type="iteration",
@@ -488,14 +488,14 @@ class TestRenderModelSummaryTable:
             ),
         ]
         # Should aggregate: 150000 input, 1500 output, 75000 cache_read
-        display.render_model_summary_table(entries)
+        display.render_model_status_table(entries)
 
-    def test_render_model_summary_table_aggregates_by_phase_cli_and_model(
+    def test_render_model_status_table_aggregates_by_phase_cli_and_model(
         self, capsys, monkeypatch
     ):
         """Keep phases separate and split a phase when CLI or model differs."""
-        monkeypatch.setattr("cafe.services.summary_display.RICH_AVAILABLE", False)
-        display = SummaryDisplay()
+        monkeypatch.setattr("cafe.services.status_display.RICH_AVAILABLE", False)
+        display = StatusDisplay()
         entries = [
             TimelineEntry(
                 entry_type="iteration",
@@ -559,7 +559,7 @@ class TestRenderModelSummaryTable:
             ),
         ]
 
-        display.render_model_summary_table(entries)
+        display.render_model_status_table(entries)
 
         output = capsys.readouterr().out
         assert "spec - codex - gpt-test" in output
@@ -573,15 +573,15 @@ class TestRenderModelSummaryTable:
         assert "plan - codex - gpt-test" in output
         assert "  Input Tokens:  800" in output
 
-    def test_render_model_summary_table_empty_entries(self):
+    def test_render_model_status_table_empty_entries(self):
         """Test rendering with empty entries list"""
-        display = SummaryDisplay()
+        display = StatusDisplay()
         # Should not crash with empty list
-        display.render_model_summary_table([])
+        display.render_model_status_table([])
 
-    def test_render_model_summary_table_handles_missing_token_data(self):
+    def test_render_model_status_table_handles_missing_token_data(self):
         """Test handling entries without token usage data"""
-        display = SummaryDisplay()
+        display = StatusDisplay()
         entries = [
             TimelineEntry(
                 entry_type="iteration",
@@ -595,11 +595,11 @@ class TestRenderModelSummaryTable:
             )
         ]
         # Should handle gracefully
-        display.render_model_summary_table(entries)
+        display.render_model_status_table(entries)
 
-    def test_render_model_summary_table_aggregates_costs(self):
+    def test_render_model_status_table_aggregates_costs(self):
         """Test that costs are properly aggregated across iterations"""
-        display = SummaryDisplay()
+        display = StatusDisplay()
         entries = [
             TimelineEntry(
                 entry_type="iteration",
@@ -633,4 +633,4 @@ class TestRenderModelSummaryTable:
             ),
         ]
         # Should aggregate costs: 0.10 + 0.05 = 0.15
-        display.render_model_summary_table(entries)
+        display.render_model_status_table(entries)

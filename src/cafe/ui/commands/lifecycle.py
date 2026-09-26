@@ -2042,9 +2042,9 @@ def reset(
         if phase is None:
             from datetime import datetime
 
-            from cafe.services.summary_service import SummaryService
+            from cafe.services.status_service import StatusService
 
-            service = SummaryService()
+            service = StatusService()
             latest_phase = None
             latest_time = None
 

@@ -353,6 +353,13 @@ credential. Slack delivery never replaces `cafe task inspect` or
 
 ### Inspect and recover
 
+Run `cafe status` in the issue worktree for the current workflow status followed by
+the existing timeline and usage tables. A pending HumanTask includes its exact
+`cafe task inspect <id>` command; a paused workflow includes its recorded reason,
+and a completed workflow is explicitly labeled. Missing or conflicting records
+are reported as unknown rather than guessed. Status inspection does not resume
+work, complete tasks, or repair records.
+
 Ask the driver for the information or recovery outcome you need:
 
 ```text

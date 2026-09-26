@@ -816,7 +816,6 @@ remove_issue = issues_commands.remove_issue
 make = workflow_commands.make
 show = workflow_commands.show
 status = workflow_commands.status
-summary = workflow_commands.summary
 workflow = workflow_commands.workflow
 
 

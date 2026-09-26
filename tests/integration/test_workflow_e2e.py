@@ -431,19 +431,13 @@ steps:
         show_result = runner.invoke(app, ["show", "release"])
     assert show_result.exit_code == 0
 
-    class _SummaryService:
-        def get_current_issue(self) -> str:
-            return "release-journey"
-
-        def load_phase_status(self, _issue: str, _step: str):
-            return None
-
-        def load_iteration_statuses(self, _issue: str, _step: str):
-            return []
-
-    with patch("cafe.services.summary_service.SummaryService", _SummaryService):
+    with patch(
+        "cafe.services.status_service.StatusService.get_current_issue",
+        return_value="release-journey",
+    ):
         status_result = runner.invoke(app, ["status"])
-    assert status_result.exit_code == 0
+    assert status_result.exit_code == 0, status_result.output
+    assert "State: Completed" in status_result.output
 
     feedback_iteration_dir = issue_dir / "release" / "iteration_002"
     assert feedback_iteration_dir.exists()
