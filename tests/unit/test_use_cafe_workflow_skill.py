@@ -3140,6 +3140,16 @@ def test_kickoff_cli_forwards_custom_task_ownership_without_route_authority(tmp_
         ],
     }
     assert "need_clarification" not in proposal["reactive_user_handoffs"]
+    retired_route_flag = subprocess.run(
+        _kickoff_formatter_command(
+            strategic_context, "--need-clarification", "driver_confirmable"
+        ),
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert retired_route_flag.returncode != 0
 
 
 def test_proactive_review_overrides_are_sparse_ordered_and_fail_closed() -> None:

@@ -499,7 +499,6 @@ def _parser() -> argparse.ArgumentParser:
     checkout = parser.add_mutually_exclusive_group(required=True)
     checkout.add_argument("--worktree")
     checkout.add_argument("--current-checkout", action="store_true")
-    parser.add_argument("--need-clarification", default="driver_confirmable")
     parser.add_argument(
         "--task-user-required", action="append", default=[], metavar="PHASE:TASK_ID"
     )

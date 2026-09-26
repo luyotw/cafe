@@ -25,8 +25,9 @@ input`:
   `cafe show <from_step> questions`, and the matching pending record in
   `.cafe/issues/<issue>/human_tasks.json`. Do not guess or reuse an old task ID.
 - [ ] Re-resolve the conversation locale.
-- [ ] Read `playbook_id`, `confirmation_contract`, and
-  `reactive_user_handoffs` from the active `issue.yaml`.
+- [ ] Read `playbook_id` from the active `issue.yaml`; read
+  `confirmation_contract`, `task_contract`, and `reactive_user_handoffs` from
+  the validated issue-scoped `driver/contract.json`.
 - [ ] Verify the exact confirmation-gate partition with
   `cafe playbook confirmation-gates <playbook-id>`.
 - [ ] If the contract or locale is missing, stale, invalid, or omits an

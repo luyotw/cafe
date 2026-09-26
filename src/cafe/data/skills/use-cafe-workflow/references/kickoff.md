@@ -356,8 +356,8 @@ remaining reactive policy in the kickoff:
 - `alignment_checkpoint`: driver-resolvable only when the proposal is clearly
   within confirmed strategy and mandate.
 
-Any other runtime `to_owner=user` baton or `Workflow is waiting for user input`
-output is a hard stop.
+An undeclared or user-owned runtime `to_owner=user` baton or `Workflow is waiting
+for user input` output is a hard stop for autonomous Driver completion.
 
 ### Delivery facts to confirm
 
