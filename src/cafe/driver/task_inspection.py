@@ -45,6 +45,7 @@ def _sources(
     if not isinstance(artifacts, Mapping):
         artifacts = {}
     root = issue_dir.parent.parent.parent.resolve()
+    remaining_bytes = 2 * 1024 * 1024
     repository_sources = (
         evidence.get("repository_sources", []) if isinstance(evidence, Mapping) else []
     )
@@ -58,9 +59,10 @@ def _sources(
                 continue
             if any(candidate.is_symlink() for candidate in (lexical_path, *lexical_path.parents)):
                 continue
-            if path.is_file() and path.stat().st_size <= 256 * 1024:
+            if path.is_file() and path.stat().st_size <= min(256 * 1024, remaining_bytes):
                 sources[f"repo:{raw_path}"] = path.read_text(encoding="utf-8")
-    for name, entry in artifacts.items():
+                remaining_bytes -= path.stat().st_size
+    for name, entry in list(artifacts.items())[:32]:
         if not isinstance(name, str) or not isinstance(entry, Mapping):
             continue
         raw_path = entry.get("path")
@@ -72,8 +74,9 @@ def _sources(
             continue
         if any(candidate.is_symlink() for candidate in (lexical_path, *lexical_path.parents)):
             continue
-        if path.is_file() and path.stat().st_size <= 256 * 1024:
+        if path.is_file() and path.stat().st_size <= min(256 * 1024, remaining_bytes):
             sources[f"artifact:{name}"] = path.read_text(encoding="utf-8")
+            remaining_bytes -= path.stat().st_size
     return sources
 
 

@@ -1412,6 +1412,14 @@ def test_public_callback_path_executes_version_three_lifecycle(tmp_path: Path, m
     driver_dir, state, event = _contract_event_context(callback, tmp_path, [("gemini", "exact")])
     calls = []
     models = []
+    authority_events = []
+    inspect_authority = callback._with_current_task_authority
+
+    def traced_authority(event, **kwargs):
+        authority_events.append(event.get("event_id"))
+        return inspect_authority(event, **kwargs)
+
+    monkeypatch.setattr(callback, "_with_current_task_authority", traced_authority)
 
     class FakeExecutor:
         def __init__(self, config, **_kwargs):
@@ -1440,6 +1448,7 @@ def test_public_callback_path_executes_version_three_lifecycle(tmp_path: Path, m
     )
     assert calls == [None, "gemini-session"]
     assert models == [None, None]
+    assert authority_events == [event["event_id"]]
     assert persisted["events"][event["event_id"]]["status"] == "accepted"
 
 

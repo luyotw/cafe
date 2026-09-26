@@ -8,6 +8,8 @@ import sys
 from copy import deepcopy
 from pathlib import Path
 
+import pytest
+
 from cafe.core.blackboard import (
     ArtifactEntry,
     ArtifactKind,
@@ -29,7 +31,17 @@ from tests.unit.test_driver_contract_application import _proposal
 from tests.unit.test_driver_task_authority import _task_proposal
 
 
-def test_custom_clarification_current_task_has_independent_driver_facts(tmp_path: Path):
+@pytest.mark.parametrize(
+    "driver",
+    [
+        {"mode": "unattended"},
+        {"mode": "attached", "poll_interval_seconds": 30},
+        {"mode": "event-driven", "clis": [{"cli": "codex"}]},
+    ],
+)
+def test_custom_clarification_current_task_has_independent_driver_facts(
+    tmp_path: Path, driver: dict
+):
     issue_dir = tmp_path / ".cafe" / "issues" / "issue500"
     issue_dir.mkdir(parents=True)
     (issue_dir / "issue.yaml").write_text("playbook: standard\n", encoding="utf-8")
@@ -56,6 +68,7 @@ def test_custom_clarification_current_task_has_independent_driver_facts(tmp_path
         status_code="BATON_NEED_CLARIFICATION",
     )
     proposal = _task_proposal()
+    proposal["driver"] = driver
     contract = build_initial_contract(
         proposal=proposal,
         issue_name="issue500",
