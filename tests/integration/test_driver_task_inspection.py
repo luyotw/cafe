@@ -293,7 +293,17 @@ def test_custom_clarification_current_task_has_independent_driver_facts(
 
 
 @pytest.mark.parametrize(
-    "change", ["none", "reconfirm", "source", "last_source", "last_handoff", "large", "oversize"]
+    "change",
+    [
+        "none",
+        "reconfirm",
+        "source",
+        "last_source",
+        "last_handoff",
+        "save_source",
+        "large",
+        "oversize",
+    ],
 )
 def test_known_clarification_uses_structured_completion_and_rejects_stale_id(
     tmp_path: Path, change: str
@@ -433,16 +443,17 @@ def test_known_clarification_uses_structured_completion_and_rejects_stale_id(
         assert assessment.stat().st_size < 256 * 1024
         assert len(json.dumps(response).encode("utf-8")) > 128 * 1024
     env = {**os.environ, "PYTHONPATH": str(Path(__file__).parents[2] / "src")}
-    if change in {"last_source", "last_handoff"}:
+    if change in {"last_source", "last_handoff", "save_source"}:
         instrumentation = tmp_path / "instrumentation"
         instrumentation.mkdir()
         (instrumentation / "sitecustomize.py").write_text(
             "from pathlib import Path\n"
             "import json, os\n"
             "from cafe.core.human_task_records import HumanTaskRecordStore\n"
-            "original = HumanTaskRecordStore.complete\n"
+            "method = '_save' if os.environ['CAFE_TEST_CHANGE'] == 'save_source' else 'complete'\n"
+            "original = getattr(HumanTaskRecordStore, method)\n"
             "def change_source(self, *args, **kwargs):\n"
-            "    if os.environ['CAFE_TEST_CHANGE'] == 'last_source':\n"
+            "    if os.environ['CAFE_TEST_CHANGE'] in {'last_source', 'save_source'}:\n"
             "        Path(os.environ['CAFE_TEST_SOURCE_PATH']).write_text('Confirmed answer: B')\n"
             "    else:\n"
             "        board = Path(os.environ['CAFE_TEST_BOARD_PATH'])\n"
@@ -450,7 +461,7 @@ def test_known_clarification_uses_structured_completion_and_rejects_stale_id(
             "        value['handoff_contract']['status_code'] = 'changed'\n"
             "        board.write_text(json.dumps(value))\n"
             "    return original(self, *args, **kwargs)\n"
-            "HumanTaskRecordStore.complete = change_source\n",
+            "setattr(HumanTaskRecordStore, method, change_source)\n",
             encoding="utf-8",
         )
         env["PYTHONPATH"] = str(instrumentation) + os.pathsep + env["PYTHONPATH"]
@@ -483,7 +494,7 @@ def test_known_clarification_uses_structured_completion_and_rejects_stale_id(
         capture_output=True,
         check=False,
     )
-    if change in {"reconfirm", "source", "last_source", "last_handoff", "oversize"}:
+    if change in {"reconfirm", "source", "last_source", "last_handoff", "save_source", "oversize"}:
         assert completed.returncode != 0
         assert HumanTaskRecordStore(issue_dir).get_task(task.id).status.value == "pending"
         return

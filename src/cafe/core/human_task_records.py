@@ -704,8 +704,6 @@ class HumanTaskRecordStore:
             wait_state = envelope.wait_states[task.id]
             if wait_state.released_at is not None:
                 raise HumanTaskCorrelationError(f"task {task.id} has no active wait state")
-            if precondition is not None:
-                precondition()
             now = _now_iso()
             result = TaskResult(
                 id=str(uuid4()),
@@ -723,7 +721,7 @@ class HumanTaskRecordStore:
             self._append_event(
                 envelope, "completed", task_id=task.id, context={"result_id": result.id}
             )
-            self._save(envelope)
+            self._save(envelope, precondition=precondition)
             return result
 
     def record_rejection(self, *, workflow_id: str, task_id: str, reason: str) -> None:
@@ -848,9 +846,12 @@ class HumanTaskRecordStore:
             )
         )
 
-    def _save(self, envelope: _Envelope) -> None:
+    def _save(self, envelope: _Envelope, *, precondition: Callable[[], None] | None = None) -> None:
         envelope.validate()
-        atomic_write_bytes(self.file_path, canonical_json(envelope.to_dict()))
+        content = canonical_json(envelope.to_dict())
+        if precondition is not None:
+            precondition()
+        atomic_write_bytes(self.file_path, content)
 
 
 def _records_by_task_id(data: Mapping[str, Any], field_name: str, parser: Any) -> dict[str, Any]:
