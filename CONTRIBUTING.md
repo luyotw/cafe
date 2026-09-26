@@ -15,6 +15,9 @@ You can contribute to this project in several ways:
 1.  **Fork & Clone**
     *   Fork this repository.
     *   Clone your fork to your local machine: `git clone https://github.com/YOUR_USERNAME/cafe.git`
+    *   Before running a GitHub workflow, configure Git push authentication for
+        that remote using the [HTTPS or SSH setup guidance](INSTALL.md#github-authentication-before-a-workflow).
+        GitHub CLI login alone does not guarantee that Git can push the clone.
 
 2.  **Create a Virtual Environment and Install Dependencies**
     ```bash
