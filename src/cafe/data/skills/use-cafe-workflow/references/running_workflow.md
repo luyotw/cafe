@@ -185,8 +185,8 @@ The callback receives only an asynchronous durable-event notice. It must
 re-check `cafe status`/`cafe show`; a notice can be stale. It may diagnose and
 perform actions already authorized by the kickoff. It cannot wait for, collect,
 infer, or choose a user answer for a mandatory, `user_required`, permission, or
-capability task, nor grant permissions or capabilities. A `need_clarification`
-task whose confirmed reactive policy is `driver_confirmable` may be answered
+capability task, nor grant permissions or capabilities. A task whose confirmed
+phase and task ID are declared `driver_confirmable` may be answered
 only when the complete answer stays within the confirmed Delivery Contract,
 its scope, explicit constraints and existing authority, and triggers no deviation.
 Contract changes, new permission or external-effect authority, mandatory
@@ -214,9 +214,9 @@ receive the user's explicit answer. The unique active declared correction
 outcome exception permits the current Driver, including an event-driven
 callback, to submit only that eligible outcome after complete review and one
 `cafe chat` consensus exchange; it never permits confirmation or another
-user-owned decision. A `need_clarification` task whose confirmed reactive
-policy is `driver_confirmable` may be completed by any Driver, including an
-event-driven callback, only within the confirmed Delivery Contract and existing
+user-owned decision. A task whose current phase and task ID are declared
+`driver_confirmable` may be completed by any Driver, including an event-driven
+callback, only within the confirmed Delivery Contract and existing
 authority. Any other `driver_confirmable` task may likewise be completed after
 the Driver verifies its confirmed contract and task-specific evidence. These
 Driver-owned cases use the same durable task flow:
@@ -227,8 +227,11 @@ the current conversation, answer the user's immediate question briefly and
 append the compact summary required by `handoffs_and_alignment.md`. Do not
 repeat it when the user already has the same task and options unless they ask.
 
-1. Inspect the exact pending task with `cafe task inspect <task-id>` and read
-   its declared input schema. Never reuse a stale task ID.
+1. Inspect the exact pending task with `cafe task inspect <task-id> --json`, then
+   run `python3 <skill-dir>/scripts/inspect_task_authority.py --issue-dir
+   .cafe/issues/<issue> --task-id <task-id> --json`. Read route/status, task
+   owner, evidence reason and declared input schema separately. Never reuse a
+   stale task ID.
 2. Classify the task before serializing its result. The Driver may serialize a
    correction result only for the unique active declared correction outcome that
    requires feedback, is marked `correction: true`, and routes to a

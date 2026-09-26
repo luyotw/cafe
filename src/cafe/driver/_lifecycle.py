@@ -164,7 +164,7 @@ def update_driver(
 def adopt_legacy(
     *, issue_dir: Path, issue_name: str, workflow_id: str
 ) -> tuple[bool, int | None, str | None, str]:
-    """Require reconfirmation for legacy evidence that cannot express the v5 contract."""
+    """Require reconfirmation for legacy evidence that cannot express current authority."""
     with contract_lock(issue_dir):
         try:
             current, digest = load_contract(
@@ -177,5 +177,5 @@ def adopt_legacy(
             return False, None, None, "reconfirmation_required"
         # Legacy proposals include fields whose removal or reinterpretation
         # would change the confirmed authority.  Only a newly rendered and
-        # explicitly reconfirmed v5 proposal may replace them.
+        # explicitly reconfirmed current proposal may replace them.
         return False, None, None, "reconfirmation_required"

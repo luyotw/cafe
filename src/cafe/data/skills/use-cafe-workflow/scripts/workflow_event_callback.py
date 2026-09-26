@@ -29,8 +29,10 @@ from cafe.core.human_task_notifications import (
 )
 from cafe.core.session import SessionStore
 from cafe.core.session_continuation import SessionContinuation
+from cafe.core.task_inbox import TaskInboxError, TaskInboxService
 from cafe.core.types import AgentCLI, AgentConfig, SessionData
 from cafe.core.workflow_runtime import resolve_human_task_notification_repository_root
+from cafe.driver.task_inspection import inspect_task_authority
 
 try:
     import fcntl
@@ -1143,6 +1145,9 @@ def _bounded_event(event: dict[str, Any]) -> dict[str, Any]:
         "hop",
         "reason",
         "task_id",
+        "route_status",
+        "resolution_owner",
+        "evidence_reason",
     }
     return {key: value for key, value in event.items() if key in allowed}
 
@@ -1497,6 +1502,9 @@ def _callback_prompt(event: dict[str, Any], *, repository_root: Path) -> str:
             "Read the builtin use-cafe-workflow skill and follow its current confirmed contract.",
             "First inspect current durable state with cafe status/show before acting; "
             "the event may be stale.",
+            "For the current task, run cafe task inspect <task-id> --json, then "
+            "inspect_task_authority.py --issue-dir <issue-dir> --task-id <task-id> --json. "
+            "Treat route_status, resolution_owner, and evidence_reason independently.",
             "Do not answer mandatory, user-required, permission, or capability tasks; only "
             "a user-facing driver turn may relay an explicit user-owned answer.",
             "You may complete a declared driver_confirmable task, including "
@@ -1510,6 +1518,25 @@ def _callback_prompt(event: dict[str, Any], *, repository_root: Path) -> str:
             f"Wake notice: {notice}",
         )
     )
+
+
+def _with_current_task_authority(
+    event: dict[str, Any], *, issue_dir: Path, repository_root: Path
+) -> dict[str, Any]:
+    task_id = event.get("task_id")
+    if not isinstance(task_id, str) or not task_id:
+        return event
+    try:
+        detail = TaskInboxService(repository_root / ".cafe").inspect_read_only(task_id)
+        if detail.issue != issue_dir.name or detail.status != "pending":
+            return event
+        facts = inspect_task_authority(issue_dir, task_id)
+    except (TaskInboxError, OSError, ValueError):
+        return event
+    return {
+        **event,
+        **{key: facts[key] for key in ("route_status", "resolution_owner", "evidence_reason")},
+    }
 
 
 def _queue_host_callback(
@@ -1818,6 +1845,9 @@ def run_callback(event: dict[str, Any], *, repository_root: Path) -> None:
         if config["schema_version"] in {3, _CONTRACT_CALLBACK_CONFIG_SCHEMA}:
             if not _event_is_durable(blackboard, event):
                 raise ValueError("workflow event callback is not durable")
+            event = _with_current_task_authority(
+                event, issue_dir=issue_dir, repository_root=repository_root
+            )
             state = _load_or_initialize_dispatch_state(
                 driver_dir,
                 workflow_id=workflow_id,
@@ -1831,6 +1861,9 @@ def run_callback(event: dict[str, Any], *, repository_root: Path) -> None:
                 repository_root=repository_root,
             )
             return
+        event = _with_current_task_authority(
+            event, issue_dir=issue_dir, repository_root=repository_root
+        )
         cli = AgentCLI(config["cli"])
         store = EventDriverSessionStore(
             driver_dir,

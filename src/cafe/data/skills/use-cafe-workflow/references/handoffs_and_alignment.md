@@ -47,7 +47,8 @@ Then route by intent:
 - `confirm_output` from a `driver_confirmable` step: verify the output and
   required input artifacts are complete, in-mandate, and consistent with
   accepted upstream artifacts before confirming. Apply the Delivery comparison below.
-- `need_clarification` with confirmed policy `driver_confirmable`: the Driver
+- a current task whose exact phase and task ID are declared
+  `driver_confirmable`, including `need_clarification`: the Driver
   may answer when the complete response stays within the confirmed Delivery
   Contract's scope, constraints and existing authority, and triggers no
   deviation. Multiple authorized reversible technical choices may be resolved
@@ -61,6 +62,15 @@ Then route by intent:
 - legacy or custom `alignment_checkpoint`: use the classification below; the
   checkpoint is evidence, not proof the user must decide.
 - any other user-owned pause: stop. Unknown handoffs are not driver-confirmable.
+
+After `cafe task inspect <task-id> --json`, run
+`python3 <skill-dir>/scripts/inspect_task_authority.py --issue-dir
+.cafe/issues/<issue> --task-id <task-id> --json`. Its `route_status`,
+`resolution_owner`, and `evidence_reason` are separate facts. Supply a complete
+response and a grounded assessment to the same read-only entry before using
+`cafe task complete <task-id> --result '<json>' --no-resume --json`. A v5
+contract's `reactive_user_handoffs.need_clarification` value alone grants no
+Driver completion authority; reconfirm task ownership when needed.
 
 ## Delivery comparison at an existing output gate
 

@@ -19,7 +19,9 @@ from cafe.core.playbook import (
     mandatory_confirmation_gate_steps,
     resolve_playbook_skills,
 )
+from cafe.core.task_inbox import TaskInboxError, TaskInboxService
 from cafe.driver import DriverEntryRequest, Freshness, evaluate_driver_entry
+from cafe.driver._store import load_contract
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.loader import SkillLoader
 from cafe.skills.selectors import resolve_skill_selector
@@ -141,9 +143,32 @@ def comparison_packet(
     mandatory = set(mandatory_confirmation_gate_steps(model)) | set(policy["mandatory_human_stops"])
     candidates = set(confirmation_gate_steps(model))
     scheduled = boundary["step"] in candidates | mandatory
+    task_declared = boundary["step"] in policy["driver_confirmable"]
+    confirmed, _contract_digest = load_contract(
+        entry.issue_dir, issue_name=entry.issue_name, workflow_id=entry.workflow_id
+    )
+    if confirmed["schema_version"] == 6:
+        task_declared = False
+        if isinstance(boundary["task_id"], str) and boundary["task_id"]:
+            try:
+                detail = TaskInboxService(entry.issue_dir.parent.parent).inspect_read_only(
+                    boundary["task_id"]
+                )
+            except TaskInboxError:
+                pass
+            else:
+                task_declared = (
+                    detail.step == boundary["step"]
+                    and detail.workflow_id == entry.workflow_id
+                    and detail.status == "pending"
+                    and detail.wait.get("released_at") is None
+                    and detail.result is None
+                    and {"phase": detail.step, "task_id": detail.policy_id}
+                    in confirmed["task_contract"]["driver_confirmable"]
+                )
     eligible = (
         scheduled
-        and boundary["step"] in policy["driver_confirmable"]
+        and task_declared
         and boundary["step"] not in mandatory | set(policy["user_required"])
         and boundary["intent"] == "confirm_output"
         and boundary["active"] is True
