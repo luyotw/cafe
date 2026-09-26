@@ -97,6 +97,12 @@ from Slack. Use CAFE's task inbox to find and complete pending work; Slack is a
 discovery aid only and cannot inspect, answer, approve, cancel, or complete a
 task.
 
+Standard plan clarification messages ask the user to answer clarification
+questions. PR local-review messages ask the user to review changes and follow-up
+proposals, then decide whether to request fixes or confirm continuation. The PR
+phase is labeled as preparation and review; the notification does not imply merge
+authorization. Unknown task types retain the generic return-to-CAFE action.
+
 ## Trust and credential boundary
 
 The package-owned `cafe.slack.human_task` capability declares exactly six

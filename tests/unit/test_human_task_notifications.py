@@ -152,6 +152,38 @@ def test_actionable_message_names_the_cafe_issue_without_opaque_identifiers() ->
     assert "cafe task" not in payload
 
 
+@pytest.mark.parametrize(
+    ("step", "task_type", "phase_label", "action_label"),
+    [
+        ("plan", "clarification-answers", "規劃", "回覆釐清問題"),
+        ("pr", "local-review", "PR 準備與審閱", "審閱變更與後續建議，決定修正或確認繼續"),
+        ("custom-stage", "custom-task", "工作流程", "處理 CAFE 工作項目"),
+    ],
+)
+def test_standard_task_actions_and_unknown_fallback_are_readable(
+    step: str, task_type: str, phase_label: str, action_label: str
+) -> None:
+    """Clarification and review prompts describe the human decision without granting merge."""
+    message = build_human_task_message(
+        repository="luyotw/cafe",
+        issue="issue421-acceptance",
+        workflow_id="workflow-one",
+        task_id="task-one",
+        step=step,
+        task_type=task_type,
+    )
+
+    payload = message.to_slack_payload()["text"]
+
+    assert "專案：luyotw/cafe" in payload
+    assert "對話：issue421-acceptance" in payload
+    assert f"目前階段：{phase_label}" in payload
+    assert f"需要你做的事：{action_label}" in payload
+    assert "請回到 CAFE 的「issue421-acceptance」工作項目處理。" in payload
+    for hidden in ("workflow-one", "task-one", task_type, "cafe task", "合併"):
+        assert hidden not in payload
+
+
 def test_actionable_message_bounds_project_controlled_metadata_to_one_safe_line_per_field() -> None:
     """Test List 2: metadata cannot add Slack markup or notification lines."""
     message = build_human_task_message(

@@ -32,10 +32,12 @@ HUMAN_TASK_STEP_LABELS = {
     "plan": "規劃",
     "develop": "開發",
     "review": "審查",
-    "pr": "提交與合併",
+    "pr": "PR 準備與審閱",
 }
 HUMAN_TASK_ACTION_LABELS = {
     "clarification-feedback": "回覆釐清問題",
+    "clarification-answers": "回覆釐清問題",
+    "local-review": "審閱變更與後續建議，決定修正或確認繼續",
     "output-review": "確認結果",
     "permission-answers": "回覆權限相關問題",
     "alignment-decision": "確認方向",
