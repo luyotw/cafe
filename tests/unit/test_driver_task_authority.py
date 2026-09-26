@@ -171,7 +171,9 @@ def test_complete_confirmed_multiselect_answer_is_driver_confirmable():
     assert result["route_status"] == "need_clarification"
 
 
-@pytest.mark.parametrize("change", ["missing", "stale", "mandatory", "permission", "unsupported"])
+@pytest.mark.parametrize(
+    "change", ["missing", "stale", "mandatory", "permission", "capability", "unsupported"]
+)
 def test_incomplete_or_user_owned_response_fails_closed(change):
     task, contract = _task(), _contract()
     response = {"task": "known-answer", "human_task_id": "durable-1", "answers": {"q1": ["A", "B"]}}
@@ -184,6 +186,8 @@ def test_incomplete_or_user_owned_response_fails_closed(change):
         task["provenance"]["trigger"] = "confirm_output"
     elif change == "permission":
         task["provenance"]["trigger"] = "need_permission"
+    elif change == "capability":
+        task["capability_approval"] = {"state": "pending"}
     else:
         response["answers"] = {"q1": ["A"]}
     result = decide_task_authority(

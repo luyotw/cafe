@@ -134,6 +134,16 @@ def test_custom_clarification_current_task_has_independent_driver_facts(
         / "use-cafe-workflow"
         / "scripts"
     )
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).parents[2] / "src")}
+    neutral_inspection = subprocess.run(
+        ["cafe", "task", "inspect", task.id, "--json"],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    assert json.loads(neutral_inspection.stdout)["data"]["task"]["id"] == task.id
     inspected = subprocess.run(
         [
             sys.executable,
