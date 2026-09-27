@@ -133,7 +133,11 @@ class StatusService:
                 status.update(
                     {
                         "State": "Waiting for user",
-                        "Reason": task.trigger.replace("_", " "),
+                        "Reason": (
+                            "checklist validation failed"
+                            if recorded and recorded.status_code == "CHECKLIST_VALIDATION_FAILED"
+                            else task.trigger.replace("_", " ")
+                        ),
                         "Task": task.id,
                         "Next": f"cafe task inspect {shlex.quote(task.id)}",
                     }

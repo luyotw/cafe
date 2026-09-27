@@ -1015,16 +1015,6 @@ class BlackboardWorkflowRuntime:
         runtime: str,
         unchecked_count: int | None,
     ) -> PlaybookRunResult:
-        self.blackboard_store.set_current_step(self.blackboard, current_step)
-        self.blackboard_store.update_handoff_contract(
-            self.blackboard,
-            from_step=current_step,
-            to_owner=HandoffOwner.AGENT,
-            to_step=current_step,
-            intent=HandoffIntent.AWAIT_AGENT,
-            status_code="CHECKLIST_VALIDATION_FAILED",
-            source="workflow.checklist_validation",
-        )
         self.blackboard_store.record_event(
             self.blackboard,
             "checklist_validation_failed",
@@ -1034,15 +1024,10 @@ class BlackboardWorkflowRuntime:
                 "unchecked_count": unchecked_count,
             },
         )
-        return PlaybookRunResult(
-            final_step=current_step,
-            final_status_code="CHECKLIST_VALIDATION_FAILED",
-            completed=False,
-            detail=(
-                f"{unchecked_count} checklist items remain unchecked"
-                if unchecked_count is not None
-                else "completion checklist is missing or unreadable"
-            ),
+        return self._pause_for_agent_execution_interruption(
+            current_step=current_step,
+            reason="checklist_validation_failed",
+            runtime=runtime,
         )
 
     def _reject_persisted_incomplete_completion(
@@ -1054,7 +1039,12 @@ class BlackboardWorkflowRuntime:
         """Reject an unconsumed agent completion recovered after a process exit."""
         if previous_step != contract.from_step or previous_step not in self.steps:
             return None
-        if contract.to_owner == HandoffOwner.AGENT and contract.to_step == previous_step:
+        rejected_completion = contract.status_code == "CHECKLIST_VALIDATION_FAILED"
+        if (
+            contract.to_owner == HandoffOwner.AGENT
+            and contract.to_step == previous_step
+            and not rejected_completion
+        ):
             return None
         if self.steps[previous_step].get("assignee_type", "agent") not in {"agent", "hybrid"}:
             return None
@@ -1071,14 +1061,16 @@ class BlackboardWorkflowRuntime:
                 if isinstance(context, dict) and context.get("agent_invoked") is False:
                     return None
                 break
-        if not completion_requires_checklist(baton_intent=contract.intent.value):
+        if not rejected_completion and not completion_requires_checklist(
+            baton_intent=contract.intent.value
+        ):
             return None
 
         unchecked_count: int | None = None
         if iteration_dir is not None:
             try:
                 result = validate_checklist(iteration_dir / "checklist.md")
-                if result.is_complete:
+                if result.is_complete and not rejected_completion:
                     return None
                 unchecked_count = result.unchecked_count
             except (OSError, UnicodeError):
@@ -1144,13 +1136,21 @@ class BlackboardWorkflowRuntime:
         records = HumanTaskRecordStore(self.issue_dir)
         iteration = self._human_task_iteration(current_step)
         policy, binding = agent_execution_interrupted_human_task(step_name=current_step)
+        status_code = (
+            "CHECKLIST_VALIDATION_FAILED"
+            if reason == "checklist_validation_failed"
+            else "INTERRUPTED"
+        )
+        result_status = (
+            status_code if reason == "checklist_validation_failed" else f"INTERRUPTED:{reason}"
+        )
         self.blackboard_store.update_handoff_contract(
             self.blackboard,
             from_step=current_step,
             to_owner=HandoffOwner.USER,
             to_step="user",
             intent=HandoffIntent.MANUAL_HANDOFF,
-            status_code="INTERRUPTED",
+            status_code=status_code,
             source="workflow.agent_execution_interrupted",
         )
         contract = self.blackboard.handoff_contract
@@ -1188,7 +1188,7 @@ class BlackboardWorkflowRuntime:
             "workflow_paused",
             {
                 "step": current_step,
-                "status_code": "INTERRUPTED",
+                "status_code": status_code,
                 "reason": reason,
                 "runtime": runtime,
                 "task_id": task.id,
@@ -1198,14 +1198,14 @@ class BlackboardWorkflowRuntime:
             "human_task",
             {
                 "step": current_step,
-                "status_code": f"INTERRUPTED:{reason}",
+                "status_code": result_status,
                 "reason": reason,
                 "task_id": task.id,
             },
         )
         return PlaybookRunResult(
             final_step=current_step,
-            final_status_code=f"INTERRUPTED:{reason}",
+            final_status_code=result_status,
             completed=False,
             detail=task.id,
         )
@@ -2246,6 +2246,12 @@ class BlackboardWorkflowRuntime:
                 f"and source='hybrid_portion:{current_step}:{portion_id}'."
             ),
         )
+        if self._execution_reported_checklist_failure(frame):
+            rejection = self._reject_incomplete_agent_completion(
+                current_step=current_step, frame=frame, runtime="hybrid_portion"
+            )
+            if rejection is not None:
+                return rejection
         completion_key = (
             self._normalize_hybrid_completion_key(frame.explicit_status_code)
             if frame.explicit_status_code is not None
@@ -4471,6 +4477,14 @@ class BlackboardWorkflowRuntime:
                         completed=False,
                         detail=si.detail,
                     )
+                # An exhausted executor validation is already a terminal failure;
+                # do not reinterpret its pinned baton as a missing handoff and retry again.
+                if self._execution_reported_checklist_failure(frame):
+                    rejection = self._reject_incomplete_agent_completion(
+                        current_step=current_step, frame=frame, runtime=runtime_label
+                    )
+                    if rejection is not None:
+                        return rejection
                 try:
                     if self._is_baton_driven_step(current_step):
                         contract = self._load_step_handoff_contract(current_step=current_step)
