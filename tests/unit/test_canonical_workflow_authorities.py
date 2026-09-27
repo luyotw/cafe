@@ -83,6 +83,73 @@ def test_ordinary_status_shows_single_source_callback_failure(tmp_path):
     assert "dispatch_state.json" in status["Next"]
 
 
+def test_ordinary_status_reads_failure_without_large_audit_body(tmp_path, monkeypatch):
+    issue_dir = tmp_path / "issues" / "issue"
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("spec")
+    store.log_event(state, "spec", "ordinary", "large detail " * 25000)
+    ordinary_path = store.audit._path(1)
+    (issue_dir / "status_sources.json").write_text(json.dumps({
+        "version": 1,
+        "workflow_id": state.workflow_id,
+        "callback_failure_receipt": "driver/callback_failure_notifications.json",
+    }))
+    (issue_dir / "driver").mkdir()
+    (issue_dir / "driver" / "callback_failure_notifications.json").write_text(json.dumps({
+        "schema_version": 1,
+        "workflow_id": state.workflow_id,
+        "records": {"failure": {
+            "occurred_at": "2026-09-28T00:00:00+00:00",
+            "outcome": "pending",
+            "error_code": "callback_failure",
+        }},
+    }))
+    original = type(ordinary_path).read_text
+
+    def read_text(path, *args, **kwargs):
+        if path == ordinary_path:
+            raise AssertionError("ordinary audit body was hydrated")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(type(ordinary_path), "read_text", read_text)
+    status = StatusService(issues_root=tmp_path / "issues").load_current_state(
+        "issue", ["spec"]
+    )
+    assert status["Reason"] == "callback_failure"
+    assert "dispatch_state.json" in status["Next"]
+
+
+def test_ordinary_status_chooses_latest_failure_independent_of_record_key(tmp_path):
+    issue_dir = tmp_path / "issues" / "issue"
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    (issue_dir / "status_sources.json").write_text(json.dumps({
+        "version": 1,
+        "workflow_id": state.workflow_id,
+        "callback_failure_receipt": "driver/callback_failure_notifications.json",
+    }))
+    (issue_dir / "driver").mkdir()
+    (issue_dir / "driver" / "callback_failure_notifications.json").write_text(json.dumps({
+        "schema_version": 1,
+        "workflow_id": state.workflow_id,
+        "records": {
+            "z_older": {
+                "occurred_at": "2026-09-28T00:00:00+00:00",
+                "outcome": "disabled",
+                "error_code": "older_failure",
+            },
+            "a_newer": {
+                "occurred_at": "2026-09-28T00:01:00+00:00",
+                "outcome": "pending",
+                "error_code": "newer_failure",
+            },
+        },
+    }, sort_keys=True))
+    status = StatusService(issues_root=tmp_path / "issues").load_current_state(
+        "issue", ["spec"]
+    )
+    assert status["Reason"] == "newer_failure"
+
+
 def test_committed_transition_replays_once_after_board_write_interruption(tmp_path, monkeypatch):
     store = BlackboardStore(tmp_path / "issue")
     state = store.load_or_create("spec")
@@ -233,12 +300,14 @@ def test_board_save_cannot_replace_authoritative_receipts(tmp_path):
     ]
 
 
-def test_ordinary_status_shows_pre_dispatch_audit_failure(tmp_path):
+def test_ordinary_status_shows_pre_dispatch_audit_failure(tmp_path, monkeypatch):
     issue_dir = tmp_path / "issues" / "issue"
     store = BlackboardStore(issue_dir)
     state = store.load_or_create("spec")
     service = StatusService(issues_root=tmp_path / "issues")
     before = service.load_current_state("issue", ["spec"])
+    store.log_event(state, "spec", "ordinary", "large detail " * 25000)
+    ordinary_path = store.audit._path(1)
     store.record_event(
         state,
         "workflow_event_callback_dispatch_failed",
@@ -247,6 +316,14 @@ def test_ordinary_status_shows_pre_dispatch_audit_failure(tmp_path):
             "error": "TimeoutError",
         },
     )
+    original = type(ordinary_path).read_text
+
+    def read_text(path, *args, **kwargs):
+        if path == ordinary_path:
+            raise AssertionError("ordinary audit body was hydrated")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(type(ordinary_path), "read_text", read_text)
     status = service.load_current_state("issue", ["spec"])
     assert status["State"] != before["State"]
     assert "audit_events" in status["Next"]

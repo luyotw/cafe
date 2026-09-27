@@ -3,6 +3,7 @@
 import json
 import re
 import shlex
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -57,19 +58,15 @@ class StatusService:
     @staticmethod
     def _with_callback_failure(issue_dir: Path, workflow_id: str,
                                status: Dict[str, str],
-                               events: List[EventEntry]) -> Dict[str, str]:
+                               audit: AuditEventStore) -> Dict[str, str]:
         def from_audit() -> Dict[str, str]:
-            failure = next(
-                (
-                    event for event in reversed(events)
-                    if event.event_type == "workflow_event_callback_dispatch_failed"
-                ),
-                None,
+            failure = audit.latest_record(
+                workflow_id, {"workflow_event_callback_dispatch_failed"}
             )
             if failure is not None:
                 status.update({
                     "State": "Callback delivery needs inspection",
-                    "Reason": str(failure.data.get("error", "callback dispatch failed")),
+                    "Reason": str(failure["data"].get("error", "callback dispatch failed")),
                     "Next": (
                         "Inspect audit_events and driver/dispatch_state.json; "
                         "verify delivery before manual recovery."
@@ -101,9 +98,18 @@ class StatusService:
         records = raw["records"]
         if not records:
             return from_audit()
-        latest = next(reversed(records.values()))
-        if not isinstance(latest, dict) or not isinstance(latest.get("error_code"), str):
-            raise ValueError("callback failure record is invalid")
+        def occurred_at(record: object) -> datetime:
+            if not isinstance(record, dict) or not isinstance(record.get("error_code"), str):
+                raise ValueError("callback failure record is invalid")
+            value = record.get("occurred_at")
+            if not isinstance(value, str):
+                raise ValueError("callback failure time is invalid")
+            instant = datetime.fromisoformat(value)
+            if instant.tzinfo is None:
+                raise ValueError("callback failure time lacks timezone")
+            return instant.astimezone(timezone.utc)
+
+        latest = max(records.values(), key=occurred_at)
         status.update({
             "State": "Callback delivery needs inspection",
             "Reason": latest["error_code"],
@@ -127,8 +133,7 @@ class StatusService:
             ):
                 raise ValueError("missing workflow identity")
             state = BlackboardState.from_dict(raw, initial_step=raw["current_step"])
-            state.events = [EventEntry.from_dict(record) for record in
-                            AuditEventStore(issue_dir).iter_records(state.workflow_id)]
+            audit = AuditEventStore(issue_dir)
             status["Workflow"] = state.workflow_id
             source = issue_dir / "next_step.txt"
             baton = HandoffContract.from_dict_with_current_step(
@@ -174,15 +179,15 @@ class StatusService:
                 ]
                 if task.iteration != max(iterations, default=1):
                     raise ValueError("task belongs to a different iteration")
-                materialized = next(
-                    (
-                        event
-                        for event in reversed(state.events)
-                        if event.event_type
-                        in {"human_task_materialized", "agent_execution_task_materialized"}
-                        and event.step == step
-                    ),
-                    None,
+                materialized_record = audit.latest_record(
+                    state.workflow_id,
+                    {"human_task_materialized", "agent_execution_task_materialized"},
+                    step=step,
+                )
+                materialized = (
+                    EventEntry.from_dict(materialized_record)
+                    if materialized_record is not None
+                    else None
                 )
                 # Runtime may reuse a pending task after refreshing the handoff.
                 # Its recorded materialization also supports legacy task keys.
@@ -212,7 +217,7 @@ class StatusService:
                     }
                 )
                 return self._with_callback_failure(
-                    issue_dir, state.workflow_id, status, state.events
+                    issue_dir, state.workflow_id, status, audit
                 )
             if any(task.status is HumanTaskStatus.CONFIGURATION_ERROR for task in tasks):
                 raise ValueError("task configuration error")
@@ -223,7 +228,7 @@ class StatusService:
                     raise ValueError("completion and current step disagree")
                 status.update({"State": "Completed", "Reason": "Workflow completed"})
                 return self._with_callback_failure(
-                    issue_dir, state.workflow_id, status, state.events
+                    issue_dir, state.workflow_id, status, audit
                 )
             if state.current_step == "done":
                 raise ValueError("completed pointer has a nonterminal handoff")
@@ -236,7 +241,7 @@ class StatusService:
                     }
                 )
                 return self._with_callback_failure(
-                    issue_dir, state.workflow_id, status, state.events
+                    issue_dir, state.workflow_id, status, audit
                 )
 
             # Ignore notification/callback events, and do not let an old pause
@@ -252,9 +257,8 @@ class StatusService:
                 "transition",
                 "workflow_completed",
             }
-            latest = next(
-                (event for event in reversed(state.events) if event.event_type in boundaries), None
-            )
+            latest_record = audit.latest_record(state.workflow_id, boundaries)
+            latest = EventEntry.from_dict(latest_record) if latest_record is not None else None
             status.update(
                 {
                     "State": "Awaiting agent",
@@ -280,7 +284,7 @@ class StatusService:
                     )
                 elif latest.event_type == "step_started":
                     status["State"] = "Agent step in progress"
-            return self._with_callback_failure(issue_dir, state.workflow_id, status, state.events)
+            return self._with_callback_failure(issue_dir, state.workflow_id, status, audit)
         except (OSError, ValueError, TypeError, KeyError, AttributeError, BatonRejected):
             # Do not expose raw parser text or manufacture a task/recovery choice.
             status["State"] = "Unknown"

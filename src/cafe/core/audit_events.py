@@ -127,6 +127,30 @@ class AuditEventStore:
             if record is not None:
                 yield record
 
+    def latest_record(
+        self, workflow_id: str, event_types: set[str], *, step: str | None = None
+    ) -> dict[str, Any] | None:
+        """Find the newest relevant event without hydrating unrelated audit bodies."""
+        wanted = {kind.encode("ascii") for kind in event_types}
+        for sequence in range(self.high_water(workflow_id), 0, -1):
+            path = self._path(sequence)
+            if path.is_symlink():
+                raise ValueError("audit event is symlinked")
+            if not path.exists():
+                continue
+            if not path.is_file():
+                raise ValueError("audit event is unsafe")
+            with path.open("rb") as handle:
+                prefix = handle.read(4096)
+            match = _EVENT_TYPE_PREFIX.search(prefix)
+            if match is None:
+                raise ValueError("audit event has no bounded type prefix")
+            if match.group(1) in wanted:
+                record = self.read(workflow_id, sequence)
+                if record is not None and (step is None or record["step"] == step):
+                    return record
+        return None
+
     @staticmethod
     def _event_bytes(record: dict[str, Any]) -> bytes:
         return (json.dumps(record, ensure_ascii=False, indent=2) + "\n").encode("utf-8")

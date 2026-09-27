@@ -2183,7 +2183,11 @@ def _write_callback_failure_notifications(
     driver_dir: Path, records: dict[str, dict[str, str]]
 ) -> None:
     """Persist secret-free callback notification outcomes for diagnosis."""
-    bounded_records = dict(list(records.items())[-MAX_FAILURE_NOTIFICATIONS:])
+    # JSON persistence sorts hash keys; retain by occurrence time instead.
+    bounded_records = dict(sorted(
+        records.items(),
+        key=lambda item: datetime.fromisoformat(item[1]["occurred_at"]),
+    )[-MAX_FAILURE_NOTIFICATIONS:])
     payload = {"schema_version": 1, "workflow_id": _prepared_workflow_id(driver_dir.parent),
                "records": bounded_records}
     _atomic_write(

@@ -2218,6 +2218,33 @@ def test_operator_sees_callback_failure_without_slack(tmp_path: Path, monkeypatc
     assert "dispatch_state.json" in status["Next"]
 
 
+def test_callback_failure_retention_keeps_newest_records(tmp_path: Path) -> None:
+    from cafe.services.status_service import StatusService
+
+    callback = _callback_module()
+    driver_dir, state, _event = _contract_event_context(
+        callback, tmp_path, [("codex", "exact")], issue_name="issue456"
+    )
+    records = {
+        f"failure_{number:03d}": {
+            "occurred_at": f"2026-09-28T00:{number // 60:02d}:{number % 60:02d}+00:00",
+            "outcome": "pending",
+            "error_code": f"failure_{number:03d}",
+        }
+        for number in reversed(range(130))
+    }
+    callback._write_callback_failure_notifications(driver_dir, records)
+    persisted = json.loads((driver_dir / "callback_failure_notifications.json").read_text())
+    assert len(persisted["records"]) == callback.MAX_FAILURE_NOTIFICATIONS
+    assert "failure_129" in persisted["records"]
+    assert "failure_000" not in persisted["records"]
+    status = StatusService(issues_root=driver_dir.parent.parent).load_current_state(
+        "issue456", ["spec", "develop"]
+    )
+    assert status["Workflow"] == state["workflow_id"]
+    assert status["Reason"] == "failure_129"
+
+
 def test_interrupted_notification_keeps_failure_visible(tmp_path: Path, monkeypatch) -> None:
     from cafe.services.status_service import StatusService
 
