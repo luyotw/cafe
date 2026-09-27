@@ -10,8 +10,11 @@ from typing import Any, Mapping
 from cafe.core.human_tasks import HumanTaskQuestion
 from cafe.core.questions_schema import parse_questions_xml, validate_questions_xml
 from cafe.core.task_inbox import TaskInboxService
+from cafe.playbooks.loader import PlaybookLoader
+from cafe.skills.loader import SkillLoader
 
 from ._store import load_contract
+from .delivery_comparison import comparison_packet_from_contract
 from .task_authority import decide_task_authority
 
 
@@ -161,6 +164,39 @@ def inspect_task_authority(
         detail.iteration,
         include_current_output=detail.trigger == "confirm_output",
     )
+    trusted_comparison = None
+    if (
+        detail.trigger == "confirm_output"
+        and isinstance(evidence, Mapping)
+        and isinstance(evidence.get("delivery_comparison"), Mapping)
+    ):
+        project_root = issue_dir.parent.parent.parent
+        try:
+            model = PlaybookLoader(project_root=project_root).load_model(board["playbook_id"]).model
+            trusted_comparison = comparison_packet_from_contract(
+                issue_dir=issue_dir,
+                issue_name=detail.issue,
+                workflow_id=detail.workflow_id,
+                contract=contract,
+                contract_sha256=digest,
+                model=model,
+                skill_loader=SkillLoader(project_root=project_root),
+                boundary={
+                    "step": detail.step,
+                    "task_id": detail.id,
+                    "iteration": detail.iteration,
+                    "intent": detail.trigger,
+                    "owner": "user",
+                    "active": True,
+                },
+                artifacts={
+                    key.split(":", 1)[1]: text
+                    for key, text in sources.items()
+                    if key.startswith(("artifact:", "current_output:"))
+                },
+            )
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
     result = decide_task_authority(
         task=task,
         contract=contract,
@@ -169,6 +205,7 @@ def inspect_task_authority(
         evidence=evidence,
         confirmed_sources=sources,
         questions=questions,
+        trusted_comparison=trusted_comparison,
     )
     if (
         handoff.get("from_step") != detail.step

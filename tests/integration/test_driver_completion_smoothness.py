@@ -22,6 +22,7 @@ from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.driver import DriverEntryRequest
 from cafe.driver._schema import build_initial_contract, freshness_semantic_facts
 from cafe.driver._store import write_contract
+from cafe.driver.delivery_comparison import digest as comparison_digest
 from cafe.driver.task_inspection import inspect_task_authority
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.loader import SkillLoader
@@ -31,7 +32,13 @@ from tests.unit.test_driver_task_authority import _task_proposal
 SCRIPTS = Path(__file__).parents[2] / "src/cafe/data/skills/use-cafe-workflow/scripts"
 
 
-def _paused_task(tmp_path: Path, *, confirm: bool = False):
+def _paused_task(
+    tmp_path: Path,
+    *,
+    confirm: bool = False,
+    required_input: bool = False,
+    source_present: bool = False,
+):
     step = "verify" if confirm else "design"
     task_name = "output-review" if confirm else "known-answer"
     trigger = "confirm_output" if confirm else "need_clarification"
@@ -43,7 +50,10 @@ def _paused_task(tmp_path: Path, *, confirm: bool = False):
         "required": True,
     }
     if confirm:
-        policy["decisions"] = [{"id": "confirm", "label": "Confirm"}]
+        policy["decisions"] = [
+            {"id": "confirm", "label": "Confirm"},
+            {"id": "revise", "label": "Revise"},
+        ]
     else:
         policy["questions"] = [
             {"id": "storage", "prompt": "Storage?", "options": ["SQLite", "Postgres"]},
@@ -63,7 +73,20 @@ def _paused_task(tmp_path: Path, *, confirm: bool = False):
             {
                 "name": "custom-task",
                 "description": "An ordinary task",
-                "workflow": {"human_tasks": [policy]},
+                "workflow": {
+                    "human_tasks": [policy],
+                    "prompt_inputs": (
+                        [
+                            {
+                                "artifacts": ["source_material"],
+                                "placeholder": "source_file",
+                                "required": True,
+                            }
+                        ]
+                        if required_input
+                        else []
+                    ),
+                },
             }
         )
         + "---\n# Custom task\n",
@@ -89,7 +112,9 @@ def _paused_task(tmp_path: Path, *, confirm: bool = False):
                 "skill": "custom-task",
                 "role": "developer",
                 "assignee_type": "agent",
-                "input_artifacts": ["spec"] if confirm else [],
+                "input_artifacts": (
+                    (["spec", "source_material"] if required_input else ["spec"]) if confirm else []
+                ),
                 "output_artifact": "review_report" if confirm else "design_doc",
                 "allowed_tools": ["Read"],
                 "capability_requests": [],
@@ -121,7 +146,8 @@ def _paused_task(tmp_path: Path, *, confirm: bool = False):
     spec.parent.mkdir(parents=True)
     spec.write_text(
         "Confirmed storage: SQLite. Confirmed test runner: pytest. Required checks: A and B. "
-        "Reversible technical choice allowed for storage and test runner.",
+        "Reversible technical choice allowed for storage and test runner."
+        + (" Authorized reversible revision of this report." if confirm else ""),
         encoding="utf-8",
     )
     board.artifacts["spec"] = ArtifactEntry(
@@ -132,6 +158,20 @@ def _paused_task(tmp_path: Path, *, confirm: bool = False):
         path=".cafe/issues/issue500/spec/iteration_001/output.md",
         content_sha256=hashlib.sha256(spec.read_bytes()).hexdigest(),
     )
+    if source_present:
+        source = issue_dir / "source_material/iteration_001/output.md"
+        source.parent.mkdir(parents=True)
+        source.write_text(
+            "Accepted source material for the existing export path.", encoding="utf-8"
+        )
+        board.artifacts["source_material"] = ArtifactEntry(
+            name="source_material",
+            kind=ArtifactKind.DOCUMENT,
+            version=1,
+            updated_by="source_material",
+            path=".cafe/issues/issue500/source_material/iteration_001/output.md",
+            content_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+        )
     report = None
     if confirm:
         report = issue_dir / "verify/iteration_001/output.md"
@@ -231,6 +271,64 @@ def _public_completion(
     return result
 
 
+def _comparison_fixture(tmp_path, issue_dir, task, contract, spec, report):
+    spec_module = importlib.util.spec_from_file_location(
+        "delivery_comparison", SCRIPTS / "compare_delivery_contract.py"
+    )
+    assert spec_module is not None and spec_module.loader is not None
+    comparison = importlib.util.module_from_spec(spec_module)
+    spec_module.loader.exec_module(comparison)
+    artifacts = {"spec": spec.read_text(), "review_report": report.read_text()}
+    source = issue_dir / "source_material/iteration_001/output.md"
+    if source.is_file():
+        artifacts["source_material"] = source.read_text()
+    packet = comparison.comparison_packet(
+        entry=DriverEntryRequest(
+            issue_dir,
+            "issue500",
+            task.workflow_id,
+            {"semantic_facts": freshness_semantic_facts(contract)},
+        ),
+        model=PlaybookLoader(project_root=tmp_path).load_model("custom-task").model,
+        skill_loader=SkillLoader(project_root=tmp_path),
+        boundary={
+            "step": "verify",
+            "task_id": task.id,
+            "iteration": 1,
+            "intent": "confirm_output",
+            "owner": "user",
+            "active": True,
+        },
+        artifacts=artifacts,
+    )
+    quote = report.read_text()[:200]
+    coverage = {}
+    for name in packet["data"]["obligations"]:
+        item = {
+            "status": "preserved",
+            "source": "review_report",
+            "quote": quote,
+            "reason": "Reviewed implementation and verification against this requirement.",
+        }
+        if name.startswith("acceptance_invariants["):
+            item.update(
+                implementation="Current export behavior",
+                verification="Reviewed output and focused tests",
+            )
+        coverage[name] = item
+    assessment = {
+        "snapshot_sha256": packet["snapshot_sha256"],
+        "coverage": coverage,
+        "deviation": {
+            "status": "clear",
+            "source": "review_report",
+            "quote": quote,
+            "reason": "No unauthorized scope or capability change in reviewed output.",
+        },
+    }
+    return comparison, packet, assessment
+
+
 @pytest.mark.parametrize(
     "case", ["single", "multiple", "mixed", "multi_select", "missing", "ambiguous"]
 )
@@ -328,68 +426,24 @@ def test_public_clean_confirmation_requires_grounded_comparison(
     response = {"task": task.policy_id, "human_task_id": task.id, "decision": "confirm"}
     evidence = {"basis": "confirmed_exact", "exhaustive": True}
     if case != "bare":
-        spec_module = importlib.util.spec_from_file_location(
-            "delivery_comparison", SCRIPTS / "compare_delivery_contract.py"
+        comparison, packet, assessment = _comparison_fixture(
+            tmp_path, issue_dir, task, contract, spec, report
         )
-        assert spec_module is not None and spec_module.loader is not None
-        comparison = importlib.util.module_from_spec(spec_module)
-        spec_module.loader.exec_module(comparison)
-        packet = comparison.comparison_packet(
-            entry=DriverEntryRequest(
-                issue_dir,
-                "issue500",
-                task.workflow_id,
-                {"semantic_facts": freshness_semantic_facts(contract)},
-            ),
-            model=PlaybookLoader(project_root=tmp_path).load_model("custom-task").model,
-            skill_loader=SkillLoader(project_root=tmp_path),
-            boundary={
-                "step": "verify",
-                "task_id": task.id,
-                "iteration": 1,
-                "intent": "confirm_output",
-                "owner": "user",
-                "active": True,
-            },
-            artifacts={"spec": spec.read_text(), "review_report": report.read_text()},
-        )
-        quote = report.read_text()
-        coverage = {}
-        for name in packet["data"]["obligations"]:
-            item = {
-                "status": "preserved",
-                "source": "review_report",
-                "quote": quote,
-                "reason": "Reviewed implementation and verification against this requirement.",
-            }
-            if name.startswith("acceptance_invariants["):
-                item.update(
-                    implementation="Current export behavior",
-                    verification="Reviewed output and focused tests",
-                )
-            coverage[name] = item
-        assessment = {
-            "snapshot_sha256": packet["snapshot_sha256"],
-            "coverage": coverage,
-            "deviation": {
-                "status": "clear",
-                "source": "review_report",
-                "quote": quote,
-                "reason": "No unauthorized scope or capability change in reviewed output.",
-            },
-        }
         assert comparison.decide(packet, assessment)["decision"] == "accept"
         if case == "stale":
-            packet["data"]["artifacts"]["review_report"] += " Unsaved claim."
+            packet["snapshot_sha256"] = "0" * 64
         elif case == "foreign_task":
             packet["data"]["boundary"]["task_id"] = "other-task"
-            packet["snapshot_sha256"] = comparison._digest(packet["data"])
+            packet["snapshot_sha256"] = comparison_digest(packet["data"])
             assessment["snapshot_sha256"] = packet["snapshot_sha256"]
         elif case == "no_current_coverage":
             for record in assessment["coverage"].values():
                 record["source"] = "spec"
                 record["quote"] = spec.read_text()
-        evidence["delivery_comparison"] = {"packet": packet, "assessment": assessment}
+        evidence["delivery_comparison"] = {
+            "snapshot_sha256": packet["snapshot_sha256"],
+            "assessment": assessment,
+        }
     else:
         evidence["citations"] = [
             {
@@ -404,3 +458,103 @@ def test_public_clean_confirmation_requires_grounded_comparison(
     assert (HumanTaskRecordStore(issue_dir).get_task(task.id).status.value == "completed") is (
         case == "grounded"
     )
+
+
+@pytest.mark.parametrize("source_present", [False, True])
+def test_public_confirmation_rejects_hidden_required_input(
+    tmp_path: Path, monkeypatch, source_present
+):
+    monkeypatch.chdir(tmp_path)
+    issue_dir, task, digest, contract, spec, report = _paused_task(
+        tmp_path, confirm=True, required_input=True, source_present=source_present
+    )
+    comparison, packet, assessment = _comparison_fixture(
+        tmp_path, issue_dir, task, contract, spec, report
+    )
+    if source_present:
+        assert not packet["data"]["missing_artifacts"]
+        assert comparison.decide(packet, assessment)["decision"] == "accept"
+    else:
+        assert packet["data"]["missing_artifacts"] == ["source_material"]
+        assert comparison.decide(packet, assessment)["decision"] != "accept"
+        packet["data"]["missing_artifacts"] = []
+        packet["snapshot_sha256"] = comparison_digest(packet["data"])
+        assessment["snapshot_sha256"] = packet["snapshot_sha256"]
+        assert comparison.decide(packet, assessment)["decision"] == "accept"
+    response = {"task": task.policy_id, "human_task_id": task.id, "decision": "confirm"}
+    evidence = {
+        "basis": "confirmed_exact",
+        "exhaustive": True,
+        "delivery_comparison": {
+            "snapshot_sha256": packet["snapshot_sha256"],
+            "assessment": assessment,
+        },
+    }
+    result = _public_completion(tmp_path, issue_dir, task.id, digest, response, evidence)
+    assert (result.returncode == 0) is source_present
+    assert (
+        HumanTaskRecordStore(issue_dir).get_task(task.id).status.value == "completed"
+    ) is source_present
+
+
+@pytest.mark.parametrize(
+    "source,allowed", [("current_output:review_report", False), ("artifact:spec", True)]
+)
+def test_public_revision_uses_only_confirmed_technical_authority(
+    tmp_path: Path, monkeypatch, source, allowed
+):
+    monkeypatch.chdir(tmp_path)
+    issue_dir, task, digest, _, spec, report = _paused_task(tmp_path, confirm=True)
+    response = {"task": task.policy_id, "human_task_id": task.id, "decision": "revise"}
+    excerpt = (
+        "No actionable work remains."
+        if source.startswith("current")
+        else "Authorized reversible revision of this report."
+    )
+    evidence = {
+        "basis": "reversible_technical",
+        "category": "technical",
+        "exhaustive": True,
+        "authority": {"source": source, "excerpt": excerpt},
+        "candidates": [
+            {
+                "field": "decision",
+                "value": "revise",
+                "precedent": False,
+                "footprint": 1,
+                "reversible": True,
+            }
+        ],
+    }
+    result = _public_completion(tmp_path, issue_dir, task.id, digest, response, evidence)
+    assert (result.returncode == 0) is allowed
+    assert (
+        HumanTaskRecordStore(issue_dir).get_task(task.id).status.value == "completed"
+    ) is allowed
+
+
+def test_largest_supported_output_uses_bounded_confirmation_transport(tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    issue_dir, task, digest, contract, spec, report = _paused_task(tmp_path, confirm=True)
+    prefix = report.read_text()
+    report.write_text(prefix + " " * (256 * 1024 - len(prefix)))
+    comparison, packet, assessment = _comparison_fixture(
+        tmp_path, issue_dir, task, contract, spec, report
+    )
+    assert comparison.decide(packet, assessment)["decision"] == "accept"
+    response = {"task": task.policy_id, "human_task_id": task.id, "decision": "confirm"}
+    evidence = {
+        "basis": "confirmed_exact",
+        "exhaustive": True,
+        "delivery_comparison": {
+            "snapshot_sha256": packet["snapshot_sha256"],
+            "assessment": assessment,
+        },
+    }
+    result = _public_completion(tmp_path, issue_dir, task.id, digest, response, evidence)
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "assessment.json").stat().st_size < 256 * 1024
+    assert HumanTaskRecordStore(issue_dir).get_task(task.id).status.value == "completed"
+    report.write_text(report.read_text() + " ")
+    with pytest.raises(ValueError):
+        _comparison_fixture(tmp_path, issue_dir, task, contract, spec, report)

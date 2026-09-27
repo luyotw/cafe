@@ -80,6 +80,8 @@ def _technical_coverage(
     source, excerpt = authority.get("source"), authority.get("excerpt")
     if not isinstance(source, str) or not isinstance(excerpt, str) or not excerpt:
         return None
+    if source.startswith("current_output:"):
+        return None
     if excerpt not in sources.get(source, ""):
         return None
     candidates = evidence.get("candidates")
@@ -139,12 +141,15 @@ def _supported_confirmation(
     contract: Mapping[str, Any],
     evidence: Mapping[str, Any],
     sources: Mapping[str, str],
+    trusted_comparison: Mapping[str, Any] | None,
 ) -> bool:
     comparison = evidence.get("delivery_comparison")
-    if not isinstance(comparison, Mapping):
+    if not isinstance(comparison, Mapping) or set(comparison) != {"snapshot_sha256", "assessment"}:
         return False
-    packet, assessment = comparison.get("packet"), comparison.get("assessment")
+    packet, assessment = trusted_comparison, comparison.get("assessment")
     if not isinstance(packet, dict) or not isinstance(assessment, dict):
+        return False
+    if comparison.get("snapshot_sha256") != packet.get("snapshot_sha256"):
         return False
     data = packet.get("data")
     if not isinstance(data, dict):
@@ -203,6 +208,7 @@ def decide_task_authority(
     evidence: Mapping[str, Any] | None = None,
     confirmed_sources: Mapping[str, str] | None = None,
     questions: Sequence[HumanTaskQuestion] | None = None,
+    trusted_comparison: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Decide only from current task identity, confirmed policy and checked evidence.
 
@@ -304,7 +310,9 @@ def decide_task_authority(
     basis = evidence.get("basis")
     sources = confirmed_sources or {}
     if route == "confirm_output" and response.get("decision") == "confirm":
-        if basis == "confirmed_exact" and _supported_confirmation(task, policy, evidence, sources):
+        if basis == "confirmed_exact" and _supported_confirmation(
+            task, policy, evidence, sources, trusted_comparison
+        ):
             return _facts(route, owner, "grounded_confirmation", allowed=True)
         return _facts(route, owner, "unsupported_or_ambiguous_response")
     exact = _exact_coverage(evidence, sources)

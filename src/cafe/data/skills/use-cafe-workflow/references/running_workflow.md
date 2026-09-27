@@ -197,8 +197,10 @@ tie-breakers; normal engineering uncertainty is not itself a user handoff. A
 complete answer may combine source-cited exact values with authorized technical
 choices ranked separately for each question; declared multi-select values all
 need support. A clean eligible `confirm_output` uses the current grounded
-Delivery comparison packet and assessment described in
-`handoffs_and_alignment.md`, after semantic review of the actual output. A
+Delivery comparison snapshot and bounded assessment described in
+`handoffs_and_alignment.md`, after semantic review of the actual output. The
+completion entry rebuilds the comparison from current production inputs;
+the current draft cannot authorize a separate technical answer. A
 bare success phrase cannot justify confirmation. The same assessment rules
 apply in attached, unattended and event-driven operation. A
 unique active declared correction outcome is not a user answer only when it

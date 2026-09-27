@@ -161,16 +161,26 @@ material delta and the exact pending options. Preserve the contract unchanged;
 only a real user reconfirmation may replace it through the existing CAS API.
 Do not auto-complete any task from this helper or infer user responses in callbacks.
 
-For a clean eligible `confirm_output`, put the current comparison packet and
-the Driver's grounded assessment under `evidence.delivery_comparison` as
-`{"packet": ..., "assessment": ...}`. Set `basis: confirmed_exact` and
-`exhaustive: true`. The Driver completion entry checks the current task,
-contract, artifact contents, current output coverage and structural assessment
-before submitting `decision: confirm`. The word `confirm` need not occur in an
+For a clean eligible `confirm_output`, put the current packet's
+`snapshot_sha256` and the Driver's grounded assessment under
+`evidence.delivery_comparison` as
+`{"snapshot_sha256": "...", "assessment": {...}}`. Keep exact excerpts bounded;
+do not embed the full packet or output in the completion assessment. Set
+`basis: confirmed_exact` and `exhaustive: true`. The Driver completion entry
+rebuilds the packet from the current task, effective playbook/skill, contract
+and accepted sources, including required-input checks, then checks the supplied
+snapshot and assessment before submitting `decision: confirm`. An absent required
+input or a changed snapshot leaves the task pending. The word `confirm` need not occur in an
 artifact quote; the cited text must substantively support the assessment. A
 bare success phrase or a structurally accepted but semantically unsupported
 assessment cannot justify confirmation. Apply the same process in attached,
 unattended and callback operation.
+
+The current phase output is comparison evidence only. It cannot establish an
+exact answer or authorize a reversible technical decision; use confirmed
+contract, user-decision, accepted-artifact or repository precedent sources for
+those decisions. Each comparison artifact is bounded to 256 KiB; a larger
+output must be reduced or routed for review before a comparison is offered.
 
 ## Route proactive-review findings through existing handoffs
 
