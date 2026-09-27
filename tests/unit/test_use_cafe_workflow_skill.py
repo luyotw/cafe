@@ -1036,7 +1036,8 @@ mandate:
     assert "| review | gemini:review-main | copilot:review-fallback |" in result.stdout
     assert "| pr | cursor-agent:publication-main | gemini:publication-fallback |" in result.stdout
     assert "### Phase execution requirements" not in result.stdout
-    assert "| need_clarification | driver_confirmable |" in result.stdout
+    assert "| need_clarification | driver_confirmable |" not in result.stdout
+    assert "### Declared HumanTask ownership" in result.stdout
     assert "### Mandate" not in result.stdout
     assert result.stdout.count("| playbook_id |") == 1
 
@@ -1481,7 +1482,9 @@ def test_confirmed_kickoff_activates_one_issue_scoped_driver_contract(tmp_path: 
         "phase": "develop",
         "decision": "not_required",
     }
-    assert contract["schema_version"] == 5
+    assert contract["schema_version"] == 6
+    assert "task_contract" in contract
+    assert "need_clarification" not in contract["reactive_user_handoffs"]
     assert (
         not {"preflight", "semantic_facts", "material_assumptions", "mandate", "issue_assessment"}
         & contract.keys()
@@ -1625,6 +1628,7 @@ def test_kickoff_formatter_shows_only_task_decisions_without_mutating_the_projec
         "delivery_contract",
         "locales",
         "confirmation_contract",
+        "task_contract",
         "reactive_user_handoffs",
         "phases",
         "proactive_review",
@@ -1992,14 +1996,14 @@ def test_kickoff_defaults_verified_github_issues_to_pr_publication() -> None:
     assert "never authorizes merge or issue closure" in normalized
 
 
-def test_need_clarification_defaults_to_bounded_driver_confirmation() -> None:
+def test_need_clarification_requires_task_declaration_and_bounded_evidence() -> None:
     skill = _read_skill_resource("SKILL.md")
     kickoff = _read_skill_resource("references/kickoff.md")
     running = _read_skill_resource("references/running_workflow.md")
     handoffs = _read_skill_resource("references/handoffs_and_alignment.md")
     normalized = " ".join((skill + kickoff + running + handoffs).split()).lower()
 
-    assert "default `need_clarification` to bounded `driver_confirmable`" in normalized
+    assert "declare ownership by exact phase and task id" in normalized
     assert "scope, explicit constraints and existing authority" in normalized
     assert "triggers no deviation" in normalized
     assert "reserved product or strategy decisions" in normalized
@@ -3114,6 +3118,40 @@ def test_kickoff_defaults_assignable_gates_to_driver_confirmation() -> None:
     assert driver_confirmable == ["spec", "plan"]
 
 
+def test_kickoff_cli_forwards_custom_task_ownership_without_route_authority(tmp_path: Path) -> None:
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text("version: 1\n", encoding="utf-8")
+    proposal = _kickoff_proposal(
+        _kickoff_formatter_command(
+            strategic_context,
+            "--task-driver-confirmable", "develop:known-answer",
+            "--task-user-required", "review:choose-release",
+        )
+    )
+    assert proposal["task_contract"] == {
+        "user_required": [
+            {"phase": "pr", "task_id": "local-review"},
+            {"phase": "review", "task_id": "choose-release"},
+        ],
+        "driver_confirmable": [
+            {"phase": "spec", "task_id": "output-review"},
+            {"phase": "plan", "task_id": "output-review"},
+            {"phase": "develop", "task_id": "known-answer"},
+        ],
+    }
+    assert "need_clarification" not in proposal["reactive_user_handoffs"]
+    retired_route_flag = subprocess.run(
+        _kickoff_formatter_command(
+            strategic_context, "--need-clarification", "driver_confirmable"
+        ),
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert retired_route_flag.returncode != 0
+
+
 def test_proactive_review_overrides_are_sparse_ordered_and_fail_closed() -> None:
     module = _load_script_module(
         SKILL_ROOT / "scripts" / "format_kickoff_contract.py",
@@ -3507,7 +3545,7 @@ def test_proactive_review_authority_precedence_has_no_blanket_callback_or_route_
             in task_policy
             and "a mandatory, `user_required`, permission, or capability task requires a **user-facing driver turn**"
             in task_policy
-            and "a `need_clarification` task whose confirmed reactive policy is `driver_confirmable`"
+            and "a task whose current phase and task id are declared `driver_confirmable`"
             in task_policy
             and "including an event-driven callback, to submit only that eligible outcome"
             in task_policy
@@ -3521,7 +3559,7 @@ def test_proactive_review_authority_precedence_has_no_blanket_callback_or_route_
     assert is_consistent(task_authority, correction_flow)
     assert not is_consistent(
         task_authority.replace(
-            "A `need_clarification` task whose confirmed reactive policy is `driver_confirmable`",
+            "A task whose current phase and task ID are declared `driver_confirmable`",
             "A `need_clarification` task",
         ),
         correction_flow,
@@ -3819,7 +3857,8 @@ def test_use_cafe_workflow_keeps_human_task_completion_in_the_interactive_driver
         in normalized_running
     )
     assert (
-        "whose confirmed reactive policy is `driver_confirmable` may be completed by any driver"
+        "whose current phase and task id are declared `driver_confirmable` "
+        "may be completed by any driver"
         in normalized_running.lower()
     )
     assert "cafe task complete <active-human-task-id>" in handoffs

@@ -60,6 +60,8 @@ try:
     from cafe.playbooks.loader import PlaybookLoader
     from cafe.skills.execution_profile import resolve_execution_profile
     from cafe.skills.loader import SkillLoader
+    from cafe.skills.selectors import resolve_skill_selector
+    from cafe.skills.workflow_composition import resolve_step_workflow_composition
     from cafe.utils.phase_config import load_phase_step_model
 except ModuleNotFoundError:
     _reexec_with_cafe_python()
@@ -67,7 +69,6 @@ except ModuleNotFoundError:
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from render_workflow_progress import render_progress  # noqa: E402, I001
-
 
 ModelChain = list[tuple[str, str]]
 EventDriverChain = list[tuple[str, str | None]]
@@ -121,9 +122,7 @@ def _kickoff_delivery_contract(
     return delivery
 
 
-def _closeout_descriptions(
-    args: argparse.Namespace, plan: dict[str, Any]
-) -> dict[str, list[str]]:
+def _closeout_descriptions(args: argparse.Namespace, plan: dict[str, Any]) -> dict[str, list[str]]:
     """Require one human explanation per command, outside the durable policy."""
     descriptions = {}
     for stage in ("deliver", "cleanup"):
@@ -224,14 +223,10 @@ def _literal_text(value: str) -> str:
 def _fact(value: str | list[str]) -> str:
     """Render literal prose as bullets."""
     items = value if isinstance(value, list) else [value]
-    return "\n".join(
-        "- " + _literal_text(item).replace("\n", "\n  ") for item in items
-    ) or "- []"
+    return "\n".join("- " + _literal_text(item).replace("\n", "\n  ") for item in items) or "- []"
 
 
-def _render_closeout(
-    plan: dict[str, Any], descriptions: dict[str, list[str]], *, zh: bool
-) -> str:
+def _render_closeout(plan: dict[str, Any], descriptions: dict[str, list[str]], *, zh: bool) -> str:
     """Show explanations and losslessly quoted commands; never execute shell text."""
     sections = []
     for stage in ("deliver", "cleanup"):
@@ -248,9 +243,7 @@ def _render_closeout(
             longest_run = max((len(run) for run in re.findall(r"`+", command)), default=0)
             fence = "`" * max(3, longest_run + 1)
             code = "\n".join(indent + line for line in command.split("\n"))
-            entries.append(
-                f"{prefix}{explanation}\n\n{indent}{fence}bash\n{code}\n{indent}{fence}"
-            )
+            entries.append(f"{prefix}{explanation}\n\n{indent}{fence}bash\n{code}\n{indent}{fence}")
         sections.append("\n\n".join(entries))
     return "\n\n".join(sections)
 
@@ -312,6 +305,43 @@ def _resolve_partition(
     if problems:
         raise ValueError("invalid confirmation partition: " + "; ".join(problems))
     return user_required, driver_confirmable
+
+
+def _task_declarations(values: list[str] | None) -> list[dict[str, str]]:
+    tasks = []
+    for value in values or []:
+        phase, separator, task_id = value.partition(":")
+        if not separator or not phase.strip() or not task_id.strip():
+            raise ValueError("task ownership requires PHASE:TASK_ID")
+        tasks.append({"phase": phase.strip(), "task_id": task_id.strip()})
+    return tasks
+
+
+def _scheduled_task_declarations(
+    *, model: Any, project_root: Path, owner_phases: dict[str, list[str]]
+) -> dict[str, list[dict[str, str]]]:
+    loader = SkillLoader(project_root=project_root)
+    result: dict[str, list[dict[str, str]]] = {"user_required": [], "driver_confirmable": []}
+    for owner, phases in owner_phases.items():
+        for phase in phases:
+            step = model.steps[phase]
+            composition = resolve_step_workflow_composition(
+                loader,
+                primary_skill=resolve_skill_selector(step.skill, 1),
+                workflow_skills=resolve_playbook_skills(
+                    model,
+                    channel="workflow",
+                    role=step.role,
+                    step_name=phase,
+                ),
+                step_name=phase,
+            )
+            result[owner].extend(
+                {"phase": phase, "task_id": task.id}
+                for task in composition.human_tasks
+                if task.pattern == "confirm_output"
+            )
+    return result
 
 
 def _parse_chain(raw_chain: str, *, step_name: str) -> ModelChain:
@@ -469,7 +499,12 @@ def _parser() -> argparse.ArgumentParser:
     checkout = parser.add_mutually_exclusive_group(required=True)
     checkout.add_argument("--worktree")
     checkout.add_argument("--current-checkout", action="store_true")
-    parser.add_argument("--need-clarification", default="driver_confirmable")
+    parser.add_argument(
+        "--task-user-required", action="append", default=[], metavar="PHASE:TASK_ID"
+    )
+    parser.add_argument(
+        "--task-driver-confirmable", action="append", default=[], metavar="PHASE:TASK_ID"
+    )
     parser.add_argument("--need-permission", default="user_required")
     parser.add_argument(
         "--alignment-checkpoint",
@@ -604,6 +639,31 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
                 "chain": [{"cli": cli, "model": model_name} for cli, model_name in selected],
             }
         )
+    scheduled_tasks = _scheduled_task_declarations(
+        model=model,
+        project_root=args.project_root,
+        owner_phases={
+            "user_required": [*user_required, *mandatory_human_tasks],
+            "driver_confirmable": driver_confirmable,
+        },
+    )
+    task_contract = {
+        "user_required": [
+            *scheduled_tasks["user_required"],
+            *_task_declarations(args.task_user_required),
+        ],
+        "driver_confirmable": [
+            *scheduled_tasks["driver_confirmable"],
+            *_task_declarations(args.task_driver_confirmable),
+        ],
+    }
+    for owner in task_contract:
+        task_contract[owner] = list(
+            dict.fromkeys((entry["phase"], entry["task_id"]) for entry in task_contract[owner])
+        )
+        task_contract[owner] = [
+            {"phase": phase, "task_id": task_id} for phase, task_id in task_contract[owner]
+        ]
     proposal: dict[str, Any] = {
         "delivery_contract": _kickoff_delivery_contract(
             args, capability_choices=capability_choices
@@ -619,8 +679,8 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
             "driver_confirmable": driver_confirmable,
             "mandatory_human_stops": list(mandatory_human_tasks),
         },
+        "task_contract": task_contract,
         "reactive_user_handoffs": {
-            "need_clarification": args.need_clarification,
             "need_permission": args.need_permission,
             "alignment_checkpoint": args.alignment_checkpoint,
         },
@@ -867,6 +927,15 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
             _table(
                 ["Intent", "Policy"],
                 [[key, value] for key, value in proposal["reactive_user_handoffs"].items()],
+            ),
+            "### Declared HumanTask ownership",
+            _table(
+                ["Phase", "Task", "Owner"],
+                [
+                    [entry["phase"], entry["task_id"], owner]
+                    for owner, entries in proposal["task_contract"].items()
+                    for entry in entries
+                ],
             ),
             "### Deliver and cleanup plan to confirm",
             _render_closeout(closeout, _closeout_descriptions(args, closeout), zh=zh),

@@ -1095,10 +1095,13 @@ def _recorded_result_continuation(
     payload = result.payload
     continuation = payload.get("continuation")
     if payload.get("task") != policy.id or not isinstance(continuation, str) or not continuation:
-        return HumanTaskRejection(
-            message="The completed durable human task has an invalid continuation.",
-            correction_guidance=policy.correction_guidance,
-        ), ""
+        return (
+            HumanTaskRejection(
+                message="The completed durable human task has an invalid continuation.",
+                correction_guidance=policy.correction_guidance,
+            ),
+            "",
+        )
     feedback = payload.get("feedback")
     if isinstance(feedback, str) and feedback:
         return continuation, feedback
@@ -1106,10 +1109,13 @@ def _recorded_result_continuation(
     if answers is None:
         return continuation, ""
     if not isinstance(answers, Mapping):
-        return HumanTaskRejection(
-            message="The completed durable human task has invalid recorded answers.",
-            correction_guidance=policy.correction_guidance,
-        ), ""
+        return (
+            HumanTaskRejection(
+                message="The completed durable human task has invalid recorded answers.",
+                correction_guidance=policy.correction_guidance,
+            ),
+            "",
+        )
     lines = []
     for question, answer in answers.items():
         if (
@@ -1117,10 +1123,13 @@ def _recorded_result_continuation(
             or not isinstance(answer, list)
             or not all(isinstance(item, str) for item in answer)
         ):
-            return HumanTaskRejection(
-                message="The completed durable human task has invalid recorded answers.",
-                correction_guidance=policy.correction_guidance,
-            ), ""
+            return (
+                HumanTaskRejection(
+                    message="The completed durable human task has invalid recorded answers.",
+                    correction_guidance=policy.correction_guidance,
+                ),
+                "",
+            )
         lines.append(f"{question}: {', '.join(answer)}")
     return continuation, "\n".join(lines)
 

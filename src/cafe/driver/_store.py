@@ -192,7 +192,7 @@ def write_updated_contract(
     *,
     expected_predecessor_sha256: str,
 ) -> str:
-    """Atomically replace a supported v3/v4 contract after an exact CAS check."""
+    """Atomically replace a supported contract after an exact CAS check."""
     driver = _safe_driver_directory(issue_dir, create=False)
     path = driver / CONTRACT_FILENAME
     actual = sha256_bytes(_read_bounded(path, label="Driver contract predecessor"))

@@ -172,6 +172,10 @@ obtain explicit user confirmation of:
 - `repository_content_locale`;
 - every assignable planned confirmation gate, partitioned into `user_required`
   and `driver_confirmable`, plus the separate mandatory HumanTask stop list;
+- each Driver-completable HumanTask as a task declaration keyed by its exact
+  phase and task ID, using `--task-driver-confirmable PHASE:TASK_ID`; declare
+  user-owned tasks with `--task-user-required PHASE:TASK_ID`. An undeclared task
+  is user-owned. The pause route never assigns ownership;
 - `reactive_user_handoffs`;
 - the effective proactive-review decision for every agent or hybrid phase with
   an existing scheduled confirmation pause. Default every assignable scheduled
@@ -338,20 +342,22 @@ change the separate event-driven callback chain.
 
 `need_clarification` and `need_permission` are reactive interruptions, not
 scheduled candidates. `manual_handoff` is routing, not a planned confirmation
-gate. Alignment is a proactive driver decision governed by mandate. Record the
-reactive policy in the kickoff:
+gate. Alignment is a proactive driver decision governed by mandate. Declare
+ownership by exact phase and task ID, independently of route. Record the
+remaining reactive policy in the kickoff:
 
-- Default `need_clarification` to bounded `driver_confirmable` handling. The Driver may answer
-  only when the complete answer stays within the confirmed Delivery Contract,
-  its scope, explicit constraints and existing authority, and triggers no deviation;
-  otherwise it remains user-owned;
+- A `need_clarification` task may be `driver_confirmable` only through its
+  confirmed task declaration. The Driver may answer only when the complete
+  answer stays within the confirmed Delivery Contract, its scope, explicit
+  constraints and existing authority, and triggers no deviation; otherwise it
+  remains user-owned;
 - `need_permission`: user required unless the exact permission already exists
   in the current thread;
 - `alignment_checkpoint`: driver-resolvable only when the proposal is clearly
   within confirmed strategy and mandate.
 
-Any other runtime `to_owner=user` baton or `Workflow is waiting for user input`
-output is a hard stop.
+An undeclared or user-owned runtime `to_owner=user` baton or `Workflow is waiting
+for user input` output is a hard stop for autonomous Driver completion.
 
 ### Delivery facts to confirm
 
