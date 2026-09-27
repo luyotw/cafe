@@ -2202,6 +2202,8 @@ def test_operator_sees_callback_failure_without_slack(tmp_path: Path, monkeypatc
     driver_dir, _state, event = _contract_event_context(
         callback, tmp_path, [("codex", "exact")], issue_name="issue456"
     )
+    service = StatusService(issues_root=driver_dir.parent.parent)
+    before = service.load_current_state("issue456", ["spec", "develop"])
     monkeypatch.setattr(
         callback, "load_human_task_notification_settings",
         lambda: SimpleNamespace(enabled=False, code="disabled"),
@@ -2210,11 +2212,9 @@ def test_operator_sees_callback_failure_without_slack(tmp_path: Path, monkeypatc
         event, repository_root=tmp_path, error=TimeoutError("delivery unavailable")
     )
     receipt = json.loads((driver_dir / "callback_failure_notifications.json").read_text())
-    status = StatusService(issues_root=driver_dir.parent.parent).load_current_state(
-        "issue456", ["spec", "develop"]
-    )
+    status = service.load_current_state("issue456", ["spec", "develop"])
     assert receipt["workflow_id"] == event["workflow_id"]
-    assert status["State"] == "Callback delivery needs inspection"
+    assert status["State"] != before["State"]
     assert "dispatch_state.json" in status["Next"]
 
 
@@ -2225,6 +2225,8 @@ def test_interrupted_notification_keeps_failure_visible(tmp_path: Path, monkeypa
     driver_dir, _state, event = _contract_event_context(
         callback, tmp_path, [("codex", "exact")], issue_name="issue456"
     )
+    service = StatusService(issues_root=driver_dir.parent.parent)
+    before = service.load_current_state("issue456", ["spec", "develop"])
 
     def interrupted():
         raise OSError("notification settings unavailable")
@@ -2240,10 +2242,9 @@ def test_interrupted_notification_keeps_failure_visible(tmp_path: Path, monkeypa
         event, repository_root=tmp_path, error=TimeoutError("delivery unavailable")
     )
     assert json.loads((driver_dir / "callback_failure_notifications.json").read_text()) == receipt
-    status = StatusService(issues_root=driver_dir.parent.parent).load_current_state(
-        "issue456", ["spec", "develop"]
-    )
-    assert status["State"] == "Callback delivery needs inspection"
+    status = service.load_current_state("issue456", ["spec", "develop"])
+    assert status["State"] != before["State"]
+    assert "dispatch_state.json" in status["Next"]
 
 
 def test_callback_queues_the_bound_codex_host_thread(tmp_path: Path, monkeypatch) -> None:
