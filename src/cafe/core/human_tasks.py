@@ -287,7 +287,7 @@ class HumanTaskRejection:
 def agent_execution_interrupted_human_task(
     *, step_name: str
 ) -> tuple[HumanTaskPolicy, HumanTaskBinding]:
-    """Return the machine-owned task used after an agent exits unsuccessfully.
+    """Return the machine-owned task used after execution or completion validation fails.
 
     This is intentionally a runtime policy rather than a playbook binding:
     every agent-owned step must pause safely when its provider process ends
@@ -301,7 +301,8 @@ def agent_execution_interrupted_human_task(
             id=AGENT_EXECUTION_INTERRUPTED_TASK_ID,
             pattern=AGENT_EXECUTION_INTERRUPTED_TRIGGER,
             prompt=(
-                "Agent execution was interrupted. Review the saved diagnostics, then choose "
+                "Agent execution was interrupted or its completion failed validation. "
+                "Review the saved diagnostics, then choose "
                 "whether to retry the same workflow step in the existing session or a fresh "
                 "session. A fresh session preserves the step, iteration, model, and authority."
             ),

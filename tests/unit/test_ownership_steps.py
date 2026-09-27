@@ -267,9 +267,9 @@ def test_agent_completion_with_unchecked_checklist_is_not_published(tmp_path: Pa
     state = BlackboardStore(issue_dir).load_or_create("build")
 
     assert result.final_status_code == "CHECKLIST_VALIDATION_FAILED"
-    assert state.current_step == "build"
+    assert state.current_step == "user"
     assert state.handoff_contract is not None
-    assert state.handoff_contract.to_step == "build"
+    assert state.handoff_contract.to_step == "user"
     assert "code" not in state.artifacts
 
 
@@ -327,9 +327,9 @@ def test_resume_rejects_persisted_outbound_baton_with_unchecked_checklist(
     reloaded = store.load_or_create("build")
 
     assert result.final_status_code == "CHECKLIST_VALIDATION_FAILED"
-    assert reloaded.current_step == "build"
+    assert reloaded.current_step == "user"
     assert reloaded.handoff_contract is not None
-    assert reloaded.handoff_contract.to_step == "build"
+    assert reloaded.handoff_contract.to_step == "user"
 
 
 def test_clarification_handoff_allows_unchecked_checklist(tmp_path: Path) -> None:
@@ -727,7 +727,11 @@ def test_hybrid_owner_resumes_only_its_declared_portion_after_matching_task(
     assert BlackboardStore(issue_dir).load_or_create("mixed").step_attempt_counts == {"mixed": 1}
 
 
-def test_hybrid_agent_portion_cannot_advance_with_unchecked_checklist(tmp_path: Path) -> None:
+@pytest.mark.parametrize("failed_signal", ["unchecked", "malformed_baton", "missing_status"])
+def test_hybrid_agent_portion_cannot_advance_with_unchecked_checklist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed_signal: str
+) -> None:
+    monkeypatch.setattr(BlackboardWorkflowRuntime, "_notify_new_human_task", lambda *_: None)
     issue_dir = tmp_path / ".cafe" / "issues" / "hybrid-checklist-gate"
     binding = HumanTaskBinding(trigger="approve", task_id="approval", outcomes={"accept": "mixed"})
     playbook = {
@@ -765,11 +769,21 @@ def test_hybrid_agent_portion_cannot_advance_with_unchecked_checklist(tmp_path: 
         output.write_text("partial draft\n", encoding="utf-8")
         (iteration_dir / "checklist.md").write_text("[ ] finish draft\n", encoding="utf-8")
         return StepExecutionResult(
-            response="confirmed",
+            response="" if failed_signal == "missing_status" else "confirmed",
             artifacts={"code": str(output)},
-            status_code="confirmed",
+            status_code=None if failed_signal == "missing_status" else "confirmed",
             artifact_ready=True,
             agent_invoked=True,
+            events=(
+                []
+                if failed_signal == "unchecked"
+                else [{"type": "checklist_validation_failed"}]
+                + (
+                    [{"type": "hybrid_portion_baton", "payload": "bad baton"}]
+                    if failed_signal == "malformed_baton"
+                    else []
+                )
+            ),
         )
 
     result = BlackboardWorkflowRuntime(
@@ -780,10 +794,14 @@ def test_hybrid_agent_portion_cannot_advance_with_unchecked_checklist(tmp_path: 
     state = BlackboardStore(issue_dir).load_or_create("mixed")
 
     assert result.final_status_code == "CHECKLIST_VALIDATION_FAILED"
-    assert state.current_step == "mixed"
+    assert state.current_step == "user"
     assert state.ownership_cursor is not None
     assert state.ownership_cursor["portion"] == "draft"
     assert "code" not in state.artifacts
+
+    (task,) = HumanTaskRecordStore(issue_dir).tasks()
+    assert task.status.value == "pending"
+    assert task.continuations == {"retry": "mixed", "retry_fresh_session": "mixed"}
 
 
 @pytest.mark.parametrize(
@@ -1075,3 +1093,163 @@ def test_persisted_visit_limit_survives_a_separate_runtime_instance(tmp_path: Pa
         BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor).run(
             start_step="loop", single_step=True
         )
+
+
+@pytest.mark.parametrize("completion", ["status_code", "baton"])
+@pytest.mark.parametrize("decision", ["retry", "retry_fresh_session"])
+def test_checklist_failure_has_durable_recovery_and_retries_same_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, completion: str, decision: str
+) -> None:
+    """A clean provider exit with rejected output remains recoverable after restart."""
+    issue_dir = tmp_path / ".cafe/issues/checklist-recovery"
+    playbook = {
+        "playbook": {"id": "checklist-recovery"},
+        "steps": {
+            "build": {
+                "skill": "phase",
+                "role": "operator",
+                "behavior": {"completion": completion},
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+    iteration = issue_dir / "build/iteration_001"
+    calls = []
+    callbacks = []
+    notifications = []
+    monkeypatch.setattr(
+        BlackboardWorkflowRuntime,
+        "_notify_new_human_task",
+        lambda self, task: notifications.append(task),
+    )
+
+    def executor(step_name, _step_def, state, **_kwargs):
+        calls.append(step_name)
+        iteration.mkdir(parents=True, exist_ok=True)
+        output = iteration / "output.md"
+        output.write_text("Saved substantive work\n")
+        (iteration / "checklist.md").write_text(
+            "[ ] verify work\n" if len(calls) == 1 else "[x] verify work\n"
+        )
+        (iteration / "iteration.json").write_text(
+            json.dumps(
+                {
+                    "iteration": 1,
+                    "cli": "claude",
+                    "session_id": "original-session",
+                    "model": "configured-model",
+                    "agent_invoked": True,
+                    "end_time": "2026-09-27T09:00:00+08:00",
+                }
+            )
+        )
+        # The generic executor pins the baton after exhausting completion repair.
+        failed = len(calls) == 1
+        BlackboardStore(issue_dir).update_handoff_contract(
+            state,
+            from_step=step_name,
+            to_owner=HandoffOwner.AGENT if failed else HandoffOwner.DONE,
+            to_step=step_name if failed else "done",
+            intent=HandoffIntent.AWAIT_AGENT if failed else HandoffIntent.WORKFLOW_COMPLETE,
+            status_code="CHECKLIST_VALIDATION_FAILED" if failed else "confirmed",
+            source="workflow.completion_validation" if failed else "baton",
+        )
+        return StepExecutionResult(
+            response="",
+            artifacts={"result": str(output)},
+            status_code=None if completion == "baton" else "confirmed",
+            artifact_ready=not failed,
+            agent_invoked=True,
+            events=[{"type": "checklist_validation_failed"}] if failed else [],
+        )
+
+    def run():
+        return BlackboardWorkflowRuntime(
+            issue_dir=issue_dir,
+            playbook=playbook,
+            executor=executor,
+            workflow_event_callback=callbacks.append,
+        ).run()
+
+    result = run()
+    assert result.final_status_code == "CHECKLIST_VALIDATION_FAILED"
+    assert calls == ["build"]
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("build")
+    records = HumanTaskRecordStore(issue_dir)
+    (task,) = records.tasks()
+    assert result.detail == task.id
+    assert state.current_step == "user"
+    assert state.handoff_contract.to_owner == HandoffOwner.USER
+    assert "result" not in state.artifacts
+    assert notifications == [task]
+    assert [(event["event_type"], event["status_code"]) for event in callbacks] == [
+        ("human_task", "CHECKLIST_VALIDATION_FAILED")
+    ]
+    assert (iteration / "output.md").read_text() == "Saved substantive work\n"
+    assert (
+        json.loads((iteration / "iteration.json").read_text())["workflow_completion_trusted"]
+        is False
+    )
+    assert any(event.event_type == "checklist_validation_failed" for event in state.events)
+
+    run()  # Restarting while waiting cannot retry or create a second task.
+    assert calls == ["build"]
+    assert [item.id for item in records.tasks()] == [task.id]
+    applied = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=store.load_or_create("build"),
+        from_step="build",
+        trigger=task.trigger,
+        raw_payload={"task": task.policy_id, "human_task_id": task.id, "decision": decision},
+        source="test",
+    )
+    assert applied.rejection is None
+    assert applied.target == "build"
+    recorded = records.get_result(task.id)
+    if decision == "retry_fresh_session":
+        assert (
+            recorded.payload["session_continuation"]["previous"]["session_id"] == "original-session"
+        )
+    else:
+        assert "session_continuation" not in recorded.payload
+    assert run().completed
+    assert calls == ["build", "build"]
+
+
+def test_resume_materializes_recovery_for_preexisting_checklist_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    issue_dir = tmp_path / ".cafe/issues/old-checklist-failure"
+    playbook = {
+        "playbook": {"id": "old-checklist-failure"},
+        "steps": {
+            "build": {"skill": "phase", "role": "operator", "on": {"await_agent": "_done"}},
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("build", playbook_id="old-checklist-failure")
+    iteration = issue_dir / "build/iteration_001"
+    iteration.mkdir(parents=True)
+    (iteration / "checklist.md").write_text("[ ] unfinished\n")
+    store.update_handoff_contract(
+        state,
+        from_step="build",
+        to_owner=HandoffOwner.AGENT,
+        to_step="build",
+        intent=HandoffIntent.AWAIT_AGENT,
+        status_code="CHECKLIST_VALIDATION_FAILED",
+        source="workflow.checklist_validation",
+    )
+    monkeypatch.setattr(BlackboardWorkflowRuntime, "_notify_new_human_task", lambda *_: None)
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=lambda *_args, **_kwargs: pytest.fail("recovery requires a user decision"),
+    )
+    assert runtime.run().final_status_code == "CHECKLIST_VALIDATION_FAILED"
+    assert store.load_or_create("build").current_step == "user"
+    (task,) = HumanTaskRecordStore(issue_dir).tasks()
+    assert task.status.value == "pending"
+    assert task.continuations == {"retry": "build", "retry_fresh_session": "build"}

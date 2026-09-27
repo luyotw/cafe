@@ -283,3 +283,17 @@ def test_manual_handoff_can_reuse_a_recovery_task(workflow):
     assert "State: Waiting for user" in output
     assert f"cafe task inspect {task.id}" in output
     assert "Reason: agent execution interrupted" in output
+
+
+def test_checklist_failure_reports_recovery_task_and_reason(workflow):
+    write_state(workflow, intent="manual_handoff")
+    task = materialize(workflow, trigger="agent_execution_interrupted")
+    path = workflow / "blackboard.json"
+    raw = json.loads(path.read_text())
+    raw["handoff_contract"]["status_code"] = "CHECKLIST_VALIDATION_FAILED"
+    path.write_text(json.dumps(raw))
+    output = invoke_unchanged(workflow)
+    assert "State: Waiting for user" in output
+    assert "Reason: checklist validation failed" in output
+    assert f"cafe task inspect {task.id}" in output
+    assert "Agent step in progress" not in output
