@@ -77,6 +77,17 @@ are not guarded through completion; the user accepted this documented limitation
 A v5 contract's `reactive_user_handoffs.need_clarification` value alone grants no
 Driver completion authority; reconfirm task ownership when needed.
 
+For `answers`, account for every required field and every selected value. Use
+`basis: confirmed_exact` with a source and excerpt for each exact value. If an
+authorized reversible technical choice is needed, use
+`basis: reversible_technical`, `category: technical`, one grounded authority
+excerpt and candidates grouped by their `field`; cite other exact values in
+`citations`. Rank candidates separately for each field by repository precedent,
+smaller footprint and reversibility. A scalar field needs one supported winner;
+a declared multi-select field may retain all supported co-winners. Missing
+citations, unresolved scalar ties, preference or scope choices leave the task
+pending for the user. Use only sources returned by current task inspection.
+
 ## Delivery comparison at an existing output gate
 
 Use `scripts/compare_delivery_contract.py` before accepting an eligible output.
@@ -149,6 +160,17 @@ self-contained compact decision summary below, showing the unmet requirement or
 material delta and the exact pending options. Preserve the contract unchanged;
 only a real user reconfirmation may replace it through the existing CAS API.
 Do not auto-complete any task from this helper or infer user responses in callbacks.
+
+For a clean eligible `confirm_output`, put the current comparison packet and
+the Driver's grounded assessment under `evidence.delivery_comparison` as
+`{"packet": ..., "assessment": ...}`. Set `basis: confirmed_exact` and
+`exhaustive: true`. The Driver completion entry checks the current task,
+contract, artifact contents, current output coverage and structural assessment
+before submitting `decision: confirm`. The word `confirm` need not occur in an
+artifact quote; the cited text must substantively support the assessment. A
+bare success phrase or a structurally accepted but semantically unsupported
+assessment cannot justify confirmation. Apply the same process in attached,
+unattended and callback operation.
 
 ## Route proactive-review findings through existing handoffs
 

@@ -194,6 +194,13 @@ gates, reserved product or strategy decisions, and uncertainty about whether
 authority already exists remain user-owned. Authorized reversible technical
 choices may use repository precedent, smaller footprint, and reversibility as
 tie-breakers; normal engineering uncertainty is not itself a user handoff. A
+complete answer may combine source-cited exact values with authorized technical
+choices ranked separately for each question; declared multi-select values all
+need support. A clean eligible `confirm_output` uses the current grounded
+Delivery comparison packet and assessment described in
+`handoffs_and_alignment.md`, after semantic review of the actual output. A
+bare success phrase cannot justify confirmation. The same assessment rules
+apply in attached, unattended and event-driven operation. A
 unique active declared correction outcome is not a user answer only when it
 requires feedback, is marked `correction: true`, and routes to a
 non-advancing correction continuation. Derive it solely from the active

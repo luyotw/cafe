@@ -30,6 +30,8 @@ def _sources(
     board: Mapping[str, Any],
     evidence: Mapping[str, Any] | None,
     active_step: str,
+    active_iteration: int,
+    include_current_output: bool = False,
 ) -> dict[str, str]:
     sources = {
         "contract": json.dumps(contract["delivery_contract"], ensure_ascii=False, sort_keys=True)
@@ -69,8 +71,10 @@ def _sources(
     for name, entry in list(artifacts.items())[:32]:
         if not isinstance(name, str) or not isinstance(entry, Mapping):
             continue
-        # The output of the paused phase has not been accepted yet.
-        if entry.get("updated_by") == active_step:
+        current_output = entry.get("updated_by") == active_step
+        # A pending confirmation may review its current output, but that output
+        # never becomes an accepted upstream artifact citation.
+        if current_output and not include_current_output:
             continue
         raw_path = entry.get("path")
         if not isinstance(raw_path, str):
@@ -79,13 +83,25 @@ def _sources(
         path = lexical_path.resolve()
         if not path.is_relative_to(issue_dir.resolve()):
             continue
+        if (
+            current_output
+            and path
+            != (
+                issue_dir / active_step / f"iteration_{active_iteration:03d}" / "output.md"
+            ).resolve()
+        ):
+            continue
         if any(candidate.is_symlink() for candidate in (lexical_path, *lexical_path.parents)):
             continue
         if path.is_file() and path.stat().st_size <= min(256 * 1024, remaining_bytes):
             content = path.read_bytes()
-            if entry.get("content_sha256") != hashlib.sha256(content).hexdigest():
+            if (
+                not current_output
+                and entry.get("content_sha256") != hashlib.sha256(content).hexdigest()
+            ):
                 continue
-            sources[f"artifact:{name}"] = content.decode("utf-8")
+            source_kind = "current_output" if current_output else "artifact"
+            sources[f"{source_kind}:{name}"] = content.decode("utf-8")
             remaining_bytes -= len(content)
     return sources
 
@@ -136,7 +152,15 @@ def inspect_task_authority(
                 )
                 for item in parse_questions_xml(questions_file)
             )
-    sources = _sources(issue_dir, contract, board, evidence, detail.step)
+    sources = _sources(
+        issue_dir,
+        contract,
+        board,
+        evidence,
+        detail.step,
+        detail.iteration,
+        include_current_output=detail.trigger == "confirm_output",
+    )
     result = decide_task_authority(
         task=task,
         contract=contract,
