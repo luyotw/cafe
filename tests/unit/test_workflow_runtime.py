@@ -318,10 +318,10 @@ def test_event_callback_diagnostic_failure_never_blocks_workflow_advancement(
     )
     original_record = runtime.blackboard_store.record_event
 
-    def record_event(state, event_type, payload):
+    def record_event(state, event_type, payload, **kwargs):
         if event_type == "workflow_event_callback_dispatch_failed":
             raise OSError("disk unavailable")
-        return original_record(state, event_type, payload)
+        return original_record(state, event_type, payload, **kwargs)
 
     monkeypatch.setattr(runtime.blackboard_store, "record_event", record_event)
     assert runtime.run(start_step="spec").completed is True
@@ -2714,10 +2714,10 @@ def test_replay_resets_attempt_cycle_when_transition_event_survives_first(
 
     original_record_event = runtime.blackboard_store.record_event
 
-    def interrupt_reset_audit(state, event_type, payload):
+    def interrupt_reset_audit(state, event_type, payload, **kwargs):
         if event_type == "step_attempt_count_reset":
             raise RuntimeError("crash after transition event")
-        return original_record_event(state, event_type, payload)
+        return original_record_event(state, event_type, payload, **kwargs)
 
     with pytest.raises(RuntimeError, match="crash after transition event"):
         with pytest.MonkeyPatch.context() as patcher:
@@ -2730,16 +2730,26 @@ def test_replay_resets_attempt_cycle_when_transition_event_survives_first(
     assert crashed.current_step == "plan"
     assert crashed.step_attempt_counts == {}
 
+    executed: list[str] = []
+
+    def continue_plan(step_name, *_args):
+        executed.append(step_name)
+        assert step_name == "plan"
+        _write_baton(issue_dir, from_step="plan", to_owner="done",
+                     to_step="done", intent="workflow_complete")
+        return StepExecutionResult(response="", artifacts={})
+
     replay = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
         playbook=playbook,
-        executor=lambda *_args: pytest.fail("replay must not execute the completed step"),
+        executor=continue_plan,
     ).run(single_step=True)
 
     recovered = BlackboardStore(issue_dir).load_or_create("spec")
-    assert replay.final_step == "spec"
-    assert recovered.current_step == "plan"
-    assert recovered.step_attempt_counts == {}
+    assert replay.final_step == "plan"
+    assert executed == ["plan"]
+    assert recovered.current_step == "done"
+    assert "spec" not in recovered.step_attempt_counts
     assert any(event.event_type == "transition" for event in recovered.events)
 
 

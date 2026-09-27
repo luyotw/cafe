@@ -977,6 +977,18 @@ class BlackboardStore:
                     raw[field_name] = change["after"]
                 elif raw.get(field_name) != change["after"]:
                     raise ValueError("audit patch conflicts with workflow state")
+            baton = record.get("baton")
+            if baton is not None:
+                if (not isinstance(baton, dict)
+                        or set(baton) != {"version", "to_owner", "to_step", "intent"}):
+                    raise ValueError("audit baton intent is invalid")
+                HandoffContract.from_dict_with_current_step(
+                    baton, current_step=str(raw.get("current_step", ""))
+                )
+                atomic_write_bytes(
+                    self.next_step_path,
+                    json.dumps(baton, ensure_ascii=False, indent=2).encode("utf-8"),
+                )
             checkpoint = sequence
             changed = True
         if changed:
@@ -1180,7 +1192,19 @@ class BlackboardStore:
         status_code: str = "",
         source: str = "workflow",
     ) -> HandoffContract:
-        contract = HandoffContract(
+        contract = self.build_handoff_contract(
+            from_step=from_step, to_owner=to_owner, to_step=to_step,
+            intent=intent, status_code=status_code, source=source,
+        )
+        self.write_handoff_contract(state, contract)
+        return contract
+
+    @staticmethod
+    def build_handoff_contract(
+        *, from_step: str, to_owner: HandoffOwner, to_step: str,
+        intent: HandoffIntent, status_code: str = "", source: str = "workflow",
+    ) -> HandoffContract:
+        return HandoffContract(
             version=HANDOFF_CONTRACT_VERSION,
             from_step=from_step,
             to_owner=to_owner,
@@ -1190,8 +1214,6 @@ class BlackboardStore:
             created_at=_now_iso(),
             source=source,
         )
-        self.write_handoff_contract(state, contract)
-        return contract
 
     def get_artifact(self, state: BlackboardState, name: str) -> Optional[ArtifactEntry]:
         return state.artifacts.get(name)
@@ -1318,12 +1340,15 @@ class BlackboardStore:
         event_type: str,
         message: str,
         data: Optional[Dict[str, Any]] = None,
+        *,
+        baton_contract: HandoffContract | None = None,
     ) -> None:
         entry = EventEntry(_now_iso(), step, event_type, message, data or {})
-        self._commit_event(state, entry)
+        self._commit_event(state, entry, baton_contract=baton_contract)
 
     def _commit_event(self, state: BlackboardState, entry: EventEntry,
-                      *, event_id: str | None = None) -> EventEntry:
+                      *, event_id: str | None = None,
+                      baton_contract: HandoffContract | None = None) -> EventEntry:
         with self._thread_lock_for(self.file_path):
             with self.state_lock_path.open("a+", encoding="utf-8") as lock_file:
                 with _optional_process_file_lock(lock_file):
@@ -1356,7 +1381,16 @@ class BlackboardStore:
                         **entry.to_dict(),
                         "patch": patch,
                     }
+                    if baton_contract is not None:
+                        record["baton"] = baton_contract.to_next_step_dict()
                     self.audit.commit(state.workflow_id, record)
+                    if baton_contract is not None:
+                        atomic_write_bytes(
+                            self.next_step_path,
+                            json.dumps(record["baton"], ensure_ascii=False, indent=2).encode(
+                                "utf-8"
+                            ),
+                        )
                     merged.applied_event_sequence = sequence
                     merged.events = list(persisted.events) + [entry]
                     self._save_unlocked(merged)
@@ -1367,10 +1401,14 @@ class BlackboardStore:
                     return entry
 
     def record_event(
-        self, state: BlackboardState, event_type: str, payload: Dict[str, Any]
+        self, state: BlackboardState, event_type: str, payload: Dict[str, Any],
+        *, baton_contract: HandoffContract | None = None,
     ) -> None:
         step = str(payload.get("step", state.current_step))
-        self.log_event(state, step, event_type, json.dumps(payload, ensure_ascii=False), payload)
+        self.log_event(
+            state, step, event_type, json.dumps(payload, ensure_ascii=False), payload,
+            baton_contract=baton_contract,
+        )
 
     def prepare_workflow_callback_event(
         self,

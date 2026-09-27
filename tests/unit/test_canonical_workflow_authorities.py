@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from cafe.core.blackboard import BlackboardStore
+from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.services.status_service import StatusService
 
 
@@ -131,6 +131,62 @@ def test_conflicting_committed_transition_fails_closed(tmp_path, monkeypatch):
     store.file_path.write_text(json.dumps(raw))
     with pytest.raises(ValueError):
         BlackboardStore(store.issue_dir).load_or_create("spec")
+
+
+def test_committed_transition_replays_baton_before_board_checkpoint(tmp_path, monkeypatch):
+    import cafe.core.blackboard as blackboard_module
+
+    store = BlackboardStore(tmp_path / "issue")
+    state = store.load_or_create("spec")
+    contract = store.build_handoff_contract(
+        from_step="spec", to_owner=HandoffOwner.AGENT, to_step="develop",
+        intent=HandoffIntent.AWAIT_AGENT,
+    )
+    state.current_step = "develop"
+    state.handoff_contract = contract
+    original_write = blackboard_module.atomic_write_bytes
+
+    def interrupted(path, content):
+        if path == store.next_step_path:
+            raise OSError("interrupted baton replacement")
+        return original_write(path, content)
+
+    monkeypatch.setattr(blackboard_module, "atomic_write_bytes", interrupted)
+    with pytest.raises(OSError):
+        store.record_event(
+            state, "transition", {"step": "spec", "to": "develop"},
+            baton_contract=contract,
+        )
+    monkeypatch.setattr(blackboard_module, "atomic_write_bytes", original_write)
+    recovered = BlackboardStore(store.issue_dir).load_or_create("spec")
+    assert recovered.current_step == "develop"
+    assert recovered.handoff_contract.to_step == "develop"
+    assert json.loads(store.next_step_path.read_text())["to_step"] == "develop"
+
+
+def test_transition_replays_after_baton_commit_before_board_checkpoint(tmp_path, monkeypatch):
+    store = BlackboardStore(tmp_path / "issue")
+    state = store.load_or_create("spec")
+    contract = store.build_handoff_contract(
+        from_step="spec", to_owner=HandoffOwner.AGENT, to_step="develop",
+        intent=HandoffIntent.AWAIT_AGENT,
+    )
+    state.current_step = "develop"
+    state.handoff_contract = contract
+
+    def interrupted(_state):
+        raise OSError("interrupted board replacement")
+
+    monkeypatch.setattr(store, "_save_unlocked", interrupted)
+    with pytest.raises(OSError):
+        store.record_event(
+            state, "transition", {"step": "spec", "to": "develop"},
+            baton_contract=contract,
+        )
+    recovered = BlackboardStore(store.issue_dir).load_or_create("spec")
+    assert recovered.current_step == "develop"
+    assert recovered.handoff_contract.to_step == "develop"
+    assert json.loads(store.next_step_path.read_text())["to_step"] == "develop"
 
 
 def test_reserved_sequence_gap_does_not_hide_later_event(tmp_path):

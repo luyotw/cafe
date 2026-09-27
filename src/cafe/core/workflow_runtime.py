@@ -3476,6 +3476,14 @@ class BlackboardWorkflowRuntime:
         contract_source: str = "workflow.transition",
     ) -> PlaybookRunResult:
         self.blackboard.current_step = "done"
+        baton_contract = None
+        if update_contract:
+            baton_contract = self.blackboard_store.build_handoff_contract(
+                from_step=current_step, to_owner=HandoffOwner.DONE,
+                to_step="done", intent=HandoffIntent.WORKFLOW_COMPLETE,
+                status_code=status_code, source=contract_source,
+            )
+            self.blackboard.handoff_contract = baton_contract
         self.blackboard_store.record_event(
             self.blackboard,
             "workflow_completed",
@@ -3487,17 +3495,8 @@ class BlackboardWorkflowRuntime:
                 "reason": reason,
                 "runtime": runtime,
             },
+            baton_contract=baton_contract,
         )
-        if update_contract:
-            self.blackboard_store.update_handoff_contract(
-                self.blackboard,
-                from_step=current_step,
-                to_owner=HandoffOwner.DONE,
-                to_step="done",
-                intent=HandoffIntent.WORKFLOW_COMPLETE,
-                status_code=status_code,
-                source=contract_source,
-            )
         cafe_dir = self.issue_dir.parent.parent
         clear_marker_if_matches(cafe_dir, self.issue_dir.name)
         if not self._flush_phase_terminal(event_type="workflow_completed"):
@@ -3557,10 +3556,19 @@ class BlackboardWorkflowRuntime:
         if completed_attempts is not None:
             transition_data["completed_attempts"] = completed_attempts
         self.blackboard.current_step = next_step
+        baton_contract = None
+        if update_contract:
+            baton_contract = self.blackboard_store.build_handoff_contract(
+                from_step=current_step, to_owner=HandoffOwner.AGENT,
+                to_step=next_step, intent=HandoffIntent.AWAIT_AGENT,
+                status_code=status_code, source=contract_source,
+            )
+            self.blackboard.handoff_contract = baton_contract
         self.blackboard_store.record_event(
             self.blackboard,
             "transition",
             transition_data,
+            baton_contract=baton_contract,
         )
         if completed_attempts is not None:
             self.blackboard_store.record_event(self.blackboard, "step_attempt_count_reset", {
@@ -3569,16 +3577,6 @@ class BlackboardWorkflowRuntime:
                 "transition_intent": raw_transition_intent,
                 "transition_source": source,
             })
-        if update_contract:
-            self.blackboard_store.update_handoff_contract(
-                self.blackboard,
-                from_step=current_step,
-                to_owner=HandoffOwner.AGENT,
-                to_step=next_step,
-                intent=HandoffIntent.AWAIT_AGENT,
-                status_code=status_code,
-                source=contract_source,
-            )
         self._flush_phase_terminal()
 
     def _handle_post_contract(
