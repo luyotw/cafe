@@ -94,6 +94,15 @@ removal to avoid asking for that approval. Respect an explicit user choice to
 stop at a PR, preserve resources, or exclude an action. Repository context
 informs the recommendation; only user confirmation authorizes execution.
 
+When delivery includes merging a GitHub PR, propose a merge commit by default:
+`gh pr merge --merge` from the verified issue worktree, or with an exact verified
+PR selector. This preserves the branch commits and fixes the strategy for
+non-interactive execution. Propose `--squash` or `--rebase` only when the user
+explicitly chose that strategy. If repository policy disallows merge commits,
+resolve the available strategy with the user before rendering the contract.
+An existing confirmed closeout plan takes precedence; changing its strategy
+requires reconfirmation.
+
 Default the cleanup proposal to closing the verified, bound GitHub issue and
 then running `cafe close`, in that order. Use the issue's verified numeric ID
 in the first exact argv array:
