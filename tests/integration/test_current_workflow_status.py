@@ -102,6 +102,41 @@ def invoke_unchanged(issue):
     return result.stdout
 
 
+def test_public_status_uses_declared_alternate_diagnostic_source(workflow):
+    write_state(workflow, owner="agent", step="package", intent="await_agent")
+    (workflow / "other_producer").mkdir()
+    (workflow / "other_producer" / "incidents.json").write_text(json.dumps({
+        "schema_version": 7,
+        "workflow_id": "workflow-demo",
+        "incidents": {
+            "later_key": {
+                "at": "2026-09-28T00:00:00+00:00",
+                "code": "earlier_incident",
+            },
+            "earlier_key": {
+                "at": "2026-09-28T00:01:00+00:00",
+                "code": "latest_incident",
+            },
+        },
+    }))
+    (workflow / "status_sources.json").write_text(json.dumps({
+        "version": 1,
+        "workflow_id": "workflow-demo",
+        "diagnostic": {
+            "path": "other_producer/incidents.json",
+            "schema_version": 7,
+            "records_key": "incidents",
+            "time_key": "at",
+            "reason_key": "code",
+            "state": "Producer incident needs inspection",
+            "next": "Inspect other_producer/incidents.json before recovery.",
+        },
+    }))
+    output = invoke_unchanged(workflow)
+    assert "latest_incident" in output
+    assert "other_producer/incidents.json" in output
+
+
 def test_completed_iteration_still_waits_for_exact_user_task(workflow):
     write_state(workflow)
     task = materialize(workflow)

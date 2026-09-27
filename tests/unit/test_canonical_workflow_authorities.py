@@ -9,6 +9,27 @@ from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.services.status_service import StatusService
 
 
+def _declare_callback_diagnostic(issue_dir, workflow_id):
+    (issue_dir / "status_sources.json").write_text(json.dumps({
+        "version": 1,
+        "workflow_id": workflow_id,
+        "diagnostic": {
+            "path": "driver/callback_failure_notifications.json",
+            "schema_version": 1,
+            "records_key": "records",
+            "time_key": "occurred_at",
+            "reason_key": "error_code",
+            "state": "Callback delivery needs inspection",
+            "next": "Inspect driver/dispatch_state.json before manual recovery.",
+            "audit_fallback": {
+                "event_type": "workflow_event_callback_dispatch_failed",
+                "reason_key": "error",
+                "next": "Inspect audit_events before manual recovery.",
+            },
+        },
+    }))
+
+
 def test_complete_events_and_receipts_live_outside_the_board(tmp_path):
     store = BlackboardStore(tmp_path / "issue")
     state = store.load_or_create("spec")
@@ -53,15 +74,7 @@ def test_ordinary_status_shows_single_source_callback_failure(tmp_path):
     state = BlackboardStore(issue_dir).load_or_create("spec")
     service = StatusService(issues_root=tmp_path / "issues")
     before = service.load_current_state("issue", ["spec"])
-    (issue_dir / "status_sources.json").write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "workflow_id": state.workflow_id,
-                "callback_failure_receipt": "driver/callback_failure_notifications.json",
-            }
-        )
-    )
+    _declare_callback_diagnostic(issue_dir, state.workflow_id)
     (issue_dir / "driver").mkdir()
     (issue_dir / "driver" / "callback_failure_notifications.json").write_text(
         json.dumps(
@@ -89,11 +102,7 @@ def test_ordinary_status_reads_failure_without_large_audit_body(tmp_path, monkey
     state = store.load_or_create("spec")
     store.log_event(state, "spec", "ordinary", "large detail " * 25000)
     ordinary_path = store.audit._path(1)
-    (issue_dir / "status_sources.json").write_text(json.dumps({
-        "version": 1,
-        "workflow_id": state.workflow_id,
-        "callback_failure_receipt": "driver/callback_failure_notifications.json",
-    }))
+    _declare_callback_diagnostic(issue_dir, state.workflow_id)
     (issue_dir / "driver").mkdir()
     (issue_dir / "driver" / "callback_failure_notifications.json").write_text(json.dumps({
         "schema_version": 1,
@@ -122,11 +131,7 @@ def test_ordinary_status_reads_failure_without_large_audit_body(tmp_path, monkey
 def test_ordinary_status_chooses_latest_failure_independent_of_record_key(tmp_path):
     issue_dir = tmp_path / "issues" / "issue"
     state = BlackboardStore(issue_dir).load_or_create("spec")
-    (issue_dir / "status_sources.json").write_text(json.dumps({
-        "version": 1,
-        "workflow_id": state.workflow_id,
-        "callback_failure_receipt": "driver/callback_failure_notifications.json",
-    }))
+    _declare_callback_diagnostic(issue_dir, state.workflow_id)
     (issue_dir / "driver").mkdir()
     (issue_dir / "driver" / "callback_failure_notifications.json").write_text(json.dumps({
         "schema_version": 1,
@@ -306,6 +311,7 @@ def test_ordinary_status_shows_pre_dispatch_audit_failure(tmp_path, monkeypatch)
     state = store.load_or_create("spec")
     service = StatusService(issues_root=tmp_path / "issues")
     before = service.load_current_state("issue", ["spec"])
+    _declare_callback_diagnostic(issue_dir, state.workflow_id)
     store.log_event(state, "spec", "ordinary", "large detail " * 25000)
     ordinary_path = store.audit._path(1)
     store.record_event(
@@ -352,18 +358,30 @@ def test_failure_source_rejects_another_workflow(tmp_path):
     BlackboardStore(issue_dir).load_or_create("spec")
     service = StatusService(issues_root=tmp_path / "issues")
     before = service.load_current_state("issue", ["spec"])
-    (issue_dir / "status_sources.json").write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "workflow_id": "another-workflow",
-                "callback_failure_receipt": "driver/callback_failure_notifications.json",
-            }
-        )
-    )
+    _declare_callback_diagnostic(issue_dir, "another-workflow")
     status = service.load_current_state("issue", ["spec"])
     assert status["State"] != before["State"]
     assert "Next" in status
+
+
+def test_declared_diagnostic_rejects_receipt_from_another_workflow(tmp_path):
+    issue_dir = tmp_path / "issues" / "issue"
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+    _declare_callback_diagnostic(issue_dir, state.workflow_id)
+    (issue_dir / "driver").mkdir()
+    (issue_dir / "driver" / "callback_failure_notifications.json").write_text(json.dumps({
+        "schema_version": 1,
+        "workflow_id": "another-workflow",
+        "records": {"failure": {
+            "occurred_at": "2026-09-28T00:00:00+00:00",
+            "error_code": "stale_failure",
+        }},
+    }))
+    status = StatusService(issues_root=tmp_path / "issues").load_current_state(
+        "issue", ["spec"]
+    )
+    assert status["Reason"] != "stale_failure"
+    assert "dispatch_state.json" not in status["Next"]
 
 
 def test_resume_selection_skips_large_ordinary_body(tmp_path, monkeypatch):

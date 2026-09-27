@@ -43,7 +43,26 @@ def activate(
             declaration = {
                 "version": 1,
                 "workflow_id": workflow_id,
-                "callback_failure_receipt": "driver/callback_failure_notifications.json",
+                "diagnostic": {
+                    "path": "driver/callback_failure_notifications.json",
+                    "schema_version": 1,
+                    "records_key": "records",
+                    "time_key": "occurred_at",
+                    "reason_key": "error_code",
+                    "state": "Callback delivery needs inspection",
+                    "next": (
+                        "Inspect driver/callback_failure_notifications.json and "
+                        "driver/dispatch_state.json; verify delivery before manual recovery."
+                    ),
+                    "audit_fallback": {
+                        "event_type": "workflow_event_callback_dispatch_failed",
+                        "reason_key": "error",
+                        "next": (
+                            "Inspect audit_events and driver/dispatch_state.json; "
+                            "verify delivery before manual recovery."
+                        ),
+                    },
+                },
             }
             if source_path.exists():
                 if source_path.is_symlink() or source_path.stat().st_size > 4096 or (

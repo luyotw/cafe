@@ -56,67 +56,83 @@ class StatusService:
             raise RuntimeError(f"Failed to detect current issue from git context: {e}")
 
     @staticmethod
-    def _with_callback_failure(issue_dir: Path, workflow_id: str,
-                               status: Dict[str, str],
-                               audit: AuditEventStore) -> Dict[str, str]:
+    def _with_declared_diagnostic(issue_dir: Path, workflow_id: str,
+                                  status: Dict[str, str],
+                                  audit: AuditEventStore) -> Dict[str, str]:
+        declaration_path = issue_dir / "status_sources.json"
+        if not declaration_path.exists():
+            return status
+        if (declaration_path.is_symlink() or not declaration_path.is_file()
+                or declaration_path.stat().st_size > 4096):
+            raise ValueError("status source is invalid")
+        declaration = json.loads(declaration_path.read_text(encoding="utf-8"))
+        if (not isinstance(declaration, dict) or declaration.get("version") != 1
+                or declaration.get("workflow_id") != workflow_id):
+            raise ValueError("status source identity is invalid")
+        source = declaration.get("diagnostic")
+        if not isinstance(source, dict):
+            raise ValueError("status source declaration is invalid")
+        for key in ("path", "records_key", "time_key", "reason_key", "state", "next"):
+            if not isinstance(source.get(key), str) or not source[key]:
+                raise ValueError("status source declaration is invalid")
+        if type(source.get("schema_version")) is not int or source["schema_version"] < 1:
+            raise ValueError("status source schema version is invalid")
+        fallback = source.get("audit_fallback")
+        if (fallback is not None and (
+            not isinstance(fallback, dict)
+            or any(not isinstance(fallback.get(key), str) or not fallback[key]
+                   for key in ("event_type", "reason_key", "next"))
+        )):
+            raise ValueError("status audit fallback is invalid")
+        relative = Path(source["path"])
+        if (relative.is_absolute() or not relative.parts or ".." in relative.parts
+                or not (issue_dir / relative).resolve().is_relative_to(issue_dir.resolve())):
+            raise ValueError("status source path is unsafe")
+        diagnostic_path = issue_dir / relative
+
         def from_audit() -> Dict[str, str]:
-            failure = audit.latest_record(
-                workflow_id, {"workflow_event_callback_dispatch_failed"}
-            )
-            if failure is not None:
+            if fallback is None:
+                return status
+            event = audit.latest_record(workflow_id, {fallback["event_type"]})
+            if event is not None:
                 status.update({
-                    "State": "Callback delivery needs inspection",
-                    "Reason": str(failure["data"].get("error", "callback dispatch failed")),
-                    "Next": (
-                        "Inspect audit_events and driver/dispatch_state.json; "
-                        "verify delivery before manual recovery."
-                    ),
+                    "State": source["state"],
+                    "Reason": str(event["data"].get(fallback["reason_key"], "unknown")),
+                    "Next": fallback["next"],
                 })
             return status
 
-        declaration_path = issue_dir / "status_sources.json"
-        if not declaration_path.exists():
+        if not diagnostic_path.exists():
             return from_audit()
-        if declaration_path.is_symlink() or declaration_path.stat().st_size > 4096:
-            raise ValueError("callback failure source is invalid")
-        declaration = json.loads(declaration_path.read_text(encoding="utf-8"))
-        if (not isinstance(declaration, dict) or declaration.get("version") != 1
-                or declaration.get("workflow_id") != workflow_id
-                or declaration.get("callback_failure_receipt")
-                != "driver/callback_failure_notifications.json"):
-            raise ValueError("callback failure source identity is invalid")
-        receipt_path = issue_dir / declaration["callback_failure_receipt"]
-        if not receipt_path.exists():
-            return from_audit()
-        if receipt_path.is_symlink() or receipt_path.stat().st_size > 256 * 1024:
-            raise ValueError("callback failure receipt is invalid")
-        raw = json.loads(receipt_path.read_text(encoding="utf-8"))
-        if (not isinstance(raw, dict) or raw.get("schema_version") != 1
+        if (diagnostic_path.is_symlink() or not diagnostic_path.is_file()
+                or diagnostic_path.stat().st_size > 256 * 1024):
+            raise ValueError("status diagnostic is invalid")
+        raw = json.loads(diagnostic_path.read_text(encoding="utf-8"))
+        if (not isinstance(raw, dict)
+                or raw.get("schema_version") != source["schema_version"]
                 or raw.get("workflow_id") != workflow_id
-                or not isinstance(raw.get("records"), dict)):
-            raise ValueError("callback failure receipt identity is invalid")
-        records = raw["records"]
+                or not isinstance(raw.get(source["records_key"]), dict)):
+            raise ValueError("status diagnostic identity is invalid")
+        records = raw[source["records_key"]]
         if not records:
             return from_audit()
         def occurred_at(record: object) -> datetime:
-            if not isinstance(record, dict) or not isinstance(record.get("error_code"), str):
-                raise ValueError("callback failure record is invalid")
-            value = record.get("occurred_at")
+            if (not isinstance(record, dict)
+                    or not isinstance(record.get(source["reason_key"]), str)):
+                raise ValueError("status diagnostic record is invalid")
+            value = record.get(source["time_key"])
             if not isinstance(value, str):
-                raise ValueError("callback failure time is invalid")
+                raise ValueError("status diagnostic time is invalid")
             instant = datetime.fromisoformat(value)
             if instant.tzinfo is None:
-                raise ValueError("callback failure time lacks timezone")
+                raise ValueError("status diagnostic time lacks timezone")
             return instant.astimezone(timezone.utc)
 
         latest = max(records.values(), key=occurred_at)
         status.update({
-            "State": "Callback delivery needs inspection",
-            "Reason": latest["error_code"],
-            "Next": (
-                "Inspect driver/callback_failure_notifications.json and "
-                "driver/dispatch_state.json; verify delivery before manual recovery."
-            ),
+            "State": source["state"],
+            "Reason": latest[source["reason_key"]],
+            "Next": source["next"],
         })
         return status
 
@@ -216,7 +232,7 @@ class StatusService:
                         "Next": f"cafe task inspect {shlex.quote(task.id)}",
                     }
                 )
-                return self._with_callback_failure(
+                return self._with_declared_diagnostic(
                     issue_dir, state.workflow_id, status, audit
                 )
             if any(task.status is HumanTaskStatus.CONFIGURATION_ERROR for task in tasks):
@@ -227,7 +243,7 @@ class StatusService:
                 if state.current_step != "done":
                     raise ValueError("completion and current step disagree")
                 status.update({"State": "Completed", "Reason": "Workflow completed"})
-                return self._with_callback_failure(
+                return self._with_declared_diagnostic(
                     issue_dir, state.workflow_id, status, audit
                 )
             if state.current_step == "done":
@@ -240,7 +256,7 @@ class StatusService:
                         "Next": f"cafe task ls --issue {shlex.quote(issue_name)}",
                     }
                 )
-                return self._with_callback_failure(
+                return self._with_declared_diagnostic(
                     issue_dir, state.workflow_id, status, audit
                 )
 
@@ -284,7 +300,7 @@ class StatusService:
                     )
                 elif latest.event_type == "step_started":
                     status["State"] = "Agent step in progress"
-            return self._with_callback_failure(issue_dir, state.workflow_id, status, audit)
+            return self._with_declared_diagnostic(issue_dir, state.workflow_id, status, audit)
         except (OSError, ValueError, TypeError, KeyError, AttributeError, BatonRejected):
             # Do not expose raw parser text or manufacture a task/recovery choice.
             status["State"] = "Unknown"
