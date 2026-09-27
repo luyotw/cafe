@@ -19,11 +19,28 @@ from cafe.core.capabilities import (
 from cafe.core.human_task_notifications import (
     SlackNotificationError,
     build_human_task_message,
+    build_workflow_callback_failure_message,
     load_slack_webhook_url,
     post_slack_notification,
 )
 
 VALID_WEBHOOK = "https://hooks.slack.com/services/T00000000/B00000000/secret-value"
+
+
+def test_callback_state_error_gives_user_an_action_instead_of_internal_fields() -> None:
+    message = build_workflow_callback_failure_message(
+        repository="cafe",
+        issue="issue500",
+        step="develop",
+        event_type="phase_terminal",
+        error_code="callback_ValueError",
+    ).to_slack_payload()["text"]
+
+    assert "無法讀取自動通知所需的狀態或設定" in message
+    assert "這不代表工作流程已停止" in message
+    assert "原對話，請 Driver 檢查目前進度與下一步" in message
+    assert "callback_ValueError" not in message
+    assert "transport_clis" not in message
 
 
 @pytest.fixture(autouse=True)

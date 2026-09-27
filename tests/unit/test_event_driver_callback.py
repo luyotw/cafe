@@ -2261,13 +2261,13 @@ def test_callback_failure_sends_a_best_effort_slack_notice(tmp_path: Path, monke
             {
                 "text": "\n".join(
                     (
-                        "CAFE event callback 執行失敗",
+                        "CAFE 自動通知未完成",
                         f"專案：{tmp_path.name}",
                         "對話：issue456",
                         "目前階段：需求規格",
-                        "事件：human_task",
-                        "錯誤：codex_queue_exit_1",
-                        "工作流程狀態已保存，請回到 CAFE 的「issue456」工作項目查看。",
+                        "狀況：CAFE 無法將通知送達原對話。",
+                        "影響：原對話可能收不到這次更新；這不代表工作流程已停止。",
+                        "請回到 CAFE 的「issue456」原對話，請 Driver 檢查目前進度與下一步。",
                     )
                 )
             },
@@ -2328,7 +2328,7 @@ def test_callback_failure_uses_canonical_repository_route_and_deduplicates(
     assert routed_roots == [canonical_root]
     assert len(payloads) == 1
     assert "專案：main-repository" in payloads[0][0]["text"]
-    assert "錯誤：codex_queue_exit_2" in payloads[0][0]["text"]
+    assert "狀況：CAFE 無法將通知送達原對話。" in payloads[0][0]["text"]
     receipts = json.loads(
         (issue_dir / "driver" / callback.FAILURE_NOTIFICATIONS_FILENAME).read_text(encoding="utf-8")
     )
