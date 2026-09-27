@@ -734,6 +734,11 @@ def _load_or_initialize_dispatch_state(
             state = json.loads(_read_bounded_text(path, label="event-driven dispatch state"))
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise ValueError("event-driven dispatch state is unreadable") from exc
+        if contract_managed and isinstance(state, dict):
+            # Older callbacks persisted the selected transport here. The
+            # confirmed Driver contract now owns that choice, so discard this
+            # obsolete snapshot when loading an otherwise current state.
+            state.pop("transport_clis", None)
         expected_fields = (
             {
                 "schema_version",

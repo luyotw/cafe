@@ -584,6 +584,32 @@ def test_contract_chain_update_keeps_sessions_and_historical_routes(tmp_path: Pa
     assert status["events"][0]["attempts"][0]["cli"] == "gemini"
 
 
+def test_contract_dispatch_loads_legacy_transport_snapshot(tmp_path: Path) -> None:
+    callback = _callback_module()
+    driver_dir, state, event = _contract_event_context(
+        callback, tmp_path, [("codex", "implicit")]
+    )
+    state["transport_clis"] = [{"cli": "codex"}]
+    callback._write_dispatch_state(driver_dir, state)
+    config = callback._contract_callback_config(
+        issue_dir=driver_dir.parent,
+        issue_name=driver_dir.parent.name,
+        workflow_id=state["workflow_id"],
+    )
+
+    loaded = callback._load_or_initialize_dispatch_state(
+        driver_dir, workflow_id=state["workflow_id"], config=config
+    )
+
+    assert "transport_clis" not in loaded
+    assert event["event_id"] in loaded["events"]
+    assert loaded["entries"][0]["session"] == state["entries"][0]["session"]
+    callback._write_dispatch_state(driver_dir, loaded)
+    assert "transport_clis" not in json.loads(
+        (driver_dir / "dispatch_state.json").read_text()
+    )
+
+
 def test_unknown_legacy_sessions_are_rebuilt_without_misrouting_host(tmp_path: Path) -> None:
     callback = _callback_module()
     driver_dir, state, event = _contract_event_context(
