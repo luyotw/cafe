@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from cafe.core.audit_events import MAX_EVENT_BYTES
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.services.status_service import StatusService
 
@@ -299,3 +300,26 @@ def test_resume_selection_skips_large_ordinary_body(tmp_path, monkeypatch):
         )
     )
     assert [record["event_id"] for record in selected] == [callback["event_id"]]
+
+
+def test_callback_marker_close_stays_within_bounded_record(tmp_path):
+    store = BlackboardStore(tmp_path / "issue")
+    state = store.load_or_create("spec")
+    sequence = store.audit.reserve(state.workflow_id)
+    record = {
+        "workflow_id": state.workflow_id,
+        "event_id": "boundary-event",
+        "sequence": sequence,
+        "timestamp": "2026-09-28T00:00:00+00:00",
+        "step": "spec",
+        "event_type": "workflow_event_callback_enqueued",
+        "message": "",
+        "data": {},
+        "patch": {},
+        "delivery": "open",
+    }
+    empty_size = len(store.audit._event_bytes(record))
+    record["message"] = "x" * (MAX_EVENT_BYTES - empty_size - 2)
+    store.audit.commit(state.workflow_id, record)
+    store.audit.close(state.workflow_id, sequence)
+    assert store.audit.read(state.workflow_id, sequence, bounded=True)["delivery"] == "closed"

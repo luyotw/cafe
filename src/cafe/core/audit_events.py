@@ -109,10 +109,14 @@ class AuditEventStore:
             raise ValueError("audit sequence already committed")
         if record.get("workflow_id") != workflow_id or sequence > self.high_water(workflow_id):
             raise ValueError("audit event identity is invalid")
+        if record["event_type"] == "workflow_event_callback_enqueued":
+            if record.get("delivery", "open") != "open":
+                raise ValueError("new callback delivery marker is invalid")
+            record["delivery"] = "open"
         content = self._event_bytes(record)
         if (
             record["event_type"] == "workflow_event_callback_enqueued"
-            and len(content) > MAX_EVENT_BYTES
+            and len(content) > MAX_EVENT_BYTES - 2
         ):
             raise ValueError("audit event exceeds bounded record size")
         atomic_write_bytes(path, content)
