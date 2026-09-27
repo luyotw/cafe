@@ -252,12 +252,12 @@ repeat it when the user already has the same task and options unless they ask.
    `contract_sha256` and `sources_sha256` to
    `complete_driver_task.py --issue-dir <issue-dir> --task-id <task-id>
    --assessment <file> --contract-sha256 <digest> --sources-sha256 <digest> --json`.
-   This Driver-owned entry rechecks authority under the contract replacement
-   lock and again inside the neutral durable task transaction, immediately
-   before recording the result. It uses the same structured task validation
-   and preserves the no-resume continuation boundary.
-   `sources_sha256` binds the confirmed source contents, current task,
-   handoff, and dynamic questions used by that decision.
+   This Driver-owned entry validates current authority when invoked, uses the
+   same structured task validation, and preserves the no-resume continuation
+   boundary. `sources_sha256` binds the inspected source contents, current task,
+   handoff, and dynamic questions to that initial validation. Concurrent
+   decision-source changes after validation are not guarded through completion;
+   the user accepted this documented limitation.
    A changed contract, task, evidence source, or answer must be reinspected.
    For an explicit user-owned answer or the separately authorized correction
    outcome, use the generic command only after their respective rules above

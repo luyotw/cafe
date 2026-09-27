@@ -71,10 +71,10 @@ After `cafe task inspect <task-id> --json`, run
 response and a grounded assessment to the same read-only entry. For a
 `driver_confirmable` response, pass that same assessment and the returned
 `contract_sha256` and `sources_sha256` to `complete_driver_task.py`; it
-rechecks authority inside the neutral durable task transaction before recording
-the result, then leaves workflow resumption to the confirmed Driver mode.
-A v5
-contract's `reactive_user_handoffs.need_clarification` value alone grants no
+validates current authority when invoked, then leaves workflow resumption to
+the confirmed Driver mode. Concurrent decision-source changes after validation
+are not guarded through completion; the user accepted this documented limitation.
+A v5 contract's `reactive_user_handoffs.need_clarification` value alone grants no
 Driver completion authority; reconfirm task ownership when needed.
 
 ## Delivery comparison at an existing output gate

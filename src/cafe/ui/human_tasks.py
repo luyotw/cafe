@@ -6,7 +6,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional, Sequence
+from typing import Any, Optional, Sequence
 
 from cafe.core.blackboard import (
     ArtifactEntry,
@@ -273,8 +273,6 @@ def apply_human_task_payload(
     raw_payload: str | Mapping[str, Any],
     source: str,
     supervisor_handoff_to: Optional[str] = None,
-    completion_precondition: Callable[[], None] | None = None,
-    completion_postcondition: Callable[[], None] | None = None,
 ) -> HumanTaskApplication:
     """Validate and apply one response while retaining a pause on rejection."""
     record_store = HumanTaskRecordStore(issue_dir)
@@ -310,8 +308,6 @@ def apply_human_task_payload(
             source=source,
             record_store=record_store,
             supervisor_handoff_to=supervisor_handoff_to,
-            completion_precondition=completion_precondition,
-            completion_postcondition=completion_postcondition,
         )
 
 
@@ -469,8 +465,6 @@ def _apply_human_task_payload(
     source: str,
     record_store: HumanTaskRecordStore,
     supervisor_handoff_to: Optional[str] = None,
-    completion_precondition: Callable[[], None] | None = None,
-    completion_postcondition: Callable[[], None] | None = None,
 ) -> HumanTaskApplication:
     """Apply a response while holding the matching durable-record transaction."""
     store = BlackboardStore(issue_dir)
@@ -790,8 +784,6 @@ def _apply_human_task_payload(
                     task_id=durable_task.id,
                     payload=completion_payload,
                     source=source,
-                    precondition=completion_precondition,
-                    postcondition=completion_postcondition,
                 )
             except (HumanTaskCorrelationError, OSError, ValueError) as exc:
                 rejection = HumanTaskRejection(

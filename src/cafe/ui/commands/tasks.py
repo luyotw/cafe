@@ -6,7 +6,7 @@ import json
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Mapping, Optional
 
 import typer
 from rich.console import Console
@@ -43,8 +43,6 @@ def apply_structured_task(
     project_root: Path,
     source: str,
     supervisor_handoff_to: str | None = None,
-    completion_precondition: Callable[[], None] | None = None,
-    completion_postcondition: Callable[[], None] | None = None,
 ) -> tuple[CompletionPreflight, HumanTaskApplication]:
     """Use the same neutral validator and durable transition for both callers."""
     preflight = service.preflight_completion(task_id)
@@ -61,8 +59,6 @@ def apply_structured_task(
         raw_payload=raw_payload,
         source=source,
         supervisor_handoff_to=supervisor_handoff_to,
-        completion_precondition=completion_precondition,
-        completion_postcondition=completion_postcondition,
     )
     if applied.rejection is not None or applied.target is None:
         message = (
