@@ -865,6 +865,8 @@ class HumanTaskRecordStore:
         content = canonical_json(envelope.to_dict())
         if precondition is not None:
             precondition()
+        # Post-write validation and rollback are not crash-atomic against concurrent
+        # decision-source changes; readers may see completion before rollback.
         atomic_write_bytes(self.file_path, content)
         if postcondition is not None:
             try:
