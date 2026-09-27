@@ -24,6 +24,7 @@ try:
 except ImportError:  # pragma: no cover - available only on Windows.
     msvcrt = None  # type: ignore[assignment]
 
+from cafe.core.audit_events import AuditEventStore
 from cafe.core.packet_io import atomic_write_bytes
 from cafe.core.workflow_models import BatonRejected
 
@@ -180,18 +181,14 @@ def _merge_generic_state(
             baseline.get(field_name, {}),
             desired_raw[field_name],
         )
-    for field_name in ("events", "decisions"):
+    for field_name in ("decisions",):
         merged_raw[field_name] = _merge_changed_sequence(
             latest_raw[field_name],
             baseline.get(field_name, []),
             desired_raw[field_name],
         )
-    if capability_receipts_authoritative:
-        merged_raw["capability_receipts"] = _merge_changed_sequence(
-            latest_raw["capability_receipts"],
-            baseline.get("capability_receipts", []),
-            desired_raw["capability_receipts"],
-        )
+    merged_raw["events"] = latest_raw["events"]
+    merged_raw["capability_receipts"] = latest_raw["capability_receipts"]
     return BlackboardState.from_dict(merged_raw, initial_step=desired.current_step)
 
 
@@ -639,6 +636,7 @@ class BlackboardState:
     handoff_contract: Optional[HandoffContract] = None
     ownership_cursor: Optional[Dict[str, Any]] = None
     step_attempt_counts: Dict[str, int] = field(default_factory=dict)
+    applied_event_sequence: int = 0
     updated_at: str = field(default_factory=_now_iso)
     _persisted_snapshot: Optional[Dict[str, Any]] = field(
         default=None, init=False, repr=False, compare=False
@@ -660,6 +658,7 @@ class BlackboardState:
             ),
             "ownership_cursor": dict(self.ownership_cursor) if self.ownership_cursor else None,
             "step_attempt_counts": dict(self.step_attempt_counts),
+            "applied_event_sequence": self.applied_event_sequence,
             "updated_at": self.updated_at,
         }
 
@@ -742,6 +741,7 @@ class BlackboardState:
             ),
             ownership_cursor=cursor,
             step_attempt_counts=attempts,
+            applied_event_sequence=int(data.get("applied_event_sequence", 0)),
             updated_at=str(data.get("updated_at", _now_iso())),
         )
         state._persisted_snapshot = state.to_dict()
@@ -765,6 +765,7 @@ def is_genuine_cold_start(state: BlackboardState, *, entry_point: str) -> bool:
         and not state.artifacts
         and not state.capability_receipts
         and not state.step_attempt_counts
+        and state.applied_event_sequence == 0
         and state.ownership_cursor is None
         and not state.handoff_summary
         and bootstrap_handoff
@@ -776,6 +777,7 @@ class BlackboardStore:
 
     _thread_locks: Dict[Path, threading.RLock] = {}
     _thread_locks_guard = threading.Lock()
+    _receipt_transactions = threading.local()
 
     def __init__(self, issue_dir: Path) -> None:
         self.issue_dir = issue_dir
@@ -783,6 +785,69 @@ class BlackboardStore:
         self.state_lock_path = issue_dir / f".{BLACKBOARD_FILENAME}.state.lock"
         self.receipt_lock_path = issue_dir / f".{BLACKBOARD_FILENAME}.receipt.lock"
         self.next_step_path = issue_dir / NEXT_STEP_FILENAME
+        self.audit = AuditEventStore(issue_dir)
+        self.receipts_path = issue_dir / "capability_receipts.json"
+
+    def _in_receipt_transaction(self) -> bool:
+        active = getattr(self._receipt_transactions, "paths", set())
+        return self.receipt_lock_path.resolve() in active
+
+    def _compact_dict(self, state: BlackboardState) -> Dict[str, Any]:
+        raw = state.to_dict()
+        raw.pop("events")
+        raw.pop("capability_receipts")
+        return raw
+
+    def _load_receipts(self, workflow_id: str) -> List[Dict[str, Any]]:
+        path = self.receipts_path
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("capability receipt authority is absent")
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if (not isinstance(raw, dict) or raw.get("version") != 1
+                or raw.get("workflow_id") != workflow_id
+                or not isinstance(raw.get("receipts"), list)
+                or any(not isinstance(item, dict) for item in raw["receipts"])):
+            raise ValueError("capability receipt authority is invalid")
+        return list(raw["receipts"])
+
+    def _write_receipts(self, workflow_id: str, receipts: List[Dict[str, Any]]) -> None:
+        atomic_write_bytes(self.receipts_path, json.dumps(
+            {"version": 1, "workflow_id": workflow_id, "receipts": receipts},
+            ensure_ascii=False, sort_keys=True,
+        ).encode("utf-8"))
+
+    def refresh_capability_receipts(self, state: BlackboardState) -> None:
+        state.capability_receipts = self._load_receipts(state.workflow_id)
+
+    def _hydrate(self, state: BlackboardState) -> None:
+        state.events = [
+            EventEntry.from_dict(record) for record in self.audit.iter_records(state.workflow_id)
+        ]
+        self.refresh_capability_receipts(state)
+        state._persisted_snapshot = state.to_dict()
+
+    def _hydrate_latest(self, persisted: BlackboardState, desired: BlackboardState) -> None:
+        baseline = desired._persisted_snapshot
+        if (baseline is not None and baseline.get("workflow_id") == persisted.workflow_id
+                and baseline.get("applied_event_sequence") == persisted.applied_event_sequence
+                and baseline.get("events") == [entry.to_dict() for entry in desired.events]):
+            persisted.events = list(desired.events)
+            self.refresh_capability_receipts(persisted)
+            persisted._persisted_snapshot = persisted.to_dict()
+        else:
+            self._hydrate(persisted)
+
+    def _ensure_authorities(self, state: BlackboardState) -> None:
+        if not self.audit.binding.exists() or not self.receipts_path.exists():
+            if (not is_genuine_cold_start(state, entry_point=state.current_step)
+                    or (self.audit.binding.exists()
+                        and self.audit.high_water(state.workflow_id) != 0)):
+                raise ValueError("workflow authorities are absent after execution")
+            self.audit.initialize(state.workflow_id)
+            if not self.receipts_path.exists():
+                self._write_receipts(state.workflow_id, [])
+        self.audit.high_water(state.workflow_id)
+        self._load_receipts(state.workflow_id)
 
     def load_or_create(
         self,
@@ -806,8 +871,13 @@ class BlackboardStore:
         tolerate_invalid_baton: bool,
     ) -> BlackboardState:
         if self.file_path.exists():
+            with self.state_lock_path.open("a+", encoding="utf-8") as lock_file:
+                with _optional_process_file_lock(lock_file):
+                    self._reconcile_unlocked()
             raw = json.loads(self.file_path.read_text(encoding="utf-8"))
             state = BlackboardState.from_dict(raw, initial_step=initial_step)
+            self._ensure_authorities(state)
+            self._hydrate(state)
             if not raw.get("workflow_id"):
                 state.workflow_id = str(uuid.uuid4())
                 self.save(state)
@@ -842,8 +912,11 @@ class BlackboardStore:
             with self.state_lock_path.open("a+", encoding="utf-8") as lock_file:
                 with _optional_process_file_lock(lock_file):
                     if self.file_path.exists():
+                        self._reconcile_unlocked()
                         raw = json.loads(self.file_path.read_text(encoding="utf-8"))
                         persisted = BlackboardState.from_dict(raw, initial_step=state.current_step)
+                        self._ensure_authorities(persisted)
+                        self._hydrate_latest(persisted, state)
                         if state._persisted_snapshot is not None:
                             merged = _merge_generic_state(
                                 persisted=persisted,
@@ -856,20 +929,61 @@ class BlackboardStore:
                             state.__dict__.clear()
                             state.__dict__.update(merged.__dict__)
                         else:
-                            if not capability_receipts_authoritative:
-                                state.capability_receipts = list(persisted.capability_receipts)
+                            state.capability_receipts = list(persisted.capability_receipts)
+                            state.events = list(persisted.events)
                     self._save_unlocked(state)
+                    self._ensure_authorities(state)
+                    self.refresh_capability_receipts(state)
+                    state._persisted_snapshot = state.to_dict()
 
     def _save_unlocked(self, state: BlackboardState) -> None:
         """Persist a state whose caller already owns the state-file lock."""
         self.issue_dir.mkdir(parents=True, exist_ok=True)
         state.updated_at = _now_iso()
-        payload = json.dumps(state.to_dict(), ensure_ascii=False, indent=2).encode("utf-8")
+        payload = json.dumps(self._compact_dict(state), ensure_ascii=False, indent=2).encode(
+            "utf-8"
+        )
         atomic_write_bytes(
             self.file_path,
             payload,
         )
-        state._persisted_snapshot = json.loads(payload)
+        state._persisted_snapshot = state.to_dict()
+
+    def _reconcile_unlocked(self) -> None:
+        """Apply committed state patches before another workflow operation."""
+        if not self.file_path.exists():
+            return
+        raw = json.loads(self.file_path.read_text(encoding="utf-8"))
+        workflow_id = raw.get("workflow_id")
+        if not isinstance(workflow_id, str) or not self.audit.binding.exists():
+            return
+        checkpoint = raw.get("applied_event_sequence", 0)
+        if not isinstance(checkpoint, int) or checkpoint < 0:
+            raise ValueError("audit checkpoint is invalid")
+        changed = False
+        high_water = self.audit.high_water(workflow_id)
+        for sequence in range(checkpoint + 1, high_water + 1):
+            record = self.audit.read(workflow_id, sequence)
+            if record is None:
+                continue
+            for field_name, change in record.get("patch", {}).items():
+                if field_name in {
+                    "events", "capability_receipts", "workflow_id", "applied_event_sequence"
+                }:
+                    raise ValueError("audit patch changes an authority")
+                if not isinstance(change, dict) or set(change) != {"before", "after"}:
+                    raise ValueError("audit patch is malformed")
+                if raw.get(field_name) == change["before"]:
+                    raw[field_name] = change["after"]
+                elif raw.get(field_name) != change["after"]:
+                    raise ValueError("audit patch conflicts with workflow state")
+            checkpoint = sequence
+            changed = True
+        if changed:
+            raw["applied_event_sequence"] = checkpoint
+            atomic_write_bytes(
+                self.file_path, json.dumps(raw, ensure_ascii=False, indent=2).encode("utf-8")
+            )
 
     def ensure_baton(
         self,
@@ -1090,22 +1204,35 @@ class BlackboardStore:
         self.save(state)
 
     def append_capability_receipt(self, state: BlackboardState, receipt: Dict[str, Any]) -> None:
-        """Append one structured host capability receipt and persist the blackboard."""
-        state.capability_receipts.append(dict(receipt))
-        self.save(state, capability_receipts_authoritative=True)
+        """Append one receipt against the latest workflow-bound authority."""
+        if not self._in_receipt_transaction():
+            with self.capability_receipt_transaction(state):
+                self.append_capability_receipt(state, receipt)
+            return
+        receipts = self._load_receipts(state.workflow_id)
+        receipts.append(dict(receipt))
+        self._write_receipts(state.workflow_id, receipts)
+        state.capability_receipts = receipts
 
     def upsert_capability_receipt(self, state: BlackboardState, receipt: Dict[str, Any]) -> None:
         """Persist one evolving attempt receipt without duplicating its audit identity."""
         attempt_id = str(receipt.get("notification_attempt_id") or "")
         if not attempt_id:
             raise ValueError("notification_attempt_id is required for receipt upsert")
-        for index, existing in enumerate(state.capability_receipts):
+        if not self._in_receipt_transaction():
+            with self.capability_receipt_transaction(state):
+                self.upsert_capability_receipt(state, receipt)
+            return
+        receipts = self._load_receipts(state.workflow_id)
+        for index, existing in enumerate(receipts):
             if str(existing.get("notification_attempt_id") or "") == attempt_id:
-                state.capability_receipts[index] = dict(receipt)
-                self.save(state, capability_receipts_authoritative=True)
+                receipts[index] = dict(receipt)
+                self._write_receipts(state.workflow_id, receipts)
+                state.capability_receipts = receipts
                 return
-        state.capability_receipts.append(dict(receipt))
-        self.save(state, capability_receipts_authoritative=True)
+        receipts.append(dict(receipt))
+        self._write_receipts(state.workflow_id, receipts)
+        state.capability_receipts = receipts
 
     @contextmanager
     def capability_receipt_transaction(self, state: BlackboardState) -> Iterator[BlackboardState]:
@@ -1117,9 +1244,16 @@ class BlackboardStore:
                     if self.file_path.exists():
                         raw = json.loads(self.file_path.read_text(encoding="utf-8"))
                         persisted = BlackboardState.from_dict(raw, initial_step=state.current_step)
+                        self._ensure_authorities(persisted)
+                        self._hydrate(persisted)
                         state.__dict__.clear()
                         state.__dict__.update(persisted.__dict__)
-                    yield state
+                    active = getattr(self._receipt_transactions, "paths", set())
+                    self._receipt_transactions.paths = active | {self.receipt_lock_path.resolve()}
+                    try:
+                        yield state
+                    finally:
+                        self._receipt_transactions.paths = active
 
     @classmethod
     def _thread_lock_for(cls, file_path: Path) -> threading.RLock:
@@ -1185,16 +1319,52 @@ class BlackboardStore:
         message: str,
         data: Optional[Dict[str, Any]] = None,
     ) -> None:
-        state.events.append(
-            EventEntry(
-                timestamp=_now_iso(),
-                step=step,
-                event_type=event_type,
-                message=message,
-                data=data or {},
-            )
-        )
-        self.save(state)
+        entry = EventEntry(_now_iso(), step, event_type, message, data or {})
+        self._commit_event(state, entry)
+
+    def _commit_event(self, state: BlackboardState, entry: EventEntry,
+                      *, event_id: str | None = None) -> EventEntry:
+        with self._thread_lock_for(self.file_path):
+            with self.state_lock_path.open("a+", encoding="utf-8") as lock_file:
+                with _optional_process_file_lock(lock_file):
+                    self._reconcile_unlocked()
+                    raw = json.loads(self.file_path.read_text(encoding="utf-8"))
+                    persisted = BlackboardState.from_dict(raw, initial_step=state.current_step)
+                    self._ensure_authorities(persisted)
+                    self._hydrate_latest(persisted, state)
+                    merged = (_merge_generic_state(
+                        persisted=persisted, desired=state,
+                        baseline=state._persisted_snapshot,
+                        capability_receipts_authoritative=False,
+                    ) if state._persisted_snapshot is not None else state)
+                    before = self._compact_dict(persisted)
+                    after = self._compact_dict(merged)
+                    patch = {
+                        key: {"before": before.get(key), "after": value}
+                        for key, value in after.items()
+                        if key not in {"updated_at", "applied_event_sequence"}
+                        and before.get(key) != value
+                    }
+                    sequence = self.audit.reserve(state.workflow_id)
+                    if entry.event_type == "workflow_event_callback_enqueued":
+                        entry.data["sequence"] = sequence
+                        entry.message = json.dumps(entry.data, ensure_ascii=False)
+                    record = {
+                        "workflow_id": state.workflow_id,
+                        "event_id": event_id or str(uuid.uuid4()),
+                        "sequence": sequence,
+                        **entry.to_dict(),
+                        "patch": patch,
+                    }
+                    self.audit.commit(state.workflow_id, record)
+                    merged.applied_event_sequence = sequence
+                    merged.events = list(persisted.events) + [entry]
+                    self._save_unlocked(merged)
+                    self.refresh_capability_receipts(merged)
+                    merged._persisted_snapshot = merged.to_dict()
+                    state.__dict__.clear()
+                    state.__dict__.update(merged.__dict__)
+                    return entry
 
     def record_event(
         self, state: BlackboardState, event_type: str, payload: Dict[str, Any]
@@ -1223,68 +1393,21 @@ class BlackboardStore:
             ):
                 raise ValueError("workflow callback replay identity is incomplete")
 
-        with self._thread_lock_for(self.file_path):
-            self.issue_dir.mkdir(parents=True, exist_ok=True)
-            with self.state_lock_path.open("a+", encoding="utf-8") as lock_file:
-                with _optional_process_file_lock(lock_file):
-                    if self.file_path.exists():
-                        raw = json.loads(self.file_path.read_text(encoding="utf-8"))
-                        persisted = BlackboardState.from_dict(raw, initial_step=state.current_step)
-                        if state._persisted_snapshot is not None:
-                            latest = _merge_generic_state(
-                                persisted=persisted,
-                                desired=state,
-                                baseline=state._persisted_snapshot,
-                                capability_receipts_authoritative=False,
-                            )
-                            state.__dict__.clear()
-                            state.__dict__.update(latest.__dict__)
+        if supplied_identity["event_id"] is not None:
+            self.validate_workflow_callback_event(state.workflow_id, payload)
+            return dict(payload)
+        occurred_at = _now_iso()
+        durable_payload = {**payload, "event_id": str(uuid.uuid4()),
+                           "occurred_at": occurred_at}
+        entry = EventEntry(occurred_at, str(payload.get("step", state.current_step)),
+                           "workflow_event_callback_enqueued",
+                           json.dumps(durable_payload, ensure_ascii=False), durable_payload)
+        return dict(self._commit_event(state, entry, event_id=durable_payload["event_id"]).data)
 
-                    if supplied_identity["event_id"] is not None:
-                        for entry in reversed(state.events):
-                            if (
-                                entry.event_type == "workflow_event_callback_enqueued"
-                                and entry.data.get("event_id")
-                                == supplied_identity["event_id"]
-                            ):
-                                if all(
-                                    entry.data.get(key) == value
-                                    for key, value in supplied_identity.items()
-                                ):
-                                    return dict(entry.data)
-                                raise ValueError(
-                                    "workflow callback replay identity conflicts with durable state"
-                                )
-                        raise ValueError("workflow callback replay identity is not durable")
-
-                    sequence = 1 + max(
-                        (
-                            entry.data["sequence"]
-                            for entry in state.events
-                            if entry.event_type == "workflow_event_callback_enqueued"
-                            and isinstance(entry.data.get("sequence"), int)
-                            and not isinstance(entry.data["sequence"], bool)
-                        ),
-                        default=0,
-                    )
-                    occurred_at = _now_iso()
-                    durable_payload = {
-                        **payload,
-                        "event_id": str(uuid.uuid4()),
-                        "sequence": sequence,
-                        "occurred_at": occurred_at,
-                    }
-                    state.events.append(
-                        EventEntry(
-                            timestamp=occurred_at,
-                            step=str(payload.get("step", state.current_step)),
-                            event_type="workflow_event_callback_enqueued",
-                            message=json.dumps(durable_payload, ensure_ascii=False),
-                            data=durable_payload,
-                        )
-                    )
-                    self._save_unlocked(state)
-                    return durable_payload
+    def validate_workflow_callback_event(self, workflow_id: str,
+                                         event: Dict[str, Any]) -> bool:
+        self.audit.validate_callback(workflow_id, event)
+        return True
 
     def get_events_since(self, state: BlackboardState, timestamp: str) -> List[EventEntry]:
         return [entry for entry in state.events if entry.timestamp >= timestamp]
@@ -1352,7 +1475,7 @@ class BlackboardStore:
         return "\n".join(lines)
 
     def rebuild_from_iterations(self, *, initial_step: str) -> BlackboardState:
-        state = BlackboardState(current_step=initial_step)
+        state = self.load_or_create(initial_step)
         latest_step = initial_step
         latest_timestamp = ""
 
@@ -1389,13 +1512,10 @@ class BlackboardStore:
                 latest_step = artifact_file.parent.parent.name
 
         state.current_step = latest_step
-        state.events.append(
-            EventEntry(
-                timestamp=_now_iso(),
-                step=latest_step,
-                event_type="rebuild",
-                message="Rebuilt blackboard state from iteration artifacts",
-            )
+        self.log_event(
+            state,
+            latest_step,
+            "rebuild",
+            "Rebuilt blackboard state from iteration artifacts",
         )
-        self.save(state)
         return state

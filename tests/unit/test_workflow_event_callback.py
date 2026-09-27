@@ -88,13 +88,12 @@ def test_callback_event_envelope_is_one_way_and_bounded(tmp_path: Path) -> None:
     }
 
     persisted = json.loads((runtime.issue_dir / "blackboard.json").read_text())
-    durable = next(
-        item
-        for item in persisted["events"]
-        if item["event_type"] == "workflow_event_callback_enqueued"
+    assert "events" not in persisted
+    durable = runtime.blackboard_store.audit.validate_callback(
+        runtime.blackboard.workflow_id, captured
     )
     assert captured["event_id"] == durable["data"]["event_id"]
-    assert captured["sequence"] == durable["data"]["sequence"] == 1
+    assert captured["sequence"] == durable["data"]["sequence"]
     assert captured["occurred_at"] == durable["timestamp"]
 
 
@@ -114,12 +113,13 @@ def test_callback_event_identity_is_monotonic_and_reused_on_replay(tmp_path: Pat
     runtime._dispatch_workflow_event("phase_terminal", {"step": "spec", "status_code": "two"})
     runtime._dispatch_workflow_event("phase_terminal", events[0])
 
-    assert [event["sequence"] for event in events] == [1, 2, 1]
+    assert events[0]["sequence"] < events[1]["sequence"]
+    assert events[2]["sequence"] == events[0]["sequence"]
     assert events[2]["event_id"] == events[0]["event_id"]
-    persisted = json.loads((runtime.issue_dir / "blackboard.json").read_text())
+    persisted = list(runtime.blackboard_store.audit.iter_records(runtime.blackboard.workflow_id))
     assert sum(
         item["event_type"] == "workflow_event_callback_enqueued"
-        for item in persisted["events"]
+        for item in persisted
     ) == 2
 
 

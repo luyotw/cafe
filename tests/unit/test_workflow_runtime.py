@@ -5,6 +5,7 @@ import multiprocessing
 import subprocess
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from hashlib import sha256
 from pathlib import Path
@@ -13,15 +14,48 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
-from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
+from cafe.core.audit_events import AuditEventStore
+from cafe.core.blackboard import (
+    BlackboardState,
+    BlackboardStore,
+    HandoffIntent,
+    HandoffOwner,
+)
 from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.human_tasks import HumanTaskBinding, HumanTaskDecision, HumanTaskPolicy
+from cafe.core.packet_io import atomic_write_bytes, canonical_json
 from cafe.core.workflow_models import BatonRejected, PlaybookRunResult, StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.ui.human_tasks import resolve_step_human_task
 
 pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
+
+
+def _canonicalize_board_fixture(issue_dir: Path) -> None:
+    """Give hand-written workflow fixtures the new prepared authorities."""
+    board_path = issue_dir / "blackboard.json"
+    raw = json.loads(board_path.read_text(encoding="utf-8"))
+    state = BlackboardState.from_dict(raw, initial_step=raw["current_step"])
+    raw["workflow_id"] = state.workflow_id
+    audit = AuditEventStore(issue_dir)
+    audit.initialize(state.workflow_id)
+    for entry in state.events:
+        sequence = audit.reserve(state.workflow_id)
+        audit.commit(state.workflow_id, {
+            "workflow_id": state.workflow_id,
+            "event_id": str(uuid.uuid4()),
+            "sequence": sequence,
+            **entry.to_dict(),
+            "patch": {},
+        })
+    raw.pop("events", None)
+    raw.pop("capability_receipts", None)
+    raw["applied_event_sequence"] = audit.high_water(state.workflow_id)
+    atomic_write_bytes(board_path, canonical_json(raw))
+    atomic_write_bytes(issue_dir / "capability_receipts.json", canonical_json({
+        "version": 1, "workflow_id": state.workflow_id, "receipts": [],
+    }))
 
 
 def test_event_callback_wakes_once_after_a_phase_transition(tmp_path: Path) -> None:
@@ -76,9 +110,44 @@ def test_event_callback_wakes_once_after_a_phase_transition(tmp_path: Path) -> N
     ]
     assert events[0]["step"] == "spec"
     assert events[1]["step"] == "develop"
-    assert [event["sequence"] for event in events] == [1, 2]
+    assert events[0]["sequence"] < events[1]["sequence"]
     assert all(event["event_id"] for event in events)
     assert all(event["occurred_at"] for event in events)
+
+
+def test_open_failed_callback_is_visited_once_without_blocking_run(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "callback-resume"
+    seen: list[str] = []
+
+    def callback(event):
+        seen.append(event["event_id"])
+        raise TimeoutError("provider unavailable")
+
+    def executor(*_args):
+        _write_baton(issue_dir, from_step="spec", to_owner="done",
+                     to_step="done", intent="workflow_complete")
+        return StepExecutionResult(response="", artifacts={})
+
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook={"playbook": {"id": "resume"}, "steps": {
+            "spec": {"skill": "spec_first", "role": "pm", "on": {"await_agent": "_done"}}
+        }},
+        executor=executor,
+        workflow_event_callback=callback,
+    )
+    pending = runtime.blackboard_store.prepare_workflow_callback_event(
+        runtime.blackboard,
+        {
+            "workflow_id": runtime.blackboard.workflow_id,
+            "issue": issue_dir.name,
+            "event_type": "phase_terminal",
+            "step": "spec",
+        },
+    )
+    result = runtime.run(start_step="spec")
+    assert result.completed is True
+    assert seen.count(pending["event_id"]) == 1
 
 
 def test_callback_sequence_is_allocated_from_latest_durable_state(tmp_path: Path) -> None:
@@ -128,9 +197,8 @@ def test_legacy_blackboard_events_load_without_callback_identity(tmp_path: Path)
         )
     )
 
-    state = BlackboardStore(issue_dir).load_or_create("spec")
-
-    assert state.events[0].data == {"step": "spec"}
+    with pytest.raises(ValueError):
+        BlackboardStore(issue_dir).load_or_create("spec")
 
 
 def test_store_artifacts_preserves_plan_todo_identity_baseline(tmp_path: Path) -> None:
@@ -287,7 +355,7 @@ def test_pause_without_completed_phase_still_wakes_callback(tmp_path: Path) -> N
         "reason": "limit",
     }.items()
     assert events[0]["event_id"]
-    assert events[0]["sequence"] == 1
+    assert events[0]["sequence"] >= 1
     assert events[0]["occurred_at"]
 
 
@@ -551,7 +619,9 @@ def test_runtime_rejects_unmapped_outcome_only_success_without_inventing_target(
         },
     }
 
-    def executor(_step_name: str, _step_def: dict, _state: object, **_kwargs) -> StepExecutionResult:
+    def executor(
+        _step_name: str, _step_def: dict, _state: object, **_kwargs
+    ) -> StepExecutionResult:
         _write_outcome_only_success(issue_dir)
         return StepExecutionResult(response="", artifacts={})
 
@@ -1606,6 +1676,9 @@ def test_runtime_completes_declared_capability_step_with_receipt(tmp_path: Path)
             to_step="done",
             intent="workflow_complete",
         )
+        BlackboardStore(issue_dir).append_capability_receipt(
+            state, {"capability": "demo.publish", "success": True}
+        )
         return StepExecutionResult(
             response="done",
             artifacts={"publish_result": "p1"},
@@ -1782,6 +1855,7 @@ def test_runtime_rejects_legacy_text_baton_in_core_path(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
+    _canonicalize_board_fixture(issue_dir)
     (issue_dir / "next_step.txt").write_text("spec\n", encoding="utf-8")
     playbook = {
         "playbook": {"id": "default"},
@@ -2526,6 +2600,7 @@ def test_continuous_runtime_executes_after_realigning_stale_current_step(
         ),
         encoding="utf-8",
     )
+    _canonicalize_board_fixture(issue_dir)
     _write_iteration_evidence(issue_dir, "spec")
     _write_baton(
         issue_dir,
@@ -2637,20 +2712,23 @@ def test_replay_resets_attempt_cycle_when_transition_event_survives_first(
         ),
     )
 
+    original_record_event = runtime.blackboard_store.record_event
+
+    def interrupt_reset_audit(state, event_type, payload):
+        if event_type == "step_attempt_count_reset":
+            raise RuntimeError("crash after transition event")
+        return original_record_event(state, event_type, payload)
+
     with pytest.raises(RuntimeError, match="crash after transition event"):
         with pytest.MonkeyPatch.context() as patcher:
             patcher.setattr(
-                runtime,
-                "_reset_step_attempts_after_successful_advance",
-                lambda **_kwargs: (_ for _ in ()).throw(
-                    RuntimeError("crash after transition event")
-                ),
+                runtime.blackboard_store, "record_event", interrupt_reset_audit,
             )
             runtime.run(start_step="spec")
 
     crashed = BlackboardStore(issue_dir).load_or_create("spec")
-    assert crashed.current_step == "spec"
-    assert crashed.step_attempt_counts == {"spec": 1}
+    assert crashed.current_step == "plan"
+    assert crashed.step_attempt_counts == {}
 
     replay = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
@@ -2662,7 +2740,7 @@ def test_replay_resets_attempt_cycle_when_transition_event_survives_first(
     assert replay.final_step == "spec"
     assert recovered.current_step == "plan"
     assert recovered.step_attempt_counts == {}
-    assert any(event.event_type == "step_attempt_count_reset" for event in recovered.events)
+    assert any(event.event_type == "transition" for event in recovered.events)
 
 
 def test_replay_does_not_overwrite_a_newer_target_user_handoff(tmp_path: Path) -> None:
@@ -2738,6 +2816,7 @@ def test_runtime_resumes_to_user_wait_from_handoff_contract(tmp_path: Path) -> N
         ),
         encoding="utf-8",
     )
+    _canonicalize_board_fixture(issue_dir)
     _write_baton(
         issue_dir,
         from_step="develop",
@@ -2789,6 +2868,7 @@ def test_runtime_resumes_to_done_from_handoff_contract(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
+    _canonicalize_board_fixture(issue_dir)
     _write_iteration_evidence(issue_dir, "pr")
     _write_baton(
         issue_dir,
@@ -4075,6 +4155,61 @@ def test_concurrent_stale_runtimes_claim_one_notification_attempt(
     )
 
 
+def test_two_notification_processes_claim_one_provider_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A workflow-bound receipt lock prevents a duplicate provider call."""
+    if "fork" not in multiprocessing.get_all_start_methods():
+        pytest.skip("requires a fork-capable process lock test host")
+    import cafe.core.workflow_runtime as runtime_mod
+
+    issue_dir = tmp_path / ".cafe" / "issues" / "process-notification-recovery"
+    monkeypatch.setattr(runtime_mod, "load_capability_registry", lambda _dirs: {})
+    monkeypatch.setattr(runtime_mod, "default_capability_definition_dirs", lambda _root: [])
+    with multiprocessing.Manager() as manager:
+        dispatches = manager.list()
+
+        def provider(**_kwargs):
+            dispatches.append("provider")
+            time.sleep(0.05)
+            return SimpleNamespace(
+                receipt={"capability": "cafe.slack.human_task", "success": True}
+            )
+
+        monkeypatch.setattr(runtime_mod, "run_capability_request", provider)
+        runtimes = [
+            BlackboardWorkflowRuntime(
+                issue_dir=issue_dir,
+                playbook=PlaybookLoader().load("standard"),
+                executor=lambda *_args: None,
+            )
+            for _ in range(2)
+        ]
+        task = HumanTaskRecordStore(issue_dir).materialize(
+            workflow_id=runtimes[0].blackboard.workflow_id,
+            step="spec", iteration=1, trigger="output_ready",
+            policy_id="output-review", prompt="Review requirements.",
+            expected_result={"input_schema": "decision"},
+            continuations={"agree": "plan"}, assignee_type="human",
+        )
+        context = multiprocessing.get_context("fork")
+        barrier = context.Barrier(2)
+
+        def notify(runtime):
+            barrier.wait(timeout=5)
+            runtime._notify_new_human_task(task)
+
+        processes = [context.Process(target=notify, args=(runtime,)) for runtime in runtimes]
+        for process in processes:
+            process.start()
+        for process in processes:
+            process.join(timeout=10)
+            assert process.exitcode == 0
+        assert list(dispatches) == ["provider"]
+        receipts = BlackboardStore(issue_dir).load_or_create("spec").capability_receipts
+        assert any(receipt.get("success") is True for receipt in receipts)
+
+
 def test_independent_runtimes_claim_one_notification_attempt_across_processes(
     tmp_path: Path,
 ) -> None:
@@ -4589,6 +4724,7 @@ def test_runtime_chains_pr_need_changes_through_develop_to_review(tmp_path: Path
         ),
         encoding="utf-8",
     )
+    _canonicalize_board_fixture(issue_dir)
     _write_baton(issue_dir, from_step="pr", to_owner="agent", to_step="pr", intent="await_agent")
 
     playbook = {
@@ -5447,7 +5583,9 @@ def test_recovery_settles_the_persisted_batch_before_running_its_consumer(
     }
     assert len(delivered) == 1
     assert delivered[0].data["delivery_id"] == prepared[0].data["delivery_id"]
-    assert any(event.event_type == "workflow_feedback_delivery_reconciled" for event in state.events)
+    assert any(
+        event.event_type == "workflow_feedback_delivery_reconciled" for event in state.events
+    )
 
 
 def test_recovery_reconciles_an_already_settled_batch_without_duplicate_consumer(
@@ -5473,7 +5611,7 @@ def test_recovery_reconciles_an_already_settled_batch_without_duplicate_consumer
     def crash_after_settlement(
         self: WorkflowFeedbackLedger, *args: object, **kwargs: object
     ) -> object:
-        settled = settle_reviewed(self, *args, **kwargs)
+        settle_reviewed(self, *args, **kwargs)
         raise RuntimeError("simulated post-settlement crash")
 
     monkeypatch.setattr(WorkflowFeedbackLedger, "settle_reviewed", crash_after_settlement)
@@ -5806,8 +5944,13 @@ def test_recovery_rejects_malformed_preparation_after_source_resolves(
     prepared = [
         event for event in state.events if event.event_type == "workflow_feedback_delivery_prepared"
     ]
-    prepared[-1].data["source_identities"] = "not-a-source-identity-list"
-    store.save(state)
+    record = next(
+        item for item in store.audit.iter_records(state.workflow_id)
+        if item["event_type"] == "workflow_feedback_delivery_prepared"
+        and item["data"]["delivery_id"] == prepared[-1].data["delivery_id"]
+    )
+    record["data"]["source_identities"] = "not-a-source-identity-list"
+    atomic_write_bytes(store.audit._path(record["sequence"]), canonical_json(record))
     assert ledger.reconcile_resolved({feedback.source_identity}) == 1
 
     resumed = _recovery_fault_curation_runtime(issue_dir=issue_dir, calls=calls)
@@ -6171,7 +6314,7 @@ def test_runtime_handles_agent_execution_error(
         "task_id": task.id,
     }.items()
     assert callback_events[0]["event_id"]
-    assert callback_events[0]["sequence"] == 1
+    assert callback_events[0]["sequence"] >= 1
     assert callback_events[0]["occurred_at"]
     assert not any(event.event_type == "step_reconciled" for event in bb.events)
 
@@ -6337,6 +6480,7 @@ def test_runtime_resume_reconciliation_is_idempotent(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
+    _canonicalize_board_fixture(issue_dir)
     playbook = {
         "playbook": {"id": "default"},
         "steps": {
@@ -6403,6 +6547,7 @@ def test_runtime_resume_reconciles_declared_self_loop_without_rerunning_agent(
         ),
         encoding="utf-8",
     )
+    _canonicalize_board_fixture(issue_dir)
     playbook = {
         "playbook": {"id": "declared-self-loop-recovery"},
         "steps": {
@@ -6502,6 +6647,7 @@ def test_runtime_recovered_user_handoff_materializes_one_actionable_task(
         ),
         encoding="utf-8",
     )
+    _canonicalize_board_fixture(issue_dir)
     runtime = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
         playbook=PlaybookLoader().load("tdd-qa"),
@@ -6571,6 +6717,7 @@ def test_runtime_recovered_user_handoff_remains_actionable_after_reconciliation_
         ),
         encoding="utf-8",
     )
+    _canonicalize_board_fixture(issue_dir)
     interrupted_runtime = BlackboardWorkflowRuntime(
         issue_dir=issue_dir,
         playbook=PlaybookLoader().load("tdd-qa"),
@@ -6655,6 +6802,7 @@ def test_runtime_reconciles_after_consumed_handoff_start_step(tmp_path: Path) ->
         ),
         encoding="utf-8",
     )
+    _canonicalize_board_fixture(issue_dir)
     playbook = {
         "playbook": {"id": "default"},
         "steps": {

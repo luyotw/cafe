@@ -21,7 +21,9 @@ from cafe.core.workflow_models import BatonRejected
 
 class TestBatonRejected:
     def test_attributes_set_correctly(self) -> None:
-        exc = BatonRejected(field="to_owner", invalid_value="human", valid_values=["agent", "user", "done"])
+        exc = BatonRejected(
+            field="to_owner", invalid_value="human", valid_values=["agent", "user", "done"]
+        )
         assert exc.field == "to_owner"
         assert exc.invalid_value == "human"
         assert exc.valid_values == ["agent", "user", "done"]
@@ -33,7 +35,9 @@ class TestBatonRejected:
         assert "extra" not in exc.valid_values
 
     def test_str_contains_field_and_invalid_value(self) -> None:
-        exc = BatonRejected(field="intent", invalid_value="bad_intent", valid_values=["await_agent"])
+        exc = BatonRejected(
+            field="intent", invalid_value="bad_intent", valid_values=["await_agent"]
+        )
         msg = str(exc)
         assert "intent" in msg
         assert "bad_intent" in msg
@@ -73,7 +77,9 @@ class TestLoadHandoffContractBatonRejected:
         issue_dir.mkdir(parents=True)
         store = BlackboardStore(issue_dir)
         state = store.load_or_create("develop")
-        _write_baton(issue_dir, _base_payload(to_owner="human", to_step="user", intent="need_clarification"))
+        _write_baton(
+            issue_dir, _base_payload(to_owner="human", to_step="user", intent="need_clarification")
+        )
 
         with pytest.raises(BatonRejected) as exc_info:
             store.load_handoff_contract(state, allowed_steps=["develop", "review"])
@@ -91,7 +97,9 @@ class TestLoadHandoffContractBatonRejected:
         issue_dir.mkdir(parents=True)
         store = BlackboardStore(issue_dir)
         state = store.load_or_create("develop")
-        _write_baton(issue_dir, _base_payload(to_owner="agent", to_step="review", intent="confirmed"))
+        _write_baton(
+            issue_dir, _base_payload(to_owner="agent", to_step="review", intent="confirmed")
+        )
 
         with pytest.raises(BatonRejected) as exc_info:
             store.load_handoff_contract(state, allowed_steps=["develop", "review"])
@@ -107,7 +115,9 @@ class TestLoadHandoffContractBatonRejected:
         issue_dir.mkdir(parents=True)
         store = BlackboardStore(issue_dir)
         state = store.load_or_create("develop")
-        _write_baton(issue_dir, _base_payload(to_owner="agent", to_step="review", intent="await_agent"))
+        _write_baton(
+            issue_dir, _base_payload(to_owner="agent", to_step="review", intent="await_agent")
+        )
 
         contract = store.load_handoff_contract(state, allowed_steps=["develop", "review"])
 
@@ -120,7 +130,9 @@ class TestLoadHandoffContractBatonRejected:
         issue_dir.mkdir(parents=True)
         store = BlackboardStore(issue_dir)
         state = store.load_or_create("develop")
-        _write_baton(issue_dir, _base_payload(to_owner="human", to_step="user", intent="need_clarification"))
+        _write_baton(
+            issue_dir, _base_payload(to_owner="human", to_step="user", intent="need_clarification")
+        )
 
         with pytest.raises(BatonRejected):
             store.load_handoff_contract(state, allowed_steps=["develop", "review"])
@@ -216,8 +228,8 @@ def test_blackboard_load_or_create_persists_current_step_and_playbook(tmp_path: 
     assert loaded.playbook_id == "standard"
 
 
-def test_blackboard_migrates_a_legacy_state_to_a_stable_workflow_id(tmp_path: Path) -> None:
-    """UT-005: old taskless workflow state gains identity without a task record."""
+def test_legacy_executed_board_without_authorities_fails_closed(tmp_path: Path) -> None:
+    """An executed pre-change board cannot silently acquire empty authorities."""
     issue_dir = tmp_path / ".cafe" / "issues" / "legacy"
     issue_dir.mkdir(parents=True)
     (issue_dir / "blackboard.json").write_text(
@@ -225,11 +237,8 @@ def test_blackboard_migrates_a_legacy_state_to_a_stable_workflow_id(tmp_path: Pa
         encoding="utf-8",
     )
 
-    state = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="standard")
-    persisted = json.loads((issue_dir / "blackboard.json").read_text(encoding="utf-8"))
-
-    assert state.workflow_id
-    assert persisted["workflow_id"] == state.workflow_id
+    with pytest.raises(ValueError):
+        BlackboardStore(issue_dir).load_or_create("spec", playbook_id="standard")
     assert not (issue_dir / "human_tasks.json").exists()
 
 
@@ -616,7 +625,8 @@ class TestLegacyBatonFormatsAreRejected:
         issue_dir, store, state = self._store_and_state(tmp_path)
         (issue_dir / "next_step.txt").write_text(
             "to_step=user\nto_owner=user\nintent=need_clarification\n"
-            "message=Schema comment updated. Please confirm schema and import 6 pending datasets, then reply to continue.\n",
+            "message=Schema comment updated. Please confirm schema and import 6 pending "
+            "datasets, then reply to continue.\n",
             encoding="utf-8",
         )
 

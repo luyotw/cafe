@@ -6,7 +6,14 @@ import shlex
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from cafe.core.blackboard import BlackboardState, HandoffContract, HandoffIntent, HandoffOwner
+from cafe.core.audit_events import AuditEventStore
+from cafe.core.blackboard import (
+    BlackboardState,
+    EventEntry,
+    HandoffContract,
+    HandoffIntent,
+    HandoffOwner,
+)
 from cafe.core.git import GitOperations
 from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.types import PhaseStatus
@@ -47,6 +54,66 @@ class StatusService:
         except Exception as e:
             raise RuntimeError(f"Failed to detect current issue from git context: {e}")
 
+    @staticmethod
+    def _with_callback_failure(issue_dir: Path, workflow_id: str,
+                               status: Dict[str, str],
+                               events: List[EventEntry]) -> Dict[str, str]:
+        def from_audit() -> Dict[str, str]:
+            failure = next(
+                (
+                    event for event in reversed(events)
+                    if event.event_type == "workflow_event_callback_dispatch_failed"
+                ),
+                None,
+            )
+            if failure is not None:
+                status.update({
+                    "State": "Callback delivery needs inspection",
+                    "Reason": str(failure.data.get("error", "callback dispatch failed")),
+                    "Next": (
+                        "Inspect audit_events and driver/dispatch_state.json; "
+                        "verify delivery before manual recovery."
+                    ),
+                })
+            return status
+
+        declaration_path = issue_dir / "status_sources.json"
+        if not declaration_path.exists():
+            return from_audit()
+        if declaration_path.is_symlink() or declaration_path.stat().st_size > 4096:
+            raise ValueError("callback failure source is invalid")
+        declaration = json.loads(declaration_path.read_text(encoding="utf-8"))
+        if (not isinstance(declaration, dict) or declaration.get("version") != 1
+                or declaration.get("workflow_id") != workflow_id
+                or declaration.get("callback_failure_receipt")
+                != "driver/callback_failure_notifications.json"):
+            raise ValueError("callback failure source identity is invalid")
+        receipt_path = issue_dir / declaration["callback_failure_receipt"]
+        if not receipt_path.exists():
+            return from_audit()
+        if receipt_path.is_symlink() or receipt_path.stat().st_size > 256 * 1024:
+            raise ValueError("callback failure receipt is invalid")
+        raw = json.loads(receipt_path.read_text(encoding="utf-8"))
+        if (not isinstance(raw, dict) or raw.get("schema_version") != 1
+                or raw.get("workflow_id") != workflow_id
+                or not isinstance(raw.get("records"), dict)):
+            raise ValueError("callback failure receipt identity is invalid")
+        records = raw["records"]
+        if not records:
+            return from_audit()
+        latest = next(reversed(records.values()))
+        if not isinstance(latest, dict) or not isinstance(latest.get("error_code"), str):
+            raise ValueError("callback failure record is invalid")
+        status.update({
+            "State": "Callback delivery needs inspection",
+            "Reason": latest["error_code"],
+            "Next": (
+                "Inspect driver/callback_failure_notifications.json and "
+                "driver/dispatch_state.json; verify delivery before manual recovery."
+            ),
+        })
+        return status
+
     def load_current_state(self, issue_name: str, phase_names: List[str]) -> Dict[str, str]:
         """Project the current handoff and task without creating or repairing records."""
         issue_dir = self.issues_root / issue_name
@@ -60,6 +127,8 @@ class StatusService:
             ):
                 raise ValueError("missing workflow identity")
             state = BlackboardState.from_dict(raw, initial_step=raw["current_step"])
+            state.events = [EventEntry.from_dict(record) for record in
+                            AuditEventStore(issue_dir).iter_records(state.workflow_id)]
             status["Workflow"] = state.workflow_id
             source = issue_dir / "next_step.txt"
             baton = HandoffContract.from_dict_with_current_step(
@@ -142,7 +211,9 @@ class StatusService:
                         "Next": f"cafe task inspect {shlex.quote(task.id)}",
                     }
                 )
-                return status
+                return self._with_callback_failure(
+                    issue_dir, state.workflow_id, status, state.events
+                )
             if any(task.status is HumanTaskStatus.CONFIGURATION_ERROR for task in tasks):
                 raise ValueError("task configuration error")
 
@@ -151,7 +222,9 @@ class StatusService:
                 if state.current_step != "done":
                     raise ValueError("completion and current step disagree")
                 status.update({"State": "Completed", "Reason": "Workflow completed"})
-                return status
+                return self._with_callback_failure(
+                    issue_dir, state.workflow_id, status, state.events
+                )
             if state.current_step == "done":
                 raise ValueError("completed pointer has a nonterminal handoff")
             if baton.to_owner is HandoffOwner.USER:
@@ -162,7 +235,9 @@ class StatusService:
                         "Next": f"cafe task ls --issue {shlex.quote(issue_name)}",
                     }
                 )
-                return status
+                return self._with_callback_failure(
+                    issue_dir, state.workflow_id, status, state.events
+                )
 
             # Ignore notification/callback events, and do not let an old pause
             # override a subsequent start, transition, or completed human task.
@@ -205,7 +280,7 @@ class StatusService:
                     )
                 elif latest.event_type == "step_started":
                     status["State"] = "Agent step in progress"
-            return status
+            return self._with_callback_failure(issue_dir, state.workflow_id, status, state.events)
         except (OSError, ValueError, TypeError, KeyError, AttributeError, BatonRejected):
             # Do not expose raw parser text or manufacture a task/recovery choice.
             status["State"] = "Unknown"
