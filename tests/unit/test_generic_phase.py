@@ -1981,13 +1981,19 @@ def test_build_prompt_states_both_language_policy_inputs(tmp_path: Path) -> None
     assert "en-US" in content_line
 
 
-def test_build_prompt_omits_the_language_lines_when_no_locale_is_stored(tmp_path: Path) -> None:
+def test_build_prompt_uses_english_policy_when_no_locale_is_stored(tmp_path: Path) -> None:
     phase = GenericPhase(_setup_loader(tmp_path))
 
     prompt = phase.build_prompt(
         skill_name="cafe-plan",
         skill_invocation="/custom-drafting",
-        context={"handoff_summary": "Resume"},
+        context={"handoff_summary": "Resume", "repository_content_locale": "en-US"},
     )
 
-    assert "conversation language" not in prompt
+    conversation_line = next(
+        line for line in prompt.splitlines() if "conversation language" in line
+    )
+    content_line = next(line for line in prompt.splitlines() if "content language" in line)
+    assert "en-US" in conversation_line
+    assert "en-US" in content_line
+    assert "identifiers" in prompt

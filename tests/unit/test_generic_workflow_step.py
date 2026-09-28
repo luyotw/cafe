@@ -9054,10 +9054,11 @@ workflow:
         assert not executor._validate_projected_todo_completion(checklist)
 
 
-def test_build_context_forwards_the_stored_workflow_language_to_the_agent(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("stored_locale", ["zh-TW", None])
+def test_build_context_forwards_the_workflow_language_to_the_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stored_locale: str | None
 ) -> None:
-    """The phase context carries the stored locale through the production assembler."""
+    """The public prompt path applies the English fallback without storing it."""
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".cafe").mkdir(parents=True, exist_ok=True)
     (tmp_path / ".cafe" / "strategic_context.yaml").write_text(
@@ -9093,9 +9094,15 @@ def test_build_context_forwards_the_stored_workflow_language_to_the_agent(
     }
     store = BlackboardStore(issue_dir)
     state = store.load_or_create("draft")
-    state.conversation_locale = "zh-TW"
-    state.conversation_locale_source = "explicit"
+    state.conversation_locale = stored_locale
+    state.conversation_locale_source = "explicit" if stored_locale else None
     store.save(state)
+    if stored_locale is None:
+        raw = json.loads(store.file_path.read_text(encoding="utf-8"))
+        raw.pop("conversation_locale")
+        raw.pop("conversation_locale_source")
+        store.file_path.write_text(json.dumps(raw), encoding="utf-8")
+        state = store.load_or_create("draft")
     monkeypatch.setattr(
         AgentManager,
         "read_agent_file",
@@ -9125,7 +9132,16 @@ def test_build_context_forwards_the_stored_workflow_language_to_the_agent(
         skill_name="drafting", skill_invocation="/drafting", context=context
     )
 
-    assert context["conversation_locale"] == "zh-TW"
+    assert context["conversation_locale"] == (stored_locale or "")
     assert context["repository_content_locale"] == "en-US"
-    assert "workflow conversation language: zh-TW" in prompt
-    assert "repository content language: en-US" in prompt
+    conversation_line = next(
+        line for line in prompt.splitlines() if "conversation language" in line
+    )
+    content_line = next(line for line in prompt.splitlines() if "content language" in line)
+    assert (stored_locale or "en-US") in conversation_line
+    assert "en-US" in content_line
+    if stored_locale is None:
+        assert state.conversation_locale is None
+        assert "conversation_locale" not in json.loads(
+            store.file_path.read_text(encoding="utf-8")
+        )

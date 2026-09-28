@@ -20,6 +20,7 @@ from cafe.core.capabilities import (
     load_capability_registry,
     run_capability_request,
 )
+from cafe.core.conversation_locale import DEFAULT_CONVERSATION_LOCALE
 from cafe.core.execution_boundary import (
     EffectiveBoundary,
     ExecutionClass,
@@ -193,8 +194,8 @@ class GenericPhase:
             lines.extend(runtime_files)
             lines.append("")
 
-        conversation_locale = context.get("conversation_locale") if context else None
-        if conversation_locale:
+        if context is not None:
+            conversation_locale = context.get("conversation_locale") or DEFAULT_CONVERSATION_LOCALE
             runtime_context.append("Language policy (see docs/language-policy.md):")
             runtime_context.append(
                 "- workflow conversation language: "
