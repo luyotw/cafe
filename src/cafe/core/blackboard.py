@@ -25,6 +25,12 @@ except ImportError:  # pragma: no cover - available only on Windows.
     msvcrt = None  # type: ignore[assignment]
 
 from cafe.core.audit_events import AuditEventStore
+from cafe.core.conversation_locale import (
+    ConversationLocaleError,
+    SuppliedLocale,
+    normalize_locale_tag,
+    resolve_conversation_locale,
+)
 from cafe.core.packet_io import atomic_write_bytes
 from cafe.core.workflow_models import BatonRejected
 
@@ -153,6 +159,15 @@ def _merge_changed_sequence(
     return merged
 
 
+def _optional_locale_field(raw: Any) -> Optional[str]:
+    """Read a stored locale field without inventing a value for a legacy record."""
+    if raw is None:
+        return None
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("blackboard conversation locale fields must be non-empty strings or null")
+    return raw.strip()
+
+
 def _merge_generic_state(
     *,
     persisted: "BlackboardState",
@@ -172,6 +187,8 @@ def _merge_generic_state(
         "handoff_summary",
         "handoff_contract",
         "ownership_cursor",
+        "conversation_locale",
+        "conversation_locale_source",
     ):
         if desired_raw[field_name] != baseline.get(field_name):
             merged_raw[field_name] = desired_raw[field_name]
@@ -636,6 +653,8 @@ class BlackboardState:
     handoff_contract: Optional[HandoffContract] = None
     ownership_cursor: Optional[Dict[str, Any]] = None
     step_attempt_counts: Dict[str, int] = field(default_factory=dict)
+    conversation_locale: Optional[str] = None
+    conversation_locale_source: Optional[str] = None
     applied_event_sequence: int = 0
     updated_at: str = field(default_factory=_now_iso)
     _persisted_snapshot: Optional[Dict[str, Any]] = field(
@@ -658,6 +677,8 @@ class BlackboardState:
             ),
             "ownership_cursor": dict(self.ownership_cursor) if self.ownership_cursor else None,
             "step_attempt_counts": dict(self.step_attempt_counts),
+            "conversation_locale": self.conversation_locale,
+            "conversation_locale_source": self.conversation_locale_source,
             "applied_event_sequence": self.applied_event_sequence,
             "updated_at": self.updated_at,
         }
@@ -741,6 +762,12 @@ class BlackboardState:
             ),
             ownership_cursor=cursor,
             step_attempt_counts=attempts,
+            # Absence is never backfilled: a record written before the locale
+            # contract stays without one instead of gaining an apparent choice.
+            conversation_locale=_optional_locale_field(data.get("conversation_locale")),
+            conversation_locale_source=_optional_locale_field(
+                data.get("conversation_locale_source")
+            ),
             applied_event_sequence=int(data.get("applied_event_sequence", 0)),
             updated_at=str(data.get("updated_at", _now_iso())),
         )
@@ -855,13 +882,36 @@ class BlackboardStore:
         playbook_id: str = "standard",
         *,
         tolerate_invalid_baton: bool = False,
+        supplied_locale: Optional[SuppliedLocale] = None,
+        playbook_conversation_locale: Optional[str] = None,
     ) -> BlackboardState:
         with self._thread_lock_for(self.file_path):
             return self._load_or_create_unlocked(
                 initial_step,
                 playbook_id,
                 tolerate_invalid_baton=tolerate_invalid_baton,
+                supplied_locale=supplied_locale,
+                playbook_conversation_locale=playbook_conversation_locale,
             )
+
+    def set_conversation_locale(
+        self, state: BlackboardState, supplied: SuppliedLocale
+    ) -> BlackboardState:
+        """Apply a deliberate workflow-language change to the owning state.
+
+        This is the only path that rewrites a stored locale. It is not
+        initialization and never a side effect of resuming, and it leaves every
+        already-materialized task record untouched.
+        """
+        normalized = normalize_locale_tag(supplied.value)
+        if normalized is None:
+            raise ConversationLocaleError(
+                "a deliberate workflow-language change requires a usable locale tag"
+            )
+        state.conversation_locale = normalized
+        state.conversation_locale_source = supplied.source.value
+        self.save(state)
+        return state
 
     def _load_or_create_unlocked(
         self,
@@ -869,6 +919,8 @@ class BlackboardStore:
         playbook_id: str,
         *,
         tolerate_invalid_baton: bool,
+        supplied_locale: Optional[SuppliedLocale] = None,
+        playbook_conversation_locale: Optional[str] = None,
     ) -> BlackboardState:
         if self.file_path.exists():
             with self.state_lock_path.open("a+", encoding="utf-8") as lock_file:
@@ -891,7 +943,18 @@ class BlackboardStore:
                     raise
             return state
 
-        state = BlackboardState(current_step=initial_step, playbook_id=playbook_id)
+        # Automatic initialization is creation-only; the load path above never
+        # writes a locale, so a resume cannot overwrite or backfill one.
+        resolved = resolve_conversation_locale(
+            supplied=() if supplied_locale is None else (supplied_locale,),
+            playbook_default=playbook_conversation_locale,
+        )
+        state = BlackboardState(
+            current_step=initial_step,
+            playbook_id=playbook_id,
+            conversation_locale=resolved.value,
+            conversation_locale_source=resolved.source.value,
+        )
         self.save(state)
         try:
             self.ensure_baton(state)
