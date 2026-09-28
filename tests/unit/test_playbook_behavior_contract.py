@@ -368,22 +368,22 @@ def _fixed_name_step_policy_violations(module):
     violations = []
 
     for node in ast.walk(tree):
+        if not (
+            isinstance(node, (ast.Compare, ast.IfExp))
+            or (isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or))
+            or (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get"
+                and node.args
+            )
+        ):
+            continue
         uses_step_identity = _node_contains_step_identity(node)
         fixed_names = _workflow_step_literals(node)
         if not uses_step_identity or not fixed_names:
             continue
-
-        if isinstance(node, (ast.Compare, ast.IfExp)):
-            violations.append((node.lineno, sorted(fixed_names)))
-        elif isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or):
-            violations.append((node.lineno, sorted(fixed_names)))
-        elif (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "get"
-            and node.args
-        ):
-            violations.append((node.lineno, sorted(fixed_names)))
+        violations.append((node.lineno, sorted(fixed_names)))
 
     return violations
 

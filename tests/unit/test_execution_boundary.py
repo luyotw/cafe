@@ -358,14 +358,13 @@ def test_script_launcher_inventory_covers_workflow_process_calls() -> None:
                 self.scope.pop()
                 self.process_modules, self.process_callables = previous
 
-            def visit_AsyncFunctionDef(  # noqa: N802
-                self, node: ast.AsyncFunctionDef
-            ) -> None:
+            def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:  # noqa: N802
                 self.visit_FunctionDef(node)
 
         runner_attributes: set[str] = set()
+        runner_calls = Counter()
 
-        class RunnerAttributeVisitor(ScopedVisitor):
+        class Visitor(ScopedVisitor):
             def visit_Assign(self, node: ast.Assign) -> None:
                 self._record(node.targets, node.value)
                 self.generic_visit(node)
@@ -386,25 +385,23 @@ def test_script_launcher_inventory_covers_workflow_process_calls() -> None:
                     ):
                         runner_attributes.add(target.attr)
 
-        RunnerAttributeVisitor().visit(tree)
-
-        class Visitor(ScopedVisitor):
             def visit_Call(self, node: ast.Call) -> None:
                 target = node.func
-                injected_runner = (
+                identity = f"{relative}::{'.'.join(self.scope) or '<module>'}"
+                if is_process_callable(target, self.process_modules, self.process_callables):
+                    discovered[identity] += 1
+                elif (
                     isinstance(target, ast.Attribute)
                     and isinstance(target.value, ast.Name)
                     and target.value.id == "self"
-                    and target.attr in runner_attributes
-                )
-                if (
-                    is_process_callable(target, self.process_modules, self.process_callables)
-                    or injected_runner
                 ):
-                    discovered[f"{relative}::{'.'.join(self.scope) or '<module>'}"] += 1
+                    runner_calls[identity, target.attr] += 1
                 self.generic_visit(node)
 
         Visitor().visit(tree)
+        for (identity, attribute), count in runner_calls.items():
+            if attribute in runner_attributes:
+                discovered[identity] += count
 
     assert "src/cafe/core/sandbox_execution.py::run" in discovered
     assert "src/cafe/verification/receipt.py::_run_with_output_log" in discovered

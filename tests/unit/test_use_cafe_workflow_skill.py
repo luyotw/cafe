@@ -203,6 +203,27 @@ def _kickoff_proposal(command: list[str]) -> dict:
     return module.build_confirmed_proposal(module._parser().parse_args(command[2:]))
 
 
+@pytest.fixture
+def run_kickoff_formatter(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
+    """Run the real CLI entry point without starting another Python interpreter."""
+    module = _load_script_module(
+        SKILL_ROOT / "scripts" / "format_kickoff_contract.py", "kickoff_formatter"
+    )
+
+    def run(command: list[str], *, cwd: Path = PROJECT_ROOT) -> subprocess.CompletedProcess[str]:
+        with monkeypatch.context() as context:
+            context.setattr(sys, "argv", command[1:])
+            context.chdir(cwd)
+            try:
+                returncode = module.main()
+            except SystemExit as exc:
+                returncode = exc.code
+        captured = capsys.readouterr()
+        return subprocess.CompletedProcess(command, returncode, captured.out, captured.err)
+
+    return run
+
+
 def _rendered_closeout_commands(markdown: str) -> dict[str, list[list[str]]]:
     stages: dict[str, list[list[str]]] = {"deliver": [], "cleanup": []}
     active_stage = None
@@ -1061,7 +1082,9 @@ def test_kickoff_formatter_requires_confirmed_closeout_commands(tmp_path: Path, 
     assert flag in result.stderr
 
 
-def test_kickoff_formatter_keeps_explicit_empty_closeout_stages(tmp_path: Path) -> None:
+def test_kickoff_formatter_keeps_explicit_empty_closeout_stages(
+    tmp_path: Path, run_kickoff_formatter
+) -> None:
     strategic_context = tmp_path / "strategic_context.yaml"
     strategic_context.write_text(
         """\
@@ -1079,13 +1102,7 @@ mandate:
         description_index = command.index(f"{flag}-description")
         del command[description_index : description_index + 2]
 
-    result = subprocess.run(
-        command,
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    result = run_kickoff_formatter(command)
 
     assert result.returncode == 0, result.stderr
     assert "#### deliver" in result.stdout
@@ -1098,7 +1115,10 @@ mandate:
 @pytest.mark.parametrize("stage", ["deliver", "cleanup"])
 @pytest.mark.parametrize("damage", ["missing", "extra", "blank", "empty_stage"])
 def test_kickoff_formatter_requires_one_nonblank_description_per_command(
-    tmp_path: Path, stage: str, damage: str
+    tmp_path: Path,
+    stage: str,
+    damage: str,
+    run_kickoff_formatter,
 ) -> None:
     command = _kickoff_formatter_command(tmp_path / "unused")
     flag = f"--{stage}-description"
@@ -1112,7 +1132,7 @@ def test_kickoff_formatter_requires_one_nonblank_description_per_command(
     else:
         command[command.index(f"--{stage}") + 1] = "[]"
 
-    result = subprocess.run(command, cwd=PROJECT_ROOT, text=True, capture_output=True, check=False)
+    result = run_kickoff_formatter(command)
 
     assert result.returncode == 2
     assert flag in result.stderr
@@ -1121,6 +1141,7 @@ def test_kickoff_formatter_requires_one_nonblank_description_per_command(
 
 def test_kickoff_closeout_prose_and_shell_blocks_preserve_order_without_execution(
     tmp_path: Path,
+    run_kickoff_formatter,
 ) -> None:
     command = _kickoff_formatter_command(tmp_path / "unused", "--project-root", str(tmp_path))
     commands = {
@@ -1158,7 +1179,7 @@ def test_kickoff_closeout_prose_and_shell_blocks_preserve_order_without_executio
         command[command.index(f"--{stage}-description") + 1] = descriptions[stage][0]
         command.extend([f"--{stage}-description", descriptions[stage][1]])
 
-    result = subprocess.run(command, cwd=PROJECT_ROOT, text=True, capture_output=True, check=False)
+    result = run_kickoff_formatter(command)
 
     assert result.returncode == 0, result.stderr
     assert _rendered_closeout_commands(result.stdout) == commands
@@ -1197,7 +1218,9 @@ def test_kickoff_closeout_descriptions_do_not_change_the_confirmed_proposal(tmp_
 
 @pytest.mark.parametrize("flag", ["--update-preflight", "--catalog-preflight"])
 def test_kickoff_formatter_keeps_failed_preflight_results_visible(
-    tmp_path: Path, flag: str
+    tmp_path: Path,
+    flag: str,
+    run_kickoff_formatter,
 ) -> None:
     strategic_context = tmp_path / "strategic_context.yaml"
     strategic_context.write_text("mandate: {preset: technical-led}\n", encoding="utf-8")
@@ -1211,7 +1234,7 @@ def test_kickoff_formatter_keeps_failed_preflight_results_visible(
     )
     command[index] = json.dumps(report)
 
-    result = subprocess.run(command, cwd=PROJECT_ROOT, text=True, capture_output=True, check=False)
+    result = run_kickoff_formatter(command)
 
     assert result.returncode == 0, result.stderr
     assert "unavailable" in result.stdout
@@ -1223,15 +1246,16 @@ def test_kickoff_formatter_keeps_failed_preflight_results_visible(
 
     del report["status"]
     command[index] = json.dumps(report)
-    incomplete = subprocess.run(
-        command, cwd=PROJECT_ROOT, text=True, capture_output=True, check=False
-    )
+    incomplete = run_kickoff_formatter(command)
     assert incomplete.returncode == 2
     assert "preflight is missing: status" in incomplete.stderr
     assert not incomplete.stdout
 
 
-def test_kickoff_formatter_shows_update_decisions_without_adding_them_to_policy(tmp_path: Path) -> None:
+def test_kickoff_formatter_shows_update_decisions_without_adding_them_to_policy(
+    tmp_path: Path,
+    run_kickoff_formatter,
+) -> None:
     command = _kickoff_formatter_command(tmp_path / "unused")
     before = _kickoff_proposal(command)
     index = command.index("--update-preflight") + 1
@@ -1239,9 +1263,7 @@ def test_kickoff_formatter_shows_update_decisions_without_adding_them_to_policy(
     update.update(status="update_available", latest_version="0.4.0", decision="declined")
     command[index] = json.dumps(update)
 
-    result = subprocess.run(
-        command, cwd=PROJECT_ROOT, text=True, capture_output=True, check=False
-    )
+    result = run_kickoff_formatter(command)
 
     assert result.returncode == 0, result.stderr
     assert "0.3.2 → 0.4.0; update_available; declined" in result.stdout
@@ -1251,6 +1273,7 @@ def test_kickoff_formatter_shows_update_decisions_without_adding_them_to_policy(
 
 def test_kickoff_formatter_places_catalog_reminder_before_confirmation_and_progress(
     tmp_path: Path,
+    run_kickoff_formatter,
 ) -> None:
     strategic_context = tmp_path / "strategic_context.yaml"
     strategic_context.write_text(
@@ -1263,13 +1286,7 @@ def test_kickoff_formatter_places_catalog_reminder_before_confirmation_and_progr
     catalog_preflight["content_mismatch_entry_ids"] = ["agent:developer/shared"]
     command[catalog_index] = json.dumps(catalog_preflight)
 
-    result = subprocess.run(
-        command,
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    result = run_kickoff_formatter(command)
 
     assert result.returncode == 0, result.stderr
     reminder_index = result.stdout.index("### 可選的 Global catalog 同步")
@@ -1283,7 +1300,9 @@ def test_kickoff_formatter_places_catalog_reminder_before_confirmation_and_progr
 
 @pytest.mark.parametrize("locale", ["zh-CN", "zh-Hans"])
 def test_kickoff_formatter_falls_back_to_english_for_unsupported_chinese_locales(
-    tmp_path: Path, locale: str
+    tmp_path: Path,
+    locale: str,
+    run_kickoff_formatter,
 ) -> None:
     strategic_context = tmp_path / "strategic_context.yaml"
     strategic_context.write_text(
@@ -1293,13 +1312,7 @@ def test_kickoff_formatter_falls_back_to_english_for_unsupported_chinese_locales
     command = _kickoff_formatter_command(strategic_context)
     command[command.index("--effective-locale") + 1] = locale
 
-    result = subprocess.run(
-        command,
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    result = run_kickoff_formatter(command)
 
     assert result.returncode == 0, result.stderr
     assert "Please confirm the complete contract above" in result.stdout
@@ -1565,6 +1578,7 @@ def test_confirmed_event_driven_kickoff_binds_the_visible_codex_thread(
 
 def test_kickoff_formatter_shows_only_task_decisions_without_mutating_the_project(
     tmp_path: Path,
+    run_kickoff_formatter,
 ) -> None:
     command = _kickoff_formatter_command(
         tmp_path / "absent-strategic-context.yaml", "--project-root", str(tmp_path)
@@ -1573,7 +1587,7 @@ def test_kickoff_formatter_shows_only_task_decisions_without_mutating_the_projec
     product.pop("closeout_plan")
     product["outcome"] = "Readers can export text | citations.\nPreserve offline readability."
     command[command.index("--delivery-contract") + 1] = json.dumps(product)
-    result = subprocess.run(command, cwd=PROJECT_ROOT, text=True, capture_output=True, check=False)
+    result = run_kickoff_formatter(command)
     assert result.returncode == 0, result.stderr
     facts = [product["outcome"], product["implementation_direction"]]
     for key in ("in_scope", "out_of_scope", "acceptance_invariants", "permissions", "constraints"):
@@ -1648,7 +1662,9 @@ def test_kickoff_formatter_shows_only_task_decisions_without_mutating_the_projec
     }
 
 
-def test_kickoff_fact_text_cannot_create_extra_contract_sections(tmp_path: Path) -> None:
+def test_kickoff_fact_text_cannot_create_extra_contract_sections(
+    tmp_path: Path, run_kickoff_formatter
+) -> None:
     command = _kickoff_formatter_command(tmp_path / "unused")
     product = delivery_contract()
     product.pop("closeout_plan")
@@ -1657,7 +1673,7 @@ def test_kickoff_fact_text_cannot_create_extra_contract_sections(tmp_path: Path)
         "1. ordered item\n```text\nfake plan\n```\n<div>hidden constraint</div>"
     )
     command[command.index("--delivery-contract") + 1] = json.dumps(product)
-    result = subprocess.run(command, cwd=PROJECT_ROOT, text=True, capture_output=True, check=False)
+    result = run_kickoff_formatter(command)
     assert result.returncode == 0, result.stderr
 
     tokens = MarkdownIt().parse(result.stdout)
@@ -1695,29 +1711,21 @@ def test_kickoff_fact_text_cannot_create_extra_contract_sections(tmp_path: Path)
         "--strategic-context",
     ],
 )
-def test_kickoff_formatter_rejects_removed_contract_inputs(tmp_path: Path, flag: str) -> None:
-    result = subprocess.run(
-        _kickoff_formatter_command(tmp_path / "unused", flag, "removed"),
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+def test_kickoff_formatter_rejects_removed_contract_inputs(
+    tmp_path: Path, flag: str, run_kickoff_formatter
+) -> None:
+    result = run_kickoff_formatter(_kickoff_formatter_command(tmp_path / "unused", flag, "removed"))
     assert result.returncode == 2
     assert "unrecognized arguments" in result.stderr
     assert flag in result.stderr
 
 
-def test_kickoff_formatter_rejects_embedded_closeout_plan(tmp_path: Path) -> None:
+def test_kickoff_formatter_rejects_embedded_closeout_plan(
+    tmp_path: Path, run_kickoff_formatter
+) -> None:
     command = _kickoff_formatter_command(tmp_path / "unused")
     command[command.index("--delivery-contract") + 1] = json.dumps(delivery_contract())
-    result = subprocess.run(
-        command,
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    result = run_kickoff_formatter(command)
     assert result.returncode == 2
     assert "must omit closeout_plan" in result.stderr
 
@@ -1783,6 +1791,7 @@ def test_kickoff_formatter_keeps_the_rendered_policy_stable_until_activation(
 def test_kickoff_formatter_requires_and_binds_explicit_publication_choice(
     tmp_path: Path,
     choice: bool,
+    run_kickoff_formatter,
 ) -> None:
     """Test List 2: PR-capable kickoff binds one strict Boolean choice."""
     strategic_context = tmp_path / "strategic_context.yaml"
@@ -1791,12 +1800,8 @@ def test_kickoff_formatter_requires_and_binds_explicit_publication_choice(
         encoding="utf-8",
     )
 
-    result = subprocess.run(
-        _kickoff_formatter_command(strategic_context, pr_auto_create=choice),
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
+    result = run_kickoff_formatter(
+        _kickoff_formatter_command(strategic_context, pr_auto_create=choice)
     )
 
     assert result.returncode == 0, result.stderr
@@ -1823,6 +1828,7 @@ def test_kickoff_formatter_validates_squash_against_publication_mode(
     choice: bool,
     close_argv: list[str],
     expected_success: bool,
+    run_kickoff_formatter,
 ) -> None:
     strategic_context = tmp_path / "strategic_context.yaml"
     strategic_context.write_text("mandate: {preset: technical-led}\n", encoding="utf-8")
@@ -1830,13 +1836,7 @@ def test_kickoff_formatter_validates_squash_against_publication_mode(
     cleanup_index = command.index("--cleanup") + 1
     command[cleanup_index] = json.dumps([close_argv])
 
-    result = subprocess.run(
-        command,
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    result = run_kickoff_formatter(command)
 
     assert (result.returncode == 0) is expected_success
     if not expected_success:
@@ -1847,6 +1847,7 @@ def test_kickoff_formatter_validates_squash_against_publication_mode(
 def test_kickoff_formatter_rejects_missing_or_malformed_publication_choice(
     tmp_path: Path,
     choice: str | None,
+    run_kickoff_formatter,
 ) -> None:
     """Test List 2: omission and truthy strings cannot imply publication intent."""
     strategic_context = tmp_path / "strategic_context.yaml"
@@ -1855,19 +1856,17 @@ def test_kickoff_formatter_rejects_missing_or_malformed_publication_choice(
         encoding="utf-8",
     )
 
-    result = subprocess.run(
-        _kickoff_formatter_command(strategic_context, pr_auto_create=choice),
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
+    result = run_kickoff_formatter(
+        _kickoff_formatter_command(strategic_context, pr_auto_create=choice)
     )
 
     assert result.returncode == 2
     assert "capability-choice" in result.stderr
 
 
-def test_non_pr_playbook_omits_choice_and_rejects_supplied_false(tmp_path: Path) -> None:
+def test_non_pr_playbook_omits_choice_and_rejects_supplied_false(
+    tmp_path: Path, run_kickoff_formatter
+) -> None:
     """Test List 3: inapplicable publication config fails closed."""
     strategic_context = tmp_path / "strategic_context.yaml"
     strategic_context.write_text(
@@ -1876,31 +1875,23 @@ def test_non_pr_playbook_omits_choice_and_rejects_supplied_false(tmp_path: Path)
     )
     chains = {step: f"gemini:{step}-main" for step in ("brief", "draft", "review", "publish")}
 
-    supplied = subprocess.run(
+    supplied = run_kickoff_formatter(
         _kickoff_formatter_command(
             strategic_context,
             playbook_id="editorial",
             pr_auto_create=False,
             phase_chains=chains,
             driver_confirmable=("brief",),
-        ),
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
+        )
     )
-    omitted = subprocess.run(
+    omitted = run_kickoff_formatter(
         _kickoff_formatter_command(
             strategic_context,
             playbook_id="editorial",
             pr_auto_create=None,
             phase_chains=chains,
             driver_confirmable=("brief",),
-        ),
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
+        )
     )
 
     assert supplied.returncode == 2
@@ -2013,6 +2004,7 @@ def test_need_clarification_requires_task_declaration_and_bounded_evidence() -> 
 
 def test_kickoff_contract_formatter_accepts_event_driven_binding(
     tmp_path: Path,
+    run_kickoff_formatter,
 ) -> None:
     strategic_context = tmp_path / "strategic_context.yaml"
     strategic_context.write_text(
@@ -2027,7 +2019,7 @@ mandate:
         encoding="utf-8",
     )
 
-    result = subprocess.run(
+    result = run_kickoff_formatter(
         _kickoff_formatter_command(
             strategic_context,
             "--driver-mode",
@@ -2038,11 +2030,7 @@ mandate:
             "claude:claude-opus-exact",
             "--event-driver",
             "gemini:gemini-pro-exact",
-        ),
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
+        )
     )
 
     assert result.returncode == 0, result.stderr
@@ -2094,41 +2082,35 @@ mandate:
     ],
 )
 def test_kickoff_contract_rejects_nonconforming_event_driver_chains(
-    tmp_path: Path, extra_args: tuple[str, ...]
+    tmp_path: Path,
+    extra_args: tuple[str, ...],
+    run_kickoff_formatter,
 ) -> None:
     strategic_context = tmp_path / "strategic_context.yaml"
     strategic_context.write_text("version: 1\n", encoding="utf-8")
 
-    result = subprocess.run(
-        _kickoff_formatter_command(strategic_context, *extra_args),
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    result = run_kickoff_formatter(_kickoff_formatter_command(strategic_context, *extra_args))
 
     assert result.returncode == 2
 
 
-def test_kickoff_contract_accepts_one_event_driver_entry(tmp_path: Path) -> None:
+def test_kickoff_contract_accepts_one_event_driver_entry(
+    tmp_path: Path, run_kickoff_formatter
+) -> None:
     strategic_context = tmp_path / "strategic_context.yaml"
     strategic_context.write_text(
         "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
         encoding="utf-8",
     )
 
-    result = subprocess.run(
+    result = run_kickoff_formatter(
         _kickoff_formatter_command(
             strategic_context,
             "--driver-mode",
             "event-driven",
             "--event-driver",
             "copilot",
-        ),
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
+        )
     )
 
     assert result.returncode == 0, result.stderr
@@ -2148,18 +2130,15 @@ def test_kickoff_contract_accepts_one_event_driver_entry(tmp_path: Path) -> None
     ],
 )
 def test_kickoff_contract_formatter_rejects_invalid_operating_mode(
-    tmp_path: Path, extra_args: tuple[str, ...], expected_error: str
+    tmp_path: Path,
+    extra_args: tuple[str, ...],
+    expected_error: str,
+    run_kickoff_formatter,
 ) -> None:
     strategic_context = tmp_path / "strategic_context.yaml"
     strategic_context.write_text("version: 1\n", encoding="utf-8")
 
-    result = subprocess.run(
-        _kickoff_formatter_command(strategic_context, *extra_args),
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    result = run_kickoff_formatter(_kickoff_formatter_command(strategic_context, *extra_args))
 
     assert result.returncode == 2
     assert expected_error in result.stderr
@@ -2175,14 +2154,16 @@ def test_kickoff_formatter_documents_structural_validation_boundary() -> None:
     assert "--phase-rationale" not in script
 
 
-def test_kickoff_contract_formatter_accepts_primary_only_chains(tmp_path: Path) -> None:
+def test_kickoff_contract_formatter_accepts_primary_only_chains(
+    tmp_path: Path, run_kickoff_formatter
+) -> None:
     strategic_context = tmp_path / "strategic_context.yaml"
     strategic_context.write_text(
         "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
         encoding="utf-8",
     )
 
-    result = subprocess.run(
+    result = run_kickoff_formatter(
         [
             sys.executable,
             str(SKILL_ROOT / "scripts" / "format_kickoff_contract.py"),
@@ -2202,11 +2183,7 @@ def test_kickoff_contract_formatter_accepts_primary_only_chains(tmp_path: Path) 
             "plan",
             "--current-checkout",
             *_proactive_review_args("standard"),
-        ],
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
+        ]
     )
 
     assert result.returncode == 0, result.stderr
@@ -2546,6 +2523,7 @@ def test_preflight_cache_runs_and_reuses_cafe_fallback_smoke(tmp_path: Path) -> 
 
 def test_kickoff_contract_formatter_rejects_incomplete_gate_partition(
     tmp_path: Path,
+    run_kickoff_formatter,
 ) -> None:
     strategic_context = tmp_path / "strategic_context.yaml"
     strategic_context.write_text(
@@ -2563,7 +2541,7 @@ def test_kickoff_contract_formatter_rejects_incomplete_gate_partition(
         / "format_kickoff_contract.py"
     )
 
-    result = subprocess.run(
+    result = run_kickoff_formatter(
         [
             sys.executable,
             str(script),
@@ -2581,11 +2559,7 @@ def test_kickoff_contract_formatter_rejects_incomplete_gate_partition(
             "spec",
             "--worktree",
             ".cafe/worktrees/issue346",
-        ],
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
+        ]
     )
 
     assert result.returncode == 2
@@ -2594,6 +2568,7 @@ def test_kickoff_contract_formatter_rejects_incomplete_gate_partition(
 
 def test_kickoff_contract_formatter_rejects_mandatory_gate_assignment(
     tmp_path: Path,
+    run_kickoff_formatter,
 ) -> None:
     strategic_context = tmp_path / "strategic_context.yaml"
     strategic_context.write_text(
@@ -2604,13 +2579,7 @@ def test_kickoff_contract_formatter_rejects_mandatory_gate_assignment(
     command = _kickoff_formatter_command(strategic_context)
     driver_index = command.index("--driver-confirmable")
     command[driver_index + 1 : driver_index + 3] = ["spec", "plan", "pr"]
-    result = subprocess.run(
-        command,
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    result = run_kickoff_formatter(command)
 
     assert result.returncode == 2
     assert "unknown gates: pr" in result.stderr
@@ -2678,6 +2647,7 @@ def test_kickoff_contract_formatter_uses_cafe_python_when_site_packages_are_miss
 def test_kickoff_formatter_validates_custom_iteration_profiles_without_displaying_them(
     tmp_path: Path,
     profile_damage: str | None,
+    run_kickoff_formatter,
 ) -> None:
     skills_root = tmp_path / ".cafe" / "skills"
     playbooks_root = tmp_path / ".cafe" / "playbooks"
@@ -2737,7 +2707,7 @@ entry_point: audit
     )
     script = SKILL_ROOT / "scripts" / "format_kickoff_contract.py"
 
-    result = subprocess.run(
+    result = run_kickoff_formatter(
         [
             sys.executable,
             str(script),
@@ -2756,9 +2726,6 @@ entry_point: audit
             "--current-checkout",
         ],
         cwd=tmp_path,
-        text=True,
-        capture_output=True,
-        check=False,
     )
 
     if profile_damage is not None:
@@ -2772,13 +2739,15 @@ entry_point: audit
     assert "Phase execution requirements" not in result.stdout
 
 
-def test_kickoff_formatter_rejects_unresolved_phase_models(tmp_path: Path) -> None:
+def test_kickoff_formatter_rejects_unresolved_phase_models(
+    tmp_path: Path, run_kickoff_formatter
+) -> None:
     strategic_context = tmp_path / "strategic_context.yaml"
     strategic_context.write_text(
         "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
         encoding="utf-8",
     )
-    result = subprocess.run(
+    result = run_kickoff_formatter(
         [
             sys.executable,
             str(SKILL_ROOT / "scripts" / "format_kickoff_contract.py"),
@@ -2799,9 +2768,6 @@ def test_kickoff_formatter_rejects_unresolved_phase_models(tmp_path: Path) -> No
             "--current-checkout",
         ],
         cwd=tmp_path,
-        text=True,
-        capture_output=True,
-        check=False,
     )
 
     assert result.returncode == 2
@@ -2809,18 +2775,14 @@ def test_kickoff_formatter_rejects_unresolved_phase_models(tmp_path: Path) -> No
     assert "field='spec'" in result.stderr
 
 
-def test_kickoff_formatter_accepts_phase_chains_without_rationale(tmp_path: Path) -> None:
+def test_kickoff_formatter_accepts_phase_chains_without_rationale(
+    tmp_path: Path, run_kickoff_formatter
+) -> None:
     command = _kickoff_formatter_command(
         tmp_path / "absent-context.yaml", "--project-root", str(tmp_path)
     )
     assert not any("rationale" in argument for argument in command)
-    result = subprocess.run(
-        command,
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    result = run_kickoff_formatter(command)
     assert result.returncode == 0, result.stderr
     assert (
         "| develop | copilot:implementation-main | cursor-agent:implementation-fallback |"
@@ -3194,6 +3156,7 @@ def test_proactive_review_overrides_are_sparse_ordered_and_fail_closed() -> None
 
 def test_kickoff_derives_proactive_defaults_only_at_scheduled_pauses(
     tmp_path: Path,
+    run_kickoff_formatter,
 ) -> None:
     strategic_context = tmp_path / "strategic_context.yaml"
     strategic_context.write_text(
@@ -3201,15 +3164,11 @@ def test_kickoff_derives_proactive_defaults_only_at_scheduled_pauses(
         encoding="utf-8",
     )
 
-    result = subprocess.run(
+    result = run_kickoff_formatter(
         _kickoff_formatter_command(
             strategic_context,
             include_proactive_review_args=False,
-        ),
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
+        )
     )
 
     assert result.returncode == 0, result.stderr
@@ -3237,6 +3196,7 @@ def test_kickoff_derives_proactive_defaults_only_at_scheduled_pauses(
 
 def test_kickoff_defaults_apply_to_custom_assignable_and_mandatory_gates(
     tmp_path: Path,
+    run_kickoff_formatter,
 ) -> None:
     playbooks_root = tmp_path / ".cafe" / "playbooks"
     playbooks_root.mkdir(parents=True)
@@ -3286,7 +3246,7 @@ entry_point: define
         "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
         encoding="utf-8",
     )
-    result = subprocess.run(
+    result = run_kickoff_formatter(
         [
             sys.executable,
             str(SKILL_ROOT / "scripts" / "format_kickoff_contract.py"),
@@ -3307,9 +3267,6 @@ entry_point: define
             "--current-checkout",
         ],
         cwd=tmp_path,
-        text=True,
-        capture_output=True,
-        check=False,
     )
 
     assert result.returncode == 0, result.stderr
@@ -3334,22 +3291,19 @@ entry_point: define
 
 def test_kickoff_renders_not_required_override_without_claiming_a_review(
     tmp_path: Path,
+    run_kickoff_formatter,
 ) -> None:
     strategic_context = tmp_path / "strategic_context.yaml"
     strategic_context.write_text(
         "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
         encoding="utf-8",
     )
-    result = subprocess.run(
+    result = run_kickoff_formatter(
         _kickoff_formatter_command(
             strategic_context,
             "--proactive-review-decision",
             "spec=not_required",
-        ),
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
+        )
     )
 
     assert result.returncode == 0, result.stderr
@@ -3674,7 +3628,9 @@ def test_proactive_review_snapshot_includes_the_resolved_chat_identity() -> None
         assert required in normalized
 
 
-def test_kickoff_rejects_required_review_without_a_scheduled_pause(tmp_path: Path) -> None:
+def test_kickoff_rejects_required_review_without_a_scheduled_pause(
+    tmp_path: Path, run_kickoff_formatter
+) -> None:
     strategic_context = tmp_path / "strategic_context.yaml"
     strategic_context.write_text(
         "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
@@ -3691,13 +3647,7 @@ def test_kickoff_rejects_required_review_without_a_scheduled_pause(tmp_path: Pat
                     f"{phase}={state}",
                 ]
             )
-        result = subprocess.run(
-            _kickoff_formatter_command(strategic_context, *decisions),
-            cwd=PROJECT_ROOT,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
+        result = run_kickoff_formatter(_kickoff_formatter_command(strategic_context, *decisions))
 
         assert result.returncode == 2
         assert (
@@ -3707,23 +3657,23 @@ def test_kickoff_rejects_required_review_without_a_scheduled_pause(tmp_path: Pat
 
 
 @pytest.mark.parametrize("override", ["spec=", "spec=maybe", "spec=not_required:old rationale"])
-def test_kickoff_rejects_invalid_or_legacy_review_override(tmp_path: Path, override: str) -> None:
-    result = subprocess.run(
+def test_kickoff_rejects_invalid_or_legacy_review_override(
+    tmp_path: Path, override: str, run_kickoff_formatter
+) -> None:
+    result = run_kickoff_formatter(
         _kickoff_formatter_command(
             tmp_path / "unused",
             "--proactive-review-decision",
             override,
-        ),
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
+        )
     )
     assert result.returncode == 2
     assert "proactive review decisions use PHASE=required|not_required" in result.stderr
 
 
-def test_kickoff_accepts_required_review_at_scheduled_pauses(tmp_path: Path) -> None:
+def test_kickoff_accepts_required_review_at_scheduled_pauses(
+    tmp_path: Path, run_kickoff_formatter
+) -> None:
     strategic_context = tmp_path / "strategic_context.yaml"
     strategic_context.write_text(
         "mandate: {preset: technical-led, axes: {}, out_of_mandate: []}\n",
@@ -3739,13 +3689,7 @@ def test_kickoff_accepts_required_review_at_scheduled_pauses(tmp_path: Path) -> 
             ]
         )
 
-    result = subprocess.run(
-        _kickoff_formatter_command(strategic_context, *decisions),
-        cwd=PROJECT_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    result = run_kickoff_formatter(_kickoff_formatter_command(strategic_context, *decisions))
 
     assert result.returncode == 0, result.stderr
     phase_decisions = _kickoff_proposal(result.args)["proactive_review"]["phase_decisions"]
