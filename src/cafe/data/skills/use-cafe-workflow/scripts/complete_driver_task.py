@@ -12,7 +12,7 @@ _SOURCE_ROOT = Path(__file__).resolve().parents[5]
 if str(_SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(_SOURCE_ROOT))
 
-from cafe.manager.task_completion import complete_manager_task  # noqa: E402
+from cafe.manager._store import select_authority_directory  # noqa: E402
 
 
 def main() -> None:
@@ -37,7 +37,16 @@ def main() -> None:
         or not isinstance(assessment.get("evidence"), dict)
     ):
         raise ValueError("assessment requires response and evidence objects")
-    result = complete_manager_task(
+    authority = select_authority_directory(args.issue_dir)
+    if authority.name == "driver":
+        from cafe.driver.task_completion import complete_driver_task
+
+        complete = complete_driver_task
+    else:
+        from cafe.manager.task_completion import complete_manager_task
+
+        complete = complete_manager_task
+    result = complete(
         args.issue_dir,
         args.task_id,
         response=assessment["response"],

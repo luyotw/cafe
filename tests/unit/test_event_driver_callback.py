@@ -2624,3 +2624,51 @@ def test_callback_session_conflict_keeps_existing_session(tmp_path: Path, monkey
 
     persisted = json.loads((driver_dir / "dispatch_state.json").read_text(encoding="utf-8"))
     assert persisted["entries"][0]["session"]["id"] == "existing"
+
+
+def test_manager_event_contract_uses_manager_state_path(tmp_path: Path) -> None:
+    callback = _callback_module()
+    issue_dir = tmp_path / ".cafe" / "issues" / "manager-event"
+    blackboard = _prepare_issue(issue_dir)
+    from cafe.manager import ActivateConfirmedContract, activate_confirmed_contract
+
+    activate_confirmed_contract(
+        ActivateConfirmedContract(
+            issue_dir=issue_dir,
+            issue_name=issue_dir.name,
+            workflow_id=blackboard.workflow_id,
+            confirmed_by="user",
+            confirmed_at=datetime(2026, 9, 28, tzinfo=timezone.utc),
+            proposal={
+                "delivery_contract": delivery_contract(),
+                "locales": {"conversation": {"value": "en", "source": "test"}},
+                "confirmation_contract": {
+                    "user_required": ["spec", "plan"],
+                    "manager_confirmable": [],
+                    "mandatory_human_stops": ["spec", "plan"],
+                },
+                "reactive_user_handoffs": {
+                    "need_clarification": "manager_confirmable",
+                    "need_permission": "user_required",
+                    "alignment_checkpoint": "manager_resolvable_when_clear",
+                },
+                "phases": [{"name": "develop", "chain": [{"cli": "codex", "model": "exact"}]}],
+                "proactive_review": {
+                    "phase_decisions": [{"phase": "develop", "decision": "not_required"}]
+                },
+                "manager": {"mode": "event-driven", "clis": [{"cli": "codex"}]},
+                "checkout": {"kind": "current_checkout"},
+                "task_contract": {"user_required": [], "manager_confirmable": []},
+            },
+        )
+    )
+
+    config = callback._contract_callback_config(
+        issue_dir=issue_dir,
+        issue_name=issue_dir.name,
+        workflow_id=blackboard.workflow_id,
+    )
+
+    assert config["clis"] == [{"cli": "codex"}]
+    assert (issue_dir / "manager" / "contract.json").is_file()
+    assert not (issue_dir / "driver" / "contract.json").exists()

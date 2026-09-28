@@ -38,21 +38,40 @@ def validate_entry(
     *, issue_dir: Path, issue_name: str, workflow_id: str, fresh_facts: Mapping[str, Any]
 ) -> dict[str, Any]:
     """Fail before Manager work when current authority cannot be proved unchanged."""
-    result = evaluate_manager_entry(
-        ManagerEntryRequest(
+    manager_contract = issue_dir / "manager" / "contract.json"
+    driver_contract = issue_dir / "driver" / "contract.json"
+    if manager_contract.exists() or driver_contract.exists():
+        from cafe.manager._store import select_authority_directory
+
+        authority = select_authority_directory(issue_dir)
+    else:
+        authority = issue_dir / "manager"
+    if authority.name == "driver":
+        from cafe.driver import DriverEntryRequest, evaluate_driver_entry
+
+        request_type = DriverEntryRequest
+        evaluate = evaluate_driver_entry
+    else:
+        request_type = ManagerEntryRequest
+        evaluate = evaluate_manager_entry
+    result = evaluate(
+        request_type(
             issue_dir=issue_dir,
             issue_name=issue_name,
             workflow_id=workflow_id,
             fresh_facts=fresh_facts,
         )
     )
-    if result.freshness is not Freshness.SAME_SEMANTICS:
+    if result.freshness.value != Freshness.SAME_SEMANTICS.value:
         raise ValueError(f"Manager contract requires {result.freshness.value} recovery")
+    runtime = dict(result.runtime)
+    if "driver" in runtime:
+        runtime["manager"] = runtime.pop("driver")
     return {
         "contract_sha256": result.contract_sha256,
         "revision": result.revision,
         "delivery_contract": _plain(result.delivery_contract),
-        "runtime": _plain(result.runtime),
+        "runtime": _plain(runtime),
         "event": _plain(result.event),
         "proactive_review": _plain(result.proactive_review),
         "phase_model_authority": _plain(result.phase_model_authority),
