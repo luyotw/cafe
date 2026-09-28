@@ -181,10 +181,12 @@ obtain explicit user confirmation of:
 - `repository_content_locale`;
 - every assignable planned confirmation gate, partitioned into `user_required`
   and `driver_confirmable`, plus the separate mandatory HumanTask stop list;
-- each Driver-completable HumanTask as a task declaration keyed by its exact
-  phase and task ID, using `--task-driver-confirmable PHASE:TASK_ID`; declare
-  user-owned tasks with `--task-user-required PHASE:TASK_ID`. An undeclared task
-  is user-owned. The pause route never assigns ownership;
+- overall `need_clarification` ownership, defaulting new proposals to
+  `driver_confirmable`; present finer clarification ownership only when the user
+  requests it. Declare ownership by exact phase and task ID for those overrides,
+  using `--task-driver-confirmable PHASE:TASK_ID` or
+  `--task-user-required PHASE:TASK_ID`. Explicit task ownership takes precedence
+  over the overall policy. Other undeclared tasks remain user-owned;
 - `reactive_user_handoffs`;
 - the effective proactive-review decision for every agent or hybrid phase with
   an existing scheduled confirmation pause. Default every assignable scheduled
@@ -351,12 +353,14 @@ change the separate event-driven callback chain.
 
 `need_clarification` and `need_permission` are reactive interruptions, not
 scheduled candidates. `manual_handoff` is routing, not a planned confirmation
-gate. Alignment is a proactive driver decision governed by mandate. Declare
-ownership by exact phase and task ID, independently of route. Record the
-remaining reactive policy in the kickoff:
+gate. Alignment is a proactive driver decision governed by mandate. Record the
+overall reactive policy in the kickoff, with task overrides only when requested:
 
-- A `need_clarification` task may be `driver_confirmable` only through its
-  confirmed task declaration. The Driver may answer only when the complete
+- Default new proposals to `need_clarification: driver_confirmable`, using
+  `--need-clarification driver_confirmable`; `--need-clarification user_required`
+  reserves all otherwise undeclared clarifications for the user. Explicit
+  phase/task declarations override either overall choice. The Driver may answer
+  only when the complete
   answer stays within the confirmed Delivery Contract, its scope, explicit
   constraints and existing authority, and triggers no deviation; otherwise it
   remains user-owned;
@@ -365,8 +369,15 @@ remaining reactive policy in the kickoff:
 - `alignment_checkpoint`: driver-resolvable only when the proposal is clearly
   within confirmed strategy and mandate.
 
-An undeclared or user-owned runtime `to_owner=user` baton or `Workflow is waiting
-for user input` output is a hard stop for autonomous Driver completion.
+A runtime `to_owner=user` baton or `Workflow is waiting for user input` output
+is a hard stop unless the confirmed overall clarification policy or an explicit
+task declaration authorizes Driver completion. Explicit user ownership wins.
+
+Existing v6 contracts lack the overall policy and retain task-only ownership
+until explicit reconfirmation. Existing v5 contracts retain their explicitly
+confirmed overall clarification choice. New v7 contracts record both the overall
+choice and task overrides; reading old records never inserts the new default or
+rewrites digests.
 
 ### Delivery facts to confirm
 
@@ -425,7 +436,7 @@ Render these facts with the complete kickoff, resolve material ambiguity, and
 interpret the user's response semantically in any language. Acknowledgement of
 one part does not confirm unreviewed facts. Retain existing explicit decisions;
 do not repeatedly ask for unchanged choices. Only the confirmed facts become
-`delivery_contract` in the single version-5 durable Driver contract. The nested
+`delivery_contract` in the single version-7 durable Driver contract. The nested
 Delivery Contract has its own version; no feature-specific sidecar is authority.
 
 Inspect the selected effective entry point, transitions, `initial_input`,
@@ -715,7 +726,7 @@ with the active playbook, and obtain fresh confirmation before persisting it.
 ## Durable Driver authority
 
 After the user confirms the complete normalized kickoff, activate exactly one
-version-5 contract at `.cafe/issues/<issue>/driver/contract.json` before the
+version-7 contract at `.cafe/issues/<issue>/driver/contract.json` before the
 first Driver entry. The activation command must bind the prepared workflow ID,
 timezone-aware confirmation time, confirmer, and the same semantic proposal
 that was rendered for confirmation. Rendering alone never writes authority.

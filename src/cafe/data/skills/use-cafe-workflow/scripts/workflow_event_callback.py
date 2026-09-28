@@ -1627,8 +1627,9 @@ def _callback_prompt(event: dict[str, Any], *, repository_root: Path) -> str:
             "Treat route_status, resolution_owner, and evidence_reason independently.",
             "Do not answer mandatory, user-required, permission, or capability tasks; only "
             "a user-facing driver turn may relay an explicit user-owned answer.",
-            "You may complete a declared driver_confirmable task, including "
-            "need_clarification, only after verifying its confirmed contract and evidence. "
+            "You may complete a driver_confirmable task authorized by its explicit declaration "
+            "or the confirmed overall need_clarification policy, only after verifying its "
+            "confirmed contract and evidence. Explicit task ownership overrides the overall policy. "
             "Use complete_driver_task.py with the same assessment and inspected digests "
             "so authority is rechecked at durable completion. "
             "A clarification answer must stay within confirmed scope, constraints and authority "

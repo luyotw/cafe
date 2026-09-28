@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including passive supervision, bounded recovery, and declarative repair when execution leaves its safe operating envelope.
-metadata: {version: 1.70.4}
+metadata: {version: 1.71.0}
 ---
 
 # Use CAFE Workflow
@@ -64,6 +64,11 @@ read the union once; do not preload the rest.
 - Route every HumanTask through its declared owner and schema. The Driver never
   infers or supplies a user-owned answer; Driver-owned exceptions exist only
   where the confirmed task contract explicitly grants them.
+- Default new kickoff proposals to overall `need_clarification: driver_confirmable`.
+  Offer phase/task overrides only when the user requests finer control. Explicit
+  task ownership takes precedence; answers still require evidence within the
+  confirmed scope, constraints and authority. Existing contracts retain their
+  confirmed policy and never acquire this default merely by being read.
 - Treat a wrapper directive with `action: yield` as terminal for the current
   Driver turn. Do not poll the background worker after that directive.
 - For an initial kickoff confirmation request, present the complete stdout of

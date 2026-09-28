@@ -507,6 +507,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--need-permission", default="user_required")
     parser.add_argument(
+        "--need-clarification",
+        choices=("driver_confirmable", "user_required"),
+        default="driver_confirmable",
+        help="Overall clarification ownership; explicit task declarations override it.",
+    )
+    parser.add_argument(
         "--alignment-checkpoint",
         default="driver_resolvable_when_clear",
     )
@@ -681,6 +687,7 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
         },
         "task_contract": task_contract,
         "reactive_user_handoffs": {
+            "need_clarification": args.need_clarification,
             "need_permission": args.need_permission,
             "alignment_checkpoint": args.alignment_checkpoint,
         },
@@ -928,14 +935,26 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
                 ["Intent", "Policy"],
                 [[key, value] for key, value in proposal["reactive_user_handoffs"].items()],
             ),
-            "### Declared HumanTask ownership",
-            _table(
-                ["Phase", "Task", "Owner"],
+            *(
                 [
-                    [entry["phase"], entry["task_id"], owner]
-                    for owner, entries in proposal["task_contract"].items()
-                    for entry in entries
-                ],
+                    "### Declared HumanTask ownership",
+                    _table(
+                        ["Phase", "Task", "Owner"],
+                        [
+                            [entry["phase"], entry["task_id"], owner]
+                            for owner, entries in (
+                                ("user_required", _task_declarations(args.task_user_required)),
+                                (
+                                    "driver_confirmable",
+                                    _task_declarations(args.task_driver_confirmable),
+                                ),
+                            )
+                            for entry in entries
+                        ],
+                    ),
+                ]
+                if args.task_user_required or args.task_driver_confirmable
+                else []
             ),
             "### Deliver and cleanup plan to confirm",
             _render_closeout(closeout, _closeout_descriptions(args, closeout), zh=zh),
