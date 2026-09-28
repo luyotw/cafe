@@ -29,7 +29,7 @@ retry. Treat a materially different visible failure as a new incident.
     hook/tool declaration, or planned confirmation gate.
   - **Phase declarative defect:** wrong phase/shared/chat skill contract,
     placeholder, route, or supporting skill resource.
-  - **Driver or CAFE core defect:** `use-cafe-workflow`, CLI/runtime Python,
+  - **Manager or CAFE core defect:** `use-cafe-workflow`, CLI/runtime Python,
     workflow state machinery, or host execution.
   - **Unconfirmed or transient:** evidence does not distinguish product behavior
     from environment, project, provider, or agent behavior.
@@ -67,13 +67,13 @@ python3 <skill-dir>/scripts/sync_helper_with_preflight.py \
 Use only the user's exact approved scope and require the successful post-change
 receipt; do not diagnose by bypassing the wrapper with a direct sync command.
 
-Do not use writer skills to change driver/meta skills, CAFE runtime Python,
+Do not use writer skills to change manager/meta skills, CAFE runtime Python,
 workflow state machinery, or host infrastructure. Do not invent a
-`write-cafe-driver` skill.
+`write-cafe-manager` skill.
 
-## Driver and core defects
+## Manager and core defects
 
-Do not self-modify a driver or core defect unless the user explicitly authorizes
+Do not self-modify a manager or core defect unless the user explicitly authorizes
 that source change. Stop before an unsafe or contract-bypassing workaround and
 recommend following or opening an issue at
 <https://github.com/luyotw/cafe/issues>.
@@ -89,7 +89,7 @@ Before recommending a new issue:
   user authorization.
 
 For unconfirmed or transient failures of a phase agent, follow the bounded retry
-rules in `supervision_and_recovery.md`. The Driver
+rules in `supervision_and_recovery.md`. The Manager
 does not answer the user-owned interruption task or treat a recommendation as
 retry authority. Continue through a workaround only through an existing legal
 task, input, correction, or authorization path, and only when explicit

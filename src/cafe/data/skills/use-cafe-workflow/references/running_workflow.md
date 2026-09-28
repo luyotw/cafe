@@ -6,7 +6,7 @@ execution and whenever agent work remains.
 
 For active supervision, interruption classification, or recovery, read
 `supervision_and_recovery.md`. Its non-intervention envelope decides whether
-the Driver remains passive before the ordinary commands below are considered.
+the Manager remains passive before the ordinary commands below are considered.
 
 Before every start or resume, follow `project_global_skill_sync.md`: validate
 the persisted runtime/catalog preflight against fresh read-only checks. A
@@ -20,7 +20,7 @@ contract. Reconfirm kickoff only for a material difference found by the semantic
 comparison. Verified metadata-only churn may continue, while uncertain
 differences fail closed.
 
-The Driver must never execute `release-check` while a workflow is active. Defer
+The Manager must never execute `release-check` while a workflow is active. Defer
 an in-workflow request until the workflow is complete; the user may run it
 before release.
 
@@ -29,26 +29,26 @@ append the localized renderer output required by `workflow_progress.md`.
 Rendering that reply must not add a status poll, resume, task completion, or other
 intervention.
 
-For Driver-managed preparation, resolve the user-facing runtime-update decision
+For Manager-managed preparation, resolve the user-facing runtime-update decision
 from `project_global_skill_sync.md` before invoking `cafe prepare
 --no-interactive`; callbacks never supply this answer.
 
-## Required Driver launch entrypoint
+## Required Manager launch entrypoint
 
 The kickoff records one mode; it is a skill operating contract, not a CAFE-core
 policy.
 
-Every Driver-managed start and ordinary resume must use the same wrapper:
+Every Manager-managed start and ordinary resume must use the same wrapper:
 
 ```bash
 python3 <skill-dir>/scripts/run_workflow.py \
   --issue <issue> \
   --playbook <confirmed-playbook> \
-  --driver-mode <attached|unattended|event-driven> \
-  --fresh-facts '<rebuilt-current-driver-facts-json>'
+  --manager-mode <attached|unattended|event-driven> \
+  --fresh-facts '<rebuilt-current-manager-facts-json>'
 ```
 
-`--driver-mode` is an assertion against the confirmed contract. The wrapper
+`--manager-mode` is an assertion against the confirmed contract. The wrapper
 fails closed for missing, unreadable, stale, or conflicting workflow identity,
 playbook, mode, callback binding, CLI order, or checkout identity. It reads the
 prepared workflow and persisted baton for both start and resume; never add
@@ -56,10 +56,10 @@ prepared workflow and persisted baton for both start and resume; never add
 
 Rebuild `--fresh-facts` from the current bounded runtime and catalog checks as
 an object containing `semantic_facts.effective_policy`, rebuilt from the current
-complete Driver policy. Runtime/catalog diagnostics stay outside the contract;
+complete Manager policy. Runtime/catalog diagnostics stay outside the contract;
 do not add `material_assumptions` or copy stale policy merely to make it match.
 The wrapper validates that
-payload through `evaluate_driver_entry` and rejects `material_change` and
+payload through `evaluate_manager_entry` and rejects `material_change` and
 `unknown` before launching any attached, unattended, or event-driven worker.
 Continue only after the existing contract reconfirmation path establishes
 `same_semantics`.
@@ -70,11 +70,11 @@ Continue only after the existing contract reconfirmation path establishes
   empty terminal yield is transport state, not a reason to inspect early.
 - **unattended** launches background continuous execution without a callback
   and returns `action: yield`. That directive is terminal for the current
-  Driver turn; inspect durable state only when the user returns.
+  Manager turn; inspect durable state only when the user returns.
 - **event-driven** validates the trusted builtin callback and confirmed ordered
-  Driver CLI chain, launches background continuous execution with the callback,
+  Manager CLI chain, launches background continuous execution with the callback,
   and returns `action: yield`. That directive is terminal for the current
-  Driver turn: do not poll with sleep, `ps`, `write_stdin`, `cafe status`, or
+  Manager turn: do not poll with sleep, `ps`, `write_stdin`, `cafe status`, or
   `cafe task ls`; wait for a callback wake or user input.
 
 None of the modes uses `--single-step`. The wrapper always supplies `--execute`
@@ -84,14 +84,14 @@ It never infers HumanTask answers, permissions, `--open-pr`, model or playbook
 changes, `--add-dir`, `--no-verify`, or retry/fresh-session choices.
 The only separately authorized continuation input is `--alignment-input`: it
 requires explicit JSON and is accepted only when the current durable handoff,
-confirmed Driver policy, and latest alignment request all authorize that exact
+confirmed Manager policy, and latest alignment request all authorize that exact
 decision. It is not a HumanTask answer or a general phase-input channel.
 
-The wrapper also emits stable `CAFE_DRIVER_DIRECTIVE` records for launch
+The wrapper also emits stable `CAFE_MANAGER_DIRECTIVE` records for launch
 failure and a durable user-owned boundary. Do not launch through a user-owned
 boundary or infer its answer.
 
-The callback reads the issue-scoped `driver/contract.json` and projects the
+The callback reads the issue-scoped `manager/contract.json` and projects the
 primary CLI plus fallback CLI/model order only in memory. Waking the primary
 session never includes a model override. `dispatch_state.json` is mutable runtime
 state that records sessions with their CLI/model identities, each event's
@@ -99,19 +99,19 @@ routing chain, attempt history, the sticky active index, takeover, exhaustion,
 recovery, and timestamps. These recorded identities describe past dispatch;
 the current contract controls new dispatch. The stored digest does not block
 dispatch after a confirmed contract update.
-`driver/config.yaml` is a legacy migration input only; when a contract exists
+`manager/config.yaml` is a legacy migration input only; when a contract exists
 it is neither read as callback authority nor a
-writer target. The event-driver lifecycle uses no session-file discovery,
+writer target. The event-manager lifecycle uses no session-file discovery,
 directory diff, sleep, polling, or watcher.
 
 The wrapper validates only launch authority and invocation identity. It does
 not become a workflow state inspector or decision engine. After a callback wake
 notice, continue to inspect `cafe status`, `cafe show`, and durable tasks before
-deciding what the Driver may do.
+deciding what the Manager may do.
 
 Session acquisition and actual delivery are separate boundaries. Every
 unacquired, unbound entry first runs a provider request exactly equivalent to
-`say "HI"` with no workflow event or driver authority. Codex, Claude, Gemini,
+`say "HI"` with no workflow event or manager authority. Codex, Claude, Gemini,
 Cursor, and Copilot each supply a provider-created session ID from their
 verified structured or terminal evidence. The callback persists that ID in
 `dispatch_state.json` before the actual callback. An existing acquired session
@@ -147,7 +147,7 @@ An event already attempted under an unknown or different route is not resumed
 by interpreting its old indexes against the new chain; new events use the
 current chain. No manual rebind is needed for a new callback.
 
-Inspect this state without acquiring a callback lock or modifying any driver
+Inspect this state without acquiring a callback lock or modifying any manager
 file:
 
 ```bash
@@ -158,7 +158,7 @@ python3 <skill-dir>/scripts/workflow_event_callback.py \
 The projection reports confirmed order/conformance, acquisition separately
 from delivery, the active transport, takeover, exhaustion, and recovery. It
 does not infer delivery from model output or claim cross-provider context
-continuity. The callback remains an ordinary driver and uses only existing
+continuity. The callback remains an ordinary manager and uses only existing
 kickoff authority: confirmation contract, mandatory HumanTask stops, reactive
 user handoffs, and mandate. It cannot change confirmed models.
 
@@ -166,7 +166,7 @@ user handoffs, and mandate. It cannot change confirmed models.
 
 Before any agent step, derive its inputs from the effective graph and project
 one bounded delta only for facts that are user-confirmed in the current turn,
-a completed HumanTask, or the current Driver contract; belong to this workflow;
+a completed HumanTask, or the current Manager contract; belong to this workflow;
 remain current and relevant; and are not already visible through declared
 artifacts, iteration input, or durable task results. This applies to every
 playbook. Preserve exact wording when paraphrase could alter meaning.
@@ -213,7 +213,7 @@ non-advancing correction continuation. Derive it solely from the active
 HumanTask declaration regardless of outcome, phase, or target names; zero or
 multiple eligible outcomes fail closed for user/playbook clarification. The
 exception applies only after complete review and one `cafe chat` consensus
-exchange. It may complete a declared `driver_confirmable` task only after
+exchange. It may complete a declared `manager_confirmable` task only after
 verifying the current confirmation contract and evidence. It does not own the background worker or
 gain a safe stop channel. An existing reliable, authorized control may be used
 only after verification; this feature creates no PID registry, cancellation API,
@@ -222,20 +222,20 @@ recovery protocol, or stop guarantee.
 ## Completing a HumanTask
 
 The callback is not an interaction channel. A mandatory, `user_required`,
-permission, or capability task requires a **user-facing driver turn** to
+permission, or capability task requires a **user-facing manager turn** to
 receive the user's explicit answer. The unique active declared correction
-outcome exception permits the current Driver, including an event-driven
+outcome exception permits the current Manager, including an event-driven
 callback, to submit only that eligible outcome after complete review and one
 `cafe chat` consensus exchange; it never permits confirmation or another
-user-owned decision. A task authorized by an explicit `driver_confirmable`
+user-owned decision. A task authorized by an explicit `manager_confirmable`
 declaration or the confirmed overall clarification policy may be completed by
-any Driver, including an event-driven callback, only within the confirmed
+any Manager, including an event-driven callback, only within the confirmed
 Delivery Contract and existing authority. Explicit task ownership overrides the overall policy; the overall
 choice applies only to `need_clarification`, never to permissions, capabilities
-or mandatory decisions. Any other `driver_confirmable` task may likewise be
-completed after the Driver verifies its confirmed contract and task-specific
+or mandatory decisions. Any other `manager_confirmable` task may likewise be
+completed after the Manager verifies its confirmed contract and task-specific
 evidence. These
-Driver-owned cases use the same durable task flow:
+Manager-owned cases use the same durable task flow:
 
 On every later user-facing turn, inspect current durable state first. If a
 user-owned HumanTask is still pending and no adequate handoff has been given in
@@ -248,27 +248,27 @@ repeat it when the user already has the same task and options unless they ask.
    .cafe/issues/<issue> --task-id <task-id> --json`. Read route/status, task
    owner, evidence reason and declared input schema separately. Never reuse a
    stale task ID.
-2. Classify the task before serializing its result. The Driver may serialize a
+2. Classify the task before serializing its result. The Manager may serialize a
    correction result only for the unique active declared correction outcome that
    requires feedback, is marked `correction: true`, and routes to a
    non-advancing correction continuation, and only after complete review and one
    `cafe chat` consensus exchange, including the consolidated findings,
    consensus, and acceptance conditions. If zero or multiple outcomes qualify,
    fail closed for user/playbook clarification. For a user-owned task, serialize only the user's
-   supplied answer into that schema; the Driver may add the task ID required by
+   supplied answer into that schema; the Manager may add the task ID required by
    the schema, but must not infer a decision, approval, permission, or missing
-   answer. For a `driver_confirmable` task, use only its declared response after
+   answer. For a `manager_confirmable` task, use only its declared response after
    the required contract and evidence verification. For `need_clarification`,
    record a concise contract basis and do not submit when the answer changes
    the contract, triggers a deviation, needs new authority, is reserved to the
    user, or its authority is uncertain.
-3. For a `driver_confirmable` answer, save `{"response": ..., "evidence": ...}`
+3. For a `manager_confirmable` answer, save `{"response": ..., "evidence": ...}`
    as an assessment file. Inspect that exact assessment with
    `inspect_task_authority.py --assessment <file>` and pass its
    `contract_sha256` and `sources_sha256` to
-   `complete_driver_task.py --issue-dir <issue-dir> --task-id <task-id>
+   `complete_manager_task.py --issue-dir <issue-dir> --task-id <task-id>
    --assessment <file> --contract-sha256 <digest> --sources-sha256 <digest> --json`.
-   This Driver-owned entry validates current authority when invoked, uses the
+   This Manager-owned entry validates current authority when invoked, uses the
    same structured task validation, and preserves the no-resume continuation
    boundary. `sources_sha256` binds the inspected source contents, current task,
    handoff, and dynamic questions to that initial validation. Concurrent
@@ -285,10 +285,10 @@ repeat it when the user already has the same task and options unless they ask.
    handoff state before retrying. Repeating the exact normalized response is
    safe and does not resume twice; a different response conflicts.
 4. After durable completion, rebuild fresh facts and invoke
-   `scripts/run_workflow.py` with the confirmed issue, playbook, Driver mode,
+   `scripts/run_workflow.py` with the confirmed issue, playbook, Manager mode,
    and `--fresh-facts`. The wrapper follows the persisted continuation.
 
-`--no-resume` is an internal driver control that separates durable task
+`--no-resume` is an internal manager control that separates durable task
 completion from mode-specific continuation. Direct `cafe task complete` users
 retain its normal automatic foreground-resume behavior and need not perform
 this two-step flow.
@@ -296,7 +296,7 @@ this two-step flow.
 ## Commands and handoffs
 
 - Resolve the current phase from `cafe status` and the structured baton, then
-  use the wrapper for every Driver-managed start or resume.
+  use the wrapper for every Manager-managed start or resume.
 - Ordinary resume follows the persisted baton and completed durable task. Do
   not select or reconstruct a step with `--start-step`.
 - Use `--single-step` only for manual, bounded diagnosis. No ordinary operating
@@ -312,7 +312,7 @@ this two-step flow.
   schema.
 
 Direct `cafe workflow` invocation is an explicit manual bypass only, never the
-normal Driver path. Use it only when the user explicitly requests that bypass;
+normal Manager path. Use it only when the user explicitly requests that bypass;
 the caller then owns every argument and the wrapper's validation/directive
 contract does not apply.
 
@@ -332,17 +332,17 @@ Continue a single deferred wait for the remaining interval instead of starting
 a shorter polling loop; wait on the same deferred operation.
 A terminal session id, empty output, or host-tool yield is transport state, not
 substantive process output. It must not trigger a short `write_stdin` poll.
-Substantive lifecycle output may still wake the driver immediately.
+Substantive lifecycle output may still wake the manager immediately.
 
 For unattended runs, tell the user that progress is durable but not proactively
 observed. For event-driven runs, explain that boundary callbacks are best effort
 and do not delay advancement; their role is timely diagnosis and authorized
 handling of anomalies, not worker control.
 
-## Proactive driver review
+## Proactive manager review
 
 Before every start or resume, validate the confirmed
-`.cafe/issues/<issue>/driver/contract.json` and use its
+`.cafe/issues/<issue>/manager/contract.json` and use its
 `proactive_review.phase_decisions` projection. If the contract is absent,
 invalid, stale, or its phase coverage no longer matches the active playbook,
 stop and require kickoff reconfirmation; do not infer a review policy from an
@@ -352,12 +352,12 @@ reopen unrelated kickoff policy.
 Only an executed required phase becomes due for proactive review, and only when
 its durable output has reached an existing scheduled confirmation pause that
 blocks downstream agent work. Complete the review before completing a
-`driver_confirmable` task or relaying a `user_required` answer that would resume
+`manager_confirmable` task or relaying a `user_required` answer that would resume
 the workflow. A phase that advances immediately is not eligible for `required`;
-its kickoff decision must be `not_required` because an asynchronous Driver
+its kickoff decision must be `not_required` because an asynchronous Manager
 cannot review it in time to gate advancement. A not_required phase, a skipped
 phase, and an all-not_required contract perform no proactive review. The
-current Driver performs the review directly; it must not launch a separate
+current Manager performs the review directly; it must not launch a separate
 reviewer or create a review artifact that itself needs proactive review.
 
 For every due phase, review the exact current durable artifact against accepted
@@ -370,7 +370,7 @@ pass is not a no-blocking result.
 
 Bind that work to a composite review snapshot: artifact identity,
 accepted-requirements identity, correction-history identity, active task
-identity, handoff/baton identity, and driver-contract identity. Re-resolve and
+identity, handoff/baton identity, and manager-contract identity. Re-resolve and
 compare the complete snapshot immediately before invoking chat and immediately
 before task completion, confirmation, or reuse of a clean result. Any mismatch
 invalidates the review/chat result: retain the pause and restart the full
@@ -381,7 +381,7 @@ match is insufficient; resolve these inputs through the same existing chat
 configuration path at both checks rather than inventing a second session or
 environment mechanism.
 
-The Driver must complete all applicable review passes before producing one
+The Manager must complete all applicable review passes before producing one
 bounded findings batch. It names the reviewed phase and role, the exact current artifact
 identity, every observable blocker, its requirement or boundary, and concise
 evidence. Deliver that one batch through
@@ -393,11 +393,11 @@ and the chat response is discussion evidence, not workflow authority.
 The bounded consumer accepts at most 20 findings and at most 12,000 UTF-8
 bytes for the rendered prompt; each evidence item is limited to at most 500
 UTF-8 bytes. The 120-second timeout and 4,000-byte output cap are policy-only
-Driver limits: treat a breach as ambiguous and retain the pause. The generic
-`cafe chat` runtime does not enforce them, so the Driver must not claim runtime
+Manager limits: treat a breach as ambiguous and retain the pause. The generic
+`cafe chat` runtime does not enforce them, so the Manager must not claim runtime
 enforcement or fabricate a provider-side kill/receipt. Ordinary user-initiated
 chat behavior remains unchanged. An over-budget batch remains paused and fails
-closed. The Driver must not truncate, split, or silently omit findings or
+closed. The Manager must not truncate, split, or silently omit findings or
 evidence to fit a limit; retain the pause and obtain the applicable user-owned
 scope decision before a new full review can form a compliant batch.
 
@@ -412,8 +412,8 @@ the single safe retry of this chat exchange.
 Findings, chat attempts, disagreements, and rebuttals do not create an
 iteration. Independently verify a rebuttal against the same unchanged artifact.
 An accepted finding without a durable correction remains blocking. If the
-Driver and phase agent agree that an artifact correction is necessary, the
-Driver may intentionally create one formal correction iteration only through
+Manager and phase agent agree that an artifact correction is necessary, the
+Manager may intentionally create one formal correction iteration only through
 the unique active declared correction outcome. First verify that it requires
 feedback, declares `correction: true`, and routes to a non-advancing correction
 continuation. If zero or multiple outcomes qualify, fail closed for
@@ -424,7 +424,7 @@ inputs; then verify
 the durable task result and correction continuation before resuming in the
 configured mode. Only the resumed runtime materializes and executes the next
 formal iteration. Inspect its durable input, delta, and output only at the next
-observable pause or failure, then complete Driver re-review of the resulting
+observable pause or failure, then complete Manager re-review of the resulting
 artifact and every affected requirement.
 
 After any correction or other candidate change, re-review the changed durable
@@ -434,7 +434,7 @@ or unresolved attempt must fail closed: retain the pause, restart from the
 current artifact identity, and complete a fresh full review. Stop with a
 self-contained user handoff when correction needs user-owned authority,
 permission, capability, scope selection, or an answer. A no-blocking result is
-quality evidence only: it does not replace `driver_confirmable` evidence,
+quality evidence only: it does not replace `manager_confirmable` evidence,
 mandatory HumanTasks, or user approval, and it does not replace built-in review
 or any other graph-declared review.
 
@@ -448,10 +448,10 @@ Apply this same contract in attached, unattended, and event-driven callback
 modes, but only at the existing scheduled pause. Attached mode reviews before
 its paused handoff resumes, unattended mode reviews when the user returns while
 that pause is still pending, and an event-driven callback may begin after the
-durable pause notification. A callback acting as the current Driver may submit
+durable pause notification. A callback acting as the current Manager may submit
 the same unique eligible correction outcome after complete review and one
 `cafe chat` consensus exchange. It may also complete a confirmed
-`driver_confirmable` clean advancement after the required review and evidence
+`manager_confirmable` clean advancement after the required review and evidence
 verification, but may not choose an advancing mandatory or `user_required`
 confirmation or any other user-owned decision.
 A phase-terminal callback that did not pause cannot make the review gating and
@@ -466,11 +466,11 @@ closeout route in `completion_and_authority.md`.
 
 ## Delivery evidence during execution and takeover
 
-Before Driver-owned work, the entry adapter returns the confirmed
+Before Manager-owned work, the entry adapter returns the confirmed
 `delivery_contract` with its contract digest. Rebuild fresh facts from confirmed
 user decisions and current bounded evidence; never echo persisted facts merely
 to force a freshness match. Reuse the same product contract across providers.
-A missing, malformed, stale or digest-mismatched contract stops Driver-owned
+A missing, malformed, stale or digest-mismatched contract stops Manager-owned
 work for the existing reconfirmation handoff. An older full contract must be
 explicitly reconfirmed before becoming a compact contract; do not drop its
 restrictions or turn its advisory inputs into new authority during conversion.
@@ -483,7 +483,7 @@ whereas an explicit empty list means isolated inputs. Read complete sources
 when excerpts cannot establish coverage. Do not insert a confirmation gate
 where none exists or require a specification/planning phase.
 
-A clean comparison only permits a confirmed `driver_confirmable` output.
+A clean comparison only permits a confirmed `manager_confirmable` output.
 Mandatory/user-required confirmations and reactive decisions retain their
 owners in attached, unattended and event-driven modes. Callbacks remain
 asynchronous and non-gating; they cannot collect or infer a user's answer.

@@ -1,4 +1,5 @@
 {
+  "manager": "cafe.manager.settings:update_manager_setting",
   "driver": "cafe.driver.settings:update_driver_setting",
   "pr.auto_create": "cafe.core.capability_setup:update_pr_auto_create_setting"
 }

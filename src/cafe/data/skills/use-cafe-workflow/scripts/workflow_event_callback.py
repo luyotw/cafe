@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Skill-owned callback runner for event-driven workflow drivers."""
+"""Skill-owned callback runner for event-driven workflow managers."""
 
 from __future__ import annotations
 
@@ -32,7 +32,6 @@ from cafe.core.session_continuation import SessionContinuation
 from cafe.core.task_inbox import TaskInboxError, TaskInboxService
 from cafe.core.types import AgentCLI, AgentConfig, SessionData
 from cafe.core.workflow_runtime import resolve_human_task_notification_repository_root
-from cafe.driver.task_inspection import inspect_task_authority
 
 try:
     import fcntl
@@ -46,6 +45,7 @@ except ImportError:  # pragma: no cover - unavailable outside Windows.
 
 
 DRIVER_AGENT_NAME = "__cafe_event_driver__"
+MANAGER_AGENT_NAME = "__cafe_event_manager__"
 CONFIG_FILENAME = "config.yaml"
 SESSION_FILENAME = "session.json"
 DISPATCH_STATE_FILENAME = "dispatch_state.json"
@@ -136,9 +136,9 @@ def _read_bounded_text(path: Path, *, label: str) -> str:
 
 
 @contextmanager
-def _session_lock(driver_dir: Path) -> Iterator[None]:
-    driver_dir.mkdir(parents=True, exist_ok=True)
-    lock_path = driver_dir / LOCK_FILENAME
+def _session_lock(manager_dir: Path) -> Iterator[None]:
+    manager_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = manager_dir / LOCK_FILENAME
     with lock_path.open("a+", encoding="utf-8") as handle:
         if fcntl is not None:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
@@ -161,8 +161,34 @@ def _session_lock(driver_dir: Path) -> Iterator[None]:
                 msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
 
 
-def _driver_dir(issue_dir: Path) -> Path:
-    return issue_dir / "driver"
+def _manager_dir(issue_dir: Path) -> Path:
+    manager = issue_dir / "manager"
+    driver = issue_dir / "driver"
+    manager_contract = manager / "contract.json"
+    driver_contract = driver / "contract.json"
+    if manager_contract.exists() or driver_contract.exists():
+        from cafe.manager._store import select_authority_directory
+
+        return select_authority_directory(issue_dir)
+    if driver_contract.exists():
+        return driver
+    if manager_contract.exists():
+        return manager
+    if driver.is_dir() and any(driver.iterdir()):
+        return driver
+    return driver
+
+
+def _agent_name(manager_dir: Path) -> str:
+    return MANAGER_AGENT_NAME if manager_dir.name == "manager" else DRIVER_AGENT_NAME
+
+
+def _contract_api(issue_dir: Path):
+    if _manager_dir(issue_dir).name == "driver":
+        from cafe import driver as api
+    else:
+        from cafe import manager as api
+    return api
 
 
 def _current_host_session_binding() -> dict[str, str] | None:
@@ -236,7 +262,7 @@ def write_config(
     model: str | None = None,
     clis: Sequence[tuple[str, str]] | None = None,
 ) -> None:
-    """Create a legacy event binding only when no Driver contract exists."""
+    """Create a legacy event binding only when no Manager contract exists."""
     if clis is not None:
         if cli is not None or model is not None:
             raise ValueError("event-driven config cannot mix legacy and ordered forms")
@@ -260,27 +286,24 @@ def write_config(
         primary_cli = cli
     prepared = issue_dir / "blackboard.json"
     if prepared.is_file() and not prepared.is_symlink():
-        from cafe.driver import (
-            DriverContractMissingError,
-            EventCallbackRequest,
-            event_callback_projection,
-        )
+        api = _contract_api(issue_dir)
+        missing_error = getattr(api, "ManagerContractMissingError", None) or api.DriverContractMissingError
 
         try:
-            event_callback_projection(
-                EventCallbackRequest(
+            api.event_callback_projection(
+                api.EventCallbackRequest(
                     issue_dir=issue_dir,
                     issue_name=issue_dir.name,
                     workflow_id=_prepared_workflow_id(issue_dir),
                 )
             )
-        except DriverContractMissingError:
+        except missing_error:
             pass
         else:
-            raise ValueError("contract-managed event drivers do not write legacy config")
-    driver_dir = _driver_dir(issue_dir)
-    with _session_lock(driver_dir):
-        existing = _load_config(driver_dir)
+            raise ValueError("contract-managed event managers do not write legacy config")
+    manager_dir = _manager_dir(issue_dir)
+    with _session_lock(manager_dir):
+        existing = _load_config(manager_dir)
         # When a user launches CAFE from the Codex App, wake that visible
         # conversation.  The callback still receives only an opaque thread ID;
         # provider transport controls are deliberately not inherited.
@@ -294,24 +317,24 @@ def write_config(
             if (
                 proposed["schema_version"] == 3
                 or existing["schema_version"] == 3
-                or (driver_dir / SESSION_FILENAME).exists()
-                or (driver_dir / DISPATCH_STATE_FILENAME).exists()
+                or (manager_dir / SESSION_FILENAME).exists()
+                or (manager_dir / DISPATCH_STATE_FILENAME).exists()
             ):
                 raise ValueError("event-driven binding cannot change within a prepared workflow")
         if proposed["schema_version"] == 3:
             _load_or_initialize_dispatch_state(
-                driver_dir,
+                manager_dir,
                 workflow_id=_prepared_workflow_id(issue_dir),
                 config=proposed,
             )
         _atomic_write(
-            driver_dir / CONFIG_FILENAME,
+            manager_dir / CONFIG_FILENAME,
             yaml.safe_dump(proposed, sort_keys=True).encode("utf-8"),
         )
 
 
-def _load_config(driver_dir: Path) -> dict[str, Any] | None:
-    path = driver_dir / CONFIG_FILENAME
+def _load_config(manager_dir: Path) -> dict[str, Any] | None:
+    path = manager_dir / CONFIG_FILENAME
     if not path.is_file() or path.is_symlink():
         return None
     try:
@@ -398,10 +421,10 @@ def _contract_callback_config(
     dispatch state retains session identities and event history; the current
     contract remains the authority for callback routing.
     """
-    from cafe.driver import EventCallbackRequest, event_callback_projection
+    api = _contract_api(issue_dir)
 
-    projection = event_callback_projection(
-        EventCallbackRequest(
+    projection = api.event_callback_projection(
+        api.EventCallbackRequest(
             issue_dir=issue_dir,
             issue_name=issue_name,
             workflow_id=workflow_id,
@@ -411,12 +434,12 @@ def _contract_callback_config(
         return None
     entries = projection.event.get("clis")
     if not isinstance(entries, tuple):
-        raise ValueError("event-driven Driver contract projection is invalid")
+        raise ValueError("event-driven Manager contract projection is invalid")
     raw_entries: list[tuple[str, str | None]] = []
     for index, entry in enumerate(entries):
         expected = {"cli"} if index == 0 else {"cli", "model"}
         if not isinstance(entry, Mapping) or set(entry) != expected:
-            raise ValueError("event-driven Driver contract projection is invalid")
+            raise ValueError("event-driven Manager contract projection is invalid")
         raw_entries.append((entry.get("cli"), entry.get("model")))
     normalized = _normalize_cli_entries(raw_entries, implicit_primary_model=True)
     config: dict[str, Any] = {
@@ -442,9 +465,9 @@ def activate_confirmed_contract_with_host_session(
     last trusted point where the originating App thread is still available.
     """
     result = activate_contract()
-    driver_dir = _driver_dir(issue_dir)
+    manager_dir = _manager_dir(issue_dir)
     try:
-        with _session_lock(driver_dir):
+        with _session_lock(manager_dir):
             config = _contract_callback_config(
                 issue_dir=issue_dir,
                 issue_name=issue_name,
@@ -455,10 +478,10 @@ def activate_confirmed_contract_with_host_session(
             host_session = _current_host_session_binding()
             if host_session is None:
                 return result
-            state_path = driver_dir / DISPATCH_STATE_FILENAME
+            state_path = manager_dir / DISPATCH_STATE_FILENAME
             if state_path.exists():
                 state = _load_or_initialize_dispatch_state(
-                    driver_dir,
+                    manager_dir,
                     workflow_id=workflow_id,
                     config=config,
                 )
@@ -471,16 +494,16 @@ def activate_confirmed_contract_with_host_session(
                     "source": "host_session",
                     "acquired_at": _now(),
                 }
-                _write_dispatch_state(driver_dir, updated)
+                _write_dispatch_state(manager_dir, updated)
                 return result
             _load_or_initialize_dispatch_state(
-                driver_dir,
+                manager_dir,
                 workflow_id=workflow_id,
                 config={**config, "host_session": host_session},
             )
     except (OSError, RuntimeError, ValueError) as exc:
         print(
-            f"Warning: Driver contract activated without Codex host binding: {exc}",
+            f"Warning: Manager contract activated without Codex host binding: {exc}",
             file=sys.stderr,
         )
     return result
@@ -725,7 +748,7 @@ def _validate_dispatch_events(state: dict[str, Any]) -> None:
 
 
 def _load_or_initialize_dispatch_state(
-    driver_dir: Path,
+    manager_dir: Path,
     *,
     workflow_id: str,
     config: dict[str, Any],
@@ -734,7 +757,7 @@ def _load_or_initialize_dispatch_state(
     contract_managed = config.get("schema_version") == _CONTRACT_CALLBACK_CONFIG_SCHEMA
     if config.get("schema_version") not in {3, _CONTRACT_CALLBACK_CONFIG_SCHEMA}:
         raise ValueError("event-driven dispatch state requires an ordered configuration")
-    path = driver_dir / DISPATCH_STATE_FILENAME
+    path = manager_dir / DISPATCH_STATE_FILENAME
     if path.is_file() and not path.is_symlink():
         try:
             state = json.loads(_read_bounded_text(path, label="event-driven dispatch state"))
@@ -742,7 +765,7 @@ def _load_or_initialize_dispatch_state(
             raise ValueError("event-driven dispatch state is unreadable") from exc
         if contract_managed and isinstance(state, dict):
             # Older callbacks persisted the selected transport here. The
-            # confirmed Driver contract now owns that choice, so discard this
+            # confirmed Manager contract now owns that choice, so discard this
             # obsolete snapshot when loading an otherwise current state.
             state.pop("transport_clis", None)
         expected_fields = (
@@ -925,15 +948,15 @@ def _load_or_initialize_dispatch_state(
         state["contract_sha256"] = config["contract_sha256"]
     else:
         state["policy"] = config
-    _write_dispatch_state(driver_dir, state)
+    _write_dispatch_state(manager_dir, state)
     return state
 
 
-def _write_dispatch_state(driver_dir: Path, state: dict[str, Any]) -> dict[str, Any]:
+def _write_dispatch_state(manager_dir: Path, state: dict[str, Any]) -> dict[str, Any]:
     updated = copy.deepcopy(state)
     updated["updated_at"] = _now()
     _atomic_write(
-        driver_dir / DISPATCH_STATE_FILENAME,
+        manager_dir / DISPATCH_STATE_FILENAME,
         json.dumps(updated, sort_keys=True).encode("utf-8"),
     )
     return updated
@@ -942,7 +965,7 @@ def _write_dispatch_state(driver_dir: Path, state: dict[str, Any]) -> dict[str, 
 def _entry_is_conforming(entry: dict[str, str]) -> bool:
     executor = AgentExecutor(
         AgentConfig(
-            name=DRIVER_AGENT_NAME,
+            name=MANAGER_AGENT_NAME,
             cli=AgentCLI(entry["cli"]),
             model=entry.get("model"),
             clis=[],
@@ -950,15 +973,15 @@ def _entry_is_conforming(entry: dict[str, str]) -> bool:
         ),
         stream_output=False,
     )
-    return executor.supports_event_driver()
+    return executor.supports_event_manager()
 
 
 def _read_legacy_session(
-    driver_dir: Path,
+    manager_dir: Path,
     config: dict[str, Any],
 ) -> dict[str, Any] | None:
     """Read and validate legacy session provenance without updating it."""
-    path = driver_dir / SESSION_FILENAME
+    path = manager_dir / SESSION_FILENAME
     if not path.is_file() or path.is_symlink():
         if path.exists():
             raise ValueError("event-driven session is invalid")
@@ -1109,8 +1132,8 @@ def _project_v3_events(state: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def read_status(issue_dir: Path) -> dict[str, Any]:
-    """Project exact event-driver state without locks, writes, or output inference."""
-    driver_dir = _driver_dir(issue_dir)
+    """Project exact event-manager state without locks, writes, or output inference."""
+    manager_dir = _manager_dir(issue_dir)
     try:
         config = _contract_callback_config(
             issue_dir=issue_dir,
@@ -1118,13 +1141,14 @@ def read_status(issue_dir: Path) -> dict[str, Any]:
             workflow_id=_prepared_workflow_id(issue_dir),
         )
     except ValueError as exc:
-        from cafe.driver import DriverContractMissingError
+        api = _contract_api(issue_dir)
+        missing_error = getattr(api, "ManagerContractMissingError", None) or api.DriverContractMissingError
 
-        if not isinstance(exc, DriverContractMissingError) and (
+        if not isinstance(exc, missing_error) and (
             "requires a prepared workflow" not in str(exc)
         ):
             raise
-        config = _load_config(driver_dir)
+        config = _load_config(manager_dir)
     if config is None:
         return {
             "configured": False,
@@ -1138,7 +1162,7 @@ def read_status(issue_dir: Path) -> dict[str, Any]:
         }
 
     if config["schema_version"] in {1, 2}:
-        session = _read_legacy_session(driver_dir, config)
+        session = _read_legacy_session(manager_dir, config)
         host_session = config.get("host_session")
         if session is not None:
             provenance = {
@@ -1174,7 +1198,7 @@ def read_status(issue_dir: Path) -> dict[str, Any]:
             "recovery_pending": False,
         }
 
-    state_path = driver_dir / DISPATCH_STATE_FILENAME
+    state_path = manager_dir / DISPATCH_STATE_FILENAME
     if not state_path.is_file() or state_path.is_symlink():
         if state_path.exists():
             raise ValueError("event-driven dispatch state is invalid")
@@ -1190,7 +1214,7 @@ def read_status(issue_dir: Path) -> dict[str, Any]:
         if not isinstance(workflow_id, str) or not workflow_id:
             raise ValueError("event-driven dispatch state is invalid")
         state = _load_or_initialize_dispatch_state(
-            driver_dir,
+            manager_dir,
             workflow_id=workflow_id,
             config=config,
         )
@@ -1269,7 +1293,7 @@ def _bounded_event(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def _ensure_dispatch_event(
-    driver_dir: Path,
+    manager_dir: Path,
     state: dict[str, Any],
     event: dict[str, Any],
 ) -> dict[str, Any]:
@@ -1308,7 +1332,7 @@ def _ensure_dispatch_event(
         updated["events"][event_id]["routing_chain"] = [
             {"cli": entry["cli"], "model": entry.get("model")} for entry in state["entries"]
         ]
-    return _write_dispatch_state(driver_dir, updated)
+    return _write_dispatch_state(manager_dir, updated)
 
 
 def _classify_provider_failure(error: BaseException) -> str:
@@ -1332,7 +1356,7 @@ def _classify_provider_failure(error: BaseException) -> str:
 
 
 def _append_pending_attempt(
-    driver_dir: Path,
+    manager_dir: Path,
     state: dict[str, Any],
     *,
     event_id: str,
@@ -1353,11 +1377,11 @@ def _append_pending_attempt(
             "finished_at": None,
         }
     )
-    return _write_dispatch_state(driver_dir, updated)
+    return _write_dispatch_state(manager_dir, updated)
 
 
 def _finish_pending_attempt(
-    driver_dir: Path,
+    manager_dir: Path,
     state: dict[str, Any],
     *,
     event_id: str,
@@ -1383,7 +1407,7 @@ def _finish_pending_attempt(
     if recovery_pending:
         updated["events"][event_id]["status"] = "recovery_pending"
         updated["events"][event_id]["recovery_pending"] = True
-    return _write_dispatch_state(driver_dir, updated)
+    return _write_dispatch_state(manager_dir, updated)
 
 
 def _observed_session_ids(records: Any) -> set[str]:
@@ -1401,7 +1425,7 @@ def _observed_session_ids(records: Any) -> set[str]:
 
 
 def _acquire_v3_session(
-    driver_dir: Path,
+    manager_dir: Path,
     state: dict[str, Any],
     *,
     event_id: str,
@@ -1423,7 +1447,7 @@ def _acquire_v3_session(
         return state, "ambiguous"
 
     state = _append_pending_attempt(
-        driver_dir,
+        manager_dir,
         state,
         event_id=event_id,
         index=index,
@@ -1431,7 +1455,7 @@ def _acquire_v3_session(
     )
     executor = executor_factory(
         AgentConfig(
-            name=DRIVER_AGENT_NAME,
+            name=_agent_name(manager_dir),
             cli=AgentCLI(entry["cli"]),
             model=entry.get("model"),
             clis=[],
@@ -1441,7 +1465,12 @@ def _acquire_v3_session(
     )
     try:
         with tempfile.TemporaryDirectory(prefix="cafe-event-bootstrap-") as temporary:
-            result = executor.execute_event_driver(
+            execute_callback = (
+                executor.execute_event_manager
+                if manager_dir.name == "manager"
+                else executor.execute_event_driver
+            )
+            result = execute_callback(
                 'say "HI"',
                 allowed_tools=[],
                 allowed_directories=[],
@@ -1455,7 +1484,7 @@ def _acquire_v3_session(
     except Exception as exc:
         classification = _classify_provider_failure(exc)
         state = _finish_pending_attempt(
-            driver_dir,
+            manager_dir,
             state,
             event_id=event_id,
             status="failed" if classification == "conclusive_nonacceptance" else "ambiguous",
@@ -1471,7 +1500,7 @@ def _acquire_v3_session(
         observed_ids = _observed_session_ids(records)
         classification = "ambiguous" if len(observed_ids) > 1 else "conclusive_nonacceptance"
         state = _finish_pending_attempt(
-            driver_dir,
+            manager_dir,
             state,
             event_id=event_id,
             status="failed" if classification == "conclusive_nonacceptance" else "ambiguous",
@@ -1498,14 +1527,15 @@ def _acquire_v3_session(
             "finished_at": now,
         }
     )
-    return _write_dispatch_state(driver_dir, updated), "acquired"
+    return _write_dispatch_state(manager_dir, updated), "acquired"
 
 
-class EventDriverSessionStore(SessionStore):
+class EventManagerSessionStore(SessionStore):
     """Persist exactly one callback target session below its issue skill state."""
 
-    def __init__(self, driver_dir: Path, *, workflow_id: str, cli: AgentCLI, model: str) -> None:
-        self.driver_dir = driver_dir
+    def __init__(self, manager_dir: Path, *, workflow_id: str, cli: AgentCLI, model: str) -> None:
+        self.manager_dir = manager_dir
+        self.agent_name = _agent_name(manager_dir)
         self.workflow_id = workflow_id
         self.cli = cli
         self.model = model
@@ -1513,7 +1543,7 @@ class EventDriverSessionStore(SessionStore):
 
     @property
     def path(self) -> Path:
-        return self.driver_dir / SESSION_FILENAME
+        return self.manager_dir / SESSION_FILENAME
 
     def _load_raw(self) -> dict[str, Any] | None:
         if not self.path.is_file() or self.path.is_symlink():
@@ -1533,7 +1563,7 @@ class EventDriverSessionStore(SessionStore):
         issue_name: Optional[str] = None,
         phase_name: Optional[str] = None,
     ) -> Optional[SessionData]:
-        if agent_name != DRIVER_AGENT_NAME or issue_name is not None or phase_name is not None:
+        if agent_name != self.agent_name or issue_name is not None or phase_name is not None:
             return None
         raw = self._load_raw()
         if raw is None:
@@ -1557,7 +1587,7 @@ class EventDriverSessionStore(SessionStore):
         if not isinstance(session_id, str) or not session_id:
             raise ValueError("event-driven session is invalid")
         return SessionData(
-            agent_name=DRIVER_AGENT_NAME,
+            agent_name=self.agent_name,
             cli=cli,
             session_id=session_id,
             created_at=datetime.fromisoformat(str(raw["created_at"])),
@@ -1574,7 +1604,7 @@ class EventDriverSessionStore(SessionStore):
         phase_name: Optional[str] = None,
     ) -> None:
         if (
-            agent_name != DRIVER_AGENT_NAME
+            agent_name != self.agent_name
             or issue_name is not None
             or phase_name is not None
             or cli != self.cli
@@ -1585,6 +1615,7 @@ class EventDriverSessionStore(SessionStore):
         if existing is not None and existing.get("session_id") != session_id:
             raise ValueError("event-driven session identity cannot be replaced")
         self._pending_session_id = session_id
+
 
     def commit(self) -> None:
         """Persist a session only after the callback verifies reported identity."""
@@ -1613,11 +1644,14 @@ class EventDriverSessionStore(SessionStore):
         self.path.unlink(missing_ok=True)
 
 
+EventDriverSessionStore = EventManagerSessionStore
+
+
 def _callback_prompt(event: dict[str, Any], *, repository_root: Path) -> str:
     notice = json.dumps(event, ensure_ascii=False, sort_keys=True)
     return "\n".join(
         (
-            "You are the event-driven CAFE workflow driver.",
+            "You are the event-driven CAFE workflow manager.",
             "This is an asynchronous wake notification, not a workflow advancement gate.",
             "Read the builtin use-cafe-workflow skill and follow its current confirmed contract.",
             "First inspect current durable state with cafe status/show before acting; "
@@ -1626,11 +1660,11 @@ def _callback_prompt(event: dict[str, Any], *, repository_root: Path) -> str:
             "inspect_task_authority.py --issue-dir <issue-dir> --task-id <task-id> --json. "
             "Treat route_status, resolution_owner, and evidence_reason independently.",
             "Do not answer mandatory, user-required, permission, or capability tasks; only "
-            "a user-facing driver turn may relay an explicit user-owned answer.",
-            "You may complete a driver_confirmable task authorized by its explicit declaration "
+            "a user-facing manager turn may relay an explicit user-owned answer.",
+            "You may complete a manager_confirmable task authorized by its explicit declaration "
             "or the confirmed overall need_clarification policy, only after verifying its "
             "confirmed contract and evidence. Explicit task ownership overrides the overall policy. "
-            "Use complete_driver_task.py with the same assessment and inspected digests "
+            "Use complete_manager_task.py with the same assessment and inspected digests "
             "so authority is rechecked at durable completion. "
             "A clarification answer must stay within confirmed scope, constraints and authority "
             "and trigger no contract deviation; otherwise leave it for the user. Do not grant "
@@ -1653,6 +1687,10 @@ def _with_current_task_authority(
         detail = TaskInboxService(repository_root / ".cafe").inspect_read_only(task_id)
         if detail.issue != issue_dir.name or detail.status != "pending":
             return event
+        if _manager_dir(issue_dir).name == "driver":
+            from cafe.driver.task_inspection import inspect_task_authority
+        else:
+            from cafe.manager.task_inspection import inspect_task_authority
         facts = inspect_task_authority(issue_dir, task_id)
     except (TaskInboxError, OSError, ValueError):
         return {
@@ -1689,7 +1727,7 @@ def _queue_host_callback(
 
 
 def _accept_delivery(
-    driver_dir: Path,
+    manager_dir: Path,
     state: dict[str, Any],
     *,
     event_id: str,
@@ -1734,11 +1772,11 @@ def _accept_delivery(
             "accepted_at": now,
         }
     updated["active_index"] = index
-    return _write_dispatch_state(driver_dir, updated)
+    return _write_dispatch_state(manager_dir, updated)
 
 
 def _deliver_v3_callback(
-    driver_dir: Path,
+    manager_dir: Path,
     state: dict[str, Any],
     event: dict[str, Any],
     *,
@@ -1758,7 +1796,7 @@ def _deliver_v3_callback(
         return state, "ambiguous"
 
     state = _append_pending_attempt(
-        driver_dir,
+        manager_dir,
         state,
         event_id=event_id,
         index=index,
@@ -1774,7 +1812,7 @@ def _deliver_v3_callback(
             return
         try:
             state = _accept_delivery(
-                driver_dir,
+                manager_dir,
                 state,
                 event_id=event_id,
                 index=index,
@@ -1803,7 +1841,7 @@ def _deliver_v3_callback(
         else:
             executor = executor_factory(
                 AgentConfig(
-                    name=DRIVER_AGENT_NAME,
+                    name=_agent_name(manager_dir),
                     cli=AgentCLI(entry["cli"]),
                     model=entry.get("model"),
                     session_id=session_id,
@@ -1812,7 +1850,12 @@ def _deliver_v3_callback(
                 ),
                 stream_output=False,
             )
-            result = executor.execute_event_driver(
+            execute_callback = (
+                executor.execute_event_manager
+                if manager_dir.name == "manager"
+                else executor.execute_event_driver
+            )
+            result = execute_callback(
                 _callback_prompt(event, repository_root=repository_root),
                 expected_session_id=session_id,
                 event_id=event_id,
@@ -1835,7 +1878,7 @@ def _deliver_v3_callback(
             return state, "accepted"
         classification = _classify_provider_failure(exc)
         state = _finish_pending_attempt(
-            driver_dir,
+            manager_dir,
             state,
             event_id=event_id,
             status="failed" if classification == "conclusive_nonacceptance" else "ambiguous",
@@ -1851,7 +1894,7 @@ def _deliver_v3_callback(
     if accepted and reported_session_id == session_id:
         return (
             _accept_delivery(
-                driver_dir,
+                manager_dir,
                 state,
                 event_id=event_id,
                 index=index,
@@ -1864,7 +1907,7 @@ def _deliver_v3_callback(
     conflicting = bool(observed_ids and observed_ids != {session_id})
     classification = "ambiguous" if accepted or conflicting else "conclusive_nonacceptance"
     state = _finish_pending_attempt(
-        driver_dir,
+        manager_dir,
         state,
         event_id=event_id,
         status="ambiguous" if classification == "ambiguous" else "failed",
@@ -1877,7 +1920,7 @@ def _deliver_v3_callback(
 
 
 def _exhaust_event(
-    driver_dir: Path,
+    manager_dir: Path,
     state: dict[str, Any],
     *,
     event_id: str,
@@ -1886,11 +1929,11 @@ def _exhaust_event(
     event_state = updated["events"][event_id]
     event_state["status"] = "exhausted"
     event_state["recovery_pending"] = True
-    return _write_dispatch_state(driver_dir, updated)
+    return _write_dispatch_state(manager_dir, updated)
 
 
 def _run_v3_callback(
-    driver_dir: Path,
+    manager_dir: Path,
     state: dict[str, Any],
     event: dict[str, Any],
     *,
@@ -1917,7 +1960,7 @@ def _run_v3_callback(
             updated = copy.deepcopy(state)
             updated["events"][event_id]["routing_chain"] = current_route
             updated["events"][event_id]["starting_index"] = state["active_index"]
-            state = _write_dispatch_state(driver_dir, updated)
+            state = _write_dispatch_state(manager_dir, updated)
             event_state = state["events"][event_id]
     if attempts and attempts[-1].get("status") == "acquired":
         acquired = attempts[-1]
@@ -1933,7 +1976,7 @@ def _run_v3_callback(
 
     while index < len(state["entries"]):
         state, acquisition = _acquire_v3_session(
-            driver_dir,
+            manager_dir,
             state,
             event_id=event_id,
             index=index,
@@ -1947,7 +1990,7 @@ def _run_v3_callback(
             continue
 
         state, delivery = _deliver_v3_callback(
-            driver_dir,
+            manager_dir,
             state,
             event,
             index=index,
@@ -1958,7 +2001,7 @@ def _run_v3_callback(
             return state
         index += 1
 
-    return _exhaust_event(driver_dir, state, event_id=event_id)
+    return _exhaust_event(manager_dir, state, event_id=event_id)
 
 
 def run_callback(event: dict[str, Any], *, repository_root: Path) -> None:
@@ -1967,8 +2010,8 @@ def run_callback(event: dict[str, Any], *, repository_root: Path) -> None:
     if not isinstance(workflow_id, str) or not workflow_id:
         raise ValueError("workflow event callback has an invalid workflow ID")
     issue_dir = repository_root / ".cafe" / "issues" / issue_name
-    driver_dir = _driver_dir(issue_dir)
-    with _session_lock(driver_dir):
+    manager_dir = _manager_dir(issue_dir)
+    with _session_lock(manager_dir):
         config = _contract_callback_config(
             issue_dir=issue_dir,
             issue_name=issue_name,
@@ -1987,13 +2030,13 @@ def run_callback(event: dict[str, Any], *, repository_root: Path) -> None:
                 event, issue_dir=issue_dir, repository_root=repository_root
             )
             state = _load_or_initialize_dispatch_state(
-                driver_dir,
+                manager_dir,
                 workflow_id=workflow_id,
                 config=config,
             )
-            state = _ensure_dispatch_event(driver_dir, state, event)
+            state = _ensure_dispatch_event(manager_dir, state, event)
             result = _run_v3_callback(
-                driver_dir,
+                manager_dir,
                 state,
                 event,
                 repository_root=repository_root,
@@ -2008,13 +2051,13 @@ def run_callback(event: dict[str, Any], *, repository_root: Path) -> None:
             event, issue_dir=issue_dir, repository_root=repository_root
         )
         cli = AgentCLI(config["cli"])
-        store = EventDriverSessionStore(
-            driver_dir,
+        store = EventManagerSessionStore(
+            manager_dir,
             workflow_id=workflow_id,
             cli=cli,
             model=config["model"],
         )
-        existing = store.load_session(DRIVER_AGENT_NAME, cli)
+        existing = store.load_session(store.agent_name, cli)
         host_session = config.get("host_session")
         host_thread_id = host_session["thread_id"] if isinstance(host_session, dict) else None
         if host_thread_id is not None:
@@ -2027,7 +2070,7 @@ def run_callback(event: dict[str, Any], *, repository_root: Path) -> None:
                 repository_root=repository_root,
             )
             if existing is None:
-                store.save_session(DRIVER_AGENT_NAME, cli, host_thread_id)
+                store.save_session(store.agent_name, cli, host_thread_id)
             store.commit()
             return
         continuation = (
@@ -2038,12 +2081,12 @@ def run_callback(event: dict[str, Any], *, repository_root: Path) -> None:
         manager = AgentManager(session_manager=store, issue_name=None, stream_agent_output=False)
         manager.register_agent(
             AgentConfig(
-                name=DRIVER_AGENT_NAME, cli=cli, model=config["model"], clis=[], backup_clis=[]
+                name=store.agent_name, cli=cli, model=config["model"], clis=[], backup_clis=[]
             )
         )
         try:
             manager.execute(
-                DRIVER_AGENT_NAME,
+                store.agent_name,
                 _callback_prompt(event, repository_root=repository_root),
                 allowed_tools=["Read", "Grep", "Glob", "Bash"],
                 allowed_directories=[str(repository_root)],
@@ -2059,7 +2102,7 @@ def run_callback(event: dict[str, Any], *, repository_root: Path) -> None:
             or (existing is not None and manager._last_session_id != existing.session_id)
             or (host_thread_id is not None and manager._last_session_id != host_thread_id)
         ):
-            raise ValueError("event-driven driver identity mismatch")
+            raise ValueError("event-driven manager identity mismatch")
         store.commit()
 
 
@@ -2071,12 +2114,12 @@ def _notify_callback_failure(
     step = event.get("step")
     event_type = event.get("event_type")
     issue_dir = repository_root / ".cafe" / "issues" / issue
-    driver_dir = _driver_dir(issue_dir)
+    manager_dir = _manager_dir(issue_dir)
     notification_root = resolve_human_task_notification_repository_root(issue_dir)
     error_code = _callback_error_code(error)
     notification_key = _callback_failure_key(event, error_code=error_code)
-    with _session_lock(driver_dir):
-        records = _load_callback_failure_notifications(driver_dir)
+    with _session_lock(manager_dir):
+        records = _load_callback_failure_notifications(manager_dir)
         existing = records.get(notification_key)
         if isinstance(existing, dict) and existing.get("outcome") in {
             "sent", "disabled", "pending"
@@ -2088,7 +2131,7 @@ def _notify_callback_failure(
             "error_code": error_code,
             "notification_code": "notification_pending",
         }
-        _write_callback_failure_notifications(driver_dir, records)
+        _write_callback_failure_notifications(manager_dir, records)
         settings = load_human_task_notification_settings()
         if not settings.enabled:
             records[notification_key] = {
@@ -2097,7 +2140,7 @@ def _notify_callback_failure(
                 "error_code": error_code,
                 "notification_code": settings.code,
             }
-            _write_callback_failure_notifications(driver_dir, records)
+            _write_callback_failure_notifications(manager_dir, records)
             return
         message = build_workflow_callback_failure_message(
             repository=notification_root.name,
@@ -2116,7 +2159,7 @@ def _notify_callback_failure(
                 "error_code": error_code,
                 "notification_code": type(notification_error).__name__,
             }
-            _write_callback_failure_notifications(driver_dir, records)
+            _write_callback_failure_notifications(manager_dir, records)
             raise
         records[notification_key] = {
             "occurred_at": _now(),
@@ -2124,7 +2167,7 @@ def _notify_callback_failure(
             "error_code": error_code,
             "notification_code": "slack_notification_sent",
         }
-        _write_callback_failure_notifications(driver_dir, records)
+        _write_callback_failure_notifications(manager_dir, records)
 
 
 def _callback_error_code(error: Exception) -> str:
@@ -2158,9 +2201,9 @@ def _callback_failure_key(event: dict[str, Any], *, error_code: str) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def _load_callback_failure_notifications(driver_dir: Path) -> dict[str, dict[str, str]]:
+def _load_callback_failure_notifications(manager_dir: Path) -> dict[str, dict[str, str]]:
     """Load the bounded, workflow-bound callback failure authority."""
-    path = driver_dir / FAILURE_NOTIFICATIONS_FILENAME
+    path = manager_dir / FAILURE_NOTIFICATIONS_FILENAME
     if not path.exists():
         return {}
     try:
@@ -2168,7 +2211,7 @@ def _load_callback_failure_notifications(driver_dir: Path) -> dict[str, dict[str
     except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
         raise ValueError("callback failure authority is unreadable") from exc
     if (not isinstance(raw, dict) or raw.get("schema_version") != 1
-            or raw.get("workflow_id") != _prepared_workflow_id(driver_dir.parent)):
+            or raw.get("workflow_id") != _prepared_workflow_id(manager_dir.parent)):
         raise ValueError("callback failure authority identity is invalid")
     records = raw.get("records")
     if not isinstance(records, dict):
@@ -2181,7 +2224,7 @@ def _load_callback_failure_notifications(driver_dir: Path) -> dict[str, dict[str
 
 
 def _write_callback_failure_notifications(
-    driver_dir: Path, records: dict[str, dict[str, str]]
+    manager_dir: Path, records: dict[str, dict[str, str]]
 ) -> None:
     """Persist secret-free callback notification outcomes for diagnosis."""
     # JSON persistence sorts hash keys; retain by occurrence time instead.
@@ -2189,10 +2232,10 @@ def _write_callback_failure_notifications(
         records.items(),
         key=lambda item: datetime.fromisoformat(item[1]["occurred_at"]),
     )[-MAX_FAILURE_NOTIFICATIONS:])
-    payload = {"schema_version": 1, "workflow_id": _prepared_workflow_id(driver_dir.parent),
+    payload = {"schema_version": 1, "workflow_id": _prepared_workflow_id(manager_dir.parent),
                "records": bounded_records}
     _atomic_write(
-        driver_dir / FAILURE_NOTIFICATIONS_FILENAME,
+        manager_dir / FAILURE_NOTIFICATIONS_FILENAME,
         json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8"),
     )
 

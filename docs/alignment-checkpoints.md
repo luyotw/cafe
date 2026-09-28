@@ -1,7 +1,7 @@
-# Driver-Owned Alignment
+# Manager-Owned Alignment
 
 CAFE's bundled workflows delegate semantic alignment to the
-`use-cafe-workflow` driver. The driver has the conversational context needed to
+`use-cafe-workflow` manager. The manager has the conversational context needed to
 compare the newest proposal delta with `.cafe/strategic_context.yaml`, the
 relevant strategic documents, and the current issue artifacts.
 
@@ -19,9 +19,9 @@ Alignment is separate from other user stops:
 - Alignment asks whether a concrete proposal delta contradicts or extends
   confirmed strategy, or requires a strategic choice.
 
-## Driver Decision
+## Manager Decision
 
-The driver evaluates alignment during kickoff, before driver-confirming spec or
+The manager evaluates alignment during kickoff, before manager-confirming spec or
 plan, and whenever a correction changes strategic scope. It does not repeat the
 check for unchanged scope during develop, review, or PR.
 
@@ -47,11 +47,11 @@ sufficient evidence.
 CAFE core retains the `alignment_checkpoint` status, user-owned handoff
 contract, request files, JSON decision handling, and the opt-in heuristic gate
 for legacy or explicitly configured custom playbooks. The heuristic may propose
-a checkpoint; the workflow driver still owns final semantic classification.
+a checkpoint; the workflow manager still owns final semantic classification.
 
 A custom playbook can still opt into `AlignmentCheckpointGate` with an
-`alignment:` step block. When that happens, the workflow driver treats the
-generated request as compatibility evidence and applies the same driver
+`alignment:` step block. When that happens, the workflow manager treats the
+generated request as compatibility evidence and applies the same manager
 classification before deciding whether the user is actually needed.
 
 Required core checkpoints write:
@@ -60,7 +60,7 @@ Required core checkpoints write:
 - `.cafe/issues/<issue>/<step>/iteration_NNN/strategic_document_update_request.json`
   when a strategic document update is required
 
-Plain `--user-input` text never approves a core checkpoint. A driver-resolvable
+Plain `--user-input` text never approves a core checkpoint. A manager-resolvable
 legacy/custom checkpoint uses an explicit JSON payload:
 
 ```json

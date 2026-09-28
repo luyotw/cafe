@@ -2294,7 +2294,7 @@ def test_callback_queues_the_bound_codex_host_thread(tmp_path: Path, monkeypatch
     assert "--model" not in command
     assert command[command.index("--cd") + 1] == str(tmp_path)
     prompt = command[command.index("--message") + 1]
-    assert "event-driven CAFE workflow driver" in prompt
+    assert "event-driven CAFE workflow manager" in prompt
     assert '"event_type": "human_task"' in prompt
     assert run.call_args.kwargs == {
         "check": True,

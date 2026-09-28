@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Execute one confirmed closeout argv with durable, non-replayable evidence.
 
-This records outcomes, not authority. The Driver must establish action authority,
+This records outcomes, not authority. The Manager must establish action authority,
 target/effect checks, worker quiescence, and terminal cleanup choice first.
 """
 
@@ -19,8 +19,8 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from cafe.core.packet_io import atomic_write_bytes, canonical_json
-from cafe.driver._store import load_contract
-from cafe.driver.delivery import (
+from cafe.manager._store import load_contract
+from cafe.manager.delivery import (
     MAX_CLOSEOUT_EVIDENCE_BYTES,
     closeout_evidence_record,
 )

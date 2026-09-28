@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate one Driver entry and return only Driver-owned projections.
+"""Validate one Manager entry and return only Manager-owned projections.
 
 Preflight, cache invalidation, confirmation, callback routing, and projection
 installation remain owned by ``use-cafe-workflow``.  This adapter is its sole
@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
-from cafe.driver import DriverEntryRequest, Freshness, evaluate_driver_entry
+from cafe.manager import ManagerEntryRequest, Freshness, evaluate_manager_entry
 
 
 def _mapping_json(value: str) -> dict[str, Any]:
@@ -37,9 +37,9 @@ def _plain(value: Any) -> Any:
 def validate_entry(
     *, issue_dir: Path, issue_name: str, workflow_id: str, fresh_facts: Mapping[str, Any]
 ) -> dict[str, Any]:
-    """Fail before Driver work when current authority cannot be proved unchanged."""
-    result = evaluate_driver_entry(
-        DriverEntryRequest(
+    """Fail before Manager work when current authority cannot be proved unchanged."""
+    result = evaluate_manager_entry(
+        ManagerEntryRequest(
             issue_dir=issue_dir,
             issue_name=issue_name,
             workflow_id=workflow_id,
@@ -47,7 +47,7 @@ def validate_entry(
         )
     )
     if result.freshness is not Freshness.SAME_SEMANTICS:
-        raise ValueError(f"Driver contract requires {result.freshness.value} recovery")
+        raise ValueError(f"Manager contract requires {result.freshness.value} recovery")
     return {
         "contract_sha256": result.contract_sha256,
         "revision": result.revision,
@@ -61,7 +61,7 @@ def validate_entry(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Validate a Driver entry before Driver-owned work."
+        description="Validate a Manager entry before Manager-owned work."
     )
     parser.add_argument("--issue-dir", type=Path, required=True)
     parser.add_argument("--issue-name", required=True)

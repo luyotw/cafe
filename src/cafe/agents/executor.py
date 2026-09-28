@@ -53,6 +53,9 @@ class EventDriverExecutionResult:
     records: tuple[dict[str, Any], ...]
 
 
+EventManagerExecutionResult = EventDriverExecutionResult
+
+
 def _structured_record_limit(
     execution_control: AgentExecutionControl | None,
 ) -> int:
@@ -162,6 +165,10 @@ class AgentExecutor:
     def supports_event_driver(self) -> bool:
         """Return the adapter's explicit event-driver contract opt-in."""
         return self._get_cli_strategy().event_driver_conforming
+
+    def supports_event_manager(self) -> bool:
+        """Return the Manager-named alias for callback support."""
+        return self.supports_event_driver()
 
     def _translate_tool_names(self, tools: Optional[List[str]]) -> Optional[List[str]]:
         """Translate tool names from Claude convention to current CLI convention.
@@ -482,6 +489,28 @@ class AgentExecutor:
             accepted=accepted,
             event_id=event_id,
             records=bounded_records,
+        )
+
+    def execute_event_manager(
+        self,
+        prompt: str,
+        *,
+        expected_session_id: str | None = None,
+        event_id: str | None = None,
+        on_acceptance: Callable[[], None] | None = None,
+        allowed_tools: Optional[List[str]] = None,
+        allowed_directories: Optional[List[str]] = None,
+        execution_control: AgentExecutionControl | None = None,
+    ) -> EventManagerExecutionResult:
+        """Manager-named alias preserving the established callback behavior."""
+        return self.execute_event_driver(
+            prompt,
+            expected_session_id=expected_session_id,
+            event_id=event_id,
+            on_acceptance=on_acceptance,
+            allowed_tools=allowed_tools,
+            allowed_directories=allowed_directories,
+            execution_control=execution_control,
         )
 
     def preview_cli_command_args(

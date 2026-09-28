@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Complete a Driver-owned task after an atomic authority recheck."""
+"""Complete a Manager-owned task after an atomic authority recheck."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ _SOURCE_ROOT = Path(__file__).resolve().parents[5]
 if str(_SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(_SOURCE_ROOT))
 
-from cafe.driver.task_completion import complete_driver_task  # noqa: E402
+from cafe.manager.task_completion import complete_manager_task  # noqa: E402
 
 
 def main() -> None:
@@ -37,7 +37,7 @@ def main() -> None:
         or not isinstance(assessment.get("evidence"), dict)
     ):
         raise ValueError("assessment requires response and evidence objects")
-    result = complete_driver_task(
+    result = complete_manager_task(
         args.issue_dir,
         args.task_id,
         response=assessment["response"],

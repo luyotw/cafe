@@ -10,7 +10,7 @@
    and the confirmed Delivery Contract. Do not synthesize specification,
    planning, development, review, or publication steps or artifact names.
 3. End workflow execution at its declared terminal state, then proactively
-   assist with closeout below. Workflow completion does not end the Driver's
+   assist with closeout below. Workflow completion does not end the Manager's
    assistance or require an external service call or local teardown.
 
 A `brief → draft → done` graph ends with its declared draft evidence. A graph
@@ -25,13 +25,13 @@ terminal state from liveness, filesystem progress, or agent prose.
 
 ## Offer a bounded direct closeout instead of rerunning
 
-This is a user-approved bounded direct-closeout route, not an ordinary Driver
+This is a user-approved bounded direct-closeout route, not an ordinary Manager
 power.
 
 Before restarting or resuming workflow execution late in the work, check whether
 the deliverable is already substantially complete and the only remaining work is
 a small, exact, high-confidence correction or cleanup. Recommend that the user
-stop running the workflow and let the current Driver finish directly only when
+stop running the workflow and let the current Manager finish directly only when
 all of these conditions hold:
 
 - current durable status proves the workflow is paused, and bounded process
@@ -49,7 +49,7 @@ all of these conditions hold:
 - the cost of another workflow run is materially greater than the risk and work
   of the direct patch.
 
-This is a proposal, not implicit Driver authority. Give the user a
+This is a proposal, not implicit Manager authority. Give the user a
 self-contained recommendation that explicitly says not to rerun the workflow,
 lists every remaining edit or task, explains why each is high confidence, names
 the validation to run, and states the durable consequence: a nonterminal
@@ -59,7 +59,7 @@ resume the workflow normally. Do not attempt to manufacture a safe stop: if any
 worker or agent is live, continue process-only monitoring or use an already
 authorized reliable control and reassess only after verified quiescence.
 
-After approval, the current Driver may inspect the affected implementation,
+After approval, the current Manager may inspect the affected implementation,
 make only the listed local edits, and run only the stated proportionate checks.
 Do not edit CAFE workflow artifacts, blackboard state, baton state, or
 `next_step.txt`; do not perform an external action under this approval. If the
@@ -69,11 +69,11 @@ Report verified direct-closeout results separately from workflow status, and
 never describe a still-nonterminal workflow as completed.
 
 Direct-closeout approval is session-local authority for the exact listed work,
-not durable workflow authority. Do not encode it by changing workflow or Driver
-state. If direct work is interrupted or another Driver takes over before it is
+not durable workflow authority. Do not encode it by changing workflow or Manager
+state. If direct work is interrupted or another Manager takes over before it is
 verified complete, fail closed and ask the user whether to reauthorize the same
 remaining list or return to the workflow. After a verified direct closeout, a
-later Driver must not automatically resume the nonterminal workflow; it must
+later Manager must not automatically resume the nonterminal workflow; it must
 inspect the reported patch and checks and obtain a direct user instruction before
 resuming.
 
@@ -87,7 +87,7 @@ a fixed shipping checklist to every playbook.
 
 ### Confirm cleanup, archive, or no action
 
-After the Driver has verified workflow completion, offer the user these terminal
+After the Manager has verified workflow completion, offer the user these terminal
 choices once:
 
 1. Run the confirmed non-empty `cleanup` array.
@@ -106,7 +106,7 @@ first command failure.
 
 For each confirmed `deliver` or `cleanup` command, use
 `scripts/execute_closeout.py` as the sole command execution path. It reads the
-confirmed Driver contract immediately before execution and records the exact
+confirmed Manager contract immediately before execution and records the exact
 ordered argv, contract digest, issue/workflow identity, worktree target, and each
 command's outcome under the repository's shared Git directory at
 `<git-common-dir>/cafe/closeout/<issue>/<workflow-id>.json`. This location is
@@ -152,7 +152,7 @@ Before cleanup can remove a worktree, establish worker quiescence and inspect
 registered worktrees plus dirty/untracked content. The confirmed argv must use
 explicit targets. When a command needs another Git context, make that context
 an exact argument (for example `git -C <retained-checkout> worktree remove
-<target>`), rather than changing the Driver's working directory. Never add force
+<target>`), rather than changing the Manager's working directory. Never add force
 flags. If `cafe close` is confirmed, it must be the exact final cleanup command,
 after any `gh issue close` command. It may archive the issue and remove its
 worktree; render final progress from the archive path it reports.
@@ -235,7 +235,7 @@ complete. A successful repair does not grant any separate closeout action.
 - A direct user instruction to merge a particular change, or a separately
   confirmed human-owned integration task, may authorize that integration action.
   Handle it as a separate task under its existing execution contract, not as a
-  Driver completion step. Verify its result before reporting it complete. It
+  Manager completion step. Verify its result before reporting it complete. It
   still grants no issue closure, deployment, deletion, or other publication.
 - When action or target authority is missing or ambiguous, leave that action
   unexecuted and use the existing self-contained user handoff if needed. Never

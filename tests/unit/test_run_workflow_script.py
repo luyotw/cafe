@@ -1,4 +1,4 @@
-"""Driver launch invariants owned by the use-cafe-workflow skill."""
+"""Manager launch invariants owned by the use-cafe-workflow skill."""
 
 from __future__ import annotations
 
@@ -55,16 +55,16 @@ def _prepared(root: Path, *, step: str = "develop", playbook: str = "direct") ->
 
 
 def _contract(mode: str, root: Path) -> dict[str, object]:
-    driver: dict[str, object] = {"mode": mode}
+    manager: dict[str, object] = {"mode": mode}
     if mode == "attached":
-        driver["poll_interval_seconds"] = 90
+        manager["poll_interval_seconds"] = 90
     elif mode == "event-driven":
-        driver["clis"] = [{"cli": "codex"}, {"cli": "claude", "model": "sonnet"}]
+        manager["clis"] = [{"cli": "codex"}, {"cli": "claude", "model": "sonnet"}]
     return {
         "identity": {"issue_name": "issue498", "workflow_id": "workflow-498"},
-        "driver": driver,
+        "manager": manager,
         "checkout": {"kind": "worktree", "path": str(root)},
-        "reactive_user_handoffs": {"alignment_checkpoint": "driver_resolvable_when_clear"},
+        "reactive_user_handoffs": {"alignment_checkpoint": "manager_resolvable_when_clear"},
     }
 
 
@@ -93,7 +93,7 @@ def _args(mode: str, *extra: str) -> list[str]:
 def _install_contract_stubs(monkeypatch, module, contract):
     monkeypatch.setattr(
         module,
-        "evaluate_driver_entry",
+        "evaluate_manager_entry",
         lambda request: SimpleNamespace(
             freshness=module.Freshness.SAME_SEMANTICS,
             contract_sha256="digest",
@@ -102,16 +102,16 @@ def _install_contract_stubs(monkeypatch, module, contract):
     monkeypatch.setattr(module, "load_contract", lambda *args, **kwargs: (contract, "digest"))
     monkeypatch.setattr(
         module,
-        "resolve_builtin_workflow_event_callback",
-        lambda callback_id, **kwargs: SimpleNamespace(callback_id=callback_id),
-    )
-    monkeypatch.setattr(
-        module,
         "event_callback_projection",
         lambda request: SimpleNamespace(
             contract_sha256="digest",
             event={"clis": ({"cli": "codex"}, {"cli": "claude", "model": "sonnet"})},
         ),
+    )
+    monkeypatch.setattr(
+        module,
+        "resolve_builtin_workflow_event_callback",
+        lambda callback_id, **kwargs: SimpleNamespace(callback_id=callback_id),
     )
 
 
@@ -121,20 +121,20 @@ def _install_contract_stubs(monkeypatch, module, contract):
         (
             "attached",
             [],
-            'CAFE_DRIVER_DIRECTIVE {"schema_version":1,"mode":"attached","action":"wait",'
+            'CAFE_MANAGER_DIRECTIVE {"schema_version":1,"mode":"attached","action":"wait",'
             '"worker":"foreground","next_wake":["process_exit","user_input"],'
             '"poll_interval_seconds":90}',
         ),
         (
             "unattended",
             ["--background"],
-            'CAFE_DRIVER_DIRECTIVE {"schema_version":1,"mode":"unattended","action":"yield",'
+            'CAFE_MANAGER_DIRECTIVE {"schema_version":1,"mode":"unattended","action":"yield",'
             '"worker":"background","next_wake":["user_input"]}',
         ),
         (
             "event-driven",
             ["--background", "--on-workflow-event", CALLBACK_ID],
-            'CAFE_DRIVER_DIRECTIVE {"schema_version":1,"mode":"event-driven","action":"yield",'
+            'CAFE_MANAGER_DIRECTIVE {"schema_version":1,"mode":"event-driven","action":"yield",'
             '"worker":"background","next_wake":["workflow_event_callback","user_input"]}',
         ),
     ],
@@ -228,7 +228,7 @@ def test_runtime_source_mismatch_fails_before_worker_launch(
         )
         == 2
     )
-    assert "Driver runtime source differs" in capsys.readouterr().err
+    assert "Manager runtime source differs" in capsys.readouterr().err
 
 
 def test_global_wrapper_accepts_an_identical_runtime_copy(tmp_path: Path, monkeypatch) -> None:
@@ -354,7 +354,7 @@ def test_contract_mode_prepared_identity_and_checkout_mismatches_fail_closed(
     assert result == 2
     assert launched is False
     assert capsys.readouterr().out.splitlines()[0] == (
-        f'CAFE_DRIVER_DIRECTIVE {{"schema_version":1,"mode":"{requested_mode}",'
+        f'CAFE_MANAGER_DIRECTIVE {{"schema_version":1,"mode":"{requested_mode}",'
         '"action":"launch_failed","worker":"none","next_wake":["user_input"]}'
     )
 
@@ -398,8 +398,8 @@ def test_stale_contract_identity_and_unreadable_state_fail_closed(
     assert module.run(args, cwd=tmp_path, process_factory=lambda *a, **k: _Process()) == 2
     assert "launch_failed" in capsys.readouterr().out
 
-    (issue_dir / "driver").mkdir()
-    (issue_dir / "driver/contract.json").write_text("not json", encoding="utf-8")
+    (issue_dir / "manager").mkdir()
+    (issue_dir / "manager/contract.json").write_text("not json", encoding="utf-8")
     assert module.run(args, cwd=tmp_path, process_factory=lambda *a, **k: _Process()) == 2
     assert "launch_failed" in capsys.readouterr().out
 
@@ -449,7 +449,7 @@ def test_launch_failure_and_durable_user_boundary_have_stable_directives(
 
     assert module.run(args, cwd=tmp_path, process_factory=lambda *a, **k: _Process(7)) == 7
     assert capsys.readouterr().out.splitlines()[0] == (
-        'CAFE_DRIVER_DIRECTIVE {"schema_version":1,"mode":"unattended",'
+        'CAFE_MANAGER_DIRECTIVE {"schema_version":1,"mode":"unattended",'
         '"action":"launch_failed","worker":"background","next_wake":["user_input"],'
         '"exit_code":7}'
     )
@@ -467,7 +467,7 @@ def test_launch_failure_and_durable_user_boundary_have_stable_directives(
         == 0
     )
     assert capsys.readouterr().out.splitlines()[0] == (
-        'CAFE_DRIVER_DIRECTIVE {"schema_version":1,"mode":"unattended",'
+        'CAFE_MANAGER_DIRECTIVE {"schema_version":1,"mode":"unattended",'
         '"action":"await_user","worker":"none","next_wake":["user_input"]}'
     )
 
@@ -483,7 +483,7 @@ def test_attached_directive_is_flushed_before_wait(tmp_path: Path, monkeypatch) 
 
     class WaitingProcess(_Process):
         def wait(self) -> int:
-            assert printed[0][0][0].startswith("CAFE_DRIVER_DIRECTIVE ")
+            assert printed[0][0][0].startswith("CAFE_MANAGER_DIRECTIVE ")
             assert printed[0][1].get("flush") is True
             return 0
 
@@ -595,7 +595,7 @@ def test_freshness_mismatch_fails_before_worker_creation(
             contract_sha256="digest",
         )
 
-    monkeypatch.setattr(module, "evaluate_driver_entry", evaluate)
+    monkeypatch.setattr(module, "evaluate_manager_entry", evaluate)
 
     result = module.run(
         _args(mode),
