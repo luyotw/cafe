@@ -38,6 +38,8 @@ All notable changes to this project will be documented in this file.
 - Exposed retry recovery after checklist validation failures and accepted reviewer
   annotations on completed checklist entries.
 - Preserved generated checklist contracts in workflow test fixtures.
+- Kept workflow progress rendering available when a pending task cannot be
+  resolved from the durable task inbox.
 
 See [the v0.5.0 release notes](docs/releases/v0.5.0.md) for upgrade guidance and
 details.

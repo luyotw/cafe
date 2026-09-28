@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import stat
 import subprocess
@@ -12,7 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 
-from cafe.core.blackboard import HandoffIntent, HandoffOwner
+from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.ui.cli import app
 from cafe.utils.pr import parse_pr_body, parse_pr_title
@@ -116,19 +115,7 @@ def test_cafe_workflow_pr_non_interactive_routes_through_runtime(tmp_path: Path,
     plan_dir.mkdir(parents=True)
     (spec_dir / "output.md").write_text("# Spec\n", encoding="utf-8")
     (plan_dir / "output.md").write_text("# Plan\n", encoding="utf-8")
-    (issue_dir / "blackboard.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "playbook_id": "standard",
-                "current_step": "pr",
-                "artifacts": {},
-                "events": [],
-                "decisions": [],
-            }
-        ),
-        encoding="utf-8",
-    )
+    BlackboardStore(issue_dir).load_or_create("pr", playbook_id="standard")
 
     pr_output = issue_dir / "pr" / "iteration_001" / "output.md"
     pr_output.parent.mkdir(parents=True, exist_ok=True)

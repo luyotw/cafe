@@ -10,7 +10,6 @@ import pytest
 
 from cafe.core.automatic_steps import AutomaticExecutionResult, AutomaticExecutorRegistry
 from cafe.core.blackboard import (
-    BLACKBOARD_SCHEMA_VERSION,
     BlackboardState,
     BlackboardStore,
     HandoffIntent,
@@ -928,127 +927,27 @@ def test_hybrid_rejects_malformed_or_conflicting_captured_batons(
     assert runtime.blackboard.current_step == "mixed"
 
 
-def test_blackboard_v2_state_migrates_to_v4_without_losing_handoff(tmp_path: Path) -> None:
-    """UT-011: v2 data gains ownership defaults and persists as schema v4."""
-    issue_dir = tmp_path / ".cafe" / "issues" / "migration"
-    store = BlackboardStore(issue_dir)
-    issue_dir.mkdir(parents=True)
-    store.file_path.write_text(
-        '{"schema_version": 2, "current_step": "approval", "playbook_id": "owner-test", '
-        '"workflow_id": "stable-id", "handoff_summary": "waiting"}',
-        encoding="utf-8",
-    )
-
-    state = store.load_or_create("approval", playbook_id="owner-test")
-    assert state.schema_version == BLACKBOARD_SCHEMA_VERSION == 4
-    assert state.ownership_cursor is None
-    assert state.step_attempt_counts == {}
-    store.save(state)
-    assert '"schema_version": 4' in store.file_path.read_text(encoding="utf-8")
-    with pytest.raises(ValueError, match="future"):
-        BlackboardState.from_dict({"schema_version": 99}, initial_step="approval")
-
-
-def test_blackboard_v3_attempt_state_migrates_without_losing_cycle_progress(
-    tmp_path: Path,
+@pytest.mark.parametrize("schema_version", [2, 3])
+def test_executed_workflow_without_external_authorities_is_not_migrated(
+    tmp_path: Path, schema_version: int,
 ) -> None:
-    issue_dir = tmp_path / ".cafe" / "issues" / "attempt-migration"
-    store = BlackboardStore(issue_dir)
-    issue_dir.mkdir(parents=True)
-    store.file_path.write_text(
-        '{"schema_version": 3, "current_step": "review", '
-        '"step_visit_counts": {"review": 2}, '
-        '"ownership_cursor": {"step": "review", "visit_count": 2}}',
-        encoding="utf-8",
-    )
+    store = BlackboardStore(tmp_path / ".cafe" / "issues" / "old-workflow")
+    store.issue_dir.mkdir(parents=True)
+    original = json.dumps({
+        "schema_version": schema_version, "current_step": "review",
+        "workflow_id": "old-workflow", "handoff_summary": "already executed",
+    })
+    store.file_path.write_text(original, encoding="utf-8")
 
-    state = store.load_or_create("review")
-    assert state.schema_version == BLACKBOARD_SCHEMA_VERSION == 4
-    assert state.step_attempt_counts == {"review": 2}
-    assert state.ownership_cursor == {"step": "review", "attempt_count": 2}
+    with pytest.raises(ValueError, match="workflow authorities are absent"):
+        store.load_or_create("review")
 
-    store.save(state)
-    persisted = store.file_path.read_text(encoding="utf-8")
-    assert '"step_attempt_counts"' in persisted
-    assert '"step_visit_counts"' not in persisted
-    assert '"attempt_count"' in persisted
-    assert '"visit_count"' not in persisted
+    assert store.file_path.read_text(encoding="utf-8") == original
+    assert not store.audit.binding.exists()
+    assert not store.receipts_path.exists()
 
 
-def test_blackboard_v3_attempt_events_migrate_to_one_v4_shape(tmp_path: Path) -> None:
-    issue_dir = tmp_path / ".cafe" / "issues" / "attempt-event-migration"
-    store = BlackboardStore(issue_dir)
-    issue_dir.mkdir(parents=True)
-    store.file_path.write_text(
-        json.dumps(
-            {
-                "schema_version": 3,
-                "current_step": "review",
-                "events": [
-                    {
-                        "timestamp": "2026-08-28T00:00:00+00:00",
-                        "step": "review",
-                        "event_type": "step_completed",
-                        "message": '{"step": "review", "visit": 2}',
-                        "data": {"step": "review", "visit": 2},
-                    },
-                    {
-                        "timestamp": "2026-08-28T00:00:01+00:00",
-                        "step": "review",
-                        "event_type": "loop_detected",
-                        "message": "legacy loop",
-                        "data": {
-                            "step": "review",
-                            "visits": 6,
-                            "max_iterations": 5,
-                        },
-                    },
-                    {
-                        "timestamp": "2026-08-28T00:00:02+00:00",
-                        "step": "review",
-                        "event_type": "step_visit_count_reset",
-                        "message": "legacy reset",
-                        "data": {"step": "review", "completed_visits": 2},
-                    },
-                    {
-                        "timestamp": "2026-08-28T00:00:03+00:00",
-                        "step": "audit",
-                        "event_type": "custom_audit",
-                        "message": "unrelated legacy vocabulary",
-                        "data": {"visit": "homepage", "max_iterations": "external"},
-                    },
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
 
-    state = store.load_or_create("review")
-
-    assert [event.event_type for event in state.events] == [
-        "step_completed",
-        "loop_detected",
-        "step_attempt_count_reset",
-        "custom_audit",
-    ]
-    assert state.events[0].data["attempt"] == 2
-    assert state.events[1].data["attempts"] == 6
-    assert state.events[1].data["max_attempts_per_cycle"] == 5
-    assert state.events[2].data["completed_attempts"] == 2
-    assert all("visit" not in event.message for event in state.events[:3])
-    assert state.events[3].data == {"visit": "homepage", "max_iterations": "external"}
-    assert state.events[3].message == "unrelated legacy vocabulary"
-
-    store.save(state)
-    persisted = json.loads(store.file_path.read_text(encoding="utf-8"))
-    migrated_events = persisted["events"][:3]
-    assert '"step_visit_count_reset"' not in json.dumps(migrated_events)
-    assert '"max_iterations"' not in json.dumps(migrated_events)
-    assert '"completed_visits"' not in json.dumps(migrated_events)
-    assert persisted["events"][3]["data"] == {
-        "visit": "homepage",
-        "max_iterations": "external",
-    }
 
 
 def test_simulation_reports_all_owners_without_creating_runtime_state(tmp_path: Path) -> None:

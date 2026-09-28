@@ -834,12 +834,11 @@ def test_use_cafe_workflow_uses_structured_human_task_resume_payloads() -> None:
     normalized = " ".join(reference.split())
     normalized_running = " ".join(running.split())
 
-    assert '"task":"output-review","decision":"confirm"' in reference
-    assert '"task":"clarification-answers","answers"' in reference
-    assert '"task":"clarification-feedback","feedback"' in reference
-    assert '"human_task_id":"<active-human-task-id>"' in reference
+    assert "complete_driver_task.py" in reference
+    assert "--task-id <active-human-task-id>" in reference
+    assert "For `answers`, account for every required field" in normalized
+    assert "Use the active task's declared decision ID" in normalized
     assert "Do not guess or reuse an old task ID" in normalized
-    assert "runtime accepts plain text only for a declared `feedback` schema" in normalized
     assert '--user-input "confirmed"' not in reference
     assert "resolve the active HumanTask and its input schema" in normalized_running
     assert "current `human_task_id`" in normalized_running
@@ -3839,7 +3838,7 @@ def test_event_driver_documentation_defines_the_contract_managed_lifecycle() -> 
     assert "--status --issue-dir .cafe/issues/<issue>" in contract
 
 
-def test_use_cafe_workflow_keeps_human_task_completion_in_the_interactive_driver() -> None:
+def test_use_cafe_workflow_binds_driver_completion_to_inspected_authority() -> None:
     skill = _read_skill_resource("SKILL.md")
     running = _read_skill_resource("references/running_workflow.md")
     handoffs = _read_skill_resource("references/handoffs_and_alignment.md")
@@ -3847,21 +3846,18 @@ def test_use_cafe_workflow_keeps_human_task_completion_in_the_interactive_driver
 
     assert "HumanTask" in skill
     assert "`references/handoffs_and_alignment.md`" in skill
-    assert "cafe task complete <task-id> --result '<json>' --no-resume --json" in running
+    assert "complete_driver_task.py --issue-dir <issue-dir> --task-id <task-id>" in running
+    assert "--contract-sha256 <digest> --sources-sha256 <digest>" in normalized_running
     assert (
         "Direct `cafe task complete` users retain its normal automatic foreground-resume"
         in normalized_running
     )
+    assert "serialize only the user's supplied answer" in normalized_running
     assert (
-        "cannot wait for, collect, infer, or choose a user answer for a mandatory"
+        "must not infer a decision, approval, permission, or missing answer"
         in normalized_running
     )
-    assert (
-        "whose current phase and task id are declared `driver_confirmable` "
-        "may be completed by any driver"
-        in normalized_running.lower()
-    )
-    assert "cafe task complete <active-human-task-id>" in handoffs
+    assert "--task-id <active-human-task-id>" in handoffs
     assert '"work_report"' in handoffs
     assert '--user-input \'{"task":"output-review"' not in handoffs
 
@@ -3908,7 +3904,8 @@ def test_driver_keeps_completion_separate_from_external_authority() -> None:
         assert "convergent review" not in " ".join(text.split())
         assert "cafe.pr.publish" not in text
         assert "pr.auto_create" not in text
-        assert "gh pr merge" not in text
+    assert "gh pr merge --merge" in kickoff
+    assert "only user confirmation authorizes execution" in " ".join(kickoff.split())
     assert "[gh, issue, close, \"123\"]" in kickoff
     assert "[cafe, close]" in kickoff
 

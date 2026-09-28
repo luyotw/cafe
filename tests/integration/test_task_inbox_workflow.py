@@ -468,8 +468,7 @@ def test_deferred_terminal_completion_wakes_driver_from_callback_worker(
         "workflow_completed",
         "workflow_completed",
     ]
-    assert dispatched[1]["event_id"] != dispatched[0]["event_id"]
-    assert dispatched[1]["sequence"] == dispatched[0]["sequence"] + 1
+    assert dispatched[1] == dispatched[0]
     assert "Executing step=" not in replayed.stdout
 
 

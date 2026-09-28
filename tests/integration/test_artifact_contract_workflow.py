@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
-from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardStore, EventEntry
+from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardStore
 from cafe.core.git import GitOperations
 from cafe.core.playbook import resolve_step_behavior
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
@@ -218,16 +218,10 @@ def test_custom_artifact_names_and_legacy_summary_are_boundary_distinct(tmp_path
     )
     store = BlackboardStore(issue_dir)
     state = store.load_or_create("consume", playbook_id="custom-contract")
-    state.events.append(
-        EventEntry(
-            timestamp="2026-06-01T00:00:00+00:00",
-            step="emit",
-            event_type="transition",
-            message="custom route",
-            data={"from": "emit", "to": "consume", "source_artifact": entry.to_dict()},
-        )
+    store.record_event(
+        state, "transition",
+        {"step": "emit", "from": "emit", "to": "consume", "source_artifact": entry.to_dict()},
     )
-    store.save(state)
 
     resolved = GenericWorkflowStepExecutor._add_causal_todo_artifact(
         {"evidence_bundle": entry}, store.load_or_create("consume"), playbook=playbook

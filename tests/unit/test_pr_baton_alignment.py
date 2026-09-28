@@ -8,22 +8,7 @@ from cafe.phases.generic_workflow_step import align_pr_baton_after_execution
 
 
 def _bootstrap_issue(issue_dir: Path) -> None:
-    issue_dir.mkdir(parents=True)
-    (issue_dir / "blackboard.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "current_step": "pr",
-                "playbook_id": "standard",
-                "artifacts": {},
-                "events": [],
-                "decisions": [],
-                "handoff_summary": "",
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
+    BlackboardStore(issue_dir).load_or_create("pr", playbook_id="standard")
 
 
 def test_align_pr_baton_updates_when_needs_changes_and_stale(tmp_path: Path) -> None:

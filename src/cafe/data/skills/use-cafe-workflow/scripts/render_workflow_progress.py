@@ -500,11 +500,12 @@ def _active_task_authority(issue_dir: Path | None) -> dict[str, Any] | None:
     ]
     if len(pending) != 1 or not isinstance(pending[0].get("id"), str):
         return None
+    from cafe.core.task_inbox import TaskInboxError
     from cafe.driver.task_inspection import inspect_task_authority
 
     try:
         return inspect_task_authority(issue_dir, pending[0]["id"])
-    except (OSError, ValueError):
+    except (OSError, ValueError, TaskInboxError):
         return None
 
 
