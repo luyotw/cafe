@@ -19,11 +19,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from cafe.core.packet_io import atomic_write_bytes, canonical_json
-from cafe.manager._store import load_contract
-from cafe.manager.delivery import (
-    MAX_CLOSEOUT_EVIDENCE_BYTES,
-    closeout_evidence_record,
-)
+from cafe.manager.delivery import MAX_CLOSEOUT_EVIDENCE_BYTES
 
 MAX_EVIDENCE_BYTES = MAX_CLOSEOUT_EVIDENCE_BYTES
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\Z")
@@ -166,8 +162,25 @@ def _confirmed(
         raise ValueError("issue worktree belongs to another repository")
     if len(os.fsencode(str(worktree))) > 4096:
         raise ValueError("issue worktree path exceeds the bounded evidence projection")
+    from cafe.manager._store import select_authority_directory
+
+    authority = select_authority_directory(issue)
+    if authority.name == "driver":
+        from cafe.driver._store import load_contract
+    else:
+        from cafe.manager._store import load_contract
     contract, digest = load_contract(issue, issue_name=issue_name, workflow_id=workflow_id)
     return contract["delivery_contract"]["closeout_plan"], digest, worktree
+
+
+def _closeout_evidence_builder(issue_dir: Path):
+    from cafe.manager._store import select_authority_directory
+
+    if select_authority_directory(issue_dir).name == "driver":
+        from cafe.driver.delivery import closeout_evidence_record
+    else:
+        from cafe.manager.delivery import closeout_evidence_record
+    return closeout_evidence_record
 
 
 def _initialize(
@@ -180,6 +193,7 @@ def _initialize(
     common_dir: Path,
 ) -> dict[str, Any]:
     plan, digest, worktree = _confirmed(issue_dir, issue_name, workflow_id, common_dir)
+    closeout_evidence_record = _closeout_evidence_builder(issue_dir)
     record = closeout_evidence_record(
         plan,
         issue_name=issue_name,

@@ -150,6 +150,25 @@ def _manager_owner(value: str) -> str:
     return "manager_confirmable" if value == "driver_confirmable" else value
 
 
+def _resolve_alias(primary: Any, legacy: Any, label: str) -> Any:
+    if primary is not None and legacy is not None and primary != legacy:
+        raise ValueError(f"Manager and legacy Driver {label} inputs conflict")
+    if primary is not None:
+        return primary
+    return legacy
+
+
+def _normalize_aliases(args: argparse.Namespace) -> None:
+    args.manager_mode = _resolve_alias(args.manager_mode, args.legacy_manager_mode, "mode")
+    args.event_manager = _resolve_alias(args.event_manager, args.legacy_event_manager, "event chain") or []
+    args.manager_confirmable = _resolve_alias(
+        args.manager_confirmable, args.legacy_manager_confirmable, "confirmation ownership"
+    )
+    args.task_manager_confirmable = _resolve_alias(
+        args.task_manager_confirmable, args.legacy_task_manager_confirmable, "task ownership"
+    ) or []
+
+
 def _capability_choices(args: argparse.Namespace, model: Any) -> list[Any]:
     registry = load_capability_registry(default_capability_definition_dirs(args.project_root))
     return resolve_setup_choices(model, registry, args.capability_choice)
@@ -470,20 +489,19 @@ def _parser() -> argparse.ArgumentParser:
         )
     parser.add_argument("--update-preflight", type=_json_mapping, required=True)
     parser.add_argument("--catalog-preflight", type=_json_mapping, required=True)
-    parser.add_argument(
-        "--manager-mode", "--driver-mode", dest="manager_mode",
-        choices=tuple(sorted(_MANAGER_MODES)), required=True
-    )
+    parser.add_argument("--manager-mode", dest="manager_mode", choices=tuple(sorted(_MANAGER_MODES)))
+    parser.add_argument("--driver-mode", dest="legacy_manager_mode", choices=tuple(sorted(_MANAGER_MODES)))
     parser.add_argument(
         "--poll-interval-seconds",
         type=_positive_seconds,
     )
     parser.add_argument(
-        "--event-manager", "--event-driver", dest="event_manager",
+        "--event-manager", dest="event_manager",
         action="append",
-        default=[],
+        default=None,
         metavar="CLI[:MODEL]",
     )
+    parser.add_argument("--event-driver", dest="legacy_event_manager", action="append", default=None, metavar="CLI[:MODEL]")
     parser.add_argument(
         "--phase-chain",
         action="append",
@@ -503,7 +521,8 @@ def _parser() -> argparse.ArgumentParser:
         help="Explicit answer to a setup question declared by an effective capability.",
     )
     parser.add_argument("--user-required", nargs="*", default=None)
-    parser.add_argument("--manager-confirmable", "--driver-confirmable", dest="manager_confirmable", nargs="*", default=None)
+    parser.add_argument("--manager-confirmable", dest="manager_confirmable", nargs="*", default=None)
+    parser.add_argument("--driver-confirmable", dest="legacy_manager_confirmable", nargs="*", default=None)
     checkout = parser.add_mutually_exclusive_group(required=True)
     checkout.add_argument("--worktree")
     checkout.add_argument("--current-checkout", action="store_true")
@@ -511,8 +530,9 @@ def _parser() -> argparse.ArgumentParser:
         "--task-user-required", action="append", default=[], metavar="PHASE:TASK_ID"
     )
     parser.add_argument(
-        "--task-manager-confirmable", "--task-driver-confirmable", dest="task_manager_confirmable", action="append", default=[], metavar="PHASE:TASK_ID"
+        "--task-manager-confirmable", dest="task_manager_confirmable", action="append", default=None, metavar="PHASE:TASK_ID"
     )
+    parser.add_argument("--task-driver-confirmable", dest="legacy_task_manager_confirmable", action="append", default=None, metavar="PHASE:TASK_ID")
     parser.add_argument("--need-permission", default="user_required")
     parser.add_argument(
         "--need-clarification",
@@ -622,6 +642,7 @@ def _preflight_reports(args: argparse.Namespace) -> tuple[dict[str, Any], dict[s
 
 def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
     """Build only the issue's user-confirmed delivery and execution decisions."""
+    _normalize_aliases(args)
     project_root = args.project_root.resolve()
     model = PlaybookLoader(project_root=project_root).load_model(args.playbook_id).model
     candidates = confirmation_gate_steps(model)
@@ -986,6 +1007,9 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
 def main() -> int:
     try:
         args = _parser().parse_args()
+        _normalize_aliases(args)
+        if args.manager_mode is None:
+            raise ValueError("--manager-mode is required")
         proposal = build_confirmed_proposal(args)
         rendered = render(args, confirmed_proposal=proposal)
         if args.activate_confirmed:

@@ -667,11 +667,21 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--issue-dir", type=Path)
     parser.add_argument("--locale", default="en")
     parser.add_argument(
-        "--manager-state", "--driver-state", dest="manager_state",
+        "--manager-state", dest="manager_state",
         type=_json_argument,
         help="JSON display state; must include deliver and cleanup",
     )
+    parser.add_argument("--driver-state", dest="legacy_manager_state", type=_json_argument)
     return parser
+
+
+def _resolve_manager_state(
+    manager_state: Mapping[str, Any] | None,
+    legacy_driver_state: Mapping[str, Any] | None,
+) -> Mapping[str, Any] | None:
+    if manager_state is not None and legacy_driver_state is not None and manager_state != legacy_driver_state:
+        raise ValueError("Manager and legacy Driver state inputs conflict")
+    return manager_state if manager_state is not None else legacy_driver_state
 
 
 def _issue_playbook_id(issue_dir: Path) -> str | None:
@@ -689,6 +699,7 @@ def _issue_playbook_id(issue_dir: Path) -> str | None:
 def main() -> int:
     try:
         args = _parser().parse_args()
+        args.manager_state = _resolve_manager_state(args.manager_state, args.legacy_manager_state)
         issue_dir = args.issue_dir.resolve() if args.issue_dir is not None else None
         playbook_id = args.playbook or (
             _issue_playbook_id(issue_dir) if issue_dir is not None else None

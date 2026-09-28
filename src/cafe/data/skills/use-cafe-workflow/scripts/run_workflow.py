@@ -410,10 +410,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--issue", required=True)
     parser.add_argument("--playbook", required=True)
-    parser.add_argument(
-        "--manager-mode", "--driver-mode", dest="manager_mode", required=True,
-        choices=("attached", "unattended", "event-driven")
-    )
+    parser.add_argument("--manager-mode", dest="manager_mode", choices=("attached", "unattended", "event-driven"))
+    parser.add_argument("--driver-mode", dest="legacy_manager_mode", choices=("attached", "unattended", "event-driven"))
     parser.add_argument(
         "--fresh-facts",
         type=_mapping_json,
@@ -433,9 +431,17 @@ def run(
     cwd: Path | None = None,
     process_factory: Callable[..., Any] = subprocess.Popen,
 ) -> int:
-    args = _parser().parse_args(argv)
-    mode = args.manager_mode
     try:
+        args = _parser().parse_args(argv)
+        mode = args.manager_mode or args.legacy_manager_mode or "unattended"
+        if (
+            args.manager_mode is not None
+            and args.legacy_manager_mode is not None
+            and args.manager_mode != args.legacy_manager_mode
+        ):
+            raise ValueError("Manager and legacy Driver mode inputs conflict")
+        if args.manager_mode is None and args.legacy_manager_mode is None:
+            raise ValueError("--manager-mode is required")
         interpreter = _validated_host_interpreter()
         issue_name = _validate_identifier(args.issue, "issue name")
         playbook = _validate_identifier(args.playbook, "playbook name")
