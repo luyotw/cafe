@@ -375,10 +375,11 @@ task declaration authorizes Manager completion. Explicit user ownership wins.
 
 Existing v6 contracts lack the overall policy and retain task-only ownership
 until explicit reconfirmation. Existing v5 contracts retain their explicitly
-confirmed overall clarification choice. Existing v7 Manager contracts remain
-valid with their confirmed overall choice and task overrides. New v8 Manager
-contracts record both the overall choice and task overrides; reading old records
-never inserts the new default or rewrites digests.
+confirmed overall clarification choice. Existing v7 Driver contracts remain
+valid through the legacy Driver authority, with their confirmed overall choice
+and task overrides. New v8 Manager contracts record both the overall choice
+and task overrides; reading old records never inserts the new default or
+rewrites digests.
 
 ### Delivery facts to confirm
 
