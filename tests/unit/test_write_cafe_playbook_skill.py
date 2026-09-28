@@ -80,8 +80,13 @@ def test_write_cafe_playbook_defines_conversation_locale_contract() -> None:
     assert "### Conversation locale" in reference
     assert "omitted conversation locale values resolve to `auto`" in normalized_reference
     assert "does not require a separate user confirmation" in normalized_reference
-    assert "asking about the language choice is not an override" in normalized_reference
-    assert "does not translate commands, paths, playbook or step names" in normalized_reference
+    assert "docs/language-policy.md" in normalized_reference
+    assert "third** precedence tier" in normalized_reference
+    assert "an explicit user instruction outranks it" in normalized_reference
+    assert "resolved once, when the workflow state is created" in normalized_reference
+    assert "does not change an existing workflow's language" in normalized_reference
+    assert "docs/language-policy.md" in normalized_skill
+    assert "not commands, identifiers, payload keys, or quoted text" in normalized_skill
 
 
 def test_write_cafe_playbook_requires_bounded_applicability_and_migration() -> None:
