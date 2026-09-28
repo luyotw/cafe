@@ -217,32 +217,6 @@ explicitly chooses another mode or an existing confirmed issue contract already
 fixes it. Render the proposed mode with the complete kickoff for confirmation;
 a default is not confirmation or execution authority.
 
-### Bind callbacks to the current Driver
-
-Before proposing event-driven settings, identify the CLI hosting the current
-Driver from the active session's explicit host context. Use that CLI as the
-primary `--event-driver`: a Codex Driver uses `--event-driver codex`, and a
-Claude Driver uses `--event-driver claude`. The primary resumes the current
-Driver conversation through the existing host-session binding when available;
-it has no model field or model override.
-
-Phase agents are workers supervised by this Driver. Never derive the primary
-Driver CLI from a phase's CLI/model, a phase fallback, provider availability,
-cost, or a request to avoid a model. A phase using Claude does not move a Codex
-Driver's callbacks to Claude. A request to change phase models or "all
-fallbacks" applies to phase chains unless the user explicitly includes Driver
-callback routing. It does not authorize a new Driver conversation or a
-cross-provider handoff.
-
-Configure a different primary only after a direct user request to transfer the
-Driver to that CLI. Configure callback fallbacks only when the user explicitly
-selects them for the Driver; keep the existing distinct-CLI rule and explain
-that takeover resumes a separate provider conversation. If the current host
-CLI cannot be established, ask for that missing identity before proposing the
-callback chain. On resume, preserve the confirmed chain and acquired sessions;
-resolve a material conflict with the current Driver through the existing
-reconfirmation route, without silently rebinding or replacing runtime state.
-
 Resolve effective `steps.*.capability_requests` against the package-owned
 capability registry. Render each manifest's `setup_questions`: its prompt,
 setting, selected typed value, observable outcome, and selected `prepare_args`.

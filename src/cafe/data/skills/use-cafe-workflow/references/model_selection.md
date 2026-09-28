@@ -65,12 +65,6 @@ preflight, and every write to the active worktree's `.cafe/phases.yaml`.
 - Keep exact model choices issue-owned. A reusable phase skill must remain valid
   when providers rename, replace, or reposition models.
 
-This selection covers phase workers only. Bind the Driver callback primary to
-the current Driver's CLI/session using `kickoff.md`; phase primaries, phase
-fallbacks, and model exclusions do not change Driver identity or callback
-routing. Interpret a phase-model request for "all fallbacks" within this scope
-unless the user explicitly selects a Driver callback fallback as well.
-
 ## Classify the required capability band
 
 Classify the remaining work for each phase before mapping it to current models.
