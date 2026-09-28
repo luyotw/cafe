@@ -91,6 +91,10 @@ The wrapper also emits stable `CAFE_DRIVER_DIRECTIVE` records for launch
 failure and a durable user-owned boundary. Do not launch through a user-owned
 boundary or infer its answer.
 
+For a new event-driven contract, first bind the primary to the current Driver
+as specified in `kickoff.md` under "Bind callbacks to the current Driver".
+Never reconstruct callback routing from phase model chains.
+
 The callback reads the issue-scoped `driver/contract.json` and projects the
 primary CLI plus fallback CLI/model order only in memory. Waking the primary
 session never includes a model override. `dispatch_state.json` is mutable runtime
