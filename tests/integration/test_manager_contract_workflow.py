@@ -169,3 +169,66 @@ def test_manager_settings_dispatch_updates_the_selected_legacy_authority(tmp_pat
     updated = json.loads(contract_path.read_text(encoding="utf-8"))
     assert updated["driver"] == request.value
     assert not (issue_dir / "manager" / "contract.json").exists()
+
+
+def test_manager_settings_dispatch_honors_equivalent_dual_authority(tmp_path):
+    from copy import deepcopy
+
+    from cafe.core.packet_io import canonical_json
+    from cafe.driver._schema import build_initial_contract as build_driver_contract
+    from cafe.settings import SettingUpdateRequest, dispatch_setting_update
+
+    proposal = _proposal()
+    issue_dir = tmp_path / "issue"
+    _activate(issue_dir)
+    legacy = deepcopy(proposal)
+    legacy["driver"] = legacy.pop("manager")
+    for field in ("confirmation_contract", "task_contract"):
+        legacy[field]["driver_confirmable"] = legacy[field].pop("manager_confirmable")
+    legacy["reactive_user_handoffs"]["need_clarification"] = "driver_confirmable"
+    legacy["reactive_user_handoffs"]["alignment_checkpoint"] = "driver_resolvable_when_clear"
+    driver_dir = issue_dir / "driver"
+    driver_dir.mkdir()
+    driver_contract = build_driver_contract(
+        proposal=legacy,
+        issue_name="journey",
+        workflow_id="workflow-journey",
+        confirmed_by="user",
+        confirmed_at="2026-09-28T00:00:00+00:00",
+    )
+    driver_path = driver_dir / "contract.json"
+    driver_path.write_bytes(canonical_json(driver_contract))
+    manager_path = issue_dir / "manager" / "contract.json"
+    manager_before = manager_path.read_bytes()
+    driver_before = driver_path.read_bytes()
+    request = SettingUpdateRequest(
+        config_path=issue_dir / "issue.yaml", value={"mode": "unattended"}
+    )
+
+    preview = dispatch_setting_update(
+        "manager", SettingUpdateRequest(request.config_path, request.value, preview=True)
+    )
+    assert preview.status == "unchanged"
+    assert preview.changes["manager"]["after"] == request.value
+    assert manager_path.read_bytes() == manager_before
+    assert driver_path.read_bytes() == driver_before
+
+    applied = dispatch_setting_update("manager", request)
+    assert applied.status == "unchanged"
+    assert manager_path.read_bytes() == manager_before
+    assert driver_path.read_bytes() == driver_before
+
+    changed = SettingUpdateRequest(
+        config_path=request.config_path,
+        value={"mode": "attached", "poll_interval_seconds": 30},
+    )
+    changed_preview = dispatch_setting_update(
+        "manager", SettingUpdateRequest(changed.config_path, changed.value, preview=True)
+    )
+    assert changed_preview.status == "proposed"
+    assert manager_path.read_bytes() == manager_before
+    assert driver_path.read_bytes() == driver_before
+    with pytest.raises(ValueError):
+        dispatch_setting_update("manager", changed)
+    assert manager_path.read_bytes() == manager_before
+    assert driver_path.read_bytes() == driver_before

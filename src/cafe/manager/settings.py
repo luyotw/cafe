@@ -20,22 +20,33 @@ def update_manager_setting(request: SettingUpdateRequest) -> ManagerSettingsUpda
     manager_record = issue_dir / "manager" / "contract.json"
     driver_record = issue_dir / "driver" / "contract.json"
     if authority.name == "driver":
-        if manager_record.exists() and driver_record.exists():
-            raise ValueError(
-                "Manager settings cannot update a legacy workflow with a parallel Manager record; "
-                f"inspect {driver_record} and {manager_record}, then reconcile the selected authority"
-            )
+        has_manager_projection = manager_record.exists() and driver_record.exists()
         from cafe.driver._store import load_contract as load_driver_contract
         from cafe.driver.api import update_driver_settings
 
         contract, _digest = load_driver_contract(issue_dir, allow_legacy_upgrade=True)
-        result = update_driver_settings(
-            issue_dir=issue_dir,
-            issue_name=contract["identity"]["issue_name"],
-            workflow_id=contract["identity"]["workflow_id"],
-            driver=request.value,
-            preview=request.preview,
-        )
+        update = {
+            "issue_dir": issue_dir,
+            "issue_name": contract["identity"]["issue_name"],
+            "workflow_id": contract["identity"]["workflow_id"],
+            "driver": request.value,
+        }
+        if has_manager_projection:
+            preview = update_driver_settings(**update, preview=True)
+            if request.preview:
+                result = preview
+            elif preview.status == "unchanged":
+                result = update_driver_settings(
+                    **update,
+                    expected_contract_sha256=preview.contract_sha256,
+                )
+            else:
+                raise ValueError(
+                    "Cannot change Manager settings while equivalent role contracts coexist; "
+                    f"reconcile {driver_record} and {manager_record} before applying the change"
+                )
+        else:
+            result = update_driver_settings(**update, preview=request.preview)
         return ManagerSettingsUpdateResult(
             result.status,
             MappingProxyType({"manager": result.changes["driver"]}),
