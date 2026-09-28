@@ -1179,6 +1179,7 @@ def _notify_slack_human_task_adapter(
     timeout_sec: float,
 ) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
     """Deliver one package-owned HumanTask notification without exposing credentials."""
+    from cafe.core.conversation_locale import DEFAULT_CONVERSATION_LOCALE
     from cafe.core.human_task_notifications import (
         SlackNotificationError,
         build_human_task_message,
@@ -1194,6 +1195,7 @@ def _notify_slack_human_task_adapter(
         task_id=str(request.args["task_id"]),
         step=str(request.args["step"]),
         task_type=str(request.args["task_type"]),
+        locale=str(request.args.get("conversation_locale") or DEFAULT_CONVERSATION_LOCALE),
     )
     try:
         webhook_url = load_slack_webhook_url(repository_root=repo_root)

@@ -161,6 +161,7 @@ def test_approve_restart_and_duplicate_resume_execute_exact_request_once(
                 "task_id": task.id,
                 "step": "develop",
                 "task_type": "capability-approval",
+                "conversation_locale": "en-US",
             },
             "effects": {
                 "writes": [],

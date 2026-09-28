@@ -422,3 +422,105 @@ def test_completion_accepts_only_a_bounded_structured_work_report() -> None:
         isinstance(validate_human_task_completion(policy, payload), HumanTaskRejection)
         for payload in invalid_payloads
     )
+
+
+def _localizable_policy() -> HumanTaskPolicy:
+    return HumanTaskPolicy.model_validate(
+        {
+            "id": "output-review",
+            "pattern": "confirm_output",
+            "prompt": "Confirm the result",
+            "prompt_locales": {"zh-tw": "確認結果"},
+            "input_schema": "decision",
+            "correction_guidance": "Answer with one declared decision.",
+            "correction_guidance_locales": {"zh-TW": "請用其中一個宣告的決定回覆。"},
+            "decisions": [
+                {"id": "confirm", "label": "Confirm", "label_locales": {"zh-TW": "確認"}},
+                {"id": "revise", "label": "Revise", "correction": True},
+            ],
+        }
+    )
+
+
+def test_localizing_a_policy_changes_presentation_only() -> None:
+    """Unit Test 7: machine identity survives any localization."""
+    policy = _localizable_policy()
+
+    localized = policy.for_locale("zh-TW")
+
+    assert localized.prompt == "確認結果"
+    assert localized.correction_guidance == "請用其中一個宣告的決定回覆。"
+    assert [item.label for item in localized.decisions] == ["確認", "Revise"]
+    assert localized.id == policy.id
+    assert localized.pattern == policy.pattern
+    assert localized.input_schema == policy.input_schema
+    assert localized.required == policy.required
+    assert localized.allowed_targets == policy.allowed_targets
+    assert [item.id for item in localized.decisions] == [item.id for item in policy.decisions]
+    assert [item.correction for item in localized.decisions] == [
+        item.correction for item in policy.decisions
+    ]
+
+
+def test_a_policy_without_authored_variants_is_unchanged_by_any_locale() -> None:
+    policy = HumanTaskPolicy.model_validate(
+        {
+            "id": "output-review",
+            "pattern": "confirm_output",
+            "prompt": "Confirm the result",
+            "input_schema": "decision",
+            "decisions": _decisions("confirm"),
+        }
+    )
+
+    assert policy.for_locale("zh-TW") == policy
+    assert policy.for_locale(None) == policy
+
+
+def test_an_unsupported_locale_keeps_the_declared_presentation() -> None:
+    policy = _localizable_policy()
+
+    localized = policy.for_locale("ja-JP")
+
+    assert localized.prompt == "Confirm the result"
+    assert [item.label for item in localized.decisions] == ["Confirm", "Revise"]
+
+
+def test_localized_policy_drops_the_variant_maps_from_its_snapshot() -> None:
+    snapshot = _localizable_policy().for_locale("zh-TW").model_dump(mode="json")
+
+    assert snapshot["prompt_locales"] == {}
+    assert snapshot["correction_guidance_locales"] == {}
+    assert all(item["label_locales"] == {} for item in snapshot["decisions"])
+    assert HumanTaskPolicy.model_validate(snapshot).prompt == "確認結果"
+
+
+def test_question_options_are_answer_identity_and_are_never_translated() -> None:
+    question = HumanTaskQuestion.model_validate(
+        {
+            "id": "scope",
+            "prompt": "Which scope?",
+            "prompt_locales": {"zh-TW": "選哪個範圍？"},
+            "options": ["narrow", "wide"],
+        }
+    )
+
+    localized = question.for_locale("zh-TW")
+
+    assert localized.prompt == "選哪個範圍？"
+    assert localized.options == question.options
+    assert localized.id == question.id
+
+
+def test_locale_variant_keys_must_be_usable_language_tags() -> None:
+    with pytest.raises(ValidationError):
+        HumanTaskPolicy.model_validate(
+            {
+                "id": "output-review",
+                "pattern": "confirm_output",
+                "prompt": "Confirm the result",
+                "prompt_locales": {"auto": "unresolved"},
+                "input_schema": "decision",
+                "decisions": _decisions("confirm"),
+            }
+        )

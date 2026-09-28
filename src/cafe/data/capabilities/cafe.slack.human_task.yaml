@@ -10,6 +10,7 @@ arguments:
     task_id: {type: string}
     step: {type: string}
     task_type: {type: string}
+    conversation_locale: {type: string}
 outputs:
   required: [delivered, workflow_id, task_id]
   properties:
