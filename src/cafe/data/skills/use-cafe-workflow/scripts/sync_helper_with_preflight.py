@@ -380,7 +380,7 @@ def _comparison(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]
         ),
         "semantic_review_required": True,
         "semantic_review_reason": (
-            "CLI helper publication may change Driver behavior even when effective "
+            "CLI helper publication may change Manager behavior even when effective "
             "playbook, phase, and agent catalog digests are unchanged."
         ),
     }

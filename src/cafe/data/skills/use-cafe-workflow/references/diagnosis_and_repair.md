@@ -69,7 +69,7 @@ receipt; do not diagnose by bypassing the wrapper with a direct sync command.
 
 Do not use writer skills to change manager/meta skills, CAFE runtime Python,
 workflow state machinery, or host infrastructure. Do not invent a
-`write-cafe-manager` skill.
+`write-cafe-driver` skill.
 
 ## Manager and core defects
 

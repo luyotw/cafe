@@ -980,7 +980,7 @@ def workflow(
                 # below so the durable terminal callback follows the same path
                 # as every other workflow completion. Terminal observations are
                 # intentionally at-least-once: each authorized worker gets a new
-                # durable event identity, and the Driver must re-read state.
+                # durable event identity; the callback must re-read state.
                 if not interactive:
                     if user_input and user_input.strip():
                         step_keys = list(playbook_data.get("steps", {}).keys())

@@ -17,7 +17,7 @@ from cafe.skills.loader import SkillLoader
 from cafe.skills.selectors import resolve_skill_selector
 from cafe.skills.workflow_composition import resolve_step_workflow_composition
 
-from ._store import load_contract
+from ._store import load_contract, select_authority_directory
 from .api import ManagerEntryRequest, Freshness, evaluate_manager_entry
 
 
@@ -143,14 +143,44 @@ def comparison_packet(
     The caller resolves boundary from the active task/baton and artifacts from
     current authoritative files. A later comparison must reload those inputs.
     """
-    result = evaluate_manager_entry(entry)
-    if result.freshness is not Freshness.SAME_SEMANTICS:
+    authority = select_authority_directory(entry.issue_dir)
+    if authority.name == "driver":
+        from cafe.driver import DriverEntryRequest, evaluate_driver_entry
+        from cafe.driver._store import load_contract as load_driver_contract
+
+        result = evaluate_driver_entry(
+            DriverEntryRequest(
+                entry.issue_dir,
+                entry.issue_name,
+                entry.workflow_id,
+                entry.fresh_facts,
+            )
+        )
+        load_authority = load_driver_contract
+    else:
+        result = evaluate_manager_entry(entry)
+        load_authority = load_contract
+    if result.freshness.value != Freshness.SAME_SEMANTICS.value:
         raise ValueError("Delivery comparison requires fresh Manager authority")
-    confirmed, contract_sha256 = load_contract(
+    confirmed, contract_sha256 = load_authority(
         entry.issue_dir, issue_name=entry.issue_name, workflow_id=entry.workflow_id
     )
     if result.contract_sha256 != contract_sha256:
         raise ValueError("Delivery comparison contract changed")
+    if authority.name == "driver":
+        confirmed = dict(confirmed)
+        if "driver" in confirmed:
+            confirmed["manager"] = confirmed.pop("driver")
+        for field in ("confirmation_contract", "task_contract"):
+            owner = confirmed.get(field)
+            if isinstance(owner, dict) and "driver_confirmable" in owner:
+                owner["manager_confirmable"] = owner.pop("driver_confirmable")
+        handoffs = confirmed.get("reactive_user_handoffs")
+        if isinstance(handoffs, dict):
+            if handoffs.get("alignment_checkpoint") == "driver_resolvable_when_clear":
+                handoffs["alignment_checkpoint"] = "manager_resolvable_when_clear"
+            if handoffs.get("need_clarification") == "driver_confirmable":
+                handoffs["need_clarification"] = "manager_confirmable"
     return comparison_packet_from_contract(
         issue_dir=entry.issue_dir,
         issue_name=entry.issue_name,
@@ -228,7 +258,7 @@ def comparison_packet_from_contract(
     candidates = set(confirmation_gate_steps(model))
     scheduled = boundary["step"] in candidates | mandatory
     task_declared = boundary["step"] in policy["manager_confirmable"]
-    if contract["schema_version"] == 8:
+    if contract["schema_version"] in {7, 8}:
         task_declared = False
         if isinstance(boundary["task_id"], str) and boundary["task_id"]:
             try:

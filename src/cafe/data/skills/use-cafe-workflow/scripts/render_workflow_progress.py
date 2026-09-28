@@ -69,10 +69,10 @@ _TEXT = {
     "zh": {
         "missing": "流程尚未建立",
         "iteration": "第 {iteration} 輪",
-        "review": "manager 主動審查",
+        "review": "流程管理員主動審查",
         "confirmation": "使用者確認",
-        "delegable": "manager 可代理",
-        "not_delegable": "manager 不可代理",
+        "delegable": "流程管理員可代理",
+        "not_delegable": "流程管理員不可代理",
         "closeout": "收尾",
         "status": {
             "pending": "待執行",
@@ -158,15 +158,25 @@ def _read_json(path: Path) -> dict[str, Any] | None:
 
 
 def _load_contract(issue_dir: Path) -> dict[str, Any] | None:
-    from cafe.manager._store import select_authority_directory
+    manager_path = issue_dir / "manager" / "contract.json"
+    driver_path = issue_dir / "driver" / "contract.json"
+    if manager_path.is_file() and driver_path.is_file():
+        from cafe.manager._store import select_authority_directory
 
-    authority = select_authority_directory(issue_dir)
+        authority = select_authority_directory(issue_dir)
+    elif driver_path.is_file():
+        authority = driver_path.parent
+    else:
+        authority = manager_path.parent
     if authority.name == "driver":
-        from cafe.driver._store import load_contract
-
-        raw, _digest = load_contract(issue_dir)
-        raw = dict(raw)
-        raw["manager"] = raw.pop("driver")
+        raw = _read_json(authority / "contract.json")
+        if raw is None:
+            return None
+        nested = raw.get("policy")
+        if isinstance(nested, Mapping):
+            raw = dict(nested)
+        if "driver" in raw:
+            raw["manager"] = raw.pop("driver")
         for field in ("confirmation_contract", "task_contract"):
             owner = raw.get(field)
             if isinstance(owner, dict) and "driver_confirmable" in owner:
@@ -213,6 +223,8 @@ def _confirmation_contract(contract: Mapping[str, Any]) -> tuple[set[str], set[s
         value = raw.get(name, [])
         return {str(item) for item in value} if isinstance(value, list) else set()
 
+    if "manager_confirmable" not in raw and "driver_confirmable" in raw:
+        raw = {**raw, "manager_confirmable": raw["driver_confirmable"]}
     return values("user_required"), values("manager_confirmable"), values("mandatory_human_stops")
 
 
@@ -528,7 +540,12 @@ def _active_task_authority(issue_dir: Path | None) -> dict[str, Any] | None:
     if len(pending) != 1 or not isinstance(pending[0].get("id"), str):
         return None
     from cafe.core.task_inbox import TaskInboxError
-    from cafe.manager.task_inspection import inspect_task_authority
+    from cafe.manager._store import select_authority_directory
+
+    if select_authority_directory(issue_dir).name == "driver":
+        from cafe.driver.task_inspection import inspect_task_authority
+    else:
+        from cafe.manager.task_inspection import inspect_task_authority
 
     try:
         return inspect_task_authority(issue_dir, pending[0]["id"])
@@ -543,12 +560,17 @@ def render_progress(
     locale: str = "en",
     issue_dir: Path | None = None,
     manager_state: Mapping[str, Any] | None = None,
+    driver_state: Mapping[str, Any] | None = None,
 ) -> str:
     """Render progress without creating, resuming, or mutating workflow state."""
     language = _language(locale)
     text = _TEXT[language]
     if playbook is None:
         return str(text["missing"])
+    if manager_state is not None and driver_state is not None:
+        raise ValueError("provide only one Manager state value")
+    if manager_state is None:
+        manager_state = driver_state
     model = _playbook_mapping(playbook)
     steps = list(model["steps"])
     policy = _mapping(contract or {}, "contract")

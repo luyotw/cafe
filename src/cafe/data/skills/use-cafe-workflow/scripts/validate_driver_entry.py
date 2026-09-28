@@ -1,107 +1,17 @@
 #!/usr/bin/env python3
-"""Validate one Manager entry and return only Manager-owned projections.
+"""Legacy Driver entrypoint alias for Manager validation."""
 
-Preflight, cache invalidation, confirmation, callback routing, and projection
-installation remain owned by ``use-cafe-workflow``.  This adapter is its sole
-route into the durable contract application package.
-"""
-
-from __future__ import annotations
-
-import argparse
-import json
+import importlib.util
 from pathlib import Path
-from typing import Any, Mapping
 
-from cafe.manager import ManagerEntryRequest, Freshness, evaluate_manager_entry
-
-
-def _mapping_json(value: str) -> dict[str, Any]:
-    try:
-        parsed = json.loads(value)
-    except json.JSONDecodeError as exc:
-        raise argparse.ArgumentTypeError("fresh facts must be valid JSON") from exc
-    if not isinstance(parsed, dict):
-        raise argparse.ArgumentTypeError("fresh facts must be a JSON object")
-    return parsed
-
-
-def _plain(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        return {str(key): _plain(item) for key, item in value.items()}
-    if isinstance(value, tuple):
-        return [_plain(item) for item in value]
-    return value
-
-
-def validate_entry(
-    *, issue_dir: Path, issue_name: str, workflow_id: str, fresh_facts: Mapping[str, Any]
-) -> dict[str, Any]:
-    """Fail before Manager work when current authority cannot be proved unchanged."""
-    manager_contract = issue_dir / "manager" / "contract.json"
-    driver_contract = issue_dir / "driver" / "contract.json"
-    if manager_contract.exists() or driver_contract.exists():
-        from cafe.manager._store import select_authority_directory
-
-        authority = select_authority_directory(issue_dir)
-    else:
-        authority = issue_dir / "manager"
-    if authority.name == "driver":
-        from cafe.driver import DriverEntryRequest, evaluate_driver_entry
-
-        request_type = DriverEntryRequest
-        evaluate = evaluate_driver_entry
-    else:
-        request_type = ManagerEntryRequest
-        evaluate = evaluate_manager_entry
-    result = evaluate(
-        request_type(
-            issue_dir=issue_dir,
-            issue_name=issue_name,
-            workflow_id=workflow_id,
-            fresh_facts=fresh_facts,
-        )
-    )
-    if result.freshness.value != Freshness.SAME_SEMANTICS.value:
-        raise ValueError(f"Manager contract requires {result.freshness.value} recovery")
-    runtime = dict(result.runtime)
-    if "driver" in runtime:
-        runtime["manager"] = runtime.pop("driver")
-    return {
-        "contract_sha256": result.contract_sha256,
-        "revision": result.revision,
-        "delivery_contract": _plain(result.delivery_contract),
-        "runtime": _plain(runtime),
-        "event": _plain(result.event),
-        "proactive_review": _plain(result.proactive_review),
-        "phase_model_authority": _plain(result.phase_model_authority),
-    }
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Validate a Manager entry before Manager-owned work."
-    )
-    parser.add_argument("--issue-dir", type=Path, required=True)
-    parser.add_argument("--issue-name", required=True)
-    parser.add_argument("--workflow-id", required=True)
-    parser.add_argument("--fresh-facts", type=_mapping_json, required=True)
-    args = parser.parse_args()
-    try:
-        print(
-            json.dumps(
-                validate_entry(
-                    issue_dir=args.issue_dir,
-                    issue_name=args.issue_name,
-                    workflow_id=args.workflow_id,
-                    fresh_facts=args.fresh_facts,
-                ),
-                sort_keys=True,
-            )
-        )
-    except ValueError as exc:
-        parser.error(str(exc))
-    return 0
+_manager_path = Path(__file__).with_name("validate_manager_entry.py")
+_spec = importlib.util.spec_from_file_location("validate_manager_entry_alias", _manager_path)
+if _spec is None or _spec.loader is None:
+    raise ImportError("Manager entrypoint is unavailable")
+_manager = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_manager)
+validate_entry = _manager.validate_entry
+main = _manager.main
 
 
 if __name__ == "__main__":

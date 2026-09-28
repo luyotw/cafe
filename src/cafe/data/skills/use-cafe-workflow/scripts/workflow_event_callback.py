@@ -1677,6 +1677,15 @@ def _callback_prompt(event: dict[str, Any], *, repository_root: Path) -> str:
     )
 
 
+def inspect_task_authority(issue_dir: Path, task_id: str, **kwargs: Any) -> dict[str, Any]:
+    """Inspect through the selected Manager or legacy Driver contract API."""
+    if _manager_dir(issue_dir).name == "driver":
+        from cafe.driver.task_inspection import inspect_task_authority as inspect
+    else:
+        from cafe.manager.task_inspection import inspect_task_authority as inspect
+    return inspect(issue_dir, task_id, **kwargs)
+
+
 def _with_current_task_authority(
     event: dict[str, Any], *, issue_dir: Path, repository_root: Path
 ) -> dict[str, Any]:
@@ -1687,10 +1696,6 @@ def _with_current_task_authority(
         detail = TaskInboxService(repository_root / ".cafe").inspect_read_only(task_id)
         if detail.issue != issue_dir.name or detail.status != "pending":
             return event
-        if _manager_dir(issue_dir).name == "driver":
-            from cafe.driver.task_inspection import inspect_task_authority
-        else:
-            from cafe.manager.task_inspection import inspect_task_authority
         facts = inspect_task_authority(issue_dir, task_id)
     except (TaskInboxError, OSError, ValueError):
         return {

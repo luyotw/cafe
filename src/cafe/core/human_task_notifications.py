@@ -261,7 +261,7 @@ class WorkflowCallbackFailureSlackMessage:
                 f"目前階段：{step}",
                 f"狀況：{reason}",
                 "影響：原對話可能收不到這次更新；這不代表工作流程已停止。",
-                f"請回到 CAFE 的「{issue}」原對話，請 Driver 檢查目前進度與下一步。",
+                f"請回到 CAFE 的「{issue}」原對話，請流程管理員檢查目前進度與下一步。",
             )
         )
         return {"text": text}

@@ -252,7 +252,7 @@ def test_custom_clarification_current_task_has_independent_driver_facts(
         text=True,
         capture_output=True,
     )
-    assert "spec: user confirmation (driver may not act)" in progress.stdout
+    assert "spec: user confirmation (manager may not act)" in progress.stdout
     assert progress.stdout.rstrip().endswith("○ cleanup (closeout) · Pending")
     for diagnostic in ("route_status=", "pause_status=", "resolution_owner=", "evidence_reason="):
         assert diagnostic not in progress.stdout

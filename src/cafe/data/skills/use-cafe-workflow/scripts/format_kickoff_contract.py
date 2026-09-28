@@ -19,7 +19,7 @@ _SOURCE_ROOT = Path(__file__).resolve().parents[5]
 if str(_SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(_SOURCE_ROOT))
 
-_DRIVER_MODES = {"attached", "unattended", "event-driven"}
+_MANAGER_MODES = {"attached", "unattended", "event-driven"}
 _EVENT_DRIVEN_CLIS = {"claude", "codex", "gemini", "copilot", "cursor-agent"}
 
 
@@ -472,7 +472,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--catalog-preflight", type=_json_mapping, required=True)
     parser.add_argument(
         "--manager-mode", "--driver-mode", dest="manager_mode",
-        choices=tuple(sorted(_DRIVER_MODES)), required=True
+        choices=tuple(sorted(_MANAGER_MODES)), required=True
     )
     parser.add_argument(
         "--poll-interval-seconds",

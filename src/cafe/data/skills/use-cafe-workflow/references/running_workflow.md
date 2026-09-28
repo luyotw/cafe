@@ -99,7 +99,7 @@ routing chain, attempt history, the sticky active index, takeover, exhaustion,
 recovery, and timestamps. These recorded identities describe past dispatch;
 the current contract controls new dispatch. The stored digest does not block
 dispatch after a confirmed contract update.
-`manager/config.yaml` is a legacy migration input only; when a contract exists
+`driver/config.yaml` is a legacy migration input only; when a contract exists
 it is neither read as callback authority nor a
 writer target. The event-manager lifecycle uses no session-file discovery,
 directory diff, sleep, polling, or watcher.

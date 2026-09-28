@@ -2374,7 +2374,7 @@ def test_callback_failure_sends_a_best_effort_slack_notice(tmp_path: Path, monke
                         "目前階段：需求規格",
                         "狀況：CAFE 無法將通知送達原對話。",
                         "影響：原對話可能收不到這次更新；這不代表工作流程已停止。",
-                        "請回到 CAFE 的「issue456」原對話，請 Driver 檢查目前進度與下一步。",
+                        "請回到 CAFE 的「issue456」原對話，請流程管理員檢查目前進度與下一步。",
                     )
                 )
             },
@@ -2672,3 +2672,13 @@ def test_manager_event_contract_uses_manager_state_path(tmp_path: Path) -> None:
     assert config["clis"] == [{"cli": "codex"}]
     assert (issue_dir / "manager" / "contract.json").is_file()
     assert not (issue_dir / "driver" / "contract.json").exists()
+    store = callback.EventManagerSessionStore(
+        issue_dir / "manager",
+        workflow_id=blackboard.workflow_id,
+        cli=AgentCLI.CODEX,
+        model="exact",
+    )
+    assert store.agent_name == callback.MANAGER_AGENT_NAME
+    store.save_session(store.agent_name, AgentCLI.CODEX, "manager-session")
+    store.commit()
+    assert store.path.is_file()

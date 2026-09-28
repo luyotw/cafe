@@ -906,7 +906,7 @@ class BlackboardStore:
         *,
         capability_receipts_authoritative: bool = False,
     ) -> None:
-        """Persist generic workflow fields without overwriting driver-owned state."""
+        """Persist generic workflow fields without overwriting role-owned state."""
         with self._thread_lock_for(self.file_path):
             self.issue_dir.mkdir(parents=True, exist_ok=True)
             with self.state_lock_path.open("a+", encoding="utf-8") as lock_file:

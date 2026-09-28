@@ -38,7 +38,7 @@ def test_callback_state_error_gives_user_an_action_instead_of_internal_fields() 
 
     assert "無法讀取自動通知所需的狀態或設定" in message
     assert "這不代表工作流程已停止" in message
-    assert "原對話，請 Driver 檢查目前進度與下一步" in message
+    assert "原對話，請流程管理員檢查目前進度與下一步" in message
     assert "callback_ValueError" not in message
     assert "transport_clis" not in message
 

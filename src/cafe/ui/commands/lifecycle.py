@@ -989,7 +989,7 @@ def prepare(
             worktree_cafe_dir.mkdir(parents=True, exist_ok=True)
 
             # Copy only project-owned configuration. Issue-owned phases.yaml is
-            # installed by the workflow driver after kickoff confirmation.
+            # installed by the role-owned workflow adapter after kickoff confirmation.
             for config_name in ("config.yaml", "strategic_context.yaml"):
                 repo_file = repo_cafe_dir / config_name
                 if repo_file.exists():
@@ -1069,7 +1069,7 @@ def prepare(
             write_marker(cafe_dir, issue_name)
 
         # Preparation owns workflow identity creation. This makes the confirmed
-        # Driver contract bindable before the first runtime visit without
+        # role contract bindable before the first runtime visit without
         # executing a phase. A repeated prepare reuses the untouched identity.
         blackboard = BlackboardStore(issue_dir).load_or_create(
             entry_step_name,

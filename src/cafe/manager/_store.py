@@ -39,8 +39,14 @@ def select_authority_directory(issue_dir: Path) -> Path:
     if manager_path.exists() and driver_path.exists():
         from cafe.driver._store import load_contract as load_driver_contract
 
-        manager, _ = load_contract(issue)
-        driver, _ = load_driver_contract(issue, allow_legacy_upgrade=True)
+        try:
+            manager, _ = load_contract(issue)
+            driver, _ = load_driver_contract(issue, allow_legacy_upgrade=True)
+        except (ValueError, OSError) as exc:
+            raise ValueError(
+                f"Cannot validate both role contracts for {issue}; inspect {manager_path} and "
+                f"{driver_path}, then recover the confirmed authority before retrying: {exc}"
+            ) from exc
         projected = dict(driver)
         projected["manager"] = projected.pop("driver")
         for field in ("confirmation_contract", "task_contract"):
@@ -65,7 +71,11 @@ def select_authority_directory(issue_dir: Path) -> Path:
             "task_contract",
         )
         if any(manager.get(field) != projected.get(field) for field in fields):
-            raise ValueError("Manager and Driver contracts conflict; recover the legacy authority first")
+            raise ValueError(
+                f"Manager and legacy Driver contracts conflict for {issue}; the Driver contract "
+                f"remains authoritative. Inspect {driver_path} and {manager_path}, then recover "
+                "the matching record before retrying."
+            )
         return issue / "driver"
     if driver_path.exists():
         return issue / "driver"
@@ -105,6 +115,7 @@ def _safe_manager_directory(issue_dir: Path, *, create: bool) -> Path:
 @contextmanager
 def contract_lock(issue_dir: Path) -> Iterator[None]:
     """Serialize activation/replacement; fail closed if a process lock cannot be held."""
+    _assert_manager_write_authority(issue_dir)
     manager = _safe_manager_directory(issue_dir, create=True)
     lock_path = manager / LOCK_FILENAME
     if lock_path.exists() and lock_path.is_symlink():
@@ -201,6 +212,7 @@ def write_contract(
     expected_predecessor_sha256: str | None,
 ) -> str:
     """Atomically install one validated replacement while holding ``contract_lock``."""
+    _assert_manager_write_authority(issue_dir)
     manager = _safe_manager_directory(issue_dir, create=True)
     path = manager / CONTRACT_FILENAME
     if path.exists() and path.is_symlink():
@@ -234,6 +246,7 @@ def write_updated_contract(
     expected_predecessor_sha256: str,
 ) -> str:
     """Atomically replace a supported contract after an exact CAS check."""
+    _assert_manager_write_authority(issue_dir)
     manager = _safe_manager_directory(issue_dir, create=False)
     path = manager / CONTRACT_FILENAME
     actual = sha256_bytes(_read_bounded(path, label="Manager contract predecessor"))
@@ -249,3 +262,14 @@ def write_updated_contract(
     except OSError:
         pass
     return sha256_bytes(content)
+
+
+def _assert_manager_write_authority(issue_dir: Path) -> None:
+    """Keep an existing legacy Driver record as the only writable authority."""
+    issue = Path(issue_dir)
+    manager_exists = (issue / "manager" / CONTRACT_FILENAME).exists()
+    driver_exists = (issue / "driver" / CONTRACT_FILENAME).exists()
+    if driver_exists:
+        if manager_exists:
+            select_authority_directory(issue)
+        raise ValueError("legacy Driver authority remains writable only through its compatibility adapter")
