@@ -640,3 +640,41 @@ def test_the_directive_reports_the_stored_workflow_language_on_resume(
     unchanged = json.loads((issue_dir / "blackboard.json").read_text(encoding="utf-8"))
     assert unchanged["conversation_locale"] == "zh-TW"
     assert unchanged["conversation_locale_source"] == "inferred"
+
+
+def test_the_directive_matches_a_legacy_contract_snapshot_on_resume(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """An old workflow keeps the same English fallback in both Driver consumers."""
+    module = _module()
+    issue_dir = _prepared(tmp_path)
+    from conversation_locale_adapter import contract_locale_snapshot
+
+    contract = _contract("unattended", tmp_path)
+    contract["locales"] = {
+        "conversation": contract_locale_snapshot(
+            issue_dir,
+            playbook_id="direct",
+            playbook_locale="ja-JP",
+            declared_value="zh-TW",
+            declared_source="inferred",
+        )
+    }
+    _install_contract_stubs(monkeypatch, module, contract)
+    before = (issue_dir / "blackboard.json").read_bytes()
+
+    assert (
+        module.run(
+            _args("unattended"),
+            cwd=tmp_path,
+            process_factory=lambda *a, **k: _Process(0),
+        )
+        == 0
+    )
+
+    directive = json.loads(
+        capsys.readouterr().out.splitlines()[0].removeprefix("CAFE_DRIVER_DIRECTIVE ")
+    )
+    assert directive["conversation_locale"] == contract["locales"]["conversation"]
+    assert directive["conversation_locale"] == {"value": "en-US", "source": "fallback"}
+    assert (issue_dir / "blackboard.json").read_bytes() == before

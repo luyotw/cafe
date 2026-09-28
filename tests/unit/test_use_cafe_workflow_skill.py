@@ -8,6 +8,7 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from markdown_it import MarkdownIt
@@ -1319,6 +1320,43 @@ def test_kickoff_formatter_falls_back_to_english_for_unsupported_chinese_locales
     assert "請確認上述完整契約" not in result.stdout
 
 
+def test_kickoff_formatter_mirrors_a_legacy_workflow_instead_of_new_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    issue_dir = tmp_path / "legacy"
+    issue_dir.mkdir()
+    state_path = issue_dir / "blackboard.json"
+    state_path.write_text(
+        json.dumps({"schema_version": 4, "current_step": "spec", "playbook_id": "standard"}),
+        encoding="utf-8",
+    )
+    before = state_path.read_bytes()
+    command = _kickoff_formatter_command(
+        tmp_path / "strategic_context.yaml", "--issue-dir", str(issue_dir)
+    )
+    module = _load_script_module(
+        SKILL_ROOT / "scripts/format_kickoff_contract.py", "legacy_kickoff"
+    )
+    loaded = PlaybookLoader(project_root=PROJECT_ROOT).load_model("standard")
+    model = loaded.model.model_copy(
+        update={
+            "playbook": loaded.model.playbook.model_copy(update={"conversation_locale": "ja-JP"})
+        }
+    )
+    monkeypatch.setattr(
+        module.PlaybookLoader,
+        "load_model",
+        lambda self, playbook_id: SimpleNamespace(model=model),
+    )
+    args = module._parser().parse_args(command[2:])
+    args.locale_source = "inferred"
+
+    proposal = module.build_confirmed_proposal(args)
+
+    assert proposal["locales"]["conversation"] == {"value": "en-US", "source": "fallback"}
+    assert state_path.read_bytes() == before
+
+
 def _write_fake_cafe(
     path: Path,
     *,
@@ -1441,7 +1479,14 @@ def test_confirmed_kickoff_activates_one_issue_scoped_driver_contract(tmp_path: 
     issue_dir = tmp_path / "issues" / "issue346"
     issue_dir.mkdir(parents=True)
     (issue_dir / "blackboard.json").write_text(
-        json.dumps({"workflow_id": "prepared-346"}), encoding="utf-8"
+        json.dumps(
+            {
+                "workflow_id": "prepared-346",
+                "conversation_locale": "zh-TW",
+                "conversation_locale_source": "explicit",
+            }
+        ),
+        encoding="utf-8",
     )
     result = subprocess.run(
         _kickoff_formatter_command(
@@ -1478,7 +1523,7 @@ def test_confirmed_kickoff_activates_one_issue_scoped_driver_contract(tmp_path: 
     assert "pr" not in contract
     assert "playbook" not in contract
     assert contract["locales"] == {
-        "conversation": {"value": "zh-TW", "source": "user thread override"}
+        "conversation": {"value": "zh-TW", "source": "explicit"}
     }
     assert contract["delivery_contract"]["schema_version"] == 3
     closeout_plan = contract["delivery_contract"]["closeout_plan"]
@@ -1742,9 +1787,18 @@ def test_kickoff_formatter_keeps_the_rendered_policy_stable_until_activation(
     issue_dir = tmp_path / "issues" / "issue346"
     issue_dir.mkdir(parents=True)
     (issue_dir / "blackboard.json").write_text(
-        json.dumps({"workflow_id": "prepared-346"}), encoding="utf-8"
+        json.dumps(
+            {
+                "workflow_id": "prepared-346",
+                "conversation_locale": "zh-TW",
+                "conversation_locale_source": "explicit",
+            }
+        ),
+        encoding="utf-8",
     )
-    normal_command = _kickoff_formatter_command(strategic_context)
+    normal_command = _kickoff_formatter_command(
+        strategic_context, "--issue-dir", str(issue_dir)
+    )
     normal = subprocess.run(
         normal_command,
         cwd=PROJECT_ROOT,

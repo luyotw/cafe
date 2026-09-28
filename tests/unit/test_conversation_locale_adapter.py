@@ -113,13 +113,42 @@ def test_a_workflow_with_no_stored_value_falls_back_without_being_written(
     _workflow(issue_dir, locale=None, source=None)
 
     snapshot = adapter.contract_locale_snapshot(
-        issue_dir, playbook_id="standard", playbook_locale="en-US"
+        issue_dir,
+        playbook_id="standard",
+        playbook_locale="ja-JP",
+        declared_value="zh-TW",
+        declared_source="inferred",
+    )
+    effective = adapter.effective_conversation_locale(
+        issue_dir,
+        playbook_locale="ja-JP",
+        supplied=SuppliedLocale(value="zh-TW", source=LocaleSource.INFERRED),
     )
     persisted = json.loads((issue_dir / "blackboard.json").read_text(encoding="utf-8"))
 
-    assert snapshot == {"value": "en-US", "source": "playbook:standard"}
+    assert snapshot == {"value": "en-US", "source": "fallback"}
+    assert effective == ("en-US", "fallback")
     assert persisted.get("conversation_locale") is None
+    assert persisted.get("conversation_locale_source") is None
     assert adapter.stored_conversation_locale(issue_dir) is None
+
+
+def test_a_new_workflow_still_resolves_the_supplied_creation_preference(tmp_path: Path) -> None:
+    adapter = _adapter()
+    issue_dir = tmp_path / "new"
+    supplied = SuppliedLocale(value="zh-TW", source=LocaleSource.INFERRED)
+
+    assert adapter.effective_conversation_locale(
+        issue_dir, playbook_locale="ja-JP", supplied=supplied
+    ) == ("zh-TW", "inferred")
+    assert adapter.contract_locale_snapshot(
+        issue_dir,
+        playbook_id="standard",
+        playbook_locale="ja-JP",
+        declared_value=supplied.value,
+        declared_source=supplied.source.value,
+    ) == {"value": "zh-TW", "source": "inferred"}
+    assert not (issue_dir / "blackboard.json").exists()
 
 
 def test_an_absent_or_unreadable_record_does_not_raise(tmp_path: Path) -> None:
