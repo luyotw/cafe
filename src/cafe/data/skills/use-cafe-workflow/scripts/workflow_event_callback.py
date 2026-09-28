@@ -180,16 +180,20 @@ def _current_host_session_binding() -> dict[str, str] | None:
 
 def _prepared_workflow_id(issue_dir: Path) -> str:
     """Read the WorkflowInstance identity established by ``cafe prepare``."""
-    path = issue_dir / "blackboard.json"
+    from cafe.core.audit_events import AuditEventStore
+
+    store = AuditEventStore(issue_dir)
+    path = store.binding
     if not path.is_file() or path.is_symlink():
         raise ValueError("event-driven ordered policy requires a prepared workflow")
     try:
-        document = json.loads(_read_bounded_text(path, label="event-driven workflow state"))
+        document = json.loads(_read_bounded_text(path, label="event-driven workflow identity"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError("event-driven workflow state is unreadable") from exc
     workflow_id = document.get("workflow_id") if isinstance(document, dict) else None
     if not isinstance(workflow_id, str) or not workflow_id.strip():
         raise ValueError("event-driven ordered policy requires a prepared workflow")
+    store.high_water(workflow_id)
     return workflow_id
 
 
@@ -1956,16 +1960,6 @@ def _run_v3_callback(
     return _exhaust_event(driver_dir, state, event_id=event_id)
 
 
-def _event_is_durable(blackboard, event: dict[str, Any]) -> bool:
-    return any(
-        entry.event_type == "workflow_event_callback_enqueued"
-        and entry.data.get("event_id") == event.get("event_id")
-        and entry.data.get("sequence") == event.get("sequence")
-        and entry.data.get("occurred_at") == event.get("occurred_at")
-        for entry in blackboard.events
-    )
-
-
 def run_callback(event: dict[str, Any], *, repository_root: Path) -> None:
     issue_name = _validated_issue_name(event)
     workflow_id = event.get("workflow_id")
@@ -1983,12 +1977,11 @@ def run_callback(event: dict[str, Any], *, repository_root: Path) -> None:
             return
         from cafe.core.blackboard import BlackboardStore
 
-        blackboard = BlackboardStore(issue_dir).load_or_create("spec")
-        if blackboard.workflow_id != workflow_id:
+        store = BlackboardStore(issue_dir)
+        if _prepared_workflow_id(issue_dir) != workflow_id:
             raise StaleWorkflowEventError("workflow event callback is stale")
         if config["schema_version"] in {3, _CONTRACT_CALLBACK_CONFIG_SCHEMA}:
-            if not _event_is_durable(blackboard, event):
-                raise ValueError("workflow event callback is not durable")
+            store.validate_workflow_callback_event(workflow_id, event)
             event = _with_current_task_authority(
                 event, issue_dir=issue_dir, repository_root=repository_root
             )
@@ -1998,12 +1991,17 @@ def run_callback(event: dict[str, Any], *, repository_root: Path) -> None:
                 config=config,
             )
             state = _ensure_dispatch_event(driver_dir, state, event)
-            _run_v3_callback(
+            result = _run_v3_callback(
                 driver_dir,
                 state,
                 event,
                 repository_root=repository_root,
             )
+            event_state = result["events"][event["event_id"]]
+            if event_state["status"] in {"accepted", "exhausted", "recovery_pending"} or (
+                event_state["attempts"] and event_state["attempts"][-1].get("status") == "pending"
+            ):
+                store.audit.close(workflow_id, event["sequence"])
             return
         event = _with_current_task_authority(
             event, issue_dir=issue_dir, repository_root=repository_root
@@ -2079,8 +2077,17 @@ def _notify_callback_failure(
     with _session_lock(driver_dir):
         records = _load_callback_failure_notifications(driver_dir)
         existing = records.get(notification_key)
-        if isinstance(existing, dict) and existing.get("outcome") in {"sent", "disabled"}:
+        if isinstance(existing, dict) and existing.get("outcome") in {
+            "sent", "disabled", "pending"
+        }:
             return
+        records[notification_key] = {
+            "occurred_at": _now(),
+            "outcome": "pending",
+            "error_code": error_code,
+            "notification_code": "notification_pending",
+        }
+        _write_callback_failure_notifications(driver_dir, records)
         settings = load_human_task_notification_settings()
         if not settings.enabled:
             records[notification_key] = {
@@ -2151,17 +2158,20 @@ def _callback_failure_key(event: dict[str, Any], *, error_code: str) -> str:
 
 
 def _load_callback_failure_notifications(driver_dir: Path) -> dict[str, dict[str, str]]:
-    """Load bounded notification receipts; malformed state is replaced safely."""
+    """Load the bounded, workflow-bound callback failure authority."""
     path = driver_dir / FAILURE_NOTIFICATIONS_FILENAME
+    if not path.exists():
+        return {}
     try:
         raw = json.loads(_read_bounded_text(path, label="callback failure notifications"))
-    except (FileNotFoundError, OSError, UnicodeError, ValueError, json.JSONDecodeError):
-        return {}
-    if not isinstance(raw, dict) or raw.get("schema_version") != 1:
-        return {}
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError("callback failure authority is unreadable") from exc
+    if (not isinstance(raw, dict) or raw.get("schema_version") != 1
+            or raw.get("workflow_id") != _prepared_workflow_id(driver_dir.parent)):
+        raise ValueError("callback failure authority identity is invalid")
     records = raw.get("records")
     if not isinstance(records, dict):
-        return {}
+        raise ValueError("callback failure authority records are invalid")
     return {
         key: value
         for key, value in records.items()
@@ -2173,8 +2183,13 @@ def _write_callback_failure_notifications(
     driver_dir: Path, records: dict[str, dict[str, str]]
 ) -> None:
     """Persist secret-free callback notification outcomes for diagnosis."""
-    bounded_records = dict(list(records.items())[-MAX_FAILURE_NOTIFICATIONS:])
-    payload = {"schema_version": 1, "records": bounded_records}
+    # JSON persistence sorts hash keys; retain by occurrence time instead.
+    bounded_records = dict(sorted(
+        records.items(),
+        key=lambda item: datetime.fromisoformat(item[1]["occurred_at"]),
+    )[-MAX_FAILURE_NOTIFICATIONS:])
+    payload = {"schema_version": 1, "workflow_id": _prepared_workflow_id(driver_dir.parent),
+               "records": bounded_records}
     _atomic_write(
         driver_dir / FAILURE_NOTIFICATIONS_FILENAME,
         json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8"),

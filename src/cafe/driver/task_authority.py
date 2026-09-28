@@ -63,7 +63,7 @@ def _exact_coverage(
         if source.startswith(("repo:", "current_output:")):
             return None
         text = sources.get(source)
-        if not isinstance(text, str) or excerpt not in text or value not in excerpt:
+        if not isinstance(text, str) or excerpt not in text:
             return None
         covered.add((field, value))
     return covered

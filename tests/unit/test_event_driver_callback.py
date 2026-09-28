@@ -2149,12 +2149,27 @@ def test_event_driver_refuses_callbacks_without_a_process_lock(tmp_path: Path) -
 
 
 def test_callback_acquires_and_delivers_a_contract_bound_session(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, capsys
 ) -> None:
     callback = _callback_module()
     driver_dir, state, event = _contract_event_context(
         callback, tmp_path, [("codex", "exact")], issue_name="issue456"
     )
+    from cafe.core.blackboard import BlackboardStore
+
+    issue_dir = driver_dir.parent
+    store = BlackboardStore(issue_dir)
+    board = store.load_or_create("spec")
+    store.log_event(board, "develop", "large_history", "complete detail " * 20000)
+    assert store.file_path.stat().st_size < 256 * 1024
+    before_status = {
+        path: path.read_bytes()
+        for path in (store.file_path, store.receipts_path, store.audit.binding)
+    }
+    assert callback.read_status(issue_dir)["configured"] is True
+    assert callback.main(["--status", "--issue-dir", str(issue_dir)]) == 0
+    assert json.loads(capsys.readouterr().out)["configured"] is True
+    assert all(path.read_bytes() == content for path, content in before_status.items())
     calls = []
 
     class FakeExecutor:
@@ -2176,6 +2191,87 @@ def test_callback_acquires_and_delivers_a_contract_bound_session(
     persisted = json.loads((driver_dir / "dispatch_state.json").read_text(encoding="utf-8"))
     assert calls == [None, "session-1"]
     assert persisted["entries"][0]["session"]["id"] == "session-1"
+    assert persisted["events"][event["event_id"]]["status"] == "accepted"
+    assert store.audit.validate_callback(event["workflow_id"], event)["delivery"] == "closed"
+
+
+def test_operator_sees_callback_failure_without_slack(tmp_path: Path, monkeypatch) -> None:
+    from cafe.services.status_service import StatusService
+
+    callback = _callback_module()
+    driver_dir, _state, event = _contract_event_context(
+        callback, tmp_path, [("codex", "exact")], issue_name="issue456"
+    )
+    service = StatusService(issues_root=driver_dir.parent.parent)
+    before = service.load_current_state("issue456", ["spec", "develop"])
+    monkeypatch.setattr(
+        callback, "load_human_task_notification_settings",
+        lambda: SimpleNamespace(enabled=False, code="disabled"),
+    )
+    callback._notify_callback_failure(
+        event, repository_root=tmp_path, error=TimeoutError("delivery unavailable")
+    )
+    receipt = json.loads((driver_dir / "callback_failure_notifications.json").read_text())
+    status = service.load_current_state("issue456", ["spec", "develop"])
+    assert receipt["workflow_id"] == event["workflow_id"]
+    assert status["State"] != before["State"]
+    assert "dispatch_state.json" in status["Next"]
+
+
+def test_callback_failure_retention_keeps_newest_records(tmp_path: Path) -> None:
+    from cafe.services.status_service import StatusService
+
+    callback = _callback_module()
+    driver_dir, state, _event = _contract_event_context(
+        callback, tmp_path, [("codex", "exact")], issue_name="issue456"
+    )
+    records = {
+        f"failure_{number:03d}": {
+            "occurred_at": f"2026-09-28T00:{number // 60:02d}:{number % 60:02d}+00:00",
+            "outcome": "pending",
+            "error_code": f"failure_{number:03d}",
+        }
+        for number in reversed(range(130))
+    }
+    callback._write_callback_failure_notifications(driver_dir, records)
+    persisted = json.loads((driver_dir / "callback_failure_notifications.json").read_text())
+    assert len(persisted["records"]) == callback.MAX_FAILURE_NOTIFICATIONS
+    assert "failure_129" in persisted["records"]
+    assert "failure_000" not in persisted["records"]
+    status = StatusService(issues_root=driver_dir.parent.parent).load_current_state(
+        "issue456", ["spec", "develop"]
+    )
+    assert status["Workflow"] == state["workflow_id"]
+    assert status["Reason"] == "failure_129"
+
+
+def test_interrupted_notification_keeps_failure_visible(tmp_path: Path, monkeypatch) -> None:
+    from cafe.services.status_service import StatusService
+
+    callback = _callback_module()
+    driver_dir, _state, event = _contract_event_context(
+        callback, tmp_path, [("codex", "exact")], issue_name="issue456"
+    )
+    service = StatusService(issues_root=driver_dir.parent.parent)
+    before = service.load_current_state("issue456", ["spec", "develop"])
+
+    def interrupted():
+        raise OSError("notification settings unavailable")
+
+    monkeypatch.setattr(callback, "load_human_task_notification_settings", interrupted)
+    with pytest.raises(OSError):
+        callback._notify_callback_failure(
+            event, repository_root=tmp_path, error=TimeoutError("delivery unavailable")
+        )
+    receipt = json.loads((driver_dir / "callback_failure_notifications.json").read_text())
+    assert next(iter(receipt["records"].values()))["outcome"] == "pending"
+    callback._notify_callback_failure(
+        event, repository_root=tmp_path, error=TimeoutError("delivery unavailable")
+    )
+    assert json.loads((driver_dir / "callback_failure_notifications.json").read_text()) == receipt
+    status = service.load_current_state("issue456", ["spec", "develop"])
+    assert status["State"] != before["State"]
+    assert "dispatch_state.json" in status["Next"]
 
 
 def test_callback_queues_the_bound_codex_host_thread(tmp_path: Path, monkeypatch) -> None:
@@ -2234,6 +2330,7 @@ def test_bound_host_thread_queue_failure_never_creates_a_new_session(
 def test_callback_failure_sends_a_best_effort_slack_notice(tmp_path: Path, monkeypatch) -> None:
     callback = _callback_module()
     monkeypatch.chdir(tmp_path)
+    prepared = _prepare_issue(tmp_path / ".cafe" / "issues" / "issue456")
     failure = subprocess.CalledProcessError(1, ["codex", "queue"])
 
     def fail_callback(*_args, **_kwargs):
@@ -2256,7 +2353,7 @@ def test_callback_failure_sends_a_best_effort_slack_notice(tmp_path: Path, monke
     )
     event = {
         "issue": "issue456",
-        "workflow_id": "workflow",
+        "workflow_id": prepared.workflow_id,
         "event_type": "human_task",
         "step": "spec",
     }
@@ -2293,6 +2390,7 @@ def test_callback_failure_uses_canonical_repository_route_and_deduplicates(
     canonical_root = tmp_path / "main-repository"
     issue_dir = active_root / ".cafe" / "issues" / "issue456"
     issue_dir.mkdir(parents=True)
+    prepared = _prepare_issue(issue_dir)
     canonical_root.mkdir()
     monkeypatch.setattr(
         callback,
@@ -2324,7 +2422,7 @@ def test_callback_failure_uses_canonical_repository_route_and_deduplicates(
     )
     event = {
         "issue": "issue456",
-        "workflow_id": "workflow",
+        "workflow_id": prepared.workflow_id,
         "event_type": "human_task",
         "step": "spec",
         "task_id": "task-one",
@@ -2348,6 +2446,7 @@ def test_callback_and_slack_failure_leave_a_durable_receipt(tmp_path: Path, monk
     callback = _callback_module()
     issue_dir = tmp_path / ".cafe" / "issues" / "issue456"
     issue_dir.mkdir(parents=True)
+    prepared = _prepare_issue(issue_dir)
     monkeypatch.setattr(
         callback,
         "load_human_task_notification_settings",
@@ -2361,7 +2460,7 @@ def test_callback_and_slack_failure_leave_a_durable_receipt(tmp_path: Path, monk
     monkeypatch.setattr(callback, "post_slack_notification", fail_slack)
     event = {
         "issue": "issue456",
-        "workflow_id": "workflow",
+        "workflow_id": prepared.workflow_id,
         "event_type": "human_task",
         "step": "spec",
     }

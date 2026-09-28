@@ -1,11 +1,15 @@
 """Read-only status journeys using durable state and arbitrary phase names."""
 
 import json
+import uuid
 
 import pytest
 from typer.testing import CliRunner
 
+from cafe.core.audit_events import AuditEventStore
+from cafe.core.blackboard import EventEntry
 from cafe.core.human_task_records import HumanTaskRecordStore
+from cafe.core.packet_io import atomic_write_bytes, canonical_json
 from cafe.services.status_service import StatusService
 from cafe.ui.cli import app
 
@@ -39,10 +43,27 @@ def write_state(issue, *, owner="user", step="user", intent="confirm_output", ev
         "playbook_id": "custom",
         "current_step": step,
         "handoff_contract": {**baton, "from_step": "package"},
-        "events": list(events),
     }
-    (issue / "blackboard.json").write_text(json.dumps(state))
+    audit = AuditEventStore(issue)
+    audit.initialize("workflow-demo")
+    for event in events:
+        _append_audit_fixture(issue, event)
+    state["applied_event_sequence"] = audit.high_water("workflow-demo")
+    atomic_write_bytes(issue / "blackboard.json", canonical_json(state))
+    atomic_write_bytes(issue / "capability_receipts.json", canonical_json({
+        "version": 1, "workflow_id": "workflow-demo", "receipts": [],
+    }))
     (issue / "next_step.txt").write_text(json.dumps(baton))
+
+
+def _append_audit_fixture(issue, event):
+    audit = AuditEventStore(issue)
+    sequence = audit.reserve("workflow-demo")
+    atomic = EventEntry.from_dict(event)
+    audit.commit("workflow-demo", {
+        "workflow_id": "workflow-demo", "event_id": str(uuid.uuid4()),
+        "sequence": sequence, **atomic.to_dict(), "patch": {},
+    })
 
 
 def materialize(issue, *, workflow_id="workflow-demo", step="package", trigger="confirm_output"):
@@ -57,10 +78,7 @@ def materialize(issue, *, workflow_id="workflow-demo", step="package", trigger="
         continuations={"confirm": "_done"},
         assignee_type="user",
     )
-    path = issue / "blackboard.json"
-    raw = json.loads(path.read_text())
-    raw["events"].append(
-        {
+    _append_audit_fixture(issue, {
             "step": step,
             "event_type": (
                 "agent_execution_task_materialized"
@@ -68,9 +86,7 @@ def materialize(issue, *, workflow_id="workflow-demo", step="package", trigger="
                 else "human_task_materialized"
             ),
             "data": {"step": step, "trigger": trigger, "task_id": task.id},
-        }
-    )
-    path.write_text(json.dumps(raw))
+        })
     return task
 
 
@@ -84,6 +100,41 @@ def invoke_unchanged(issue):
     assert result.exit_code == 0, result.stdout
     assert snapshot(issue) == before
     return result.stdout
+
+
+def test_public_status_uses_declared_alternate_diagnostic_source(workflow):
+    write_state(workflow, owner="agent", step="package", intent="await_agent")
+    (workflow / "other_producer").mkdir()
+    (workflow / "other_producer" / "incidents.json").write_text(json.dumps({
+        "schema_version": 7,
+        "workflow_id": "workflow-demo",
+        "incidents": {
+            "later_key": {
+                "at": "2026-09-28T00:00:00+00:00",
+                "code": "earlier_incident",
+            },
+            "earlier_key": {
+                "at": "2026-09-28T00:01:00+00:00",
+                "code": "latest_incident",
+            },
+        },
+    }))
+    (workflow / "status_sources.json").write_text(json.dumps({
+        "version": 1,
+        "workflow_id": "workflow-demo",
+        "diagnostic": {
+            "path": "other_producer/incidents.json",
+            "schema_version": 7,
+            "records_key": "incidents",
+            "time_key": "at",
+            "reason_key": "code",
+            "state": "Producer incident needs inspection",
+            "next": "Inspect other_producer/incidents.json before recovery.",
+        },
+    }))
+    output = invoke_unchanged(workflow)
+    assert "latest_incident" in output
+    assert "other_producer/incidents.json" in output
 
 
 def test_completed_iteration_still_waits_for_exact_user_task(workflow):
@@ -251,16 +302,11 @@ def test_older_iteration_task_is_not_offered(workflow):
 def test_task_must_match_latest_materialization(workflow):
     write_state(workflow)
     task = materialize(workflow)
-    path = workflow / "blackboard.json"
-    raw = json.loads(path.read_text())
-    raw["events"].append(
-        {
+    _append_audit_fixture(workflow, {
             "step": "package",
             "event_type": "human_task_materialized",
             "data": {"task_id": "other-task"},
-        }
-    )
-    path.write_text(json.dumps(raw))
+        })
     output = invoke_unchanged(workflow)
     assert "State: Unknown" in output
     assert f"cafe task inspect {task.id}" not in output

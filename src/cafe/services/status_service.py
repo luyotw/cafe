@@ -3,10 +3,18 @@
 import json
 import re
 import shlex
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from cafe.core.blackboard import BlackboardState, HandoffContract, HandoffIntent, HandoffOwner
+from cafe.core.audit_events import AuditEventStore
+from cafe.core.blackboard import (
+    BlackboardState,
+    EventEntry,
+    HandoffContract,
+    HandoffIntent,
+    HandoffOwner,
+)
 from cafe.core.git import GitOperations
 from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.types import PhaseStatus
@@ -47,6 +55,87 @@ class StatusService:
         except Exception as e:
             raise RuntimeError(f"Failed to detect current issue from git context: {e}")
 
+    @staticmethod
+    def _with_declared_diagnostic(issue_dir: Path, workflow_id: str,
+                                  status: Dict[str, str],
+                                  audit: AuditEventStore) -> Dict[str, str]:
+        declaration_path = issue_dir / "status_sources.json"
+        if not declaration_path.exists():
+            return status
+        if (declaration_path.is_symlink() or not declaration_path.is_file()
+                or declaration_path.stat().st_size > 4096):
+            raise ValueError("status source is invalid")
+        declaration = json.loads(declaration_path.read_text(encoding="utf-8"))
+        if (not isinstance(declaration, dict) or declaration.get("version") != 1
+                or declaration.get("workflow_id") != workflow_id):
+            raise ValueError("status source identity is invalid")
+        source = declaration.get("diagnostic")
+        if not isinstance(source, dict):
+            raise ValueError("status source declaration is invalid")
+        for key in ("path", "records_key", "time_key", "reason_key", "state", "next"):
+            if not isinstance(source.get(key), str) or not source[key]:
+                raise ValueError("status source declaration is invalid")
+        if type(source.get("schema_version")) is not int or source["schema_version"] < 1:
+            raise ValueError("status source schema version is invalid")
+        fallback = source.get("audit_fallback")
+        if (fallback is not None and (
+            not isinstance(fallback, dict)
+            or any(not isinstance(fallback.get(key), str) or not fallback[key]
+                   for key in ("event_type", "reason_key", "next"))
+        )):
+            raise ValueError("status audit fallback is invalid")
+        relative = Path(source["path"])
+        if (relative.is_absolute() or not relative.parts or ".." in relative.parts
+                or not (issue_dir / relative).resolve().is_relative_to(issue_dir.resolve())):
+            raise ValueError("status source path is unsafe")
+        diagnostic_path = issue_dir / relative
+
+        def from_audit() -> Dict[str, str]:
+            if fallback is None:
+                return status
+            event = audit.latest_record(workflow_id, {fallback["event_type"]})
+            if event is not None:
+                status.update({
+                    "State": source["state"],
+                    "Reason": str(event["data"].get(fallback["reason_key"], "unknown")),
+                    "Next": fallback["next"],
+                })
+            return status
+
+        if not diagnostic_path.exists():
+            return from_audit()
+        if (diagnostic_path.is_symlink() or not diagnostic_path.is_file()
+                or diagnostic_path.stat().st_size > 256 * 1024):
+            raise ValueError("status diagnostic is invalid")
+        raw = json.loads(diagnostic_path.read_text(encoding="utf-8"))
+        if (not isinstance(raw, dict)
+                or raw.get("schema_version") != source["schema_version"]
+                or raw.get("workflow_id") != workflow_id
+                or not isinstance(raw.get(source["records_key"]), dict)):
+            raise ValueError("status diagnostic identity is invalid")
+        records = raw[source["records_key"]]
+        if not records:
+            return from_audit()
+        def occurred_at(record: object) -> datetime:
+            if (not isinstance(record, dict)
+                    or not isinstance(record.get(source["reason_key"]), str)):
+                raise ValueError("status diagnostic record is invalid")
+            value = record.get(source["time_key"])
+            if not isinstance(value, str):
+                raise ValueError("status diagnostic time is invalid")
+            instant = datetime.fromisoformat(value)
+            if instant.tzinfo is None:
+                raise ValueError("status diagnostic time lacks timezone")
+            return instant.astimezone(timezone.utc)
+
+        latest = max(records.values(), key=occurred_at)
+        status.update({
+            "State": source["state"],
+            "Reason": latest[source["reason_key"]],
+            "Next": source["next"],
+        })
+        return status
+
     def load_current_state(self, issue_name: str, phase_names: List[str]) -> Dict[str, str]:
         """Project the current handoff and task without creating or repairing records."""
         issue_dir = self.issues_root / issue_name
@@ -60,6 +149,7 @@ class StatusService:
             ):
                 raise ValueError("missing workflow identity")
             state = BlackboardState.from_dict(raw, initial_step=raw["current_step"])
+            audit = AuditEventStore(issue_dir)
             status["Workflow"] = state.workflow_id
             source = issue_dir / "next_step.txt"
             baton = HandoffContract.from_dict_with_current_step(
@@ -105,15 +195,15 @@ class StatusService:
                 ]
                 if task.iteration != max(iterations, default=1):
                     raise ValueError("task belongs to a different iteration")
-                materialized = next(
-                    (
-                        event
-                        for event in reversed(state.events)
-                        if event.event_type
-                        in {"human_task_materialized", "agent_execution_task_materialized"}
-                        and event.step == step
-                    ),
-                    None,
+                materialized_record = audit.latest_record(
+                    state.workflow_id,
+                    {"human_task_materialized", "agent_execution_task_materialized"},
+                    step=step,
+                )
+                materialized = (
+                    EventEntry.from_dict(materialized_record)
+                    if materialized_record is not None
+                    else None
                 )
                 # Runtime may reuse a pending task after refreshing the handoff.
                 # Its recorded materialization also supports legacy task keys.
@@ -142,7 +232,9 @@ class StatusService:
                         "Next": f"cafe task inspect {shlex.quote(task.id)}",
                     }
                 )
-                return status
+                return self._with_declared_diagnostic(
+                    issue_dir, state.workflow_id, status, audit
+                )
             if any(task.status is HumanTaskStatus.CONFIGURATION_ERROR for task in tasks):
                 raise ValueError("task configuration error")
 
@@ -151,7 +243,9 @@ class StatusService:
                 if state.current_step != "done":
                     raise ValueError("completion and current step disagree")
                 status.update({"State": "Completed", "Reason": "Workflow completed"})
-                return status
+                return self._with_declared_diagnostic(
+                    issue_dir, state.workflow_id, status, audit
+                )
             if state.current_step == "done":
                 raise ValueError("completed pointer has a nonterminal handoff")
             if baton.to_owner is HandoffOwner.USER:
@@ -162,7 +256,9 @@ class StatusService:
                         "Next": f"cafe task ls --issue {shlex.quote(issue_name)}",
                     }
                 )
-                return status
+                return self._with_declared_diagnostic(
+                    issue_dir, state.workflow_id, status, audit
+                )
 
             # Ignore notification/callback events, and do not let an old pause
             # override a subsequent start, transition, or completed human task.
@@ -177,9 +273,8 @@ class StatusService:
                 "transition",
                 "workflow_completed",
             }
-            latest = next(
-                (event for event in reversed(state.events) if event.event_type in boundaries), None
-            )
+            latest_record = audit.latest_record(state.workflow_id, boundaries)
+            latest = EventEntry.from_dict(latest_record) if latest_record is not None else None
             status.update(
                 {
                     "State": "Awaiting agent",
@@ -205,7 +300,7 @@ class StatusService:
                     )
                 elif latest.event_type == "step_started":
                     status["State"] = "Agent step in progress"
-            return status
+            return self._with_declared_diagnostic(issue_dir, state.workflow_id, status, audit)
         except (OSError, ValueError, TypeError, KeyError, AttributeError, BatonRejected):
             # Do not expose raw parser text or manufacture a task/recovery choice.
             status["State"] = "Unknown"

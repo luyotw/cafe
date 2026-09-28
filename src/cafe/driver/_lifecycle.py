@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Mapping
+
+from cafe.core.packet_io import atomic_write_bytes, canonical_json
 
 from ._freshness import Freshness, compare_freshness
 from ._schema import build_driver_settings_update, build_initial_contract
@@ -35,6 +38,39 @@ def activate(
         confirmed_at=confirmed_at,
     )
     with contract_lock(issue_dir):
+        if candidate["driver"]["mode"] == "event-driven":
+            source_path = issue_dir / "status_sources.json"
+            declaration = {
+                "version": 1,
+                "workflow_id": workflow_id,
+                "diagnostic": {
+                    "path": "driver/callback_failure_notifications.json",
+                    "schema_version": 1,
+                    "records_key": "records",
+                    "time_key": "occurred_at",
+                    "reason_key": "error_code",
+                    "state": "Callback delivery needs inspection",
+                    "next": (
+                        "Inspect driver/callback_failure_notifications.json and "
+                        "driver/dispatch_state.json; verify delivery before manual recovery."
+                    ),
+                    "audit_fallback": {
+                        "event_type": "workflow_event_callback_dispatch_failed",
+                        "reason_key": "error",
+                        "next": (
+                            "Inspect audit_events and driver/dispatch_state.json; "
+                            "verify delivery before manual recovery."
+                        ),
+                    },
+                },
+            }
+            if source_path.exists():
+                if source_path.is_symlink() or source_path.stat().st_size > 4096 or (
+                    json.loads(source_path.read_text(encoding="utf-8")) != declaration
+                ):
+                    raise ValueError("callback failure source conflicts with prepared workflow")
+            else:
+                atomic_write_bytes(source_path, canonical_json(declaration))
         try:
             current, current_sha = load_contract(
                 issue_dir, issue_name=issue_name, workflow_id=workflow_id
