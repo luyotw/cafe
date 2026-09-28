@@ -1,7 +1,7 @@
 ---
 name: cafe-spec
 description: "收集、整理或修訂需求規格（依 iteration 切換行為）"
-version: 1.5.0
+version: 1.6.0
 workflow:
   execution_profile:
     workload: requirements
@@ -34,18 +34,15 @@ workflow:
           - reference: execution_steps_iteration_1.md
           - template_catalog: true
           - optional_checklist: basic_principles.md
-          - reference: dod_instruction_composed.md
       - when: {min_iteration: 2, max_iteration: 3}
         sections:
           - reference: execution_steps_iteration_n.md
           - optional_checklist: basic_principles.md
-          - reference: dod_instruction_composed.md
       - when: {min_iteration: 4}
         sections:
           - reference: execution_steps_iteration_n.md
           - optional_checklist: basic_principles.md
           - reference: important_notes_iteration_4_plus_composed.md
-          - reference: dod_instruction_after_notes_composed.md
     include_role_guidance: true
     compact_agent_guidance: true
   output_templates:

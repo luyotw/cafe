@@ -313,7 +313,7 @@ def generate_spec_checklist(
     if iteration >= 4:
         iteration_note = _load_skill_checklist_reference(
             "spec",
-            "important_notes_iteration_4_plus.md",
+            "important_notes_iteration_4_plus_composed.md",
         )
 
     template_instruction = ""
@@ -339,14 +339,20 @@ def generate_spec_checklist(
                 "[ ] Follow template structure when writing analysis results\n"
             )
 
-    dod_instruction = _load_skill_checklist_reference("spec", "dod_instruction.md")
     basic_principles_checklist = ""
     if basic_principles:
         basic_principles_checklist = convert_to_checklist(basic_principles, "Basic Principles")
 
-    checklist_content = (
-        f"{execution_steps}\n{template_instruction}{basic_principles_checklist}\n"
-        f"{iteration_note}{dod_instruction}\n{agent_guidelines}"
+    checklist_content = "\n".join(
+        part
+        for part in (
+            execution_steps,
+            template_instruction,
+            basic_principles_checklist,
+            iteration_note,
+            agent_guidelines,
+        )
+        if part
     )
 
     placeholders = {

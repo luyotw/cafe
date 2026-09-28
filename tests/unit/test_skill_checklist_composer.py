@@ -35,9 +35,6 @@ REQUIRED_SKILL_REFERENCES = {
     "spec_first": [
         "execution_steps_iteration_1.md",
         "important_notes_iteration_4_plus.md",
-        "dod_instruction.md",
-        "dod_instruction_composed.md",
-        "dod_instruction_after_notes_composed.md",
         "important_notes_iteration_4_plus_composed.md",
         "xml_questions_instruction.md",
     ],
@@ -846,16 +843,6 @@ def test_spec_iteration_1_reference_mentions_images_directory() -> None:
     assert "UI/UX" in content or "visual context" in content
 
 
-def test_spec_dod_instruction_skill_reference_contract() -> None:
-    instruction = load_skill_reference("spec_first", "dod_instruction.md")
-    assert "DoD" in instruction
-    assert "functional" in instruction.lower()
-    assert "Acceptance Criteria" in instruction
-    assert "**DoD:**" in instruction
-    assert "checkbox" in instruction
-    assert "CAFE_" not in instruction
-
-
 def test_develop_correction_checklist_uses_feedback_file_path(tmp_path: Path) -> None:
     checklist_path = tmp_path / "checklist.md"
     feedback = ".cafe/issues/test/review/iteration_001/output.md"
@@ -899,19 +886,6 @@ def test_develop_normal_checklist_keeps_accepted_plan_immutable(tmp_path: Path) 
     assert "update the authoritative plan progress" not in content
     assert f"All tasks in {plan} are marked [x]" not in content
     assert "All projected Plan Todo rows" in content
-
-
-def test_spec_checklist_includes_dod_instruction(tmp_path: Path) -> None:
-    checklist_path = tmp_path / "checklist.md"
-    generate_spec_checklist(
-        iteration=1,
-        agent_name="Roger",
-        current_spec_file=".cafe/issues/test/spec/iteration_001/output.md",
-        prev_spec_file=None,
-        checklist_file_path=checklist_path,
-    )
-    content = checklist_path.read_text(encoding="utf-8")
-    assert "Definition of Done" in content
 
 
 def test_spec_and_develop_xml_question_instruction_requires_need_clarification() -> None:
