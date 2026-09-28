@@ -35,6 +35,7 @@ def _reexec_with_cafe_python() -> None:
 try:
     import yaml  # type: ignore[import-untyped]
 
+    from cafe.core.audit_events import AuditEventStore
     from cafe.playbooks.loader import PlaybookLoader, apply_issue_playbook_overrides
 except ModuleNotFoundError:
     _reexec_with_cafe_python()
@@ -44,6 +45,7 @@ except ModuleNotFoundError:
 _STATUSES = {
     "pending",
     "in_progress",
+    "awaiting_input",
     "completed",
     "returned",
     "awaiting_confirmation",
@@ -55,6 +57,7 @@ _CLOSEOUT_ITEMS = ("deliver", "cleanup")
 _TEXT_STATUS_SYMBOLS = {
     "pending": "○",
     "in_progress": "▶\ufe0e",
+    "awaiting_input": "⏸\ufe0e",
     "completed": "✓",
     "returned": "↩\ufe0e",
     "awaiting_confirmation": "⏸\ufe0e",
@@ -74,6 +77,7 @@ _TEXT = {
         "status": {
             "pending": "待執行",
             "in_progress": "進行中",
+            "awaiting_input": "等待回覆",
             "completed": "已完成",
             "returned": "已退回",
             "awaiting_confirmation": "等待確認",
@@ -93,6 +97,7 @@ _TEXT = {
         "status": {
             "pending": "Pending",
             "in_progress": "In progress",
+            "awaiting_input": "Awaiting response",
             "completed": "Completed",
             "returned": "Returned",
             "awaiting_confirmation": "Awaiting confirmation",
@@ -295,16 +300,11 @@ def _runtime_progress(
     blackboard = _read_json(issue_dir / "blackboard.json")
     if blackboard is None:
         return statuses, iterations
-    events = blackboard.get("events", [])
-    if not isinstance(events, list):
-        raise ValueError("blackboard events must be a list")
+    events = AuditEventStore(issue_dir).iter_records(blackboard.get("workflow_id", ""))
     workflow_finished = str(blackboard.get("current_step", "")) == "done"
     for event in events:
-        if not isinstance(event, Mapping):
-            continue
-        event_type = str(event.get("event_type", event.get("type", "")))
-        data = event.get("data", {})
-        data = data if isinstance(data, Mapping) else {}
+        event_type = event["event_type"]
+        data = event["data"]
         step = str(data.get("step", event.get("step", "")))
         event_iteration = _iteration_number(data.get("iteration")) or _iteration_number(
             data.get("attempt")
@@ -321,6 +321,15 @@ def _runtime_progress(
             elif event_type in {"step_skipped", "workflow_step_skipped"}:
                 statuses[step] = "skipped"
                 terminal_evidence.add(step)
+            elif event_type == "workflow_paused" and str(data.get("status_code", "")).upper() in {
+                "BATON_NEED_CLARIFICATION",
+                "BATON_NEED_PERMISSION",
+            }:
+                statuses[step] = "awaiting_input"
+                terminal_evidence.add(step)
+            elif event_type == "human_task_completed" and statuses[step] == "awaiting_input":
+                statuses[step] = "completed"
+                terminal_evidence.discard(step)
             elif event_type == "workflow_blocked" or (
                 event_type in {"workflow_paused", "workflow_interruption"}
                 and str(data.get("status_code", "")).upper() == "INTERRUPTED"
@@ -384,8 +393,10 @@ def _runtime_progress(
         elif code in {"INTERRUPTED", "BLOCKED"}:
             statuses[step] = "blocked"
             terminal_evidence.add(step)
-        elif metadata.get("end_time") and code and step not in terminal_evidence:
+        elif metadata.get("end_time") and step not in terminal_evidence:
             statuses[step] = "completed"
+        elif metadata.get("timestamp") and statuses[step] == "pending":
+            statuses[step] = "in_progress"
     if workflow_finished:
         statuses = {
             step: "skipped" if status == "pending" else status for step, status in statuses.items()
@@ -543,7 +554,11 @@ def render_progress(
         if step in required_reviews:
             review_status = reviews.get(
                 step,
-                ("pending" if phase_statuses[step] in {"pending", "in_progress"} else "unknown"),
+                (
+                    "pending"
+                    if phase_statuses[step] in {"pending", "in_progress", "awaiting_input"}
+                    else "unknown"
+                ),
             )
             review_label = (
                 f"{step}：{text['review']}" if language == "zh" else f"{step}: {text['review']}"
