@@ -380,3 +380,117 @@ def test_preparation_rejects_a_locale_without_a_declared_tier(
 
     assert result.exit_code != 0
     assert not (_issue_dir(tmp_path, "rejected-locale") / "blackboard.json").exists()
+
+
+def _adapter_module():
+    path = (
+        Path(__file__).parents[2]
+        / "src/cafe/data/skills/use-cafe-workflow/scripts/conversation_locale_adapter.py"
+    )
+    spec = importlib.util.spec_from_file_location("conversation_locale_adapter_journey", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_a_driver_started_workflow_stores_what_the_adapter_supplied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, slack_posts: list
+) -> None:
+    """Integration 7: the Driver supplies; the workflow decides and then owns it."""
+    from tests.conftest import create_minimal_config
+
+    adapter = _adapter_module()
+    create_minimal_config(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    supplied = adapter.supplied_preference(value="zh-TW", source="inferred")
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.utils.git_utils.is_github_repo", return_value=False),
+        patch("cafe.ui.phase_prompts.is_github_repo", return_value=False),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "main"
+        git.has_uncommitted_changes.return_value = False
+        git.branch_exists.return_value = False
+        git.worktree_exists.return_value = False
+        mock_git_cls.return_value = git
+
+        prepared = runner.invoke(
+            app,
+            [
+                "prepare",
+                "driver-started",
+                "--playbook",
+                "standard",
+                "--no-interactive",
+                "--input-method=manual",
+                "--no-auto-create-pr",
+                *adapter.creation_locale_arguments(supplied),
+            ],
+        )
+
+    assert prepared.exit_code == 0, prepared.stdout
+    issue_dir = _issue_dir(tmp_path, "driver-started")
+    assert adapter.effective_conversation_locale(issue_dir) == ("zh-TW", "inferred")
+
+    # Resuming reads the effective generic value instead of re-resolving it, and
+    # the snapshot the Driver contract carries equals it.
+    resumed = adapter.effective_conversation_locale(
+        issue_dir,
+        playbook_locale="ja-JP",
+        supplied=adapter.supplied_preference(value="ko-KR", source="explicit"),
+    )
+    snapshot = adapter.contract_locale_snapshot(
+        issue_dir, playbook_id="standard", declared_value="ja-JP", declared_source="explicit"
+    )
+
+    assert resumed == ("zh-TW", "inferred")
+    assert snapshot == {"value": "zh-TW", "source": "inferred"}
+
+    adapter.one_reply_language_request("en-US")
+    assert adapter.effective_conversation_locale(issue_dir) == ("zh-TW", "inferred")
+    assert adapter.contract_locale_snapshot(issue_dir, playbook_id="standard") == snapshot
+
+
+def test_the_explicit_change_moves_new_work_without_touching_pending_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, slack_posts: list
+) -> None:
+    """Integration 9: a deliberate change applies forward only."""
+    adapter = _adapter_module()
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    monkeypatch.chdir(repo_root)
+    issue_dir = _issue_dir(repo_root, "deliberate")
+    _pause_for_output_review(issue_dir)
+    _store_locale(issue_dir, "en-US")
+    _pause_for_output_review(issue_dir)
+    outstanding = HumanTaskRecordStore(issue_dir).tasks()[-1]
+    captured = (outstanding.prompt, dict(outstanding.expected_result))
+    slack_posts.clear()
+
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("spec")
+    store.set_conversation_locale(
+        state, SuppliedLocale(value="zh-TW", source=LocaleSource.EXPLICIT)
+    )
+
+    # Subsequent work uses the new language; the outstanding task does not move.
+    _pause_for_output_review(issue_dir)
+    records = HumanTaskRecordStore(issue_dir)
+    still_pending = records.get_task(outstanding.id)
+    newest = records.tasks()[-1]
+
+    assert (still_pending.prompt, dict(still_pending.expected_result)) == captured
+    assert newest.prompt == "檢視需求規格，並選擇如何繼續。"
+    assert "確認結果" in _delivered_text(slack_posts)
+    assert adapter.contract_locale_snapshot(issue_dir, playbook_id="standard") == {
+        "value": "zh-TW",
+        "source": "explicit",
+    }
+
+    policy = HumanTaskPolicy.model_validate(captured[1])
+    completion = validate_human_task_completion(
+        policy, {"task": policy.id, "decision": policy.decisions[0].id}
+    )
+    assert completion.decision == policy.decisions[0].id

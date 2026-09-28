@@ -123,19 +123,22 @@ def _install_contract_stubs(monkeypatch, module, contract):
             [],
             'CAFE_DRIVER_DIRECTIVE {"schema_version":1,"mode":"attached","action":"wait",'
             '"worker":"foreground","next_wake":["process_exit","user_input"],'
+            '"conversation_locale":{"value":"en-US","source":"fallback"},'
             '"poll_interval_seconds":90}',
         ),
         (
             "unattended",
             ["--background"],
             'CAFE_DRIVER_DIRECTIVE {"schema_version":1,"mode":"unattended","action":"yield",'
-            '"worker":"background","next_wake":["user_input"]}',
+            '"worker":"background","next_wake":["user_input"],'
+            '"conversation_locale":{"value":"en-US","source":"fallback"}}',
         ),
         (
             "event-driven",
             ["--background", "--on-workflow-event", CALLBACK_ID],
             'CAFE_DRIVER_DIRECTIVE {"schema_version":1,"mode":"event-driven","action":"yield",'
-            '"worker":"background","next_wake":["workflow_event_callback","user_input"]}',
+            '"worker":"background","next_wake":["workflow_event_callback","user_input"],'
+            '"conversation_locale":{"value":"en-US","source":"fallback"}}',
         ),
     ],
 )
@@ -468,7 +471,8 @@ def test_launch_failure_and_durable_user_boundary_have_stable_directives(
     )
     assert capsys.readouterr().out.splitlines()[0] == (
         'CAFE_DRIVER_DIRECTIVE {"schema_version":1,"mode":"unattended",'
-        '"action":"await_user","worker":"none","next_wake":["user_input"]}'
+        '"action":"await_user","worker":"none","next_wake":["user_input"],'
+        '"conversation_locale":{"value":"en-US","source":"fallback"}}'
     )
 
 
@@ -606,3 +610,33 @@ def test_freshness_mismatch_fails_before_worker_creation(
     assert result == 2
     assert seen_facts == [FRESH_FACTS]
     assert '"action":"launch_failed"' in capsys.readouterr().out
+
+
+def test_the_directive_reports_the_stored_workflow_language_on_resume(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """Resuming reads the stored value; it never re-resolves the language."""
+    module = _module()
+    issue_dir = _prepared(tmp_path)
+    state = json.loads((issue_dir / "blackboard.json").read_text(encoding="utf-8"))
+    state["conversation_locale"] = "zh-TW"
+    state["conversation_locale_source"] = "inferred"
+    (issue_dir / "blackboard.json").write_text(json.dumps(state), encoding="utf-8")
+    _install_contract_stubs(monkeypatch, module, _contract("unattended", tmp_path))
+
+    assert (
+        module.run(
+            _args("unattended"),
+            cwd=tmp_path,
+            process_factory=lambda *a, **k: _Process(0),
+        )
+        == 0
+    )
+
+    directive = json.loads(
+        capsys.readouterr().out.splitlines()[0].removeprefix("CAFE_DRIVER_DIRECTIVE ")
+    )
+    assert directive["conversation_locale"] == {"value": "zh-TW", "source": "inferred"}
+    unchanged = json.loads((issue_dir / "blackboard.json").read_text(encoding="utf-8"))
+    assert unchanged["conversation_locale"] == "zh-TW"
+    assert unchanged["conversation_locale_source"] == "inferred"

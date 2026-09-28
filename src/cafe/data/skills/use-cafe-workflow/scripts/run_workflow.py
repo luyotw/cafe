@@ -68,6 +68,11 @@ from cafe.workflow_execution.event_callback import (  # noqa: E402
     resolve_builtin_workflow_event_callback,
 )
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from conversation_locale_adapter import (  # noqa: E402, I001
+    effective_conversation_locale,
+)
+
 CALLBACK_ID = "builtin:use-cafe-workflow:workflow_event_callback"
 MAX_WORKFLOW_STATE_BYTES = 256 * 1024
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -348,6 +353,7 @@ def _emit_directive(
     guidance: str,
     poll_interval_seconds: int | None = None,
     exit_code: int | None = None,
+    conversation_locale: dict[str, str] | None = None,
 ) -> None:
     directive: dict[str, Any] = {
         "schema_version": 1,
@@ -356,6 +362,10 @@ def _emit_directive(
         "worker": worker,
         "next_wake": next_wake,
     }
+    if conversation_locale is not None:
+        # Read, never re-resolved: the Driver mirrors the generic authority so a
+        # resumed turn cannot drift to another language.
+        directive["conversation_locale"] = conversation_locale
     if poll_interval_seconds is not None:
         directive["poll_interval_seconds"] = poll_interval_seconds
     if exit_code is not None:
@@ -423,6 +433,8 @@ def run(
         state = _prepared_workflow(issue_dir)
         if state["playbook_id"] != playbook:
             raise ValueError("requested playbook differs from the prepared workflow")
+        locale_value, locale_source = effective_conversation_locale(issue_dir)
+        conversation_locale = {"value": locale_value, "source": locale_source}
         workflow_id = state["workflow_id"]
         entry = evaluate_driver_entry(
             DriverEntryRequest(
@@ -473,6 +485,7 @@ def run(
             guidance=(
                 "Workflow is at a durable user-owned boundary. Do not launch or infer an answer."
             ),
+            conversation_locale=conversation_locale,
         )
         return 0
 
@@ -518,6 +531,7 @@ def run(
                 "Foreground workflow started successfully. Retain the foreground handle and wait "
                 f"the full confirmed {interval}-second interval before polling."
             ),
+            conversation_locale=conversation_locale,
         )
 
     returncode = process.wait()
@@ -539,6 +553,7 @@ def run(
                 "Background workflow started successfully. Yield now; inspect durable state only "
                 "when the user returns."
             ),
+            conversation_locale=conversation_locale,
         )
     elif mode == "event-driven":
         _emit_directive(
@@ -550,6 +565,7 @@ def run(
                 "Background workflow started successfully. End the current Driver turn now. Do not "
                 "poll with sleep, ps, write_stdin, cafe status, or cafe task ls."
             ),
+            conversation_locale=conversation_locale,
         )
     else:
         try:
@@ -563,6 +579,7 @@ def run(
                 worker="none",
                 next_wake=["user_input"],
                 guidance="Workflow reached a durable user-owned boundary. Do not infer an answer.",
+                conversation_locale=conversation_locale,
             )
     return 0
 
