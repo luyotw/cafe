@@ -9,12 +9,14 @@ import re
 import stat
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 import yaml
+
+from cafe.core.conversation_locale import DEFAULT_CONVERSATION_LOCALE, select_text_locale
 
 SLACK_WEBHOOK_FILENAME = ".slack-webhook"
 TEST_RUN_SLACK_WEBHOOK_FILENAME = ".cafe/test-slack-webhook"
@@ -27,23 +29,99 @@ MACHINE_CONFIG_DIRECTORY = ".cafe"
 MACHINE_CONFIG_FILENAME = "config.yaml"
 MAX_NOTIFICATION_METADATA_LENGTH = 128
 SAFE_NOTIFICATION_METADATA = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}\Z")
-HUMAN_TASK_STEP_LABELS = {
-    "spec": "需求規格",
-    "plan": "規劃",
-    "develop": "開發",
-    "review": "審查",
-    "pr": "PR 準備與審閱",
+# Developer-authored fixed notification text. Only these two languages are
+# authored; every other workflow locale selects the English catalog for that one
+# message without changing the workflow's stored locale, and the fallback adds no
+# notice to the delivered message. See docs/language-policy.md.
+NOTIFICATION_TEXT_CATALOGS: dict[str, dict[str, Any]] = {
+    "en-US": {
+        "step_labels": {
+            "spec": "Requirements",
+            "plan": "Planning",
+            "develop": "Development",
+            "review": "Review",
+            "pr": "PR preparation and review",
+        },
+        "action_labels": {
+            "clarification-feedback": "Answer the clarification questions",
+            "clarification-answers": "Answer the clarification questions",
+            "local-review": "Review the changes and decide to fix or continue",
+            "output-review": "Confirm the result",
+            "permission-answers": "Answer the permission questions",
+            "alignment-decision": "Confirm the direction",
+            "no-changes-needed": "Confirm that no change is needed",
+            "agent-execution-interrupted": "Decide how to continue",
+        },
+        "repository_fallback": "this project",
+        "issue_fallback": "an unnamed work item",
+        "step_fallback": "Workflow",
+        "action_fallback": "Handle a CAFE work item",
+        "unknown_step": "Unknown step",
+        "field_separator": ": ",
+        "task_headline": "CAFE needs your input",
+        "repository_field": "Project",
+        "issue_field": "Conversation",
+        "step_field": "Current step",
+        "action_field": "What you need to do",
+        "task_closing": 'Return to the "{issue}" work item in CAFE to continue.',
+        "callback_headline": "A CAFE automatic notification did not complete",
+        "status_field": "Situation",
+        "reason_state": "CAFE could not read the state or configuration the notification needs.",
+        "reason_queue": "CAFE could not deliver the notification to the original conversation.",
+        "reason_generic": "CAFE's automatic notification failed.",
+        "callback_impact": (
+            "Impact: the original conversation may not have received this update; "
+            "this does not mean the workflow stopped."
+        ),
+        "callback_closing": (
+            'Return to the "{issue}" conversation in CAFE and ask the Driver to '
+            "check the current progress and next step."
+        ),
+    },
+    "zh-TW": {
+        "step_labels": {
+            "spec": "需求規格",
+            "plan": "規劃",
+            "develop": "開發",
+            "review": "審查",
+            "pr": "PR 準備與審閱",
+        },
+        "action_labels": {
+            "clarification-feedback": "回覆釐清問題",
+            "clarification-answers": "回覆釐清問題",
+            "local-review": "審閱變更與後續建議，決定修正或確認繼續",
+            "output-review": "確認結果",
+            "permission-answers": "回覆權限相關問題",
+            "alignment-decision": "確認方向",
+            "no-changes-needed": "確認沒有需要變更",
+            "agent-execution-interrupted": "決定如何繼續",
+        },
+        "repository_fallback": "目前專案",
+        "issue_fallback": "未命名工作項目",
+        "step_fallback": "工作流程",
+        "action_fallback": "處理 CAFE 工作項目",
+        "unknown_step": "未知階段",
+        "field_separator": "：",
+        "task_headline": "CAFE 需要你的處理",
+        "repository_field": "專案",
+        "issue_field": "對話",
+        "step_field": "目前階段",
+        "action_field": "需要你做的事",
+        "task_closing": "請回到 CAFE 的「{issue}」工作項目處理。",
+        "callback_headline": "CAFE 自動通知未完成",
+        "status_field": "狀況",
+        "reason_state": "CAFE 無法讀取自動通知所需的狀態或設定。",
+        "reason_queue": "CAFE 無法將通知送達原對話。",
+        "reason_generic": "CAFE 的自動通知發生錯誤。",
+        "callback_impact": "影響：原對話可能收不到這次更新；這不代表工作流程已停止。",
+        "callback_closing": "請回到 CAFE 的「{issue}」原對話，請 Driver 檢查目前進度與下一步。",
+    },
 }
-HUMAN_TASK_ACTION_LABELS = {
-    "clarification-feedback": "回覆釐清問題",
-    "clarification-answers": "回覆釐清問題",
-    "local-review": "審閱變更與後續建議，決定修正或確認繼續",
-    "output-review": "確認結果",
-    "permission-answers": "回覆權限相關問題",
-    "alignment-decision": "確認方向",
-    "no-changes-needed": "確認沒有需要變更",
-    "agent-execution-interrupted": "決定如何繼續",
-}
+
+
+def _notification_catalog(locale: str | None) -> dict[str, Any]:
+    """Select authored text for a locale without ever changing that locale."""
+    return NOTIFICATION_TEXT_CATALOGS[select_text_locale(locale)]
 
 
 class SlackNotificationError(RuntimeError):
@@ -214,23 +292,24 @@ class HumanTaskSlackMessage:
     task_id: str
     step: str
     task_type: str
+    locale: str = DEFAULT_CONVERSATION_LOCALE
 
     def to_slack_payload(self) -> dict[str, str]:
-        repository = _readable_metadata(self.repository, fallback="目前專案")
-        issue = _readable_metadata(self.issue, fallback="未命名工作項目")
-        step_label = HUMAN_TASK_STEP_LABELS.get(self.step, "工作流程")
-        action_label = HUMAN_TASK_ACTION_LABELS.get(self.task_type, "處理 CAFE 工作項目")
-        text = "\n".join(
-            (
-                "CAFE 需要你的處理",
-                f"專案：{repository}",
-                f"對話：{issue}",
-                f"目前階段：{step_label}",
-                f"需要你做的事：{action_label}",
-                f"請回到 CAFE 的「{issue}」工作項目處理。",
-            )
+        text = _notification_catalog(self.locale)
+        repository = _readable_metadata(self.repository, fallback=text["repository_fallback"])
+        issue = _readable_metadata(self.issue, fallback=text["issue_fallback"])
+        step_label = text["step_labels"].get(self.step, text["step_fallback"])
+        action_label = text["action_labels"].get(self.task_type, text["action_fallback"])
+        separator = text["field_separator"]
+        lines = (
+            text["task_headline"],
+            f"{text['repository_field']}{separator}{repository}",
+            f"{text['issue_field']}{separator}{issue}",
+            f"{text['step_field']}{separator}{step_label}",
+            f"{text['action_field']}{separator}{action_label}",
+            text["task_closing"].format(issue=issue),
         )
-        return {"text": text}
+        return {"text": "\n".join(lines)}
 
 
 @dataclass(frozen=True)
@@ -242,29 +321,30 @@ class WorkflowCallbackFailureSlackMessage:
     step: str
     event_type: str
     error_code: str
+    locale: str = DEFAULT_CONVERSATION_LOCALE
 
     def to_slack_payload(self) -> dict[str, str]:
-        repository = _readable_metadata(self.repository, fallback="目前專案")
-        issue = _readable_metadata(self.issue, fallback="未命名工作項目")
-        step = HUMAN_TASK_STEP_LABELS.get(self.step, self.step or "未知階段")
+        text = _notification_catalog(self.locale)
+        repository = _readable_metadata(self.repository, fallback=text["repository_fallback"])
+        issue = _readable_metadata(self.issue, fallback=text["issue_fallback"])
+        step = text["step_labels"].get(self.step, self.step or text["unknown_step"])
         if self.error_code == "callback_ValueError":
-            reason = "CAFE 無法讀取自動通知所需的狀態或設定。"
+            reason = text["reason_state"]
         elif self.error_code.startswith("codex_queue_"):
-            reason = "CAFE 無法將通知送達原對話。"
+            reason = text["reason_queue"]
         else:
-            reason = "CAFE 的自動通知發生錯誤。"
-        text = "\n".join(
-            (
-                "CAFE 自動通知未完成",
-                f"專案：{repository}",
-                f"對話：{issue}",
-                f"目前階段：{step}",
-                f"狀況：{reason}",
-                "影響：原對話可能收不到這次更新；這不代表工作流程已停止。",
-                f"請回到 CAFE 的「{issue}」原對話，請 Driver 檢查目前進度與下一步。",
-            )
+            reason = text["reason_generic"]
+        separator = text["field_separator"]
+        lines = (
+            text["callback_headline"],
+            f"{text['repository_field']}{separator}{repository}",
+            f"{text['issue_field']}{separator}{issue}",
+            f"{text['step_field']}{separator}{step}",
+            f"{text['status_field']}{separator}{reason}",
+            text["callback_impact"],
+            text["callback_closing"].format(issue=issue),
         )
-        return {"text": text}
+        return {"text": "\n".join(lines)}
 
 
 class SlackPayloadMessage(Protocol):
@@ -281,6 +361,7 @@ def build_human_task_message(
     step: str,
     task_type: str,
     issue: str = "",
+    locale: str = DEFAULT_CONVERSATION_LOCALE,
 ) -> HumanTaskSlackMessage:
     """Build one readable, bounded HumanTask notification."""
     repository = sanitize_human_task_metadata(repository)
@@ -296,11 +377,18 @@ def build_human_task_message(
         task_id=task_id,
         step=step,
         task_type=task_type,
+        locale=locale,
     )
 
 
 def build_workflow_callback_failure_message(
-    *, repository: str, issue: str, step: str, event_type: str, error_code: str
+    *,
+    repository: str,
+    issue: str,
+    step: str,
+    event_type: str,
+    error_code: str,
+    locale: str = DEFAULT_CONVERSATION_LOCALE,
 ) -> WorkflowCallbackFailureSlackMessage:
     """Build a bounded callback-failure notification without raw exception text."""
     return WorkflowCallbackFailureSlackMessage(
@@ -309,6 +397,7 @@ def build_workflow_callback_failure_message(
         step=sanitize_human_task_metadata(step),
         event_type=sanitize_human_task_metadata(event_type),
         error_code=sanitize_human_task_metadata(error_code),
+        locale=locale,
     )
 
 
