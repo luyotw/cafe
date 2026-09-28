@@ -1,45 +1,37 @@
-# Issue Decomposition And Project Position
+# Issue Split Proposals And Project Position
 
-Read this reference when starting or resuming linked work, or before the driver
-confirms a spec or plan containing an issue-decomposition assessment. Also read
-`strategic_context.md` and `handoffs_and_alignment.md`.
+Read this reference when any step proposes an issue split, or when starting or
+resuming linked work. Also read `references/strategic_context.md` and
+`references/handoffs_and_alignment.md`, relative to the Driver SKILL.md.
 
-## Assessments before confirmation
+## Receive proposals from any step
 
-The requirements and planning stages use this stable assessment structure:
+`behavior.allow_issue_decomposition` enables shared guidance for a step. The
+playbook may set a default and individual steps may override it; omitted values
+resolve to false. Do not infer this behavior from phase or skill names, and do
+not require a spec, plan, or PR step.
 
-- Decision: `keep` or `split`
-- Rationale
-- Current issue scope
-- Trigger
+Read proposals from the existing step output and normal handoff whenever control
+returns, including workflow completion. Present the current issue's retained
+scope and a short list of proposed issue titles, scopes, and dependencies. Keep
+outcomes independently deliverable and non-overlapping; consult existing open
+issues to avoid duplicates. Tightly coupled work stays together without a
+report, proof, or extra confirmation. A proposal alone adds no checkpoint or
+validation gate.
 
-| Title | Goal | Depends on | Scope boundary | Non-goals | Definition of Done |
-| --- | --- | --- | --- | --- | --- |
+Additional independent work remains a follow-up while the current bounded
+change is completed. If investigation or measurement is needed before fixes
+can be defined, scope that investigation first and propose fixes after its
+results are known. Do not silently change confirmed product scope.
 
-Before confirming, compare the newest assessment with the confirmed
-requirement, relevant strategic documents, repository evidence, and existing
-open issues. For `keep`, continue the existing confirmation flow without an
-extra decomposition prompt.
+## Existing authority
 
-For `split`, reject proposals that are vague, overlapping, or unsupported.
-Require a useful, independently acceptable outcome for the current issue and
-non-overlapping follow-up outcomes before external coordination. A planning
-assessment may refine delivery order but must not silently change confirmed
-product scope.
-
-## Authority and delivery gate
-
-Resolve the mandate and required authority first. Ask the user only if the
-proposal changes an escalated decision, including product scope, priority,
-cost, or external commitments. Only then coordinate follow-up issue creation or
-updates, roadmap updates, and dependency order through existing trusted
-mechanisms. Each driver-created follow-up issue records its explicit
-dependencies, scope boundary, non-goals, and Definition of Done.
-
-When `split` leaves the current issue too broad, the current issue is narrowed
-to an independently acceptable, deliverable, and reviewable outcome. It must
-not enter develop until that is true. Do not treat an agent-authored proposal as
-authority for an external mutation.
+Use the existing authorized Driver path for issue creation. Apply existing
+scope and external-action authority; ask only when a required decision or
+permission is not already authorized. Phase-agent proposals and this behavior
+flag grant no authority to create issues or change scope, priority, scheduling,
+or external commitments. Record each created issue's scope and dependencies;
+no additional mandatory decomposition fields or state are required.
 
 ## Reconstructible project position
 

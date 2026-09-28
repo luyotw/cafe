@@ -1984,6 +1984,7 @@ class GenericWorkflowStepExecutor(Phase):
             "valid_baton_intents": ", ".join(valid_baton_intents),
             "step_transitions": ", ".join(f"{i}→{s}" for i, s in step_transitions.items()),
             "behavior_completion": behavior.completion,
+            "allow_issue_decomposition": behavior.allow_issue_decomposition,
             "publish_confirmation": behavior.publish_confirmation,
         }
         context.update(

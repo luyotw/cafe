@@ -167,6 +167,28 @@ contract and every other warning are resolved.
 
 Quote `"on"`; unquoted YAML 1.1 may parse it as a boolean before normalization.
 
+### Optional issue split proposals
+
+Set `behavior.allow_issue_decomposition: true` at the playbook level or under
+any step's `behavior` to inject the shared issue-splitting guidance into its
+GenericPhase prompt. The universal default is `false`; explicit step values
+override the playbook default, including `false`. Bundled playbooks opt in.
+
+```yaml
+behavior:
+  allow_issue_decomposition: true
+steps:
+  investigate:
+    # Other required step fields omitted here.
+    behavior:
+      allow_issue_decomposition: false
+```
+
+This enables assessment and proposals in existing output and handoff only.
+It adds no report for cohesive work, no confirmation gate, and no external
+issue-creation permission. The Driver handles proposals through existing
+authority regardless of phase names or the presence of a PR step.
+
 ### Human-task bindings
 
 `human_tasks` makes a user handoff explicit.  A binding selects a policy declared

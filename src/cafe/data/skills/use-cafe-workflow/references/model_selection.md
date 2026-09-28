@@ -27,9 +27,10 @@ Use these scale defaults as guidance, not line-count quotas:
 | `medium` | Several connected components or one public contract, with bounded integration coverage. |
 | `large` | Cross-cutting runtime behavior, more than two subsystems, durable migration, security/trust boundaries, or a broad integration matrix. |
 
-If the proposed scope is `large`, perform the issue-decomposition assessment
-before confirmation. Do not compensate for an issue that should be split merely
-by assigning a stronger model.
+Do not compensate for independently deliverable work merely by assigning a
+stronger model. Handle any issue split proposal through
+`references/issue_decomposition.md` (relative to the Driver SKILL.md); issue
+scale alone does not require a decomposition report or confirmation gate.
 
 ## Resolve phase execution requirements
 

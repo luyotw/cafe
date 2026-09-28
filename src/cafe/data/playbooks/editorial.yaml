@@ -13,6 +13,7 @@ playbook:
 
 behavior:
   completion: status_code
+  allow_issue_decomposition: true
 
 skills:
   workflow:

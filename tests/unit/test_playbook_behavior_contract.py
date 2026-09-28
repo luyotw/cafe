@@ -110,6 +110,26 @@ def test_behavior_contract_step_values_override_playbook_defaults():
     assert behavior.runtime_tool_grants == ["git_inspection"]
 
 
+@pytest.mark.parametrize(
+    ("defaults", "override", "expected"),
+    [
+        ({}, {}, False),
+        ({}, {"allow_issue_decomposition": True}, True),
+        ({"allow_issue_decomposition": True}, {}, True),
+        ({"allow_issue_decomposition": True}, {"allow_issue_decomposition": False}, False),
+    ],
+)
+def test_issue_decomposition_is_opt_in_and_step_overridable(defaults, override, expected):
+    payload = _playbook(defaults=defaults, build_behavior=override)
+    model = PlaybookDefinition.model_validate(payload)
+    for playbook in (payload, model):
+        behavior = resolve_step_behavior(playbook, "build")
+        assert behavior.allow_issue_decomposition is expected
+        assert behavior.publish_confirmation is False
+        assert behavior.runtime_tool_grants == []
+    assert model.steps["build"].capability_requests == []
+
+
 @pytest.mark.parametrize("playbook_id", ["tdd", "hotfix"])
 def test_bundled_review_steps_preserve_declared_runtime_review_grants(playbook_id):
     """UT-007: bundled review steps retain their declared inspection capabilities."""

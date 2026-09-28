@@ -158,6 +158,14 @@ class GenericPhase:
         runtime_files: list[str] = []
         runtime_context: list[str] = []
 
+        if context and context.get("allow_issue_decomposition") is True:
+            lines.append(
+                self.skill_loader.get_reference(
+                    "cafe-workflow-common", "issue_decomposition.md"
+                ).strip()
+            )
+            lines.append("")
+
         if shared_skill_invocations:
             lines.append("Shared skills:")
             lines.extend(f"- {invocation}" for invocation in shared_skill_invocations)
