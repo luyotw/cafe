@@ -9,6 +9,10 @@ from typing import Any, Dict, Iterable, Optional
 
 import yaml
 
+from cafe.core.conversation_locale import DEFAULT_CONVERSATION_LOCALE, normalize_locale_tag
+
+#: Used when the repository has not confirmed a content locale of its own.
+DEFAULT_CONTENT_LOCALE = DEFAULT_CONVERSATION_LOCALE
 
 DEFAULT_DOCUMENT_CATEGORIES = (
     "roadmap",
@@ -62,6 +66,10 @@ class StrategicContext:
     documents: Dict[str, StrategicDocumentMetadata]
     axes: Dict[str, AxisRule]
     out_of_mandate: tuple[str, ...]
+    #: The language this repository writes its own documentation, code comments
+    #: and engineering artifacts in. Distinct from the workflow conversation
+    #: language, which the workflow's own state owns.
+    content_locale: str = DEFAULT_CONTENT_LOCALE
     notes: str = ""
 
     def document(self, category: str) -> StrategicDocumentMetadata:
@@ -138,8 +146,16 @@ def load_strategic_context(project_root: Path | str = Path.cwd(), issue_name: Op
         documents=documents,
         axes=axes,
         out_of_mandate=out_of_mandate,
+        content_locale=_resolve_content_locale(raw),
         notes=notes,
     )
+
+
+def _resolve_content_locale(raw: Dict[str, Any]) -> str:
+    """Read the confirmed repository content locale, or the documented default."""
+    declared = _as_dict(raw.get("repository_language")).get("content_locale")
+    normalized = normalize_locale_tag(declared) if isinstance(declared, str) else None
+    return normalized or DEFAULT_CONTENT_LOCALE
 
 
 def _as_dict(value: Any) -> Dict[str, Any]:

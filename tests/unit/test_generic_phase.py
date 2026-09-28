@@ -1957,3 +1957,37 @@ def test_execute_script_hook_timeout_decodes_bytes_output(
     assert event["exit_code"] is None
     assert "partial-bytes" in event["stdout"]
     assert "timed-bytes" in event["stderr"]
+
+
+def test_build_prompt_states_both_language_policy_inputs(tmp_path: Path) -> None:
+    """Unit: the phase prompt carries the two policy languages, not an agent preference."""
+    phase = GenericPhase(_setup_loader(tmp_path))
+
+    prompt = phase.build_prompt(
+        skill_name="cafe-plan",
+        skill_invocation="/custom-drafting",
+        context={
+            "conversation_locale": "zh-TW",
+            "repository_content_locale": "en-US",
+        },
+        output_file=tmp_path / "custom_artifact.md",
+    )
+
+    conversation_line = next(
+        line for line in prompt.splitlines() if "conversation language" in line
+    )
+    content_line = next(line for line in prompt.splitlines() if "content language" in line)
+    assert "zh-TW" in conversation_line
+    assert "en-US" in content_line
+
+
+def test_build_prompt_omits_the_language_lines_when_no_locale_is_stored(tmp_path: Path) -> None:
+    phase = GenericPhase(_setup_loader(tmp_path))
+
+    prompt = phase.build_prompt(
+        skill_name="cafe-plan",
+        skill_invocation="/custom-drafting",
+        context={"handoff_summary": "Resume"},
+    )
+
+    assert "conversation language" not in prompt
