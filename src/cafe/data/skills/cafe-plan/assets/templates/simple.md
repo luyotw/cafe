@@ -10,18 +10,6 @@ Add a "forgot password" link to the login page
 - **Will not do:** [Related work intentionally excluded]
 - **Key trade-offs:** [Material scope, cost, reliability, or maintenance trade-offs; write "None" if none apply]
 
-## Issue Decomposition Assessment
-
-- Decision: `keep` or `split`
-- Rationale: [Repository evidence for keeping or splitting delivery]
-- Current issue scope: [Independently acceptable outcome to deliver now]
-- Trigger: [none, product scope, or implementation scope]
-
-### Proposed follow-up issues
-
-| Title | Goal | Depends on | Scope boundary | Non-goals | Definition of Done |
-| --- | --- | --- | --- | --- | --- |
-
 ## Negative space
 
 - **Not adding:** [dependency or abstraction declined] — [one-line reason]

@@ -525,11 +525,7 @@ def test_launch_chat_session_stops_before_cli_when_playbook_validation_fails(
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "invalid-chat"
     issue_dir.mkdir(parents=True)
-    (issue_dir / "blackboard.json").write_text(
-        '{"schema_version":1,"playbook_id":"invalid","current_step":"develop",'
-        '"artifacts":{},"events":[],"decisions":[]}',
-        encoding="utf-8",
-    )
+    BlackboardStore(issue_dir).load_or_create("develop", playbook_id="invalid")
 
     with (
         patch("builtins.print") as mock_print,
@@ -740,10 +736,7 @@ def test_launch_chat_session_uses_active_phase_chain(
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "research-1"
     issue_dir.mkdir(parents=True)
-    (issue_dir / "blackboard.json").write_text(
-        '{"schema_version":1,"playbook_id":"research","current_step":"question","artifacts":{},"events":[],"decisions":[]}',
-        encoding="utf-8",
-    )
+    BlackboardStore(issue_dir).load_or_create("question", playbook_id="research")
     (tmp_path / ".cafe" / "phases.yaml").write_text(
         "question:\n"
         "  name: Morgan\n"
@@ -856,17 +849,14 @@ def test_prepare_chat_handoff_state_creates_blackboard_and_clears_stale_baton(
     issue_dir = tmp_path / ".cafe" / "issues" / "issue123"
     next_step_path = get_chat_next_step_path(issue_dir)
     issue_dir.mkdir(parents=True, exist_ok=True)
-    (issue_dir / "blackboard.json").write_text(
-        '{"schema_version":1,"playbook_id":"default","current_step":"review","artifacts":{},"events":[],"decisions":[]}',
-        encoding="utf-8",
-    )
+    BlackboardStore(issue_dir).load_or_create("review", playbook_id="standard")
     next_step_path.write_text("review\n", encoding="utf-8")
 
     current_step, valid_steps, playbook_id = _prepare_chat_handoff_state(issue_dir)
 
     assert current_step == "review"
     assert "spec" in valid_steps
-    assert playbook_id == "default"
+    assert playbook_id == "standard"
     assert (issue_dir / "blackboard.json").exists()
     assert next_step_path.exists()
 

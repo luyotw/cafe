@@ -4,6 +4,46 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.5.0] - 2026-09-28
+
+### Breaking changes
+
+- Moved audit events and capability receipts out of `blackboard.json` into
+  separate workflow-bound stores. Existing workflows are not migrated; finish
+  them with their original version before upgrading, then start new workflows.
+- Removed the `cafe summary` alias. Use `cafe status` instead.
+
+### Added
+
+- Added opt-in issue split guidance through
+  `behavior.allow_issue_decomposition`, available to any playbook step. Built-in
+  playbooks enable it; custom playbooks default to disabled. Independent work
+  receives concise split proposals without mandatory reports or extra gates.
+- Added current workflow state, pending task inspection commands, pause reasons,
+  and declared callback diagnostics to `cafe status`.
+
+### Changed
+
+- Made HumanTask ownership independent of its pause route. Driver-confirmable
+  tasks use the confirmed contract and current inspected authority at completion;
+  required user decisions and permissions remain user-owned.
+- Made PR delivery use merge commits by default rather than squash.
+- Clarified Git push authentication setup and Slack clarification/review actions.
+
+### Fixed
+
+- Preserved callback continuation across transport changes and contract
+  reconfirmation, with actionable delivery failure diagnostics and bounded audit
+  reads that keep event bodies out of ordinary blackboard status reads.
+- Exposed retry recovery after checklist validation failures and accepted reviewer
+  annotations on completed checklist entries.
+- Preserved generated checklist contracts in workflow test fixtures.
+- Kept workflow progress rendering available when a pending task cannot be
+  resolved from the durable task inbox.
+
+See [the v0.5.0 release notes](docs/releases/v0.5.0.md) for upgrade guidance and
+details.
+
 ## [0.4.1] - 2026-09-25
 
 ### Fixed

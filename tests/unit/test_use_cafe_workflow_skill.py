@@ -834,12 +834,11 @@ def test_use_cafe_workflow_uses_structured_human_task_resume_payloads() -> None:
     normalized = " ".join(reference.split())
     normalized_running = " ".join(running.split())
 
-    assert '"task":"output-review","decision":"confirm"' in reference
-    assert '"task":"clarification-answers","answers"' in reference
-    assert '"task":"clarification-feedback","feedback"' in reference
-    assert '"human_task_id":"<active-human-task-id>"' in reference
+    assert "complete_driver_task.py" in reference
+    assert "--task-id <active-human-task-id>" in reference
+    assert "For `answers`, account for every required field" in normalized
+    assert "Use the active task's declared decision ID" in normalized
     assert "Do not guess or reuse an old task ID" in normalized
-    assert "runtime accepts plain text only for a declared `feedback` schema" in normalized
     assert '--user-input "confirmed"' not in reference
     assert "resolve the active HumanTask and its input schema" in normalized_running
     assert "current `human_task_id`" in normalized_running
@@ -1036,7 +1035,8 @@ mandate:
     assert "| review | gemini:review-main | copilot:review-fallback |" in result.stdout
     assert "| pr | cursor-agent:publication-main | gemini:publication-fallback |" in result.stdout
     assert "### Phase execution requirements" not in result.stdout
-    assert "| need_clarification | driver_confirmable |" in result.stdout
+    assert "| need_clarification | driver_confirmable |" not in result.stdout
+    assert "### Declared HumanTask ownership" in result.stdout
     assert "### Mandate" not in result.stdout
     assert result.stdout.count("| playbook_id |") == 1
 
@@ -1481,7 +1481,9 @@ def test_confirmed_kickoff_activates_one_issue_scoped_driver_contract(tmp_path: 
         "phase": "develop",
         "decision": "not_required",
     }
-    assert contract["schema_version"] == 5
+    assert contract["schema_version"] == 6
+    assert "task_contract" in contract
+    assert "need_clarification" not in contract["reactive_user_handoffs"]
     assert (
         not {"preflight", "semantic_facts", "material_assumptions", "mandate", "issue_assessment"}
         & contract.keys()
@@ -1625,6 +1627,7 @@ def test_kickoff_formatter_shows_only_task_decisions_without_mutating_the_projec
         "delivery_contract",
         "locales",
         "confirmation_contract",
+        "task_contract",
         "reactive_user_handoffs",
         "phases",
         "proactive_review",
@@ -1992,14 +1995,14 @@ def test_kickoff_defaults_verified_github_issues_to_pr_publication() -> None:
     assert "never authorizes merge or issue closure" in normalized
 
 
-def test_need_clarification_defaults_to_bounded_driver_confirmation() -> None:
+def test_need_clarification_requires_task_declaration_and_bounded_evidence() -> None:
     skill = _read_skill_resource("SKILL.md")
     kickoff = _read_skill_resource("references/kickoff.md")
     running = _read_skill_resource("references/running_workflow.md")
     handoffs = _read_skill_resource("references/handoffs_and_alignment.md")
     normalized = " ".join((skill + kickoff + running + handoffs).split()).lower()
 
-    assert "default `need_clarification` to bounded `driver_confirmable`" in normalized
+    assert "declare ownership by exact phase and task id" in normalized
     assert "scope, explicit constraints and existing authority" in normalized
     assert "triggers no deviation" in normalized
     assert "reserved product or strategy decisions" in normalized
@@ -3114,6 +3117,40 @@ def test_kickoff_defaults_assignable_gates_to_driver_confirmation() -> None:
     assert driver_confirmable == ["spec", "plan"]
 
 
+def test_kickoff_cli_forwards_custom_task_ownership_without_route_authority(tmp_path: Path) -> None:
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text("version: 1\n", encoding="utf-8")
+    proposal = _kickoff_proposal(
+        _kickoff_formatter_command(
+            strategic_context,
+            "--task-driver-confirmable", "develop:known-answer",
+            "--task-user-required", "review:choose-release",
+        )
+    )
+    assert proposal["task_contract"] == {
+        "user_required": [
+            {"phase": "pr", "task_id": "local-review"},
+            {"phase": "review", "task_id": "choose-release"},
+        ],
+        "driver_confirmable": [
+            {"phase": "spec", "task_id": "output-review"},
+            {"phase": "plan", "task_id": "output-review"},
+            {"phase": "develop", "task_id": "known-answer"},
+        ],
+    }
+    assert "need_clarification" not in proposal["reactive_user_handoffs"]
+    retired_route_flag = subprocess.run(
+        _kickoff_formatter_command(
+            strategic_context, "--need-clarification", "driver_confirmable"
+        ),
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert retired_route_flag.returncode != 0
+
+
 def test_proactive_review_overrides_are_sparse_ordered_and_fail_closed() -> None:
     module = _load_script_module(
         SKILL_ROOT / "scripts" / "format_kickoff_contract.py",
@@ -3507,7 +3544,7 @@ def test_proactive_review_authority_precedence_has_no_blanket_callback_or_route_
             in task_policy
             and "a mandatory, `user_required`, permission, or capability task requires a **user-facing driver turn**"
             in task_policy
-            and "a `need_clarification` task whose confirmed reactive policy is `driver_confirmable`"
+            and "a task whose current phase and task id are declared `driver_confirmable`"
             in task_policy
             and "including an event-driven callback, to submit only that eligible outcome"
             in task_policy
@@ -3521,7 +3558,7 @@ def test_proactive_review_authority_precedence_has_no_blanket_callback_or_route_
     assert is_consistent(task_authority, correction_flow)
     assert not is_consistent(
         task_authority.replace(
-            "A `need_clarification` task whose confirmed reactive policy is `driver_confirmable`",
+            "A task whose current phase and task ID are declared `driver_confirmable`",
             "A `need_clarification` task",
         ),
         correction_flow,
@@ -3790,9 +3827,8 @@ def test_event_driver_documentation_defines_the_contract_managed_lifecycle() -> 
     assert "bootstrap never counts as event delivery or acceptance" in contract
     assert "actual callback durable acceptance" in contract
     assert "Copilot never receives a caller-selected new-session ID" in contract
-    assert (
-        "`dispatch_state.json` is mutable runtime state bound to that contract's digest" in contract
-    )
+    assert "`dispatch_state.json` is mutable runtime state" in contract
+    assert "The stored digest does not block dispatch" in contract
     assert "callback reads the issue-scoped `driver/contract.json`" in contract
     assert "provider acknowledgement is bound to the exact event identity" in contract
     assert "no session-file discovery, directory diff, sleep, polling, or watcher" in contract
@@ -3802,7 +3838,7 @@ def test_event_driver_documentation_defines_the_contract_managed_lifecycle() -> 
     assert "--status --issue-dir .cafe/issues/<issue>" in contract
 
 
-def test_use_cafe_workflow_keeps_human_task_completion_in_the_interactive_driver() -> None:
+def test_use_cafe_workflow_binds_driver_completion_to_inspected_authority() -> None:
     skill = _read_skill_resource("SKILL.md")
     running = _read_skill_resource("references/running_workflow.md")
     handoffs = _read_skill_resource("references/handoffs_and_alignment.md")
@@ -3810,20 +3846,18 @@ def test_use_cafe_workflow_keeps_human_task_completion_in_the_interactive_driver
 
     assert "HumanTask" in skill
     assert "`references/handoffs_and_alignment.md`" in skill
-    assert "cafe task complete <task-id> --result '<json>' --no-resume --json" in running
+    assert "complete_driver_task.py --issue-dir <issue-dir> --task-id <task-id>" in running
+    assert "--contract-sha256 <digest> --sources-sha256 <digest>" in normalized_running
     assert (
         "Direct `cafe task complete` users retain its normal automatic foreground-resume"
         in normalized_running
     )
+    assert "serialize only the user's supplied answer" in normalized_running
     assert (
-        "cannot wait for, collect, infer, or choose a user answer for a mandatory"
+        "must not infer a decision, approval, permission, or missing answer"
         in normalized_running
     )
-    assert (
-        "whose confirmed reactive policy is `driver_confirmable` may be completed by any driver"
-        in normalized_running.lower()
-    )
-    assert "cafe task complete <active-human-task-id>" in handoffs
+    assert "--task-id <active-human-task-id>" in handoffs
     assert '"work_report"' in handoffs
     assert '--user-input \'{"task":"output-review"' not in handoffs
 
@@ -3870,7 +3904,8 @@ def test_driver_keeps_completion_separate_from_external_authority() -> None:
         assert "convergent review" not in " ".join(text.split())
         assert "cafe.pr.publish" not in text
         assert "pr.auto_create" not in text
-        assert "gh pr merge" not in text
+    assert "gh pr merge --merge" in kickoff
+    assert "only user confirmation authorizes execution" in " ".join(kickoff.split())
     assert "[gh, issue, close, \"123\"]" in kickoff
     assert "[cafe, close]" in kickoff
 

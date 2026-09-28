@@ -32,10 +32,12 @@ HUMAN_TASK_STEP_LABELS = {
     "plan": "規劃",
     "develop": "開發",
     "review": "審查",
-    "pr": "提交與合併",
+    "pr": "PR 準備與審閱",
 }
 HUMAN_TASK_ACTION_LABELS = {
     "clarification-feedback": "回覆釐清問題",
+    "clarification-answers": "回覆釐清問題",
+    "local-review": "審閱變更與後續建議，決定修正或確認繼續",
     "output-review": "確認結果",
     "permission-answers": "回覆權限相關問題",
     "alignment-decision": "確認方向",
@@ -245,17 +247,21 @@ class WorkflowCallbackFailureSlackMessage:
         repository = _readable_metadata(self.repository, fallback="目前專案")
         issue = _readable_metadata(self.issue, fallback="未命名工作項目")
         step = HUMAN_TASK_STEP_LABELS.get(self.step, self.step or "未知階段")
-        event_type = _readable_metadata(self.event_type, fallback="未知事件")
-        error_code = _readable_metadata(self.error_code, fallback="未知錯誤")
+        if self.error_code == "callback_ValueError":
+            reason = "CAFE 無法讀取自動通知所需的狀態或設定。"
+        elif self.error_code.startswith("codex_queue_"):
+            reason = "CAFE 無法將通知送達原對話。"
+        else:
+            reason = "CAFE 的自動通知發生錯誤。"
         text = "\n".join(
             (
-                "CAFE event callback 執行失敗",
+                "CAFE 自動通知未完成",
                 f"專案：{repository}",
                 f"對話：{issue}",
                 f"目前階段：{step}",
-                f"事件：{event_type}",
-                f"錯誤：{error_code}",
-                f"工作流程狀態已保存，請回到 CAFE 的「{issue}」工作項目查看。",
+                f"狀況：{reason}",
+                "影響：原對話可能收不到這次更新；這不代表工作流程已停止。",
+                f"請回到 CAFE 的「{issue}」原對話，請 Driver 檢查目前進度與下一步。",
             )
         )
         return {"text": text}

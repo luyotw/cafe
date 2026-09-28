@@ -24,6 +24,17 @@ meaning, failed boundary, and execution context. Exact wording need not match.
 When the visible information is insufficient or conflicting, treat the state as
 ambiguous and diagnose it instead of manufacturing certainty.
 
+When reporting a callback or runtime failure to the user, translate internal
+field names and error codes into the failed operation, its visible effect, and
+one usable next action. For a saved-state format mismatch, explain that the
+current CAFE version could not read older workflow state and identify whether
+only the automatic conversation notification failed or the workflow itself
+paused, based on fresh `cafe status` and task evidence. A callback failure alone
+does not prove the worker stopped. Keep raw field names in diagnostic evidence,
+not as the user's instruction; never ask the user to edit state files. If the
+workflow is still running, report that the Driver can inspect it when the user
+returns. If a task is pending, present its declared choices in plain language.
+
 ## Non-intervention envelope
 
 The Driver remains passive while every applicable condition is demonstrably

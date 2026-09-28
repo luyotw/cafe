@@ -94,6 +94,15 @@ removal to avoid asking for that approval. Respect an explicit user choice to
 stop at a PR, preserve resources, or exclude an action. Repository context
 informs the recommendation; only user confirmation authorizes execution.
 
+When delivery includes merging a GitHub PR, propose a merge commit by default:
+`gh pr merge --merge` from the verified issue worktree, or with an exact verified
+PR selector. This preserves the branch commits and fixes the strategy for
+non-interactive execution. Propose `--squash` or `--rebase` only when the user
+explicitly chose that strategy. If repository policy disallows merge commits,
+resolve the available strategy with the user before rendering the contract.
+An existing confirmed closeout plan takes precedence; changing its strategy
+requires reconfirmation.
+
 Default the cleanup proposal to closing the verified, bound GitHub issue and
 then running `cafe close`, in that order. Use the issue's verified numeric ID
 in the first exact argv array:
@@ -172,6 +181,10 @@ obtain explicit user confirmation of:
 - `repository_content_locale`;
 - every assignable planned confirmation gate, partitioned into `user_required`
   and `driver_confirmable`, plus the separate mandatory HumanTask stop list;
+- each Driver-completable HumanTask as a task declaration keyed by its exact
+  phase and task ID, using `--task-driver-confirmable PHASE:TASK_ID`; declare
+  user-owned tasks with `--task-user-required PHASE:TASK_ID`. An undeclared task
+  is user-owned. The pause route never assigns ownership;
 - `reactive_user_handoffs`;
 - the effective proactive-review decision for every agent or hybrid phase with
   an existing scheduled confirmation pause. Default every assignable scheduled
@@ -338,20 +351,22 @@ change the separate event-driven callback chain.
 
 `need_clarification` and `need_permission` are reactive interruptions, not
 scheduled candidates. `manual_handoff` is routing, not a planned confirmation
-gate. Alignment is a proactive driver decision governed by mandate. Record the
-reactive policy in the kickoff:
+gate. Alignment is a proactive driver decision governed by mandate. Declare
+ownership by exact phase and task ID, independently of route. Record the
+remaining reactive policy in the kickoff:
 
-- Default `need_clarification` to bounded `driver_confirmable` handling. The Driver may answer
-  only when the complete answer stays within the confirmed Delivery Contract,
-  its scope, explicit constraints and existing authority, and triggers no deviation;
-  otherwise it remains user-owned;
+- A `need_clarification` task may be `driver_confirmable` only through its
+  confirmed task declaration. The Driver may answer only when the complete
+  answer stays within the confirmed Delivery Contract, its scope, explicit
+  constraints and existing authority, and triggers no deviation; otherwise it
+  remains user-owned;
 - `need_permission`: user required unless the exact permission already exists
   in the current thread;
 - `alignment_checkpoint`: driver-resolvable only when the proposal is clearly
   within confirmed strategy and mandate.
 
-Any other runtime `to_owner=user` baton or `Workflow is waiting for user input`
-output is a hard stop.
+An undeclared or user-owned runtime `to_owner=user` baton or `Workflow is waiting
+for user input` output is a hard stop for autonomous Driver completion.
 
 ### Delivery facts to confirm
 
@@ -660,8 +675,9 @@ for confirmation rather than asking again.
   memory. Do not
   create `driver/config.yaml`: that file is legacy migration evidence only and
   cannot override a contract-managed callback. Its mutable
-  `dispatch_state.json` records only the active contract digest, sessions, and
-  delivery progress.
+  `dispatch_state.json` records session CLI/model identities, event routing
+  history, and delivery progress. Its legacy digest field does not control
+  callback continuation; the current contract controls new dispatch.
 
   Do not put the mode, CLI, model, session, callback, or any driver control
   setting in `issue.yaml`. Confirm that every entry reports `event-driven

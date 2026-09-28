@@ -15,6 +15,7 @@ from cafe.core.human_tasks import HumanTaskPolicy
 RUNTIME_OWNED_PROMPT_PLACEHOLDERS = frozenset(
     {
         "agent_file",
+        "allow_issue_decomposition",
         "authoritative_inputs",
         "behavior_completion",
         "current_step",

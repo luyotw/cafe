@@ -1,4 +1,4 @@
-"""Time formatting utilities for cafe summary."""
+"""Time formatting utilities for cafe status."""
 
 from datetime import datetime, timedelta, timezone
 from typing import Optional

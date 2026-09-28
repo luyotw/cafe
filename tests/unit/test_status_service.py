@@ -1,4 +1,4 @@
-"""Unit tests for summary service layer."""
+"""Unit tests for status service layer."""
 
 import json
 from datetime import datetime
@@ -13,7 +13,7 @@ from cafe.core.types import PhaseStatus
 
 def test_context_packet_status_projects_only_strict_effective_inputs(tmp_path, monkeypatch) -> None:
     """IT-003: obsolete or tampered diagnostic projections never reach status."""
-    from cafe.services.summary_service import SummaryService
+    from cafe.services.status_service import StatusService
 
     monkeypatch.chdir(tmp_path)
     iteration = tmp_path / ".cafe/issues/demo/develop/iteration_001"
@@ -40,7 +40,7 @@ def test_context_packet_status_projects_only_strict_effective_inputs(tmp_path, m
         encoding="utf-8",
     )
 
-    packets = SummaryService().load_context_packets("demo")
+    packets = StatusService().load_context_packets("demo")
 
     assert len(packets) == 1
     assert packets[0]["fallback_reason"] == "packet_invalid"
@@ -51,12 +51,12 @@ def test_context_packet_status_projects_only_strict_effective_inputs(tmp_path, m
     (iteration / "iteration.json").write_text(
         json.dumps({"iteration": 1, "effective_inputs": effective}), encoding="utf-8"
     )
-    assert SummaryService().load_context_packets("demo") == []
+    assert StatusService().load_context_packets("demo") == []
 
 
 def test_context_packet_status_derives_bounded_consumer_iteration_from_runtime_path(tmp_path, monkeypatch) -> None:
     """IT-003: status ignores agent-authored consumer and iteration projections."""
-    from cafe.services.summary_service import SummaryService
+    from cafe.services.status_service import StatusService
 
     monkeypatch.chdir(tmp_path)
     iteration = tmp_path / ".cafe/issues/demo/develop/iteration_002"
@@ -72,7 +72,7 @@ def test_context_packet_status_derives_bounded_consumer_iteration_from_runtime_p
         encoding="utf-8",
     )
 
-    assert SummaryService().load_context_packets("demo")[0]["iteration"] == 2
+    assert StatusService().load_context_packets("demo")[0]["iteration"] == 2
 
 
 class TestGetCurrentIssue:
@@ -80,20 +80,20 @@ class TestGetCurrentIssue:
 
     def test_get_current_issue_from_branch_name(self):
         """Test detecting current issue from git branch name."""
-        from cafe.services.summary_service import SummaryService
+        from cafe.services.status_service import StatusService
 
-        service = SummaryService()
+        service = StatusService()
         # Mock git_ops to return a branch name
-        service.git_ops.get_current_branch = Mock(return_value="cafe-summary")
+        service.git_ops.get_current_branch = Mock(return_value="cafe-status")
 
         result = service.get_current_issue()
-        assert result == "cafe-summary"
+        assert result == "cafe-status"
 
     def test_get_current_issue_from_git_context(self):
         """Test getting current issue from git context."""
-        from cafe.services.summary_service import SummaryService
+        from cafe.services.status_service import StatusService
 
-        service = SummaryService()
+        service = StatusService()
         service.git_ops.get_current_branch = Mock(return_value="issue84")
 
         result = service.get_current_issue()
@@ -101,9 +101,9 @@ class TestGetCurrentIssue:
 
     def test_get_current_issue_handles_missing_git_context(self):
         """Test error handling when not in a git repository."""
-        from cafe.services.summary_service import SummaryService
+        from cafe.services.status_service import StatusService
 
-        service = SummaryService()
+        service = StatusService()
         service.git_ops.get_current_branch = Mock(side_effect=Exception("Not in git repo"))
 
         with pytest.raises(RuntimeError):
@@ -115,12 +115,12 @@ class TestLoadPhaseStatus:
 
     def test_load_phase_status_reads_json_file(self, tmp_path, monkeypatch):
         """Test reading and parsing phase status.json file."""
-        from cafe.services.summary_service import SummaryService
+        from cafe.services.status_service import StatusService
 
         # Change working directory to tmp_path so relative paths work
         monkeypatch.chdir(tmp_path)
 
-        service = SummaryService()
+        service = StatusService()
         # Create temporary valid JSON file
         issue_dir = tmp_path / ".cafe/issues/test-issue/spec"
         issue_dir.mkdir(parents=True)
@@ -133,11 +133,11 @@ class TestLoadPhaseStatus:
 
     def test_load_phase_status_parses_timestamp(self, tmp_path, monkeypatch):
         """Test parsing ISO format timestamps in status.json."""
-        from cafe.services.summary_service import SummaryService
+        from cafe.services.status_service import StatusService
 
         monkeypatch.chdir(tmp_path)
 
-        service = SummaryService()
+        service = StatusService()
         issue_dir = tmp_path / ".cafe/issues/test-issue/plan"
         issue_dir.mkdir(parents=True)
         status_file = issue_dir / "status.json"
@@ -149,15 +149,15 @@ class TestLoadPhaseStatus:
 
     def test_load_phase_status_handles_missing_file(self):
         """Test handling when status.json doesn't exist."""
-        from cafe.services.summary_service import SummaryService
+        from cafe.services.status_service import StatusService
 
-        service = SummaryService()
+        service = StatusService()
         result = service.load_phase_status("nonexistent-issue", "spec")
         assert result is None
 
     def test_load_phase_status_synthesizes_completed_from_iterations(self, tmp_path, monkeypatch):
         """Test synthesizing phase status when status.json is absent."""
-        from cafe.services.summary_service import SummaryService
+        from cafe.services.status_service import StatusService
 
         monkeypatch.chdir(tmp_path)
 
@@ -213,7 +213,7 @@ class TestLoadPhaseStatus:
             )
         )
 
-        service = SummaryService()
+        service = StatusService()
         result = service.load_phase_status("test-issue", "pr")
         assert result is not None
         assert result["status"] == "completed"
@@ -223,7 +223,7 @@ class TestLoadPhaseStatus:
 
     def test_load_phase_status_synthesizes_in_progress_from_user_baton(self, tmp_path, monkeypatch):
         """Test paused phases stay in-progress without a phase status file."""
-        from cafe.services.summary_service import SummaryService
+        from cafe.services.status_service import StatusService
 
         monkeypatch.chdir(tmp_path)
 
@@ -266,7 +266,7 @@ class TestLoadPhaseStatus:
         )
         (issue_dir / "next_step.txt").write_text(json.dumps(baton))
 
-        service = SummaryService()
+        service = StatusService()
         result = service.load_phase_status("test-issue", "spec")
         assert result is not None
         assert result["status"] == "in_progress"
@@ -275,8 +275,8 @@ class TestLoadPhaseStatus:
         assert "end_time" not in result
 
     def test_load_phase_status_does_not_create_blackboard_files(self, tmp_path, monkeypatch):
-        """Test summary fallback stays read-only when workflow state is absent."""
-        from cafe.services.summary_service import SummaryService
+        """Test status fallback stays read-only when workflow state is absent."""
+        from cafe.services.status_service import StatusService
 
         monkeypatch.chdir(tmp_path)
 
@@ -293,7 +293,7 @@ class TestLoadPhaseStatus:
             )
         )
 
-        service = SummaryService()
+        service = StatusService()
         result = service.load_phase_status("test-issue", "pr")
         assert result is not None
         assert result["status"] == "completed"
@@ -302,11 +302,11 @@ class TestLoadPhaseStatus:
 
     def test_load_phase_status_returns_correct_structure(self, tmp_path, monkeypatch):
         """Test that loaded status has required fields."""
-        from cafe.services.summary_service import SummaryService
+        from cafe.services.status_service import StatusService
 
         monkeypatch.chdir(tmp_path)
 
-        service = SummaryService()
+        service = StatusService()
         issue_dir = tmp_path / ".cafe/issues/test-issue/develop"
         issue_dir.mkdir(parents=True)
         status_file = issue_dir / "status.json"
@@ -324,11 +324,11 @@ class TestLoadPhaseStatus:
 
     def test_load_phase_status_handles_malformed_json(self, tmp_path, monkeypatch):
         """Test handling of malformed JSON in status file."""
-        from cafe.services.summary_service import SummaryService
+        from cafe.services.status_service import StatusService
 
         monkeypatch.chdir(tmp_path)
 
-        service = SummaryService()
+        service = StatusService()
         issue_dir = tmp_path / ".cafe/issues/test-issue/review"
         issue_dir.mkdir(parents=True)
         status_file = issue_dir / "status.json"
@@ -343,11 +343,11 @@ class TestLoadIterationStatuses:
 
     def test_load_iteration_statuses_finds_all_iterations(self, tmp_path, monkeypatch):
         """Test finding all iteration context files in a phase directory."""
-        from cafe.services.summary_service import SummaryService
+        from cafe.services.status_service import StatusService
 
         monkeypatch.chdir(tmp_path)
 
-        service = SummaryService()
+        service = StatusService()
         phase_dir = tmp_path / ".cafe/issues/test-issue/spec"
         (phase_dir / "iteration_001").mkdir(parents=True)
         (phase_dir / "iteration_002").mkdir(parents=True)
@@ -360,11 +360,11 @@ class TestLoadIterationStatuses:
 
     def test_load_iteration_statuses_orders_by_number(self, tmp_path, monkeypatch):
         """Test that iterations are ordered by iteration number."""
-        from cafe.services.summary_service import SummaryService
+        from cafe.services.status_service import StatusService
 
         monkeypatch.chdir(tmp_path)
 
-        service = SummaryService()
+        service = StatusService()
         phase_dir = tmp_path / ".cafe/issues/test-issue/plan"
         (phase_dir / "iteration_003").mkdir(parents=True)
         (phase_dir / "iteration_001").mkdir(parents=True)
@@ -376,19 +376,19 @@ class TestLoadIterationStatuses:
 
     def test_load_iteration_statuses_handles_empty_phase(self):
         """Test handling phase with no iterations."""
-        from cafe.services.summary_service import SummaryService
+        from cafe.services.status_service import StatusService
 
-        service = SummaryService()
+        service = StatusService()
         result = service.load_iteration_statuses("nonexistent", "develop")
         assert result == []
 
     def test_load_iteration_statuses_parses_iteration_info(self, tmp_path, monkeypatch):
         """Test parsing iteration number and metadata from iteration.json files."""
-        from cafe.services.summary_service import SummaryService
+        from cafe.services.status_service import StatusService
 
         monkeypatch.chdir(tmp_path)
 
-        service = SummaryService()
+        service = StatusService()
         phase_dir = tmp_path / ".cafe/issues/test-issue/review"
         (phase_dir / "iteration_001").mkdir(parents=True)
         context_data = {"iteration": 1, "status_code": "need_clarification", "timestamp": "2025-01-04T14:00:00Z"}
@@ -401,11 +401,11 @@ class TestLoadIterationStatuses:
 
     def test_load_iteration_statuses_handles_malformed_iteration_json(self, tmp_path, monkeypatch):
         """Test handling of malformed JSON in iteration iteration.json files."""
-        from cafe.services.summary_service import SummaryService
+        from cafe.services.status_service import StatusService
 
         monkeypatch.chdir(tmp_path)
 
-        service = SummaryService()
+        service = StatusService()
         phase_dir = tmp_path / ".cafe/issues/test-issue/pr"
         (phase_dir / "iteration_001").mkdir(parents=True)
         (phase_dir / "iteration_001/iteration.json").write_text('{invalid json}')
@@ -418,11 +418,11 @@ class TestLoadIterationStatuses:
 
     def test_load_iteration_statuses_skips_non_iteration_files(self, tmp_path, monkeypatch):
         """Test that non-iteration files are ignored."""
-        from cafe.services.summary_service import SummaryService
+        from cafe.services.status_service import StatusService
 
         monkeypatch.chdir(tmp_path)
 
-        service = SummaryService()
+        service = StatusService()
         phase_dir = tmp_path / ".cafe/issues/test-issue/pr"
         (phase_dir / "iteration_001").mkdir(parents=True)
         (phase_dir / "iteration_001/status.json").write_text('{"iteration": 1}')
@@ -433,11 +433,11 @@ class TestLoadIterationStatuses:
 
     def test_load_iteration_statuses_from_context_files(self, tmp_path, monkeypatch):
         """Test reading iterations from iteration.json files."""
-        from cafe.services.summary_service import SummaryService
+        from cafe.services.status_service import StatusService
 
         monkeypatch.chdir(tmp_path)
 
-        service = SummaryService()
+        service = StatusService()
         phase_dir = tmp_path / ".cafe/issues/test-issue/review"
         phase_dir.mkdir(parents=True)
 
@@ -464,11 +464,11 @@ class TestLoadIterationContexts:
 
     def test_load_iteration_statuses_reads_from_context_json(self, tmp_path, monkeypatch):
         """Verify load_iteration_statuses() reads data from iteration.json"""
-        from cafe.services.summary_service import SummaryService
+        from cafe.services.status_service import StatusService
 
         monkeypatch.chdir(tmp_path)
 
-        service = SummaryService()
+        service = StatusService()
         phase_dir = tmp_path / ".cafe/issues/test-issue/spec"
         (phase_dir / "iteration_001").mkdir(parents=True)
         (phase_dir / "iteration_002").mkdir(parents=True)
@@ -499,11 +499,11 @@ class TestLoadIterationContexts:
 
     def test_load_iteration_statuses_handles_missing_end_time(self, tmp_path, monkeypatch):
         """Verify handling when end_time is missing"""
-        from cafe.services.summary_service import SummaryService
+        from cafe.services.status_service import StatusService
 
         monkeypatch.chdir(tmp_path)
 
-        service = SummaryService()
+        service = StatusService()
         phase_dir = tmp_path / ".cafe/issues/test-issue/plan"
         (phase_dir / "iteration_001").mkdir(parents=True)
 
@@ -523,11 +523,11 @@ class TestLoadIterationContexts:
 
     def test_load_iteration_statuses_preserves_chronological_order(self, tmp_path, monkeypatch):
         """Verify iterations are ordered by iteration number"""
-        from cafe.services.summary_service import SummaryService
+        from cafe.services.status_service import StatusService
 
         monkeypatch.chdir(tmp_path)
 
-        service = SummaryService()
+        service = StatusService()
         phase_dir = tmp_path / ".cafe/issues/test-issue/develop"
         # Create directories in non-sequential order
         (phase_dir / "iteration_003").mkdir(parents=True)
@@ -557,11 +557,11 @@ class TestLoadTokenUsageData:
 
     def test_load_iteration_statuses_extracts_token_usage(self, tmp_path, monkeypatch):
         """Verify load_iteration_statuses() extracts cli, model, and stats fields"""
-        from cafe.services.summary_service import SummaryService
+        from cafe.services.status_service import StatusService
 
         monkeypatch.chdir(tmp_path)
 
-        service = SummaryService()
+        service = StatusService()
         phase_dir = tmp_path / ".cafe/issues/test-issue/spec"
         (phase_dir / "iteration_001").mkdir(parents=True)
 
@@ -595,11 +595,11 @@ class TestLoadTokenUsageData:
 
     def test_load_iteration_statuses_handles_missing_token_fields(self, tmp_path, monkeypatch):
         """Verify handling when token usage fields are missing"""
-        from cafe.services.summary_service import SummaryService
+        from cafe.services.status_service import StatusService
 
         monkeypatch.chdir(tmp_path)
 
-        service = SummaryService()
+        service = StatusService()
         phase_dir = tmp_path / ".cafe/issues/test-issue/plan"
         (phase_dir / "iteration_001").mkdir(parents=True)
 
@@ -619,11 +619,11 @@ class TestLoadTokenUsageData:
 
     def test_load_iteration_statuses_with_multiple_models(self, tmp_path, monkeypatch):
         """Verify loading iterations with different models"""
-        from cafe.services.summary_service import SummaryService
+        from cafe.services.status_service import StatusService
 
         monkeypatch.chdir(tmp_path)
 
-        service = SummaryService()
+        service = StatusService()
         phase_dir = tmp_path / ".cafe/issues/test-issue/spec"
 
         # Create multiple iterations with different models

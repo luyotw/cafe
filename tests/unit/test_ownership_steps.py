@@ -10,7 +10,6 @@ import pytest
 
 from cafe.core.automatic_steps import AutomaticExecutionResult, AutomaticExecutorRegistry
 from cafe.core.blackboard import (
-    BLACKBOARD_SCHEMA_VERSION,
     BlackboardState,
     BlackboardStore,
     HandoffIntent,
@@ -267,9 +266,9 @@ def test_agent_completion_with_unchecked_checklist_is_not_published(tmp_path: Pa
     state = BlackboardStore(issue_dir).load_or_create("build")
 
     assert result.final_status_code == "CHECKLIST_VALIDATION_FAILED"
-    assert state.current_step == "build"
+    assert state.current_step == "user"
     assert state.handoff_contract is not None
-    assert state.handoff_contract.to_step == "build"
+    assert state.handoff_contract.to_step == "user"
     assert "code" not in state.artifacts
 
 
@@ -327,9 +326,9 @@ def test_resume_rejects_persisted_outbound_baton_with_unchecked_checklist(
     reloaded = store.load_or_create("build")
 
     assert result.final_status_code == "CHECKLIST_VALIDATION_FAILED"
-    assert reloaded.current_step == "build"
+    assert reloaded.current_step == "user"
     assert reloaded.handoff_contract is not None
-    assert reloaded.handoff_contract.to_step == "build"
+    assert reloaded.handoff_contract.to_step == "user"
 
 
 def test_clarification_handoff_allows_unchecked_checklist(tmp_path: Path) -> None:
@@ -727,7 +726,11 @@ def test_hybrid_owner_resumes_only_its_declared_portion_after_matching_task(
     assert BlackboardStore(issue_dir).load_or_create("mixed").step_attempt_counts == {"mixed": 1}
 
 
-def test_hybrid_agent_portion_cannot_advance_with_unchecked_checklist(tmp_path: Path) -> None:
+@pytest.mark.parametrize("failed_signal", ["unchecked", "malformed_baton", "missing_status"])
+def test_hybrid_agent_portion_cannot_advance_with_unchecked_checklist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed_signal: str
+) -> None:
+    monkeypatch.setattr(BlackboardWorkflowRuntime, "_notify_new_human_task", lambda *_: None)
     issue_dir = tmp_path / ".cafe" / "issues" / "hybrid-checklist-gate"
     binding = HumanTaskBinding(trigger="approve", task_id="approval", outcomes={"accept": "mixed"})
     playbook = {
@@ -765,11 +768,21 @@ def test_hybrid_agent_portion_cannot_advance_with_unchecked_checklist(tmp_path: 
         output.write_text("partial draft\n", encoding="utf-8")
         (iteration_dir / "checklist.md").write_text("[ ] finish draft\n", encoding="utf-8")
         return StepExecutionResult(
-            response="confirmed",
+            response="" if failed_signal == "missing_status" else "confirmed",
             artifacts={"code": str(output)},
-            status_code="confirmed",
+            status_code=None if failed_signal == "missing_status" else "confirmed",
             artifact_ready=True,
             agent_invoked=True,
+            events=(
+                []
+                if failed_signal == "unchecked"
+                else [{"type": "checklist_validation_failed"}]
+                + (
+                    [{"type": "hybrid_portion_baton", "payload": "bad baton"}]
+                    if failed_signal == "malformed_baton"
+                    else []
+                )
+            ),
         )
 
     result = BlackboardWorkflowRuntime(
@@ -780,10 +793,14 @@ def test_hybrid_agent_portion_cannot_advance_with_unchecked_checklist(tmp_path: 
     state = BlackboardStore(issue_dir).load_or_create("mixed")
 
     assert result.final_status_code == "CHECKLIST_VALIDATION_FAILED"
-    assert state.current_step == "mixed"
+    assert state.current_step == "user"
     assert state.ownership_cursor is not None
     assert state.ownership_cursor["portion"] == "draft"
     assert "code" not in state.artifacts
+
+    (task,) = HumanTaskRecordStore(issue_dir).tasks()
+    assert task.status.value == "pending"
+    assert task.continuations == {"retry": "mixed", "retry_fresh_session": "mixed"}
 
 
 @pytest.mark.parametrize(
@@ -910,127 +927,27 @@ def test_hybrid_rejects_malformed_or_conflicting_captured_batons(
     assert runtime.blackboard.current_step == "mixed"
 
 
-def test_blackboard_v2_state_migrates_to_v4_without_losing_handoff(tmp_path: Path) -> None:
-    """UT-011: v2 data gains ownership defaults and persists as schema v4."""
-    issue_dir = tmp_path / ".cafe" / "issues" / "migration"
-    store = BlackboardStore(issue_dir)
-    issue_dir.mkdir(parents=True)
-    store.file_path.write_text(
-        '{"schema_version": 2, "current_step": "approval", "playbook_id": "owner-test", '
-        '"workflow_id": "stable-id", "handoff_summary": "waiting"}',
-        encoding="utf-8",
-    )
-
-    state = store.load_or_create("approval", playbook_id="owner-test")
-    assert state.schema_version == BLACKBOARD_SCHEMA_VERSION == 4
-    assert state.ownership_cursor is None
-    assert state.step_attempt_counts == {}
-    store.save(state)
-    assert '"schema_version": 4' in store.file_path.read_text(encoding="utf-8")
-    with pytest.raises(ValueError, match="future"):
-        BlackboardState.from_dict({"schema_version": 99}, initial_step="approval")
-
-
-def test_blackboard_v3_attempt_state_migrates_without_losing_cycle_progress(
-    tmp_path: Path,
+@pytest.mark.parametrize("schema_version", [2, 3])
+def test_executed_workflow_without_external_authorities_is_not_migrated(
+    tmp_path: Path, schema_version: int,
 ) -> None:
-    issue_dir = tmp_path / ".cafe" / "issues" / "attempt-migration"
-    store = BlackboardStore(issue_dir)
-    issue_dir.mkdir(parents=True)
-    store.file_path.write_text(
-        '{"schema_version": 3, "current_step": "review", '
-        '"step_visit_counts": {"review": 2}, '
-        '"ownership_cursor": {"step": "review", "visit_count": 2}}',
-        encoding="utf-8",
-    )
+    store = BlackboardStore(tmp_path / ".cafe" / "issues" / "old-workflow")
+    store.issue_dir.mkdir(parents=True)
+    original = json.dumps({
+        "schema_version": schema_version, "current_step": "review",
+        "workflow_id": "old-workflow", "handoff_summary": "already executed",
+    })
+    store.file_path.write_text(original, encoding="utf-8")
 
-    state = store.load_or_create("review")
-    assert state.schema_version == BLACKBOARD_SCHEMA_VERSION == 4
-    assert state.step_attempt_counts == {"review": 2}
-    assert state.ownership_cursor == {"step": "review", "attempt_count": 2}
+    with pytest.raises(ValueError, match="workflow authorities are absent"):
+        store.load_or_create("review")
 
-    store.save(state)
-    persisted = store.file_path.read_text(encoding="utf-8")
-    assert '"step_attempt_counts"' in persisted
-    assert '"step_visit_counts"' not in persisted
-    assert '"attempt_count"' in persisted
-    assert '"visit_count"' not in persisted
+    assert store.file_path.read_text(encoding="utf-8") == original
+    assert not store.audit.binding.exists()
+    assert not store.receipts_path.exists()
 
 
-def test_blackboard_v3_attempt_events_migrate_to_one_v4_shape(tmp_path: Path) -> None:
-    issue_dir = tmp_path / ".cafe" / "issues" / "attempt-event-migration"
-    store = BlackboardStore(issue_dir)
-    issue_dir.mkdir(parents=True)
-    store.file_path.write_text(
-        json.dumps(
-            {
-                "schema_version": 3,
-                "current_step": "review",
-                "events": [
-                    {
-                        "timestamp": "2026-08-28T00:00:00+00:00",
-                        "step": "review",
-                        "event_type": "step_completed",
-                        "message": '{"step": "review", "visit": 2}',
-                        "data": {"step": "review", "visit": 2},
-                    },
-                    {
-                        "timestamp": "2026-08-28T00:00:01+00:00",
-                        "step": "review",
-                        "event_type": "loop_detected",
-                        "message": "legacy loop",
-                        "data": {
-                            "step": "review",
-                            "visits": 6,
-                            "max_iterations": 5,
-                        },
-                    },
-                    {
-                        "timestamp": "2026-08-28T00:00:02+00:00",
-                        "step": "review",
-                        "event_type": "step_visit_count_reset",
-                        "message": "legacy reset",
-                        "data": {"step": "review", "completed_visits": 2},
-                    },
-                    {
-                        "timestamp": "2026-08-28T00:00:03+00:00",
-                        "step": "audit",
-                        "event_type": "custom_audit",
-                        "message": "unrelated legacy vocabulary",
-                        "data": {"visit": "homepage", "max_iterations": "external"},
-                    },
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
 
-    state = store.load_or_create("review")
-
-    assert [event.event_type for event in state.events] == [
-        "step_completed",
-        "loop_detected",
-        "step_attempt_count_reset",
-        "custom_audit",
-    ]
-    assert state.events[0].data["attempt"] == 2
-    assert state.events[1].data["attempts"] == 6
-    assert state.events[1].data["max_attempts_per_cycle"] == 5
-    assert state.events[2].data["completed_attempts"] == 2
-    assert all("visit" not in event.message for event in state.events[:3])
-    assert state.events[3].data == {"visit": "homepage", "max_iterations": "external"}
-    assert state.events[3].message == "unrelated legacy vocabulary"
-
-    store.save(state)
-    persisted = json.loads(store.file_path.read_text(encoding="utf-8"))
-    migrated_events = persisted["events"][:3]
-    assert '"step_visit_count_reset"' not in json.dumps(migrated_events)
-    assert '"max_iterations"' not in json.dumps(migrated_events)
-    assert '"completed_visits"' not in json.dumps(migrated_events)
-    assert persisted["events"][3]["data"] == {
-        "visit": "homepage",
-        "max_iterations": "external",
-    }
 
 
 def test_simulation_reports_all_owners_without_creating_runtime_state(tmp_path: Path) -> None:
@@ -1075,3 +992,163 @@ def test_persisted_visit_limit_survives_a_separate_runtime_instance(tmp_path: Pa
         BlackboardWorkflowRuntime(issue_dir=issue_dir, playbook=playbook, executor=executor).run(
             start_step="loop", single_step=True
         )
+
+
+@pytest.mark.parametrize("completion", ["status_code", "baton"])
+@pytest.mark.parametrize("decision", ["retry", "retry_fresh_session"])
+def test_checklist_failure_has_durable_recovery_and_retries_same_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, completion: str, decision: str
+) -> None:
+    """A clean provider exit with rejected output remains recoverable after restart."""
+    issue_dir = tmp_path / ".cafe/issues/checklist-recovery"
+    playbook = {
+        "playbook": {"id": "checklist-recovery"},
+        "steps": {
+            "build": {
+                "skill": "phase",
+                "role": "operator",
+                "behavior": {"completion": completion},
+                "on": {"await_agent": "_done"},
+            },
+        },
+    }
+    iteration = issue_dir / "build/iteration_001"
+    calls = []
+    callbacks = []
+    notifications = []
+    monkeypatch.setattr(
+        BlackboardWorkflowRuntime,
+        "_notify_new_human_task",
+        lambda self, task: notifications.append(task),
+    )
+
+    def executor(step_name, _step_def, state, **_kwargs):
+        calls.append(step_name)
+        iteration.mkdir(parents=True, exist_ok=True)
+        output = iteration / "output.md"
+        output.write_text("Saved substantive work\n")
+        (iteration / "checklist.md").write_text(
+            "[ ] verify work\n" if len(calls) == 1 else "[x] verify work\n"
+        )
+        (iteration / "iteration.json").write_text(
+            json.dumps(
+                {
+                    "iteration": 1,
+                    "cli": "claude",
+                    "session_id": "original-session",
+                    "model": "configured-model",
+                    "agent_invoked": True,
+                    "end_time": "2026-09-27T09:00:00+08:00",
+                }
+            )
+        )
+        # The generic executor pins the baton after exhausting completion repair.
+        failed = len(calls) == 1
+        BlackboardStore(issue_dir).update_handoff_contract(
+            state,
+            from_step=step_name,
+            to_owner=HandoffOwner.AGENT if failed else HandoffOwner.DONE,
+            to_step=step_name if failed else "done",
+            intent=HandoffIntent.AWAIT_AGENT if failed else HandoffIntent.WORKFLOW_COMPLETE,
+            status_code="CHECKLIST_VALIDATION_FAILED" if failed else "confirmed",
+            source="workflow.completion_validation" if failed else "baton",
+        )
+        return StepExecutionResult(
+            response="",
+            artifacts={"result": str(output)},
+            status_code=None if completion == "baton" else "confirmed",
+            artifact_ready=not failed,
+            agent_invoked=True,
+            events=[{"type": "checklist_validation_failed"}] if failed else [],
+        )
+
+    def run():
+        return BlackboardWorkflowRuntime(
+            issue_dir=issue_dir,
+            playbook=playbook,
+            executor=executor,
+            workflow_event_callback=callbacks.append,
+        ).run()
+
+    result = run()
+    assert result.final_status_code == "CHECKLIST_VALIDATION_FAILED"
+    assert calls == ["build"]
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("build")
+    records = HumanTaskRecordStore(issue_dir)
+    (task,) = records.tasks()
+    assert result.detail == task.id
+    assert state.current_step == "user"
+    assert state.handoff_contract.to_owner == HandoffOwner.USER
+    assert "result" not in state.artifacts
+    assert notifications == [task]
+    assert [(event["event_type"], event["status_code"]) for event in callbacks] == [
+        ("human_task", "CHECKLIST_VALIDATION_FAILED")
+    ]
+    assert (iteration / "output.md").read_text() == "Saved substantive work\n"
+    assert (
+        json.loads((iteration / "iteration.json").read_text())["workflow_completion_trusted"]
+        is False
+    )
+    assert any(event.event_type == "checklist_validation_failed" for event in state.events)
+
+    run()  # Restarting while waiting cannot retry or create a second task.
+    assert calls == ["build"]
+    assert [item.id for item in records.tasks()] == [task.id]
+    applied = apply_human_task_payload(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=store.load_or_create("build"),
+        from_step="build",
+        trigger=task.trigger,
+        raw_payload={"task": task.policy_id, "human_task_id": task.id, "decision": decision},
+        source="test",
+    )
+    assert applied.rejection is None
+    assert applied.target == "build"
+    recorded = records.get_result(task.id)
+    if decision == "retry_fresh_session":
+        assert (
+            recorded.payload["session_continuation"]["previous"]["session_id"] == "original-session"
+        )
+    else:
+        assert "session_continuation" not in recorded.payload
+    assert run().completed
+    assert calls == ["build", "build"]
+
+
+def test_resume_materializes_recovery_for_preexisting_checklist_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    issue_dir = tmp_path / ".cafe/issues/old-checklist-failure"
+    playbook = {
+        "playbook": {"id": "old-checklist-failure"},
+        "steps": {
+            "build": {"skill": "phase", "role": "operator", "on": {"await_agent": "_done"}},
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("build", playbook_id="old-checklist-failure")
+    iteration = issue_dir / "build/iteration_001"
+    iteration.mkdir(parents=True)
+    (iteration / "checklist.md").write_text("[ ] unfinished\n")
+    store.update_handoff_contract(
+        state,
+        from_step="build",
+        to_owner=HandoffOwner.AGENT,
+        to_step="build",
+        intent=HandoffIntent.AWAIT_AGENT,
+        status_code="CHECKLIST_VALIDATION_FAILED",
+        source="workflow.checklist_validation",
+    )
+    monkeypatch.setattr(BlackboardWorkflowRuntime, "_notify_new_human_task", lambda *_: None)
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=playbook,
+        executor=lambda *_args, **_kwargs: pytest.fail("recovery requires a user decision"),
+    )
+    assert runtime.run().final_status_code == "CHECKLIST_VALIDATION_FAILED"
+    assert store.load_or_create("build").current_step == "user"
+    (task,) = HumanTaskRecordStore(issue_dir).tasks()
+    assert task.status.value == "pending"
+    assert task.continuations == {"retry": "build", "retry_fresh_session": "build"}

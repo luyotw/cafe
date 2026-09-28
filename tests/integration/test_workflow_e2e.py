@@ -174,7 +174,7 @@ class _BatonWritingAgentManager:
         self.prompts.append(_prompt)
         self.allowed_tools_calls.append(_kwargs.get("allowed_tools"))
         checklist = Path(_kwargs["streaming_output_file"]).parent / "checklist.md"
-        checklist.write_text("[x] completed by test agent\n", encoding="utf-8")
+        checklist.write_text(checklist.read_text().replace("[ ]", "[x]"), encoding="utf-8")
         state = BlackboardStore(self.issue_dir).load_or_create("release")
         BlackboardStore(self.issue_dir).update_handoff_contract(
             state,
@@ -193,7 +193,7 @@ class _FeedbackAgentManager(_BatonWritingAgentManager):
 
     def execute(self, _name: str, _prompt: str, **_kwargs):
         checklist = Path(_kwargs["streaming_output_file"]).parent / "checklist.md"
-        checklist.write_text("[x] completed by test agent\n", encoding="utf-8")
+        checklist.write_text(checklist.read_text().replace("[ ]", "[x]"), encoding="utf-8")
         store = BlackboardStore(self.issue_dir)
         state = store.load_or_create("release")
         store.update_handoff_contract(
@@ -431,19 +431,13 @@ steps:
         show_result = runner.invoke(app, ["show", "release"])
     assert show_result.exit_code == 0
 
-    class _SummaryService:
-        def get_current_issue(self) -> str:
-            return "release-journey"
-
-        def load_phase_status(self, _issue: str, _step: str):
-            return None
-
-        def load_iteration_statuses(self, _issue: str, _step: str):
-            return []
-
-    with patch("cafe.services.summary_service.SummaryService", _SummaryService):
+    with patch(
+        "cafe.services.status_service.StatusService.get_current_issue",
+        return_value="release-journey",
+    ):
         status_result = runner.invoke(app, ["status"])
-    assert status_result.exit_code == 0
+    assert status_result.exit_code == 0, status_result.output
+    assert "State: Completed" in status_result.output
 
     feedback_iteration_dir = issue_dir / "release" / "iteration_002"
     assert feedback_iteration_dir.exists()
@@ -1447,19 +1441,8 @@ class TestNextStepLifecycle:
             "playbook: standard\ncontract_version: 2\ndriver:\n  mode: attached\n  poll_interval_seconds: 10\n",
             encoding="utf-8",
         )
-        (issue_dir / "blackboard.json").write_text(
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "playbook_id": "standard",
-                    "current_step": "spec",
-                    "artifacts": {},
-                    "events": [],
-                    "decisions": [],
-                }
-            ),
-            encoding="utf-8",
-        )
+        BlackboardStore(issue_dir).load_or_create("spec", playbook_id="standard")
+        (issue_dir / "next_step.txt").unlink()
 
         next_step_path = issue_dir / "next_step.txt"
         assert not next_step_path.exists()

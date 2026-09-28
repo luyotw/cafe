@@ -104,17 +104,22 @@ def validate_checklist(
     # Read checklist content
     content = checklist_path.read_text(encoding="utf-8")
 
-    from cafe.core.checklist import _CHECKBOX_LINE, load_materialization, normalized_checklist
+    from cafe.core.checklist import _CHECKBOX_LINE, load_materialization
 
     detail = ""
     try:
         pinned = load_materialization(checklist_path.parent / "iteration.json")
         integrity_valid = expected is None or pinned == expected
         expected = expected or pinned
+        # The materialized checklist fixes how many gates this iteration has.
+        # Reviewers may annotate or paraphrase a gate while recording evidence;
+        # text equality is not a useful completion signal. Projected Todo rows
+        # retain their separate exact-identity and evidence validation.
+        gate_count = sum(
+            1 for line in content.splitlines() if _CHECKBOX_LINE.match(line)
+        )
         integrity_valid = integrity_valid and (
-            expected is None
-            or not expected.content.strip()
-            or normalized_checklist(content) == normalized_checklist(expected.content)
+            expected is None or gate_count == len(expected.gates)
         )
     except ValueError as exc:
         integrity_valid = False

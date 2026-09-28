@@ -8,7 +8,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from cafe.core.context_packet import resolve_context_packet
-from cafe.services.summary_service import SummaryService
+from cafe.services.status_service import StatusService
 from cafe.ui.cli import app
 
 runner = CliRunner()
@@ -102,7 +102,7 @@ def test_cafe_status_shows_verified_and_fallback_context_packets(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(SummaryService, "get_current_issue", lambda self: "demo")
+    monkeypatch.setattr(StatusService, "get_current_issue", lambda self: "demo")
     monkeypatch.setattr(
         "cafe.ui.commands.workflow._load_issue_step_names", lambda _issue: ["develop", "review"]
     )

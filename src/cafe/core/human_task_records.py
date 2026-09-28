@@ -847,7 +847,8 @@ class HumanTaskRecordStore:
 
     def _save(self, envelope: _Envelope) -> None:
         envelope.validate()
-        atomic_write_bytes(self.file_path, canonical_json(envelope.to_dict()))
+        content = canonical_json(envelope.to_dict())
+        atomic_write_bytes(self.file_path, content)
 
 
 def _records_by_task_id(data: Mapping[str, Any], field_name: str, parser: Any) -> dict[str, Any]:

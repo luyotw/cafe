@@ -19,11 +19,28 @@ from cafe.core.capabilities import (
 from cafe.core.human_task_notifications import (
     SlackNotificationError,
     build_human_task_message,
+    build_workflow_callback_failure_message,
     load_slack_webhook_url,
     post_slack_notification,
 )
 
 VALID_WEBHOOK = "https://hooks.slack.com/services/T00000000/B00000000/secret-value"
+
+
+def test_callback_state_error_gives_user_an_action_instead_of_internal_fields() -> None:
+    message = build_workflow_callback_failure_message(
+        repository="cafe",
+        issue="issue500",
+        step="develop",
+        event_type="phase_terminal",
+        error_code="callback_ValueError",
+    ).to_slack_payload()["text"]
+
+    assert "無法讀取自動通知所需的狀態或設定" in message
+    assert "這不代表工作流程已停止" in message
+    assert "原對話，請 Driver 檢查目前進度與下一步" in message
+    assert "callback_ValueError" not in message
+    assert "transport_clis" not in message
 
 
 @pytest.fixture(autouse=True)
@@ -150,6 +167,38 @@ def test_actionable_message_names_the_cafe_issue_without_opaque_identifiers() ->
     assert "8a010542" not in payload
     assert "clarification-feedback" not in payload
     assert "cafe task" not in payload
+
+
+@pytest.mark.parametrize(
+    ("step", "task_type", "phase_label", "action_label"),
+    [
+        ("plan", "clarification-answers", "規劃", "回覆釐清問題"),
+        ("pr", "local-review", "PR 準備與審閱", "審閱變更與後續建議，決定修正或確認繼續"),
+        ("custom-stage", "custom-task", "工作流程", "處理 CAFE 工作項目"),
+    ],
+)
+def test_standard_task_actions_and_unknown_fallback_are_readable(
+    step: str, task_type: str, phase_label: str, action_label: str
+) -> None:
+    """Clarification and review prompts describe the human decision without granting merge."""
+    message = build_human_task_message(
+        repository="luyotw/cafe",
+        issue="issue421-acceptance",
+        workflow_id="workflow-one",
+        task_id="task-one",
+        step=step,
+        task_type=task_type,
+    )
+
+    payload = message.to_slack_payload()["text"]
+
+    assert "專案：luyotw/cafe" in payload
+    assert "對話：issue421-acceptance" in payload
+    assert f"目前階段：{phase_label}" in payload
+    assert f"需要你做的事：{action_label}" in payload
+    assert "請回到 CAFE 的「issue421-acceptance」工作項目處理。" in payload
+    for hidden in ("workflow-one", "task-one", task_type, "cafe task", "合併"):
+        assert hidden not in payload
 
 
 def test_actionable_message_bounds_project_controlled_metadata_to_one_safe_line_per_field() -> None:

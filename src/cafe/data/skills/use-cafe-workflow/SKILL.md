@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including passive supervision, bounded recovery, and declarative repair when execution leaves its safe operating envelope.
-metadata: {version: 1.69.0}
+metadata: {version: 1.70.1}
 ---
 
 # Use CAFE Workflow
@@ -28,7 +28,7 @@ read the union once; do not preload the rest.
 | Start, resume, or supply declared input to ordinary execution | `references/project_global_skill_sync.md`, then `references/running_workflow.md` |
 | Supervise active work or classify a pause, timeout, interruption, retry, or recovery | `references/supervision_and_recovery.md`; read `references/running_workflow.md` only when its disposition permits a retry/resume, and `references/diagnosis_and_repair.md` only for incorrect or ambiguous behavior |
 | Handle a HumanTask, confirmation, clarification, permission, alignment, or scheduled proactive review | `references/handoffs_and_alignment.md` and `references/strategic_context.md`; also read the proactive-review section of `references/running_workflow.md` when a configured review is due |
-| Start, resume, or confirm linked/decomposed work | `references/issue_decomposition.md`, `references/strategic_context.md`, and `references/handoffs_and_alignment.md` |
+| Receive an issue split proposal from any step, or start/resume linked work | `references/issue_decomposition.md`, `references/strategic_context.md`, and `references/handoffs_and_alignment.md` |
 | Diagnose or repair a playbook, phase, Driver, or runtime defect | `references/diagnosis_and_repair.md` plus the reference for the failing boundary |
 | Consider direct closeout, verify completion, handle a Git delivery conflict, or handle follow-up work | `references/completion_and_authority.md` |
 | Render any user-visible kickoff, question, progress, error, or completion reply | `references/workflow_progress.md` |

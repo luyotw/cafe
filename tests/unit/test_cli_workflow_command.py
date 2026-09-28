@@ -16,8 +16,8 @@ from cafe.core.human_task_notifications import SlackNotificationError
 from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.workflow_models import PlaybookRunResult, StepExecutionResult
 from cafe.playbooks.loader import PlaybookLoader
-from cafe.services.summary_display import SummaryDisplay
-from cafe.services.summary_service import SummaryService
+from cafe.services.status_display import StatusDisplay
+from cafe.services.status_service import StatusService
 from cafe.ui.cli import (
     _execute_single_step_alias,
     _find_external_resume_step,
@@ -414,19 +414,7 @@ def test_single_step_alias_updates_workflow_pointer_to_requested_step(
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-210"
     issue_dir.mkdir(parents=True, exist_ok=True)
     _write_local_only_publication_contract(issue_dir)
-    (issue_dir / "blackboard.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "playbook_id": "standard",
-                "current_step": "pr",
-                "artifacts": {},
-                "events": [],
-                "decisions": [],
-            }
-        ),
-        encoding="utf-8",
-    )
+    BlackboardStore(issue_dir).load_or_create("pr", playbook_id="standard")
     config_manager = ConfigManager(".cafe")
     config_manager._config = config_manager.get_default_config()
 
@@ -706,13 +694,13 @@ def test_workflow_command_refreshes_notification_guidance_for_later_inspection(
 
     assert result.exit_code == 0, (result.stdout, result.exception)
     assert repository_roots == ([tmp_path.resolve()] if notifications_enabled else [])
-    status = SummaryService(issues_root=issues_root).load_driver_status("issue-guidance")
+    status = StatusService(issues_root=issues_root).load_driver_status("issue-guidance")
     guidance = status["notification_guidance"]
     expected_events = ["human_task"] if human_task_delivery_available else []
     assert guidance["proactive_events"] == expected_events
     assert guidance["inspection_available"] is True
     assert guidance["inspection_command"] == "cafe status"
-    rendered = SummaryDisplay().format_driver_status(status)
+    rendered = StatusDisplay().format_driver_status(status)
     assert "Notifications:" in rendered
     assert "cafe status" in rendered
 
@@ -814,7 +802,7 @@ def test_workflow_command_guidance_uses_project_only_slack_route(
         )
 
     assert result.exit_code == 0, (result.stdout, result.exception)
-    status = SummaryService(issues_root=issues_root).load_driver_status(issue_name)
+    status = StatusService(issues_root=issues_root).load_driver_status(issue_name)
     assert status["notification_guidance"]["proactive_events"] == ["human_task"]
 
 
@@ -876,7 +864,7 @@ def test_workflow_command_guidance_uses_fallback_with_malformed_sibling_route(
         )
 
     assert result.exit_code == 0, (result.stdout, result.exception)
-    status = SummaryService(issues_root=issues_root).load_driver_status(issue_name)
+    status = StatusService(issues_root=issues_root).load_driver_status(issue_name)
     assert status["notification_guidance"]["proactive_events"] == ["human_task"]
 
 
@@ -920,7 +908,7 @@ def test_workflow_command_records_guidance_when_machine_config_is_fifo(
         )
 
     assert result.exit_code == 0, (result.stdout, result.exception)
-    status = SummaryService(issues_root=issues_root).load_driver_status(issue_name)
+    status = StatusService(issues_root=issues_root).load_driver_status(issue_name)
     guidance = status["notification_guidance"]
     assert guidance["proactive_events"] == []
     assert guidance["inspection_available"] is True
@@ -2777,19 +2765,7 @@ def test_workflow_command_rejects_plain_text_chat_baton_before_execution(
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-205"
     issue_dir.mkdir(parents=True, exist_ok=True)
     _write_local_only_publication_contract(issue_dir)
-    (issue_dir / "blackboard.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "playbook_id": "standard",
-                "current_step": "pr",
-                "artifacts": {},
-                "events": [],
-                "decisions": [],
-            }
-        ),
-        encoding="utf-8",
-    )
+    BlackboardStore(issue_dir).load_or_create("pr", playbook_id="standard")
     next_step_file = issue_dir / "next_step.txt"
     next_step_file.write_text("plan\n", encoding="utf-8")
 
@@ -2837,19 +2813,7 @@ def test_workflow_command_does_not_consume_chat_baton_with_uncommitted_changes(
 
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-205b"
     issue_dir.mkdir(parents=True, exist_ok=True)
-    (issue_dir / "blackboard.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "playbook_id": "standard",
-                "current_step": "user",
-                "artifacts": {},
-                "events": [],
-                "decisions": [],
-            }
-        ),
-        encoding="utf-8",
-    )
+    BlackboardStore(issue_dir).load_or_create("user", playbook_id="standard")
     next_step_file = issue_dir / "next_step.txt"
     next_step_file.write_text("develop\n", encoding="utf-8")
 
@@ -2929,19 +2893,7 @@ def test_workflow_command_start_step_rebuilds_stale_text_baton(tmp_path: Path, m
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-206c"
     issue_dir.mkdir(parents=True, exist_ok=True)
     _write_local_only_publication_contract(issue_dir)
-    (issue_dir / "blackboard.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "playbook_id": "standard",
-                "current_step": "spec",
-                "artifacts": {},
-                "events": [],
-                "decisions": [],
-            }
-        ),
-        encoding="utf-8",
-    )
+    BlackboardStore(issue_dir).load_or_create("spec", playbook_id="standard")
     (issue_dir / "next_step.txt").write_text("done\n", encoding="utf-8")
 
     class FakeExecutor:
@@ -3174,19 +3126,7 @@ def test_workflow_command_prints_recovery_guidance_for_pr_baton_pause(
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-233"
     issue_dir.mkdir(parents=True, exist_ok=True)
     _write_local_only_publication_contract(issue_dir)
-    (issue_dir / "blackboard.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "playbook_id": "standard",
-                "current_step": "pr",
-                "artifacts": {},
-                "events": [],
-                "decisions": [],
-            }
-        ),
-        encoding="utf-8",
-    )
+    BlackboardStore(issue_dir).load_or_create("pr", playbook_id="standard")
 
     class FakeExecutor:
         def __init__(self) -> None:
@@ -3227,19 +3167,7 @@ def test_workflow_command_offers_recovery_menu_for_baton_pause_in_interactive_mo
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-233"
     issue_dir.mkdir(parents=True, exist_ok=True)
     _write_local_only_publication_contract(issue_dir)
-    (issue_dir / "blackboard.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "playbook_id": "standard",
-                "current_step": "pr",
-                "artifacts": {},
-                "events": [],
-                "decisions": [],
-            }
-        ),
-        encoding="utf-8",
-    )
+    BlackboardStore(issue_dir).load_or_create("pr", playbook_id="standard")
 
     class FakeExecutor:
         def __init__(self) -> None:
@@ -3282,20 +3210,8 @@ def test_workflow_command_user_owner_can_set_next_phase(tmp_path: Path, monkeypa
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-207"
     issue_dir.mkdir(parents=True, exist_ok=True)
     _write_local_only_publication_contract(issue_dir)
-    (issue_dir / "blackboard.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "playbook_id": "standard",
-                "current_step": "user",
-                "handoff_summary": "waiting for user decision",
-                "artifacts": {},
-                "events": [],
-                "decisions": [],
-            }
-        ),
-        encoding="utf-8",
-    )
+    state = BlackboardStore(issue_dir).load_or_create("user", playbook_id="standard")
+    BlackboardStore(issue_dir).set_handoff_summary(state, "waiting for user decision")
 
     class FakeExecutor:
         def execute_step(
@@ -3346,10 +3262,11 @@ def test_workflow_command_user_owner_can_set_next_phase(tmp_path: Path, monkeypa
     blackboard_data = json.loads((issue_dir / "blackboard.json").read_text(encoding="utf-8"))
     assert blackboard_data["handoff_summary"] == "workflow completed by user"
     handoff_event = next(
-        event for event in blackboard_data["events"] if event["event_type"] == "user_handoff"
+        event for event in BlackboardStore(issue_dir).load_or_create("pr").events
+        if event.event_type == "user_handoff"
     )
     assert (
-        handoff_event["data"]["note"]
+        handoff_event.data["note"]
         == "Please continue implementation with the new handoff context."
     )
 
@@ -3595,19 +3512,7 @@ def test_workflow_command_user_owner_can_complete_workflow(tmp_path: Path, monke
 
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-208"
     issue_dir.mkdir(parents=True, exist_ok=True)
-    (issue_dir / "blackboard.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "playbook_id": "standard",
-                "current_step": "user",
-                "artifacts": {},
-                "events": [],
-                "decisions": [],
-            }
-        ),
-        encoding="utf-8",
-    )
+    BlackboardStore(issue_dir).load_or_create("user", playbook_id="standard")
 
     with (
         patch("cafe.ui.cli.GitOperations") as mock_git_cls,
@@ -3635,19 +3540,7 @@ def test_workflow_command_user_owner_can_chat_and_resume_from_baton(
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-209"
     issue_dir.mkdir(parents=True, exist_ok=True)
     _write_local_only_publication_contract(issue_dir)
-    (issue_dir / "blackboard.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "playbook_id": "standard",
-                "current_step": "user",
-                "artifacts": {},
-                "events": [],
-                "decisions": [],
-            }
-        ),
-        encoding="utf-8",
-    )
+    BlackboardStore(issue_dir).load_or_create("user", playbook_id="standard")
 
     class FakeExecutor:
         def execute_step(
@@ -3715,19 +3608,7 @@ def test_workflow_command_enters_user_phase_immediately_after_agent_handoff(
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-211"
     issue_dir.mkdir(parents=True, exist_ok=True)
     _write_local_only_publication_contract(issue_dir)
-    (issue_dir / "blackboard.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "playbook_id": "standard",
-                "current_step": "pr",
-                "artifacts": {},
-                "events": [],
-                "decisions": [],
-            }
-        ),
-        encoding="utf-8",
-    )
+    BlackboardStore(issue_dir).load_or_create("pr", playbook_id="standard")
 
     class FakeExecutor:
         def execute_step(
@@ -3774,19 +3655,7 @@ def test_workflow_command_noninteractive_stops_after_agent_handoff_to_user(
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-211b"
     issue_dir.mkdir(parents=True, exist_ok=True)
     _write_local_only_publication_contract(issue_dir)
-    (issue_dir / "blackboard.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "playbook_id": "standard",
-                "current_step": "pr",
-                "artifacts": {},
-                "events": [],
-                "decisions": [],
-            }
-        ),
-        encoding="utf-8",
-    )
+    BlackboardStore(issue_dir).load_or_create("pr", playbook_id="standard")
 
     class FakeExecutor:
         def execute_step(
@@ -3973,20 +3842,8 @@ def test_workflow_command_done_phase_can_restart_workflow(tmp_path: Path, monkey
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-222"
     issue_dir.mkdir(parents=True, exist_ok=True)
     _write_local_only_publication_contract(issue_dir)
-    (issue_dir / "blackboard.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "playbook_id": "standard",
-                "current_step": "done",
-                "handoff_summary": "workflow completed",
-                "artifacts": {},
-                "events": [],
-                "decisions": [],
-            }
-        ),
-        encoding="utf-8",
-    )
+    state = BlackboardStore(issue_dir).load_or_create("done", playbook_id="standard")
+    BlackboardStore(issue_dir).set_handoff_summary(state, "workflow completed")
 
     class FakeExecutor:
         def execute_step(
@@ -4044,20 +3901,8 @@ def test_workflow_command_resumes_incomplete_iteration_when_user_handoff_is_lega
     spec_iteration = issue_dir / "spec" / "iteration_002"
     spec_iteration.mkdir(parents=True, exist_ok=True)
     _write_local_only_publication_contract(issue_dir)
-    (issue_dir / "blackboard.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "playbook_id": "standard",
-                "current_step": "user",
-                "handoff_summary": "clarification answers confirmed",
-                "artifacts": {},
-                "events": [],
-                "decisions": [],
-            }
-        ),
-        encoding="utf-8",
-    )
+    state = BlackboardStore(issue_dir).load_or_create("user", playbook_id="standard")
+    BlackboardStore(issue_dir).set_handoff_summary(state, "clarification answers confirmed")
     (spec_iteration / "iteration.json").write_text(
         json.dumps(
             {
@@ -4511,20 +4356,8 @@ def test_workflow_command_resumes_pr_when_external_feedback_arrives_while_done(
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-238"
     issue_dir.mkdir(parents=True, exist_ok=True)
     _write_local_only_publication_contract(issue_dir)
-    (issue_dir / "blackboard.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "playbook_id": "standard",
-                "current_step": "done",
-                "handoff_summary": "workflow completed",
-                "artifacts": {},
-                "events": [],
-                "decisions": [],
-            }
-        ),
-        encoding="utf-8",
-    )
+    state = BlackboardStore(issue_dir).load_or_create("done", playbook_id="standard")
+    BlackboardStore(issue_dir).set_handoff_summary(state, "workflow completed")
 
     class FakeExecutor:
         def execute_step(

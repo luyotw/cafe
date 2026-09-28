@@ -89,6 +89,60 @@ pip install -e .
 Run `cafe skill sync-global` after a manual installation to install the bundled
 workflow helper skills for all supported CLI agents.
 
+## GitHub authentication before a workflow
+
+GitHub workflows need both authenticated GitHub API access through `gh` and
+Git push access to the repository. A successful `gh auth status` does not prove
+that Git can authenticate using this checkout's remote transport.
+
+Check the existing configuration from the checkout that will run the workflow:
+
+```bash
+gh auth status --hostname github.com
+git remote get-url origin
+```
+
+Use the authentication method that matches the remote:
+
+- **HTTPS** (`https://github.com/OWNER/REPO.git`): Git needs an HTTPS credential
+  helper. If you want Git to use your existing authenticated GitHub CLI account,
+  run `gh auth setup-git --hostname github.com`. This changes your user Git
+  credential-helper configuration for GitHub; an agent must obtain permission
+  for that change separately from CAFE installation. If `gh` is not logged in,
+  the user should first run `gh auth login --hostname github.com`.
+- **SSH** (`git@github.com:OWNER/REPO.git`): Git needs an SSH key accepted by the
+  intended GitHub account. The user can check authentication with
+  `ssh -T git@github.com`; verify the account named in the response. GitHub's
+  successful authentication response still exits with status 1 because it does
+  not provide shell access. An authenticated account also needs write access
+  to the target repository; reading a public remote alone does not prove that.
+
+### Recover an HTTPS push that cannot prompt for credentials
+
+An automated push may stop with:
+
+```text
+fatal: could not read Username for 'https://github.com': No such device or address
+```
+
+This can happen when the documented HTTPS clone is used on a machine with
+working SSH authentication but no HTTPS credential helper. Either configure the
+HTTPS helper above, or, if the user chooses to reuse existing SSH authentication,
+change only this checkout's remote to the **same repository**:
+
+```bash
+# Replace OWNER/REPO with the owner and repository from the existing origin.
+git remote set-url origin git@github.com:OWNER/REPO.git
+git remote get-url origin
+```
+
+An agent must have authorization for the remote change; do not rewrite remotes
+automatically, switch repositories, copy credentials, or put a token in a URL.
+After fixing authentication, inspect `cafe status` and follow the existing
+workflow recovery path. Preserve the failed attempt and resume the same
+workflow rather than starting the issue over. Installation itself does not
+configure either GitHub authentication method.
+
 ## Global workflow helper behavior
 
 CAFE treats installing a missing helper and publishing a helper update as

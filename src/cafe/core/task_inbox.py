@@ -219,6 +219,10 @@ class TaskInboxService:
     def inspect(self, task_id: str) -> TaskDetail:
         return self._detail(self._select(task_id))
 
+    def inspect_read_only(self, task_id: str) -> TaskDetail:
+        """Project a durable task without refreshing runtime-owned task contracts."""
+        return self._detail(self._select(task_id, refresh=False))
+
     def preflight_completion(self, task_id: str) -> CompletionPreflight:
         record = self._select(task_id)
         if record.task.status is not HumanTaskStatus.PENDING:
@@ -247,7 +251,7 @@ class TaskInboxService:
             playbook_id=record.playbook_id,
         )
 
-    def _select(self, task_id: str) -> _Record:
+    def _select(self, task_id: str, *, refresh: bool = True) -> _Record:
         identifier = str(task_id).strip()
         matches = [record for record in self._scan() if record.task.id == identifier]
         if not matches:
@@ -276,7 +280,7 @@ class TaskInboxService:
                 recovery="Repair the duplicate durable records before retrying.",
                 task_id=identifier,
             )
-        return self._refresh_runtime_owned_contract(matches[0])
+        return self._refresh_runtime_owned_contract(matches[0]) if refresh else matches[0]
 
     @staticmethod
     def _refresh_runtime_owned_contract(record: _Record) -> _Record:

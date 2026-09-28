@@ -6,7 +6,7 @@ import json
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 import typer
 from rich.console import Console
@@ -16,16 +16,66 @@ from cafe.core.blackboard import BlackboardStore
 from cafe.core.capability_approvals import CapabilityApprovalError
 from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.human_tasks import HumanTaskPolicy
-from cafe.core.task_inbox import TaskInboxError, TaskInboxService
+from cafe.core.task_inbox import CompletionPreflight, TaskInboxError, TaskInboxService
 from cafe.playbooks.loader import PlaybookLoader, apply_issue_playbook_overrides
 from cafe.ui.commands import workflow as workflow_commands
 from cafe.ui.human_tasks import (
+    HumanTaskApplication,
     apply_capability_approval_payload,
     apply_capability_cancellation,
     apply_human_task_payload,
     collect_human_task_payload,
     durable_task_matches_current_handoff,
 )
+
+
+def load_task_playbook(preflight: CompletionPreflight, *, project_root: Path) -> dict[str, Any]:
+    """Load the effective playbook used by every structured task completion."""
+    playbook_data = PlaybookLoader(project_root=project_root).load(preflight.playbook_id)
+    return apply_issue_playbook_overrides(playbook_data, preflight.issue_dir / "issue.yaml")
+
+
+def apply_structured_task(
+    service: TaskInboxService,
+    task_id: str,
+    raw_payload: str | Mapping[str, Any],
+    *,
+    project_root: Path,
+    source: str,
+    supervisor_handoff_to: str | None = None,
+) -> tuple[CompletionPreflight, HumanTaskApplication]:
+    """Use the same neutral validator and durable transition for both callers."""
+    preflight = service.preflight_completion(task_id)
+    playbook_data = load_task_playbook(preflight, project_root=project_root)
+    blackboard = BlackboardStore(preflight.issue_dir).load_or_create(
+        preflight.task.step, playbook_id=preflight.playbook_id
+    )
+    applied = apply_human_task_payload(
+        issue_dir=preflight.issue_dir,
+        playbook_data=playbook_data,
+        blackboard=blackboard,
+        from_step=preflight.task.step,
+        trigger=preflight.task.trigger,
+        raw_payload=raw_payload,
+        source=source,
+        supervisor_handoff_to=supervisor_handoff_to,
+    )
+    if applied.rejection is not None or applied.target is None:
+        message = (
+            applied.rejection.message
+            if applied.rejection is not None
+            else "The response did not select a continuation."
+        )
+        raise TaskInboxError(
+            "invalid_response",
+            message,
+            recovery="Inspect the expected result and submit one declared response.",
+            task_id=task_id,
+            issue=preflight.issue,
+            workflow_id=preflight.workflow_id,
+        )
+    return preflight, applied
+
 
 task_app = typer.Typer(help="List, inspect, and complete durable repository tasks")
 console = Console()
@@ -316,40 +366,16 @@ def complete_task(
         if preflight.task.capability_approval is None:
             # Reload immediately before the existing locked validator/mutator so a
             # stale concurrent completion cannot proceed on old ownership evidence.
-            preflight = service.preflight_completion(task_id)
-            playbook_data = PlaybookLoader(project_root=Path.cwd()).load(preflight.playbook_id)
-            playbook_data = apply_issue_playbook_overrides(
-                playbook_data, preflight.issue_dir / "issue.yaml"
-            )
-            blackboard = BlackboardStore(preflight.issue_dir).load_or_create(
-                preflight.task.step, playbook_id=preflight.playbook_id
-            )
-            applied = apply_human_task_payload(
-                issue_dir=preflight.issue_dir,
-                playbook_data=playbook_data,
-                blackboard=blackboard,
-                from_step=preflight.task.step,
-                trigger=preflight.task.trigger,
-                raw_payload=raw_payload,
+            preflight, applied = apply_structured_task(
+                service,
+                task_id,
+                raw_payload,
+                project_root=Path.cwd(),
                 source=(
                     "command" if result is not None or result_file is not None else "interactive"
                 ),
                 supervisor_handoff_to=handoff_to,
             )
-            if applied.rejection is not None or applied.target is None:
-                message = (
-                    applied.rejection.message
-                    if applied.rejection is not None
-                    else "The response did not select a continuation."
-                )
-                raise TaskInboxError(
-                    "invalid_response",
-                    message,
-                    recovery="Inspect the expected result and submit one declared response.",
-                    task_id=task_id,
-                    issue=preflight.issue,
-                    workflow_id=preflight.workflow_id,
-                )
         if not no_resume:
             try:
                 if json_output:

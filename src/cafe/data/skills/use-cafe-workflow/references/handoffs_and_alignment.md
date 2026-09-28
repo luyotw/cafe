@@ -25,8 +25,9 @@ input`:
   `cafe show <from_step> questions`, and the matching pending record in
   `.cafe/issues/<issue>/human_tasks.json`. Do not guess or reuse an old task ID.
 - [ ] Re-resolve the conversation locale.
-- [ ] Read `playbook_id`, `confirmation_contract`, and
-  `reactive_user_handoffs` from the active `issue.yaml`.
+- [ ] Read `playbook_id` from the active `issue.yaml`; read
+  `confirmation_contract`, `task_contract`, and `reactive_user_handoffs` from
+  the validated issue-scoped `driver/contract.json`.
 - [ ] Verify the exact confirmation-gate partition with
   `cafe playbook confirmation-gates <playbook-id>`.
 - [ ] If the contract or locale is missing, stale, invalid, or omits an
@@ -47,7 +48,8 @@ Then route by intent:
 - `confirm_output` from a `driver_confirmable` step: verify the output and
   required input artifacts are complete, in-mandate, and consistent with
   accepted upstream artifacts before confirming. Apply the Delivery comparison below.
-- `need_clarification` with confirmed policy `driver_confirmable`: the Driver
+- a current task whose exact phase and task ID are declared
+  `driver_confirmable`, including `need_clarification`: the Driver
   may answer when the complete response stays within the confirmed Delivery
   Contract's scope, constraints and existing authority, and triggers no
   deviation. Multiple authorized reversible technical choices may be resolved
@@ -61,6 +63,30 @@ Then route by intent:
 - legacy or custom `alignment_checkpoint`: use the classification below; the
   checkpoint is evidence, not proof the user must decide.
 - any other user-owned pause: stop. Unknown handoffs are not driver-confirmable.
+
+After `cafe task inspect <task-id> --json`, run
+`python3 <skill-dir>/scripts/inspect_task_authority.py --issue-dir
+.cafe/issues/<issue> --task-id <task-id> --json`. Its `route_status`,
+`resolution_owner`, and `evidence_reason` are separate facts. Supply a complete
+response and a grounded assessment to the same read-only entry. For a
+`driver_confirmable` response, pass that same assessment and the returned
+`contract_sha256` and `sources_sha256` to `complete_driver_task.py`; it
+validates current authority when invoked, then leaves workflow resumption to
+the confirmed Driver mode. Concurrent decision-source changes after validation
+are not guarded through completion; the user accepted this documented limitation.
+A v5 contract's `reactive_user_handoffs.need_clarification` value alone grants no
+Driver completion authority; reconfirm task ownership when needed.
+
+For `answers`, account for every required field and every selected value. Use
+`basis: confirmed_exact` with a source and excerpt for each exact value. If an
+authorized reversible technical choice is needed, use
+`basis: reversible_technical`, `category: technical`, one grounded authority
+excerpt and candidates grouped by their `field`; cite other exact values in
+`citations`. Rank candidates separately for each field by repository precedent,
+smaller footprint and reversibility. A scalar field needs one supported winner;
+a declared multi-select field may retain all supported co-winners. Missing
+citations, unresolved scalar ties, preference or scope choices leave the task
+pending for the user. Use only sources returned by current task inspection.
 
 ## Delivery comparison at an existing output gate
 
@@ -134,6 +160,27 @@ self-contained compact decision summary below, showing the unmet requirement or
 material delta and the exact pending options. Preserve the contract unchanged;
 only a real user reconfirmation may replace it through the existing CAS API.
 Do not auto-complete any task from this helper or infer user responses in callbacks.
+
+For a clean eligible `confirm_output`, put the current packet's
+`snapshot_sha256` and the Driver's grounded assessment under
+`evidence.delivery_comparison` as
+`{"snapshot_sha256": "...", "assessment": {...}}`. Keep exact excerpts bounded;
+do not embed the full packet or output in the completion assessment. Set
+`basis: confirmed_exact` and `exhaustive: true`. The Driver completion entry
+rebuilds the packet from the current task, effective playbook/skill, contract
+and accepted sources, including required-input checks, then checks the supplied
+snapshot and assessment before submitting `decision: confirm`. An absent required
+input or a changed snapshot leaves the task pending. The word `confirm` need not occur in an
+artifact quote; the cited text must substantively support the assessment. A
+bare success phrase or a structurally accepted but semantically unsupported
+assessment cannot justify confirmation. Apply the same process in attached,
+unattended and callback operation.
+
+The current phase output is comparison evidence only. It cannot establish an
+exact answer or authorize a reversible technical decision; use confirmed
+contract, user-decision, accepted-artifact or repository precedent sources for
+those decisions. Each comparison artifact is bounded to 256 KiB; a larger
+output must be reduced or routed for review before a comparison is offered.
 
 ## Route proactive-review findings through existing handoffs
 
@@ -229,9 +276,10 @@ phase, keep its existing model chain unless the user explicitly requested a
 different one. Then submit the exact HumanTask response, for example:
 
 ```bash
-cafe task complete <active-human-task-id> \
-  --result '{"task":"output-review","decision":"confirm","human_task_id":"<active-human-task-id>"}' \
-  --no-resume --json
+python3 <skill-dir>/scripts/complete_driver_task.py \
+  --issue-dir .cafe/issues/<issue> --task-id <active-human-task-id> \
+  --assessment <assessment.json> --contract-sha256 <inspected-contract-sha256> \
+  --sources-sha256 <inspected-sources-sha256> --json
 ```
 
 Use the active task's declared decision ID. Verify the durable result, then

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from cafe.core.blackboard import BlackboardStore
+from cafe.core.blackboard import BlackboardState, BlackboardStore
 from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.task_inbox import TaskInboxError, TaskInboxService
 
@@ -15,8 +15,7 @@ from cafe.core.task_inbox import TaskInboxError, TaskInboxService
 def _issue(cafe_dir: Path, name: str, workflow_id: str) -> Path:
     issue_dir = cafe_dir / "issues" / name
     issue_dir.mkdir(parents=True)
-    blackboard = BlackboardStore(issue_dir).load_or_create("spec", playbook_id="standard")
-    blackboard.workflow_id = workflow_id
+    blackboard = BlackboardState(current_step="spec", workflow_id=workflow_id)
     BlackboardStore(issue_dir).save(blackboard)
     (issue_dir / "issue.yaml").write_text("playbook: standard\n", encoding="utf-8")
     return issue_dir
@@ -157,9 +156,10 @@ def test_completion_preflight_rejects_stale_or_mismatched_ownership(tmp_path: Pa
 
     assert service.preflight_completion(task.id).workflow_id == "workflow-a"
 
-    state = BlackboardStore(issue).load_or_create("spec")
-    state.workflow_id = "workflow-other"
-    BlackboardStore(issue).save(state)
+    state_path = issue / "blackboard.json"
+    raw = json.loads(state_path.read_text(encoding="utf-8"))
+    raw["workflow_id"] = "workflow-other"
+    state_path.write_text(json.dumps(raw), encoding="utf-8")
     with pytest.raises(TaskInboxError) as mismatch:
         service.preflight_completion(task.id)
     assert mismatch.value.code == "workflow_mismatch"

@@ -487,6 +487,28 @@ def _line(status: str, label: str, status_text: Mapping[str, str]) -> str:
     return f"{_TEXT_STATUS_SYMBOLS[status]} {label} · {status_text[status]}"
 
 
+def _active_task_authority(issue_dir: Path | None) -> dict[str, Any] | None:
+    if issue_dir is None:
+        return None
+    records = _read_json(issue_dir / "human_tasks.json")
+    if not isinstance(records, Mapping):
+        return None
+    pending = [
+        task
+        for task in records.get("tasks", [])
+        if isinstance(task, Mapping) and task.get("status") == "pending"
+    ]
+    if len(pending) != 1 or not isinstance(pending[0].get("id"), str):
+        return None
+    from cafe.core.task_inbox import TaskInboxError
+    from cafe.driver.task_inspection import inspect_task_authority
+
+    try:
+        return inspect_task_authority(issue_dir, pending[0]["id"])
+    except (OSError, ValueError, TaskInboxError):
+        return None
+
+
 def render_progress(
     *,
     playbook: Any | None = None,
@@ -509,6 +531,7 @@ def render_progress(
     user_required, driver_confirmable, mandatory = _confirmation_contract(policy)
     gate_steps = (user_required | driver_confirmable | mandatory) & set(steps)
     confirmation_statuses = _confirmation_statuses(issue_dir, gate_steps, iterations)
+    task_authority = _active_task_authority(issue_dir)
     status_text = text["status"]
 
     phase_blocks: list[tuple[str, list[str]]] = []
@@ -520,18 +543,27 @@ def render_progress(
         if step in required_reviews:
             review_status = reviews.get(
                 step,
-                (
-                    "pending"
-                    if phase_statuses[step] in {"pending", "in_progress"}
-                    else "unknown"
-                ),
+                ("pending" if phase_statuses[step] in {"pending", "in_progress"} else "unknown"),
             )
             review_label = (
                 f"{step}：{text['review']}" if language == "zh" else f"{step}: {text['review']}"
             )
             block.append(_line(review_status, review_label, status_text))
         if step in gate_steps:
-            proxy = text["delegable"] if step in driver_confirmable else text["not_delegable"]
+            task_owner = (
+                task_authority["resolution_owner"]
+                if task_authority is not None and task_authority["step"] == step
+                else None
+            )
+            proxy = (
+                text["delegable"]
+                if task_owner == "driver_confirmable"
+                else (
+                    text["not_delegable"]
+                    if task_owner == "user_required"
+                    else text["delegable"] if step in driver_confirmable else text["not_delegable"]
+                )
+            )
             confirmation_label = (
                 f"{step}：{text['confirmation']}（{proxy}）"
                 if language == "zh"
@@ -565,6 +597,11 @@ def render_progress(
             status_text,
         )
         body += ("\n│\n" if body else "") + closeout_line
+    if task_authority is not None:
+        body += "\n│\n" + " ".join(
+            f"{key}={task_authority[key]}"
+            for key in ("route_status", "pause_status", "resolution_owner", "evidence_reason")
+        )
     return body
 
 

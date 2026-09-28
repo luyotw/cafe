@@ -349,7 +349,7 @@ class TestPrepareCommand:
         assert blackboard["workflow_id"]
         assert blackboard["playbook_id"] == "standard"
         assert blackboard["current_step"] == "spec"
-        assert blackboard["events"] == []
+        assert "events" not in blackboard
         assert blackboard["step_attempt_counts"] == {}
         assert (issue_dir / "next_step.txt").is_file()
         assert f"Workflow ID: {blackboard['workflow_id']}" in result.stdout
@@ -767,7 +767,7 @@ class TestPrepareCommand:
         blackboard = json.loads(
             (issue_dir / "blackboard.json").read_text(encoding="utf-8")
         )
-        assert blackboard["events"] == []
+        assert "events" not in blackboard
         assert blackboard["step_attempt_counts"] == {}
 
     def test_prepare_with_different_base_branches(self, temp_repo_dir, mock_git_ops):

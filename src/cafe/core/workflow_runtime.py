@@ -26,6 +26,7 @@ from cafe.core.blackboard import (
     ArtifactKind,
     BlackboardState,
     BlackboardStore,
+    DecisionEntry,
     HandoffContract,
     HandoffIntent,
     HandoffOwner,
@@ -1015,16 +1016,6 @@ class BlackboardWorkflowRuntime:
         runtime: str,
         unchecked_count: int | None,
     ) -> PlaybookRunResult:
-        self.blackboard_store.set_current_step(self.blackboard, current_step)
-        self.blackboard_store.update_handoff_contract(
-            self.blackboard,
-            from_step=current_step,
-            to_owner=HandoffOwner.AGENT,
-            to_step=current_step,
-            intent=HandoffIntent.AWAIT_AGENT,
-            status_code="CHECKLIST_VALIDATION_FAILED",
-            source="workflow.checklist_validation",
-        )
         self.blackboard_store.record_event(
             self.blackboard,
             "checklist_validation_failed",
@@ -1034,15 +1025,10 @@ class BlackboardWorkflowRuntime:
                 "unchecked_count": unchecked_count,
             },
         )
-        return PlaybookRunResult(
-            final_step=current_step,
-            final_status_code="CHECKLIST_VALIDATION_FAILED",
-            completed=False,
-            detail=(
-                f"{unchecked_count} checklist items remain unchecked"
-                if unchecked_count is not None
-                else "completion checklist is missing or unreadable"
-            ),
+        return self._pause_for_agent_execution_interruption(
+            current_step=current_step,
+            reason="checklist_validation_failed",
+            runtime=runtime,
         )
 
     def _reject_persisted_incomplete_completion(
@@ -1054,7 +1040,12 @@ class BlackboardWorkflowRuntime:
         """Reject an unconsumed agent completion recovered after a process exit."""
         if previous_step != contract.from_step or previous_step not in self.steps:
             return None
-        if contract.to_owner == HandoffOwner.AGENT and contract.to_step == previous_step:
+        rejected_completion = contract.status_code == "CHECKLIST_VALIDATION_FAILED"
+        if (
+            contract.to_owner == HandoffOwner.AGENT
+            and contract.to_step == previous_step
+            and not rejected_completion
+        ):
             return None
         if self.steps[previous_step].get("assignee_type", "agent") not in {"agent", "hybrid"}:
             return None
@@ -1071,14 +1062,16 @@ class BlackboardWorkflowRuntime:
                 if isinstance(context, dict) and context.get("agent_invoked") is False:
                     return None
                 break
-        if not completion_requires_checklist(baton_intent=contract.intent.value):
+        if not rejected_completion and not completion_requires_checklist(
+            baton_intent=contract.intent.value
+        ):
             return None
 
         unchecked_count: int | None = None
         if iteration_dir is not None:
             try:
                 result = validate_checklist(iteration_dir / "checklist.md")
-                if result.is_complete:
+                if result.is_complete and not rejected_completion:
                     return None
                 unchecked_count = result.unchecked_count
             except (OSError, UnicodeError):
@@ -1144,13 +1137,21 @@ class BlackboardWorkflowRuntime:
         records = HumanTaskRecordStore(self.issue_dir)
         iteration = self._human_task_iteration(current_step)
         policy, binding = agent_execution_interrupted_human_task(step_name=current_step)
+        status_code = (
+            "CHECKLIST_VALIDATION_FAILED"
+            if reason == "checklist_validation_failed"
+            else "INTERRUPTED"
+        )
+        result_status = (
+            status_code if reason == "checklist_validation_failed" else f"INTERRUPTED:{reason}"
+        )
         self.blackboard_store.update_handoff_contract(
             self.blackboard,
             from_step=current_step,
             to_owner=HandoffOwner.USER,
             to_step="user",
             intent=HandoffIntent.MANUAL_HANDOFF,
-            status_code="INTERRUPTED",
+            status_code=status_code,
             source="workflow.agent_execution_interrupted",
         )
         contract = self.blackboard.handoff_contract
@@ -1188,7 +1189,7 @@ class BlackboardWorkflowRuntime:
             "workflow_paused",
             {
                 "step": current_step,
-                "status_code": "INTERRUPTED",
+                "status_code": status_code,
                 "reason": reason,
                 "runtime": runtime,
                 "task_id": task.id,
@@ -1198,14 +1199,14 @@ class BlackboardWorkflowRuntime:
             "human_task",
             {
                 "step": current_step,
-                "status_code": f"INTERRUPTED:{reason}",
+                "status_code": result_status,
                 "reason": reason,
                 "task_id": task.id,
             },
         )
         return PlaybookRunResult(
             final_step=current_step,
-            final_status_code=f"INTERRUPTED:{reason}",
+            final_status_code=result_status,
             completed=False,
             detail=task.id,
         )
@@ -1793,14 +1794,15 @@ class BlackboardWorkflowRuntime:
         status_code: str,
         transition_intent: HandoffIntent | str | None,
         transition_source: str,
-    ) -> None:
+        emit_audit: bool = True,
+    ) -> int | None:
         """Start a fresh bounded-iteration cycle after a successful advance."""
         if current_step == next_step:
-            return
+            return None
         if resolve_step_attempt_limit(self.steps.get(current_step, {})) is None:
-            return
+            return None
         if transition_intent is None and transition_source == "goto":
-            return
+            return None
 
         raw_intent = (
             transition_intent.value
@@ -1816,14 +1818,13 @@ class BlackboardWorkflowRuntime:
             HandoffIntent.AWAIT_AGENT.value,
             HandoffIntent.NO_CHANGES_NEEDED.value,
         }:
-            return
+            return None
 
-        self.blackboard_store.reset_step_attempt_count(
-            self.blackboard,
-            step=current_step,
-            next_step=next_step,
-            transition_intent=raw_intent,
-            transition_source=transition_source,
+        if not emit_audit:
+            return self.blackboard.step_attempt_counts.pop(current_step, None)
+        return self.blackboard_store.reset_step_attempt_count(
+            self.blackboard, step=current_step, next_step=next_step,
+            transition_intent=raw_intent, transition_source=transition_source,
         )
 
     def _materialize_owned_human_task(
@@ -2246,6 +2247,12 @@ class BlackboardWorkflowRuntime:
                 f"and source='hybrid_portion:{current_step}:{portion_id}'."
             ),
         )
+        if self._execution_reported_checklist_failure(frame):
+            rejection = self._reject_incomplete_agent_completion(
+                current_step=current_step, frame=frame, runtime="hybrid_portion"
+            )
+            if rejection is not None:
+                return rejection
         completion_key = (
             self._normalize_hybrid_completion_key(frame.explicit_status_code)
             if frame.explicit_status_code is not None
@@ -2786,7 +2793,9 @@ class BlackboardWorkflowRuntime:
             if identity in represented_identity_set
         )
         excluded_identities = tuple(
-            identity for identity in frame.pending_feedback if identity not in represented_identities
+            identity
+            for identity in frame.pending_feedback
+            if identity not in represented_identities
         )
         feedback_ledger = WorkflowFeedbackLedger(self.issue_dir)
         delivered_feedback, excluded_feedback = feedback_ledger.settle_or_reconcile_reviewed(
@@ -2929,7 +2938,9 @@ class BlackboardWorkflowRuntime:
                         updated_by=self.blackboard.current_step,
                         path=value,
                         content_sha256=(
-                            sha256_bytes(Path(value).read_bytes()) if Path(value).is_file() else None
+                            sha256_bytes(Path(value).read_bytes())
+                            if Path(value).is_file()
+                            else None
                         ),
                     )
                 )
@@ -3126,6 +3137,7 @@ class BlackboardWorkflowRuntime:
             )
         if materialized_task_id:
             self._replaced_user_handoff = None
+        self.blackboard.current_step = "user"
         if record_event:
             self.blackboard_store.record_event(
                 self.blackboard,
@@ -3137,7 +3149,8 @@ class BlackboardWorkflowRuntime:
                     "runtime": runtime,
                 },
             )
-        self.blackboard_store.set_current_step(self.blackboard, "user")
+        else:
+            self.blackboard_store.save(self.blackboard)
         if materialized_task_id:
             flushed = self._flush_phase_terminal(
                 event_type="human_task",
@@ -3462,6 +3475,15 @@ class BlackboardWorkflowRuntime:
         update_contract: bool = False,
         contract_source: str = "workflow.transition",
     ) -> PlaybookRunResult:
+        self.blackboard.current_step = "done"
+        baton_contract = None
+        if update_contract:
+            baton_contract = self.blackboard_store.build_handoff_contract(
+                from_step=current_step, to_owner=HandoffOwner.DONE,
+                to_step="done", intent=HandoffIntent.WORKFLOW_COMPLETE,
+                status_code=status_code, source=contract_source,
+            )
+            self.blackboard.handoff_contract = baton_contract
         self.blackboard_store.record_event(
             self.blackboard,
             "workflow_completed",
@@ -3473,18 +3495,8 @@ class BlackboardWorkflowRuntime:
                 "reason": reason,
                 "runtime": runtime,
             },
+            baton_contract=baton_contract,
         )
-        if update_contract:
-            self.blackboard_store.update_handoff_contract(
-                self.blackboard,
-                from_step=current_step,
-                to_owner=HandoffOwner.DONE,
-                to_step="done",
-                intent=HandoffIntent.WORKFLOW_COMPLETE,
-                status_code=status_code,
-                source=contract_source,
-            )
-        self.blackboard_store.set_current_step(self.blackboard, "done")
         cafe_dir = self.issue_dir.parent.parent
         clear_marker_if_matches(cafe_dir, self.issue_dir.name)
         if not self._flush_phase_terminal(event_type="workflow_completed"):
@@ -3510,10 +3522,9 @@ class BlackboardWorkflowRuntime:
         contract_source: str = "workflow.transition",
         transition_intent: HandoffIntent | str | None = None,
     ) -> None:
-        self.blackboard_store.record_decision(
-            self.blackboard,
-            {"from": current_step, "to": next_step, "status_code": status_code},
-        )
+        self.blackboard.decisions.append(DecisionEntry.from_dict(
+            {"from": current_step, "to": next_step, "status_code": status_code}
+        ))
         transition_id = str(uuid4())
         raw_transition_intent = (
             transition_intent.value
@@ -3537,29 +3548,35 @@ class BlackboardWorkflowRuntime:
         }
         if source_artifact is not None:
             transition_data["source_artifact"] = source_artifact
+        completed_attempts = self._reset_step_attempts_after_successful_advance(
+            current_step=current_step, next_step=next_step,
+            status_code=status_code, transition_intent=transition_intent,
+            transition_source=source, emit_audit=False,
+        )
+        if completed_attempts is not None:
+            transition_data["completed_attempts"] = completed_attempts
+        self.blackboard.current_step = next_step
+        baton_contract = None
+        if update_contract:
+            baton_contract = self.blackboard_store.build_handoff_contract(
+                from_step=current_step, to_owner=HandoffOwner.AGENT,
+                to_step=next_step, intent=HandoffIntent.AWAIT_AGENT,
+                status_code=status_code, source=contract_source,
+            )
+            self.blackboard.handoff_contract = baton_contract
         self.blackboard_store.record_event(
             self.blackboard,
             "transition",
             transition_data,
+            baton_contract=baton_contract,
         )
-        self._reset_step_attempts_after_successful_advance(
-            current_step=current_step,
-            next_step=next_step,
-            status_code=status_code,
-            transition_intent=transition_intent,
-            transition_source=source,
-        )
-        self.blackboard_store.set_current_step(self.blackboard, next_step)
-        if update_contract:
-            self.blackboard_store.update_handoff_contract(
-                self.blackboard,
-                from_step=current_step,
-                to_owner=HandoffOwner.AGENT,
-                to_step=next_step,
-                intent=HandoffIntent.AWAIT_AGENT,
-                status_code=status_code,
-                source=contract_source,
-            )
+        if completed_attempts is not None:
+            self.blackboard_store.record_event(self.blackboard, "step_attempt_count_reset", {
+                "step": current_step, "next_step": next_step,
+                "completed_attempts": completed_attempts,
+                "transition_intent": raw_transition_intent,
+                "transition_source": source,
+            })
         self._flush_phase_terminal()
 
     def _handle_post_contract(
@@ -3641,20 +3658,12 @@ class BlackboardWorkflowRuntime:
         )
 
     def _capability_receipt_recorded(self, capability_id: str) -> bool:
-        for receipt in getattr(self.blackboard, "capability_receipts", []):
+        self.blackboard_store.refresh_capability_receipts(self.blackboard)
+        for receipt in self.blackboard.capability_receipts:
             if (
                 isinstance(receipt, dict)
                 and receipt.get("capability") == capability_id
                 and receipt.get("success") is True
-            ):
-                return True
-        for event in getattr(self.blackboard, "events", []):
-            data = getattr(event, "data", {})
-            if (
-                getattr(event, "event_type", "") == "capability_receipt"
-                and isinstance(data, dict)
-                and data.get("capability") == capability_id
-                and data.get("success") is True
             ):
                 return True
         return False
@@ -3667,8 +3676,6 @@ class BlackboardWorkflowRuntime:
     ) -> list[str]:
         missing: list[str] = []
         for capability_id in self._required_capability_ids(current_step):
-            if self._capability_receipt_satisfied(execution_result, capability_id):
-                continue
             if self._capability_receipt_recorded(capability_id):
                 continue
             missing.append(capability_id)
@@ -3727,7 +3734,8 @@ class BlackboardWorkflowRuntime:
             missing.append("feedback_delivery_batch")
         else:
             entries = {
-                entry.source_identity: entry for entry in WorkflowFeedbackLedger(self.issue_dir).load()
+                entry.source_identity: entry
+                for entry in WorkflowFeedbackLedger(self.issue_dir).load()
             }
             if any(
                 identity not in entries
@@ -4471,6 +4479,14 @@ class BlackboardWorkflowRuntime:
                         completed=False,
                         detail=si.detail,
                     )
+                # An exhausted executor validation is already a terminal failure;
+                # do not reinterpret its pinned baton as a missing handoff and retry again.
+                if self._execution_reported_checklist_failure(frame):
+                    rejection = self._reject_incomplete_agent_completion(
+                        current_step=current_step, frame=frame, runtime=runtime_label
+                    )
+                    if rejection is not None:
+                        return rejection
                 try:
                     if self._is_baton_driven_step(current_step):
                         contract = self._load_step_handoff_contract(current_step=current_step)
@@ -5289,6 +5305,15 @@ class BlackboardWorkflowRuntime:
         start_step: Optional[str] = None,
         single_step: bool = False,
     ) -> PlaybookRunResult:
+        if self._workflow_event_callback is not None:
+            # Capture eligibility once; a failed open callback cannot be
+            # selected again by events emitted later in this invocation.
+            high_water = self.blackboard_store.audit.high_water(self.blackboard.workflow_id)
+            for record in self.blackboard_store.audit.iter_open_callbacks(
+                self.blackboard.workflow_id, high_water
+            ):
+                payload = record["data"]
+                self._dispatch_workflow_event(str(payload.get("event_type", "")), payload)
         recovered_feedback_delivery = self._try_reconcile_pending_feedback_delivery()
         if (
             recovered_feedback_delivery is not None

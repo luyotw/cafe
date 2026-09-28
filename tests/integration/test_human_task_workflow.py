@@ -961,8 +961,6 @@ def test_taskless_payload_rejects_another_workflows_durable_records(tmp_path: Pa
     store, state = _paused_default_state(
         issue_dir, from_step="spec", intent=HandoffIntent.CONFIRM_OUTPUT
     )
-    state.workflow_id = "workflow-A"
-    store.save(state)
     _materialize_default_task(
         issue_dir,
         state,

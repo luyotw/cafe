@@ -371,6 +371,7 @@ class StepBehaviorDeclaration(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     completion: Optional[CompletionMode] = None
+    allow_issue_decomposition: Optional[bool] = None
     publish_confirmation: Optional[bool] = None
     feedback_target: Optional[str] = None
     feedback_artifact: Optional[str] = None
@@ -456,6 +457,7 @@ class EffectiveStepBehavior(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     completion: CompletionMode = "status_code"
+    allow_issue_decomposition: bool = False
     publish_confirmation: bool = False
     feedback_target: Optional[str] = None
     feedback_artifact: Optional[str] = None
@@ -1177,6 +1179,9 @@ def resolve_step_behavior(
         override = StepBehaviorDeclaration.model_validate(steps[step_name].get("behavior") or {})
     return EffectiveStepBehavior(
         completion=_behavior_value(defaults, override, "completion", "status_code"),
+        allow_issue_decomposition=_behavior_value(
+            defaults, override, "allow_issue_decomposition", False
+        ),
         publish_confirmation=_behavior_value(defaults, override, "publish_confirmation", False),
         feedback_target=_behavior_value(defaults, override, "feedback_target", None),
         feedback_artifact=_behavior_value(defaults, override, "feedback_artifact", None),
