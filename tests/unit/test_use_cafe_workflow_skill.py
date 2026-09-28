@@ -2157,6 +2157,15 @@ def test_kickoff_formatter_documents_structural_validation_boundary() -> None:
     assert "--phase-rationale" not in script
 
 
+def test_kickoff_reference_distinguishes_new_and_legacy_manager_contract_versions() -> None:
+    kickoff = " ".join(_read_skill_resource("references/kickoff.md").split())
+
+    assert "Existing v7 Manager contracts remain valid" in kickoff
+    assert "New v8 Manager contracts record both the overall choice and task overrides" in kickoff
+    assert "single schema-version-8 durable Manager contract" in kickoff
+    assert "activate exactly one schema-version-8 contract at" in kickoff
+
+
 def test_kickoff_contract_formatter_accepts_primary_only_chains(
     tmp_path: Path, run_kickoff_formatter
 ) -> None:

@@ -375,9 +375,10 @@ task declaration authorizes Manager completion. Explicit user ownership wins.
 
 Existing v6 contracts lack the overall policy and retain task-only ownership
 until explicit reconfirmation. Existing v5 contracts retain their explicitly
-confirmed overall clarification choice. New v7 contracts record both the overall
-choice and task overrides; reading old records never inserts the new default or
-rewrites digests.
+confirmed overall clarification choice. Existing v7 Manager contracts remain
+valid with their confirmed overall choice and task overrides. New v8 Manager
+contracts record both the overall choice and task overrides; reading old records
+never inserts the new default or rewrites digests.
 
 ### Delivery facts to confirm
 
@@ -436,8 +437,8 @@ Render these facts with the complete kickoff, resolve material ambiguity, and
 interpret the user's response semantically in any language. Acknowledgement of
 one part does not confirm unreviewed facts. Retain existing explicit decisions;
 do not repeatedly ask for unchanged choices. Only the confirmed facts become
-`delivery_contract` in the single version-7 durable Manager contract. The nested
-Delivery Contract has its own version; no feature-specific sidecar is authority.
+`delivery_contract` in the single schema-version-8 durable Manager contract. The
+nested Delivery Contract has its own version; no feature-specific sidecar is authority.
 
 Inspect the selected effective entry point, transitions, `initial_input`,
 `input_artifacts`, and `output_artifact` declarations. Supply the confirmed
@@ -726,8 +727,9 @@ with the active playbook, and obtain fresh confirmation before persisting it.
 ## Durable Manager authority
 
 After the user confirms the complete normalized kickoff, activate exactly one
-version-7 contract at `.cafe/issues/<issue>/manager/contract.json` before the
-first Manager entry. The activation command must bind the prepared workflow ID,
+schema-version-8 contract at
+`.cafe/issues/<issue>/manager/contract.json` before the first Manager entry. The
+activation command must bind the prepared workflow ID,
 timezone-aware confirmation time, confirmer, and the same semantic proposal
 that was rendered for confirmation. Rendering alone never writes authority.
 That contract contains Manager-owned policy only; generic workflow and capability
