@@ -156,13 +156,14 @@ class FakeGitOperations:
 
 def _complete_current_checklist(*, streaming_output_file=None, **_kwargs) -> None:
     assert streaming_output_file is not None
-    (Path(streaming_output_file).parent / "checklist.md").write_text(
-        "[x] completed by test agent\n",
+    checklist = Path(streaming_output_file).parent / "checklist.md"
+    checklist.write_text(
+        checklist.read_text(encoding="utf-8").replace("[ ]", "[x]"),
         encoding="utf-8",
     )
 
 
-def _build_loader(tmp_path: Path) -> GenericPhase:
+def _build_loader(tmp_path: Path, *, checklist_skill: str | None = None) -> GenericPhase:
     skill_root = tmp_path / "builtin" / "skills"
     for name, body in {
         "cafe-spec": "## Role\nRead your agent file: {agent_file}\n\n## Context\n{blackboard_digest}\n",
@@ -195,6 +196,11 @@ def _build_loader(tmp_path: Path) -> GenericPhase:
             f"---\nname: {name}\ndescription: desc\n{workflow}---\n\n{body}",
             encoding="utf-8",
         )
+        if name == checklist_skill:
+            (skill_dir / "references").mkdir()
+            (skill_dir / "references" / "execution_steps_normal.md").write_text(
+                "[ ] Complete task\n", encoding="utf-8"
+            )
     synthesis_templates = skill_root / "synthesis" / "assets" / "templates"
     synthesis_templates.mkdir(parents=True, exist_ok=True)
     (synthesis_templates / "evidence.md").write_text("# Evidence\n", encoding="utf-8")
@@ -508,10 +514,8 @@ def test_generic_step_forwards_declared_read_only_guard_on_checklist_retry(
 
         def execute(self, *args, continuation=None, **kwargs):
             result = super().execute(*args, **kwargs)
-            checklist.write_text(
-                "[ ] complete task\n" if self.execute_call_count == 1 else "[x] complete task\n",
-                encoding="utf-8",
-            )
+            if self.execute_call_count > 1:
+                _complete_current_checklist(streaming_output_file=checklist.parent / "output.md")
             return result
 
     playbook = {
@@ -533,7 +537,7 @@ def test_generic_step_forwards_declared_read_only_guard_on_checklist_retry(
     }
     state = BlackboardStore(issue_dir).load_or_create("build")
     agent_manager = ChecklistRetryManager()
-    generic_phase = _build_loader(tmp_path)
+    generic_phase = _build_loader(tmp_path, checklist_skill="cafe-spec")
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name="issue-declared-guard-retry",
@@ -687,14 +691,17 @@ def test_baton_only_completion_cannot_bypass_checklist_retry(
 
     def on_retry(**_kwargs: object) -> None:
         if repair_succeeds:
-            checklist.write_text("[x] complete work\n", encoding="utf-8")
+            checklist.write_text(
+                checklist.read_text(encoding="utf-8").replace("[ ]", "[x]"),
+                encoding="utf-8",
+            )
 
     manager = FakeAgentManager(["", "", ""], on_execute=on_retry)
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name="baton-checklist",
         playbook=playbook,
-        generic_phase=_build_loader(tmp_path),
+        generic_phase=_build_loader(tmp_path, checklist_skill="cafe-develop"),
         agent_manager=manager,
         git_ops=FakeGitOperations(),
         role_agent_map={"developer": "David"},
@@ -702,7 +709,6 @@ def test_baton_only_completion_cannot_bypass_checklist_retry(
 
     def fake_execute(**kwargs):
         kwargs["output_file"].write_text("partial work\n", encoding="utf-8")
-        kwargs["checklist_file"].write_text("[ ] complete work\n", encoding="utf-8")
         (issue_dir / "next_step.txt").write_text(
             json.dumps(
                 {
@@ -3206,14 +3212,9 @@ def test_generic_workflow_step_applies_phase_specific_model_per_step(
     store = BlackboardStore(issue_dir)
     state = store.load_or_create("spec")
 
-    def _mark_checklist_complete(*, streaming_output_file, **kwargs) -> None:
-        iteration_dir = Path(streaming_output_file).parent
-        checklist_file = iteration_dir / "checklist.md"
-        checklist_file.write_text("- [x] completed\n", encoding="utf-8")
-
     agent_manager = FakeAgentManager(
         ["confirmed", "confirmed"],
-        on_execute=_mark_checklist_complete,
+        on_execute=_complete_current_checklist,
     )
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
@@ -3275,14 +3276,9 @@ def test_generic_workflow_step_applies_primary_model_from_phase_chain(
     store = BlackboardStore(issue_dir)
     state = store.load_or_create("spec")
 
-    def _mark_checklist_complete(*, streaming_output_file, **kwargs) -> None:
-        iteration_dir = Path(streaming_output_file).parent
-        checklist_file = iteration_dir / "checklist.md"
-        checklist_file.write_text("- [x] completed\n", encoding="utf-8")
-
     agent_manager = FakeAgentManager(
         ["confirmed", "confirmed"],
-        on_execute=_mark_checklist_complete,
+        on_execute=_complete_current_checklist,
     )
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
@@ -3868,7 +3864,7 @@ def test_plan_malformed_todo_retries_before_confirming(
 
     def write_plan_attempt(**_kwargs: object) -> None:
         iteration_dir.mkdir(parents=True, exist_ok=True)
-        (iteration_dir / "checklist.md").write_text("[x] completed\n", encoding="utf-8")
+        _complete_current_checklist(streaming_output_file=iteration_dir / "output.md")
         (iteration_dir / "output.md").write_text(
             _plan_todo_output(trailing_prose=manager.execute_call_count == 1),
             encoding="utf-8",
