@@ -1,13 +1,14 @@
 ## Checklist
 
-[ ] Read src/cafe/data/agents/developer/Nick.md to understand your role and native language
+[ ] Read src/cafe/data/agents/developer/Nick.md to understand your role
+[ ] Write engineering prose in the repository content language stated in the runtime context, and anything addressed to the user in the workflow conversation language; your own preferred language overrides neither
 [ ] Read the initial development guide and preserve it verbatim under `## Development Guide` in .cafe/issues/test/plan/iteration_001/output.md
 [ ] Read the requirements document .cafe/issues/test/spec/iteration_001/output.md
 [ ] Inspect only the repository evidence needed to choose an implementation direction (planning, not implementation); do not draft the detailed Plan yet
 [ ] Before recommending an unset runtime/deployment architecture, treat the user as non-technical by default: reuse existing evidence and ask only missing plain-language usage questions that materially change the direction
 [ ] Confirm the recommendation does not assume a fixed IP, an always-on personal computer/NAS, self-managed server expertise, or authorization to adopt/pay for/deploy an external service
 [ ] Write `<!-- plan-stage: solution-alignment -->` as the first non-blank line; ignore marker-looking text anywhere else
-[ ] Write `Plan confirmation answer: <localized canonical answer>` as the second non-blank line, using one concise answer in your native language; treat no other location as confirmation protocol data
+[ ] Write `Plan confirmation answer: <localized canonical answer>` as the second non-blank line, using one concise answer in the workflow conversation language stated in the runtime context; treat no other location as confirmation protocol data
 [ ] Write `# Unconfirmed Solution Direction`, `Status: UNCONFIRMED — not executable`, and the sections **Recommended Direction**, **Will Do**, **Will Not Do**, and **Key Trade-offs**; use one recommendation, at most 3 scope items per side, at most 2 material tradeoffs, and explicit `None` when no tradeoff applies
 [ ] Confirm the proposed scope is sufficient but not excessive: it covers the spec without speculative scope, unnecessary complexity, abstractions, or follow-on work
 [ ] During solution alignment, do not write a Test List, implementation tasks, file-by-file steps, dependency ADR, or executable Plan content
@@ -41,7 +42,8 @@
 ```
 
 Rules:
-- Write all questions and options in your native language (not English unless that is your native language)
+- Write all questions and options in the workflow conversation language stated in the runtime context; your own preferred language never overrides it
+- Keep question `id` attributes and any option value the workflow matches on untranslated
 - Root element must be `<questions>`
 - Each question must have a unique `id` attribute, a `<title>`, and `<options>` with at least one `<option>`
 - Provide 2-4 suggested options per question, except `solution_direction_confirmation`, which must provide exactly the single canonical confirmation option required by the Plan skill

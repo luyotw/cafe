@@ -1,7 +1,7 @@
 ---
 name: cafe-pr
 description: "Prepare the local pull request title and description for publication"
-version: 1.5.0
+version: 1.6.0
 workflow:
   execution_profile:
     workload: publication

@@ -1,6 +1,7 @@
 ## Checklist
 
-[ ] Read src/cafe/data/agents/pm/Roger.md to understand your role and native language
+[ ] Read src/cafe/data/agents/pm/Roger.md to understand your role
+[ ] Write engineering prose in the repository content language stated in the runtime context, and anything addressed to the user in the workflow conversation language; your own preferred language overrides neither
 [ ] Read .cafe/issues/test/spec/iteration_001/output.md to review previous analysis
 [ ] Review user's answer (provided below)
 [ ] Integrate new information into specification, DO NOT hint the existence of the previous iterations

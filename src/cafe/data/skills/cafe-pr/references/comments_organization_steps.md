@@ -1,6 +1,7 @@
 ## Checklist
 
-[ ] Read {agent_file} to understand your role and native language
+[ ] Read {agent_file} to understand your role
+[ ] Write engineering prose in the repository content language stated in the runtime context, and anything addressed to the user in the workflow conversation language; your own preferred language overrides neither
 [ ] Read {user_input_file} which contains the original PR review comments
 [ ] Check {prev_output_file} (if exists) - skip todo items that are already completed there
 [ ] Group related comments together

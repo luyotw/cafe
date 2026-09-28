@@ -1,7 +1,7 @@
 ---
 name: cafe-develop
 description: "依計畫進行程式開發與測試"
-version: 1.11.0
+version: 1.12.0
 workflow:
   execution_profile:
     workload: implementation

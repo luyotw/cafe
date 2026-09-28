@@ -1,6 +1,7 @@
 ## Checklist
 
-[ ] Read {agent_file} to understand your role and native language
+[ ] Read {agent_file} to understand your role
+[ ] Write engineering prose in the repository content language stated in the runtime context, and anything addressed to the user in the workflow conversation language; your own preferred language overrides neither
 [ ] Read {previous_output_file} to review previous PR content
 [ ] Review unpushed commits to identify new changes
 [ ] Edit {output_file} to update PR content based on new changes (NOT in your response)

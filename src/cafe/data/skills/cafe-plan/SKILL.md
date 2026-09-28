@@ -1,7 +1,7 @@
 ---
 name: cafe-plan
 description: "產出可執行的開發計畫"
-version: 1.10.0
+version: 1.11.0
 workflow:
   execution_profile:
     workload: planning

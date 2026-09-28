@@ -1,7 +1,7 @@
 ---
 name: cafe-spec
 description: "收集、整理或修訂需求規格（依 iteration 切換行為）"
-version: 1.6.0
+version: 1.7.0
 workflow:
   execution_profile:
     workload: requirements
