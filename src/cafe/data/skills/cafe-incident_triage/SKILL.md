@@ -1,7 +1,7 @@
 ---
 name: cafe-incident_triage
 description: Classify incidents and choose response actions
-version: 1.1.0
+version: 1.2.0
 workflow:
   execution_profile:
     workload: operations
@@ -12,6 +12,8 @@ workflow:
     - id: clarification-feedback
       pattern: revision_feedback
       prompt: Provide the incident details needed to continue triage.
+      prompt_locales:
+        zh-TW: "提供繼續分級所需的事件細節。"
       input_schema: feedback
   prompt_inputs:
     - artifacts: [incident_recovery, incident_learning, causal_todo]

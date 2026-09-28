@@ -1,7 +1,7 @@
 ---
 name: cafe-incident_detect
 description: Detect and report incident signals for operational response
-version: 1.1.0
+version: 1.2.0
 workflow:
   execution_profile:
     workload: operations
@@ -12,6 +12,8 @@ workflow:
     - id: clarification-feedback
       pattern: revision_feedback
       prompt: Provide the incident details needed to continue detection.
+      prompt_locales:
+        zh-TW: "提供繼續偵測所需的事件細節。"
       input_schema: feedback
   prompt_inputs:
     - artifacts: [incident_plan, incident_learning, causal_todo]

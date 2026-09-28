@@ -1,7 +1,7 @@
 ---
 name: cafe-develop
 description: "依計畫進行程式開發與測試"
-version: 1.10.1
+version: 1.11.0
 workflow:
   execution_profile:
     workload: implementation
@@ -12,21 +12,31 @@ workflow:
     - id: no-change-decision
       pattern: no_changes_needed
       prompt: Review the implementation reasoning and choose how to continue.
+      prompt_locales:
+        zh-TW: "檢視實作判斷的理由，並選擇如何繼續。"
       input_schema: decision
       decisions:
         - id: agree
           label: Agree that no further changes are needed
+          label_locales:
+            zh-TW: "同意不需要再進行變更"
         - id: disagree
           label: Request further changes
+          label_locales:
+            zh-TW: "要求進一步變更"
           requires_feedback: true
           correction: true
     - id: clarification-feedback
       pattern: revision_feedback
       prompt: Provide the clarification or implementation feedback needed to continue.
+      prompt_locales:
+        zh-TW: "提供繼續所需的釐清說明或實作回饋。"
       input_schema: feedback
     - id: permission-answers
       pattern: revision_feedback
       prompt: Provide the permission decision or access details needed to continue development.
+      prompt_locales:
+        zh-TW: "提供繼續開發所需的權限決定或存取資訊。"
       input_schema: feedback
   prompt_inputs:
     - artifacts: [spec]
