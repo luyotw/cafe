@@ -11,7 +11,7 @@ Do not hand-write, reorder, trim, or otherwise repair its diagram. If rendering
 fails, report the renderer error and do not invent progress.
 
 The renderer reads the effective playbook, including `issue.yaml` overrides,
-plus existing blackboard, iteration, HumanTask, and confirmed Driver-contract
+plus existing blackboard, canonical `audit_events`, iteration, HumanTask, and confirmed Driver-contract
 records. It never starts or resumes a workflow and never writes runtime or
 Driver state. Calling it is presentation, not a poll required by supervision;
 invoke it only when a user-visible response is already due. `action: yield`
@@ -28,7 +28,8 @@ Stdout is a compact vertical execution spine. Each node carries a readable text
 status symbol plus its localized status text. Renderer-owned status markers use
 text presentation, never emoji presentation; ambiguous Unicode symbols are
 forced to text with variation selector 15. Proactive-review and confirmation
-checkpoints immediately follow their owning phase. The default diagram is a
+checkpoints immediately follow their owning phase. Keep task-authority diagnostic
+fields in task inspection output. The default diagram is a
 latest-state projection: it shows each phase's newest durable status and the
 Driver-review or user-confirmation checkpoint currently represented for that
 phase. The default projection never adds correction arrows or a historical
@@ -57,7 +58,7 @@ Driver-only display state is one JSON object with only these fields:
 }
 ```
 
-Allowed states are `pending`, `in_progress`, `completed`, `returned`,
+Allowed states are `pending`, `in_progress`, `awaiting_input`, `completed`, `returned`,
 `awaiting_confirmation`, `skipped`, `blocked`, and `unknown`. Supply
 Both `deliver` and `cleanup` are required for every established-workflow render.
 Supply `proactive_review` only for phases whose confirmed

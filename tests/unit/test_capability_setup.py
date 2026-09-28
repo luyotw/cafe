@@ -83,7 +83,9 @@ def test_duplicate_missing_unknown_answers_and_capabilities_fail_closed(tmp_path
     assert resolve_setup_choices(_graph(step="pr"), registry, []) == []
 
 
-def test_every_builtin_graph_resolves_without_requiring_a_publication_capability(tmp_path):
+def test_every_builtin_graph_resolves_without_requiring_a_publication_capability(
+    tmp_path, cached_builtin_skill_frontmatter
+):
     registry = load_capability_registry(default_capability_definition_dirs(tmp_path))
     for path in (Path(__file__).parents[2] / "src/cafe/data/playbooks").glob("*.yaml"):
         graph = PlaybookLoader(project_root=tmp_path).load_model(path.stem).model

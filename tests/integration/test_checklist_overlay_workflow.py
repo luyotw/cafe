@@ -7,6 +7,8 @@ import yaml
 
 from cafe.playbooks.loader import PlaybookLoader
 
+pytestmark = pytest.mark.usefixtures("cached_builtin_skill_frontmatter")
+
 
 def write_skill(root, name, workflow=None, references=None):
     directory = root / name

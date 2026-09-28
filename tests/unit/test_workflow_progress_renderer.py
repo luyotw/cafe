@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
+from cafe.core.audit_events import AuditEventStore
 from cafe.playbooks.loader import PlaybookLoader
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -77,56 +79,79 @@ def _unknown_closeout_state() -> dict[str, str]:
     return {"deliver": "unknown", "cleanup": "unknown"}
 
 
+def _write_runtime_state(issue_dir: Path, state: dict) -> None:
+    state = dict(state)
+    events = state.pop("events", [])
+    workflow_id = state.setdefault("workflow_id", "workflow-1")
+    (issue_dir / "blackboard.json").write_text(json.dumps(state), encoding="utf-8")
+    audit = AuditEventStore(issue_dir)
+    if audit.root.exists():
+        shutil.rmtree(audit.root)
+    audit.initialize(workflow_id)
+    for event in events:
+        sequence = audit.reserve(workflow_id)
+        audit.commit(
+            workflow_id,
+            {
+                "timestamp": "2026-09-20T01:00:00+00:00",
+                "step": "",
+                "message": "",
+                "data": {},
+                **event,
+                "workflow_id": workflow_id,
+                "sequence": sequence,
+                "event_id": f"event-{sequence}",
+            },
+        )
+
+
 def _write_runtime(issue_dir: Path) -> None:
     issue_dir.mkdir(parents=True)
-    (issue_dir / "blackboard.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 4,
-                "workflow_id": "workflow-1",
-                "playbook_id": "custom",
-                "current_step": "資料盤點",
-                "events": [
-                    {
-                        "timestamp": "2026-09-20T01:00:00+00:00",
-                        "step": "publish-draft",
-                        "event_type": "step_started",
-                        "message": "",
-                        "data": {"step": "publish-draft", "attempt": 1},
-                    },
-                    {
-                        "timestamp": "2026-09-20T01:01:00+00:00",
-                        "step": "publish-draft",
-                        "event_type": "step_completed",
-                        "message": "",
-                        "data": {"step": "publish-draft", "attempt": 1},
-                    },
-                    {
-                        "timestamp": "2026-09-20T01:02:00+00:00",
-                        "step": "publish-draft",
-                        "event_type": "transition",
-                        "message": "",
-                        "data": {"from": "publish-draft", "to": "資料盤點"},
-                    },
-                    {
-                        "timestamp": "2026-09-20T01:03:00+00:00",
-                        "step": "資料盤點",
-                        "event_type": "step_started",
-                        "message": "",
-                        "data": {"step": "資料盤點", "attempt": 2},
-                    },
-                ],
-                "handoff_contract": {
-                    "version": 1,
-                    "from_step": "資料盤點",
-                    "to_owner": "agent",
-                    "to_step": "資料盤點",
-                    "intent": "await_agent",
+    _write_runtime_state(
+        issue_dir,
+        {
+            "schema_version": 4,
+            "workflow_id": "workflow-1",
+            "playbook_id": "custom",
+            "current_step": "資料盤點",
+            "events": [
+                {
+                    "timestamp": "2026-09-20T01:00:00+00:00",
+                    "step": "publish-draft",
+                    "event_type": "step_started",
+                    "message": "",
+                    "data": {"step": "publish-draft", "attempt": 1},
                 },
+                {
+                    "timestamp": "2026-09-20T01:01:00+00:00",
+                    "step": "publish-draft",
+                    "event_type": "step_completed",
+                    "message": "",
+                    "data": {"step": "publish-draft", "attempt": 1},
+                },
+                {
+                    "timestamp": "2026-09-20T01:02:00+00:00",
+                    "step": "publish-draft",
+                    "event_type": "transition",
+                    "message": "",
+                    "data": {"from": "publish-draft", "to": "資料盤點"},
+                },
+                {
+                    "timestamp": "2026-09-20T01:03:00+00:00",
+                    "step": "資料盤點",
+                    "event_type": "step_started",
+                    "message": "",
+                    "data": {"step": "資料盤點", "attempt": 2},
+                },
+            ],
+            "handoff_contract": {
+                "version": 1,
+                "from_step": "資料盤點",
+                "to_owner": "agent",
+                "to_step": "資料盤點",
+                "intent": "await_agent",
             },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
+        },
     )
     (issue_dir / "human_tasks.json").write_text(
         json.dumps(
@@ -195,30 +220,28 @@ def test_renderer_preserves_custom_phase_names_and_localizes_only_annotations() 
 def test_omitted_review_is_pending_until_its_phase_finishes(tmp_path: Path) -> None:
     issue_dir = tmp_path / "issue"
     issue_dir.mkdir()
-    (issue_dir / "blackboard.json").write_text(
-        json.dumps(
-            {
-                "current_step": "active",
-                "events": [
-                    {
-                        "event_type": "step_started",
-                        "step": "completed",
-                        "data": {"step": "completed", "attempt": 1},
-                    },
-                    {
-                        "event_type": "step_completed",
-                        "step": "completed",
-                        "data": {"step": "completed", "attempt": 1},
-                    },
-                    {
-                        "event_type": "step_started",
-                        "step": "active",
-                        "data": {"step": "active", "attempt": 1},
-                    },
-                ],
-            }
-        ),
-        encoding="utf-8",
+    _write_runtime_state(
+        issue_dir,
+        {
+            "current_step": "active",
+            "events": [
+                {
+                    "event_type": "step_started",
+                    "step": "completed",
+                    "data": {"step": "completed", "attempt": 1},
+                },
+                {
+                    "event_type": "step_completed",
+                    "step": "completed",
+                    "data": {"step": "completed", "attempt": 1},
+                },
+                {
+                    "event_type": "step_started",
+                    "step": "active",
+                    "data": {"step": "active", "attempt": 1},
+                },
+            ],
+        },
     )
     phases = ("completed", "active", "future")
 
@@ -233,9 +256,7 @@ def test_omitted_review_is_pending_until_its_phase_finishes(tmp_path: Path) -> N
         },
         contract={
             "proactive_review": {
-                "phase_decisions": [
-                    {"phase": phase, "decision": "required"} for phase in phases
-                ]
+                "phase_decisions": [{"phase": phase, "decision": "required"} for phase in phases]
             }
         },
         locale="zh-TW",
@@ -366,7 +387,8 @@ def test_pending_confirmation_blocked_and_skipped_use_durable_evidence(tmp_path:
     _write_runtime(issue_dir)
     blackboard_path = issue_dir / "blackboard.json"
     blackboard = json.loads(blackboard_path.read_text(encoding="utf-8"))
-    blackboard["events"].extend(
+    events = list(AuditEventStore(issue_dir).iter_records(blackboard["workflow_id"]))
+    events.extend(
         [
             {
                 "event_type": "workflow_step_skipped",
@@ -380,7 +402,7 @@ def test_pending_confirmation_blocked_and_skipped_use_durable_evidence(tmp_path:
             },
         ]
     )
-    blackboard_path.write_text(json.dumps(blackboard, ensure_ascii=False), encoding="utf-8")
+    _write_runtime_state(issue_dir, {**blackboard, "events": events})
     tasks_path = issue_dir / "human_tasks.json"
     tasks = json.loads(tasks_path.read_text(encoding="utf-8"))
     tasks["tasks"][0]["status"] = "pending"
@@ -407,28 +429,26 @@ def test_direct_playbook_and_archived_issue_cli_are_supported(tmp_path: Path) ->
     archive = tmp_path / "archived" / "issue539"
     archive.mkdir(parents=True)
     (archive / "issue.yaml").write_text("playbook_id: direct-subagent-review\n", encoding="utf-8")
-    (archive / "blackboard.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 4,
-                "workflow_id": "workflow-archive",
-                "playbook_id": "direct-subagent-review",
-                "current_step": "done",
-                "events": [
-                    {
-                        "event_type": "step_completed",
-                        "step": "develop",
-                        "data": {"step": "develop", "attempt": 1},
-                    },
-                    {
-                        "event_type": "step_started",
-                        "step": "pr",
-                        "data": {"step": "pr", "attempt": 1},
-                    },
-                ],
-            }
-        ),
-        encoding="utf-8",
+    _write_runtime_state(
+        archive,
+        {
+            "schema_version": 4,
+            "workflow_id": "workflow-archive",
+            "playbook_id": "direct-subagent-review",
+            "current_step": "done",
+            "events": [
+                {
+                    "event_type": "step_completed",
+                    "step": "develop",
+                    "data": {"step": "develop", "attempt": 1},
+                },
+                {
+                    "event_type": "step_started",
+                    "step": "pr",
+                    "data": {"step": "pr", "attempt": 1},
+                },
+            ],
+        },
     )
     contract_dir = archive / "driver"
     contract_dir.mkdir()
@@ -526,10 +546,7 @@ def test_previous_revision_does_not_approve_the_new_iteration(tmp_path: Path) ->
 def test_cli_without_confirmed_contract_reports_unestablished_workflow(tmp_path: Path) -> None:
     issue_dir = tmp_path / "issue"
     issue_dir.mkdir()
-    (issue_dir / "blackboard.json").write_text(
-        json.dumps({"playbook_id": "direct-subagent-review", "events": []}),
-        encoding="utf-8",
-    )
+    _write_runtime_state(issue_dir, {"playbook_id": "direct-subagent-review", "events": []})
 
     result = subprocess.run(
         [sys.executable, str(SCRIPT), "--issue-dir", str(issue_dir), "--locale", "zh-TW"],
@@ -546,21 +563,19 @@ def test_cli_without_confirmed_contract_reports_unestablished_workflow(tmp_path:
 def test_compact_spine_omits_raw_routes_without_inventing_a_return(tmp_path: Path) -> None:
     issue_dir = tmp_path / "issue"
     issue_dir.mkdir()
-    (issue_dir / "blackboard.json").write_text(
-        json.dumps(
-            {
-                "current_step": "A",
-                "events": [],
-                "handoff_contract": {
-                    "from_step": "A",
-                    "to_step": "A",
-                    "to_owner": "agent",
-                    "intent": "await_agent",
-                    "source": "workflow.start_step_override",
-                },
-            }
-        ),
-        encoding="utf-8",
+    _write_runtime_state(
+        issue_dir,
+        {
+            "current_step": "A",
+            "events": [],
+            "handoff_contract": {
+                "from_step": "A",
+                "to_step": "A",
+                "to_owner": "agent",
+                "intent": "await_agent",
+                "source": "workflow.start_step_override",
+            },
+        },
     )
     playbook = {
         "playbook": {"id": "non-topological"},
@@ -624,20 +639,18 @@ def test_latest_iteration_metadata_cannot_be_overwritten_by_prior_completion(
 ) -> None:
     issue_dir = tmp_path / "issue"
     issue_dir.mkdir()
-    (issue_dir / "blackboard.json").write_text(
-        json.dumps(
-            {
-                "current_step": "review",
-                "events": [
-                    {
-                        "event_type": "step_started",
-                        "step": "review",
-                        "data": {"step": "review", "attempt": 2},
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
+    _write_runtime_state(
+        issue_dir,
+        {
+            "current_step": "review",
+            "events": [
+                {
+                    "event_type": "step_started",
+                    "step": "review",
+                    "data": {"step": "review", "attempt": 2},
+                }
+            ],
+        },
     )
     previous = issue_dir / "review" / "iteration_001"
     previous.mkdir(parents=True)
@@ -717,25 +730,23 @@ def test_completed_confirmation_renders_only_a_declared_non_correction_outcome(
 def test_forward_skip_review_manual_handoff_is_not_a_return(tmp_path: Path) -> None:
     issue_dir = tmp_path / "issue"
     issue_dir.mkdir()
-    (issue_dir / "blackboard.json").write_text(
-        json.dumps(
-            {
-                "current_step": "pr",
-                "events": [
-                    {
-                        "event_type": "transition",
-                        "step": "develop",
-                        "data": {
-                            "from": "develop",
-                            "to": "pr",
-                            "status_code": "skip_review",
-                            "transition_intent": "manual_handoff",
-                        },
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
+    _write_runtime_state(
+        issue_dir,
+        {
+            "current_step": "pr",
+            "events": [
+                {
+                    "event_type": "transition",
+                    "step": "develop",
+                    "data": {
+                        "from": "develop",
+                        "to": "pr",
+                        "status_code": "skip_review",
+                        "transition_intent": "manual_handoff",
+                    },
+                }
+            ],
+        },
     )
 
     rendered = _module().render_progress(
@@ -769,7 +780,6 @@ def test_upstream_baton_without_feedback_returns_until_the_source_runs_again(
 ) -> None:
     issue_dir = tmp_path / "issue"
     issue_dir.mkdir()
-    blackboard_path = issue_dir / "blackboard.json"
     events = [
         {
             "event_type": "step_started",
@@ -798,9 +808,7 @@ def test_upstream_baton_without_feedback_returns_until_the_source_runs_again(
             "data": {"step": target, "attempt": 3},
         },
     ]
-    blackboard_path.write_text(
-        json.dumps({"current_step": target, "events": events}), encoding="utf-8"
-    )
+    _write_runtime_state(issue_dir, {"current_step": target, "events": events})
     completed_iteration = issue_dir / source / "iteration_002"
     completed_iteration.mkdir(parents=True)
     (completed_iteration / "iteration.json").write_text(
@@ -849,9 +857,7 @@ def test_upstream_baton_without_feedback_returns_until_the_source_runs_again(
         events.append(
             {"event_type": event_type, "step": source, "data": {"step": source, "attempt": 3}}
         )
-        blackboard_path.write_text(
-            json.dumps({"current_step": source, "events": events}), encoding="utf-8"
-        )
+        _write_runtime_state(issue_dir, {"current_step": source, "events": events})
         metadata = {"iteration": 3}
         if event_type == "step_completed":
             metadata.update(status_code="confirmed", end_time="2026-09-23T02:00:00+00:00")
@@ -876,30 +882,28 @@ def test_manual_handoff_without_a_distinct_upstream_target_is_not_a_return(
 ) -> None:
     issue_dir = tmp_path / "issue"
     issue_dir.mkdir()
-    (issue_dir / "blackboard.json").write_text(
-        json.dumps(
-            {
-                "current_step": target,
-                "events": [
-                    {
-                        "event_type": "step_completed",
-                        "step": "source",
-                        "data": {"step": "source", "attempt": 1},
+    _write_runtime_state(
+        issue_dir,
+        {
+            "current_step": target,
+            "events": [
+                {
+                    "event_type": "step_completed",
+                    "step": "source",
+                    "data": {"step": "source", "attempt": 1},
+                },
+                {
+                    "event_type": "transition",
+                    "step": "source",
+                    "data": {
+                        "from": "source",
+                        "to": target,
+                        "status_code": "BATON_MANUAL_HANDOFF",
+                        "transition_intent": "manual_handoff",
                     },
-                    {
-                        "event_type": "transition",
-                        "step": "source",
-                        "data": {
-                            "from": "source",
-                            "to": target,
-                            "status_code": "BATON_MANUAL_HANDOFF",
-                            "transition_intent": "manual_handoff",
-                        },
-                    },
-                ],
-            }
-        ),
-        encoding="utf-8",
+                },
+            ],
+        },
     )
 
     rendered = _module().render_progress(
@@ -933,26 +937,24 @@ def test_normal_cycle_requires_explicit_correction_to_infer_a_return(
 ) -> None:
     issue_dir = tmp_path / "issue"
     issue_dir.mkdir()
-    (issue_dir / "blackboard.json").write_text(
-        json.dumps(
-            {
-                "current_step": "A",
-                "events": [
-                    {"event_type": "step_completed", "step": "C", "data": {}},
-                    {
-                        "event_type": "transition",
-                        "step": "C",
-                        "data": {
-                            "from": "C",
-                            "to": "A",
-                            "status_code": status_code,
-                            "transition_intent": "manual_handoff",
-                        },
+    _write_runtime_state(
+        issue_dir,
+        {
+            "current_step": "A",
+            "events": [
+                {"event_type": "step_completed", "step": "C", "data": {}},
+                {
+                    "event_type": "transition",
+                    "step": "C",
+                    "data": {
+                        "from": "C",
+                        "to": "A",
+                        "status_code": status_code,
+                        "transition_intent": "manual_handoff",
                     },
-                ],
-            }
-        ),
-        encoding="utf-8",
+                },
+            ],
+        },
     )
 
     rendered = _module().render_progress(
@@ -979,25 +981,23 @@ def test_normal_cycle_requires_explicit_correction_to_infer_a_return(
 def test_declared_correction_manual_handoff_is_a_formal_return(tmp_path: Path) -> None:
     issue_dir = tmp_path / "issue"
     issue_dir.mkdir()
-    (issue_dir / "blackboard.json").write_text(
-        json.dumps(
-            {
-                "current_step": "develop",
-                "events": [
-                    {
-                        "event_type": "transition",
-                        "step": "review",
-                        "data": {
-                            "from": "review",
-                            "to": "develop",
-                            "status_code": "needs_changes",
-                            "transition_intent": "manual_handoff",
-                        },
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
+    _write_runtime_state(
+        issue_dir,
+        {
+            "current_step": "develop",
+            "events": [
+                {
+                    "event_type": "transition",
+                    "step": "review",
+                    "data": {
+                        "from": "review",
+                        "to": "develop",
+                        "status_code": "needs_changes",
+                        "transition_intent": "manual_handoff",
+                    },
+                }
+            ],
+        },
     )
 
     rendered = _module().render_progress(
@@ -1024,40 +1024,38 @@ def test_declared_correction_manual_handoff_is_a_formal_return(tmp_path: Path) -
 def test_delivered_pr_feedback_baton_is_a_formal_return(tmp_path: Path) -> None:
     issue_dir = tmp_path / "issue"
     issue_dir.mkdir()
-    (issue_dir / "blackboard.json").write_text(
-        json.dumps(
-            {
-                "current_step": "develop",
-                "events": [
-                    {
-                        "event_type": "step_started",
+    _write_runtime_state(
+        issue_dir,
+        {
+            "current_step": "develop",
+            "events": [
+                {
+                    "event_type": "step_started",
+                    "step": "pr",
+                    "data": {"step": "pr", "attempt": 2},
+                },
+                {
+                    "event_type": "workflow_feedback_delivered",
+                    "step": "pr",
+                    "data": {
                         "step": "pr",
-                        "data": {"step": "pr", "attempt": 2},
+                        "delivery_id": "delivery-1",
+                        "source_identities": ["github_pr:comment:1"],
                     },
-                    {
-                        "event_type": "workflow_feedback_delivered",
-                        "step": "pr",
-                        "data": {
-                            "step": "pr",
-                            "delivery_id": "delivery-1",
-                            "source_identities": ["github_pr:comment:1"],
-                        },
+                },
+                {
+                    "event_type": "transition",
+                    "step": "pr",
+                    "data": {
+                        "from": "pr",
+                        "to": "develop",
+                        "source": "baton",
+                        "status_code": "BATON_MANUAL_HANDOFF",
+                        "transition_intent": "manual_handoff",
                     },
-                    {
-                        "event_type": "transition",
-                        "step": "pr",
-                        "data": {
-                            "from": "pr",
-                            "to": "develop",
-                            "source": "baton",
-                            "status_code": "BATON_MANUAL_HANDOFF",
-                            "transition_intent": "manual_handoff",
-                        },
-                    },
-                ],
-            }
-        ),
-        encoding="utf-8",
+                },
+            ],
+        },
     )
 
     rendered = _module().render_progress(
@@ -1132,10 +1130,7 @@ def test_repeated_returns_project_only_latest_phase_states(tmp_path: Path) -> No
                 },
             ]
         )
-    (issue_dir / "blackboard.json").write_text(
-        json.dumps({"current_step": "develop", "events": events}),
-        encoding="utf-8",
-    )
+    _write_runtime_state(issue_dir, {"current_step": "develop", "events": events})
 
     rendered = _module().render_progress(
         playbook={
@@ -1172,55 +1167,53 @@ def test_default_projection_suppresses_superseded_returns_and_shows_active_check
 ) -> None:
     issue_dir = tmp_path / "issue"
     issue_dir.mkdir()
-    (issue_dir / "blackboard.json").write_text(
-        json.dumps(
-            {
-                "current_step": "pr",
-                "events": [
-                    {
-                        "event_type": "workflow_feedback_delivery_prepared",
-                        "step": "pr",
-                        "data": {"step": "pr", "iteration": {"number": 13}},
+    _write_runtime_state(
+        issue_dir,
+        {
+            "current_step": "pr",
+            "events": [
+                {
+                    "event_type": "workflow_feedback_delivery_prepared",
+                    "step": "pr",
+                    "data": {"step": "pr", "iteration": {"number": 13}},
+                },
+                {
+                    "event_type": "workflow_feedback_delivered",
+                    "step": "pr",
+                    "data": {"step": "pr", "source_identities": ["review:13"]},
+                },
+                {
+                    "event_type": "transition",
+                    "step": "pr",
+                    "data": {
+                        "from": "pr",
+                        "to": "develop",
+                        "status_code": "BATON_MANUAL_HANDOFF",
+                        "transition_intent": "manual_handoff",
                     },
-                    {
-                        "event_type": "workflow_feedback_delivered",
-                        "step": "pr",
-                        "data": {"step": "pr", "source_identities": ["review:13"]},
-                    },
-                    {
-                        "event_type": "transition",
-                        "step": "pr",
-                        "data": {
-                            "from": "pr",
-                            "to": "develop",
-                            "status_code": "BATON_MANUAL_HANDOFF",
-                            "transition_intent": "manual_handoff",
-                        },
-                    },
-                    {
-                        "event_type": "step_started",
-                        "step": "develop",
-                        "data": {"step": "develop", "attempt": 6},
-                    },
-                    {
-                        "event_type": "step_completed",
-                        "step": "develop",
-                        "data": {"step": "develop", "attempt": 6},
-                    },
-                    {
-                        "event_type": "step_started",
-                        "step": "pr",
-                        "data": {"step": "pr", "attempt": 14},
-                    },
-                    {
-                        "event_type": "step_completed",
-                        "step": "pr",
-                        "data": {"step": "pr", "attempt": 14},
-                    },
-                ],
-            }
-        ),
-        encoding="utf-8",
+                },
+                {
+                    "event_type": "step_started",
+                    "step": "develop",
+                    "data": {"step": "develop", "attempt": 6},
+                },
+                {
+                    "event_type": "step_completed",
+                    "step": "develop",
+                    "data": {"step": "develop", "attempt": 6},
+                },
+                {
+                    "event_type": "step_started",
+                    "step": "pr",
+                    "data": {"step": "pr", "attempt": 14},
+                },
+                {
+                    "event_type": "step_completed",
+                    "step": "pr",
+                    "data": {"step": "pr", "attempt": 14},
+                },
+            ],
+        },
     )
     (issue_dir / "human_tasks.json").write_text(
         json.dumps(
@@ -1249,9 +1242,7 @@ def test_default_projection_suppresses_superseded_returns_and_shows_active_check
             },
         },
         contract={
-            "proactive_review": {
-                "phase_decisions": [{"phase": "pr", "decision": "required"}]
-            },
+            "proactive_review": {"phase_decisions": [{"phase": "pr", "decision": "required"}]},
             "confirmation_contract": {
                 "mandatory_human_stops": ["pr"],
                 "driver_confirmable": [],
@@ -1281,35 +1272,33 @@ def test_default_projection_suppresses_superseded_returns_and_shows_active_check
 def test_latest_return_is_phase_state_without_a_historical_arrow(tmp_path: Path) -> None:
     issue_dir = tmp_path / "issue"
     issue_dir.mkdir()
-    (issue_dir / "blackboard.json").write_text(
-        json.dumps(
-            {
-                "current_step": "pr",
-                "events": [
-                    {
-                        "event_type": "step_started",
-                        "step": "pr",
-                        "data": {"step": "pr", "attempt": 14},
+    _write_runtime_state(
+        issue_dir,
+        {
+            "current_step": "pr",
+            "events": [
+                {
+                    "event_type": "step_started",
+                    "step": "pr",
+                    "data": {"step": "pr", "attempt": 14},
+                },
+                {
+                    "event_type": "workflow_feedback_delivered",
+                    "step": "pr",
+                    "data": {"step": "pr", "source_identities": ["review:14"]},
+                },
+                {
+                    "event_type": "transition",
+                    "step": "pr",
+                    "data": {
+                        "from": "pr",
+                        "to": "develop",
+                        "status_code": "BATON_MANUAL_HANDOFF",
+                        "transition_intent": "manual_handoff",
                     },
-                    {
-                        "event_type": "workflow_feedback_delivered",
-                        "step": "pr",
-                        "data": {"step": "pr", "source_identities": ["review:14"]},
-                    },
-                    {
-                        "event_type": "transition",
-                        "step": "pr",
-                        "data": {
-                            "from": "pr",
-                            "to": "develop",
-                            "status_code": "BATON_MANUAL_HANDOFF",
-                            "transition_intent": "manual_handoff",
-                        },
-                    },
-                ],
-            }
-        ),
-        encoding="utf-8",
+                },
+            ],
+        },
     )
 
     rendered = _module().render_progress(
@@ -1348,9 +1337,7 @@ def test_same_phase_task_return_projects_latest_confirmation_state(tmp_path: Pat
                         "iteration": 11,
                         "trigger": "confirm_output",
                         "status": "completed",
-                        "expected_result": {
-                            "decisions": [{"id": "fix_now", "correction": True}]
-                        },
+                        "expected_result": {"decisions": [{"id": "fix_now", "correction": True}]},
                         "continuations": {"fix_now": "pr"},
                     }
                 ],
@@ -1389,55 +1376,53 @@ def test_same_phase_task_return_projects_latest_confirmation_state(tmp_path: Pat
 def test_cross_target_returns_project_only_each_phase_latest_state(tmp_path: Path) -> None:
     issue_dir = tmp_path / "issue"
     issue_dir.mkdir()
-    (issue_dir / "blackboard.json").write_text(
-        json.dumps(
-            {
-                "current_step": "A",
-                "events": [
-                    {
-                        "event_type": "step_started",
-                        "step": "C",
-                        "data": {"step": "C", "attempt": 1},
+    _write_runtime_state(
+        issue_dir,
+        {
+            "current_step": "A",
+            "events": [
+                {
+                    "event_type": "step_started",
+                    "step": "C",
+                    "data": {"step": "C", "attempt": 1},
+                },
+                {
+                    "event_type": "transition",
+                    "step": "C",
+                    "data": {
+                        "from": "C",
+                        "to": "B",
+                        "status_code": "needs_changes",
+                        "transition_intent": "manual_handoff",
                     },
-                    {
-                        "event_type": "transition",
-                        "step": "C",
-                        "data": {
-                            "from": "C",
-                            "to": "B",
-                            "status_code": "needs_changes",
-                            "transition_intent": "manual_handoff",
-                        },
+                },
+                {
+                    "event_type": "step_started",
+                    "step": "B",
+                    "data": {"step": "B", "attempt": 2},
+                },
+                {
+                    "event_type": "step_started",
+                    "step": "C",
+                    "data": {"step": "C", "attempt": 2},
+                },
+                {
+                    "event_type": "transition",
+                    "step": "C",
+                    "data": {
+                        "from": "C",
+                        "to": "A",
+                        "status_code": "needs_changes",
+                        "transition_intent": "manual_handoff",
                     },
-                    {
-                        "event_type": "step_started",
-                        "step": "B",
-                        "data": {"step": "B", "attempt": 2},
-                    },
-                    {
-                        "event_type": "step_started",
-                        "step": "C",
-                        "data": {"step": "C", "attempt": 2},
-                    },
-                    {
-                        "event_type": "transition",
-                        "step": "C",
-                        "data": {
-                            "from": "C",
-                            "to": "A",
-                            "status_code": "needs_changes",
-                            "transition_intent": "manual_handoff",
-                        },
-                    },
-                    {
-                        "event_type": "step_started",
-                        "step": "A",
-                        "data": {"step": "A", "attempt": 2},
-                    },
-                ],
-            }
-        ),
-        encoding="utf-8",
+                },
+                {
+                    "event_type": "step_started",
+                    "step": "A",
+                    "data": {"step": "A", "attempt": 2},
+                },
+            ],
+        },
     )
 
     rendered = _module().render_progress(
@@ -1503,9 +1488,7 @@ def test_runtime_and_task_return_history_is_suppressed(tmp_path: Path) -> None:
                 },
             ]
         )
-    (issue_dir / "blackboard.json").write_text(
-        json.dumps({"current_step": "develop", "events": events}), encoding="utf-8"
-    )
+    _write_runtime_state(issue_dir, {"current_step": "develop", "events": events})
     (issue_dir / "human_tasks.json").write_text(
         json.dumps(
             {
@@ -1516,9 +1499,7 @@ def test_runtime_and_task_return_history_is_suppressed(tmp_path: Path) -> None:
                         "iteration": 12,
                         "trigger": "confirm_output",
                         "status": "completed",
-                        "expected_result": {
-                            "decisions": [{"id": "fix_now", "correction": True}]
-                        },
+                        "expected_result": {"decisions": [{"id": "fix_now", "correction": True}]},
                         "continuations": {"fix_now": "develop"},
                     }
                 ],
@@ -1568,34 +1549,32 @@ def test_runtime_and_task_return_history_is_suppressed(tmp_path: Path) -> None:
 def test_forward_feedback_curation_delivery_is_not_a_return(tmp_path: Path) -> None:
     issue_dir = tmp_path / "issue"
     issue_dir.mkdir()
-    (issue_dir / "blackboard.json").write_text(
-        json.dumps(
-            {
-                "current_step": "consumer",
-                "events": [
-                    {
-                        "event_type": "workflow_feedback_delivered",
+    _write_runtime_state(
+        issue_dir,
+        {
+            "current_step": "consumer",
+            "events": [
+                {
+                    "event_type": "workflow_feedback_delivered",
+                    "step": "curator",
+                    "data": {
                         "step": "curator",
-                        "data": {
-                            "step": "curator",
-                            "source_identities": ["external_note:1"],
-                        },
+                        "source_identities": ["external_note:1"],
                     },
-                    {
-                        "event_type": "transition",
-                        "step": "curator",
-                        "data": {
-                            "from": "curator",
-                            "to": "consumer",
-                            "source": "baton",
-                            "status_code": "BATON_MANUAL_HANDOFF",
-                            "transition_intent": "manual_handoff",
-                        },
+                },
+                {
+                    "event_type": "transition",
+                    "step": "curator",
+                    "data": {
+                        "from": "curator",
+                        "to": "consumer",
+                        "source": "baton",
+                        "status_code": "BATON_MANUAL_HANDOFF",
+                        "transition_intent": "manual_handoff",
                     },
-                ],
-            }
-        ),
-        encoding="utf-8",
+                },
+            ],
+        },
     )
 
     rendered = _module().render_progress(
@@ -1630,25 +1609,23 @@ def test_forward_feedback_curation_delivery_is_not_a_return(tmp_path: Path) -> N
 def test_durable_blocked_event_overrides_completed_iteration_metadata(tmp_path: Path) -> None:
     issue_dir = tmp_path / "issue"
     issue_dir.mkdir()
-    (issue_dir / "blackboard.json").write_text(
-        json.dumps(
-            {
-                "current_step": "publish",
-                "events": [
-                    {
-                        "event_type": "step_completed",
-                        "step": "publish",
-                        "data": {"step": "publish", "attempt": 1},
-                    },
-                    {
-                        "event_type": "workflow_blocked",
-                        "step": "publish",
-                        "data": {"step": "publish", "missing_capabilities": ["demo.publish"]},
-                    },
-                ],
-            }
-        ),
-        encoding="utf-8",
+    _write_runtime_state(
+        issue_dir,
+        {
+            "current_step": "publish",
+            "events": [
+                {
+                    "event_type": "step_completed",
+                    "step": "publish",
+                    "data": {"step": "publish", "attempt": 1},
+                },
+                {
+                    "event_type": "workflow_blocked",
+                    "step": "publish",
+                    "data": {"step": "publish", "missing_capabilities": ["demo.publish"]},
+                },
+            ],
+        },
     )
     iteration = issue_dir / "publish" / "iteration_001"
     iteration.mkdir(parents=True)
@@ -1676,3 +1653,79 @@ def test_durable_blocked_event_overrides_completed_iteration_metadata(tmp_path: 
 
     assert "! publish · Blocked" in rendered
     assert "✓ publish · Completed" not in rendered
+
+
+@pytest.mark.parametrize(
+    ("pause_code", "answered", "expected"),
+    [
+        ("BATON_NEED_CLARIFICATION", False, "⏸\ufe0e 資料盤點 · 等待回覆"),
+        ("BATON_NEED_PERMISSION", False, "⏸\ufe0e 資料盤點 · 等待回覆"),
+        ("BATON_NEED_CLARIFICATION", True, "✓ 資料盤點 · 已完成"),
+    ],
+)
+def test_audit_pause_overrides_finished_draft_without_an_iteration_status_code(
+    tmp_path: Path, pause_code: str, answered: bool, expected: str
+) -> None:
+    issue_dir = tmp_path / "issue"
+    iteration = issue_dir / "資料盤點" / "iteration_001"
+    iteration.mkdir(parents=True)
+    events = [
+        {"event_type": "step_started", "step": "資料盤點", "data": {"attempt": 1}},
+        {"event_type": "step_completed", "step": "資料盤點", "data": {"attempt": 1}},
+        {"event_type": "workflow_paused", "step": "資料盤點", "data": {"status_code": pause_code}},
+    ]
+    if answered:
+        events.append({"event_type": "human_task_completed", "step": "資料盤點"})
+    _write_runtime_state(issue_dir, {"current_step": "user", "events": events})
+    (iteration / "iteration.json").write_text(
+        json.dumps({"iteration": 1, "end_time": "2026-09-20T01:00:00+00:00"}),
+        encoding="utf-8",
+    )
+    contract = _contract()
+    contract["proactive_review"]["phase_decisions"].append(
+        {"phase": "資料盤點", "decision": "required"}
+    )
+    before = {path: path.read_bytes() for path in issue_dir.rglob("*") if path.is_file()}
+
+    rendered = _module().render_progress(
+        playbook=_custom_playbook(),
+        contract=contract,
+        locale="zh-TW",
+        issue_dir=issue_dir,
+        driver_state=_unknown_closeout_state(),
+    )
+
+    assert expected in rendered
+    assert "○ publish-draft · 待執行" in rendered
+    if not answered:
+        assert "○ 資料盤點：driver 主動審查 · 待執行" in rendered
+    assert "events" not in json.loads((issue_dir / "blackboard.json").read_text())
+    assert before == {path: path.read_bytes() for path in issue_dir.rglob("*") if path.is_file()}
+
+
+@pytest.mark.parametrize(
+    ("metadata", "expected"),
+    [
+        ({"end_time": "2026-09-20T01:00:00+00:00"}, "✓ 資料盤點 · Completed"),
+        ({"timestamp": "2026-09-20T01:00:00+00:00"}, "▶\ufe0e 資料盤點 · In progress"),
+    ],
+)
+def test_iteration_timestamps_work_without_status_codes_or_execution_events(
+    tmp_path: Path, metadata: dict, expected: str
+) -> None:
+    issue_dir = tmp_path / "issue"
+    iteration = issue_dir / "資料盤點" / "iteration_001"
+    iteration.mkdir(parents=True)
+    _write_runtime_state(issue_dir, {"current_step": "資料盤點"})
+    (iteration / "iteration.json").write_text(json.dumps(metadata), encoding="utf-8")
+
+    rendered = _module().render_progress(
+        playbook=_custom_playbook(),
+        contract=_contract(),
+        locale="en",
+        issue_dir=issue_dir,
+        driver_state=_unknown_closeout_state(),
+    )
+
+    assert expected in rendered
+    assert "○ publish-draft · Pending" in rendered

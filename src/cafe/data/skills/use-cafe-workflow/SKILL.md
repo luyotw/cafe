@@ -1,7 +1,7 @@
 ---
 name: use-cafe-workflow
 description: Use this skill when you need to develop an issue by driving CAFE from the terminal with non-interactive commands, including passive supervision, bounded recovery, and declarative repair when execution leaves its safe operating envelope.
-metadata: {version: 1.70.1}
+metadata: {version: 1.70.4}
 ---
 
 # Use CAFE Workflow
@@ -55,6 +55,8 @@ read the union once; do not preload the rest.
 
 ## Always-on boundaries
 
+- You are the primary Driver: use your current CLI/session as the primary
+  `--event-driver`; phase model choices do not change your Driver identity.
 - During ordinary execution, the Driver observes process and durable workflow
   state only. Do not use `cafe chat`, inspect implementation code or diffs, do
   phase work, manually resume/select a step, or mutate workflow state merely to
