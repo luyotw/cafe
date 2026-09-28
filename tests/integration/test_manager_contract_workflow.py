@@ -232,3 +232,46 @@ def test_manager_settings_dispatch_honors_equivalent_dual_authority(tmp_path):
         dispatch_setting_update("manager", changed)
     assert manager_path.read_bytes() == manager_before
     assert driver_path.read_bytes() == driver_before
+
+
+def test_manager_settings_rejects_a_dangling_parallel_contract_before_mutation(tmp_path):
+    from copy import deepcopy
+
+    from cafe.core.packet_io import canonical_json
+    from cafe.driver._schema import build_initial_contract as build_driver_contract
+    from cafe.settings import SettingUpdateRequest, dispatch_setting_update
+
+    legacy = deepcopy(_proposal())
+    legacy["driver"] = legacy.pop("manager")
+    for field in ("confirmation_contract", "task_contract"):
+        legacy[field]["driver_confirmable"] = legacy[field].pop("manager_confirmable")
+    legacy["reactive_user_handoffs"]["need_clarification"] = "driver_confirmable"
+    legacy["reactive_user_handoffs"]["alignment_checkpoint"] = "driver_resolvable_when_clear"
+    issue_dir = tmp_path / "issue"
+    driver_dir = issue_dir / "driver"
+    driver_dir.mkdir(parents=True)
+    driver_contract = build_driver_contract(
+        proposal=legacy,
+        issue_name="journey",
+        workflow_id="workflow-journey",
+        confirmed_by="user",
+        confirmed_at="2026-09-28T00:00:00+00:00",
+    )
+    driver_path = driver_dir / "contract.json"
+    driver_path.write_bytes(canonical_json(driver_contract))
+    manager_dir = issue_dir / "manager"
+    manager_dir.mkdir()
+    manager_path = manager_dir / "contract.json"
+    manager_path.symlink_to(manager_dir / "missing-contract.json")
+    request = SettingUpdateRequest(
+        config_path=issue_dir / "issue.yaml",
+        value={"mode": "attached", "poll_interval_seconds": 30},
+    )
+    driver_before = driver_path.read_bytes()
+
+    with pytest.raises(ValueError) as error:
+        dispatch_setting_update("manager", request)
+
+    assert str(manager_path) in str(error.value)
+    assert driver_path.read_bytes() == driver_before
+    assert manager_path.is_symlink()

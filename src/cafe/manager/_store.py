@@ -31,12 +31,53 @@ def contract_path(issue_dir: Path) -> Path:
     return Path(issue_dir) / "manager" / CONTRACT_FILENAME
 
 
+def _role_contract_present(issue_dir: Path, role: str) -> bool:
+    """Distinguish an absent role record from an unsafe present path."""
+    issue = Path(issue_dir)
+    path = issue / role / CONTRACT_FILENAME
+    try:
+        _reject_symlink_ancestors(issue)
+    except ValueError as exc:
+        raise ValueError(
+            f"Unsafe role contract path {path}; inspect the path and restore or remove the "
+            "symlink before retrying."
+        ) from exc
+    directory = issue / role
+    try:
+        directory_stat = directory.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise ValueError(
+            f"Cannot inspect role contract path {path}; recover the path before retrying."
+        ) from exc
+    if not stat.S_ISDIR(directory_stat.st_mode):
+        raise ValueError(
+            f"Unsafe role contract path {path}; restore or remove the role directory before retrying."
+        )
+    try:
+        record_stat = path.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise ValueError(
+            f"Cannot inspect role contract path {path}; recover the path before retrying."
+        ) from exc
+    if stat.S_ISLNK(record_stat.st_mode) or not stat.S_ISREG(record_stat.st_mode):
+        raise ValueError(
+            f"Unsafe role contract path {path}; restore or remove the alias before retrying."
+        )
+    return True
+
+
 def select_authority_directory(issue_dir: Path) -> Path:
     """Select the sole writable role directory, rejecting unproven dual records."""
     issue = Path(issue_dir)
     manager_path = issue / "manager" / CONTRACT_FILENAME
     driver_path = issue / "driver" / CONTRACT_FILENAME
-    if manager_path.exists() and driver_path.exists():
+    manager_present = _role_contract_present(issue, "manager")
+    driver_present = _role_contract_present(issue, "driver")
+    if manager_present and driver_present:
         from cafe.driver._store import load_contract as load_driver_contract
 
         try:
@@ -77,7 +118,7 @@ def select_authority_directory(issue_dir: Path) -> Path:
                 "the matching record before retrying."
             )
         return issue / "driver"
-    if driver_path.exists():
+    if driver_present:
         return issue / "driver"
     return issue / "manager"
 
