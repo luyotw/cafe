@@ -233,7 +233,10 @@ def test_custom_clarification_current_task_has_independent_driver_facts(
         text=True,
         capture_output=True,
     )
-    assert json.loads(inspected.stdout)["resolution_owner"] == "driver_confirmable"
+    inspected_facts = json.loads(inspected.stdout)
+    assert inspected_facts["route_status"] == "need_clarification"
+    assert inspected_facts["resolution_owner"] == "driver_confirmable"
+    assert inspected_facts["evidence_reason"] == "evidence_unevaluated"
     progress = subprocess.run(
         [
             sys.executable,
@@ -249,9 +252,10 @@ def test_custom_clarification_current_task_has_independent_driver_facts(
         text=True,
         capture_output=True,
     )
-    assert "route_status=need_clarification" in progress.stdout
-    assert "resolution_owner=driver_confirmable" in progress.stdout
-    assert "evidence_reason=evidence_unevaluated" in progress.stdout
+    assert "spec: user confirmation (driver may not act)" in progress.stdout
+    assert progress.stdout.rstrip().endswith("○ cleanup (closeout) · Pending")
+    for diagnostic in ("route_status=", "pause_status=", "resolution_owner=", "evidence_reason="):
+        assert diagnostic not in progress.stdout
 
     callback_spec = importlib.util.spec_from_file_location(
         "task_authority_callback", scripts / "workflow_event_callback.py"
@@ -661,8 +665,10 @@ workflow:
         issue_dir=issue_dir,
         driver_state={"deliver": "pending", "cleanup": "pending"},
     )
-    assert "resolution_owner=user_required" in progress
-    assert "evidence_reason=declared_user_required" in progress
+    assert "⏸︎ design · Awaiting response" in progress
+    assert progress.endswith("○ cleanup (closeout) · Pending")
+    for diagnostic in ("route_status=", "pause_status=", "resolution_owner=", "evidence_reason="):
+        assert diagnostic not in progress
     callback_spec = importlib.util.spec_from_file_location(
         "rejected_task_callback", scripts / "workflow_event_callback.py"
     )
