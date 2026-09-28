@@ -28,7 +28,8 @@ Stdout is a compact vertical execution spine. Each node carries a readable text
 status symbol plus its localized status text. Renderer-owned status markers use
 text presentation, never emoji presentation; ambiguous Unicode symbols are
 forced to text with variation selector 15. Proactive-review and confirmation
-checkpoints immediately follow their owning phase. The default diagram is a
+checkpoints immediately follow their owning phase. Keep task-authority diagnostic
+fields in task inspection output. The default diagram is a
 latest-state projection: it shows each phase's newest durable status and the
 Driver-review or user-confirmation checkpoint currently represented for that
 phase. The default projection never adds correction arrows or a historical

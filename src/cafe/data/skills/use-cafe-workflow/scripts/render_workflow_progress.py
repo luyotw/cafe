@@ -612,11 +612,6 @@ def render_progress(
             status_text,
         )
         body += ("\n│\n" if body else "") + closeout_line
-    if task_authority is not None:
-        body += "\n│\n" + " ".join(
-            f"{key}={task_authority[key]}"
-            for key in ("route_status", "pause_status", "resolution_owner", "evidence_reason")
-        )
     return body
 
 
