@@ -9052,3 +9052,80 @@ workflow:
 
         ledger.path.write_text('{"version": 1, "entries": []}\n', encoding="utf-8")
         assert not executor._validate_projected_todo_completion(checklist)
+
+
+def test_build_context_forwards_the_stored_workflow_language_to_the_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The phase context carries the stored locale through the production assembler."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".cafe").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".cafe" / "strategic_context.yaml").write_text(
+        "version: 1\nrepository_language:\n  content_locale: en-US\n", encoding="utf-8"
+    )
+    skill_root = tmp_path / "builtin" / "skills" / "drafting"
+    skill_root.mkdir(parents=True)
+    (skill_root / "SKILL.md").write_text(
+        "---\nname: drafting\ndescription: Draft\n---\n\n# Skill\n", encoding="utf-8"
+    )
+    loader = SkillLoader(
+        project_root=tmp_path,
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+    loader.discover()
+    phase = GenericPhase(
+        loader,
+        skill_bridge=NativeSkillBridge(loader, project_root=tmp_path, home_dir=tmp_path / "home"),
+    )
+    issue_dir = tmp_path / ".cafe" / "issues" / "locale-context"
+    playbook = {
+        "playbook": {"id": "custom-drafting"},
+        "roles": {"writer": {"default_agent": "David", "description": "Writer"}},
+        "steps": {
+            "draft": {
+                "skill": "drafting",
+                "role": "writer",
+                "output_artifact": "draft",
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("draft")
+    state.conversation_locale = "zh-TW"
+    state.conversation_locale_source = "explicit"
+    store.save(state)
+    monkeypatch.setattr(
+        AgentManager,
+        "read_agent_file",
+        staticmethod(lambda _name, _role: ("test", "---\nname: David\n---\n")),
+    )
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="locale-context",
+        playbook=playbook,
+        generic_phase=phase,
+        agent_manager=FakeAgentManager("await_agent"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"writer": "David"},
+    )
+    executor.iteration = 1
+    output = issue_dir / "draft" / "iteration_001" / "output.md"
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    context = executor._build_context(
+        step_name="draft",
+        step_def=playbook["steps"]["draft"],
+        blackboard_state=state,
+        agent_name="David",
+        output_file=output,
+    )
+    prompt = phase.build_prompt(
+        skill_name="drafting", skill_invocation="/drafting", context=context
+    )
+
+    assert context["conversation_locale"] == "zh-TW"
+    assert context["repository_content_locale"] == "en-US"
+    assert "workflow conversation language: zh-TW" in prompt
+    assert "repository content language: en-US" in prompt
