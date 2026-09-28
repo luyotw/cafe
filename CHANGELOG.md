@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.5.1] - 2026-09-28
+
+### Fixed
+
+- Read workflow progress from canonical `audit_events` instead of the removed
+  blackboard event list. Iteration timestamps remain usable without a status
+  code, and clarification or permission pauses appear as waiting for a response.
+- Removed internal task-routing and authority diagnostics from the user-facing
+  progress diagram while preserving confirmation ownership labels.
+- Clarified that event-driven callbacks target the current primary Driver;
+  phase model selections do not transfer Driver ownership.
+
+### Performance
+
+- Reused immutable builtin skill metadata in focused workflow tests, ran
+  formatter checks without redundant Python subprocesses, and reduced repeated
+  AST traversal. A local comparison of the same 349 tests improved from 124.2
+  seconds to 64.4 seconds, retaining all parameter combinations and assertions.
+
+See [the v0.5.1 release notes](docs/releases/v0.5.1.md) for details.
+
 ## [0.5.0] - 2026-09-28
 
 ### Breaking changes
