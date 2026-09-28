@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -121,3 +122,50 @@ def test_manager_settings_dispatch_updates_only_manager_contract(tmp_path):
     assert saved.status == "saved"
     assert (issue_dir / "manager" / "contract.json").is_file()
     assert not (issue_dir / "driver" / "contract.json").exists()
+
+
+def test_manager_settings_dispatch_updates_the_selected_legacy_authority(tmp_path):
+    from copy import deepcopy
+
+    from cafe.core.packet_io import canonical_json
+    from cafe.driver._schema import build_initial_contract as build_driver_contract
+    from cafe.settings import SettingUpdateRequest, dispatch_setting_update
+
+    proposal = _proposal()
+    legacy = deepcopy(proposal)
+    legacy["driver"] = legacy.pop("manager")
+    for field in ("confirmation_contract", "task_contract"):
+        legacy[field]["driver_confirmable"] = legacy[field].pop("manager_confirmable")
+    legacy["reactive_user_handoffs"]["need_clarification"] = "driver_confirmable"
+    legacy["reactive_user_handoffs"]["alignment_checkpoint"] = "driver_resolvable_when_clear"
+    issue_dir = tmp_path / "issue"
+    driver_dir = issue_dir / "driver"
+    driver_dir.mkdir(parents=True)
+    old_contract = build_driver_contract(
+        proposal=legacy,
+        issue_name="journey",
+        workflow_id="workflow-journey",
+        confirmed_by="user",
+        confirmed_at="2026-09-28T00:00:00+00:00",
+    )
+    contract_path = driver_dir / "contract.json"
+    contract_path.write_bytes(canonical_json(old_contract))
+    request = SettingUpdateRequest(
+        config_path=issue_dir / "issue.yaml",
+        value={"mode": "attached", "poll_interval_seconds": 30},
+    )
+
+    preview = dispatch_setting_update("manager", SettingUpdateRequest(
+        config_path=request.config_path, value=request.value, preview=True
+    ))
+    assert preview.status == "proposed"
+    assert preview.changes["manager"]["after"] == request.value
+    assert json.loads(contract_path.read_text(encoding="utf-8")) == old_contract
+
+    saved = dispatch_setting_update("manager", request)
+
+    assert saved.status == "saved"
+    assert saved.changes["manager"]["after"] == request.value
+    updated = json.loads(contract_path.read_text(encoding="utf-8"))
+    assert updated["driver"] == request.value
+    assert not (issue_dir / "manager" / "contract.json").exists()

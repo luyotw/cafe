@@ -1024,6 +1024,7 @@ mandate:
     confirmation_index = result.stdout.index("請確認上述完整契約")
     progress_index = result.stdout.index("### Workflow progress")
     assert confirmation_index < progress_index
+    assert "流程管理員" in result.stdout[confirmation_index:progress_index]
     progress_block = result.stdout[progress_index:]
     assert progress_block.startswith("### Workflow progress\n\n```text\n")
     assert progress_block.rstrip().endswith("```")

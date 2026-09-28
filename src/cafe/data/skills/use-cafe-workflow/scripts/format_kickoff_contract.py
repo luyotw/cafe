@@ -802,7 +802,7 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
     zh = locale_token == "zh-tw" or locale_token.startswith("zh-hant")
     headers = ["欄位", "值"] if zh else ["Field", "Value"]
     confirmation_prompt = (
-        "請確認上述完整契約；確認後 Manager 才會準備並啟動 workflow。"
+        "請確認上述完整契約；確認後流程管理員才會準備並啟動 workflow。"
         if zh
         else "Please confirm the complete contract above before the Manager prepares "
         "and starts the workflow."

@@ -333,11 +333,16 @@ def _validate_alignment_input(
     if not isinstance(from_step, str) or not _IDENTIFIER.fullmatch(from_step):
         raise ValueError("alignment input has no valid durable source step")
     reactive = contract.get("reactive_user_handoffs")
+    checkpoint_policy = (
+        "manager_resolvable_when_clear"
+        if isinstance(contract.get("manager"), Mapping)
+        else "driver_resolvable_when_clear"
+    )
     if (
         not isinstance(reactive, Mapping)
-        or reactive.get("alignment_checkpoint") != "manager_resolvable_when_clear"
+        or reactive.get("alignment_checkpoint") != checkpoint_policy
     ):
-        raise ValueError("the confirmed Manager contract does not authorize alignment input")
+        raise ValueError("the confirmed workflow contract does not authorize alignment input")
     candidates = sorted((issue_dir / from_step).glob("iteration_*/alignment_request.json"))
     if not candidates:
         raise ValueError("durable alignment request is missing")
