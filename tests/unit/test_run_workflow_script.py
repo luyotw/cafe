@@ -657,6 +657,83 @@ def test_explicit_user_handoff_controller_failure_is_not_reported_as_yield(
     assert '"action":"yield"' not in directive
 
 
+def test_explicit_user_input_launches_only_from_a_user_owned_boundary(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = _module()
+    issue_dir = _prepared(tmp_path, step="user")
+    state_path = issue_dir / "blackboard.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["handoff_contract"] = {
+        "version": 1,
+        "from_step": "closeout",
+        "to_owner": "user",
+        "to_step": "user",
+        "intent": "need_clarification",
+    }
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    _install_contract_stubs(monkeypatch, module, _contract("event-driven", tmp_path))
+    launched: list[list[str]] = []
+
+    assert (
+        module.run(
+            _args("event-driven", "--user-input", "1"),
+            cwd=tmp_path,
+            process_factory=lambda argv, **kwargs: launched.append(argv) or _Process(),
+        )
+        == 0
+    )
+    assert launched[0][-4:] == ["--on-workflow-event", CALLBACK_ID, "--user-input", "1"]
+    assert "--start-step" not in launched[0]
+
+    state["current_step"] = "closeout"
+    state["handoff_contract"] = {
+        "to_owner": "agent",
+        "to_step": "closeout",
+        "intent": "await_agent",
+    }
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    assert (
+        module.run(
+            _args("event-driven", "--user-input", "1"),
+            cwd=tmp_path,
+            process_factory=lambda *args, **kwargs: pytest.fail("worker must not launch"),
+        )
+        == 2
+    )
+
+
+def test_explicit_user_input_rejects_empty_or_combined_continuations(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = _module()
+    _prepared(tmp_path, step="user")
+    _install_contract_stubs(monkeypatch, module, _contract("unattended", tmp_path))
+
+    assert (
+        module.run(
+            _args("unattended", "--user-input", "   "),
+            cwd=tmp_path,
+            process_factory=lambda *args, **kwargs: pytest.fail("worker must not launch"),
+        )
+        == 2
+    )
+    assert (
+        module.run(
+            _args(
+                "unattended",
+                "--user-input",
+                "continue",
+                "--user-handoff",
+                '{"type":"user_handoff"}',
+            ),
+            cwd=tmp_path,
+            process_factory=lambda *args, **kwargs: pytest.fail("worker must not launch"),
+        )
+        == 2
+    )
+
+
 def test_legacy_driver_alignment_decision_resumes_the_confirmed_workflow(
     tmp_path: Path, monkeypatch
 ) -> None:

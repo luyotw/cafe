@@ -441,6 +441,10 @@ def _parser() -> argparse.ArgumentParser:
         "--user-handoff",
         help="Explicit JSON for a user-owned durable handoff redirect.",
     )
+    parser.add_argument(
+        "--user-input",
+        help="Explicit user input for a user-owned workflow boundary.",
+    )
     return parser
 
 
@@ -463,6 +467,17 @@ def _validate_user_handoff_input(raw: str | None) -> str | None:
     if len(payload["input"].encode("utf-8")) > 65_536:
         raise ValueError("user handoff input exceeds the 64 KiB limit")
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def _validate_user_input(raw: str | None) -> str | None:
+    """Bound user-owned free text before forwarding it to the authoritative CLI."""
+    if raw is None:
+        return None
+    if not raw.strip():
+        raise ValueError("user input must not be empty")
+    if len(raw.encode("utf-8")) > 65_536:
+        raise ValueError("user input exceeds the 64 KiB limit")
+    return raw
 
 
 def run(
@@ -519,8 +534,12 @@ def run(
         if confirmed_mode != mode:
             raise ValueError("requested Manager mode differs from the confirmed contract")
         _validate_checkout(contract, project_root)
-        if args.alignment_input is not None and args.user_handoff is not None:
-            raise ValueError("alignment input and user handoff cannot be combined")
+        continuation_count = sum(
+            value is not None
+            for value in (args.alignment_input, args.user_handoff, args.user_input)
+        )
+        if continuation_count > 1:
+            raise ValueError("continuation inputs cannot be combined")
         alignment_input = _validate_alignment_input(
             args.alignment_input,
             issue_dir=issue_dir,
@@ -530,6 +549,9 @@ def run(
         user_handoff = _validate_user_handoff_input(args.user_handoff)
         if user_handoff is not None and not _is_user_boundary(state):
             raise ValueError("explicit user handoff requires a current user-owned boundary")
+        user_input = _validate_user_input(args.user_input)
+        if user_input is not None and not _is_user_boundary(state):
+            raise ValueError("explicit user input requires a current user-owned boundary")
         if mode == "event-driven":
             _validate_event_binding(
                 issue_dir=issue_dir,
@@ -542,7 +564,7 @@ def run(
     except (OSError, ValueError) as exc:
         return _launch_failed(mode, str(exc))
 
-    continuation_input = alignment_input or user_handoff
+    continuation_input = alignment_input or user_handoff or user_input
     if _is_user_boundary(state) and continuation_input is None:
         _emit_directive(
             mode=mode,

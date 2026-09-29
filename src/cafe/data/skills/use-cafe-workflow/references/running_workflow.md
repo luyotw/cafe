@@ -82,8 +82,9 @@ and `--mute-agent-output`, supplies `--background` only for unattended and
 event-driven operation, and supplies the callback only for event-driven mode.
 It never infers HumanTask answers, permissions, `--open-pr`, model or playbook
 changes, `--add-dir`, `--no-verify`, or retry/fresh-session choices.
-The separately authorized continuation inputs are `--alignment-input` and
-`--user-handoff`. `--alignment-input` requires explicit JSON and is accepted
+The separately authorized continuation inputs are `--alignment-input`,
+`--user-handoff`, and `--user-input`; exactly one may be supplied.
+`--alignment-input` requires explicit JSON and is accepted
 only when the current durable handoff, confirmed Manager policy, and latest
 alignment request all authorize that exact decision. `--user-handoff` is an
 explicit, typed user redirect containing the exact workflow ID, pending human
@@ -91,7 +92,10 @@ task ID, declared target, bounded input, and stable request ID. It is accepted
 only at a current user-owned boundary; the CLI rechecks the task and target,
 cancels (never completes) the superseded task, persists the input, and resumes
 the declared target. It is not a fallback for an invalid HumanTask answer or a
-general phase-input channel.
+general phase-input channel. `--user-input` is bounded, non-empty user text
+for a current user-owned boundary. It preserves the durable handoff's declared
+source/target, and the authoritative workflow CLI validates any active
+HumanTask schema; it cannot select a step or grant permission or capability.
 
 The wrapper also emits stable `CAFE_MANAGER_DIRECTIVE` records for launch
 failure and a durable user-owned boundary. Do not launch through a user-owned
@@ -180,8 +184,10 @@ playbook. Preserve exact wording when paraphrase could alter meaning.
 Use a routing HumanTask only within its declared schema **and semantic purpose**;
 correction feedback includes missing confirmed direction with the findings and
 acceptance conditions. Otherwise use workflow `--user-input` only when the
-current command and target step support it. An explicit user-owned redirect may
-use `--user-handoff` only with its declared typed contract. Never replace a
+current command and target step support it. The managed wrapper may forward
+bounded `--user-input` only at a current user-owned boundary; an explicit
+user-owned redirect may use `--user-handoff` only with its declared typed
+contract. Never replace a
 task-required answer, use `--start-step` just to carry context, or edit
 artifacts, blackboard, or baton state. If no legal input path exists, retain the
 pause and report it.
@@ -309,9 +315,11 @@ this two-step flow.
   not select or reconstruct a step with `--start-step`.
 - Use `--single-step` only for manual, bounded diagnosis. No ordinary operating
   mode uses it.
-- The wrapper has no input that grants user-owned decisions or separately
-  authorized options. Complete those through their existing explicit boundary
-  before invoking the wrapper.
+- The wrapper may forward exactly one explicit continuation input: validated
+  alignment JSON, a typed HumanTask redirect, or bounded user input at the
+  current durable user-owned boundary. It cannot grant a
+  user-owned decision, separately authorized option, permission, capability,
+  or a different target.
 - For a HumanTask, read `handoffs_and_alignment.md`, resolve the active
   HumanTask and its input schema, including current `human_task_id`, then follow
   **Completing a HumanTask** above. Never turn an unknown or stale task into
