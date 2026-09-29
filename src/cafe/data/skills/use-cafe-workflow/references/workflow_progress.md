@@ -1,6 +1,6 @@
 # Workflow Progress Diagram
 
-Read this reference before every user-visible Driver reply. For an initial
+Read this reference before every user-visible Manager reply. For an initial
 kickoff, `format_kickoff_contract.py` owns the complete response and places the
 renderer-produced progress diagram at its end. For every other question,
 progress update, error, and completion message, the final block must come from the stdout of
@@ -11,17 +11,17 @@ Do not hand-write, reorder, trim, or otherwise repair its diagram. If rendering
 fails, report the renderer error and do not invent progress.
 
 The renderer reads the effective playbook, including `issue.yaml` overrides,
-plus existing blackboard, canonical `audit_events`, iteration, HumanTask, and confirmed Driver-contract
+plus existing blackboard, canonical `audit_events`, iteration, HumanTask, and confirmed Manager-contract
 records. It never starts or resumes a workflow and never writes runtime or
-Driver state. Calling it is presentation, not a poll required by supervision;
+Manager state. Calling it is presentation, not a poll required by supervision;
 invoke it only when a user-visible response is already due. `action: yield`
 still ends the current turn without an additional inspection.
 
 Use the effective conversation locale with `--locale`. Traditional Chinese is
 selected by `zh-TW` or `zh-Hant`; other locales use English as the renderer's
-source text, which the Driver translates for the user.
+source text, which the Manager translates for the user.
 Step keys are always preserved exactly. `deliver` and `cleanup` are required
-Driver closeout items, not runtime phases, and always appear after the playbook
+Manager closeout items, not runtime phases, and always appear after the playbook
 phases. A playbook phase with the same name remains a separate unqualified node.
 
 Stdout is a compact vertical execution spine. Each node carries a readable text
@@ -31,7 +31,7 @@ forced to text with variation selector 15. Proactive-review and confirmation
 checkpoints immediately follow their owning phase. Keep task-authority diagnostic
 fields in task inspection output. The default diagram is a
 latest-state projection: it shows each phase's newest durable status and the
-Driver-review or user-confirmation checkpoint currently represented for that
+Manager-review or user-confirmation checkpoint currently represented for that
 phase. The default projection never adds correction arrows or a historical
 trail; later iteration evidence supersedes earlier states. If a phase's newest
 durable state is itself returned, the phase line uses the returned symbol and
@@ -48,7 +48,7 @@ unreachable from the entry point are separated rather than joined by a false
 spine edge. Omitting route declarations from the presentation does not change
 runtime routing.
 
-Driver-only display state is one JSON object with only these fields:
+Manager-only display state is one JSON object with only these fields:
 
 ```json
 {
@@ -85,7 +85,7 @@ For an ordinary running update:
 ```bash
 python3 <skill-dir>/scripts/render_workflow_progress.py \
   --project-root <repo> --issue-dir <repo>/.cafe/issues/<issue> \
-  --locale zh-TW --driver-state \
+  --locale zh-TW --manager-state \
   '{"proactive_review":{"develop":"in_progress"},"deliver":"pending","cleanup":"pending"}'
 ```
 
@@ -96,7 +96,7 @@ it from `human_tasks.json`:
 ```bash
 python3 <skill-dir>/scripts/render_workflow_progress.py \
   --project-root <repo> --issue-dir <repo>/.cafe/issues/<issue> --locale en \
-  --driver-state '{"deliver":"unknown","cleanup":"unknown"}'
+  --manager-state '{"deliver":"unknown","cleanup":"unknown"}'
 ```
 
 For a formal return, again pass no return override. The completed task outcome
@@ -106,19 +106,19 @@ does not add a historical return arrow:
 ```bash
 python3 <skill-dir>/scripts/render_workflow_progress.py \
   --project-root <repo> --issue-dir <repo>/.cafe/issues/<issue> --locale zh-TW \
-  --driver-state '{"deliver":"unknown","cleanup":"unknown"}'
+  --manager-state '{"deliver":"unknown","cleanup":"unknown"}'
 ```
 
-For completion and Driver closeout reporting, provide both required closeout
+For completion and Manager closeout reporting, provide both required closeout
 values:
 
 ```bash
 python3 <skill-dir>/scripts/render_workflow_progress.py \
   --project-root <repo> --issue-dir <repo>/.cafe/issues/<issue> --locale en \
-  --driver-state '{"deliver":"completed","cleanup":"pending"}'
+  --manager-state '{"deliver":"completed","cleanup":"pending"}'
 ```
 
-On a resumed Driver session, rebuild the ephemeral JSON from evidence available
+On a resumed Manager session, rebuild the ephemeral JSON from evidence available
 in that session. For confirmed closeout commands, inspect the durable
 `execute_closeout.py --inspect` record from a retained checkout and reconcile
 its per-command outcomes with read-only external-state checks. Use `unknown`
@@ -130,7 +130,7 @@ directory reported by the lifecycle command, for example:
 python3 <skill-dir>/scripts/render_workflow_progress.py \
   --project-root <repo> \
   --issue-dir ~/.cafe/projects/<project-path>/archived/<issue> \
-  --locale zh-TW --driver-state '{"deliver":"completed","cleanup":"completed"}'
+  --locale zh-TW --manager-state '{"deliver":"completed","cleanup":"completed"}'
 ```
 
 An explicit archive path is read exactly like an active issue path. If neither

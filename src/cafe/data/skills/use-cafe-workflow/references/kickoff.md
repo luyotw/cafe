@@ -9,7 +9,7 @@ the workflow conversation language. Also read `playbook_selection.md`,
 
 `docs/language-policy.md` is the single source of truth for precedence,
 persistence, the language-change scope, and the fallback rules. This checklist
-only describes what the Driver does; it never states a competing rule.
+only describes what the Manager does; it never states a competing rule.
 
 - [ ] Read `docs/language-policy.md` before answering any question about the
   workflow conversation language.
@@ -96,7 +96,7 @@ operation replaces it.
 At the beginning of every new kickoff, inspect the repository context needed to
 find its actual delivery path: relevant documentation and runbooks, CI/CD
 configuration, scripts and make targets, repository conventions, and recent
-delivery evidence when it is available. This is Driver reasoning, not a
+delivery evidence when it is available. This is Manager reasoning, not a
 provider detector or a fixed shipping checklist. Do not enumerate CI/CD vendors,
 match trigger keywords, or silently choose a generic merge/deploy/cleanup
 sequence.
@@ -178,7 +178,7 @@ plan, not filling in the original `[]` after kickoff.
 Present both exact command lists, grounded in the repository context above, without
 adding an evidence report to the contract. The user confirms the complete
 kickoff, including their command order and effects. That
-confirmation is durable authority for the Driver to execute exactly those arrays
+confirmation is durable authority for the Manager to execute exactly those arrays
 at closeout; it is not authority for a changed command, reordered command, or
 materially changed target/effect. Never silently discard restrictions from an
 older confirmed contract; a user reconfirmation is required to replace it with
@@ -195,17 +195,17 @@ obtain explicit user confirmation of:
 - `conversation_locale` with source;
 - `repository_content_locale`;
 - every assignable planned confirmation gate, partitioned into `user_required`
-  and `driver_confirmable`, plus the separate mandatory HumanTask stop list;
+  and `manager_confirmable`, plus the separate mandatory HumanTask stop list;
 - overall `need_clarification` ownership, defaulting new proposals to
-  `driver_confirmable`; present finer clarification ownership only when the user
+  `manager_confirmable`; present finer clarification ownership only when the user
   requests it. Declare ownership by exact phase and task ID for those overrides,
-  using `--task-driver-confirmable PHASE:TASK_ID` or
+  using `--task-manager-confirmable PHASE:TASK_ID` or
   `--task-user-required PHASE:TASK_ID`. Explicit task ownership takes precedence
   over the overall policy. Other undeclared tasks remain user-owned;
 - `reactive_user_handoffs`;
 - the effective proactive-review decision for every agent or hybrid phase with
   an existing scheduled confirmation pause. Default every assignable scheduled
-  confirmation gate to `driver_confirmable` with proactive review `required`;
+  confirmation gate to `manager_confirmable` with proactive review `required`;
   default mandatory gates to `required` while they remain user-owned, and let
   direct user overrides take precedence. Normalize ineligible phases internally
   to `not_required`; they require no kickoff choice;
@@ -217,7 +217,7 @@ obtain explicit user confirmation of:
   and stores no model, so callbacks cannot override that session's model. Every
   later entry is a forward-only fallback with an exact model selected by the
   user; there is no fixed fallback limit. Event-driven's ordered binding is a
-  confirmed field of the sole Driver contract, never `driver/config.yaml`;
+  confirmed field of the sole Manager contract, never `manager/config.yaml`;
 - worktree choice and path when using a worktree.
 
 `format_kickoff_contract.py` renders the complete user-facing kickoff, including
@@ -227,7 +227,7 @@ effective conversation language for the initial confirmation request instead of
 replacing it with a prose summary. Follow the translation boundary below and
 `workflow_progress.md`; do not recreate a phase list or append a second diagram.
 The kickoff has no runtime execution evidence, so
-phases, scheduled Driver reviews, and closeout items are all pending.
+phases, scheduled Manager reviews, and closeout items are all pending.
 
 For a new workflow, use event-driven as the proposed default unless the user
 explicitly chooses another mode or an existing confirmed issue contract already
@@ -259,7 +259,7 @@ the complete kickoff is confirmed, and it never authorizes merge or issue
 closure.
 
 These settings belong only in generic `issue.yaml`, through the existing
-prepare arguments declared by their owner. They do not belong in the Driver
+prepare arguments declared by their owner. They do not belong in the Manager
 contract. Configuration confirmation covers only the displayed action and
 target; it never implies authority for another external action. Follow
 `completion_and_authority.md` for ambiguous terminal wording or follow-up work.
@@ -314,7 +314,7 @@ A catalog `over_budget` result with complete discovery retains its bounded IDs
 and effective digests without triggering a publication question; incomplete
 discovery still fails closed.
 
-Before `cafe prepare --no-interactive`, complete the Driver-managed runtime
+Before `cafe prepare --no-interactive`, complete the Manager-managed runtime
 update decision in `project_global_skill_sync.md`. Present an available update
 to the user and obtain its explicit answer before installation; the command
 itself must never prompt. Record the decision and fresh post-apply check before
@@ -343,10 +343,10 @@ confirmation before preparation or workflow execution.
    steps remain user-owned and never enter the kickoff partition. Both classes
    come from `steps.<step>."on".confirm_output`.
 3. Present each candidate by step and purpose. Default every candidate to
-   `driver_confirmable` with proactive review `required`, then allow the user to
+   `manager_confirmable` with proactive review `required`, then allow the user to
    override any candidate into exactly one of:
    - `user_required`: stop for the real user;
-   - `driver_confirmable`: the driver may verify and continue.
+   - `manager_confirmable`: the manager may verify and continue.
 4. Require the two lists to be disjoint and their union to equal the candidates.
    Reject unknown steps, missing candidates, overlaps, role names, and steps
    that do not declare `on.confirm_output`.
@@ -361,37 +361,39 @@ confirmation before preparation or workflow execution.
 If the playbook, effective conversation locale, repository content locale,
 operating mode, or candidate set changes, reconfirm the kickoff contract before
 the next workflow execution. Phase model chains are kickoff initial values. The
-Driver cannot change a phase model on its own, but must apply an exact phase-only
+Manager cannot change a phase model on its own, but must apply an exact phase-only
 update for subsequent execution whenever the user explicitly requests one. A
 running iteration finishes with the model that started it. This update does not
 change the separate event-driven callback chain.
 
 `need_clarification` and `need_permission` are reactive interruptions, not
 scheduled candidates. `manual_handoff` is routing, not a planned confirmation
-gate. Alignment is a proactive driver decision governed by mandate. Record the
+gate. Alignment is a proactive manager decision governed by mandate. Record the
 overall reactive policy in the kickoff, with task overrides only when requested:
 
-- Default new proposals to `need_clarification: driver_confirmable`, using
-  `--need-clarification driver_confirmable`; `--need-clarification user_required`
+- Default new proposals to `need_clarification: manager_confirmable`, using
+  `--need-clarification manager_confirmable`; `--need-clarification user_required`
   reserves all otherwise undeclared clarifications for the user. Explicit
-  phase/task declarations override either overall choice. The Driver may answer
+  phase/task declarations override either overall choice. The Manager may answer
   only when the complete
   answer stays within the confirmed Delivery Contract, its scope, explicit
   constraints and existing authority, and triggers no deviation; otherwise it
   remains user-owned;
 - `need_permission`: user required unless the exact permission already exists
   in the current thread;
-- `alignment_checkpoint`: driver-resolvable only when the proposal is clearly
+- `alignment_checkpoint`: manager-resolvable only when the proposal is clearly
   within confirmed strategy and mandate.
 
 A runtime `to_owner=user` baton or `Workflow is waiting for user input` output
 is a hard stop unless the confirmed overall clarification policy or an explicit
-task declaration authorizes Driver completion. Explicit user ownership wins.
+task declaration authorizes Manager completion. Explicit user ownership wins.
 
 Existing v6 contracts lack the overall policy and retain task-only ownership
 until explicit reconfirmation. Existing v5 contracts retain their explicitly
-confirmed overall clarification choice. New v7 contracts record both the overall
-choice and task overrides; reading old records never inserts the new default or
+confirmed overall clarification choice. Existing v7 Driver contracts remain
+valid through the legacy Driver authority, with their confirmed overall choice
+and task overrides. New v8 Manager contracts record both the overall choice
+and task overrides; reading old records never inserts the new default or
 rewrites digests.
 
 ### Delivery facts to confirm
@@ -413,9 +415,9 @@ language. Keep purpose, scope, and implementation direction separate:
 Use explicit empty lists for `out_of_scope`, `permissions`, and `constraints`
 when none apply. Purpose, in-scope behavior, completion criteria and recommended
 direction must not be empty. Do not infer permission or an external-effect
-approval from scope or technical advice. The Driver's standing rule remains:
+approval from scope or technical advice. The Manager's standing rule remains:
 
-> The Driver may accept a requirement-equivalent implementation with a smaller
+> The Manager may accept a requirement-equivalent implementation with a smaller
 > or simpler implementation footprint. It must not accept reduced user-visible
 > behavior, feature scope, acceptance coverage, edge-case coverage, or required
 > integrations.
@@ -441,7 +443,7 @@ recommendation, not a reason to stop an equivalent approach. Do not create
 separate variations, deviation-trigger, quality, cost or evidence sections.
 
 A later technical clarification within the confirmed scope and constraints updates
-ordinary phase feedback or artifacts only. It does not replace the Driver
+ordinary phase feedback or artifacts only. It does not replace the Manager
 contract, require kickoff reconfirmation, or justify archiving, deleting, or
 rebuilding callback dispatch state. Reconfirm only when the user-visible
 outcome or scope, authority, external side effects, or an explicitly fixed
@@ -451,14 +453,14 @@ Render these facts with the complete kickoff, resolve material ambiguity, and
 interpret the user's response semantically in any language. Acknowledgement of
 one part does not confirm unreviewed facts. Retain existing explicit decisions;
 do not repeatedly ask for unchanged choices. Only the confirmed facts become
-`delivery_contract` in the single version-7 durable Driver contract. The nested
-Delivery Contract has its own version; no feature-specific sidecar is authority.
+`delivery_contract` in the single schema-version-8 durable Manager contract. The
+nested Delivery Contract has its own version; no feature-specific sidecar is authority.
 
 Inspect the selected effective entry point, transitions, `initial_input`,
 `input_artifacts`, and `output_artifact` declarations. Supply the confirmed
 product facts through the entry step's existing initial-input provider/binding
 and ordinary input interfaces where needed. Pass outcome/scope/acceptance and
-implementation facts, not Driver authority instructions or the policy JSON.
+implementation facts, not Manager authority instructions or the policy JSON.
 Preserve the original issue input as well. When no such input is declared, use
 only an existing supported input boundary; do not synthesize a phase, artifact,
 or gate. If required facts cannot be conveyed, raise the existing clarification
@@ -479,7 +481,7 @@ scope, and implementation direction separate. Preserve literal-text escaping
 during translation so fact content cannot introduce new Markdown sections.
 Compact execution settings,
 model chains and gates may stay in tables. Notification/session
-mechanics follow the selected Driver mode; do not add a separate notification
+mechanics follow the selected Manager mode; do not add a separate notification
 field or another approval choice for them.
 
 Present `deliver` and `cleanup` as separate subheadings with ordered actions.
@@ -487,7 +489,7 @@ Each action has a concise explanation in the conversation language and its
 complete, copyable command in a code block. Supply one `--deliver-description`
 or `--cleanup-description` per command, in the same order; provide none for an
 empty stage. Describe the actual action and target, including destructive
-effects, rather than a vague "clean up resources". The Driver writes these
+effects, rather than a vague "clean up resources". The Manager writes these
 explanations from context; the formatter does not classify command names.
 
 Descriptions are presentation only, not new contract fields or authority.
@@ -499,7 +501,7 @@ hyphens with typographic punctuation. Empty stages show that no command runs.
 
 Translate all presentation text into the effective conversation language:
 headings, readable field labels, descriptions, capability prompts and outcomes,
-authority explanations, and the confirmation request. The Driver owns this
+authority explanations, and the confirmation request. The Manager owns this
 translation, including free-form text from manifests or repository context;
 the formatter's source language or English fallback is not the response language.
 This applies to any conversation locale, without requiring a translation catalog.
@@ -535,16 +537,16 @@ python3 <skill-dir>/scripts/format_kickoff_contract.py <playbook-id> \
   --cleanup-description "<action and target in the conversation language>" \
   --update-preflight '<bounded runtime-update JSON>' \
   --catalog-preflight '<bounded all-catalog JSON>' \
-  --driver-mode <attached|unattended|event-driven> \
+  --manager-mode <attached|unattended|event-driven> \
   [--poll-interval-seconds <positive-integer>] \
-  [--event-driver <primary-cli> [--event-driver <fallback-cli>:<exact-model> ...]] \
+  [--event-manager <primary-cli> [--event-manager <fallback-cli>:<exact-model> ...]] \
   [--proactive-review-decision "<eligible-step>=<required|not_required>"] \
   --effective-locale <locale> \
   --locale-source "<playbook or direct-user-override source>" \
   --repository-content-locale <locale> \
   [--capability-choice <SETTING=JSON> for each declared setup question] \
   --user-required <steps...> \
-  --driver-confirmable <steps...> \
+  --manager-confirmable <steps...> \
   --worktree .cafe/worktrees/<issue-name>
 ```
 
@@ -556,14 +558,14 @@ contain the starting files.
 
 Assess playbook suitability, issue risk and model capability before proposing
 execution settings. Do not require rationale, assessment or preflight records
-as user-confirmed fields or persist them in the Driver contract.
+as user-confirmed fields or persist them in the Manager contract.
 
 Pass `--phase-chain <step>=<primary-cli>:<exact-model>` once for every
 agent-executed phase that is not already fully resolved by `--phase-config`.
 Append `,<fallback-cli>:<exact-model>` for each fallback the user confirms.
 Fallbacks are optional; a primary-only chain is valid and means a failure stops
 the workflow instead of switching CLIs.
-The formatter requires exactly the fields applicable to the selected driver
+The formatter requires exactly the fields applicable to the selected manager
 mode and rejects fields from another mode. It has no built-in provider or
 model defaults. It
 rejects a missing primary, an unresolved model, and an unsupported CLI. It
@@ -571,7 +573,7 @@ validates chain structure only; it does not validate model suitability.
 Use the capability band, resolved execution profile, issue
 assessment, provider documentation, and model preflight to justify each choice.
 The user-facing table shows the exact primary and fallback chain without
-repeating selection diagnostics. Model suitability remains Driver-assessed.
+repeating selection diagnostics. Model suitability remains Manager-assessed.
 
 Pass an option with no step values for an explicit empty list. The formatter
 validates the partition and shows every phase, scheduled gate,
@@ -655,7 +657,7 @@ for confirmation rather than asking again.
   `.cafe/issues/<issue-name>/issue.yaml` in the active checkout before the first
   workflow execution:
 
-  The following is generic issue configuration, not `driver/contract.json`.
+  The following is generic issue configuration, not `manager/contract.json`.
   Its existing preflight records are not user-confirmed contract fields.
 
   ```yaml
@@ -683,7 +685,7 @@ for confirmation rather than asking again.
     reconfirmed_at: null
   confirmation_contract:
     user_required: [spec, plan]
-    driver_confirmable: []
+    manager_confirmable: []
     confirmed_by: user
     confirmed_at: 2026-07-16
   ```
@@ -699,13 +701,13 @@ for confirmation rather than asking again.
   this contract is written. It loads the current issue contract immediately
   before dispatch and derives its primary CLI plus fallback CLI/model view in
   memory. Do not
-  create `driver/config.yaml`: that file is legacy migration evidence only and
+  create `manager/config.yaml`: that file is legacy migration evidence only and
   cannot override a contract-managed callback. Its mutable
   `dispatch_state.json` records session CLI/model identities, event routing
   history, and delivery progress. Its legacy digest field does not control
   callback continuation; the current contract controls new dispatch.
 
-  Do not put the mode, CLI, model, session, callback, or any driver control
+  Do not put the mode, CLI, model, session, callback, or any manager control
   setting in `issue.yaml`. Confirm that every entry reports `event-driven
   session-and-dispatch: conforming` before accepting the contract. When the
   primary is Codex and this command runs from a Codex App thread, that thread
@@ -735,17 +737,18 @@ for confirmation rather than asking again.
   issue configuration or silently continue in the main checkout.
 
 A legacy `mandate.confirmation_contract.agent_confirmable` value in strategic
-context is only a kickoff proposal. Rename it to `driver_confirmable`, compare it
+context is only a kickoff proposal. Rename it to `manager_confirmable`, compare it
 with the active playbook, and obtain fresh confirmation before persisting it.
 
-## Durable Driver authority
+## Durable Manager authority
 
 After the user confirms the complete normalized kickoff, activate exactly one
-version-7 contract at `.cafe/issues/<issue>/driver/contract.json` before the
-first Driver entry. The activation command must bind the prepared workflow ID,
+schema-version-8 contract at
+`.cafe/issues/<issue>/manager/contract.json` before the first Manager entry. The
+activation command must bind the prepared workflow ID,
 timezone-aware confirmation time, confirmer, and the same semantic proposal
 that was rendered for confirmation. Rendering alone never writes authority.
-That contract contains Driver-owned policy only; generic workflow and capability
+That contract contains Manager-owned policy only; generic workflow and capability
 configuration remain in `issue.yaml`.
 
 `proactive_review.phase_decisions` is an ordered normalized policy field in that
@@ -755,12 +758,12 @@ override; ineligible agent or hybrid phases are recorded as derived
 `proactive_review.yaml` sidecar and does not schedule review work.
 Capability-owned settings remain only in the generic
 `issue.yaml` contract. They are never copied, projected, or validated by the
-Driver contract.
+Manager contract.
 
-On resume, Primary and Backup Drivers must first refresh skill-owned preflight
-evidence and validate only the Driver contract before Driver-owned work.
+On resume, Primary and Backup Managers must first refresh skill-owned preflight
+evidence and validate only the Manager contract before Manager-owned work.
 Generic workflow independently validates its own views when it runs.
-Metadata-only cache churn may rebuild runtime views; material or unknown Driver
+Metadata-only cache churn may rebuild runtime views; material or unknown Manager
 semantic evidence stops for reconfirmation. Session, dispatch, callback
 delivery, active CLI, and capability result locations remain runtime state rather than contract
 fields.
@@ -772,17 +775,17 @@ for a current entry check from the complete applicable policy; do not create a
 second durable policy record. Runtime/catalog checks still occur outside the
 contract and their diagnostics do not grant authority.
 Resume and cross-provider takeover reconstruct them from the same validated
-contract through `validate_driver_entry.py`; provider session memory is not
+contract through `validate_manager_entry.py`; provider session memory is not
 confirmation evidence. Missing Delivery Contract fields, old contract versions,
 malformed values, stale identity or a mismatched digest require the existing
 reconfirmation path, never defaults or silent migration of product scope.
-Generic CAFE workflows without a Driver contract remain usable unchanged.
+Generic CAFE workflows without a Manager contract remain usable unchanged.
 
 After explicit reconfirmation, `replace_confirmed_contract` may upgrade a valid
 version-3 or version-4 predecessor using its exact file SHA-256 as the CAS
 predecessor. It validates the old identity and digest, writes the newly confirmed
 compact policy and advances the revision atomically. Old contracts cannot grant
-ordinary Driver-entry or task-decision authority. Their validated event-transport
+ordinary Manager-entry or task-decision authority. Their validated event-transport
 settings may still be read through the existing bounded callback projection;
 that is not activation or an upgrade. Malformed predecessors are never silently
 overwritten.

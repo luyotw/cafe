@@ -29,7 +29,7 @@ Use these scale defaults as guidance, not line-count quotas:
 
 Do not compensate for independently deliverable work merely by assigning a
 stronger model. Handle any issue split proposal through
-`references/issue_decomposition.md` (relative to the Driver SKILL.md); issue
+`references/issue_decomposition.md` (relative to the Manager SKILL.md); issue
 scale alone does not require a decomposition report or confirmation gate.
 
 ## Resolve phase execution requirements
@@ -47,7 +47,7 @@ Do not infer this profile from a conventional step name. Resolve the skill bound
 by the active playbook. For an iteration selector, kickoff conservatively
 aggregates all variants so every execution mode has a valid initial chain.
 Continuous mode does not pause at phase boundaries. Single-step mode may resolve
-the actual remaining iteration when control returns to the driver. This applies
+the actual remaining iteration when control returns to the manager. This applies
 equally to bundled and custom playbooks. A legacy custom skill without a
 declaration receives the neutral default;
 do not silently invent stronger or weaker requirements.
@@ -55,7 +55,7 @@ do not silently invent stronger or weaker requirements.
 ## Keep model ownership outside phase agents
 
 The phase skill owns only its provider-neutral minimum execution profile. The
-driver owns the capability-band classification, current provider/model mapping,
+manager owns the capability-band classification, current provider/model mapping,
 preflight, and every write to the active worktree's `.cafe/phases.yaml`.
 
 - Do not put provider names, model IDs, or cost tiers into phase skills.
@@ -139,7 +139,7 @@ Apply these rules:
    Do not persist a floating alias as "exact" when the preflight exposes the
    canonical model it resolved to.
 
-The driver may recommend any configured combination that meets these rules.
+The manager may recommend any configured combination that meets these rules.
 The contract records the exact chains, not assessment fields or model-selection
 rationales. Explain a material cost/capability tradeoff only when the user needs
 to choose or asks. A primary-only chain means failure stops rather than switching models.
@@ -250,10 +250,10 @@ a valid primary-only chain.
 Issue scale and risk inform selection; do not persist an assessment report as
 part of the confirmed contract or create a replacement assessment sidecar.
 
-Kickoff phase chains are initial values. The Driver never changes them from its
+Kickoff phase chains are initial values. The Manager never changes them from its
 own judgment. When the user explicitly requests a different phase model, edit
 only the corresponding future chain in the active worktree's
 `.cafe/phases.yaml`. The next phase start or iteration uses it; an iteration
-already running finishes unchanged. Do not update the Driver contract or touch
+already running finishes unchanged. Do not update the Manager contract or touch
 callback session and dispatch state. Automatic use of an already configured
 fallback does not change the contract.

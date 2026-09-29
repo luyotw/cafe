@@ -117,7 +117,7 @@ class CapabilitySetupChoice(StrictCapabilityModel):
 
 
 class CapabilitySetupQuestion(StrictCapabilityModel):
-    """Presentation metadata, not an execution approval or Driver policy."""
+    """Presentation metadata, not an execution approval or role-specific policy."""
 
     setting: str = Field(pattern=r"^[a-z][a-z0-9_-]*\.[a-z][a-z0-9_-]*$")
     prompt: str = Field(min_length=1)

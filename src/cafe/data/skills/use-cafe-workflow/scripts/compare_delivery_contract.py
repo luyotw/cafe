@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Build a grounded comparison packet and check a Driver-authored assessment.
+"""Build a grounded comparison packet and check a Manager-authored assessment.
 
-Semantic reading belongs to the Driver. This helper checks authority, exhaustive
+Semantic reading belongs to the Manager. This helper checks authority, exhaustive
 evidence and freshness; it never answers a HumanTask or advances a workflow.
 """
 
@@ -11,8 +11,8 @@ import argparse
 import json
 from pathlib import Path
 
-from cafe.driver import DriverEntryRequest
-from cafe.driver.delivery_comparison import (
+from cafe.manager import ManagerEntryRequest
+from cafe.manager.delivery_comparison import (
     comparison_packet,
     decide,
     evidence_sources,
@@ -45,7 +45,7 @@ def main() -> int:
             model.steps[context["boundary"]["step"]], context["artifact_paths"]
         )
         packet = comparison_packet(
-            entry=DriverEntryRequest(
+            entry=ManagerEntryRequest(
                 Path(context["issue_dir"]),
                 context["issue_name"],
                 context["workflow_id"],

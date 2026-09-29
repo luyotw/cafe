@@ -74,7 +74,7 @@ NOTIFICATION_TEXT_CATALOGS: dict[str, dict[str, Any]] = {
             "this does not mean the workflow stopped."
         ),
         "callback_closing": (
-            'Return to the "{issue}" conversation in CAFE and ask the Driver to '
+            'Return to the "{issue}" conversation in CAFE and ask the Manager to '
             "check the current progress and next step."
         ),
     },
@@ -114,7 +114,7 @@ NOTIFICATION_TEXT_CATALOGS: dict[str, dict[str, Any]] = {
         "reason_queue": "CAFE 無法將通知送達原對話。",
         "reason_generic": "CAFE 的自動通知發生錯誤。",
         "callback_impact": "影響：原對話可能收不到這次更新；這不代表工作流程已停止。",
-        "callback_closing": "請回到 CAFE 的「{issue}」原對話，請 Driver 檢查目前進度與下一步。",
+        "callback_closing": "請回到 CAFE 的「{issue}」原對話，請流程管理員檢查目前進度與下一步。",
     },
 }
 

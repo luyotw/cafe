@@ -11,19 +11,20 @@ mode-neutral workflow runtime. Generic workflow services should expose reusable
 contracts without embedding the identity, policy, or authorization model of a
 particular caller.
 
-## Driver dependency boundary
+## Manager dependency boundary
 
-Driver policy, mode, session, prompt, and authorization semantics are owned by
-`src/cafe/driver/` and `src/cafe/data/skills/use-cafe-workflow/`. Dependencies
-flow from those Driver-owned adapters toward mode-neutral workflow services,
-never from generic workflow layers back into Driver code.
+Manager policy, mode, session, prompt, and authorization semantics are owned by
+`src/cafe/manager/` and `src/cafe/data/skills/use-cafe-workflow/`. Dependencies
+flow from those Manager-owned adapters toward mode-neutral workflow services,
+never from generic workflow layers back into Manager code.
 
 Code under `src/cafe/core/`, `src/cafe/phases/`, generic UI commands, generic
-HumanTask services and records, hooks, and agents must remain Driver-free. They
-must not import `cafe.driver` or encode Driver-specific flags, actor names,
-contracts, routing, or authorization rules. When Driver needs a generic
+HumanTask services and records, hooks, and agents must remain Manager-free. They
+must not import `cafe.manager` or the legacy `cafe.driver` compatibility package,
+or encode Manager-specific flags, actor names, contracts, routing, or authorization
+rules. When Manager needs a generic
 operation, expose a mode-neutral interface at the owning layer and adapt it only
-from a Driver-owned boundary.
+from a Manager-owned boundary.
 
 ## Boundary changes
 

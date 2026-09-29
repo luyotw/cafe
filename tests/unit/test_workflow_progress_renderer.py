@@ -208,8 +208,8 @@ def test_renderer_preserves_custom_phase_names_and_localizes_only_annotations() 
     assert "○ publish-draft · 待執行" in rendered
     assert (
         "○ publish-draft · 待執行\n│\n"
-        "▶\ufe0e publish-draft：driver 主動審查 · 進行中\n│\n"
-        "○ publish-draft：使用者確認（driver 不可代理） · 待執行"
+        "▶\ufe0e publish-draft：流程管理員主動審查 · 進行中\n│\n"
+        "○ publish-draft：使用者確認（流程管理員不可代理） · 待執行"
     ) in rendered
     assert "？ deliver（收尾） · 狀態未知" in rendered
     assert "？ cleanup（收尾） · 狀態未知" in rendered
@@ -264,11 +264,11 @@ def test_omitted_review_is_pending_until_its_phase_finishes(tmp_path: Path) -> N
         driver_state={"deliver": "pending", "cleanup": "pending"},
     )
 
-    assert "？ completed：driver 主動審查 · 狀態未知" in rendered
-    assert "○ active：driver 主動審查 · 待執行" in rendered
-    assert "○ future：driver 主動審查 · 待執行" in rendered
-    assert "？ active：driver 主動審查" not in rendered
-    assert "？ future：driver 主動審查" not in rendered
+    assert "？ completed：流程管理員主動審查 · 狀態未知" in rendered
+    assert "○ active：流程管理員主動審查 · 待執行" in rendered
+    assert "○ future：流程管理員主動審查 · 待執行" in rendered
+    assert "？ active：流程管理員主動審查" not in rendered
+    assert "？ future：流程管理員主動審查" not in rendered
 
 
 def test_renderer_uses_current_iteration_and_revise_outcome_as_checkpoint_state(
@@ -294,8 +294,8 @@ def test_renderer_uses_current_iteration_and_revise_outcome_as_checkpoint_state(
     )
 
     assert "▶\ufe0e 資料盤點 · 第 2 輪 · 進行中" in rendered
-    assert "↩\ufe0e publish-draft：使用者確認（driver 不可代理） · 已退回" in rendered
-    assert "✓ publish-draft：使用者確認（driver 不可代理） · 已完成" not in rendered
+    assert "↩\ufe0e publish-draft：使用者確認（流程管理員不可代理） · 已退回" in rendered
+    assert "✓ publish-draft：使用者確認（流程管理員不可代理） · 已完成" not in rendered
     assert "→" not in rendered
     assert before == {path: path.read_bytes() for path in before}
 
@@ -420,7 +420,7 @@ def test_pending_confirmation_blocked_and_skipped_use_durable_evidence(tmp_path:
     assert "! 資料盤點 · iteration 2 · Blocked" in rendered
     assert "− publish-draft · Skipped" in rendered
     assert (
-        "⏸\ufe0e publish-draft: user confirmation (driver may not act) · Awaiting confirmation"
+        "⏸\ufe0e publish-draft: user confirmation (manager may not act) · Awaiting confirmation"
         in rendered
     )
 
@@ -538,8 +538,8 @@ def test_previous_revision_does_not_approve_the_new_iteration(tmp_path: Path) ->
         driver_state=_unknown_closeout_state(),
     )
 
-    assert "○ publish-draft: user confirmation (driver may not act) · Pending" in rendered
-    assert "✓ publish-draft: user confirmation (driver may not act) · Completed" not in rendered
+    assert "○ publish-draft: user confirmation (manager may not act) · Pending" in rendered
+    assert "✓ publish-draft: user confirmation (manager may not act) · Completed" not in rendered
     assert "→" not in rendered
 
 
@@ -702,8 +702,8 @@ def test_completed_confirmation_requires_a_recognized_outcome(
         driver_state=_unknown_closeout_state(),
     )
 
-    assert "？ publish-draft: user confirmation (driver may not act) · Unknown" in rendered
-    assert "✓ publish-draft: user confirmation (driver may not act) · Completed" not in rendered
+    assert "？ publish-draft: user confirmation (manager may not act) · Unknown" in rendered
+    assert "✓ publish-draft: user confirmation (manager may not act) · Completed" not in rendered
 
 
 def test_completed_confirmation_renders_only_a_declared_non_correction_outcome(
@@ -724,7 +724,7 @@ def test_completed_confirmation_renders_only_a_declared_non_correction_outcome(
         driver_state=_unknown_closeout_state(),
     )
 
-    assert "✓ publish-draft: user confirmation (driver may not act) · Completed" in rendered
+    assert "✓ publish-draft: user confirmation (manager may not act) · Completed" in rendered
 
 
 def test_forward_skip_review_manual_handoff_is_not_a_return(tmp_path: Path) -> None:
@@ -1261,8 +1261,8 @@ def test_default_projection_suppresses_superseded_returns_and_shows_active_check
     assert rendered == (
         "✓ develop · 第 6 輪 · 已完成\n│\n"
         "✓ pr · 第 14 輪 · 已完成\n│\n"
-        "✓ pr：driver 主動審查 · 已完成\n│\n"
-        "⏸\ufe0e pr：使用者確認（driver 不可代理） · 等待確認\n│\n"
+        "✓ pr：流程管理員主動審查 · 已完成\n│\n"
+        "⏸\ufe0e pr：使用者確認（流程管理員不可代理） · 等待確認\n│\n"
         "？ deliver（收尾） · 狀態未知\n│\n"
         "？ cleanup（收尾） · 狀態未知"
     )
@@ -1369,7 +1369,7 @@ def test_same_phase_task_return_projects_latest_confirmation_state(tmp_path: Pat
         driver_state=_unknown_closeout_state(),
     )
 
-    assert "↩\ufe0e pr: user confirmation (driver may not act) · Returned" in rendered
+    assert "↩\ufe0e pr: user confirmation (manager may not act) · Returned" in rendered
     assert "→" not in rendered
 
 
@@ -1540,7 +1540,7 @@ def test_runtime_and_task_return_history_is_suppressed(tmp_path: Path) -> None:
 
     assert "▶\ufe0e develop · iteration 7 · In progress" in rendered
     assert "↩\ufe0e pr · iteration 13 · Returned" in rendered
-    assert "○ pr: user confirmation (driver may not act) · Pending" in rendered
+    assert "○ pr: user confirmation (manager may not act) · Pending" in rendered
     assert "iteration 11" not in rendered
     assert "iteration 12" not in rendered
     assert "→" not in rendered
@@ -1698,7 +1698,7 @@ def test_audit_pause_overrides_finished_draft_without_an_iteration_status_code(
     assert expected in rendered
     assert "○ publish-draft · 待執行" in rendered
     if not answered:
-        assert "○ 資料盤點：driver 主動審查 · 待執行" in rendered
+        assert "○ 資料盤點：流程管理員主動審查 · 待執行" in rendered
     assert "events" not in json.loads((issue_dir / "blackboard.json").read_text())
     assert before == {path: path.read_bytes() for path in issue_dir.rglob("*") if path.is_file()}
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Check a Driver's structured action/authority comparison; never execute an action.
+"""Check a Manager's structured action/authority comparison; never execute an action.
 
-The Driver owns semantic interpretation of user instructions. This check cannot
+The Manager owns semantic interpretation of user instructions. This check cannot
 authenticate a quoted instruction or turn artifact text into user authority.
 """
 

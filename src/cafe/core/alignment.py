@@ -1,6 +1,6 @@
 """Opt-in compatibility policy and alignment checkpoint payload models.
 
-Bundled workflows delegate semantic alignment to the workflow driver. This
+Bundled workflows delegate semantic alignment to their role-owned adapters. This
 module remains available to legacy or explicitly opted-in custom playbooks.
 """
 

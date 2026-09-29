@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launch or resume a Driver-managed workflow from durable authority."""
+"""Launch or resume a Manager-managed workflow from durable authority."""
 
 from __future__ import annotations
 
@@ -27,9 +27,9 @@ def _sanitized_python_environment() -> dict[str, str]:
 
 
 def _absolute_interpreter() -> str:
-    """Return the interpreter that loaded this Driver wrapper."""
+    """Return the interpreter that loaded this Manager wrapper."""
     if not sys.executable:
-        raise RuntimeError("Driver interpreter is unavailable")
+        raise RuntimeError("Manager interpreter is unavailable")
     return str(Path(sys.executable).absolute())
 
 
@@ -47,7 +47,7 @@ def _bootstrap_isolated_runtime() -> None:
             environment,
         )
     except OSError as exc:
-        print(f"run_workflow.py: unable to start isolated Driver runtime: {exc}", file=sys.stderr)
+        print(f"run_workflow.py: unable to start isolated Manager runtime: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
 
 
@@ -56,14 +56,14 @@ if __name__ == "__main__":
 
 # The executable bootstrap intentionally precedes every CAFE import.
 import cafe  # noqa: E402
-from cafe.driver import (  # noqa: E402
-    DriverEntryRequest,
+from cafe.manager import (  # noqa: E402
     EventCallbackRequest,
     Freshness,
-    evaluate_driver_entry,
+    ManagerEntryRequest,
+    evaluate_manager_entry,
     event_callback_projection,
 )
-from cafe.driver._store import load_contract  # noqa: E402
+from cafe.manager._store import load_contract  # noqa: E402
 from cafe.workflow_execution.event_callback import (  # noqa: E402
     resolve_builtin_workflow_event_callback,
 )
@@ -76,6 +76,22 @@ from conversation_locale_adapter import (  # noqa: E402, I001
 CALLBACK_ID = "builtin:use-cafe-workflow:workflow_event_callback"
 MAX_WORKFLOW_STATE_BYTES = 256 * 1024
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def _role_api(issue_dir: Path):
+    manager_contract = issue_dir / "manager" / "contract.json"
+    driver_contract = issue_dir / "driver" / "contract.json"
+    if manager_contract.exists() or driver_contract.exists():
+        from cafe.manager._store import select_authority_directory
+
+        authority = select_authority_directory(issue_dir)
+    else:
+        authority = issue_dir / "manager"
+    if authority.name == "driver":
+        from cafe import driver as api
+    else:
+        from cafe import manager as api
+    return api
 
 
 def _wrapper_source_root() -> Path | None:
@@ -91,10 +107,10 @@ def _loaded_cafe_source_root() -> Path:
     """Return the source root that supplied the loaded CAFE package."""
     package_file = getattr(cafe, "__file__", None)
     if not isinstance(package_file, str):
-        raise ValueError("Driver runtime CAFE package has no source file")
+        raise ValueError("Manager runtime CAFE package has no source file")
     resolved = Path(package_file).resolve()
     if resolved.name != "__init__.py" or resolved.parent.name != "cafe":
-        raise ValueError("Driver runtime CAFE package source is invalid")
+        raise ValueError("Manager runtime CAFE package source is invalid")
     return resolved.parent.parent
 
 
@@ -114,9 +130,9 @@ def _validated_host_interpreter() -> str:
     loaded_source_root = _loaded_cafe_source_root()
     if wrapper_source_root is not None:
         if loaded_source_root != wrapper_source_root:
-            raise ValueError("Driver runtime source differs from the bundled workflow wrapper")
+            raise ValueError("Manager runtime source differs from the bundled workflow wrapper")
     elif not _global_wrapper_matches_runtime(loaded_source_root):
-        raise ValueError("Driver runtime source differs from the global workflow wrapper")
+        raise ValueError("Manager runtime source differs from the global workflow wrapper")
     return _absolute_interpreter()
 
 
@@ -260,24 +276,28 @@ def _validate_event_binding(
     binding = resolve_builtin_workflow_event_callback(CALLBACK_ID, project_root=project_root)
     if binding.callback_id != CALLBACK_ID:
         raise ValueError("trusted workflow callback binding changed")
-    projection = event_callback_projection(
-        EventCallbackRequest(
+    api = _role_api(issue_dir)
+    projection_request = EventCallbackRequest(
             issue_dir=issue_dir,
             issue_name=issue_name,
             workflow_id=workflow_id,
         )
+    projection = (
+        event_callback_projection(projection_request)
+        if api is cafe.manager
+        else api.event_callback_projection(projection_request)
     )
     if projection.contract_sha256 != digest:
-        raise ValueError("Driver contract changed during event binding validation")
+        raise ValueError("Manager contract changed during event binding validation")
     event = projection.event
     entries = event.get("clis") if isinstance(event, Mapping) else None
     if not isinstance(entries, tuple) or not entries:
-        raise ValueError("event-driven Driver CLI order is unavailable")
+        raise ValueError("event-driven Manager CLI order is unavailable")
     projected = [dict(entry) for entry in entries if isinstance(entry, Mapping)]
-    driver = contract.get("driver")
-    expected = driver.get("clis") if isinstance(driver, Mapping) else None
+    manager = contract.get("manager", contract.get("driver"))
+    expected = manager.get("clis") if isinstance(manager, Mapping) else None
     if len(projected) != len(entries) or projected != expected:
-        raise ValueError("event-driven Driver CLI order differs from the confirmed contract")
+        raise ValueError("event-driven Manager CLI order differs from the confirmed contract")
 
 
 def _is_user_boundary(state: Mapping[str, Any]) -> bool:
@@ -318,11 +338,16 @@ def _validate_alignment_input(
     if not isinstance(from_step, str) or not _IDENTIFIER.fullmatch(from_step):
         raise ValueError("alignment input has no valid durable source step")
     reactive = contract.get("reactive_user_handoffs")
+    checkpoint_policy = (
+        "manager_resolvable_when_clear"
+        if isinstance(contract.get("manager"), Mapping)
+        else "driver_resolvable_when_clear"
+    )
     if (
         not isinstance(reactive, Mapping)
-        or reactive.get("alignment_checkpoint") != "driver_resolvable_when_clear"
+        or reactive.get("alignment_checkpoint") != checkpoint_policy
     ):
-        raise ValueError("the confirmed Driver contract does not authorize alignment input")
+        raise ValueError("the confirmed workflow contract does not authorize alignment input")
     candidates = sorted((issue_dir / from_step).glob("iteration_*/alignment_request.json"))
     if not candidates:
         raise ValueError("durable alignment request is missing")
@@ -363,7 +388,7 @@ def _emit_directive(
         "next_wake": next_wake,
     }
     if conversation_locale is not None:
-        # Read, never re-resolved: the Driver mirrors the generic authority so a
+        # Read, never re-resolved: the Manager mirrors the generic authority so a
         # resumed turn cannot drift to another language.
         directive["conversation_locale"] = conversation_locale
     if poll_interval_seconds is not None:
@@ -371,7 +396,7 @@ def _emit_directive(
     if exit_code is not None:
         directive["exit_code"] = exit_code
     print(
-        "CAFE_DRIVER_DIRECTIVE " + json.dumps(directive, ensure_ascii=True, separators=(",", ":")),
+        "CAFE_MANAGER_DIRECTIVE " + json.dumps(directive, ensure_ascii=True, separators=(",", ":")),
         flush=True,
     )
     print(guidance)
@@ -396,18 +421,17 @@ def _launch_failed(
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Launch or resume CAFE under the confirmed Driver contract."
+        description="Launch or resume CAFE under the confirmed Manager contract."
     )
     parser.add_argument("--issue", required=True)
     parser.add_argument("--playbook", required=True)
-    parser.add_argument(
-        "--driver-mode", required=True, choices=("attached", "unattended", "event-driven")
-    )
+    parser.add_argument("--manager-mode", dest="manager_mode", choices=("attached", "unattended", "event-driven"))
+    parser.add_argument("--driver-mode", dest="legacy_manager_mode", choices=("attached", "unattended", "event-driven"))
     parser.add_argument(
         "--fresh-facts",
         type=_mapping_json,
         required=True,
-        help="Rebuilt current Driver facts as JSON.",
+        help="Rebuilt current Manager facts as JSON.",
     )
     parser.add_argument(
         "--alignment-input",
@@ -422,9 +446,17 @@ def run(
     cwd: Path | None = None,
     process_factory: Callable[..., Any] = subprocess.Popen,
 ) -> int:
-    args = _parser().parse_args(argv)
-    mode = args.driver_mode
     try:
+        args = _parser().parse_args(argv)
+        mode = args.manager_mode or args.legacy_manager_mode or "unattended"
+        if (
+            args.manager_mode is not None
+            and args.legacy_manager_mode is not None
+            and args.manager_mode != args.legacy_manager_mode
+        ):
+            raise ValueError("Manager and legacy Driver mode inputs conflict")
+        if args.manager_mode is None and args.legacy_manager_mode is None:
+            raise ValueError("--manager-mode is required")
         interpreter = _validated_host_interpreter()
         issue_name = _validate_identifier(args.issue, "issue name")
         playbook = _validate_identifier(args.playbook, "playbook name")
@@ -436,27 +468,31 @@ def run(
         locale_value, locale_source = effective_conversation_locale(issue_dir)
         conversation_locale = {"value": locale_value, "source": locale_source}
         workflow_id = state["workflow_id"]
-        entry = evaluate_driver_entry(
-            DriverEntryRequest(
+        api = _role_api(issue_dir)
+        request_type = ManagerEntryRequest if api is cafe.manager else api.DriverEntryRequest
+        evaluate = evaluate_manager_entry if api is cafe.manager else api.evaluate_driver_entry
+        entry = evaluate(
+            request_type(
                 issue_dir=issue_dir,
                 issue_name=issue_name,
                 workflow_id=workflow_id,
                 fresh_facts=args.fresh_facts,
             )
         )
-        if entry.freshness is not Freshness.SAME_SEMANTICS:
-            raise ValueError(f"Driver contract requires {entry.freshness.value} recovery")
-        contract, digest = load_contract(
+        if entry.freshness.value != Freshness.SAME_SEMANTICS.value:
+            raise ValueError(f"Manager contract requires {entry.freshness.value} recovery")
+        load = load_contract if api is cafe.manager else api._store.load_contract
+        contract, digest = load(
             issue_dir,
             issue_name=issue_name,
             workflow_id=workflow_id,
         )
         if digest != entry.contract_sha256:
-            raise ValueError("Driver contract changed during entry validation")
-        driver = contract.get("driver")
-        confirmed_mode = driver.get("mode") if isinstance(driver, Mapping) else None
+            raise ValueError("Manager contract changed during entry validation")
+        manager = contract.get("manager", contract.get("driver"))
+        confirmed_mode = manager.get("mode") if isinstance(manager, Mapping) else None
         if confirmed_mode != mode:
-            raise ValueError("requested Driver mode differs from the confirmed contract")
+            raise ValueError("requested Manager mode differs from the confirmed contract")
         _validate_checkout(contract, project_root)
         alignment_input = _validate_alignment_input(
             args.alignment_input,
@@ -520,7 +556,7 @@ def run(
         return _launch_failed(mode, str(exc), worker=worker)
 
     if mode == "attached":
-        interval = driver["poll_interval_seconds"]
+        interval = manager["poll_interval_seconds"]
         _emit_directive(
             mode=mode,
             action="wait",
@@ -562,7 +598,7 @@ def run(
             worker=worker,
             next_wake=["workflow_event_callback", "user_input"],
             guidance=(
-                "Background workflow started successfully. End the current Driver turn now. Do not "
+                "Background workflow started successfully. End the current Manager turn now. Do not "
                 "poll with sleep, ps, write_stdin, cafe status, or cafe task ls."
             ),
             conversation_locale=conversation_locale,

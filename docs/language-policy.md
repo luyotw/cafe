@@ -1,7 +1,7 @@
 # Language Policy
 
 This is the single source of truth for the question "which language should this
-piece of text be in?". Driver, playbook, agent, and phase documentation defer to
+piece of text be in?". Manager, playbook, agent, and phase documentation defer to
 this document; none of them states a competing precedence or a competing
 authority.
 
@@ -28,7 +28,7 @@ whether a person reads it.
 | Repository documentation, code comments, maintainer policy and skill documentation | Repository content language; explicit scoped exceptions are preserved |
 | Engineering spec, plan, review, and PR prose | Repository content language by default; commits follow existing repository conventions |
 | HumanTask questions, choices, confirmation text, user-facing explanations | Workflow conversation language |
-| Driver conversation, workflow progress, and Slack notifications | Workflow conversation language |
+| Manager conversation, workflow progress, and Slack notifications | Workflow conversation language |
 | Customer-facing, editorial, research, or translation deliverables | The explicit target-audience or task delivery language stated in the task or artifact contract |
 | Workflow-scoped CLI presentation | The workflow conversation language in the surfaces listed under [Support boundary](#support-boundary) |
 | IDs, schema keys, enum values, commands, paths, error codes, parser markers | Stable and untranslated |
@@ -61,21 +61,21 @@ Simplified and Traditional Chinese are never treated as interchangeable.
 
 The generic runtime owns validation, storage, inheritance, and propagation
 (`src/cafe/core/conversation_locale.py`, `src/cafe/core/blackboard.py`). Generic
-code never imports Driver code and never reads a Driver contract as its locale
+code never imports Manager code and never reads a Manager contract as its locale
 authority.
 
-A caller — the direct CLI or the Driver — may *supply* a preference through one
+A caller — the direct CLI or the Manager — may *supply* a preference through one
 generic input contract, and must declare which tier it is supplying, so an
 inferred preference is persisted as inferred and never relabelled as explicit.
 Callers do the inferring; the contract owns the tiers and the exclusion rules
 above.
 
-The Driver reaches this contract through a Driver-owned adapter. Its
+The Manager reaches this contract through a Manager-owned adapter. Its
 `locales.conversation` snapshot **mirrors** the workflow's effective value and
 source rather than competing with it; on resume the adapter reads the effective
-generic value instead of re-resolving. A confirmed Driver contract is never
-silently rewritten on resume — contract compare-and-set and reconfirmation stay
-user-owned.
+generic value instead of re-resolving. A confirmed Manager contract, including a
+legacy Driver contract selected for continuation, is never silently rewritten on
+resume — contract compare-and-set and reconfirmation stay user-owned.
 
 ## Initialization, change, and resume
 

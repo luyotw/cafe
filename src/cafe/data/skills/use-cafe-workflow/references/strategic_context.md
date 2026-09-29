@@ -2,7 +2,7 @@
 
 Use `.cafe/strategic_context.yaml` as the one project-root file for strategic
 documents and decision authority. Read it and only the relevant linked
-documents before kickoff decisions, driver-confirming outputs, answering
+documents before kickoff decisions, manager-confirming outputs, answering
 workflow questions, declared reviews, or separately authorized actions.
 
 Do not split this information into `mandate.yaml` or another parallel config.
@@ -116,7 +116,7 @@ mandate:
 Resolve an explicit issue override over `mandate`, then ground the decision in
 the named documents and latest accepted issue artifacts.
 
-Do not copy the mandate table, preset, axes, grounds or notes into the Driver
+Do not copy the mandate table, preset, axes, grounds or notes into the Manager
 contract. Include only applicable task-specific authorizations in `permissions`
 and actual fixed limits in `constraints`; removal of the duplicate table does
 not grant broader authority or erase a user's restriction.
@@ -124,7 +124,7 @@ not grant broader authority or erase a user's restriction.
 - For questions: classify by axis and level. A contradiction or extension of
   strategy requires escalation. Missing grounds require document co-creation;
   do not invent strategy.
-- For driver-confirming declared outputs: verify completeness, mandate, and
+- For manager-confirming declared outputs: verify completeness, mandate, and
   consistency with accepted upstream artifacts.
 - For declared reviews: create blocking findings only for in-mandate axes backed by
   `exists` or user-approved `draft` documents.

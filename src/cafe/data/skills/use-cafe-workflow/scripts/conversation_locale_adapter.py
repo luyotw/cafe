@@ -1,13 +1,13 @@
-"""Driver-owned adapter onto the generic conversation-locale contract.
+"""Manager-owned adapter onto the generic conversation-locale contract.
 
-The Driver may *supply* a user preference when a workflow is created, and must
+The Manager may *supply* a user preference when a workflow is created, and must
 declare which tier it is supplying. It is never the authority that decides the
-workflow language: once a workflow exists, the Driver reads the effective
+workflow language: once a workflow exists, the Manager reads the effective
 generic value and source rather than re-resolving them, so its
 ``locales.conversation`` snapshot mirrors the workflow authority instead of
 competing with it.
 
-The dependency runs one way only. This Driver-side module calls generic code;
+The dependency runs one way only. This Manager-side module calls generic code;
 nothing under ``src/cafe/core/``, ``src/cafe/phases/`` or the generic UI
 commands imports it. See ``docs/language-policy.md``.
 """
@@ -33,7 +33,7 @@ MAX_WORKFLOW_STATE_BYTES = 8 * 1024 * 1024
 def supplied_preference(
     *, value: Optional[str], source: Optional[str]
 ) -> Optional[SuppliedLocale]:
-    """Validate a preference the Driver inferred or was explicitly told."""
+    """Validate a preference the Manager inferred or was explicitly told."""
     return supplied_locale_from_inputs(value=value, source=source)
 
 
@@ -87,7 +87,7 @@ def effective_conversation_locale(
     playbook_locale: Optional[str] = None,
     supplied: Optional[SuppliedLocale] = None,
 ) -> tuple[str, str]:
-    """Resolve the value and source the Driver must mirror in its contract.
+    """Resolve the value and source the Manager must mirror in its contract.
 
     An existing workflow's stored value wins outright. A readable legacy
     record without one uses the English presentation fallback. Only a workflow
@@ -114,7 +114,7 @@ def contract_locale_snapshot(
     declared_value: Optional[str] = None,
     declared_source: Optional[str] = None,
 ) -> dict[str, str]:
-    """Build the ``locales.conversation`` snapshot the Driver contract carries.
+    """Build the ``locales.conversation`` snapshot the Manager contract carries.
 
     An existing workflow mirrors its stored value and source, or the English
     presentation fallback if it predates locale storage. Only a workflow with

@@ -2294,7 +2294,7 @@ def test_callback_queues_the_bound_codex_host_thread(tmp_path: Path, monkeypatch
     assert "--model" not in command
     assert command[command.index("--cd") + 1] == str(tmp_path)
     prompt = command[command.index("--message") + 1]
-    assert "event-driven CAFE workflow driver" in prompt
+    assert "event-driven CAFE workflow manager" in prompt
     assert '"event_type": "human_task"' in prompt
     assert run.call_args.kwargs == {
         "check": True,
@@ -2377,7 +2377,7 @@ def test_callback_failure_sends_a_best_effort_slack_notice(tmp_path: Path, monke
                         "Impact: the original conversation may not have received "
                         "this update; this does not mean the workflow stopped.",
                         'Return to the "issue456" conversation in CAFE and ask the '
-                        "Driver to check the current progress and next step.",
+                        "Manager to check the current progress and next step.",
                     )
                 )
             },
@@ -2447,6 +2447,60 @@ def test_callback_failure_uses_canonical_repository_route_and_deduplicates(
         (issue_dir / "driver" / callback.FAILURE_NOTIFICATIONS_FILENAME).read_text(encoding="utf-8")
     )
     assert list(receipts["records"].values())[0]["outcome"] == "sent"
+
+
+def test_callback_failure_notice_survives_blackboard_replacement_after_pending_receipt(
+    tmp_path: Path, monkeypatch
+) -> None:
+    callback = _callback_module()
+    driver_dir, _state, event = _contract_event_context(
+        callback, tmp_path, [("codex", "exact")], issue_name="issue456"
+    )
+    issue_dir = driver_dir.parent
+    blackboard_path = issue_dir / "blackboard.json"
+    manager_dir = callback._manager_dir(issue_dir)
+    write_receipts = callback._write_callback_failure_notifications
+    posts = []
+    monkeypatch.setattr(
+        callback,
+        "resolve_human_task_notification_repository_root",
+        lambda _issue_dir: tmp_path,
+    )
+    monkeypatch.setattr(
+        callback,
+        "load_human_task_notification_settings",
+        lambda: SimpleNamespace(enabled=True),
+    )
+    monkeypatch.setattr(callback, "load_slack_webhook_url", lambda **_kwargs: "webhook")
+    monkeypatch.setattr(
+        callback,
+        "post_slack_notification",
+        lambda _webhook, message, *, timeout_sec: posts.append(message),
+    )
+
+    def replace_blackboard_after_pending_write(directory, records):
+        write_receipts(directory, records)
+        if any(record.get("outcome") == "pending" for record in records.values()):
+            blackboard_path.write_text("[]", encoding="utf-8")
+
+    monkeypatch.setattr(
+        callback,
+        "_write_callback_failure_notifications",
+        replace_blackboard_after_pending_write,
+    )
+
+    callback._notify_callback_failure(
+        event, repository_root=tmp_path, error=TimeoutError("delivery unavailable")
+    )
+
+    callback._notify_callback_failure(
+        event, repository_root=tmp_path, error=TimeoutError("delivery unavailable")
+    )
+    receipt = json.loads(
+        (manager_dir / callback.FAILURE_NOTIFICATIONS_FILENAME).read_text(encoding="utf-8")
+    )
+    assert len(posts) == 1
+    assert next(iter(receipt["records"].values()))["outcome"] == "sent"
 
 
 def test_callback_and_slack_failure_leave_a_durable_receipt(tmp_path: Path, monkeypatch) -> None:
@@ -2630,3 +2684,61 @@ def test_callback_session_conflict_keeps_existing_session(tmp_path: Path, monkey
 
     persisted = json.loads((driver_dir / "dispatch_state.json").read_text(encoding="utf-8"))
     assert persisted["entries"][0]["session"]["id"] == "existing"
+
+
+def test_manager_event_contract_uses_manager_state_path(tmp_path: Path) -> None:
+    callback = _callback_module()
+    issue_dir = tmp_path / ".cafe" / "issues" / "manager-event"
+    blackboard = _prepare_issue(issue_dir)
+    from cafe.manager import ActivateConfirmedContract, activate_confirmed_contract
+
+    activate_confirmed_contract(
+        ActivateConfirmedContract(
+            issue_dir=issue_dir,
+            issue_name=issue_dir.name,
+            workflow_id=blackboard.workflow_id,
+            confirmed_by="user",
+            confirmed_at=datetime(2026, 9, 28, tzinfo=timezone.utc),
+            proposal={
+                "delivery_contract": delivery_contract(),
+                "locales": {"conversation": {"value": "en", "source": "test"}},
+                "confirmation_contract": {
+                    "user_required": ["spec", "plan"],
+                    "manager_confirmable": [],
+                    "mandatory_human_stops": ["spec", "plan"],
+                },
+                "reactive_user_handoffs": {
+                    "need_clarification": "manager_confirmable",
+                    "need_permission": "user_required",
+                    "alignment_checkpoint": "manager_resolvable_when_clear",
+                },
+                "phases": [{"name": "develop", "chain": [{"cli": "codex", "model": "exact"}]}],
+                "proactive_review": {
+                    "phase_decisions": [{"phase": "develop", "decision": "not_required"}]
+                },
+                "manager": {"mode": "event-driven", "clis": [{"cli": "codex"}]},
+                "checkout": {"kind": "current_checkout"},
+                "task_contract": {"user_required": [], "manager_confirmable": []},
+            },
+        )
+    )
+
+    config = callback._contract_callback_config(
+        issue_dir=issue_dir,
+        issue_name=issue_dir.name,
+        workflow_id=blackboard.workflow_id,
+    )
+
+    assert config["clis"] == [{"cli": "codex"}]
+    assert (issue_dir / "manager" / "contract.json").is_file()
+    assert not (issue_dir / "driver" / "contract.json").exists()
+    store = callback.EventManagerSessionStore(
+        issue_dir / "manager",
+        workflow_id=blackboard.workflow_id,
+        cli=AgentCLI.CODEX,
+        model="exact",
+    )
+    assert store.agent_name == callback.MANAGER_AGENT_NAME
+    store.save_session(store.agent_name, AgentCLI.CODEX, "manager-session")
+    store.commit()
+    assert store.path.is_file()

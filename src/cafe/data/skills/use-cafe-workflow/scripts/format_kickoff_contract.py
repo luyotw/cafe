@@ -19,7 +19,7 @@ _SOURCE_ROOT = Path(__file__).resolve().parents[5]
 if str(_SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(_SOURCE_ROOT))
 
-_DRIVER_MODES = {"attached", "unattended", "event-driven"}
+_MANAGER_MODES = {"attached", "unattended", "event-driven"}
 _EVENT_DRIVEN_CLIS = {"claude", "codex", "gemini", "copilot", "cursor-agent"}
 
 
@@ -55,8 +55,8 @@ try:
         resolve_playbook_skills,
     )
     from cafe.core.types import AgentCLI, AgentConfig
-    from cafe.driver import ActivateConfirmedContract, activate_confirmed_contract
-    from cafe.driver.delivery import normalize_delivery_contract, validate_closeout_plan_policy
+    from cafe.manager import ActivateConfirmedContract, activate_confirmed_contract
+    from cafe.manager.delivery import normalize_delivery_contract, validate_closeout_plan_policy
     from cafe.playbooks.loader import PlaybookLoader
     from cafe.skills.execution_profile import resolve_execution_profile
     from cafe.skills.loader import SkillLoader
@@ -72,7 +72,7 @@ from conversation_locale_adapter import contract_locale_snapshot  # noqa: E402, 
 from render_workflow_progress import render_progress  # noqa: E402, I001
 
 ModelChain = list[tuple[str, str]]
-EventDriverChain = list[tuple[str, str | None]]
+EventManagerChain = list[tuple[str, str | None]]
 
 
 def _project_path(path: Path, project_root: Path) -> Path:
@@ -146,34 +146,58 @@ def _positive_seconds(value: str) -> int:
     return seconds
 
 
+def _manager_owner(value: str) -> str:
+    """Normalize the documented legacy owner alias at the CLI boundary."""
+    return "manager_confirmable" if value == "driver_confirmable" else value
+
+
+def _resolve_alias(primary: Any, legacy: Any, label: str) -> Any:
+    if primary is not None and legacy is not None and primary != legacy:
+        raise ValueError(f"Manager and legacy Driver {label} inputs conflict")
+    if primary is not None:
+        return primary
+    return legacy
+
+
+def _normalize_aliases(args: argparse.Namespace) -> None:
+    args.manager_mode = _resolve_alias(args.manager_mode, args.legacy_manager_mode, "mode")
+    args.event_manager = _resolve_alias(args.event_manager, args.legacy_event_manager, "event chain") or []
+    args.manager_confirmable = _resolve_alias(
+        args.manager_confirmable, args.legacy_manager_confirmable, "confirmation ownership"
+    )
+    args.task_manager_confirmable = _resolve_alias(
+        args.task_manager_confirmable, args.legacy_task_manager_confirmable, "task ownership"
+    ) or []
+
+
 def _capability_choices(args: argparse.Namespace, model: Any) -> list[Any]:
     registry = load_capability_registry(default_capability_definition_dirs(args.project_root))
     return resolve_setup_choices(model, registry, args.capability_choice)
 
 
-def _driver_policy_rows(args: argparse.Namespace) -> list[list[Any]]:
-    rows: list[list[Any]] = [["driver.mode", args.driver_mode]]
-    if args.driver_mode == "attached":
+def _manager_policy_rows(args: argparse.Namespace) -> list[list[Any]]:
+    rows: list[list[Any]] = [["manager.mode", args.manager_mode]]
+    if args.manager_mode == "attached":
         if args.poll_interval_seconds is None:
-            raise ValueError("attached driver requires --poll-interval-seconds")
-        if args.event_driver:
-            raise ValueError("attached driver rejects event-driven fields")
-        rows.append(["driver.poll_interval_seconds", args.poll_interval_seconds])
-    elif args.driver_mode == "unattended":
-        if args.poll_interval_seconds is not None or args.event_driver:
-            raise ValueError("unattended driver accepts no mode-specific fields")
+            raise ValueError("attached manager requires --poll-interval-seconds")
+        if args.event_manager:
+            raise ValueError("attached manager rejects event-driven fields")
+        rows.append(["manager.poll_interval_seconds", args.poll_interval_seconds])
+    elif args.manager_mode == "unattended":
+        if args.poll_interval_seconds is not None or args.event_manager:
+            raise ValueError("unattended manager accepts no mode-specific fields")
     else:
         if args.poll_interval_seconds is not None:
-            raise ValueError("event-driven driver rejects attached polling")
+            raise ValueError("event-driven manager rejects attached polling")
         rows.extend(
-            [f"driver.clis[{index}]", cli if model is None else f"{cli}:{model}"]
-            for index, (cli, model) in enumerate(_parse_event_driver_entries(args.event_driver))
+            [f"manager.clis[{index}]", cli if model is None else f"{cli}:{model}"]
+            for index, (cli, model) in enumerate(_parse_event_manager_entries(args.event_manager))
         )
     return rows
 
 
-def _parse_event_driver_entries(values: Iterable[str] | None) -> EventDriverChain:
-    entries: EventDriverChain = []
+def _parse_event_manager_entries(values: Iterable[str] | None) -> EventManagerChain:
+    entries: EventManagerChain = []
     seen: set[str] = set()
     for index, value in enumerate(values or ()):
         raw_cli, separator, raw_model = value.partition(":")
@@ -187,9 +211,9 @@ def _parse_event_driver_entries(values: Iterable[str] | None) -> EventDriverChai
         if (
             cli not in _EVENT_DRIVEN_CLIS
             or not AgentExecutor(
-                AgentConfig(name="__cafe_event_driver__", cli=AgentCLI(cli), model=model),
+                AgentConfig(name="__cafe_event_manager__", cli=AgentCLI(cli), model=model),
                 stream_output=False,
-            ).supports_event_driver()
+            ).supports_event_manager()
         ):
             raise ValueError(f"CLI '{cli}' lacks the event-driven contract")
         if cli in seen:
@@ -197,7 +221,7 @@ def _parse_event_driver_entries(values: Iterable[str] | None) -> EventDriverChai
         seen.add(cli)
         entries.append((cli, None if index == 0 else model))
     if not entries:
-        raise ValueError("event-driven driver requires a primary --event-driver CLI")
+        raise ValueError("event-driven manager requires a primary --event-manager CLI")
     return entries
 
 
@@ -283,19 +307,19 @@ def _resolve_partition(
     *,
     candidates: tuple[str, ...],
     user_values: list[str] | None,
-    driver_values: list[str] | None,
+    manager_values: list[str] | None,
 ) -> tuple[list[str], list[str]]:
-    if user_values is None and driver_values is None:
+    if user_values is None and manager_values is None:
         return [], list(candidates)
 
     user_required = _items(user_values)
-    driver_confirmable = _items(driver_values)
+    manager_confirmable = _items(manager_values)
     candidate_set = set(candidates)
     user_set = set(user_required)
-    driver_set = set(driver_confirmable)
-    overlap = user_set & driver_set
-    unknown = (user_set | driver_set) - candidate_set
-    missing = candidate_set - (user_set | driver_set)
+    manager_set = set(manager_confirmable)
+    overlap = user_set & manager_set
+    unknown = (user_set | manager_set) - candidate_set
+    missing = candidate_set - (user_set | manager_set)
     problems = []
     if overlap:
         problems.append(f"overlapping gates: {', '.join(sorted(overlap))}")
@@ -305,7 +329,7 @@ def _resolve_partition(
         problems.append(f"unassigned gates: {', '.join(sorted(missing))}")
     if problems:
         raise ValueError("invalid confirmation partition: " + "; ".join(problems))
-    return user_required, driver_confirmable
+    return user_required, manager_confirmable
 
 
 def _task_declarations(values: list[str] | None) -> list[dict[str, str]]:
@@ -322,7 +346,7 @@ def _scheduled_task_declarations(
     *, model: Any, project_root: Path, owner_phases: dict[str, list[str]]
 ) -> dict[str, list[dict[str, str]]]:
     loader = SkillLoader(project_root=project_root)
-    result: dict[str, list[dict[str, str]]] = {"user_required": [], "driver_confirmable": []}
+    result: dict[str, list[dict[str, str]]] = {"user_required": [], "manager_confirmable": []}
     for owner, phases in owner_phases.items():
         for phase in phases:
             step = model.steps[phase]
@@ -466,17 +490,19 @@ def _parser() -> argparse.ArgumentParser:
         )
     parser.add_argument("--update-preflight", type=_json_mapping, required=True)
     parser.add_argument("--catalog-preflight", type=_json_mapping, required=True)
-    parser.add_argument("--driver-mode", choices=tuple(sorted(_DRIVER_MODES)), required=True)
+    parser.add_argument("--manager-mode", dest="manager_mode", choices=tuple(sorted(_MANAGER_MODES)))
+    parser.add_argument("--driver-mode", dest="legacy_manager_mode", choices=tuple(sorted(_MANAGER_MODES)))
     parser.add_argument(
         "--poll-interval-seconds",
         type=_positive_seconds,
     )
     parser.add_argument(
-        "--event-driver",
+        "--event-manager", dest="event_manager",
         action="append",
-        default=[],
+        default=None,
         metavar="CLI[:MODEL]",
     )
+    parser.add_argument("--event-driver", dest="legacy_event_manager", action="append", default=None, metavar="CLI[:MODEL]")
     parser.add_argument(
         "--phase-chain",
         action="append",
@@ -496,7 +522,8 @@ def _parser() -> argparse.ArgumentParser:
         help="Explicit answer to a setup question declared by an effective capability.",
     )
     parser.add_argument("--user-required", nargs="*", default=None)
-    parser.add_argument("--driver-confirmable", nargs="*", default=None)
+    parser.add_argument("--manager-confirmable", dest="manager_confirmable", nargs="*", default=None)
+    parser.add_argument("--driver-confirmable", dest="legacy_manager_confirmable", nargs="*", default=None)
     checkout = parser.add_mutually_exclusive_group(required=True)
     checkout.add_argument("--worktree")
     checkout.add_argument("--current-checkout", action="store_true")
@@ -504,18 +531,20 @@ def _parser() -> argparse.ArgumentParser:
         "--task-user-required", action="append", default=[], metavar="PHASE:TASK_ID"
     )
     parser.add_argument(
-        "--task-driver-confirmable", action="append", default=[], metavar="PHASE:TASK_ID"
+        "--task-manager-confirmable", dest="task_manager_confirmable", action="append", default=None, metavar="PHASE:TASK_ID"
     )
+    parser.add_argument("--task-driver-confirmable", dest="legacy_task_manager_confirmable", action="append", default=None, metavar="PHASE:TASK_ID")
     parser.add_argument("--need-permission", default="user_required")
     parser.add_argument(
         "--need-clarification",
-        choices=("driver_confirmable", "user_required"),
-        default="driver_confirmable",
+        type=_manager_owner,
+        choices=("manager_confirmable", "user_required"),
+        default="manager_confirmable",
         help="Overall clarification ownership; explicit task declarations override it.",
     )
     parser.add_argument(
         "--alignment-checkpoint",
-        default="driver_resolvable_when_clear",
+        default="manager_resolvable_when_clear",
     )
     parser.add_argument(
         "--proactive-review-decision",
@@ -614,14 +643,15 @@ def _preflight_reports(args: argparse.Namespace) -> tuple[dict[str, Any], dict[s
 
 def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
     """Build only the issue's user-confirmed delivery and execution decisions."""
+    _normalize_aliases(args)
     project_root = args.project_root.resolve()
     model = PlaybookLoader(project_root=project_root).load_model(args.playbook_id).model
     candidates = confirmation_gate_steps(model)
     mandatory_human_tasks = mandatory_confirmation_gate_steps(model)
-    user_required, driver_confirmable = _resolve_partition(
+    user_required, manager_confirmable = _resolve_partition(
         candidates=candidates,
         user_values=args.user_required,
-        driver_values=args.driver_confirmable,
+        manager_values=args.manager_confirmable,
     )
     # Once a workflow exists, the snapshot mirrors the generic authority; only a
     # workflow being created resolves from a supplied preference or the playbook.
@@ -637,7 +667,7 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
     if effective_locale.lower() == "auto":
         raise ValueError("--effective-locale is required when the playbook locale is auto")
     _preflight_reports(args)
-    _driver_policy_rows(args)
+    _manager_policy_rows(args)
     capability_choices = _capability_choices(args, model)
     overrides = _parse_phase_chains(args.phase_chain, step_names=set(model.steps))
     phase_config = _project_path(args.phase_config, project_root)
@@ -661,7 +691,7 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
         project_root=args.project_root,
         owner_phases={
             "user_required": [*user_required, *mandatory_human_tasks],
-            "driver_confirmable": driver_confirmable,
+            "manager_confirmable": manager_confirmable,
         },
     )
     task_contract = {
@@ -669,9 +699,9 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
             *scheduled_tasks["user_required"],
             *_task_declarations(args.task_user_required),
         ],
-        "driver_confirmable": [
-            *scheduled_tasks["driver_confirmable"],
-            *_task_declarations(args.task_driver_confirmable),
+        "manager_confirmable": [
+            *scheduled_tasks["manager_confirmable"],
+            *_task_declarations(args.task_manager_confirmable),
         ],
     }
     for owner in task_contract:
@@ -688,7 +718,7 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
         "locales": {"conversation": locale_snapshot},
         "confirmation_contract": {
             "user_required": user_required,
-            "driver_confirmable": driver_confirmable,
+            "manager_confirmable": manager_confirmable,
             "mandatory_human_stops": list(mandatory_human_tasks),
         },
         "task_contract": task_contract,
@@ -705,19 +735,19 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
                 eligible_phases=set(candidates) | set(mandatory_human_tasks),
             )
         },
-        "driver": {"mode": args.driver_mode},
+        "manager": {"mode": args.manager_mode},
         "checkout": (
             {"kind": "worktree", "path": args.worktree}
             if args.worktree
             else {"kind": "current_checkout"}
         ),
     }
-    if args.driver_mode == "attached":
-        proposal["driver"]["poll_interval_seconds"] = args.poll_interval_seconds
-    elif args.driver_mode == "event-driven":
-        proposal["driver"]["clis"] = [
+    if args.manager_mode == "attached":
+        proposal["manager"]["poll_interval_seconds"] = args.poll_interval_seconds
+    elif args.manager_mode == "event-driven":
+        proposal["manager"]["clis"] = [
             {"cli": cli} if model_name is None else {"cli": cli, "model": model_name}
-            for cli, model_name in _parse_event_driver_entries(args.event_driver)
+            for cli, model_name in _parse_event_manager_entries(args.event_manager)
         ]
     return proposal
 
@@ -750,8 +780,8 @@ def activate_confirmed_proposal(
         confirmed_at=confirmed_at,
         proposal=confirmed_proposal,
     )
-    driver = confirmed_proposal.get("driver")
-    if isinstance(driver, dict) and driver.get("mode") == "event-driven":
+    manager = confirmed_proposal.get("manager")
+    if isinstance(manager, dict) and manager.get("mode") == "event-driven":
         from workflow_event_callback import activate_confirmed_contract_with_host_session
 
         activate_confirmed_contract_with_host_session(
@@ -778,22 +808,22 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
     zh = locale_token == "zh-tw" or locale_token.startswith("zh-hant")
     headers = ["欄位", "值"] if zh else ["Field", "Value"]
     confirmation_prompt = (
-        "請確認上述完整契約；確認後 Driver 才會準備並啟動 workflow。"
+        "請確認上述完整契約；確認後流程管理員才會準備並啟動 workflow。"
         if zh
-        else "Please confirm the complete contract above before the Driver prepares "
+        else "Please confirm the complete contract above before the Manager prepares "
         "and starts the workflow."
     )
-    driver = proposal["driver"]
-    driver_rows: list[list[Any]] = [["driver.mode", driver["mode"]]]
-    if driver["mode"] == "attached":
-        driver_rows.append(["driver.poll_interval_seconds", driver["poll_interval_seconds"]])
-    elif driver["mode"] == "event-driven":
-        driver_rows.extend(
+    manager = proposal["manager"]
+    manager_rows: list[list[Any]] = [["manager.mode", manager["mode"]]]
+    if manager["mode"] == "attached":
+        manager_rows.append(["manager.poll_interval_seconds", manager["poll_interval_seconds"]])
+    elif manager["mode"] == "event-driven":
+        manager_rows.extend(
             [
-                f"driver.clis[{index}]",
+                f"manager.clis[{index}]",
                 entry["cli"] if index == 0 else f"{entry['cli']}:{entry['model']}",
             ]
-            for index, entry in enumerate(driver["clis"])
+            for index, entry in enumerate(manager["clis"])
         )
     summary = _table(
         headers,
@@ -801,7 +831,7 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
             ["playbook_id", args.playbook_id],
             ["effective_locale", f"{effective_locale} ({locale['source']})"],
             ["repository_content_locale", args.repository_content_locale],
-            *driver_rows,
+            *manager_rows,
             ["worktree", proposal["checkout"].get("path", "current checkout")],
         ],
     )
@@ -866,7 +896,7 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
             ]
         )
     confirmation = proposal["confirmation_contract"]
-    driver_confirmable = set(confirmation["driver_confirmable"])
+    manager_confirmable = set(confirmation["manager_confirmable"])
     eligible = set(confirmation_gate_steps(model)) | set(mandatory_confirmation_gate_steps(model))
     proactive_decisions = proposal["proactive_review"]["phase_decisions"]
     proactive_rows: list[list[Any]] = []
@@ -874,12 +904,12 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
         phase = decision["phase"]
         if phase not in eligible:
             continue
-        if decision["decision"] == "not_required" and phase in driver_confirmable:
-            action = "Driver may confirm after ordinary evidence verification"
+        if decision["decision"] == "not_required" and phase in manager_confirmable:
+            action = "Manager may confirm after ordinary evidence verification"
         elif decision["decision"] == "not_required":
             action = "user confirmation remains required; no proactive review"
-        elif phase in driver_confirmable:
-            action = "Driver may confirm and advance after clean review"
+        elif phase in manager_confirmable:
+            action = "Manager may confirm and advance after clean review"
         else:
             action = "user confirmation remains required"
         proactive_rows.append([phase, decision["decision"], action])
@@ -887,7 +917,7 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
         playbook=model,
         contract=proposal,
         locale=effective_locale,
-        driver_state={
+        manager_state={
             "proactive_review": {
                 decision["phase"]: "pending"
                 for decision in proactive_decisions
@@ -951,15 +981,15 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
                             for owner, entries in (
                                 ("user_required", _task_declarations(args.task_user_required)),
                                 (
-                                    "driver_confirmable",
-                                    _task_declarations(args.task_driver_confirmable),
+                                    "manager_confirmable",
+                                    _task_declarations(args.task_manager_confirmable),
                                 ),
                             )
                             for entry in entries
                         ],
                     ),
                 ]
-                if args.task_user_required or args.task_driver_confirmable
+                if args.task_user_required or args.task_manager_confirmable
                 else []
             ),
             "### Deliver and cleanup plan to confirm",
@@ -983,6 +1013,9 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
 def main() -> int:
     try:
         args = _parser().parse_args()
+        _normalize_aliases(args)
+        if args.manager_mode is None:
+            raise ValueError("--manager-mode is required")
         proposal = build_confirmed_proposal(args)
         rendered = render(args, confirmed_proposal=proposal)
         if args.activate_confirmed:
