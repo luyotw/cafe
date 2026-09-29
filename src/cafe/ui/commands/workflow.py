@@ -189,6 +189,19 @@ def _resolve_initial_step_user_inputs(
     return _build_initial_step_user_inputs(playbook_data, user_input), None
 
 
+def _declares_human_task_for_trigger(step_def: Any, trigger: str) -> bool:
+    """Return whether a user handoff must be resolved through a declared task."""
+    if not isinstance(step_def, dict):
+        return False
+    bindings = step_def.get("human_tasks")
+    if not isinstance(bindings, (list, tuple)):
+        return False
+    return any(
+        isinstance(binding, dict) and binding.get("trigger") == trigger
+        for binding in bindings
+    )
+
+
 def _persist_background_step_user_inputs(
     issue_dir: Path,
     step_user_inputs: Optional[Dict[str, str]],
@@ -1121,21 +1134,24 @@ def workflow(
                                     portion = cursor.get("portion")
                                     if isinstance(portion, str):
                                         owner_trigger = portion
-                        if (
+                        human_task_trigger = owner_trigger or contract.intent.value
+                        if owner_trigger is not None or (
                             contract.intent
                             in {
                                 HandoffIntent.CONFIRM_OUTPUT,
                                 HandoffIntent.NEED_CLARIFICATION,
                                 HandoffIntent.NO_CHANGES_NEEDED,
                             }
-                            or owner_trigger is not None
+                            and _declares_human_task_for_trigger(
+                                source_step_def, human_task_trigger
+                            )
                         ):
                             result = apply_human_task_payload(
                                 issue_dir=issue_dir,
                                 playbook_data=playbook_data,
                                 blackboard=blackboard,
                                 from_step=from_step,
-                                trigger=owner_trigger or contract.intent.value,
+                                trigger=human_task_trigger,
                                 raw_payload=user_input,
                                 source="command",
                             )
