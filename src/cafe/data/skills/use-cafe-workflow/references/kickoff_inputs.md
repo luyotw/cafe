@@ -92,6 +92,13 @@ inspection after a validated hit, but do perform the first issue-scope,
 strategy, action-target and authority judgments for each new preparation. A
 hit never supplies those decisions or confirms activation.
 
+During one preparation, keep using the validated compact report as the source
+for unchanged discovery facts. Do not dump the full cached discovery or
+assembly report again, or reread whole guidance/source files only to reconfirm
+facts already present in that report. Reopen the full report only to resolve a
+specific missing decision, diagnostic or invalidated input, and read only the
+relevant detail.
+
 Preflight reports may be passed as JSON objects in `formatter_inputs`, or by path in `preflight_files.update` and `preflight_files.catalog`. The helper reads those files as data; it does not execute their contents.
 
 ## Preferences
