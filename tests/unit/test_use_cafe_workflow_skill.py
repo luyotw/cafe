@@ -871,8 +871,11 @@ def test_use_cafe_workflow_uses_structured_human_task_resume_payloads() -> None:
 def test_use_cafe_workflow_skill_requires_playbook_derived_kickoff_contract() -> None:
     skill = _read_skill_resource("SKILL.md")
     reference = _read_skill_resource("references/kickoff.md")
+    kickoff_inputs = _read_skill_resource("references/kickoff_inputs.md")
     selection = _read_skill_resource("references/playbook_selection.md")
+    model_selection = _read_skill_resource("references/model_selection.md")
     normalized = " ".join(reference.split())
+    normalized_inputs = " ".join(kickoff_inputs.split())
 
     assert "references/kickoff.md" in skill
     assert "## Kickoff contract: first blocking gate" in reference
@@ -902,8 +905,18 @@ def test_use_cafe_workflow_skill_requires_playbook_derived_kickoff_contract() ->
     assert "self-contained initial confirmation request" in normalized
     assert "Do not substitute a shorter hand-written recap" in normalized
     assert "Do not require rationale, assessment or preflight records" in normalized
-    assert "cafe playbook list" in selection
+    assert "references/kickoff_inputs.md" in skill
+    assert "Reuse kickoff preferences and evidence" in reference
+    assert "run `discover` before repeating candidate-listing" in normalized
+    assert "through `assemble`" in normalized
+    assert "use `render` to produce the complete contract" in normalized
+    assert "normal new-issue Manager path is `discover`" in normalized_inputs
+    assert "cafe playbook list" not in selection
+    assert "prepare_kickoff.py discover" in selection
+    assert "do not repeat list/show/read" in " ".join(selection.split())
     assert "cafe playbook show <id>" in selection
+    assert "inspect the model evidence returned by `prepare_kickoff.py discover`" in model_selection
+    assert "Manager's responsibility" in model_selection
     assert "repository instructions require an independent QA" in selection
     assert "Compare the closest alternatives internally" in " ".join(selection.split())
     assert "do not infer behavior from a playbook name" in " ".join(selection.split())
@@ -3086,7 +3099,9 @@ def test_recovery_inspection_and_callback_policy_are_mode_neutral() -> None:
 def test_use_cafe_workflow_prefers_user_conversation_locale() -> None:
     skill = _read_skill_resource("SKILL.md")
     reference = _read_skill_resource("references/kickoff.md")
+    policy = (PROJECT_ROOT / "docs" / "language-policy.md").read_text()
     normalized = " ".join(reference.split())
+    normalized_policy = " ".join(policy.split())
 
     assert "references/kickoff.md" in skill
     assert "## Conversation locale checklist" in reference
@@ -3114,6 +3129,10 @@ def test_use_cafe_workflow_prefers_user_conversation_locale() -> None:
     assert "Never claim this skill lacks a locale rule" in normalized
     assert "Do not copy the locale into `issue.yaml`" in normalized
     assert "the stored value stands until the explicit change operation replaces it" in normalized
+    assert "current explicit instruction for this workflow" in normalized_policy
+    assert "applicable explicit repository-scoped saved preference" in normalized_policy
+    assert "explicit user-scoped saved preference" in normalized_policy
+    assert "A saved preference is reused only after an explicit request to save it" in normalized_policy
     assert "commands, paths, playbook and step names, intents, artifact keys" in normalized
     assert "Translate all presentation text into the effective conversation language" in normalized
     assert "capability prompts and outcomes" in normalized
@@ -3779,7 +3798,7 @@ def test_use_cafe_workflow_requires_confirmed_repository_content_locale() -> Non
     normalized_skill = " ".join(skill.split())
     normalized = " ".join(reference.split())
 
-    assert "Render, prepare, or reconfirm a kickoff" in normalized_skill
+    assert "Prepare kickoff inputs, render, or reconfirm a kickoff" in normalized_skill
     assert "`references/kickoff.md`" in normalized_skill
     assert "## Repository content locale checklist" in reference
     assert "Before `cafe init` or any other repository mutation" in normalized

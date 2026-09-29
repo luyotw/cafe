@@ -23,7 +23,7 @@ read the union once; do not preload the rest.
 | --- | --- |
 | Check or apply runtime, catalog, or bundled-helper updates | `references/project_global_skill_sync.md` |
 | Select a playbook | `references/playbook_selection.md` |
-| Render, prepare, or reconfirm a kickoff | `references/kickoff.md`, `references/model_selection.md`, `references/strategic_context.md` |
+| Prepare kickoff inputs, render, or reconfirm a kickoff | `references/kickoff.md`, `references/kickoff_inputs.md`, `references/playbook_selection.md`, `references/model_selection.md`, `references/strategic_context.md` |
 | Write or change confirmed phase chains | `references/model_selection.md`, then `references/phases_yaml.md` |
 | Start, resume, or supply declared input to ordinary execution | `references/project_global_skill_sync.md`, then `references/running_workflow.md` |
 | Supervise active work or classify a pause, timeout, interruption, retry, or recovery | `references/supervision_and_recovery.md`; read `references/running_workflow.md` only when its disposition permits a retry/resume, and `references/diagnosis_and_repair.md` only for incorrect or ambiguous behavior |

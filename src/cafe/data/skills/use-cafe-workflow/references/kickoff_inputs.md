@@ -2,6 +2,14 @@
 
 `prepare_kickoff.py` gathers local preferences and evidence in two stages, then maps an explicit complete decision set into the existing kickoff formatter. It reports missing research and decisions; it does not choose a playbook, infer issue acceptance criteria, determine model suitability, or invent delivery commands.
 
+The normal new-issue Manager path is `discover` → Manager assessment and
+decision gathering → `assemble` → `render`. Use one request file and the same
+isolated user/cache directories across a cold preparation and its warm
+follow-ups. A warm session is a fresh Manager context that reads the saved
+records; it must still assess the current issue and validate source freshness.
+For an existing workflow, read its confirmed contract and generic state rather
+than applying changed preferences to the issue.
+
 ## Request file
 
 A request is UTF-8 JSON with `schema_version: 1`, `project_root`, and `issue_name`. Optional fields include `playbook_id`, `current_explicit_inputs`, `manager_decisions`, `required_decisions`, `delivery_evidence`, `model_assessments`, `current_model_sources`, `model_contradictions`, `preflight_files`, and normalized `formatter_inputs`.

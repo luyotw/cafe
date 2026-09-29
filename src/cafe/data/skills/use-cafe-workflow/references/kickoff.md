@@ -2,8 +2,38 @@
 
 Read this reference before presenting a kickoff, preparing an issue, resuming an
 issue whose first workflow execution has not run, or answering a question about
-the workflow conversation language. Also read `playbook_selection.md`,
-`model_selection.md`, and `strategic_context.md`.
+the workflow conversation language. Also read `kickoff_inputs.md`,
+`playbook_selection.md`, `model_selection.md`, and `strategic_context.md`.
+
+## Reuse kickoff preferences and evidence
+
+For a new issue, start with the staged `prepare_kickoff.py` path in
+`kickoff_inputs.md`. Build one request file from the current user request and
+confirmed inputs, then run `discover` before repeating candidate-listing,
+preference, delivery, or model-evidence reads. Treat its catalog, preference,
+delivery, and model reports as sourced facts with explicit freshness and gaps;
+they do not decide issue scope, acceptance criteria, playbook suitability,
+model capability, or action authority. The selected graph and all unresolved
+Manager decisions remain Manager-owned.
+
+After selecting an eligible graph and resolving the required decisions, pass
+those decisions and normalized formatter inputs through `assemble`, then use
+`render` to produce the complete contract with the existing formatter. Do not
+render an incomplete assembly, omit reported gaps, or start preparation or a
+workflow before the complete contract is confirmed.
+
+Read preferences by their user or repository scope. Save a value only when the
+user explicitly requests reusable preference; never turn an inferred language,
+one-off issue answer, model suitability decision, or action authorization into a
+saved preference. Use the documented `inspect`, `set`, and `clear` operations
+for the named scope. For evidence, inspect before refresh, gather and validate
+the underlying evidence yourself, and refresh only from that evidence. A
+missing, stale, changed, contradictory, or incomplete record remains a gap; a
+successful operational probe is not model-capability evidence.
+
+On resume, the confirmed workflow contract and generic workflow state remain
+authoritative. Saved preferences and cached facts may inform a newly proposed
+contract only; they never rewrite a confirmed contract or pending task.
 
 ## Conversation locale checklist
 

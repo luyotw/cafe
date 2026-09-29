@@ -5,6 +5,15 @@ whenever execution returns control with agent phases still unexecuted. Also read
 `kickoff.md` before asking for confirmation and `running_workflow.md` before
 execution.
 
+At kickoff, inspect the model evidence returned by `prepare_kickoff.py discover`
+before repeating research. Reuse only an exact provider/model/version record
+whose supporting-source fingerprints and freshness are still valid. Gather
+current primary-source evidence for a miss, expiry, changed source, or
+contradiction, then pass the verified assessment through the documented
+evidence refresh path. The helper exposes evidence and gaps; capability-band
+classification, task suitability, and exact chain selection remain the
+Manager's responsibility.
+
 ## Assess before proposing models
 
 Read the issue, relevant strategic documents, nearby implementation, existing

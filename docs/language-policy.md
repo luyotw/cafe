@@ -5,7 +5,7 @@ piece of text be in?". Manager, playbook, agent, and phase documentation defer t
 this document; none of them states a competing precedence or a competing
 authority.
 
-There are exactly **two** normal policy inputs:
+The normal policy resolves exactly **two** language settings:
 
 - **Repository content language** — the language this project writes its own
   documentation, code comments, and engineering artifacts in. It is confirmed
@@ -41,10 +41,21 @@ claim about, and does not try to verify, a model's internal reasoning language.
 
 Precedence, highest first:
 
-1. an explicit user instruction;
-2. a preference reliably inferred from the user's own natural-language messages;
-3. the active playbook's explicit `playbook.conversation_locale`;
-4. `en-US`.
+1. a current explicit instruction for this workflow;
+2. an applicable explicit repository-scoped saved preference;
+3. an explicit user-scoped saved preference;
+4. a preference reliably inferred from the user's own natural-language messages;
+5. the active playbook's explicit `playbook.conversation_locale`;
+6. `en-US`.
+
+The staged Manager helper resolves saved preferences for a new proposal in
+repository-before-user order and reports their scope and provenance. A current
+explicit instruction overrides either saved scope. A saved preference is
+reused only after an explicit request to save it; a one-off answer is not
+persisted. Inference retains `inferred` provenance and does not become an
+explicit saved preference. These values supply the existing workflow-language
+input; they do not add another language value or change the runtime's ownership
+of an already-created workflow.
 
 Inference ignores quoted material, code, stack traces, logs, generated
 artifacts, and isolated tokens such as `1` or `ok`. Mixed or ambiguous evidence

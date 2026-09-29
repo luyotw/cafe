@@ -30,10 +30,13 @@ instructions from confirmed current scope. Unconfirmed speculative future work m
 responsibilities or phases to the current recommendation; handle it through the
 existing clarification or permission boundary only if it becomes current.
 
-Run `cafe playbook list` and enumerate every valid effective playbook across the
-project, Global, and builtin catalogs. Catalog precedence makes a same-id
-project override the one effective candidate; never evaluate its shadowed
-definitions separately. Inspect candidates with `cafe playbook show <id>`.
+Run `prepare_kickoff.py discover` using one request file and use its compact
+index of every valid effective playbook across the project, Global, and builtin
+catalogs. Catalog precedence makes a same-id project override the one effective
+candidate; never evaluate its shadowed definitions separately. Inspect a
+specific candidate with `cafe playbook show <id>` only when its indexed facts or
+diagnostics leave a material question unresolved; do not repeat list/show/read
+cycles for every candidate.
 A candidate with missing applicability is ineligible for automatic
 recommendation: report the exclusion and tell its author to add the complete
 contract and run `cafe playbook validate <id> --strict`. Do not infer missing
