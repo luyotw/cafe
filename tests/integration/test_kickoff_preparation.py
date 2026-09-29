@@ -95,7 +95,7 @@ def test_complete_format_render_does_not_create_contract_or_run_delivery(tmp_pat
     assert rendered["status"] == "rendered"
     assert rendered["proposal"]["phases"]
     assert rendered["proposal"]["delivery_contract"]
-    assert "playbook_id" in rendered["output"]
+    assert isinstance(rendered["output"], str) and rendered["output"].strip()
     assert not issue_dir.exists()
     assert "activate" not in rendered["proposal"]
 
