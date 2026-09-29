@@ -30,6 +30,20 @@ CORRECTED = (FIXTURES / "corrected.md").read_text()
 MISSING_PLAN_TODO = "<!-- plan-stage: detailed-plan -->\n# Missing tasks\n"
 
 
+def _assert_correction_context_preserved(manager):
+    first = manager.calls[0]
+    assert all(value == manager.checklists[0] for value in manager.checklists)
+    for name, prompt, continuation, kwargs in manager.calls[1:]:
+        assert name == first[0]
+        assert "evidence_bundle" in prompt
+        assert continuation.is_exact and continuation.session_id == "exact-report-session"
+        assert kwargs["allowed_tools"] == first[3]["allowed_tools"]
+        assert kwargs["allowed_directories"] == first[3]["allowed_directories"]
+    for metadata in manager.metadata:
+        assert metadata["effective_checklist"] == manager.metadata[0]["effective_checklist"]
+        assert metadata["model"] == "test-model"
+
+
 @pytest.fixture
 def journey(tmp_path, monkeypatch):
     def build(submissions, *, mode="baton", completed_checklist=False, human=None,
@@ -211,18 +225,12 @@ def test_i1_i3_i5_i7_correction_preserves_evidence_and_context(journey, mode, co
     assert HumanTaskRecordStore(j.issue).tasks() == ()
     assert j.effects == ["prepare", "after"]
     assert (j.iteration / "output.md").read_text() == CORRECTED
-    assert all(b == j.manager.checklists[0] for b in j.manager.checklists)
+    _assert_correction_context_preserved(j.manager)
     assert not (j.issue / "inspect_custom" / "iteration_002").exists()
-    first = j.manager.calls[0]
-    for name, prompt, continuation, kwargs in j.manager.calls[1:]:
-        assert name == first[0]
-        assert "evidence_bundle" in prompt
-        assert continuation.is_exact and continuation.session_id == "exact-report-session"
-        assert kwargs["allowed_tools"] == first[3]["allowed_tools"]
-        assert kwargs["allowed_directories"] == first[3]["allowed_directories"]
-    for metadata in j.manager.metadata:
-        assert metadata["effective_checklist"] == j.manager.metadata[0]["effective_checklist"]
-        assert metadata["model"] == "test-model"
+    for consumed, metadata in enumerate(j.manager.metadata[1:], start=1):
+        budget = metadata["artifact_correction"]
+        assert budget["consumed"] == consumed
+        assert len(budget["rejections"]) == consumed
     state = BlackboardStore(j.issue).load_or_create("inspect_custom")
     assert "evidence_bundle" in state.artifacts
     assert state.current_step in ("deliver_custom", "done", "_done")
@@ -275,6 +283,11 @@ def test_i6_provider_failure_retains_existing_recovery(journey, during_correctio
     assert j.effects == ["prepare"]
     assert len(HumanTaskRecordStore(j.issue).tasks()) == 1
     assert not (j.iteration / "artifact.json").exists()
+    if during_correction:
+        budget = json.loads((j.iteration / "iteration.json").read_text())["artifact_correction"]
+        assert budget["consumed"] == 1
+        assert len(budget["rejections"]) == 1
+        assert budget == j.manager.metadata[-1]["artifact_correction"]
 
 
 def test_i8_valid_report_needs_no_repair(journey):
@@ -366,6 +379,12 @@ def test_i3_missing_exact_session_uses_existing_recovery(journey):
     assert result.final_status_code == "INTERRUPTED:agent_error"
     assert len(j.manager.calls) == 1
     assert j.effects == ["prepare"]
+    budget = json.loads((j.iteration / "iteration.json").read_text())["artifact_correction"]
+    assert budget["consumed"] == 0
+    assert len(budget["rejections"]) == 1
+    assert budget["rejections"][0]["artifact"] == "evidence_bundle"
+    assert not (j.iteration / "artifact.json").exists()
+    assert len(HumanTaskRecordStore(j.issue).tasks()) == 1
 
 
 @pytest.mark.parametrize("approval", ["not_required", "required"])
@@ -451,13 +470,8 @@ def test_i4_i5_repaired_report_handoff_retry_does_not_replay_phase(journey, mode
     assert j.manager.deliveries == 1
     assert j.effects == ["prepare", "after"]
     assert not (j.issue / "inspect_custom" / "iteration_002").exists()
-    assert all(value == j.manager.checklists[0] for value in j.manager.checklists)
-    for name, prompt, continuation, kwargs in j.manager.calls[1:]:
-        assert continuation.is_exact and continuation.session_id == "exact-report-session"
-        assert name == j.manager.calls[0][0]
-        assert kwargs["allowed_tools"] == j.manager.calls[0][3]["allowed_tools"]
-        assert kwargs["allowed_directories"] == j.manager.calls[0][3]["allowed_directories"]
-        assert "evidence_bundle" in prompt
+    _assert_correction_context_preserved(j.manager)
+    for _, prompt, _, _ in j.manager.calls[1:]:
         assert "Do not repeat unrelated work" in prompt
     assert "unknown_intent" in j.manager.calls[-1][1]
 

@@ -1312,50 +1312,54 @@ class GenericWorkflowStepExecutor(Phase):
                         )
                 if error is None:
                     return response
-            if error is not None:
-                budget.reject(error)
-                self._save_artifact_correction(iteration_dir, budget)
-                budget.consume()
-                if not continuation.is_exact or not self._call_accepts_keyword(
-                    self.agent_manager.execute, "continuation"
+            budget.reject(error)
+            try:
+                # Exhaustion takes precedence; a missing session consumes no call.
+                if budget.consumed < MAX_ARTIFACT_CORRECTIONS and (
+                    not continuation.is_exact or not self._call_accepts_keyword(
+                        self.agent_manager.execute, "continuation"
+                    )
                 ):
                     raise RuntimeError("Report correction requires the exact producing session") from error
+                budget.consume()
+            finally:
+                # Persist the diagnostic on every exit and the attempt before dispatch.
                 self._save_artifact_correction(iteration_dir, budget)
-                self._refresh_and_validate_workspace_inputs(
-                    step_def=step_def, blackboard_state=blackboard_state,
-                )
-                # Do not use the phase executor's broad failure recovery or cold
-                # takeover callback: a failed exact continuation remains a failure.
-                response, usage, _, _, streaming_log, _ = self.agent_manager.execute(
-                    agent_name,
-                    error.correction_prompt(remaining=MAX_ARTIFACT_CORRECTIONS - budget.consumed),
-                    continuation=continuation,
-                    phase_name=step_name,
-                    allowed_tools=allowed_tools,
-                    allowed_directories=allowed_directories,
-                    streaming_output_file=str(iteration_dir / "streaming.jsonl"),
-                )
-                self._merge_iteration_token_usage(usage)
-                self._refresh_and_validate_workspace_inputs(
-                    step_def=step_def, blackboard_state=blackboard_state,
-                )
-                current = json.loads(context_file.read_text(encoding="utf-8"))
-                current_checklist = checklist_file.read_bytes() if checklist_file.exists() else None
-                if current_checklist != checklist_bytes or any(
-                    current.get(key) != value for key, value in pinned.items()
-                ):
-                    raise RuntimeError("Report correction changed the pinned execution context")
-                actual_cli = getattr(self.agent_manager, "get_last_cli", lambda: continuation.cli)()
-                actual_session = getattr(
-                    self.agent_manager, "get_last_session_id", lambda: continuation.session_id
-                )()
-                if actual_cli != continuation.cli or actual_session != continuation.session_id:
-                    raise RuntimeError("Report correction did not preserve the producing session")
-                current["response"] = response
-                current.setdefault("streaming_log", []).extend(streaming_log or [])
-                # Never trust provider writes to the persisted budget.
-                current["artifact_correction"] = budget.to_dict()
-                context_file.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
+            self._refresh_and_validate_workspace_inputs(
+                step_def=step_def, blackboard_state=blackboard_state,
+            )
+            # Do not use the phase executor's broad failure recovery or cold
+            # takeover callback: a failed exact continuation remains a failure.
+            response, usage, _, _, streaming_log, _ = self.agent_manager.execute(
+                agent_name,
+                error.correction_prompt(remaining=MAX_ARTIFACT_CORRECTIONS - budget.consumed),
+                continuation=continuation,
+                phase_name=step_name,
+                allowed_tools=allowed_tools,
+                allowed_directories=allowed_directories,
+                streaming_output_file=str(iteration_dir / "streaming.jsonl"),
+            )
+            self._merge_iteration_token_usage(usage)
+            self._refresh_and_validate_workspace_inputs(
+                step_def=step_def, blackboard_state=blackboard_state,
+            )
+            current = json.loads(context_file.read_text(encoding="utf-8"))
+            current_checklist = checklist_file.read_bytes() if checklist_file.exists() else None
+            if current_checklist != checklist_bytes or any(
+                current.get(key) != value for key, value in pinned.items()
+            ):
+                raise RuntimeError("Report correction changed the pinned execution context")
+            actual_cli = getattr(self.agent_manager, "get_last_cli", lambda: continuation.cli)()
+            actual_session = getattr(
+                self.agent_manager, "get_last_session_id", lambda: continuation.session_id
+            )()
+            if actual_cli != continuation.cli or actual_session != continuation.session_id:
+                raise RuntimeError("Report correction did not preserve the producing session")
+            current["response"] = response
+            current.setdefault("streaming_log", []).extend(streaming_log or [])
+            # Never trust provider writes to the persisted budget.
+            current["artifact_correction"] = budget.to_dict()
+            context_file.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _persist_agent_invocation_marker(
         self,
