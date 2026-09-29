@@ -1,7 +1,7 @@
 ---
 name: cafe-research_question
 description: Define a research question and its assumption boundaries
-version: 1.1.0
+version: 1.2.0
 workflow:
   execution_profile:
     workload: research
@@ -12,6 +12,8 @@ workflow:
     - id: clarification-feedback
       pattern: revision_feedback
       prompt: Provide the clarification needed to refine the research question.
+      prompt_locales:
+        zh-TW: "提供精煉研究問題所需的釐清說明。"
       input_schema: feedback
   prompt_inputs:
     - artifacts: [research_notes, causal_todo]

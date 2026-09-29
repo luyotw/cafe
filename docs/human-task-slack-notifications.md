@@ -103,11 +103,34 @@ proposals, then decide whether to request fixes or confirm continuation. The PR
 phase is labeled as preparation and review; the notification does not imply merge
 authorization. Unknown task types retain the generic return-to-CAFE action.
 
+## Notification language
+
+Every notification is written in the workflow's stored conversation language.
+`docs/language-policy.md` owns how that value is resolved and stored; this
+document records only which text actually exists.
+
+The notification text is developer-authored, and it is authored for **English
+and Traditional Chinese only**. A workflow whose conversation language has no
+authored text — including Simplified Chinese, which is never treated as
+interchangeable with Traditional Chinese — receives that one message in English.
+The fallback is silent: nothing is added to the delivered message, no separate
+warning is sent, and the workflow's stored language is unchanged, so a later
+message in a supported language is unaffected. A workflow created before the
+language contract existed has no stored language, and its notifications use the
+same English default without anything being written back to it.
+
+Accepting a language tag is not a claim that CAFE supports it. General CLI help,
+command output, and diagnostics are English today; that statement records current
+behavior and is neither a commitment to keep it English nor a promise to
+localize it.
+
 ## Trust and credential boundary
 
-The package-owned `cafe.slack.human_task` capability declares exactly six
-non-secret inputs: repository, CAFE issue, workflow ID, step, task ID, and task
-type. Its registered network effect is fixed to `hooks.slack.com`, and its
+The package-owned `cafe.slack.human_task` capability declares only non-secret
+inputs: the six required fields — repository, CAFE issue, workflow ID, step,
+task ID, and task type — plus the optional conversation locale that selects the
+message language. Its registered network effect is fixed to `hooks.slack.com`,
+and its
 symbolic credential is `slack_human_task_webhook`. Prompts, raw agent output,
 task feedback, project-defined fields, and credential values are never passed
 to the capability, notification, or receipt.

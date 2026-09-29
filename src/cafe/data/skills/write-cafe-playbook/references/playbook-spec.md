@@ -81,12 +81,17 @@ workflow driver when it talks with the user. Use a BCP 47 language tag such as
 language of the user's current request; omitted conversation locale values
 resolve to `auto` for backward compatibility with existing custom playbooks.
 
-The configured conversation locale is authoritative and does not require a
-separate user confirmation. The workflow driver must display the effective
-locale and its playbook source as informational kickoff context. A direct
-language instruction from the user may override it for the current thread;
-merely writing in another language or asking about the language choice is not
-an override.
+The configured value is the **third** precedence tier. `docs/language-policy.md`
+is the single source of truth: an explicit user instruction outranks it, a
+reliably inferred user preference outranks it, and `en-US` applies when none of
+the three supplies a value. It does not require a separate user confirmation,
+and the workflow driver must display the effective locale and its source as
+informational kickoff context.
+
+The effective value is resolved once, when the workflow state is created, and is
+then stored in that workflow's own state. Changing this playbook field does not
+change an existing workflow's language; only the explicit change operation
+described in `docs/language-policy.md` does.
 
 The conversation locale applies to kickoff, clarification/permission questions,
 alignment checkpoints, progress/error reports, and completion messages. It does

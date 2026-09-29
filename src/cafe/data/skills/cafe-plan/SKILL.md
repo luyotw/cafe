@@ -1,7 +1,7 @@
 ---
 name: cafe-plan
 description: "產出可執行的開發計畫"
-version: 1.9.0
+version: 1.11.0
 workflow:
   execution_profile:
     workload: planning
@@ -12,22 +12,32 @@ workflow:
     - id: development-guide
       pattern: revision_feedback
       prompt: "Please enter development guide (can be left empty)"
+      prompt_locales:
+        zh-TW: "請輸入開發指引（可留空）"
       input_schema: feedback
       required: false
     - id: output-review
       pattern: confirm_output
       prompt: Review the implementation plan and choose how to continue.
+      prompt_locales:
+        zh-TW: "檢視實作計畫，並選擇如何繼續。"
       input_schema: decision
       decisions:
         - id: confirm
           label: Confirm and continue
+          label_locales:
+            zh-TW: "確認並繼續"
         - id: revise
           label: Request revision
+          label_locales:
+            zh-TW: "要求修訂"
           requires_feedback: true
           correction: true
     - id: clarification-answers
       pattern: answer_questions
       prompt: Review the proposed direction, then confirm it or describe the needed adjustment.
+      prompt_locales:
+        zh-TW: "檢視提出的方向，確認該方向或說明需要調整之處。"
       input_schema: answers
       questions_from_xml: true
   prompt_inputs:

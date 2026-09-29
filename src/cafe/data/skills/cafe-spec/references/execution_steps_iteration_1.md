@@ -1,6 +1,7 @@
 ## Checklist
 
-[ ] Read {agent_file} to understand your role and native language
+[ ] Read {agent_file} to understand your role
+[ ] Write engineering prose in the repository content language stated in the runtime context, and anything addressed to the user in the workflow conversation language; your own preferred language overrides neither
 [ ] Read {output_file} to understand initial requirements
 [ ] If images exist in spec/images/, read and analyze them for UI/UX requirements and visual context
 [ ] Read README.md for project context

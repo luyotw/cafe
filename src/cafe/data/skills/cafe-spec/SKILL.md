@@ -1,7 +1,7 @@
 ---
 name: cafe-spec
 description: "收集、整理或修訂需求規格（依 iteration 切換行為）"
-version: 1.6.0
+version: 1.7.0
 workflow:
   execution_profile:
     workload: requirements
@@ -12,17 +12,25 @@ workflow:
     - id: output-review
       pattern: confirm_output
       prompt: Review the requirements specification and choose how to continue.
+      prompt_locales:
+        zh-TW: "檢視需求規格，並選擇如何繼續。"
       input_schema: decision
       decisions:
         - id: confirm
           label: Confirm and continue
+          label_locales:
+            zh-TW: "確認並繼續"
         - id: revise
           label: Request revision
+          label_locales:
+            zh-TW: "要求修訂"
           requires_feedback: true
           correction: true
     - id: clarification-answers
       pattern: answer_questions
       prompt: Answer the requested clarification questions.
+      prompt_locales:
+        zh-TW: "回覆所要求的釐清問題。"
       input_schema: answers
       questions_from_xml: true
   checklist:

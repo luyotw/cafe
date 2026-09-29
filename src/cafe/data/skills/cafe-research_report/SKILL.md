@@ -1,7 +1,7 @@
 ---
 name: cafe-research_report
 description: Produce a sourced research report
-version: 1.1.0
+version: 1.2.0
 workflow:
   execution_profile:
     workload: content
@@ -12,6 +12,8 @@ workflow:
     - id: clarification-feedback
       pattern: revision_feedback
       prompt: Provide the clarification needed to complete the report.
+      prompt_locales:
+        zh-TW: "提供完成報告所需的釐清說明。"
       input_schema: feedback
   prompt_inputs:
     - artifacts: [research_report_doc, causal_todo]

@@ -858,6 +858,18 @@ def _handle_user_phase(
     )
 
 
+def _pending_task_presentation(*, record_store, task_id: str, declared):
+    """Rebuild a pending task's presentation from its materialized snapshot."""
+    from cafe.core.human_tasks import HumanTaskPolicy
+
+    try:
+        return HumanTaskPolicy.model_validate(record_store.get_task(task_id).expected_result)
+    except Exception:
+        # A snapshot that cannot be read is not a reason to block the user; the
+        # declared policy still describes the same machine contract.
+        return declared
+
+
 def _handle_declared_human_task_handoff(
     *,
     issue_name: str,
@@ -953,6 +965,16 @@ def _handle_declared_human_task_handoff(
                     if key in recorded_result.payload
                 }
                 recovered_payload["human_task_id"] = completed_task.id
+    if durable_task_id is not None:
+        # A pending task's presentation is the snapshot captured when it was
+        # materialized. The render path consumes that snapshot and performs no
+        # locale re-resolution, so a later workflow-language change cannot
+        # rewrite what the user is looking at.
+        policy = _pending_task_presentation(
+            record_store=record_store,
+            task_id=durable_task_id,
+            declared=policy,
+        )
     payload = recovered_payload
     if payload is None:
         payload = collect_human_task_payload(

@@ -1,7 +1,7 @@
 ---
 name: cafe-brief_first
 description: Create an initial editorial brief and drafting requirements
-version: 1.1.0
+version: 1.2.0
 workflow:
   execution_profile:
     workload: content
@@ -12,21 +12,31 @@ workflow:
     - id: editorial-output-review
       pattern: confirm_output
       prompt: Approve the editorial brief or request a revision.
+      prompt_locales:
+        zh-TW: "核可編輯綱要，或要求修訂。"
       input_schema: decision
       decisions:
         - id: approve
           label: Approve brief
+          label_locales:
+            zh-TW: "核可綱要"
         - id: revise
           label: Request brief revision
+          label_locales:
+            zh-TW: "要求修訂綱要"
           requires_feedback: true
           correction: true
     - id: editorial-clarification
       pattern: answer_questions
       prompt: Answer the editorial clarification questions.
+      prompt_locales:
+        zh-TW: "回覆編輯相關的釐清問題。"
       input_schema: answers
       questions:
         - id: audience
           prompt: Who is the intended audience?
+          prompt_locales:
+            zh-TW: "目標讀者是誰？"
   prompt_inputs:
     - artifacts: [review_feedback, causal_todo]
       placeholder: correction_source

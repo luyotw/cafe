@@ -1,6 +1,7 @@
 ## Checklist
 
-[ ] Read {agent_file} to understand your role and native language
+[ ] Read {agent_file} to understand your role
+[ ] Write engineering prose in the repository content language stated in the runtime context, and anything addressed to the user in the workflow conversation language; your own preferred language overrides neither
 [ ] Read the first non-blank line of {previous_output_file}; accept only `<!-- plan-stage: solution-alignment -->` or `<!-- plan-stage: detailed-plan -->` as the canonical stage and ignore marker-looking text elsewhere
 [ ] Read {previous_output_file} and preserve its `## Development Guide` unchanged
 [ ] Review user's feedback (provided below)

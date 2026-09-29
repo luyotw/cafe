@@ -1,7 +1,7 @@
 ---
 name: write-cafe-playbook
 description: Use this skill when creating, restructuring, reviewing, or repairing a CAFE playbook YAML under src/cafe/data/playbooks or .cafe/playbooks. Covers applicability, conversation locale, step graphs, roles, artifacts, plan/checklist handoffs, forward plan chains, user review loops, conditional skips, hooks, tools, and strict validation. Use it whenever a user asks to write or update a CAFE playbook, or use-cafe-workflow identifies a playbook declarative defect.
-version: 1.4.1
+version: 1.5.0
 ---
 
 # Write CAFE Playbook
@@ -60,10 +60,12 @@ version: 1.4.1
   steps, gates, QA ownership, or publication behavior. The resolved graph
   remains authoritative.
 - Set `playbook.conversation_locale` to a BCP 47 language tag such as `zh-TW`
-  or `en-US` when the workflow driver should use a fixed conversation language.
-  Use `auto` only when the current user's language should be inherited. Locale
-  controls driver-to-user prose, not commands, identifiers, payload keys, or
-  quoted text.
+  or `en-US` to supply the playbook default conversation language. It is the
+  third precedence tier under `docs/language-policy.md`, below an explicit user
+  instruction and a reliably inferred user preference. Use `auto` only to leave
+  it unresolved. Locale controls user-facing prose, not commands, identifiers,
+  payload keys, or quoted text, and changing it does not change the language of
+  an existing workflow.
 - Define only roles the steps actually use. Choose an existing agent and CLI that are available for that role.
 - Give every step an explicit skill, role, artifact contract, allowed tools, hooks, valid intents, and complete `"on"` map.
 - Resolve each selected skill's `workflow.required_tools` and include every mandatory dependency in `allowed_tools`; validation rejects an incomplete binding.

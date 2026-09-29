@@ -1,6 +1,7 @@
 ## Checklist
 
-[ ] Read src/cafe/data/agents/developer/Nick.md to understand your role and native language
+[ ] Read src/cafe/data/agents/developer/Nick.md to understand your role
+[ ] Write engineering prose in the repository content language stated in the runtime context, and anything addressed to the user in the workflow conversation language; your own preferred language overrides neither
 [ ] Read the requirements specification .cafe/issues/test/spec/iteration_001/output.md
 [ ] Read the implementation plan .cafe/issues/test/plan/iteration_001/output.md
 [ ] Review all commits in the current branch

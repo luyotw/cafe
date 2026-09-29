@@ -68,6 +68,7 @@ except ModuleNotFoundError:
     raise
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from conversation_locale_adapter import contract_locale_snapshot  # noqa: E402, I001
 from render_workflow_progress import render_progress  # noqa: E402, I001
 
 ModelChain = list[tuple[str, str]]
@@ -622,7 +623,17 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
         user_values=args.user_required,
         driver_values=args.driver_confirmable,
     )
-    effective_locale = args.effective_locale or model.playbook.conversation_locale
+    # Once a workflow exists, the snapshot mirrors the generic authority; only a
+    # workflow being created resolves from a supplied preference or the playbook.
+    issue_dir = args.issue_dir or project_root / ".cafe" / "issues" / args.issue_name
+    locale_snapshot = contract_locale_snapshot(
+        issue_dir,
+        playbook_id=args.playbook_id,
+        playbook_locale=model.playbook.conversation_locale,
+        declared_value=args.effective_locale,
+        declared_source=args.locale_source,
+    )
+    effective_locale = locale_snapshot["value"]
     if effective_locale.lower() == "auto":
         raise ValueError("--effective-locale is required when the playbook locale is auto")
     _preflight_reports(args)
@@ -674,12 +685,7 @@ def build_confirmed_proposal(args: argparse.Namespace) -> dict[str, Any]:
         "delivery_contract": _kickoff_delivery_contract(
             args, capability_choices=capability_choices
         ),
-        "locales": {
-            "conversation": {
-                "value": effective_locale,
-                "source": args.locale_source or f"playbook:{args.playbook_id}",
-            },
-        },
+        "locales": {"conversation": locale_snapshot},
         "confirmation_contract": {
             "user_required": user_required,
             "driver_confirmable": driver_confirmable,

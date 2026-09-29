@@ -239,7 +239,11 @@ def test_registered_slack_human_task_capability_has_fixed_boundary(tmp_path: Pat
         "step",
         "task_type",
     }
-    assert set(manifest.arguments.properties) == set(manifest.arguments.required)
+    # The conversation locale is declared but optional so a request produced
+    # before this contract existed is still accepted.
+    assert set(manifest.arguments.properties) == set(manifest.arguments.required) | {
+        "conversation_locale"
+    }
     assert manifest.effects.network_destinations == (SLACK_DESTINATION,)
     assert manifest.effects.writes == ()
     assert manifest.credentials == (SLACK_CREDENTIAL,)

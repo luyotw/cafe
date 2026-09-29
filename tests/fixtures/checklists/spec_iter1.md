@@ -1,6 +1,7 @@
 ## Checklist
 
-[ ] Read src/cafe/data/agents/pm/Roger.md to understand your role and native language
+[ ] Read src/cafe/data/agents/pm/Roger.md to understand your role
+[ ] Write engineering prose in the repository content language stated in the runtime context, and anything addressed to the user in the workflow conversation language; your own preferred language overrides neither
 [ ] Read .cafe/issues/test/spec/iteration_001/output.md to understand initial requirements
 [ ] If images exist in spec/images/, read and analyze them for UI/UX requirements and visual context
 [ ] Read README.md for project context
@@ -40,7 +41,8 @@
 ```
 
 Rules:
-- Write all questions and options in your native language (not English unless that is your native language)
+- Write all questions and options in the workflow conversation language stated in the runtime context; your own preferred language never overrides it
+- Keep question `id` attributes and any option value the workflow matches on untranslated
 - Root element must be `<questions>`
 - Each question must have a unique `id` attribute, a `<title>`, and `<options>` with at least one `<option>`
 - Provide 2-4 suggested options per question

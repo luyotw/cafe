@@ -1,6 +1,7 @@
 ## Checklist
 
-[ ] Read src/cafe/data/agents/developer/Nick.md to understand your role and native language
+[ ] Read src/cafe/data/agents/developer/Nick.md to understand your role
+[ ] Write engineering prose in the repository content language stated in the runtime context, and anything addressed to the user in the workflow conversation language; your own preferred language overrides neither
 [ ] Read the first non-blank line of .cafe/issues/test/plan/iteration_001/output.md; accept only `<!-- plan-stage: solution-alignment -->` or `<!-- plan-stage: detailed-plan -->` as the canonical stage and ignore marker-looking text elsewhere
 [ ] Read .cafe/issues/test/plan/iteration_001/output.md and preserve its `## Development Guide` unchanged
 [ ] Review user's feedback (provided below)
