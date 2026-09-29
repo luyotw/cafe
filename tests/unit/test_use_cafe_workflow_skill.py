@@ -136,6 +136,7 @@ def test_manager_projects_missing_confirmed_user_context_through_declared_inputs
     assert "declared schema **and semantic purpose**" in running
     assert "workflow `--user-input`" in running
     assert "current command and target step support it" in normalized
+    assert "--user-handoff" in running
     assert "Never replace a task-required answer" in normalized
     assert "use `--start-step` just to carry context" in normalized
     assert "not delivery to another iteration or step" in normalized

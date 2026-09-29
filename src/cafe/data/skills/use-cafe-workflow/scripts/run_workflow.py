@@ -437,7 +437,32 @@ def _parser() -> argparse.ArgumentParser:
         "--alignment-input",
         help="Explicit JSON for an authorized durable alignment checkpoint.",
     )
+    parser.add_argument(
+        "--user-handoff",
+        help="Explicit JSON for a user-owned durable handoff redirect.",
+    )
     return parser
+
+
+def _validate_user_handoff_input(raw: str | None) -> str | None:
+    """Validate the transport envelope; the CLI validates durable task authority."""
+    if raw is None:
+        return None
+    try:
+        payload = json.loads(raw, object_pairs_hook=_exact_object)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ValueError("user handoff must be valid JSON") from exc
+    expected = {"type", "workflow_id", "human_task_id", "target", "input", "request_id"}
+    if not isinstance(payload, dict) or set(payload) != expected or payload.get("type") != "user_handoff":
+        raise ValueError("user handoff has an invalid envelope")
+    if any(
+        not isinstance(payload.get(key), str) or not payload[key].strip()
+        for key in expected - {"type"}
+    ):
+        raise ValueError("user handoff fields must be non-empty strings")
+    if len(payload["input"].encode("utf-8")) > 65_536:
+        raise ValueError("user handoff input exceeds the 64 KiB limit")
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
 def run(
@@ -494,12 +519,17 @@ def run(
         if confirmed_mode != mode:
             raise ValueError("requested Manager mode differs from the confirmed contract")
         _validate_checkout(contract, project_root)
+        if args.alignment_input is not None and args.user_handoff is not None:
+            raise ValueError("alignment input and user handoff cannot be combined")
         alignment_input = _validate_alignment_input(
             args.alignment_input,
             issue_dir=issue_dir,
             state=state,
             contract=contract,
         )
+        user_handoff = _validate_user_handoff_input(args.user_handoff)
+        if user_handoff is not None and not _is_user_boundary(state):
+            raise ValueError("explicit user handoff requires a current user-owned boundary")
         if mode == "event-driven":
             _validate_event_binding(
                 issue_dir=issue_dir,
@@ -512,7 +542,8 @@ def run(
     except (OSError, ValueError) as exc:
         return _launch_failed(mode, str(exc))
 
-    if _is_user_boundary(state) and alignment_input is None:
+    continuation_input = alignment_input or user_handoff
+    if _is_user_boundary(state) and continuation_input is None:
         _emit_directive(
             mode=mode,
             action="await_user",
@@ -543,8 +574,8 @@ def run(
         command.append("--background")
     if mode == "event-driven":
         command.extend(["--on-workflow-event", CALLBACK_ID])
-    if alignment_input is not None:
-        command.extend(["--user-input", alignment_input])
+    if continuation_input is not None:
+        command.extend(["--user-input", continuation_input])
 
     try:
         process = process_factory(

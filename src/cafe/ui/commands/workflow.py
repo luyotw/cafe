@@ -48,6 +48,7 @@ from cafe.ui.cli_shared import (
 )
 from cafe.ui.human_tasks import (
     apply_durable_human_task_payload_if_present,
+    apply_explicit_user_handoff_if_present,
     apply_human_task_payload,
 )
 from cafe.utils.config import ConfigError, validate_directories_exist
@@ -1046,6 +1047,27 @@ def workflow(
                             allowed_steps=step_keys,
                         )
                         from_step = getattr(contract, "from_step", None) or blackboard.current_step
+                        explicit_handoff = apply_explicit_user_handoff_if_present(
+                            issue_dir=issue_dir,
+                            playbook_data=playbook_data,
+                            blackboard=blackboard,
+                            raw_payload=user_input,
+                            source="command",
+                        )
+                        if explicit_handoff is not None:
+                            if explicit_handoff.rejection is not None:
+                                console.print(
+                                    f"[yellow]{explicit_handoff.rejection.message}[/yellow]"
+                                )
+                                console.print(
+                                    f"[dim]{explicit_handoff.rejection.correction_guidance}[/dim]"
+                                )
+                                if background:
+                                    raise typer.Exit(1)
+                                return
+                            user_input = None
+                            pending_start_step = explicit_handoff.target
+                            continue
                         durable_result = apply_durable_human_task_payload_if_present(
                             issue_dir=issue_dir,
                             playbook_data=playbook_data,
