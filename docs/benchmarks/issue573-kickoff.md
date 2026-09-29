@@ -2,7 +2,7 @@
 
 ## Status
 
-The local Claude command/helper boundary check passed. Two Codex baseline A attempts remain invalid observations because their read-only command sandbox could not start in this container. The first authorized Claude baseline A invocation was also rejected before prompt processing by the account five-hour session limit (HTTP 429, zero input/output tokens, zero tools); it is an invalid attempt and counts toward the 23-call cap. The user authorized 21 valid Claude preparations within that total cap, so the remaining call budget cannot now cover all 21 valid runs. A separate Claude native `Read` diagnostic succeeded, but it did not verify the helper command path.
+The local Claude command/helper boundary check passed. Two Codex baseline A attempts remain invalid observations because their read-only command sandbox could not start in this container. The first authorized Claude baseline A invocation was also rejected before prompt processing by the account five-hour session limit (HTTP 429, zero input/output tokens, zero tools); it is an invalid attempt and counts toward the 23-call cap. The CLI reported reset at `2026-09-29 21:00 Asia/Taipei`. The user directed us to use the remaining 20 authorized attempts after reset, beginning with six valid baselines. A separate Claude native `Read` diagnostic succeeded, but it did not verify the helper command path.
 
 The required pre-change revision is `6ce6bddade03e6ee31a60f437accd4d557467c50`. The current development worktree has not changed normal Manager preparation guidance, so that baseline remains reproducible.
 
@@ -67,3 +67,11 @@ Report end-to-end elapsed time and preparation excluding human waiting. Use the 
 ## Run limitations
 
 Codex reports session events and wall-clock bounds; it did not expose a separate model-reasoning duration in its attempts. Human wait is zero because the accepted answers are fixed inputs. The two Codex partial proposals are not semantically complete and cannot support a timing comparison. Retrying with `sandbox_network_access=true` still failed during read-only sandbox startup with the same `RTM_NEWADDR: Operation not permitted` boundary. The first formal Claude attempt was rejected before prompt processing due to the account five-hour limit, so it produced no proposal and exercised no tools. The Claude `Read` diagnostic did not verify helper execution. Local validation confirmed the Claude CLI flags, restricted exact-command configuration, and helper discovery with isolated cache/config paths without a provider call. All subsequent attempts, if the provider limit clears, must remain within the original 23-call total; the 3 failed attempts leave at most 20 calls for valid preparations, fewer than the planned 21.
+
+## Pre-reset verification
+
+Before the provider reset, the baseline archive was compared with Git revision `6ce6bddade03e6ee31a60f437accd4d557467c50`: all 684 tracked paths, blob contents, and file modes match exactly, and no path is writable. The archive's nineteen lost executable bits were restored without adding write permission. The helper runner remains `/tmp/cafe-573-tool-surface-xtoekfnu/manager_helper.py`, SHA-256 `d5c957e948891cb6ea43c84ea4798db269f73199e6b39726007d6c48625d068b`.
+
+The fixed A and B request hashes remain `19fb10197b5d26f654d99b4b0cd563d14a1be142c9ccfb6ed48a11afda78b280` and `960e3b8ed55a5b7de5c8455f836164b946c4c2285a994d126b56dacd246704be`. Their prompt hashes are respectively `086dbc4cc1d3f258b2bd79af259339ae10eeaca3305604e8bf72870880a7ce46` and `dc1516efca94b75887b2ffccf30c6c1bc3396585fcf908e7d6f91c4454f01e92`. The valid baseline run directories are prepared with isolated config/cache folders; they contain no provider results yet.
+
+The PLAN-013 targeted regressions were rerun: the seven kickoff modules passed 30 tests; the Manager skill selection passed 91 (72 deselected; one existing Pydantic serializer warning); locale passed 10, catalog resolution 20, and event-driver boundary 4. These local checks used no provider calls. The 21-valid-preparation target and all per-condition sample counts remain unchanged.
