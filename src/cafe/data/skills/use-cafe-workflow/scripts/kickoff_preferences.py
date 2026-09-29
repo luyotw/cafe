@@ -91,9 +91,12 @@ class PreferenceStore:
         if not isinstance(key, str) or not key.strip():
             raise ValueError("Preference key is required")
         store = self._store(scope)
-        records = store.read()
-        records[key] = {"value": value, "scope": scope, "origin": origin}
-        store.write(records)
+        store.update(
+            lambda records: {
+                **records,
+                key: {"value": value, "scope": scope, "origin": origin},
+            }
+        )
         return True
 
     def effective(self, key: str, *, explicit: Any = None, defaults: Any = None) -> EffectivePreference:
@@ -110,12 +113,15 @@ class PreferenceStore:
 
     def clear(self, key: str, *, scope: str) -> bool:
         store = self._store(scope)
-        records = store.read()
-        if key not in records:
-            return False
-        del records[key]
-        store.write(records)
-        return True
+        found = False
+
+        def remove(records: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+            nonlocal found
+            found = key in records
+            return {name: value for name, value in records.items() if name != key}
+
+        store.update(remove)
+        return found
 
 
 def canonical_language_input(record: dict[str, Any]) -> dict[str, str]:

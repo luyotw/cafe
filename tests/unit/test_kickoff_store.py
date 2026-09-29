@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -52,6 +53,21 @@ def test_failed_atomic_replace_preserves_previous_record(
     monkeypatch.undo()
     assert store.read() == {"language": {"value": "en-US"}}
     assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_concurrent_transactions_preserve_committed_keys(tmp_path: Path) -> None:
+    module = load_kickoff_module("_kickoff_store")
+    store = module.VersionedJsonStore(
+        tmp_path / "preferences.json", schema_version=1, collection="records"
+    )
+
+    def save(index: int) -> None:
+        store.update(lambda records: {**records, f"key-{index}": {"value": index}})
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(save, range(24)))
+
+    assert set(store.read()) == {f"key-{index}" for index in range(24)}
 
 
 def test_repository_identity_shares_linked_worktrees_only(tmp_path: Path) -> None:

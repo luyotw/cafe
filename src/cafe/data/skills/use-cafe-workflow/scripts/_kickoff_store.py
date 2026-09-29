@@ -48,10 +48,13 @@ class VersionedJsonStore:
 
     def read(self) -> dict[str, dict[str, Any]]:
         with _lock(self.path):
-            try:
-                document = json.loads(self.path.read_text(encoding="utf-8"))
-            except (FileNotFoundError, OSError, json.JSONDecodeError):
-                return {}
+            return self._read_unlocked()
+
+    def _read_unlocked(self) -> dict[str, dict[str, Any]]:
+        try:
+            document = json.loads(self.path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            return {}
         if not isinstance(document, dict) or document.get("schema_version") != self.schema_version:
             return {}
         records = document.get(self.collection)
@@ -63,30 +66,46 @@ class VersionedJsonStore:
             if isinstance(key, str) and isinstance(value, dict)
         }
 
-    def write(self, records: dict[str, dict[str, Any]]) -> None:
+    def _write_unlocked(self, records: dict[str, dict[str, Any]]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        descriptor, name = tempfile.mkstemp(
+            prefix=f".{self.path.name}.", suffix=".tmp", dir=self.path.parent
+        )
+        temporary = Path(name)
+        try:
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                json.dump(
+                    {"schema_version": self.schema_version, self.collection: records},
+                    stream,
+                    sort_keys=True,
+                    indent=2,
+                )
+                stream.write("\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, self.path)
+            self.path.chmod(0o600)
+        except OSError as exc:
+            temporary.unlink(missing_ok=True)
+            raise StoreError(f"Could not persist kickoff store: {self.path}") from exc
+
+    def write(self, records: dict[str, dict[str, Any]]) -> None:
         with _lock(self.path):
-            descriptor, name = tempfile.mkstemp(
-                prefix=f".{self.path.name}.", suffix=".tmp", dir=self.path.parent
-            )
-            temporary = Path(name)
-            try:
-                os.fchmod(descriptor, 0o600)
-                with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-                    json.dump(
-                        {"schema_version": self.schema_version, self.collection: records},
-                        stream,
-                        sort_keys=True,
-                        indent=2,
-                    )
-                    stream.write("\n")
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                os.replace(temporary, self.path)
-                self.path.chmod(0o600)
-            except OSError as exc:
-                temporary.unlink(missing_ok=True)
-                raise StoreError(f"Could not persist kickoff store: {self.path}") from exc
+            self._write_unlocked(records)
+
+    def update(self, mutator) -> dict[str, dict[str, Any]]:
+        """Apply one read-modify-replace transaction without losing peer updates."""
+        with _lock(self.path):
+            records = self._read_unlocked()
+            updated = mutator(records)
+            if not isinstance(updated, dict) or any(
+                not isinstance(key, str) or not isinstance(value, dict)
+                for key, value in updated.items()
+            ):
+                raise StoreError("Kickoff store update must return string-keyed records")
+            self._write_unlocked(updated)
+            return updated
 
 
 def repository_identity(project_root: Path) -> str:
