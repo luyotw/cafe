@@ -132,7 +132,7 @@ def test_runtime_returns_report_format_rejection_to_same_producer(
 
     result = runtime.run(start_step="inspect")
 
-    assert len(manager.calls) == (2 if repair_succeeds else 4)
+    assert len(manager.calls) == (2 if repair_succeeds else 3)
     for name, prompt, continuation, allowed_tools in manager.calls[1:]:
         assert name == "Inspector"
         assert "exactly one '## Todo List' section" in prompt

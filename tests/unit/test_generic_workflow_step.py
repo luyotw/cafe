@@ -126,6 +126,7 @@ class FakeAgentManager:
         allowed_directories=None,
         streaming_output_file=None,
         phase_name=None,
+        continuation=None,
     ):
         self.prompts.append(prompt)
         self.allowed_tools_calls.append(list(allowed_tools) if allowed_tools is not None else None)
@@ -3875,6 +3876,8 @@ def test_plan_malformed_todo_retries_before_confirming(
         ["ready_for_review", "ready_for_review"],
         on_execute=write_plan_attempt,
     )
+    manager.get_last_cli = lambda: AgentCLI.CODEX
+    manager.get_last_session_id = lambda: "session-1"
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name="issue-plan-todo-retry",
@@ -3902,7 +3905,7 @@ def test_plan_malformed_todo_retries_before_confirming(
     assert reloaded.handoff_contract.intent == HandoffIntent.CONFIRM_OUTPUT
 
 
-def test_plan_malformed_todo_exhaustion_resets_confirmation_baton(
+def test_plan_malformed_todo_exhaustion_preserves_untrusted_confirmation_baton(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -3925,6 +3928,8 @@ def test_plan_malformed_todo_exhaustion_resets_confirmation_baton(
         ["ready_for_review"] * 4,
         on_execute=write_invalid_plan,
     )
+    manager.get_last_cli = lambda: AgentCLI.CODEX
+    manager.get_last_session_id = lambda: "session-1"
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name="issue-plan-todo-invalid",
@@ -3936,26 +3941,20 @@ def test_plan_malformed_todo_exhaustion_resets_confirmation_baton(
         interactive=False,
     )
 
-    result = executor.execute_step("plan", playbook["steps"]["plan"], state)
+    from cafe.core.artifact_validation import ArtifactCorrectionExhausted
 
-    assert manager.execute_call_count == 4
-    assert result.artifact_ready is False
-    assert result.artifacts == {}
-    assert any(event["type"] == "checklist_validation_failed" for event in result.events)
+    with pytest.raises(ArtifactCorrectionExhausted) as failure:
+        executor.execute_step("plan", playbook["steps"]["plan"], state)
+
+    assert manager.execute_call_count == 3
+    assert failure.value.budget.consumed == 2
+    assert not (iteration_dir / "artifact.json").exists()
+    assert state.artifacts == {}
+    # The producer's proposed human route is not trusted publication, and
+    # report failure must not masquerade as a checklist failure.
     baton = json.loads((issue_dir / "next_step.txt").read_text(encoding="utf-8"))
-    assert baton == {
-        "version": 1,
-        "to_owner": "agent",
-        "to_step": "plan",
-        "intent": "await_agent",
-    }
-    reloaded = BlackboardStore(issue_dir).load_or_create("plan")
-    assert reloaded.handoff_contract is not None
-    assert reloaded.handoff_contract.to_owner == HandoffOwner.AGENT
-    assert reloaded.handoff_contract.to_step == "plan"
-    assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
-    assert reloaded.handoff_contract.status_code == "CHECKLIST_VALIDATION_FAILED"
-    assert reloaded.handoff_contract.source == "workflow.completion_validation"
+    assert baton["intent"] == "confirm_output"
+    assert not any(e.event_type == "step_completed" for e in state.events)
 
 
 def test_plan_non_interactive_ready_for_review_hands_off_to_user(
@@ -8731,6 +8730,8 @@ def test_outcome_only_handoff_retries_invalid_produced_todo(
         )
 
     manager = FakeAgentManager([""] * 4, on_execute=write_attempt)
+    manager.get_last_cli = lambda: AgentCLI.CODEX
+    manager.get_last_session_id = lambda: "session-1"
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name="output-format-retry",
@@ -8742,9 +8743,15 @@ def test_outcome_only_handoff_retries_invalid_produced_todo(
     )
     state = BlackboardStore(issue_dir).load_or_create("spec")
 
-    result = executor.execute_step("spec", playbook["steps"]["spec"], state)
+    from cafe.core.artifact_validation import ArtifactCorrectionExhausted
 
-    assert manager.execute_call_count == (2 if repair_succeeds else 4)
+    if repair_succeeds:
+        result = executor.execute_step("spec", playbook["steps"]["spec"], state)
+    else:
+        with pytest.raises(ArtifactCorrectionExhausted):
+            executor.execute_step("spec", playbook["steps"]["spec"], state)
+
+    assert manager.execute_call_count == (2 if repair_succeeds else 3)
     assert all("exactly one '## Todo List' section" in p for p in manager.prompts[1:])
     assert all(p == pinned_checklists[0] for p in pinned_checklists)
     assert pinned_checklists[0]["gates"] == []
@@ -8755,14 +8762,11 @@ def test_outcome_only_handoff_retries_invalid_produced_todo(
         manager.execute_call_count - 1
     )
     assert HumanTaskRecordStore(issue_dir).tasks() == ()
-    assert result.artifact_ready is repair_succeeds
     if repair_succeeds:
         assert parse_todo_list(Path(result.artifacts["report"]).read_text()) == ()
         assert (iteration_dir / "artifact.json").exists()
     else:
-        assert result.artifacts == {}
         assert not (iteration_dir / "artifact.json").exists()
-        assert state.handoff_contract.status_code == "CHECKLIST_VALIDATION_FAILED"
 
 
 def test_completion_contract_failure_retries_same_producer(tmp_path: Path) -> None:
@@ -8942,6 +8946,8 @@ workflow:
 
     manager = FakeAgentManager(["needs_changes", "needs_changes"], on_execute=write_attempt)
     state = BlackboardStore(issue_dir).load_or_create("inspection")
+    manager.get_last_cli = lambda: AgentCLI.CODEX
+    manager.get_last_session_id = lambda: "session-1"
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name="manual-todo-retry",
@@ -8955,7 +8961,8 @@ workflow:
     result = executor.execute_step("inspection", playbook["steps"]["inspection"], state)
 
     assert manager.execute_call_count == 2
-    assert "phase completion contract failed" in manager.prompts[1]
+    assert "findings" in manager.prompts[1]
+    assert "malformed item" in manager.prompts[1]
     assert result.artifact_ready is True
     assert "findings" in result.artifacts
     assert "— Work: fix wiring —" in Path(result.artifacts["findings"]).read_text(

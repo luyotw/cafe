@@ -1167,13 +1167,22 @@ class BlackboardWorkflowRuntime:
         contract = self.blackboard.handoff_contract
         if contract is None:
             raise RuntimeError("agent interruption did not create a handoff contract")
+        prompt = policy.prompt
+        if reason == "agent_artifact_format_exhausted":
+            rejection = next((
+                event.data.get("detail", "") for event in reversed(self.blackboard.events)
+                if event.event_type == "step_interrupted"
+                and event.data.get("step") == current_step
+                and event.data.get("reason") == reason
+            ), "")
+            prompt = f"{prompt}\n\n{rejection}"
         materialization = records.materialize_with_status(
             workflow_id=self.blackboard.workflow_id,
             step=current_step,
             iteration=iteration,
             trigger=AGENT_EXECUTION_INTERRUPTED_TRIGGER,
             policy_id=policy.id,
-            prompt=policy.prompt,
+            prompt=prompt,
             expected_result=policy.model_dump(mode="json"),
             continuations=binding.outcomes,
             assignee_type="user",
@@ -2541,9 +2550,13 @@ class BlackboardWorkflowRuntime:
             from cafe.agents.executor import AgentExecutionError
             from cafe.core.types import CriticalPhaseError
 
+            from cafe.core.artifact_validation import ArtifactCorrectionExhausted
+
             reason = "agent_error"
             detail = str(exc)
-            if isinstance(exc, (AgentExecutionError, CriticalPhaseError)) and getattr(
+            if isinstance(exc, ArtifactCorrectionExhausted):
+                reason = "agent_artifact_format_exhausted"
+            elif isinstance(exc, (AgentExecutionError, CriticalPhaseError)) and getattr(
                 exc, "error_type", None
             ):
                 reason = f"agent_{exc.error_type}"
@@ -3336,6 +3349,17 @@ class BlackboardWorkflowRuntime:
             return int(iteration_dir.name.removeprefix("iteration_"))
         except ValueError:
             return 1
+
+    def _preserve_artifact_correction_iteration(self, current_step: str) -> None:
+        """A rejected baton must not grant a repaired report a new iteration budget."""
+        iteration_dir = self._latest_iteration_dir(current_step)
+        if iteration_dir is None:
+            return
+        context_file = iteration_dir / "iteration.json"
+        if context_file.is_file():
+            context = json.loads(context_file.read_text(encoding="utf-8"))
+            if context.get("artifact_correction"):
+                self._mark_latest_iteration_completion_untrusted(current_step)
 
     def _mark_latest_iteration_completion_untrusted(self, current_step: str) -> None:
         """Keep a clean provider exit retryable when workflow completion was unusable."""
@@ -4573,6 +4597,7 @@ class BlackboardWorkflowRuntime:
                         return checklist_rejection
                     break
                 except BatonRejected as br:
+                    self._preserve_artifact_correction_iteration(current_step)
                     retry_num = _baton_attempt + 1
                     self.blackboard_store.record_event(
                         self.blackboard,
@@ -4968,6 +4993,7 @@ class BlackboardWorkflowRuntime:
                             continue
                     break
                 except BatonRejected as br:
+                    self._preserve_artifact_correction_iteration(current_step)
                     retry_num = _baton_attempt + 1
                     self.blackboard_store.record_event(
                         self.blackboard,

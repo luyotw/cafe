@@ -76,13 +76,18 @@ from cafe.core.status_codes import (
     transition_map_key,
 )
 from cafe.core.takeover import build_takeover_snapshot
+from cafe.core.artifact_validation import (
+    ArtifactCorrectionBudget,
+    ArtifactFormatError,
+    MAX_ARTIFACT_CORRECTIONS,
+    validate_artifact_syntax,
+)
 from cafe.core.todo import (
     MAX_TODO_ITEMS,
     PlanTodoDocumentKind,
     TodoContractError,
     TodoSourceArtifact,
     parse_plan_todo_document,
-    parse_todo_identity_continuity,
     parse_todo_list,
     plan_work_fingerprint,
     projection_todo_items,
@@ -775,6 +780,16 @@ class GenericWorkflowStepExecutor(Phase):
 
         def run_agent(prompt: str) -> str:
             last_prompt[:] = [prompt]
+            # A baton retry or automatic re-entry is still the same correction
+            # sequence. Reserve its opportunity before invoking any provider.
+            budget = self._load_artifact_correction(iteration_dir)
+            recovery_authorized = self._consume_artifact_recovery_authorization(
+                iteration_dir, workflow_id=blackboard_state.workflow_id, step_name=step_name
+            )
+            if budget.rejections:
+                if not recovery_authorized:
+                    budget.consume()
+                self._save_artifact_correction(iteration_dir, budget)
             self._persist_agent_invocation_marker(
                 iteration_dir=iteration_dir,
                 agent_invoked=True,
@@ -789,7 +804,7 @@ class GenericWorkflowStepExecutor(Phase):
             )
 
             def execute_agent() -> tuple[str, Optional[PhaseStatusCode]]:
-                return self._execute_agent_iteration(
+                response, status = self._execute_agent_iteration(
                     agent_name=agent_name,
                     prompt=prompt,
                     user_input=resolved_user_input,
@@ -808,6 +823,20 @@ class GenericWorkflowStepExecutor(Phase):
                         iteration_dir=iteration_dir,
                     ),
                 )
+
+                response = self._correct_artifact_format(
+                    response=response,
+                    step_name=step_name,
+                    step_def=step_def,
+                    blackboard_state=blackboard_state,
+                    agent_name=agent_name,
+                    allowed_tools=attempt_allowed_tools,
+                    output_file=output_file,
+                    checklist_file=checklist_file,
+                    iteration_dir=iteration_dir,
+                    budget=budget,
+                )
+                return response, status
 
             if is_hybrid_portion:
                 response, _ = self._preserve_hybrid_control_files(
@@ -949,19 +978,14 @@ class GenericWorkflowStepExecutor(Phase):
                 auto_continue=auto_continue,
             )
         outbound_validation_required = initial_outbound_validation[2]
-        # Artifact publication validates Todo syntax even when the current route
-        # has no checklist or causal Todo projection. Return that rejection to
-        # the producer through the existing bounded correction loop first.
-        produced_todo_invalid = (
-            agent_was_invoked
-            and execution.artifact_ready
-            and not self._validate_produced_todo_output(output_file)[0]
-        )
+        # Hooks must not turn a valid producer submission into an invalid
+        # artifact and then replay the pipeline through checklist recovery.
+        if agent_was_invoked and execution.artifact_ready:
+            self._validate_current_artifact(step_name, step_def, output_file)
         checklist_validation_failed = False
         if (
             checklist_validation_required
             or (agent_was_invoked and outbound_validation_required)
-            or produced_todo_invalid
         ):
             resolved_user_input = self._get_resolved_iteration_user_input(step_name)
 
@@ -969,11 +993,6 @@ class GenericWorkflowStepExecutor(Phase):
                 current_response: str,
                 current_status: Optional[PhaseStatusCode],
             ) -> tuple[bool, str]:
-                todo_passed, todo_detail = self._validate_produced_todo_output(
-                    output_file
-                )
-                if not todo_passed:
-                    return False, todo_detail
                 return self._validate_outbound_causal_todo(
                     step_name=step_name,
                     step_def=step_def,
@@ -1190,6 +1209,127 @@ class GenericWorkflowStepExecutor(Phase):
             feedback_source_identities=feedback_batch_source_identities,
             artifact_metadata=artifact_metadata,
         )
+
+    def _consume_artifact_recovery_authorization(
+        self, iteration_dir: Path, *, workflow_id: str, step_name: str,
+    ) -> bool:
+        """Honor one explicit user retry without resetting the automatic budget."""
+        records = HumanTaskRecordStore(self.issue_dir)
+        if not records.exists:
+            return False
+        tasks = [
+            task for task in records.tasks()
+            if task.workflow_id == workflow_id and task.step == step_name
+            and task.iteration == self.iteration
+            and task.trigger == AGENT_EXECUTION_INTERRUPTED_TRIGGER
+            and task.policy_id == AGENT_EXECUTION_INTERRUPTED_TASK_ID
+            and task.status is HumanTaskStatus.COMPLETED
+        ]
+        if not tasks:
+            return False
+        task = max(tasks, key=lambda item: (item.completed_at or "", item.id))
+        result = records.get_result(task.id)
+        if result is None:
+            return False
+        decision = result.payload.get("decision")
+        if decision not in {"retry", AGENT_EXECUTION_FRESH_SESSION_DECISION}:
+            return False
+        if task.continuations.get(decision) != step_name:
+            return False
+        context_file = self._resolve_iteration_context_file(iteration_dir)
+        metadata = json.loads(context_file.read_text(encoding="utf-8"))
+        if metadata.get("artifact_correction_recovery_result") == result.id:
+            return False
+        metadata["artifact_correction_recovery_result"] = result.id
+        context_file.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+        return True
+
+    def _load_artifact_correction(self, iteration_dir: Path) -> ArtifactCorrectionBudget:
+        context_file = self._resolve_iteration_context_file(iteration_dir)
+        metadata = json.loads(context_file.read_text(encoding="utf-8")) if context_file.exists() else {}
+        return ArtifactCorrectionBudget.from_dict(metadata.get("artifact_correction", {}))
+
+    def _save_artifact_correction(
+        self, iteration_dir: Path, budget: ArtifactCorrectionBudget,
+    ) -> None:
+        context_file = self._resolve_iteration_context_file(iteration_dir)
+        metadata = json.loads(context_file.read_text(encoding="utf-8"))
+        metadata["artifact_correction"] = budget.to_dict()
+        context_file.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    @staticmethod
+    def _validate_current_artifact(step_name: str, step_def: Dict[str, Any], output_file: Path) -> None:
+        if output_file.exists():
+            validate_artifact_syntax(
+                output_file.read_text(encoding="utf-8"), producer=step_name,
+                artifact=str(step_def.get("output_artifact", step_name)), path=str(output_file),
+            )
+
+    def _correct_artifact_format(
+        self, *, response: str, step_name: str, step_def: Dict[str, Any],
+        blackboard_state: BlackboardState, agent_name: str, allowed_tools: Optional[List[str]],
+        output_file: Path, checklist_file: Path, iteration_dir: Path,
+        budget: ArtifactCorrectionBudget,
+    ) -> str:
+        """Repair only the report, inside the existing execution lease, before hooks."""
+        context_file = self._resolve_iteration_context_file(iteration_dir)
+        metadata = json.loads(context_file.read_text(encoding="utf-8"))
+        protected_fields = (
+            "effective_checklist", "iteration", "step_name", "skill_name", "playbook_id",
+            "cli", "session_id", "model", "allowed_tools", "denied_tools", "session_continuation",
+        )
+        pinned = {key: metadata.get(key) for key in protected_fields}
+        checklist_bytes = checklist_file.read_bytes() if checklist_file.exists() else None
+        continuation = self._current_session_continuation()
+        allowed_directories = self._get_allowed_directories()
+        while True:
+            try:
+                self._validate_current_artifact(step_name, step_def, output_file)
+                return response
+            except ArtifactFormatError as error:
+                budget.reject(error)
+                self._save_artifact_correction(iteration_dir, budget)
+                budget.consume()
+                if not continuation.is_exact or not self._call_accepts_keyword(
+                    self.agent_manager.execute, "continuation"
+                ):
+                    raise RuntimeError("Report correction requires the exact producing session") from error
+                self._save_artifact_correction(iteration_dir, budget)
+                self._refresh_and_validate_workspace_inputs(
+                    step_def=step_def, blackboard_state=blackboard_state,
+                )
+                # Do not use the phase executor's broad failure recovery or cold
+                # takeover callback: a failed exact continuation remains a failure.
+                response, usage, _, _, streaming_log, _ = self.agent_manager.execute(
+                    agent_name,
+                    error.correction_prompt(remaining=MAX_ARTIFACT_CORRECTIONS - budget.consumed),
+                    continuation=continuation,
+                    phase_name=step_name,
+                    allowed_tools=allowed_tools,
+                    allowed_directories=allowed_directories,
+                    streaming_output_file=str(iteration_dir / "streaming.jsonl"),
+                )
+                self._merge_iteration_token_usage(usage)
+                self._refresh_and_validate_workspace_inputs(
+                    step_def=step_def, blackboard_state=blackboard_state,
+                )
+                current = json.loads(context_file.read_text(encoding="utf-8"))
+                current_checklist = checklist_file.read_bytes() if checklist_file.exists() else None
+                if current_checklist != checklist_bytes or any(
+                    current.get(key) != value for key, value in pinned.items()
+                ):
+                    raise RuntimeError("Report correction changed the pinned execution context")
+                actual_cli = getattr(self.agent_manager, "get_last_cli", lambda: continuation.cli)()
+                actual_session = getattr(
+                    self.agent_manager, "get_last_session_id", lambda: continuation.session_id
+                )()
+                if actual_cli != continuation.cli or actual_session != continuation.session_id:
+                    raise RuntimeError("Report correction did not preserve the producing session")
+                current["response"] = response
+                current.setdefault("streaming_log", []).extend(streaming_log or [])
+                # Never trust provider writes to the persisted budget.
+                current["artifact_correction"] = budget.to_dict()
+                context_file.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _persist_agent_invocation_marker(
         self,
@@ -3454,25 +3594,11 @@ class GenericWorkflowStepExecutor(Phase):
         todo_work_identities: Optional[dict[str, str]] = None
         todo_identity_baseline: Optional[dict[str, Any]] = None
         content = output_bytes.decode("utf-8")
-        plan_document = None
-        todo_items: tuple[Any, ...] | None = None
-        stripped_lines = [line.strip() for line in content.splitlines()]
-        first_nonblank = next((line for line in stripped_lines if line), "")
-        if first_nonblank.startswith("<!-- plan-stage:"):
-            try:
-                plan_document = parse_plan_todo_document(content)
-            except TodoContractError as exc:
-                raise ValueError(
-                    f"artifact {output_key!r} has an invalid Todo List: {exc}"
-                ) from exc
-            todo_items = plan_document.items
-        elif "## Todo List" in content:
-            try:
-                todo_items = parse_todo_list(content)
-            except TodoContractError as exc:
-                raise ValueError(
-                    f"artifact {output_key!r} has an invalid Todo List: {exc}"
-                ) from exc
+        syntax = validate_artifact_syntax(
+            content, producer=updated_by, artifact=output_key, path=output_path
+        )
+        plan_document = syntax.plan_document
+        todo_items = syntax.items
         if (
             plan_document is not None
             and plan_document.kind is PlanTodoDocumentKind.PROVISIONAL_ALIGNMENT
@@ -3500,7 +3626,7 @@ class GenericWorkflowStepExecutor(Phase):
                         "artifact": None,
                     }
         elif todo_items is not None:
-            continuity_proofs = parse_todo_identity_continuity(content)
+            continuity_proofs = syntax.continuity
             plan_items = [item for item in todo_items if item.source == "plan"]
             if plan_items:
                 todo_identities = {
@@ -3693,28 +3819,6 @@ class GenericWorkflowStepExecutor(Phase):
                 True,
             )
         return True, "", True
-
-    @staticmethod
-    def _validate_produced_todo_output(output_file: Path) -> tuple[bool, str]:
-        """Validate a produced Todo section before accepting its completion baton."""
-        if not output_file.exists():
-            return True, ""
-        try:
-            content = output_file.read_text(encoding="utf-8")
-        except (OSError, UnicodeError) as exc:
-            return False, f"The phase output is unreadable: {exc}."
-        if "## Todo List" not in content:
-            return True, ""
-        try:
-            parse_todo_list(content)
-        except TodoContractError as exc:
-            return (
-                False,
-                f"The phase output has an invalid Todo List: {exc}. "
-                "Use canonical rows with Source, Work, Closure, and Evidence fields, or "
-                "the exact marker 'No actionable work.'.",
-            )
-        return True, ""
 
     def _output_requires_contract_validation(
         self,
