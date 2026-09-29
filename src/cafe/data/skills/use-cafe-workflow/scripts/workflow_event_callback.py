@@ -2120,10 +2120,14 @@ def _stored_conversation_locale(issue_dir: Path) -> str:
     message only and never writes anything back.
     """
     try:
-        raw = json.loads((issue_dir / "blackboard.json").read_text(encoding="utf-8"))
-        stored = raw.get("conversation_locale")
+        raw = json.loads(
+            _read_bounded_text(issue_dir / "blackboard.json", label="blackboard.json")
+        )
     except (OSError, ValueError):
         return DEFAULT_CONVERSATION_LOCALE
+    if not isinstance(raw, dict):
+        return DEFAULT_CONVERSATION_LOCALE
+    stored = raw.get("conversation_locale")
     return stored if isinstance(stored, str) and stored.strip() else DEFAULT_CONVERSATION_LOCALE
 
 

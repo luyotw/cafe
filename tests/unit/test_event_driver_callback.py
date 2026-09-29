@@ -2449,6 +2449,60 @@ def test_callback_failure_uses_canonical_repository_route_and_deduplicates(
     assert list(receipts["records"].values())[0]["outcome"] == "sent"
 
 
+def test_callback_failure_notice_survives_blackboard_replacement_after_pending_receipt(
+    tmp_path: Path, monkeypatch
+) -> None:
+    callback = _callback_module()
+    driver_dir, _state, event = _contract_event_context(
+        callback, tmp_path, [("codex", "exact")], issue_name="issue456"
+    )
+    issue_dir = driver_dir.parent
+    blackboard_path = issue_dir / "blackboard.json"
+    manager_dir = callback._manager_dir(issue_dir)
+    write_receipts = callback._write_callback_failure_notifications
+    posts = []
+    monkeypatch.setattr(
+        callback,
+        "resolve_human_task_notification_repository_root",
+        lambda _issue_dir: tmp_path,
+    )
+    monkeypatch.setattr(
+        callback,
+        "load_human_task_notification_settings",
+        lambda: SimpleNamespace(enabled=True),
+    )
+    monkeypatch.setattr(callback, "load_slack_webhook_url", lambda **_kwargs: "webhook")
+    monkeypatch.setattr(
+        callback,
+        "post_slack_notification",
+        lambda _webhook, message, *, timeout_sec: posts.append(message),
+    )
+
+    def replace_blackboard_after_pending_write(directory, records):
+        write_receipts(directory, records)
+        if any(record.get("outcome") == "pending" for record in records.values()):
+            blackboard_path.write_text("[]", encoding="utf-8")
+
+    monkeypatch.setattr(
+        callback,
+        "_write_callback_failure_notifications",
+        replace_blackboard_after_pending_write,
+    )
+
+    callback._notify_callback_failure(
+        event, repository_root=tmp_path, error=TimeoutError("delivery unavailable")
+    )
+
+    callback._notify_callback_failure(
+        event, repository_root=tmp_path, error=TimeoutError("delivery unavailable")
+    )
+    receipt = json.loads(
+        (manager_dir / callback.FAILURE_NOTIFICATIONS_FILENAME).read_text(encoding="utf-8")
+    )
+    assert len(posts) == 1
+    assert next(iter(receipt["records"].values()))["outcome"] == "sent"
+
+
 def test_callback_and_slack_failure_leave_a_durable_receipt(tmp_path: Path, monkeypatch) -> None:
     callback = _callback_module()
     issue_dir = tmp_path / ".cafe" / "issues" / "issue456"
