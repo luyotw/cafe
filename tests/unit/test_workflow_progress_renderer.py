@@ -105,6 +105,25 @@ def _write_runtime_state(issue_dir: Path, state: dict) -> None:
         )
 
 
+def _append_runtime_event(issue_dir: Path, event: dict) -> None:
+    workflow_id = "workflow-1"
+    audit = AuditEventStore(issue_dir)
+    sequence = audit.reserve(workflow_id)
+    audit.commit(
+        workflow_id,
+        {
+            "timestamp": "2026-09-20T01:00:00+00:00",
+            "step": "",
+            "message": "",
+            "data": {},
+            **event,
+            "workflow_id": workflow_id,
+            "sequence": sequence,
+            "event_id": f"event-{sequence}",
+        },
+    )
+
+
 def _write_runtime(issue_dir: Path) -> None:
     issue_dir.mkdir(parents=True)
     _write_runtime_state(
@@ -526,6 +545,11 @@ def test_cli_requires_both_fixed_closeout_states() -> None:
 def test_previous_revision_does_not_approve_the_new_iteration(tmp_path: Path) -> None:
     issue_dir = tmp_path / "issue"
     _write_runtime(issue_dir)
+    records_path = issue_dir / "human_tasks.json"
+    records = json.loads(records_path.read_text(encoding="utf-8"))
+    records["tasks"][0]["completed_at"] = "2026-09-20T01:03:00+00:00"
+    records["results"][0]["payload"] = {"decision": "confirm", "continuation": "_done"}
+    records_path.write_text(json.dumps(records), encoding="utf-8")
     new_iteration = issue_dir / "publish-draft" / "iteration_002"
     new_iteration.mkdir(parents=True)
     (new_iteration / "iteration.json").write_text('{"iteration": 2}', encoding="utf-8")
@@ -541,6 +565,114 @@ def test_previous_revision_does_not_approve_the_new_iteration(tmp_path: Path) ->
     assert "○ publish-draft: user confirmation (manager may not act) · Pending" in rendered
     assert "✓ publish-draft: user confirmation (manager may not act) · Completed" not in rendered
     assert "→" not in rendered
+
+
+def test_post_confirmation_reentry_does_not_reopen_completed_confirmation(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / "issue"
+    _write_runtime(issue_dir)
+    records_path = issue_dir / "human_tasks.json"
+    records = json.loads(records_path.read_text(encoding="utf-8"))
+    records["tasks"][0]["continuations"]["confirm"] = "publish-draft"
+    records["tasks"][0]["completed_at"] = "2026-09-20T01:04:00+00:00"
+    records["results"][0]["payload"] = {
+        "decision": "confirm",
+        "continuation": "publish-draft",
+    }
+    records_path.write_text(json.dumps(records), encoding="utf-8")
+    reentry = issue_dir / "publish-draft" / "iteration_005"
+    reentry.mkdir(parents=True)
+    (reentry / "iteration.json").write_text(
+        '{"iteration": 5, "timestamp": "2026-09-20T01:04:02+00:00", "end_time": "2026-09-20T01:04:00+00:00"}',
+        encoding="utf-8",
+    )
+    _append_runtime_event(
+        issue_dir,
+        {
+            "timestamp": "2026-09-20T01:04:01+00:00",
+            "step": "publish-draft",
+            "event_type": "human_task_completed",
+            "data": {
+                "step": "publish-draft",
+                "trigger": "confirm_output",
+                "to_step": "publish-draft",
+            },
+        },
+    )
+    _append_runtime_event(
+        issue_dir,
+        {
+            "timestamp": "2026-09-20T01:04:02+00:00",
+            "step": "publish-draft",
+            "event_type": "step_started",
+            "data": {"step": "publish-draft", "attempt": 1},
+        },
+    )
+    _append_runtime_event(
+        issue_dir,
+        {
+            "timestamp": "2026-09-20T01:04:03+00:00",
+            "step": "資料盤點",
+            "event_type": "transition",
+            "data": {
+                "from": "publish-draft",
+                "to": "資料盤點",
+                "source_artifact": {"version": 3},
+                "transition_intent": "manual_handoff",
+            },
+        },
+    )
+
+    rendered = _module().render_progress(
+        playbook=_custom_playbook(),
+        contract=_contract(),
+        locale="en",
+        issue_dir=issue_dir,
+        driver_state=_unknown_closeout_state(),
+    )
+
+    assert "○ publish-draft: user confirmation (manager may not act) · Pending" in rendered
+
+    _append_runtime_event(
+        issue_dir,
+        {
+            "timestamp": "2026-09-20T01:04:04+00:00",
+            "step": "資料盤點",
+            "event_type": "transition",
+            "data": {
+                "from": "publish-draft",
+                "to": "資料盤點",
+                "source_artifact": {"version": 3},
+                "transition_intent": "await_agent",
+            },
+        },
+    )
+    rendered = _module().render_progress(
+        playbook=_custom_playbook(),
+        contract=_contract(),
+        locale="en",
+        issue_dir=issue_dir,
+        driver_state=_unknown_closeout_state(),
+    )
+
+    assert "✓ publish-draft: user confirmation (manager may not act) · Completed" in rendered
+
+    later_revision = issue_dir / "publish-draft" / "iteration_006"
+    later_revision.mkdir(parents=True)
+    (later_revision / "iteration.json").write_text(
+        '{"iteration": 6, "timestamp": "2026-09-20T01:05:00+00:00"}',
+        encoding="utf-8",
+    )
+    rendered = _module().render_progress(
+        playbook=_custom_playbook(),
+        contract=_contract(),
+        locale="en",
+        issue_dir=issue_dir,
+        driver_state=_unknown_closeout_state(),
+    )
+
+    assert "○ publish-draft: user confirmation (manager may not act) · Pending" in rendered
 
 
 def test_cli_without_confirmed_contract_reports_unestablished_workflow(tmp_path: Path) -> None:

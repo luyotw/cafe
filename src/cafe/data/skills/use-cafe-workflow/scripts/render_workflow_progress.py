@@ -432,6 +432,42 @@ def _runtime_progress(
     return statuses, iterations
 
 
+def _post_confirmation_handoff_iteration(
+    issue_dir: Path,
+    workflow_id: str,
+    step: str,
+    task_iteration: int,
+    completed_at: str,
+) -> int | None:
+    """Return the re-entry iteration that durably handed off after self-confirmation."""
+    candidates: list[tuple[int, str]] = []
+    for candidate in (issue_dir / step).glob("iteration_*"):
+        number = candidate.name.removeprefix("iteration_")
+        if not number.isdigit() or int(number) <= task_iteration:
+            continue
+        metadata = _read_json(candidate / "iteration.json")
+        timestamp = metadata.get("timestamp") if metadata is not None else None
+        if isinstance(timestamp, str) and timestamp >= completed_at:
+            candidates.append((int(number), timestamp))
+    candidates.sort()
+    events = list(AuditEventStore(issue_dir).iter_records(workflow_id))
+    for index, (iteration, started_at) in enumerate(candidates):
+        next_started_at = candidates[index + 1][1] if index + 1 < len(candidates) else None
+        for event in events:
+            timestamp = str(event.get("timestamp", ""))
+            if timestamp < started_at or (next_started_at is not None and timestamp >= next_started_at):
+                continue
+            data = event["data"]
+            if (
+                event["event_type"] == "transition"
+                and str(data.get("from", "")) == step
+                and str(data.get("to", "")) != step
+                and data.get("transition_intent") == "await_agent"
+            ):
+                return iteration
+    return None
+
+
 def _confirmation_statuses(
     issue_dir: Path | None,
     gate_steps: set[str],
@@ -467,6 +503,7 @@ def _confirmation_statuses(
     for step, task in latest.items():
         task_status = str(task.get("status", ""))
         task_iteration = task.get("iteration", 0)
+        preserve_completed_confirmation = False
         if task_status == "pending":
             statuses[step] = "awaiting_confirmation"
         elif task_status == "configuration_error":
@@ -517,8 +554,28 @@ def _confirmation_statuses(
                 statuses[step] = "returned"
             else:
                 statuses[step] = "completed"
+                completed_at = task.get("completed_at")
+                if (
+                    declared_target == step
+                    and isinstance(task_iteration, int)
+                    and isinstance(completed_at, str)
+                ):
+                    reentry_iteration = _post_confirmation_handoff_iteration(
+                        issue_dir,
+                        str(records.get("workflow_id", "")),
+                        step,
+                        task_iteration,
+                        completed_at,
+                    )
+                    # A self-loop confirmation may create one bookkeeping
+                    # iteration before handing off. A later iteration is a
+                    # distinct candidate and must obtain its own confirmation.
+                    preserve_completed_confirmation = (
+                        reentry_iteration == phase_iterations.get(step, 0)
+                    )
         if isinstance(task_iteration, int) and phase_iterations.get(step, 0) > task_iteration:
-            statuses[step] = "pending"
+            if not preserve_completed_confirmation:
+                statuses[step] = "pending"
     return statuses
 
 
