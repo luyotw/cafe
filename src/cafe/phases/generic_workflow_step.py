@@ -618,6 +618,7 @@ class GenericWorkflowStepExecutor(Phase):
         extra_prompt: Optional[str] = None,
         same_invocation_retry: bool = False,
         validated_pr_auto_create: Optional[bool] = None,
+        validate_producer_handoff: Optional[Callable[[Path], None]] = None,
     ) -> StepExecutionResult:
         hybrid_portion = step_def.get("hybrid_portion")
         is_hybrid_portion = isinstance(hybrid_portion, Mapping)
@@ -835,6 +836,9 @@ class GenericWorkflowStepExecutor(Phase):
                     checklist_file=checklist_file,
                     iteration_dir=iteration_dir,
                     budget=budget,
+                    validate_handoff=(
+                        lambda: validate_producer_handoff(portion_baton_path or baton_path)
+                    ) if validate_producer_handoff is not None else None,
                 )
                 return response, status
 
@@ -906,10 +910,16 @@ class GenericWorkflowStepExecutor(Phase):
                 )
             return runtime_context
 
+        def validate_publication() -> None:
+            self._validate_current_artifact(step_name, step_def, output_file)
+            if validate_producer_handoff is not None and self._load_artifact_correction(iteration_dir).rejections:
+                validate_producer_handoff(portion_baton_path or baton_path)
+
         execution = self.generic_phase.execute(
             skill_name=skill_name,
             step_def=step_def,
             agent_executor=run_agent,
+            validate_output=validate_publication,
             skill_invocation=skill_invocation,
             shared_skill_invocations=shared_skill_invocations,
             context=context,
@@ -1270,6 +1280,7 @@ class GenericWorkflowStepExecutor(Phase):
         blackboard_state: BlackboardState, agent_name: str, allowed_tools: Optional[List[str]],
         output_file: Path, checklist_file: Path, iteration_dir: Path,
         budget: ArtifactCorrectionBudget,
+        validate_handoff: Optional[Callable[[], None]] = None,
     ) -> str:
         """Repair only the report, inside the existing execution lease, before hooks."""
         context_file = self._resolve_iteration_context_file(iteration_dir)
@@ -1283,10 +1294,25 @@ class GenericWorkflowStepExecutor(Phase):
         continuation = self._current_session_continuation()
         allowed_directories = self._get_allowed_directories()
         while True:
+            error = None
             try:
                 self._validate_current_artifact(step_name, step_def, output_file)
-                return response
-            except ArtifactFormatError as error:
+            except ArtifactFormatError as rejected:
+                error = rejected
+            else:
+                if budget.rejections and validate_handoff is not None:
+                    try:
+                        validate_handoff()
+                    except BatonRejected as rejected:
+                        # This is handoff feedback within an existing correction
+                        # sequence, not eligibility for a new format-repair loop.
+                        error = ArtifactFormatError(
+                            step_name, str(step_def.get("output_artifact", step_name)),
+                            str(output_file), f"Report syntax is valid; handoff rejected: {rejected}",
+                        )
+                if error is None:
+                    return response
+            if error is not None:
                 budget.reject(error)
                 self._save_artifact_correction(iteration_dir, budget)
                 budget.consume()

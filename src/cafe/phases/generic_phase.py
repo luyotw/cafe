@@ -440,6 +440,7 @@ class GenericPhase:
         hook_context: Optional[Dict[str, Any]] = None,
         prepare_agent_context: Optional[Callable[[Dict[str, str]], Dict[str, str]]] = None,
         execution_guard: Optional[Callable[[], None]] = None,
+        validate_output: Optional[Callable[[], None]] = None,
         execution_lease: Optional[Callable[[], Any]] = None,
         max_retries: int = 3,
     ) -> GenericPhaseExecution:
@@ -458,6 +459,7 @@ class GenericPhase:
                 hook_context=hook_context,
                 prepare_agent_context=prepare_agent_context,
                 execution_guard=execution_guard,
+                validate_output=validate_output,
                 max_retries=max_retries,
             )
         with execution_lease():
@@ -474,6 +476,7 @@ class GenericPhase:
                 hook_context=hook_context,
                 prepare_agent_context=prepare_agent_context,
                 execution_guard=execution_guard,
+                validate_output=validate_output,
                 max_retries=max_retries,
             )
 
@@ -492,6 +495,7 @@ class GenericPhase:
         hook_context: Optional[Dict[str, Any]] = None,
         prepare_agent_context: Optional[Callable[[Dict[str, str]], Dict[str, str]]] = None,
         execution_guard: Optional[Callable[[], None]] = None,
+        validate_output: Optional[Callable[[], None]] = None,
         max_retries: int = 3,
     ) -> GenericPhaseExecution:
         runtime_context = dict(context or {})
@@ -514,6 +518,7 @@ class GenericPhase:
                 execution_guard()
 
         hook_kwargs["_execution_guard"] = guard_stable_boundary
+        hook_kwargs["_publication_guard"] = validate_output
 
         guard_stable_boundary()
         before = self._run_hook_stage(
@@ -632,6 +637,8 @@ class GenericPhase:
         published = False
         if artifact_ready:
             guard_stable_boundary()
+            if validate_output is not None:
+                validate_output()
             publish = self._run_hook_stage(
                 "publish_output",
                 step_def=step_def,
@@ -696,6 +703,10 @@ class GenericPhase:
             before_use_guard = kwargs.get("_execution_guard")
             if callable(before_use_guard):
                 before_use_guard()
+            if stage == "publish_output":
+                publication_guard = kwargs.get("_publication_guard")
+                if callable(publication_guard):
+                    publication_guard()
             result: HookResult
             if hook_entry is self._CONFIRMED_ARTIFACT_SYNC_HOOK:
                 result = self._run_confirmed_artifact_sync_hook(

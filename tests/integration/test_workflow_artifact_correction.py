@@ -33,7 +33,7 @@ MISSING_PLAN_TODO = "<!-- plan-stage: detailed-plan -->\n# Missing tasks\n"
 @pytest.fixture
 def journey(tmp_path, monkeypatch):
     def build(submissions, *, mode="baton", completed_checklist=False, human=None,
-              reverse=False, unchecked=False, mutate=None, provider_mutation=None, capability=None):
+              reverse=False, unchecked=False, mutate=None, provider_mutation=None, capability=None, publication_mutation=False):
         repo = tmp_path / "repo"
         repo.mkdir()
         subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
@@ -83,8 +83,14 @@ def journey(tmp_path, monkeypatch):
                 content = Path(kwargs["output_file"]).read_text()
                 parse_todo_list(content)
                 effects.append("after")
-                if mutate:
+                if mutate and not publication_mutation:
                     mutate(Path(kwargs["output_file"]))
+                return HookResult()
+
+        class MutatePublication:
+            def run(self, **kwargs):
+                effects.append("publish-mutation")
+                mutate(Path(kwargs["output_file"]))
                 return HookResult()
 
         producer = {"skill": "custom-report", "role": "author_custom",
@@ -95,7 +101,9 @@ def journey(tmp_path, monkeypatch):
                    "need_permission": "inspect_custom", "need_clarification": "inspect_custom"}}
         if capability:
             producer["capability_requests"] = ["cafe.browser.open"]
-            producer["hooks"]["publish_output"] = ["GitHubPRCreator"]
+            producer["hooks"]["publish_output"] = (
+                ["MutatePublication", "GitHubPRCreator"] if publication_mutation else ["GitHubPRCreator"]
+            )
         if human != "confirm_output":
             producer["on"].pop("confirm_output")
         if mode == "baton":
@@ -175,7 +183,7 @@ def journey(tmp_path, monkeypatch):
 
         manager = Provider()
         loader = SkillLoader(project_root=repo, global_root=tmp_path / "global")
-        phase = GenericPhase(loader, hook_registry={"Prepare": Prepare, "After": After},
+        phase = GenericPhase(loader, hook_registry={"Prepare": Prepare, "After": After, "MutatePublication": MutatePublication},
             skill_bridge=NativeSkillBridge(loader, project_root=repo, home_dir=tmp_path / "home"))
         executor = GenericWorkflowStepExecutor(issue_dir=issue, issue_name="correction", playbook=playbook,
             generic_phase=phase, agent_manager=manager, git_ops=GitOperations(repo),
@@ -429,3 +437,47 @@ def test_i2_prior_provider_recovery_cannot_grant_a_later_automatic_submission(jo
     with pytest.raises(ArtifactCorrectionExhausted):
         j.executor.execute_step("inspect_custom", j.playbook["steps"]["inspect_custom"], resumed.blackboard)
     assert len(j.manager.calls) == 4
+
+
+@pytest.mark.parametrize("mode", ["baton", "legacy"])
+@pytest.mark.parametrize("completed_checklist", [False, True])
+def test_i4_i5_repaired_report_handoff_retry_does_not_replay_phase(journey, mode, completed_checklist):
+    """BLK-001: handoff repair remains in the producer's bounded continuation."""
+    j = journey([REJECTED, (CORRECTED, "unknown_intent"), CORRECTED], mode=mode,
+                completed_checklist=completed_checklist)
+    result = j.runtime.run(start_step="inspect_custom")
+    assert result.completed
+    assert len(j.manager.calls) == 3
+    assert j.manager.deliveries == 1
+    assert j.effects == ["prepare", "after"]
+    assert not (j.issue / "inspect_custom" / "iteration_002").exists()
+    assert all(value == j.manager.checklists[0] for value in j.manager.checklists)
+    for name, prompt, continuation, kwargs in j.manager.calls[1:]:
+        assert continuation.is_exact and continuation.session_id == "exact-report-session"
+        assert name == j.manager.calls[0][0]
+        assert kwargs["allowed_tools"] == j.manager.calls[0][3]["allowed_tools"]
+        assert kwargs["allowed_directories"] == j.manager.calls[0][3]["allowed_directories"]
+        assert "evidence_bundle" in prompt
+        assert "Do not repeat unrelated work" in prompt
+    assert "unknown_intent" in j.manager.calls[-1][1]
+
+
+@pytest.mark.parametrize("mode", ["baton", "legacy"])
+@pytest.mark.parametrize("publication_mutation", [False, True])
+def test_i5_late_invalid_report_never_reaches_publication_adapter(journey, monkeypatch, mode, publication_mutation):
+    """BLK-002: a real publication capability cannot consume a late invalid report."""
+    import cafe.core.capabilities as capabilities
+
+    dispatches = []
+    monkeypatch.setitem(capabilities.HOST_CAPABILITY_ADAPTERS, "open_current_pr",
+        lambda **kwargs: (dispatches.append("open") or {"opened": True}, None))
+    j = journey([REJECTED, CORRECTED], mode=mode, capability=True,
+                mutate=lambda output: output.write_text(REJECTED), publication_mutation=publication_mutation)
+    result = j.runtime.run(start_step="inspect_custom")
+    assert not result.completed
+    assert len(j.manager.calls) == 2
+    assert j.effects == ["prepare", "after"] + (["publish-mutation"] if publication_mutation else [])
+    assert dispatches == []
+    assert j.manager.deliveries == 0
+    assert not (j.iteration / "artifact.json").exists()
+    assert len(HumanTaskRecordStore(j.issue).tasks()) == 1

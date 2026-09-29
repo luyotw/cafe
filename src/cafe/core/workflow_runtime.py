@@ -30,6 +30,7 @@ from cafe.core.blackboard import (
     HandoffContract,
     HandoffIntent,
     HandoffOwner,
+    OutcomeOnlyHandoff,
 )
 from cafe.core.capabilities import (
     CAPABILITY_PR_PUBLISH_ID,
@@ -1620,6 +1621,43 @@ class BlackboardWorkflowRuntime:
             or f"BATON_{contract.intent.value.upper()}"
         )
 
+    def _validate_producer_handoff(self, *, current_step: str, path: Path) -> None:
+        """Check a correction's authored handoff without publishing or deciding it.
+
+        Final normalization, confirmation and capability gates remain at the
+        runtime boundary. This check only prevents replaying a phase to repair
+        a rejected handoff after its report has been corrected.
+        """
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError) as exc:
+            raise BatonRejected(
+                field="payload", invalid_value=str(exc), valid_values=["JSON handoff object"]
+            ) from exc
+        if not isinstance(payload, dict):
+            raise BatonRejected(
+                field="payload", invalid_value=type(payload).__name__, valid_values=["JSON object"]
+            )
+        if "to_owner" not in payload and "to_step" not in payload:
+            outcome = OutcomeOnlyHandoff.from_dict(payload)
+            target = self._mapped_target_for_intent(current_step=current_step, intent=outcome.intent)
+            if target not in {*self.steps, "user", "done", "_done"}:
+                raise BatonRejected(
+                    field="intent", invalid_value=outcome.intent.value,
+                    valid_values=list(self.steps[current_step].get("on", {})),
+                )
+            return
+        contract = HandoffContract.from_dict_with_current_step(payload, current_step=current_step)
+        contract.validate(allowed_steps=list(self.steps))
+        if contract.from_step != current_step:
+            raise BatonRejected(field="from_step", invalid_value=contract.from_step,
+                                valid_values=[current_step])
+        valid_intents = effective_step_handoff_intents(self.steps[current_step])
+        if contract.intent.value not in valid_intents:
+            raise BatonRejected(field="intent", invalid_value=contract.intent.value,
+                                valid_values=valid_intents)
+        self._validate_mapped_handoff_target(current_step=current_step, contract=contract)
+
     def _load_step_handoff_contract(self, *, current_step: str) -> Optional[HandoffContract]:
         contract = self._load_agent_written_handoff_contract(
             current_step=current_step,
@@ -2508,6 +2546,9 @@ class BlackboardWorkflowRuntime:
             execute_kwargs = {
                 "extra_prompt": extra_prompt,
                 "same_invocation_retry": same_invocation_retry,
+                "validate_producer_handoff": lambda path: self._validate_producer_handoff(
+                    current_step=current_step, path=path
+                ),
             }
             try:
                 execute_parameters = inspect.signature(self.executor).parameters
