@@ -105,7 +105,8 @@ def test_callback_prompt_allows_only_bounded_driver_confirmable_clarification(
         repository_root=tmp_path,
     )
 
-    assert "including need_clarification" in prompt
+    assert "confirmed overall need_clarification policy" in prompt
+    assert "Explicit task ownership overrides the overall policy" in prompt
     assert "within confirmed scope, constraints and authority" in prompt
     assert "trigger no contract deviation" in prompt
     assert "otherwise leave it for the user" in prompt

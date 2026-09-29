@@ -949,8 +949,20 @@ class GenericWorkflowStepExecutor(Phase):
                 auto_continue=auto_continue,
             )
         outbound_validation_required = initial_outbound_validation[2]
+        # Artifact publication validates Todo syntax even when the current route
+        # has no checklist or causal Todo projection. Return that rejection to
+        # the producer through the existing bounded correction loop first.
+        produced_todo_invalid = (
+            agent_was_invoked
+            and execution.artifact_ready
+            and not self._validate_produced_todo_output(output_file)[0]
+        )
         checklist_validation_failed = False
-        if checklist_validation_required or (agent_was_invoked and outbound_validation_required):
+        if (
+            checklist_validation_required
+            or (agent_was_invoked and outbound_validation_required)
+            or produced_todo_invalid
+        ):
             resolved_user_input = self._get_resolved_iteration_user_input(step_name)
 
             def validate_output_contract(

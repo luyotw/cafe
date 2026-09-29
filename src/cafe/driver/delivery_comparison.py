@@ -228,7 +228,7 @@ def comparison_packet_from_contract(
     candidates = set(confirmation_gate_steps(model))
     scheduled = boundary["step"] in candidates | mandatory
     task_declared = boundary["step"] in policy["driver_confirmable"]
-    if contract["schema_version"] == 6:
+    if contract["schema_version"] in {6, 7}:
         task_declared = False
         if isinstance(boundary["task_id"], str) and boundary["task_id"]:
             try:

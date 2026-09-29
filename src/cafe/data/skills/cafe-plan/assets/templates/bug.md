@@ -76,8 +76,8 @@ _(If N or M is 0, one sentence explains why.)_
 - [ ] Remove any debug code
 - [ ] Commit changes
 
-### Phase 6: Definition of Done (DoD)
-Copy the wording of the DoD items from the spec's Acceptance Criteria section (lines marked with `✅ **DoD:**`) and verify each one.
+### Phase 6: Acceptance Criteria
+Copy the wording of the spec's Acceptance Criteria and verify each one.
 - [ ] The reported bug no longer reproduces
 - [ ] No regressions in existing functionality
 

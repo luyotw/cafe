@@ -233,7 +233,10 @@ def test_custom_clarification_current_task_has_independent_driver_facts(
         text=True,
         capture_output=True,
     )
-    assert json.loads(inspected.stdout)["resolution_owner"] == "driver_confirmable"
+    inspected_facts = json.loads(inspected.stdout)
+    assert inspected_facts["route_status"] == "need_clarification"
+    assert inspected_facts["resolution_owner"] == "driver_confirmable"
+    assert inspected_facts["evidence_reason"] == "evidence_unevaluated"
     progress = subprocess.run(
         [
             sys.executable,
@@ -249,9 +252,10 @@ def test_custom_clarification_current_task_has_independent_driver_facts(
         text=True,
         capture_output=True,
     )
-    assert "route_status=need_clarification" in progress.stdout
-    assert "resolution_owner=driver_confirmable" in progress.stdout
-    assert "evidence_reason=evidence_unevaluated" in progress.stdout
+    assert "spec: user confirmation (driver may not act)" in progress.stdout
+    assert progress.stdout.rstrip().endswith("○ cleanup (closeout) · Pending")
+    for diagnostic in ("route_status=", "pause_status=", "resolution_owner=", "evidence_reason="):
+        assert diagnostic not in progress.stdout
 
     callback_spec = importlib.util.spec_from_file_location(
         "task_authority_callback", scripts / "workflow_event_callback.py"
@@ -302,8 +306,9 @@ def test_custom_clarification_current_task_has_independent_driver_facts(
         "oversize",
     ],
 )
+@pytest.mark.parametrize("ownership", ["task", "overall"])
 def test_known_clarification_uses_structured_completion_and_rejects_stale_id(
-    tmp_path: Path, change: str
+    tmp_path: Path, change: str, ownership: str
 ):
     issue_dir = tmp_path / ".cafe" / "issues" / "issue500"
     issue_dir.mkdir(parents=True)
@@ -339,9 +344,13 @@ def test_known_clarification_uses_structured_completion_and_rejects_stale_id(
         intent=HandoffIntent.NEED_CLARIFICATION,
     )
     proposal = _task_proposal()
-    proposal["task_contract"]["driver_confirmable"].append(
-        {"phase": "develop", "task_id": "clarification-feedback"}
-    )
+    if ownership == "overall":
+        proposal["reactive_user_handoffs"]["need_clarification"] = "driver_confirmable"
+        proposal["task_contract"]["driver_confirmable"] = []
+    else:
+        proposal["task_contract"]["driver_confirmable"].append(
+            {"phase": "develop", "task_id": "clarification-feedback"}
+        )
     contract = build_initial_contract(
         proposal=proposal,
         issue_name="issue500",
@@ -618,7 +627,8 @@ workflow:
         contract=old_contract,
         current_task_id=task.id,
     )
-    assert old_facts["resolution_owner"] == "user_required"
+    assert old_facts["resolution_owner"] == "driver_confirmable"
+    assert old_facts["evidence_reason"] == "evidence_unevaluated"
     assert old_facts["route_status"] == "need_clarification"
     rejected_proposal = deepcopy(proposal)
     rejected_proposal["task_contract"]["user_required"] = [
@@ -661,8 +671,10 @@ workflow:
         issue_dir=issue_dir,
         driver_state={"deliver": "pending", "cleanup": "pending"},
     )
-    assert "resolution_owner=user_required" in progress
-    assert "evidence_reason=declared_user_required" in progress
+    assert "⏸︎ design · Awaiting response" in progress
+    assert progress.endswith("○ cleanup (closeout) · Pending")
+    for diagnostic in ("route_status=", "pause_status=", "resolution_owner=", "evidence_reason="):
+        assert diagnostic not in progress
     callback_spec = importlib.util.spec_from_file_location(
         "rejected_task_callback", scripts / "workflow_event_callback.py"
     )

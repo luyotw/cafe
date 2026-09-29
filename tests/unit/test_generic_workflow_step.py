@@ -8690,6 +8690,81 @@ workflow:
     ) == (True, "", False)
 
 
+@pytest.mark.parametrize("repair_succeeds", [True, False])
+def test_outcome_only_handoff_retries_invalid_produced_todo(
+    tmp_path: Path, monkeypatch, repair_succeeds: bool
+) -> None:
+    """A producer's format rejection must not escape as an execution failure."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "output-format-retry"
+    playbook = {
+        "playbook": {"id": "output-format-retry"},
+        "roles": {"pm": {"default_agent": "Roger"}},
+        "steps": {
+            "spec": {
+                "skill": "cafe-spec",
+                "role": "pm",
+                "output_artifact": "report",
+                "behavior": {"completion": "baton"},
+                "allowed_tools": ["Read", "Write"],
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+    iteration_dir = issue_dir / "spec" / "iteration_001"
+    pinned_checklists = []
+    sessions = []
+
+    def write_attempt(**_kwargs):
+        assert not (iteration_dir / "artifact.json").exists()
+        assert not BlackboardStore(issue_dir).load_or_create("spec").artifacts
+        metadata = json.loads((iteration_dir / "iteration.json").read_text())
+        pinned_checklists.append(metadata["effective_checklist"])
+        sessions.append(manager.agent.config.session_id)
+        assert (iteration_dir / "checklist.md").read_bytes() == b""
+        report = "# QA report\n\n## Todo List\n\nNo actionable work.\n"
+        if manager.execute_call_count == 1 or not repair_succeeds:
+            report += "\n# Prior report\n\n## Todo List\n\nNo actionable work.\n"
+        (iteration_dir / "output.md").write_text(report, encoding="utf-8")
+        (issue_dir / "next_step.txt").write_text(
+            json.dumps({"version": 1, "intent": "await_agent"}), encoding="utf-8"
+        )
+
+    manager = FakeAgentManager([""] * 4, on_execute=write_attempt)
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="output-format-retry",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"pm": "Roger"},
+    )
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+
+    result = executor.execute_step("spec", playbook["steps"]["spec"], state)
+
+    assert manager.execute_call_count == (2 if repair_succeeds else 4)
+    assert all("exactly one '## Todo List' section" in p for p in manager.prompts[1:])
+    assert all(p == pinned_checklists[0] for p in pinned_checklists)
+    assert pinned_checklists[0]["gates"] == []
+    assert sessions == ["session-1"] * manager.execute_call_count
+    assert (iteration_dir / "checklist.md").read_bytes() == b""
+    assert not (issue_dir / "spec" / "iteration_002").exists()
+    assert manager.allowed_tools_calls[1:] == [manager.allowed_tools_calls[0]] * (
+        manager.execute_call_count - 1
+    )
+    assert HumanTaskRecordStore(issue_dir).tasks() == ()
+    assert result.artifact_ready is repair_succeeds
+    if repair_succeeds:
+        assert parse_todo_list(Path(result.artifacts["report"]).read_text()) == ()
+        assert (iteration_dir / "artifact.json").exists()
+    else:
+        assert result.artifacts == {}
+        assert not (iteration_dir / "artifact.json").exists()
+        assert state.handoff_contract.status_code == "CHECKLIST_VALIDATION_FAILED"
+
+
 def test_completion_contract_failure_retries_same_producer(tmp_path: Path) -> None:
     phase_dir = tmp_path / ".cafe" / "issues" / "producer-retry" / "review"
     iteration_dir = phase_dir / "iteration_001"

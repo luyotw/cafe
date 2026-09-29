@@ -189,8 +189,8 @@ The callback receives only an asynchronous durable-event notice. It must
 re-check `cafe status`/`cafe show`; a notice can be stale. It may diagnose and
 perform actions already authorized by the kickoff. It cannot wait for, collect,
 infer, or choose a user answer for a mandatory, `user_required`, permission, or
-capability task, nor grant permissions or capabilities. A task whose confirmed
-phase and task ID are declared `driver_confirmable` may be answered
+capability task, nor grant permissions or capabilities. A task authorized by an
+explicit declaration or the confirmed overall clarification policy may be answered
 only when the complete answer stays within the confirmed Delivery Contract,
 its scope, explicit constraints and existing authority, and triggers no deviation.
 Contract changes, new permission or external-effect authority, mandatory
@@ -227,11 +227,14 @@ receive the user's explicit answer. The unique active declared correction
 outcome exception permits the current Driver, including an event-driven
 callback, to submit only that eligible outcome after complete review and one
 `cafe chat` consensus exchange; it never permits confirmation or another
-user-owned decision. A task whose current phase and task ID are declared
-`driver_confirmable` may be completed by any Driver, including an event-driven
-callback, only within the confirmed Delivery Contract and existing
-authority. Any other `driver_confirmable` task may likewise be completed after
-the Driver verifies its confirmed contract and task-specific evidence. These
+user-owned decision. A task authorized by an explicit `driver_confirmable`
+declaration or the confirmed overall clarification policy may be completed by
+any Driver, including an event-driven callback, only within the confirmed
+Delivery Contract and existing authority. Explicit task ownership overrides the overall policy; the overall
+choice applies only to `need_clarification`, never to permissions, capabilities
+or mandatory decisions. Any other `driver_confirmable` task may likewise be
+completed after the Driver verifies its confirmed contract and task-specific
+evidence. These
 Driver-owned cases use the same durable task flow:
 
 On every later user-facing turn, inspect current durable state first. If a

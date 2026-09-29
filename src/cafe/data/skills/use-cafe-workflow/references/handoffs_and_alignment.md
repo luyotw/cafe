@@ -48,8 +48,9 @@ Then route by intent:
 - `confirm_output` from a `driver_confirmable` step: verify the output and
   required input artifacts are complete, in-mandate, and consistent with
   accepted upstream artifacts before confirming. Apply the Delivery comparison below.
-- a current task whose exact phase and task ID are declared
-  `driver_confirmable`, including `need_clarification`: the Driver
+- a current task authorized by an explicit `driver_confirmable` declaration,
+  or a `need_clarification` task covered by the confirmed overall
+  `reactive_user_handoffs.need_clarification: driver_confirmable` policy: the Driver
   may answer when the complete response stays within the confirmed Delivery
   Contract's scope, constraints and existing authority, and triggers no
   deviation. Multiple authorized reversible technical choices may be resolved
@@ -74,8 +75,11 @@ response and a grounded assessment to the same read-only entry. For a
 validates current authority when invoked, then leaves workflow resumption to
 the confirmed Driver mode. Concurrent decision-source changes after validation
 are not guarded through completion; the user accepted this documented limitation.
-A v5 contract's `reactive_user_handoffs.need_clarification` value alone grants no
-Driver completion authority; reconfirm task ownership when needed.
+Explicit task ownership takes precedence over overall clarification ownership.
+The overall choice grants ownership, not permission to invent an answer or
+broaden authority. A v5 contract retains its explicitly confirmed overall choice;
+a v6 contract without that field retains task-only ownership until explicit
+reconfirmation. The new kickoff default applies only to new proposals.
 
 For `answers`, account for every required field and every selected value. Use
 `basis: confirmed_exact` with a source and excerpt for each exact value. If an
@@ -203,7 +207,7 @@ Use this outcome-sensitive authority matrix after due review/chat consensus:
 | Unique active declared correction outcome requiring feedback, marked `correction: true`, and routing to a non-advancing correction continuation | Driver may submit only that derived outcome, with consolidated findings, consensus, acceptance conditions, and any relevant current user-confirmed direction missing from the target's declared inputs, to create the formal correction iteration. Zero or multiple eligible outcomes fail closed for user/playbook clarification. |
 | `user_required` or mandatory confirmation gate advancing `confirm` | user_required and mandatory confirmation gates keep advancing `confirm` user-owned. |
 | Clean `driver_confirmable` confirmation | driver_confirmable clean confirm remains driver-permitted after independent review. |
-| `driver_confirmable` clarification within the confirmed contract and existing authority | Driver may submit the schema-valid answer with a concise contract basis; multiple authorized technical choices may use repository precedent, smaller footprint, and reversibility. |
+| `driver_confirmable` clarification within the confirmed contract and existing authority | Overall policy or explicit task ownership must authorize the task. Driver may submit the schema-valid answer with a concise contract basis; multiple authorized technical choices may use repository precedent, smaller footprint, and reversibility. |
 | Clarification that changes the contract, needs new authority, is reserved to the user, or has uncertain authority; permission, capability, scope, strategic, or unknown decision | These decisions remain user-owned. |
 
 Driver-triggered correction is correction, never approval. No user prompt occurs

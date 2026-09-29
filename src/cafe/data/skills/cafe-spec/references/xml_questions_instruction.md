@@ -31,4 +31,5 @@ Rules:
 - Each question must have a unique `id` attribute, a `<title>`, and `<options>` with at least one `<option>`
 - Provide 2-4 suggested options per question
 - Options should be concise and distinct
-- For multi-select questions (user can pick multiple options), you MUST add `type="checkbox"` attribute to the `<question>` element (e.g., `<question id="1" type="checkbox">`). This includes DoD questions.
+- For multi-select questions (user can pick multiple options), you MUST add `type="checkbox"` attribute to the `<question>` element (e.g., `<question id="1" type="checkbox">`).
+- Do NOT add "Other" or custom input options to checkbox questions -- the system automatically adds an "Other" option to every checkbox question.

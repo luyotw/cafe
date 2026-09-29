@@ -240,15 +240,18 @@ def decide_task_authority(
         return _facts(route, owner, "permission_or_capability")
     version = policy["schema_version"]
     key = {"phase": phase, "task_id": task_name}
-    if version == 6:
+    overall_clarification = (
+        route == "need_clarification"
+        and policy["reactive_user_handoffs"].get("need_clarification") == "driver_confirmable"
+    )
+    if version in {6, 7}:
         declared = policy["task_contract"]
         if key in declared["user_required"]:
             return _facts(route, owner, "declared_user_required")
-        if key not in declared["driver_confirmable"]:
+        if key not in declared["driver_confirmable"] and not overall_clarification:
             return _facts(route, owner, "task_ownership_undeclared")
     elif version == 5:
-        # A route-specific legacy clarification value never grants authority.
-        if (
+        if not overall_clarification and (
             route != "confirm_output"
             or phase not in confirmation["driver_confirmable"]
             or phase in confirmation["user_required"]

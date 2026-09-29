@@ -1057,8 +1057,8 @@ mandate:
     assert "| review | gemini:review-main | copilot:review-fallback |" in result.stdout
     assert "| pr | cursor-agent:publication-main | gemini:publication-fallback |" in result.stdout
     assert "### Phase execution requirements" not in result.stdout
-    assert "| need_clarification | driver_confirmable |" not in result.stdout
-    assert "### Declared HumanTask ownership" in result.stdout
+    assert "| need_clarification | driver_confirmable |" in result.stdout
+    assert "### Declared HumanTask ownership" not in result.stdout
     assert "### Mandate" not in result.stdout
     assert result.stdout.count("| playbook_id |") == 1
 
@@ -1539,9 +1539,9 @@ def test_confirmed_kickoff_activates_one_issue_scoped_driver_contract(tmp_path: 
         "phase": "develop",
         "decision": "not_required",
     }
-    assert contract["schema_version"] == 6
+    assert contract["schema_version"] == 7
     assert "task_contract" in contract
-    assert "need_clarification" not in contract["reactive_user_handoffs"]
+    assert contract["reactive_user_handoffs"]["need_clarification"] == "driver_confirmable"
     assert (
         not {"preflight", "semantic_facts", "material_assumptions", "mandate", "issue_assessment"}
         & contract.keys()
@@ -2040,7 +2040,7 @@ def test_kickoff_defaults_verified_github_issues_to_pr_publication() -> None:
     assert "never authorizes merge or issue closure" in normalized
 
 
-def test_need_clarification_requires_task_declaration_and_bounded_evidence() -> None:
+def test_need_clarification_has_overall_default_optional_overrides_and_bounded_evidence() -> None:
     skill = _read_skill_resource("SKILL.md")
     kickoff = _read_skill_resource("references/kickoff.md")
     running = _read_skill_resource("references/running_workflow.md")
@@ -2048,6 +2048,8 @@ def test_need_clarification_requires_task_declaration_and_bounded_evidence() -> 
     normalized = " ".join((skill + kickoff + running + handoffs).split()).lower()
 
     assert "declare ownership by exact phase and task id" in normalized
+    assert "default new proposals to `need_clarification: driver_confirmable`" in normalized
+    assert "explicit task ownership takes precedence" in normalized
     assert "scope, explicit constraints and existing authority" in normalized
     assert "triggers no deviation" in normalized
     assert "reserved product or strategy decisions" in normalized
@@ -3142,14 +3144,16 @@ def test_kickoff_defaults_assignable_gates_to_driver_confirmation() -> None:
     assert driver_confirmable == ["spec", "plan"]
 
 
-def test_kickoff_cli_forwards_custom_task_ownership_without_route_authority(tmp_path: Path) -> None:
+def test_kickoff_cli_forwards_custom_task_overrides_and_overall_authority(tmp_path: Path) -> None:
     strategic_context = tmp_path / "strategic_context.yaml"
     strategic_context.write_text("version: 1\n", encoding="utf-8")
     proposal = _kickoff_proposal(
         _kickoff_formatter_command(
             strategic_context,
-            "--task-driver-confirmable", "develop:known-answer",
-            "--task-user-required", "review:choose-release",
+            "--task-driver-confirmable",
+            "develop:known-answer",
+            "--task-user-required",
+            "review:choose-release",
         )
     )
     assert proposal["task_contract"] == {
@@ -3163,17 +3167,15 @@ def test_kickoff_cli_forwards_custom_task_ownership_without_route_authority(tmp_
             {"phase": "develop", "task_id": "known-answer"},
         ],
     }
-    assert "need_clarification" not in proposal["reactive_user_handoffs"]
-    retired_route_flag = subprocess.run(
-        _kickoff_formatter_command(
-            strategic_context, "--need-clarification", "driver_confirmable"
-        ),
+    assert proposal["reactive_user_handoffs"]["need_clarification"] == "driver_confirmable"
+    overall_flag = subprocess.run(
+        _kickoff_formatter_command(strategic_context, "--need-clarification", "driver_confirmable"),
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
         check=False,
     )
-    assert retired_route_flag.returncode != 0
+    assert overall_flag.returncode == 0, overall_flag.stderr
 
 
 def test_proactive_review_overrides_are_sparse_ordered_and_fail_closed() -> None:
@@ -3561,7 +3563,7 @@ def test_proactive_review_authority_precedence_has_no_blanket_callback_or_route_
             in task_policy
             and "a mandatory, `user_required`, permission, or capability task requires a **user-facing driver turn**"
             in task_policy
-            and "a task whose current phase and task id are declared `driver_confirmable`"
+            and "a task authorized by an explicit `driver_confirmable` declaration or the confirmed overall clarification policy"
             in task_policy
             and "including an event-driven callback, to submit only that eligible outcome"
             in task_policy
@@ -3575,7 +3577,7 @@ def test_proactive_review_authority_precedence_has_no_blanket_callback_or_route_
     assert is_consistent(task_authority, correction_flow)
     assert not is_consistent(
         task_authority.replace(
-            "A task whose current phase and task ID are declared `driver_confirmable`",
+            "A task authorized by an explicit `driver_confirmable` declaration or the confirmed overall clarification policy",
             "A `need_clarification` task",
         ),
         correction_flow,
@@ -3620,13 +3622,11 @@ def test_proactive_review_initial_routing_task_flow_and_matrix_share_correction_
         "`confirm_output` from a mandatory humantask step: always stop for the real user.",
         "`confirm_output` from a `user_required` step: stop for user approval or correction.",
     )
-    prior_task_flow = " ".join(
-        """
+    prior_task_flow = " ".join("""
         2. For user-owned tasks, serialize only the user's supplied answer into that schema.
         The driver may add the task ID required by the schema, but must not infer a decision,
         approval, permission, or missing answer.
-        """.split()
-    ).lower()
+        """.split()).lower()
 
     def is_consistent(initial: str, task: str, matrix: str) -> bool:
         return (
@@ -3861,8 +3861,7 @@ def test_use_cafe_workflow_binds_driver_completion_to_inspected_authority() -> N
     )
     assert "serialize only the user's supplied answer" in normalized_running
     assert (
-        "must not infer a decision, approval, permission, or missing answer"
-        in normalized_running
+        "must not infer a decision, approval, permission, or missing answer" in normalized_running
     )
     assert "--task-id <active-human-task-id>" in handoffs
     assert '"work_report"' in handoffs
@@ -3913,7 +3912,7 @@ def test_driver_keeps_completion_separate_from_external_authority() -> None:
         assert "pr.auto_create" not in text
     assert "gh pr merge --merge" in kickoff
     assert "only user confirmation authorizes execution" in " ".join(kickoff.split())
-    assert "[gh, issue, close, \"123\"]" in kickoff
+    assert '[gh, issue, close, "123"]' in kickoff
     assert "[cafe, close]" in kickoff
 
 
@@ -4095,3 +4094,43 @@ def test_driver_managed_start_and_resume_require_the_skill_wrapper() -> None:
         if re.search(r"cafe workflow[^\n]*--execute", text):
             hand_built.append(path.relative_to(SKILL_ROOT).as_posix())
     assert hand_built == []
+
+
+@pytest.mark.parametrize("owner", ["driver_confirmable", "user_required"])
+def test_kickoff_overall_clarification_policy_needs_no_detailed_task_list(
+    tmp_path: Path,
+    run_kickoff_formatter,
+    owner: str,
+) -> None:
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text("version: 1\n", encoding="utf-8")
+    command = _kickoff_formatter_command(
+        strategic_context,
+        "--need-clarification",
+        owner,
+    )
+    proposal = _kickoff_proposal(command)
+    result = run_kickoff_formatter(command)
+    assert result.returncode == 0, result.stderr
+    assert proposal["reactive_user_handoffs"]["need_clarification"] == owner
+    assert f"| need_clarification | {owner} |" in result.stdout
+    assert "### Declared HumanTask ownership" not in result.stdout
+    assert "clarification-answers" not in result.stdout
+
+
+def test_kickoff_displays_only_requested_task_overrides(
+    tmp_path: Path,
+    run_kickoff_formatter,
+) -> None:
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text("version: 1\n", encoding="utf-8")
+    command = _kickoff_formatter_command(
+        strategic_context,
+        "--task-user-required",
+        "spec:clarification-answers",
+    )
+    result = run_kickoff_formatter(command)
+    assert result.returncode == 0, result.stderr
+    assert "| need_clarification | driver_confirmable |" in result.stdout
+    assert "| spec | clarification-answers | user_required |" in result.stdout
+    assert "| spec | output-review |" not in result.stdout

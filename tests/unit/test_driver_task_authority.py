@@ -55,7 +55,7 @@ def test_driver_settings_update_preserves_confirmed_task_ownership():
     )
 
 
-@pytest.mark.parametrize("change", ["duplicate", "overlap", "legacy_route"])
+@pytest.mark.parametrize("change", ["duplicate", "overlap", "invalid_overall"])
 def test_new_contract_rejects_ambiguous_task_ownership(change):
     proposal = _task_proposal()
     if change == "duplicate":
@@ -67,7 +67,7 @@ def test_new_contract_rejects_ambiguous_task_ownership(change):
             {"phase": "develop", "task_id": "known-answer"}
         )
     else:
-        proposal["reactive_user_handoffs"]["need_clarification"] = "driver_confirmable"
+        proposal["reactive_user_handoffs"]["need_clarification"] = "unknown"
     with pytest.raises(ValueError):
         build_initial_contract(
             proposal=proposal,
@@ -78,7 +78,7 @@ def test_new_contract_rejects_ambiguous_task_ownership(change):
         )
 
 
-def test_legacy_clarification_value_does_not_grant_task_authority():
+def test_legacy_explicit_clarification_policy_retains_ownership_and_requires_evidence():
     proposal = _proposal()
     proposal["reactive_user_handoffs"]["need_clarification"] = "driver_confirmable"
     proposal["confirmation_contract"]["driver_confirmable"] = ["develop"]
@@ -95,7 +95,8 @@ def test_legacy_clarification_value_does_not_grant_task_authority():
         contract=contract,
         current_task_id="durable-1",
     )
-    assert result["resolution_owner"] == "user_required"
+    assert result["resolution_owner"] == "driver_confirmable"
+    assert result["evidence_reason"] == "evidence_unevaluated"
     assert result["allowed"] is False
     assert result["route_status"] == "need_clarification"
 
@@ -332,3 +333,127 @@ def test_unconfirmed_decision_categories_remain_user_owned(category):
     )
     assert result["allowed"] is False
     assert result["evidence_reason"] == "user_owned_decision_category"
+
+
+def _overall_contract(owner="driver_confirmable", override=None, *, mandatory=False):
+    proposal = _task_proposal()
+    proposal["reactive_user_handoffs"]["need_clarification"] = owner
+    proposal["task_contract"] = {"user_required": [], "driver_confirmable": []}
+    if mandatory:
+        proposal["confirmation_contract"]["mandatory_human_stops"].append("develop")
+    if override:
+        proposal["task_contract"][override] = [{"phase": "develop", "task_id": "known-answer"}]
+    return build_initial_contract(
+        proposal=proposal,
+        issue_name="issue500",
+        workflow_id="workflow500",
+        confirmed_by="user",
+        confirmed_at="2026-09-26T12:00:00+00:00",
+    )
+
+
+@pytest.mark.parametrize(
+    "overall,override,expected",
+    [
+        ("driver_confirmable", None, "driver_confirmable"),
+        ("user_required", None, "user_required"),
+        ("driver_confirmable", "user_required", "user_required"),
+        ("user_required", "driver_confirmable", "driver_confirmable"),
+    ],
+)
+def test_overall_clarification_policy_and_explicit_override_precedence(overall, override, expected):
+    contract = _overall_contract(overall, override)
+    assert contract["schema_version"] == 7
+    result = decide_task_authority(
+        task=_task(),
+        contract=contract,
+        current_task_id="durable-1",
+        response={
+            "task": "known-answer",
+            "human_task_id": "durable-1",
+            "answers": {"q1": ["A", "B"]},
+        },
+        evidence={
+            "basis": "confirmed_exact",
+            "exhaustive": True,
+            "citations": [
+                {"field": "answers.q1", "value": value, "source": "contract", "excerpt": "A and B"}
+                for value in ("A", "B")
+            ],
+        },
+        confirmed_sources={"contract": "All required outcomes: A and B"},
+    )
+    assert result["resolution_owner"] == expected
+    assert result["allowed"] is (expected == "driver_confirmable")
+
+
+@pytest.mark.parametrize(
+    "kind", ["permission", "capability", "mandatory", "other_route", "unsupported", "scope"]
+)
+def test_overall_clarification_policy_preserves_user_boundaries_and_evidence(kind):
+    contract, task = _overall_contract(mandatory=kind == "mandatory"), _task()
+    response = {"task": "known-answer", "human_task_id": "durable-1", "answers": {"q1": ["A", "B"]}}
+    evidence = {"basis": "confirmed_exact", "exhaustive": True, "citations": []}
+    if kind == "permission":
+        task["provenance"]["trigger"] = "need_permission"
+    elif kind == "capability":
+        task["capability_approval"] = {"state": "pending"}
+    elif kind == "mandatory":
+        task["provenance"]["trigger"] = "confirm_output"
+    elif kind == "other_route":
+        task["provenance"]["trigger"] = "manual_handoff"
+    elif kind == "scope":
+        evidence["category"] = "scope"
+    result = decide_task_authority(
+        task=task,
+        contract=contract,
+        current_task_id="durable-1",
+        response=response,
+        evidence=evidence,
+        confirmed_sources={"contract": "A and B"},
+    )
+    assert result["allowed"] is False
+
+
+def test_reading_v6_contract_preserves_digest_and_task_only_ownership():
+    from cafe.core.packet_io import canonical_json
+
+    contract = _contract()
+    before = canonical_json(contract)
+    assert contract["schema_version"] == 6
+    assert canonical_json(validate_contract(contract)) == before
+    result = decide_task_authority(
+        task=_task(task_id="undeclared"),
+        contract=contract,
+        current_task_id="durable-1",
+    )
+    assert result["resolution_owner"] == "user_required"
+    assert result["evidence_reason"] == "task_ownership_undeclared"
+    assert canonical_json(contract) == before
+
+
+def test_overall_policy_is_required_in_v7_and_cannot_be_inserted_into_v6():
+    contract = _overall_contract()
+    contract["reactive_user_handoffs"].pop("need_clarification")
+    with pytest.raises(ValueError, match="explicit overall"):
+        validate_contract(contract)
+    contract = _overall_contract()
+    contract["schema_version"] = 6
+    with pytest.raises(ValueError, match="reconfirm as v7"):
+        validate_contract(contract)
+
+
+def test_driver_settings_update_preserves_overall_policy_and_schema():
+    contract = _overall_contract("user_required", "driver_confirmable")
+    updated = build_driver_settings_update(
+        contract,
+        {"mode": "attached", "poll_interval_seconds": 30},
+        previous_contract_sha256="a" * 64,
+    )
+    assert updated["schema_version"] == 7
+    assert updated["reactive_user_handoffs"] == contract["reactive_user_handoffs"]
+    assert updated["task_contract"] == contract["task_contract"]
+    facts = freshness_semantic_facts(updated)
+    assert (
+        facts["effective_policy"]["reactive_user_handoffs"]["need_clarification"] == "user_required"
+    )
