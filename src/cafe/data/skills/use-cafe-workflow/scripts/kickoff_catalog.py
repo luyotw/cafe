@@ -62,6 +62,7 @@ def _dependency_closure(playbook: dict[str, Any], skill_loader: SkillLoader) -> 
     for name in sorted(names):
         try:
             entry = skill_loader.resolver.resolve(CatalogKind.PHASE, name)
+            dependencies.append((f"skill:{name}:effective_digest", entry.digest))
             paths = [entry.path] if entry.path.is_file() else sorted(entry.path.rglob("*"))
             for path in paths:
                 if not path.is_file() or path.is_symlink():
@@ -143,7 +144,11 @@ def _candidate_details(
     except (OSError, ValueError) as exc:
         diagnostics.append({"status": "incomplete", "reason": f"capability_registry:{type(exc).__name__}"})
     applicability = playbook.get("applicability")
-    eligible = isinstance(applicability, dict) and bool(str(applicability.get("summary", "")).strip())
+    eligible = (
+        isinstance(applicability, dict)
+        and bool(str(applicability.get("summary", "")).strip())
+        and not diagnostics
+    )
     return {
         "id": candidate_id,
         "source": source,
@@ -224,7 +229,6 @@ def discover_index(
                     candidate_id, entry.path, entry.source, project_root, global_root, builtin_root,
                     loaded.model,
                 )
-                candidate["loaded_graph"] = loaded.as_dict()
                 candidate["fingerprint"] = fingerprint
                 candidate = _json_safe(candidate)
                 reuse[candidate_id] = False

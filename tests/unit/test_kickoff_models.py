@@ -80,3 +80,27 @@ def test_operational_probe_is_not_model_suitability_evidence() -> None:
 
     assert report["status"] == "miss"
     assert report["evidence_kind"] == "capability_assessment"
+
+
+def test_future_dates_and_earlier_source_validity_cannot_extend_freshness() -> None:
+    module = load_kickoff_module("kickoff_models")
+    now = datetime(2026, 9, 29, tzinfo=timezone.utc)
+    record = _assessment(now)
+    future = {
+        **record,
+        "assessed_at": (now + timedelta(hours=1)).isoformat(),
+        "sources": [{
+            **record["sources"][0],
+            "retrieved_at": (now + timedelta(hours=2)).isoformat(),
+        }],
+    }
+    limited = {
+        **record,
+        "sources": [{
+            **record["sources"][0],
+            "valid_until": (now - timedelta(minutes=1)).isoformat(),
+        }],
+    }
+
+    assert module.assess_model_evidence(future, now=now)["status"] == "miss"
+    assert module.assess_model_evidence(limited, now=now)["status"] == "miss"

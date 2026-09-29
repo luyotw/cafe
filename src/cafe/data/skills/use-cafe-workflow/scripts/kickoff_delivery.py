@@ -12,7 +12,9 @@ from typing import Any
 from _kickoff_store import repository_identity
 
 OBSERVATION_MAX_AGE = timedelta(hours=24)
-_IGNORED_DIRS = {".git", ".venv", "__pycache__", "node_modules", "build", "dist"}
+_IGNORED_DIRS = {
+    ".git", ".venv", ".cache", "__pycache__", "node_modules", "build", "dist",
+}
 _SOURCE_PREFIXES = ("docs/", ".github/", ".cafe/", "scripts/")
 _SOURCE_NAMES = {"README", "README.md", "CONTRIBUTING.md", "Makefile", "pyproject.toml"}
 
@@ -27,11 +29,22 @@ def _inventory(project_root: Path) -> list[str]:
         timeout=10,
     )
     if result.returncode == 0:
-        return sorted(set(line for line in result.stdout.splitlines() if line))
+        return sorted(
+            set(
+                line for line in result.stdout.splitlines()
+                if line and Path(line).name != "streaming.jsonl"
+                and not line.startswith(".cafe/issues/")
+                and not line.startswith(".cafe/worktrees/")
+            )
+        )
     paths: list[str] = []
     for base, dirs, files in os.walk(root):
-        dirs[:] = sorted(name for name in dirs if name not in _IGNORED_DIRS)
+        relative_base = Path(base).relative_to(root).as_posix()
+        runtime_dirs = {"issues", "worktrees"} if relative_base == ".cafe" else set()
+        dirs[:] = sorted(name for name in dirs if name not in _IGNORED_DIRS | runtime_dirs)
         for name in files:
+            if name == "streaming.jsonl":
+                continue
             path = Path(base, name)
             paths.append(path.relative_to(root).as_posix())
     return sorted(paths)
@@ -77,7 +90,10 @@ def _date(value: Any) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
-def assess_delivery(record: dict[str, Any], *, project_root: Path, now: datetime) -> dict[str, Any]:
+def assess_delivery(
+    record: dict[str, Any], *, project_root: Path, now: datetime,
+    contradictions: list[str] | None = None,
+) -> dict[str, Any]:
     root = Path(project_root).expanduser().resolve()
     manifest = discover_delivery_manifest(root)
     diagnostics: list[str] = []
@@ -135,18 +151,20 @@ def assess_delivery(record: dict[str, Any], *, project_root: Path, now: datetime
         ):
             expired = True
             continue
-        expiry = min(observed_at + OBSERVATION_MAX_AGE, valid_until or observed_at)
+        expiry = min(observed_at + OBSERVATION_MAX_AGE, valid_until) if valid_until else observed_at + OBSERVATION_MAX_AGE
         if expiry <= instant:
             expired = True
             continue
         observations.append(observation)
     if expired:
         diagnostics.append("delivery_observation_expired_or_invalid")
+    if contradictions:
+        diagnostics.append("contradictory_current_delivery_evidence")
     blocked = any(
         item in diagnostics
         for item in ("repository_identity_changed", "discovery_manifest_missing", "watched_membership_changed", "material_source_changed")
     )
-    status = "hit" if not blocked and not discovery_gap and not expired else "miss"
+    status = "hit" if not blocked and not discovery_gap and not expired and not contradictions else "miss"
     return {
         "status": status,
         "diagnostics": diagnostics,
@@ -161,12 +179,40 @@ def refresh_delivery(record: dict[str, Any], *, evidence: Any, project_root: Pat
     if not isinstance(evidence, dict):
         return {"record": record, "refreshed": False, "diagnostic": "refresh_evidence_missing"}
     manifest = discover_delivery_manifest(project_root)
+    conventions = evidence.get("stable_conventions")
+    sources = evidence.get("sources")
+    target = evidence.get("target")
+    if not isinstance(conventions, list) or not conventions or any(
+        not isinstance(item, str) or not item.strip() for item in conventions
+    ):
+        return {"record": record, "refreshed": False, "diagnostic": "stable_conventions_missing"}
+    if not isinstance(target, str) or not target.strip() or not isinstance(sources, list) or not sources:
+        return {"record": record, "refreshed": False, "diagnostic": "delivery_source_or_target_missing"}
+    source_hashes = {item["path"]: item["fingerprint"] for item in manifest["sources"]}
+    for source in sources:
+        if not isinstance(source, dict):
+            return {"record": record, "refreshed": False, "diagnostic": "delivery_source_invalid"}
+        if isinstance(source.get("path"), str):
+            if source_hashes.get(source["path"]) != source.get("fingerprint"):
+                return {"record": record, "refreshed": False, "diagnostic": "delivery_source_changed"}
+        elif not (
+            isinstance(source.get("url"), str)
+            and source["url"].startswith(("https://", "http://"))
+            and _date(source.get("retrieved_at")) is not None
+            and isinstance(source.get("fingerprint"), str)
+        ):
+            return {"record": record, "refreshed": False, "diagnostic": "delivery_source_invalid"}
     updated = {
         **evidence,
         "repository": manifest["repository"],
         "discovery": {
             **manifest,
-            "classified_paths": list(evidence.get("classified_paths", [])),
+            "classified_paths": list(
+                evidence.get(
+                    "classified_paths",
+                    [source["path"] for source in sources if isinstance(source, dict) and isinstance(source.get("path"), str)],
+                )
+            ),
         },
     }
     return {"record": updated, "refreshed": True}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -67,6 +68,21 @@ def test_delivery_expiry_and_failed_refresh_do_not_renew_observations(tmp_path: 
     assert failed["refreshed"] is False
 
 
+def test_future_observation_and_current_contradiction_are_misses(tmp_path: Path) -> None:
+    module = load_kickoff_module("kickoff_delivery")
+    project = tmp_path / "project"
+    now = datetime(2026, 9, 29, tzinfo=timezone.utc)
+    record = _record(module, project, observed_at=now + timedelta(hours=1))
+    future = module.assess_delivery(record, project_root=project, now=now)
+    past = _record(module, project, observed_at=now - timedelta(hours=1))
+    contradiction = module.assess_delivery(
+        past, project_root=project, now=now, contradictions=["delivery target no longer exists"]
+    )
+
+    assert future["status"] == "miss"
+    assert contradiction["status"] == "miss"
+
+
 def test_unrelated_content_edit_preserves_reusable_delivery_facts(tmp_path: Path) -> None:
     module = load_kickoff_module("kickoff_delivery")
     project = tmp_path / "project"
@@ -82,3 +98,38 @@ def test_unrelated_content_edit_preserves_reusable_delivery_facts(tmp_path: Path
 
     assert baseline["status"] == "hit"
     assert after["status"] == "hit"
+
+
+def test_linked_worktree_shares_delivery_identity_but_material_divergence_isolated(
+    tmp_path: Path,
+) -> None:
+    module = load_kickoff_module("kickoff_delivery")
+    main = tmp_path / "main"
+    linked = tmp_path / "linked"
+    clone = tmp_path / "clone"
+    main.mkdir()
+    subprocess.run(["git", "init", "-q", str(main)], check=True)
+    subprocess.run(["git", "-C", str(main), "config", "user.email", "test@example.invalid"], check=True)
+    subprocess.run(["git", "-C", str(main), "config", "user.name", "Test"], check=True)
+    (main / "docs").mkdir()
+    (main / "docs/delivery.md").write_text("Use the repository release notes.", encoding="utf-8")
+    subprocess.run(["git", "-C", str(main), "add", "docs/delivery.md"], check=True)
+    subprocess.run(["git", "-C", str(main), "commit", "-qm", "initial"], check=True)
+    subprocess.run(["git", "-C", str(main), "worktree", "add", "--detach", "-q", str(linked), "HEAD"], check=True)
+    observed = datetime(2026, 9, 29, tzinfo=timezone.utc)
+    record = _record(module, main, observed_at=observed - timedelta(hours=1))
+
+    shared = module.assess_delivery(record, project_root=linked, now=observed)
+    (linked / "docs/deploy.yaml").write_text("target: linked-only\n", encoding="utf-8")
+    divergent = module.assess_delivery(record, project_root=linked, now=observed)
+    stable = module.assess_delivery(record, project_root=main, now=observed)
+    clone.mkdir()
+    subprocess.run(["git", "init", "-q", str(clone)], check=True)
+    (clone / "docs").mkdir()
+    (clone / "docs/delivery.md").write_text("Release notes are authoritative.", encoding="utf-8")
+    separate = module.assess_delivery(record, project_root=clone, now=observed)
+
+    assert shared["status"] == "hit"
+    assert divergent["status"] == "miss"
+    assert stable["status"] == "hit"
+    assert separate["status"] == "miss"
