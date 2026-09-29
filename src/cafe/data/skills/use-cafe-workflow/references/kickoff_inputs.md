@@ -10,6 +10,15 @@ records; it must still assess the current issue and validate source freshness.
 For an existing workflow, read its confirmed contract and generic state rather
 than applying changed preferences to the issue.
 
+After gathering complete, source-backed delivery conventions or an exact model
+capability assessment during the current preparation, persist that Manager
+evidence for later warm preparations with `evidence refresh --category delivery`
+or `evidence refresh --category models`, respectively. Use the documented
+evidence-file format and retain the same isolated cache directory. Refresh only
+evidence that the current assessment supports; incomplete research, a discovery
+gap, or an operational model probe alone is not reusable evidence. This local
+cache update does not confirm a model chain or authorize a delivery action.
+
 ## Request file
 
 A request is UTF-8 JSON with `schema_version: 1`, `project_root`, and `issue_name`. Optional fields include `playbook_id`, `current_explicit_inputs`, `manager_decisions`, `required_decisions`, `delivery_evidence`, `model_assessments`, `current_model_sources`, `model_contradictions`, `preflight_files`, and normalized `formatter_inputs`.

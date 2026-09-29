@@ -911,6 +911,9 @@ def test_use_cafe_workflow_skill_requires_playbook_derived_kickoff_contract() ->
     assert "through `assemble`" in normalized
     assert "use `render` to produce the complete contract" in normalized
     assert "normal new-issue Manager path is `discover`" in normalized_inputs
+    assert "persist that Manager evidence for later warm preparations" in normalized_inputs
+    assert "evidence refresh --category delivery" in normalized_inputs
+    assert "evidence refresh --category models" in normalized_inputs
     assert "cafe playbook list" not in selection
     assert "prepare_kickoff.py discover" in selection
     assert "do not repeat list/show/read" in " ".join(selection.split())
