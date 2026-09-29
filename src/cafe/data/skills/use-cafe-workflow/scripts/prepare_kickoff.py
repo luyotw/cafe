@@ -47,6 +47,8 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--request-file", type=Path, required=True)
         command.add_argument("--config-dir", type=Path, default=_default_config_dir())
         command.add_argument("--cache-dir", type=Path, default=_default_cache_dir())
+        if name in {"discover", "assemble"}:
+            command.add_argument("--summary", action="store_true")
     preferences = commands.add_parser("preferences", allow_abbrev=False).add_subparsers(
         dest="operation", required=True
     )
@@ -87,14 +89,40 @@ def _request_command(args: argparse.Namespace) -> int:
         request = _read_json(args.request_file)
         if not isinstance(request, dict):
             raise ValueError("request file must contain an object")
+        summary_mode = getattr(args, "summary", False)
+        inspect_references = {
+            "catalog": [
+                sys.executable, str(Path(__file__).resolve()), "discover",
+                "--request-file", str(args.request_file.resolve()),
+                "--config-dir", str(args.config_dir.resolve()), "--cache-dir", str(args.cache_dir.resolve()),
+            ],
+            "delivery": [
+                sys.executable, str(Path(__file__).resolve()), "evidence", "inspect",
+                "--category", "delivery", "--project-root",
+                str(Path(request.get("project_root", Path.cwd())).resolve()),
+                "--cache-dir", str(args.cache_dir.resolve()),
+            ],
+            "models": [
+                sys.executable, str(Path(__file__).resolve()), "evidence", "inspect",
+                "--category", "models", "--project-root",
+                str(Path(request.get("project_root", Path.cwd())).resolve()),
+                "--cache-dir", str(args.cache_dir.resolve()),
+            ],
+        }
         if args.command == "discover":
             report = kickoff_inputs.discover_kickoff(
-                request, config_dir=args.config_dir, cache_dir=args.cache_dir
+                request, config_dir=args.config_dir, cache_dir=args.cache_dir,
+                include_provenance=summary_mode,
             )
-            _json(report)
+            _json(
+                kickoff_inputs.compact_discovery_summary(
+                    report, inspect_references=inspect_references
+                ) if summary_mode else report
+            )
             return 0 if report.get("status") in {"ready", "partial"} else 2
         discovery = kickoff_inputs.discover_kickoff(
-            request, config_dir=args.config_dir, cache_dir=args.cache_dir
+            request, config_dir=args.config_dir, cache_dir=args.cache_dir,
+            include_provenance=summary_mode,
         )
         assembled = kickoff_inputs.assemble_kickoff(
             request,
@@ -105,6 +133,20 @@ def _request_command(args: argparse.Namespace) -> int:
             discovery=discovery,
         )
         if args.command == "assemble":
+            if summary_mode:
+                compact = kickoff_inputs.compact_discovery_summary(
+                    discovery, selected_only=True, inspect_references=inspect_references
+                )
+                compact.update({
+                    "stage": "assembly_summary",
+                    "status": assembled.get("status", "invalid"),
+                    "selected_playbook": assembled.get("selected_playbook"),
+                    "missing_decisions": assembled.get("missing_decisions", []),
+                    "assembly_diagnostics": assembled.get("diagnostics", []),
+                    "formatter_inputs": assembled.get("formatter_inputs"),
+                })
+                _json(compact)
+                return 0 if assembled.get("status") == "ready" else 3
             _json({"stage": "assembly", **assembled, "discovery": discovery})
             return 0 if assembled.get("status") == "ready" else 3
         rendered = kickoff_inputs.render_kickoff(assembled.get("formatter_inputs"))

@@ -911,6 +911,10 @@ def test_use_cafe_workflow_skill_requires_playbook_derived_kickoff_contract() ->
     assert "through `assemble`" in normalized
     assert "use `render` to produce the complete contract" in normalized
     assert "normal new-issue Manager path is `discover`" in normalized_inputs
+    assert "discover --request-file <request.json> --summary" in normalized_inputs
+    assert "assemble --request-file <request.json> --summary" in normalized_inputs
+    assert "full candidate and diagnostic details remain available" in normalized_inputs
+    assert "Do not repeat unchanged source inspection after a validated hit" in normalized_inputs
     assert "persist that Manager evidence for later warm preparations" in normalized_inputs
     assert "evidence refresh --category delivery" in normalized_inputs
     assert "evidence refresh --category models" in normalized_inputs

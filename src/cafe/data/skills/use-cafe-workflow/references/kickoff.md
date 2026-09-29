@@ -16,6 +16,18 @@ they do not decide issue scope, acceptance criteria, playbook suitability,
 model capability, or action authority. The selected graph and all unresolved
 Manager decisions remain Manager-owned.
 
+Use `discover --request-file <request.json> --summary` and, after making the
+issue-owned selection and required decisions, `assemble --request-file
+<request.json> --summary` for the normal Manager path. The compact reports
+preserve every candidate's decision-relevant facts and invalid diagnostics,
+evidence status, source fingerprints or provenance, ages, and full-inspection
+commands; assembly also preserves the selected graph, missing decisions, and
+exact formatter inputs. Full candidate and diagnostic details remain available
+through the referenced inspection commands or the default full reports. Do
+not repeat unchanged source inspection after a validated hit. A cached hit
+never skips first-time issue scope, strategy, action-target, suitability, or
+authority decisions.
+
 After selecting an eligible graph and resolving the required decisions, pass
 those decisions and normalized formatter inputs through `assemble`, then use
 `render` to produce the complete contract with the existing formatter. Do not

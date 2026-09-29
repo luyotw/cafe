@@ -62,6 +62,36 @@ python scripts/prepare_kickoff.py render --request-file request.json
 
 `discover` reports applicable preferences, every effective playbook candidate and its diagnostics, delivery discovery status, and requested model evidence. It does not select a candidate. `assemble` checks the explicitly selected graph and reports missing decisions with their owner. `render` requires a complete normalized input set and calls the existing formatter in memory. It never activates a workflow or executes delivery or cleanup argv.
 
+For normal Manager guidance, prefer the compact machine-readable views after
+the initial scope and authority decisions have been made:
+
+```sh
+python scripts/prepare_kickoff.py discover --request-file request.json --summary
+python scripts/prepare_kickoff.py assemble --request-file request.json --summary
+```
+
+In command notation these are `discover --request-file <request.json>
+--summary` and `assemble --request-file <request.json> --summary`; replace the
+placeholder with the actual request-file path when running them.
+
+Compact discovery still lists every candidate with its applicability, roles,
+profiles, phase routes, confirmation gates, capability requirements and
+diagnostics. It includes candidate counts, invalid-candidate diagnostics,
+delivery status and source fingerprints, model assessment status and source
+provenance with ages, plus commands to inspect the full records. Compact
+assembly presents the selected graph facts needed for review, candidate and
+invalid-diagnostic counts, missing decisions, and the exact normalized
+`formatter_inputs`. The report keeps all data inspectable: full candidate and
+diagnostic details remain available through the inspection commands in the report or by running the same command
+without `--summary`; `render` continues to produce the complete existing
+proposal.
+
+Treat a hit as reusable only while repository identity, source fingerprints,
+freshness and applicability validate. Do not repeat unchanged source
+inspection after a validated hit, but do perform the first issue-scope,
+strategy, action-target and authority judgments for each new preparation. A
+hit never supplies those decisions or confirms activation.
+
 Preflight reports may be passed as JSON objects in `formatter_inputs`, or by path in `preflight_files.update` and `preflight_files.catalog`. The helper reads those files as data; it does not execute their contents.
 
 ## Preferences

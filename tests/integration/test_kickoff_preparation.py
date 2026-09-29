@@ -50,6 +50,172 @@ def _formatter_inputs(issue_name: str) -> dict:
     }
 
 
+def test_compact_cli_reports_preserve_selected_facts_and_full_render(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cli = load_kickoff_module("prepare_kickoff")
+    issue_name = "issue573-compact-report-test"
+    config = tmp_path / "config"
+    cache = tmp_path / "cache"
+    evidence_args = ["--project-root", str(PROJECT_ROOT), "--cache-dir", str(cache)]
+
+    delivery_source = PROJECT_ROOT / "docs/settings-updates.md"
+    delivery_file = tmp_path / "delivery.json"
+    delivery_file.write_text(
+        json.dumps(
+            {
+                "target": "local",
+                "stable_conventions": ["Use the current repository delivery policy."],
+                "sources": [
+                    {
+                        "path": "docs/settings-updates.md",
+                        "fingerprint": hashlib.sha256(delivery_source.read_bytes()).hexdigest(),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert (
+        cli.main(
+            [
+                "evidence",
+                "refresh",
+                *evidence_args,
+                "--category",
+                "delivery",
+                "--evidence-file",
+                str(delivery_file),
+            ]
+        )
+        == 0
+    )
+
+    now = datetime.now(timezone.utc)
+    model_record = {
+        "provider": "provider.test",
+        "model": "fixture-model",
+        "version": "2026-09-30",
+        "assessed_at": now.isoformat(),
+        "workloads": ["implementation"],
+        "reasoning": "high",
+        "capability_bands": {"coding": "fixture evidence"},
+        "limitations": ["Deterministic integration fixture only."],
+        "sources": [
+            {
+                "url": "https://provider.invalid/fixture-model",
+                "retrieved_at": now.isoformat(),
+                "fingerprint": "fixture-source-v1",
+            }
+        ],
+    }
+    model_file = tmp_path / "model.json"
+    model_file.write_text(json.dumps(model_record), encoding="utf-8")
+    assert (
+        cli.main(
+            [
+                "evidence",
+                "refresh",
+                *evidence_args,
+                "--category",
+                "models",
+                "--evidence-file",
+                str(model_file),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    formatter_inputs = _formatter_inputs(issue_name)
+    formatter_inputs.update(
+        {"issue_name": issue_name, "playbook_id": "standard-qa", "project_root": str(PROJECT_ROOT)}
+    )
+    request = {
+        "schema_version": 1,
+        "project_root": str(PROJECT_ROOT),
+        "issue_name": issue_name,
+        "playbook_id": "standard-qa",
+        "manager_decisions": {"assessment": "bounded preference feature"},
+        "formatter_inputs": formatter_inputs,
+    }
+    request_file = tmp_path / "request.json"
+    request_file.write_text(json.dumps(request), encoding="utf-8")
+    common = [
+        "--request-file",
+        str(request_file),
+        "--config-dir",
+        str(config),
+        "--cache-dir",
+        str(cache),
+    ]
+
+    assert cli.main(["discover", *common]) == 0
+    full_discovery_text = capsys.readouterr().out
+    full_discovery = json.loads(full_discovery_text)
+    assert cli.main(["discover", *common, "--summary"]) == 0
+    compact_discovery_text = capsys.readouterr().out
+    compact_discovery = json.loads(compact_discovery_text)
+
+    full_candidates = full_discovery["catalog"]["candidates"]
+    compact_candidates = compact_discovery["catalog"]["candidates"]
+    assert compact_discovery["catalog"]["candidate_count"] == len(full_candidates)
+    assert {candidate["id"] for candidate in compact_candidates} == {
+        candidate["id"] for candidate in full_candidates
+    }
+    assert compact_discovery["catalog"]["invalid_candidate_count"] == sum(
+        not candidate["eligible"] for candidate in full_candidates
+    )
+    assert compact_discovery["catalog"]["ineligible_candidate_diagnostics"] == [
+        {"id": candidate["id"], "diagnostics": candidate.get("diagnostics", [])}
+        for candidate in full_candidates
+        if not candidate["eligible"]
+    ]
+    assert compact_discovery["catalog"]["diagnostics"] == full_discovery["catalog"]["diagnostics"]
+    compact_selected = next(candidate for candidate in compact_candidates if candidate["id"] == "standard-qa")
+    full_selected = next(candidate for candidate in full_candidates if candidate["id"] == "standard-qa")
+    assert compact_selected["profiles"] == full_selected["profiles"]
+    assert compact_selected["confirmation_gates"] == full_selected["confirmation_gates"]
+    assert compact_selected["mandatory_confirmation_gates"] == full_selected["mandatory_confirmation_gates"]
+    assert compact_selected["capability_requirements"] == full_selected["capability_requirements"]
+    assert set(compact_selected["steps"]) == set(full_selected["steps"])
+    for step_name, step in compact_selected["steps"].items():
+        assert step["role"] == full_selected["steps"][step_name]["role"]
+        assert step["on"] == full_selected["steps"][step_name]["on"]
+    assert compact_discovery["delivery"]["status"] == "hit"
+    assert compact_discovery["delivery"]["manifest"]["sources"]
+    assert compact_discovery["models"][0]["status"] == "hit"
+    assert compact_discovery["models"][0]["provenance"]["sources"][0]["fingerprint"] == "fixture-source-v1"
+    assert compact_discovery["models"][0]["provenance"]["age_seconds"] >= 0
+    assert compact_discovery["catalog"]["inspect_reference"]
+    assert len(compact_discovery_text.encode()) < len(full_discovery_text.encode())
+
+    assert cli.main(["assemble", *common]) == 0
+    full_assembly = json.loads(capsys.readouterr().out)
+    assert cli.main(["assemble", *common, "--summary"]) == 0
+    compact_assembly_text = capsys.readouterr().out
+    compact_assembly = json.loads(compact_assembly_text)
+    assert compact_assembly["status"] == full_assembly["status"] == "ready"
+    assert compact_assembly["selected_playbook"] == full_assembly["selected_playbook"] == "standard-qa"
+    assert compact_assembly["formatter_inputs"] == full_assembly["formatter_inputs"]
+    assert compact_assembly["selected_graph"]["profiles"] == full_assembly["selected_candidate"]["profiles"]
+    assert compact_assembly["missing_decisions"] == full_assembly["missing_decisions"] == []
+    assert compact_assembly["catalog"]["candidate_count"] == len(full_candidates)
+    assert compact_assembly["catalog"]["selected_candidate_count"] == 1
+    assert compact_assembly["catalog"]["ineligible_candidate_diagnostics"] == (
+        compact_discovery["catalog"]["ineligible_candidate_diagnostics"]
+    )
+    assert compact_assembly["catalog"]["inspect_reference"]
+    assert len(compact_assembly_text.encode()) < len(json.dumps(full_assembly, separators=(",", ":")).encode())
+
+    inputs = load_kickoff_module("kickoff_inputs")
+    compact_render = inputs.render_kickoff(compact_assembly["formatter_inputs"])
+    assert compact_render["status"] == "rendered"
+    assert compact_render["proposal"]
+    issue_dir = PROJECT_ROOT / ".cafe/issues" / issue_name
+    assert not issue_dir.exists()
+
+
 def test_returning_user_renders_same_complete_proposal_with_warm_preferences(tmp_path: Path) -> None:
     inputs = load_kickoff_module("kickoff_inputs")
     preferences = load_kickoff_module("kickoff_preferences").PreferenceStore(

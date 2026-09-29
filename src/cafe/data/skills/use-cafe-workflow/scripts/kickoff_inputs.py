@@ -166,8 +166,154 @@ def _default_cache_root() -> Path:
     return base / "cafe" / "kickoff" / "v1"
 
 
+def _age_seconds(value: Any, *, now: datetime) -> float | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return round((now - parsed.astimezone(timezone.utc)).total_seconds(), 3)
+
+
+def _compact_candidate(candidate: Any) -> dict[str, Any]:
+    if not isinstance(candidate, dict):
+        return {"eligible": False, "diagnostics": ["candidate_record_invalid"]}
+    step_fields = (
+        "type", "role", "skill", "on", "human_tasks", "input_artifacts", "output_artifact"
+    )
+    steps: dict[str, Any] = {}
+    omitted_step_fields: dict[str, list[str]] = {}
+    raw_steps = candidate.get("steps", {})
+    if isinstance(raw_steps, dict):
+        for step_id, step in raw_steps.items():
+            if not isinstance(step, dict):
+                steps[step_id] = {"diagnostics": ["step_record_invalid"]}
+                omitted_step_fields[step_id] = []
+                continue
+            steps[step_id] = {key: step[key] for key in step_fields if key in step}
+            omitted_step_fields[step_id] = sorted(set(step) - set(step_fields))
+    candidate_fields = (
+        "id", "eligible", "source", "fingerprint", "applicability", "behavior", "roles",
+        "profiles", "skills", "confirmation_gates", "mandatory_confirmation_gates",
+        "capability_requirements", "capability_setup", "diagnostics",
+    )
+    summary = {key: candidate[key] for key in candidate_fields if key in candidate}
+    summary["steps"] = steps
+    summary["omitted_detail_fields"] = sorted(set(candidate) - set(candidate_fields) - {"steps"})
+    summary["omitted_step_detail_fields"] = omitted_step_fields
+    return summary
+
+
+def compact_discovery_summary(
+    discovery: dict[str, Any],
+    *,
+    selected_only: bool = False,
+    inspect_references: dict[str, Any] | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Project reusable discovery facts without dropping candidates or diagnostics silently."""
+    instant = now or datetime.now(timezone.utc)
+    raw_catalog = discovery.get("catalog", {})
+    raw_catalog = raw_catalog if isinstance(raw_catalog, dict) else {}
+    raw_candidates = raw_catalog.get("candidates", [])
+    raw_candidates = raw_candidates if isinstance(raw_candidates, list) else []
+    candidates = [_compact_candidate(candidate) for candidate in raw_candidates]
+    selected = discovery.get("selected_candidate")
+    selected_id = selected.get("id") if isinstance(selected, dict) else None
+    selected_summary = next(
+        (item for item in candidates if item.get("id") == selected_id), None
+    )
+    if selected_summary is None and isinstance(selected, dict):
+        selected_summary = _compact_candidate(selected)
+
+    invalid_diagnostics = [
+        {"id": item.get("id"), "diagnostics": item.get("diagnostics", [])}
+        for item in candidates
+        if item.get("eligible") is not True
+    ]
+    eligible_count = sum(item.get("eligible") is True for item in candidates)
+    ineligible_count = len(candidates) - eligible_count
+    listed_candidates = [] if selected_only else candidates
+    omitted_count = len(candidates) - len(listed_candidates)
+
+    refs = inspect_references or {}
+    delivery = discovery.get("delivery", {})
+    delivery = delivery if isinstance(delivery, dict) else {}
+    manifest = delivery.get("manifest", {})
+    manifest = manifest if isinstance(manifest, dict) else {}
+    observations = []
+    for observation in delivery.get("current_observations", []):
+        if isinstance(observation, dict):
+            observations.append(
+                {**observation, "age_seconds": _age_seconds(observation.get("observed_at"), now=instant)}
+            )
+        else:
+            observations.append(observation)
+
+    models = []
+    for model in discovery.get("models", []):
+        if not isinstance(model, dict):
+            models.append({"status": "miss", "diagnostics": ["model_report_invalid"]})
+            continue
+        models.append({
+            **model,
+            "inspect_reference": refs.get("models"),
+        })
+
+    result = {
+        "schema_version": 1,
+        "stage": "discovery_summary",
+        "status": discovery.get("status", "partial"),
+        "selected_playbook": selected_id,
+        "preferences": discovery.get("preferences", {}),
+        "catalog": {
+            "candidate_count": len(raw_candidates),
+            "eligible_candidate_count": eligible_count,
+            "ineligible_candidate_count": ineligible_count,
+            "invalid_candidate_count": ineligible_count,
+            "listed_candidate_count": len(listed_candidates),
+            "unlisted_candidate_count": omitted_count,
+            "selected_candidate_count": 1 if selected_summary is not None else 0,
+            "candidates": listed_candidates,
+            "ineligible_candidate_diagnostics": invalid_diagnostics,
+            "diagnostics": raw_catalog.get("diagnostics", []),
+            "reuse": raw_catalog.get("reuse", {}),
+            "inspect_reference": refs.get("catalog"),
+        },
+        "delivery": {
+            "status": delivery.get("status", "miss"),
+            "diagnostics": delivery.get("diagnostics", []),
+            "discovery_gap": delivery.get("discovery_gap"),
+            "stable_conventions": delivery.get("stable_conventions", []),
+            "current_observations": observations,
+            "manifest": {
+                "repository": manifest.get("repository"),
+                "inventory_count": len(manifest.get("inventory", []))
+                if isinstance(manifest.get("inventory", []), list) else None,
+                "source_count": len(manifest.get("sources", []))
+                if isinstance(manifest.get("sources", []), list) else None,
+                "sources": manifest.get("sources", []),
+                "watched": manifest.get("watched", []),
+            },
+            "observation_age_seconds": None if not observations else observations[0].get("age_seconds"),
+            "inspect_reference": refs.get("delivery"),
+        },
+        "models": models,
+        "diagnostics": discovery.get("diagnostics", []),
+        "inspect_references": refs,
+    }
+    if selected_only:
+        result["stage"] = "assembly_summary"
+        result["selected_graph"] = selected_summary
+    return result
+
+
 def discover_kickoff(
-    request: dict[str, Any], *, config_dir: Path | None = None, cache_dir: Path | None = None
+    request: dict[str, Any], *, config_dir: Path | None = None, cache_dir: Path | None = None,
+    include_provenance: bool = False,
 ) -> dict[str, Any]:
     """Gather reusable inputs while leaving issue assessment and selection to Manager."""
     if not isinstance(request, dict) or request.get("schema_version") != 1:
@@ -224,14 +370,30 @@ def discover_kickoff(
     model_records = request.get("model_assessments", [])
     if not model_records:
         model_records = list(model_cache.values())
-    models = [
-        model_module.assess_model_evidence(
+    models = []
+    for assessment in model_records:
+        if not isinstance(assessment, dict):
+            continue
+        report = model_module.assess_model_evidence(
             assessment, now=now, current_sources=request.get("current_model_sources"),
             contradictions=request.get("model_contradictions"),
         )
-        for assessment in model_records
-        if isinstance(assessment, dict)
-    ]
+        if include_provenance:
+            raw_sources = assessment.get("sources", [])
+            raw_sources = raw_sources if isinstance(raw_sources, list) else []
+            report["provenance"] = {
+                "assessed_at": assessment.get("assessed_at"),
+                "age_seconds": _age_seconds(assessment.get("assessed_at"), now=now),
+                "sources": [
+                    {
+                        **source,
+                        "age_seconds": _age_seconds(source.get("retrieved_at"), now=now),
+                    }
+                    if isinstance(source, dict) else {"source": source, "age_seconds": None}
+                    for source in raw_sources
+                ],
+            }
+        models.append(report)
     selected = request.get("playbook_id")
     selected_candidate = next(
         (item for item in catalog.get("candidates", []) if item.get("id") == selected), None
