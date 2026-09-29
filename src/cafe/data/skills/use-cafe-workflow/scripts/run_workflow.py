@@ -388,7 +388,7 @@ def _emit_directive(
         "next_wake": next_wake,
     }
     if conversation_locale is not None:
-        # Read, never re-resolved: the Driver mirrors the generic authority so a
+        # Read, never re-resolved: the Manager mirrors the generic authority so a
         # resumed turn cannot drift to another language.
         directive["conversation_locale"] = conversation_locale
     if poll_interval_seconds is not None:

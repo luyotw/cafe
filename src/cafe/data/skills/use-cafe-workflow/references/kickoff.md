@@ -9,7 +9,7 @@ the workflow conversation language. Also read `playbook_selection.md`,
 
 `docs/language-policy.md` is the single source of truth for precedence,
 persistence, the language-change scope, and the fallback rules. This checklist
-only describes what the Driver does; it never states a competing rule.
+only describes what the Manager does; it never states a competing rule.
 
 - [ ] Read `docs/language-policy.md` before answering any question about the
   workflow conversation language.

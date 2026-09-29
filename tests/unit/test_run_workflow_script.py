@@ -738,7 +738,7 @@ def test_the_directive_reports_the_stored_workflow_language_on_resume(
 def test_the_directive_matches_a_legacy_contract_snapshot_on_resume(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
-    """An old workflow keeps the same English fallback in both Driver consumers."""
+    """An old workflow keeps the same English fallback in both Manager consumers."""
     module = _module()
     issue_dir = _prepared(tmp_path)
     from conversation_locale_adapter import contract_locale_snapshot

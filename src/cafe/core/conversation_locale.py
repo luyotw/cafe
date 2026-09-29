@@ -30,7 +30,7 @@ Accepting a tag is not the same as supporting it: authored text exists for
 text for that message without changing the stored locale. Simplified and
 Traditional Chinese are never treated as interchangeable.
 
-This module is generic core and imports no Driver code.
+This module is generic core and imports no Manager code.
 """
 
 from __future__ import annotations

@@ -396,7 +396,7 @@ def _adapter_module():
 def test_a_driver_started_workflow_stores_what_the_adapter_supplied(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, slack_posts: list
 ) -> None:
-    """Integration 7: the Driver supplies; the workflow decides and then owns it."""
+    """Integration 7: the Manager supplies; the workflow decides and then owns it."""
     from tests.conftest import create_minimal_config
 
     adapter = _adapter_module()
@@ -435,7 +435,7 @@ def test_a_driver_started_workflow_stores_what_the_adapter_supplied(
     assert adapter.effective_conversation_locale(issue_dir) == ("zh-TW", "inferred")
 
     # Resuming reads the effective generic value instead of re-resolving it, and
-    # the snapshot the Driver contract carries equals it.
+    # the snapshot the Manager contract carries equals it.
     resumed = adapter.effective_conversation_locale(
         issue_dir,
         playbook_locale="ja-JP",

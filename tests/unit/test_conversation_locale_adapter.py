@@ -1,4 +1,4 @@
-"""Driver-side adapter invariants for the workflow conversation language."""
+"""Manager-side adapter invariants for the workflow conversation language."""
 
 from __future__ import annotations
 
@@ -181,8 +181,8 @@ def test_a_one_reply_language_request_changes_neither_state_nor_snapshot(
     }
 
 
-def test_no_generic_module_imports_the_driver_adapter() -> None:
-    """The dependency runs one way only: Driver-side code calls generic code."""
+def test_no_generic_module_imports_the_manager_adapter() -> None:
+    """The dependency runs one way only: Manager-side code calls generic code."""
     generic_roots = ("core", "phases", "ui", "services", "workflow_execution")
     offenders = [
         path
