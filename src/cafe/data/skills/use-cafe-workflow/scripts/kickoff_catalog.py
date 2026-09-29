@@ -1,0 +1,241 @@
+"""Effective playbook index used during staged kickoff preparation."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from cafe.catalogs.resolver import CatalogKind, CatalogResolver
+from cafe.core.capabilities import default_capability_definition_dirs, load_capability_registry
+from cafe.core.playbook import confirmation_gate_steps, mandatory_confirmation_gate_steps
+from cafe.playbooks.loader import PlaybookLoader
+from cafe.skills.execution_profile import resolve_execution_profile
+from cafe.skills.loader import SkillLoader
+from cafe.skills.selectors import skill_selector_names
+from _kickoff_store import VersionedJsonStore
+
+SCHEMA_VERSION = 1
+_DEPENDENCY_FILES = (
+    "src/cafe/catalogs/resolver.py",
+    "src/cafe/playbooks/loader.py",
+    "src/cafe/skills/loader.py",
+    "src/cafe/skills/execution_profile.py",
+    "src/cafe/skills/selectors.py",
+    "src/cafe/skills/workflow_composition.py",
+    "src/cafe/core/playbook.py",
+    "src/cafe/core/capabilities.py",
+)
+
+
+def _digest(parts: list[tuple[str, str]]) -> str:
+    payload = json.dumps(parts, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            ("on" if key is True else "off" if key is False else str(key)): _json_safe(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
+def _dependency_closure(playbook: dict[str, Any], skill_loader: SkillLoader) -> list[tuple[str, str]]:
+    dependencies: list[tuple[str, str]] = []
+    skills = playbook.get("skills", {})
+    workflow = skills.get("workflow", {}) if isinstance(skills, dict) else {}
+    shared = workflow.get("shared", []) if isinstance(workflow, dict) else []
+    names: set[str] = set(shared if isinstance(shared, list) else [])
+    steps = playbook.get("steps", {})
+    for step in steps.values() if isinstance(steps, dict) else ():
+        if isinstance(step, dict):
+            selector = step.get("skill") or step.get("skill_selector")
+            if selector is not None:
+                names.update(skill_selector_names(selector))
+    for name in sorted(names):
+        try:
+            entry = skill_loader.resolver.resolve(CatalogKind.PHASE, name)
+            paths = [entry.path] if entry.path.is_file() else sorted(entry.path.rglob("*"))
+            for path in paths:
+                if not path.is_file() or path.is_symlink():
+                    continue
+                relative = path.relative_to(entry.path) if entry.path.is_dir() else Path(path.name)
+                dependencies.append((f"skill:{name}/{relative.as_posix()}", hashlib.sha256(path.read_bytes()).hexdigest()))
+        except (OSError, ValueError, FileNotFoundError) as exc:
+            dependencies.append((f"skill:{name}:diagnostic", type(exc).__name__))
+    return dependencies
+
+
+def _candidate_details(
+    candidate_id: str, path: Path, source: str, project_root: Path, global_root: Path, builtin_root: Path,
+    validated_model: Any,
+) -> dict[str, Any]:
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("Playbook root must be a mapping")
+    playbook = raw.get("playbook", {})
+    steps = raw.get("steps", {})
+    if not isinstance(playbook, dict) or not isinstance(steps, dict):
+        raise ValueError("Playbook metadata and steps must be mappings")
+    skill_loader = SkillLoader(
+        project_root=project_root, global_root=global_root, builtin_root=builtin_root
+    )
+    skill_loader.discover(strict=False)
+    workflow_skills = playbook and raw.get("skills", {}).get("workflow", {}).get("shared", [])
+    profiles: dict[str, dict[str, Any]] = {}
+    diagnostics: list[dict[str, str]] = []
+    for step_name, step in steps.items():
+        if not isinstance(step, dict):
+            diagnostics.append({"step": str(step_name), "status": "invalid", "reason": "step_not_mapping"})
+            continue
+        selector = step.get("skill") or step.get("skill_selector")
+        if selector is None:
+            continue
+        try:
+            profile = resolve_execution_profile(
+                skill_loader,
+                selector,
+                workflow_skills=workflow_skills if isinstance(workflow_skills, list) else [],
+                step_name=str(step_name),
+            )
+            profiles[str(step_name)] = {
+                "skills": list(profile.skill_names),
+                "workloads": list(profile.workloads),
+                "reasoning": profile.reasoning,
+                "risk_domains": list(profile.risk_domains),
+                "fallback_strength": profile.fallback_strength,
+                "uses_default": profile.uses_default,
+            }
+        except (ValueError, KeyError, TypeError) as exc:
+            diagnostics.append({"step": str(step_name), "status": "incomplete", "reason": type(exc).__name__})
+    try:
+        declared_gates = confirmation_gate_steps(validated_model)
+        mandatory_gates = mandatory_confirmation_gate_steps(validated_model)
+    except (ValueError, KeyError, TypeError):
+        declared_gates, mandatory_gates = [], []
+    requested_capabilities = sorted(
+        {
+            capability
+            for step in validated_model.steps.values()
+            for capability in step.capability_requests
+        }
+    )
+    capability_details: dict[str, Any] = {}
+    try:
+        registry = load_capability_registry(default_capability_definition_dirs(project_root))
+        for capability in requested_capabilities:
+            manifest = registry.get(capability)
+            if manifest is None:
+                diagnostics.append({"capability": capability, "status": "incomplete", "reason": "manifest_missing"})
+                continue
+            capability_details[capability] = {
+                "setup_questions": [question.model_dump(mode="json") for question in manifest.setup_questions],
+                "approval": manifest.approval,
+                "risk": manifest.risk,
+            }
+    except (OSError, ValueError) as exc:
+        diagnostics.append({"status": "incomplete", "reason": f"capability_registry:{type(exc).__name__}"})
+    applicability = playbook.get("applicability")
+    eligible = isinstance(applicability, dict) and bool(str(applicability.get("summary", "")).strip())
+    return {
+        "id": candidate_id,
+        "source": source,
+        "path": str(path),
+        "applicability": applicability if isinstance(applicability, dict) else None,
+        "eligible": eligible,
+        "roles": raw.get("roles", {}),
+        "behavior": raw.get("behavior", {}),
+        "skills": raw.get("skills", {}),
+        "steps": steps,
+        "profiles": profiles,
+        "confirmation_gates": list(declared_gates),
+        "mandatory_confirmation_gates": list(mandatory_gates),
+        "capability_requirements": requested_capabilities,
+        "capability_setup": capability_details,
+        "diagnostics": diagnostics,
+    }
+
+def discover_index(
+    *, project_root: Path, global_root: Path, builtin_root: Path, cache_file: Path
+) -> dict[str, Any]:
+    """Discover effective candidate facts and report per-candidate diagnostics."""
+    resolver = CatalogResolver(
+        project_root=project_root,
+        global_root=global_root,
+        builtin_root=builtin_root,
+    )
+    loader = PlaybookLoader(
+        project_root=project_root, global_root=global_root, builtin_root=builtin_root
+    )
+    skill_loader = SkillLoader(
+        project_root=project_root, global_root=global_root, builtin_root=builtin_root
+    )
+    cache = VersionedJsonStore(cache_file, schema_version=SCHEMA_VERSION, collection="candidates")
+    previous = cache.read()
+    candidates: list[dict[str, Any]] = []
+    diagnostics: list[dict[str, str]] = []
+    reuse: dict[str, bool] = {}
+    try:
+        names = resolver.keys(CatalogKind.PLAYBOOK)
+    except (OSError, ValueError) as exc:
+        return {
+            "candidates": [],
+            "diagnostics": [{"status": "incomplete", "reason": type(exc).__name__}],
+            "reuse": {},
+        }
+    dependency_code: list[tuple[str, str]] = []
+    source_root = Path(__file__).resolve().parents[6]
+    for relative in _DEPENDENCY_FILES:
+        path = source_root / relative
+        try:
+            dependency_code.append((relative, hashlib.sha256(path.read_bytes()).hexdigest()))
+        except OSError:
+            dependency_code.append((relative, "missing"))
+    for directory in default_capability_definition_dirs(project_root):
+        try:
+            for path in sorted(directory.glob("*")):
+                if path.is_file():
+                    dependency_code.append((f"capability:{path.name}", hashlib.sha256(path.read_bytes()).hexdigest()))
+        except OSError:
+            dependency_code.append((f"capability-root:{directory}", "unreadable"))
+    for candidate_id in names:
+        try:
+            entry = resolver.resolve(CatalogKind.PLAYBOOK, candidate_id)
+            raw = yaml.safe_load(entry.path.read_text(encoding="utf-8"))
+            raw = raw if isinstance(raw, dict) else {}
+            dependencies = _dependency_closure(raw, skill_loader)
+            fingerprint = _digest(
+                [("entry", entry.digest), ("source", entry.source), *dependencies, *dependency_code]
+            )
+            cached = previous.get(candidate_id)
+            if isinstance(cached, dict) and cached.get("fingerprint") == fingerprint and isinstance(cached.get("candidate"), dict):
+                candidate = cached["candidate"]
+                reuse[candidate_id] = True
+            else:
+                loaded = loader.load_model(candidate_id, strict=False)
+                candidate = _candidate_details(
+                    candidate_id, entry.path, entry.source, project_root, global_root, builtin_root,
+                    loaded.model,
+                )
+                candidate["loaded_graph"] = loaded.as_dict()
+                candidate["fingerprint"] = fingerprint
+                candidate = _json_safe(candidate)
+                reuse[candidate_id] = False
+            candidates.append(candidate)
+            cache_record = {"fingerprint": fingerprint, "candidate": candidate}
+            previous[candidate_id] = cache_record
+        except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError) as exc:
+            diagnostics.append({"id": candidate_id, "status": "invalid", "reason": type(exc).__name__, "detail": str(exc)[:250]})
+            reuse[candidate_id] = False
+    try:
+        cache.write(previous)
+    except OSError as exc:
+        diagnostics.append({"status": "cache_write_failed", "reason": type(exc).__name__})
+    return {"candidates": candidates, "diagnostics": diagnostics, "reuse": reuse}
