@@ -8690,6 +8690,81 @@ workflow:
     ) == (True, "", False)
 
 
+@pytest.mark.parametrize("repair_succeeds", [True, False])
+def test_outcome_only_handoff_retries_invalid_produced_todo(
+    tmp_path: Path, monkeypatch, repair_succeeds: bool
+) -> None:
+    """A producer's format rejection must not escape as an execution failure."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "output-format-retry"
+    playbook = {
+        "playbook": {"id": "output-format-retry"},
+        "roles": {"pm": {"default_agent": "Roger"}},
+        "steps": {
+            "spec": {
+                "skill": "cafe-spec",
+                "role": "pm",
+                "output_artifact": "report",
+                "behavior": {"completion": "baton"},
+                "allowed_tools": ["Read", "Write"],
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+    iteration_dir = issue_dir / "spec" / "iteration_001"
+    pinned_checklists = []
+    sessions = []
+
+    def write_attempt(**_kwargs):
+        assert not (iteration_dir / "artifact.json").exists()
+        assert not BlackboardStore(issue_dir).load_or_create("spec").artifacts
+        metadata = json.loads((iteration_dir / "iteration.json").read_text())
+        pinned_checklists.append(metadata["effective_checklist"])
+        sessions.append(manager.agent.config.session_id)
+        assert (iteration_dir / "checklist.md").read_bytes() == b""
+        report = "# QA report\n\n## Todo List\n\nNo actionable work.\n"
+        if manager.execute_call_count == 1 or not repair_succeeds:
+            report += "\n# Prior report\n\n## Todo List\n\nNo actionable work.\n"
+        (iteration_dir / "output.md").write_text(report, encoding="utf-8")
+        (issue_dir / "next_step.txt").write_text(
+            json.dumps({"version": 1, "intent": "await_agent"}), encoding="utf-8"
+        )
+
+    manager = FakeAgentManager([""] * 4, on_execute=write_attempt)
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="output-format-retry",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"pm": "Roger"},
+    )
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+
+    result = executor.execute_step("spec", playbook["steps"]["spec"], state)
+
+    assert manager.execute_call_count == (2 if repair_succeeds else 4)
+    assert all("exactly one '## Todo List' section" in p for p in manager.prompts[1:])
+    assert all(p == pinned_checklists[0] for p in pinned_checklists)
+    assert pinned_checklists[0]["gates"] == []
+    assert sessions == ["session-1"] * manager.execute_call_count
+    assert (iteration_dir / "checklist.md").read_bytes() == b""
+    assert not (issue_dir / "spec" / "iteration_002").exists()
+    assert manager.allowed_tools_calls[1:] == [manager.allowed_tools_calls[0]] * (
+        manager.execute_call_count - 1
+    )
+    assert HumanTaskRecordStore(issue_dir).tasks() == ()
+    assert result.artifact_ready is repair_succeeds
+    if repair_succeeds:
+        assert parse_todo_list(Path(result.artifacts["report"]).read_text()) == ()
+        assert (iteration_dir / "artifact.json").exists()
+    else:
+        assert result.artifacts == {}
+        assert not (iteration_dir / "artifact.json").exists()
+        assert state.handoff_contract.status_code == "CHECKLIST_VALIDATION_FAILED"
+
+
 def test_completion_contract_failure_retries_same_producer(tmp_path: Path) -> None:
     phase_dir = tmp_path / ".cafe" / "issues" / "producer-retry" / "review"
     iteration_dir = phase_dir / "iteration_001"
@@ -9052,3 +9127,96 @@ workflow:
 
         ledger.path.write_text('{"version": 1, "entries": []}\n', encoding="utf-8")
         assert not executor._validate_projected_todo_completion(checklist)
+
+
+@pytest.mark.parametrize("stored_locale", ["zh-TW", None])
+def test_build_context_forwards_the_workflow_language_to_the_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stored_locale: str | None
+) -> None:
+    """The public prompt path applies the English fallback without storing it."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".cafe").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".cafe" / "strategic_context.yaml").write_text(
+        "version: 1\nrepository_language:\n  content_locale: en-US\n", encoding="utf-8"
+    )
+    skill_root = tmp_path / "builtin" / "skills" / "drafting"
+    skill_root.mkdir(parents=True)
+    (skill_root / "SKILL.md").write_text(
+        "---\nname: drafting\ndescription: Draft\n---\n\n# Skill\n", encoding="utf-8"
+    )
+    loader = SkillLoader(
+        project_root=tmp_path,
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+    loader.discover()
+    phase = GenericPhase(
+        loader,
+        skill_bridge=NativeSkillBridge(loader, project_root=tmp_path, home_dir=tmp_path / "home"),
+    )
+    issue_dir = tmp_path / ".cafe" / "issues" / "locale-context"
+    playbook = {
+        "playbook": {"id": "custom-drafting"},
+        "roles": {"writer": {"default_agent": "David", "description": "Writer"}},
+        "steps": {
+            "draft": {
+                "skill": "drafting",
+                "role": "writer",
+                "output_artifact": "draft",
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("draft")
+    state.conversation_locale = stored_locale
+    state.conversation_locale_source = "explicit" if stored_locale else None
+    store.save(state)
+    if stored_locale is None:
+        raw = json.loads(store.file_path.read_text(encoding="utf-8"))
+        raw.pop("conversation_locale")
+        raw.pop("conversation_locale_source")
+        store.file_path.write_text(json.dumps(raw), encoding="utf-8")
+        state = store.load_or_create("draft")
+    monkeypatch.setattr(
+        AgentManager,
+        "read_agent_file",
+        staticmethod(lambda _name, _role: ("test", "---\nname: David\n---\n")),
+    )
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="locale-context",
+        playbook=playbook,
+        generic_phase=phase,
+        agent_manager=FakeAgentManager("await_agent"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"writer": "David"},
+    )
+    executor.iteration = 1
+    output = issue_dir / "draft" / "iteration_001" / "output.md"
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    context = executor._build_context(
+        step_name="draft",
+        step_def=playbook["steps"]["draft"],
+        blackboard_state=state,
+        agent_name="David",
+        output_file=output,
+    )
+    prompt = phase.build_prompt(
+        skill_name="drafting", skill_invocation="/drafting", context=context
+    )
+
+    assert context["conversation_locale"] == (stored_locale or "")
+    assert context["repository_content_locale"] == "en-US"
+    conversation_line = next(
+        line for line in prompt.splitlines() if "conversation language" in line
+    )
+    content_line = next(line for line in prompt.splitlines() if "content language" in line)
+    assert (stored_locale or "en-US") in conversation_line
+    assert "en-US" in content_line
+    if stored_locale is None:
+        assert state.conversation_locale is None
+        assert "conversation_locale" not in json.loads(
+            store.file_path.read_text(encoding="utf-8")
+        )

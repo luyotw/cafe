@@ -1,7 +1,7 @@
 ---
 name: cafe-research_synthesize
 description: Synthesize findings and cross-check evidence
-version: 1.1.0
+version: 1.2.0
 workflow:
   execution_profile:
     workload: research
@@ -12,6 +12,8 @@ workflow:
     - id: clarification-feedback
       pattern: revision_feedback
       prompt: Provide the clarification needed to continue synthesis.
+      prompt_locales:
+        zh-TW: "提供繼續綜整所需的釐清說明。"
       input_schema: feedback
   prompt_inputs:
     - artifacts: [research_report_doc, causal_todo]

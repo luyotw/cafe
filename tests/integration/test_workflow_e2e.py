@@ -651,6 +651,7 @@ def test_builtin_permission_notification_completes_and_reaches_reviewed_pr(
         "task_id": task.id,
         "step": "develop",
         "task_type": "permission-answers",
+        "conversation_locale": "en-US",
     }
     assert HumanTaskRecordStore(issue_dir).get_task(task.id).status is HumanTaskStatus.COMPLETED
 

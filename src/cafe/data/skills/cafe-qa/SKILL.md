@@ -1,7 +1,7 @@
 ---
 name: cafe-qa
 description: Use this skill when a workflow needs independent black-box acceptance before PR publication.
-version: 1.2.0
+version: 1.3.0
 workflow:
   execution_profile:
     workload: review
@@ -14,14 +14,20 @@ workflow:
     - id: clarification-feedback
       pattern: revision_feedback
       prompt: Provide the information or permission needed to complete the blocked acceptance check.
+      prompt_locales:
+        zh-TW: "提供完成受阻驗收檢查所需的資訊或權限。"
       input_schema: feedback
     - id: iteration-limit
       pattern: confirm_output
       prompt: The workflow reached its configured iteration limit. Increase the issue's limit if another acceptance check is authorized, then resume this phase.
+      prompt_locales:
+        zh-TW: "工作流程已達設定的迭代上限。若已授權再做一次驗收檢查，請調高此工作項目的上限後再恢復此階段。"
       input_schema: decision
       decisions:
         - id: resume
           label: Resume after increasing the iteration limit
+          label_locales:
+            zh-TW: "調高迭代上限後恢復"
   prompt_inputs:
     - artifacts: [spec]
       placeholder: spec_file

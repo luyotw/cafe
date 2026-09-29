@@ -21,6 +21,7 @@ import yaml
 
 from cafe.agents.executor import AgentExecutionControl, AgentExecutionError, AgentExecutor
 from cafe.agents.manager import AgentManager
+from cafe.core.conversation_locale import DEFAULT_CONVERSATION_LOCALE
 from cafe.core.human_task_notifications import (
     build_workflow_callback_failure_message,
     load_human_task_notification_settings,
@@ -2111,6 +2112,21 @@ def run_callback(event: dict[str, Any], *, repository_root: Path) -> None:
         store.commit()
 
 
+def _stored_conversation_locale(issue_dir: Path) -> str:
+    """Read the workflow's stored conversation locale for one background message.
+
+    A background notification must not re-resolve the language. An absent or
+    unreadable record falls back to the documented English default for this
+    message only and never writes anything back.
+    """
+    try:
+        raw = json.loads((issue_dir / "blackboard.json").read_text(encoding="utf-8"))
+        stored = raw.get("conversation_locale")
+    except (OSError, ValueError):
+        return DEFAULT_CONVERSATION_LOCALE
+    return stored if isinstance(stored, str) and stored.strip() else DEFAULT_CONVERSATION_LOCALE
+
+
 def _notify_callback_failure(
     event: dict[str, Any], *, repository_root: Path, error: Exception
 ) -> None:
@@ -2153,6 +2169,7 @@ def _notify_callback_failure(
             step=step if isinstance(step, str) else "",
             event_type=event_type if isinstance(event_type, str) else "",
             error_code=error_code,
+            locale=_stored_conversation_locale(issue_dir),
         )
         try:
             webhook_url = load_slack_webhook_url(repository_root=notification_root)

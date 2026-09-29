@@ -14,6 +14,8 @@ from typing import Any, Literal, Mapping, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from cafe.core.conversation_locale import normalize_locale_tag
+
 HumanTaskPattern = Literal[
     "confirm_output",
     "answer_questions",
@@ -50,6 +52,27 @@ def _non_empty(value: str, *, field_name: str) -> str:
     return text
 
 
+def _validate_locale_variants(value: Mapping[str, str], *, field_name: str) -> dict[str, str]:
+    """Keep authored variants keyed by a canonical tag with non-empty text."""
+    variants: dict[str, str] = {}
+    for tag, text in value.items():
+        canonical = normalize_locale_tag(tag)
+        if canonical is None:
+            raise ValueError(f"{field_name} keys must be usable language tags")
+        if canonical in variants:
+            raise ValueError(f"{field_name} keys must be unique after normalization")
+        variants[canonical] = _non_empty(text, field_name=field_name)
+    return variants
+
+
+def _authored_variant(variants: Mapping[str, str], locale: Optional[str], fallback: str) -> str:
+    """Select an authored variant, keeping the declared text when none exists."""
+    canonical = normalize_locale_tag(locale)
+    if canonical is None:
+        return fallback
+    return variants.get(canonical, fallback)
+
+
 class HumanTaskDecision(BaseModel):
     """One declared choice for a decision-based task."""
 
@@ -57,6 +80,7 @@ class HumanTaskDecision(BaseModel):
 
     id: str
     label: str
+    label_locales: dict[str, str] = Field(default_factory=dict)
     requires_feedback: bool = False
     requires_target: bool = False
     correction: bool = False
@@ -66,6 +90,20 @@ class HumanTaskDecision(BaseModel):
     def _validate_copy(cls, value: str, info) -> str:
         return _non_empty(value, field_name=info.field_name)
 
+    @field_validator("label_locales")
+    @classmethod
+    def _validate_label_locales(cls, value: dict[str, str]) -> dict[str, str]:
+        return _validate_locale_variants(value, field_name="decision label_locales")
+
+    def for_locale(self, locale: Optional[str]) -> "HumanTaskDecision":
+        """Return this decision presented in one locale, identity unchanged."""
+        return self.model_copy(
+            update={
+                "label": _authored_variant(self.label_locales, locale, self.label),
+                "label_locales": {},
+            }
+        )
+
 
 class HumanTaskQuestion(BaseModel):
     """One required structured answer in an answer-questions policy."""
@@ -74,6 +112,7 @@ class HumanTaskQuestion(BaseModel):
 
     id: str
     prompt: str
+    prompt_locales: dict[str, str] = Field(default_factory=dict)
     options: tuple[str, ...] = ()
     multiple: bool = False
 
@@ -81,6 +120,24 @@ class HumanTaskQuestion(BaseModel):
     @classmethod
     def _validate_copy(cls, value: str, info) -> str:
         return _non_empty(value, field_name=info.field_name)
+
+    @field_validator("prompt_locales")
+    @classmethod
+    def _validate_prompt_locales(cls, value: dict[str, str]) -> dict[str, str]:
+        return _validate_locale_variants(value, field_name="question prompt_locales")
+
+    def for_locale(self, locale: Optional[str]) -> "HumanTaskQuestion":
+        """Return this question presented in one locale.
+
+        Options are answer identity rather than presentation, so they are never
+        translated.
+        """
+        return self.model_copy(
+            update={
+                "prompt": _authored_variant(self.prompt_locales, locale, self.prompt),
+                "prompt_locales": {},
+            }
+        )
 
     @field_validator("options")
     @classmethod
@@ -99,9 +156,11 @@ class HumanTaskPolicy(BaseModel):
     id: str
     pattern: HumanTaskPattern
     prompt: str
+    prompt_locales: dict[str, str] = Field(default_factory=dict)
     input_schema: HumanTaskInputSchema
     required: bool = True
     correction_guidance: str = "Provide a complete response using the requested format."
+    correction_guidance_locales: dict[str, str] = Field(default_factory=dict)
     decisions: tuple[HumanTaskDecision, ...] = ()
     questions: tuple[HumanTaskQuestion, ...] = ()
     questions_from_xml: bool = False
@@ -111,6 +170,11 @@ class HumanTaskPolicy(BaseModel):
     @classmethod
     def _validate_copy(cls, value: str, info) -> str:
         return _non_empty(value, field_name=info.field_name)
+
+    @field_validator("prompt_locales", "correction_guidance_locales")
+    @classmethod
+    def _validate_policy_locales(cls, value: dict[str, str], info) -> dict[str, str]:
+        return _validate_locale_variants(value, field_name=info.field_name)
 
     @field_validator("allowed_targets")
     @classmethod
@@ -146,6 +210,26 @@ class HumanTaskPolicy(BaseModel):
         if self.input_schema != "answers" and self.questions_from_xml:
             raise ValueError("only answer policies may use questions_from_xml")
         return self
+
+    def for_locale(self, locale: Optional[str]) -> "HumanTaskPolicy":
+        """Return this policy presented in one locale.
+
+        Only presentation varies. Decision ``id``s, the input schema, the
+        pattern, required and correction flags, question options and allowed
+        targets are machine identity and are carried through unchanged.
+        """
+        return self.model_copy(
+            update={
+                "prompt": _authored_variant(self.prompt_locales, locale, self.prompt),
+                "prompt_locales": {},
+                "correction_guidance": _authored_variant(
+                    self.correction_guidance_locales, locale, self.correction_guidance
+                ),
+                "correction_guidance_locales": {},
+                "decisions": tuple(item.for_locale(locale) for item in self.decisions),
+                "questions": tuple(item.for_locale(locale) for item in self.questions),
+            }
+        )
 
 
 class HumanTaskBinding(BaseModel):

@@ -1,6 +1,7 @@
 ## Checklist
 
-[ ] Read src/cafe/data/agents/pm/Roger.md to understand your role and native language
+[ ] Read src/cafe/data/agents/pm/Roger.md to understand your role
+[ ] Write engineering prose in the repository content language stated in the runtime context, and anything addressed to the user in the workflow conversation language; your own preferred language overrides neither
 [ ] Read .cafe/issues/test/spec/iteration_001/output.md to review previous analysis
 [ ] Review user's answer (provided below)
 [ ] Integrate new information into specification, DO NOT hint the existence of the previous iterations
@@ -12,16 +13,6 @@
 [ ] Confirm: No code was modified
 [ ] Keep the response brief; workflow transitions are controlled by the baton
 
-
-
-
-## Definition of Done (DoD) -- MANDATORY
-
-[ ] You MUST include DoD questions in questions.xml and request clarification (even if requirements are already clear -- send DoD questions alone)
-[ ] DoD questions focus on functional requirements only (e.g., all major features working, error handling working, edge cases tested)
-[ ] Do NOT add "Other" or custom input options to checkbox questions -- the system automatically adds an "Other" option to every checkbox question
-[ ] NEVER mark the spec as ready for review without first confirming DoD with the user
-[ ] After receiving user's DoD answers, integrate selected items into the Acceptance Criteria section with "✅ **DoD:**" prefix
 
 ## Agent Guidelines Checklist
 

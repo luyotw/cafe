@@ -8,6 +8,7 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from markdown_it import MarkdownIt
@@ -1320,6 +1321,43 @@ def test_kickoff_formatter_falls_back_to_english_for_unsupported_chinese_locales
     assert "請確認上述完整契約" not in result.stdout
 
 
+def test_kickoff_formatter_mirrors_a_legacy_workflow_instead_of_new_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    issue_dir = tmp_path / "legacy"
+    issue_dir.mkdir()
+    state_path = issue_dir / "blackboard.json"
+    state_path.write_text(
+        json.dumps({"schema_version": 4, "current_step": "spec", "playbook_id": "standard"}),
+        encoding="utf-8",
+    )
+    before = state_path.read_bytes()
+    command = _kickoff_formatter_command(
+        tmp_path / "strategic_context.yaml", "--issue-dir", str(issue_dir)
+    )
+    module = _load_script_module(
+        SKILL_ROOT / "scripts/format_kickoff_contract.py", "legacy_kickoff"
+    )
+    loaded = PlaybookLoader(project_root=PROJECT_ROOT).load_model("standard")
+    model = loaded.model.model_copy(
+        update={
+            "playbook": loaded.model.playbook.model_copy(update={"conversation_locale": "ja-JP"})
+        }
+    )
+    monkeypatch.setattr(
+        module.PlaybookLoader,
+        "load_model",
+        lambda self, playbook_id: SimpleNamespace(model=model),
+    )
+    args = module._parser().parse_args(command[2:])
+    args.locale_source = "inferred"
+
+    proposal = module.build_confirmed_proposal(args)
+
+    assert proposal["locales"]["conversation"] == {"value": "en-US", "source": "fallback"}
+    assert state_path.read_bytes() == before
+
+
 def _write_fake_cafe(
     path: Path,
     *,
@@ -1442,7 +1480,14 @@ def test_confirmed_kickoff_activates_one_issue_scoped_manager_contract(tmp_path:
     issue_dir = tmp_path / "issues" / "issue346"
     issue_dir.mkdir(parents=True)
     (issue_dir / "blackboard.json").write_text(
-        json.dumps({"workflow_id": "prepared-346"}), encoding="utf-8"
+        json.dumps(
+            {
+                "workflow_id": "prepared-346",
+                "conversation_locale": "zh-TW",
+                "conversation_locale_source": "explicit",
+            }
+        ),
+        encoding="utf-8",
     )
     result = subprocess.run(
         _kickoff_formatter_command(
@@ -1479,7 +1524,7 @@ def test_confirmed_kickoff_activates_one_issue_scoped_manager_contract(tmp_path:
     assert "pr" not in contract
     assert "playbook" not in contract
     assert contract["locales"] == {
-        "conversation": {"value": "zh-TW", "source": "user thread override"}
+        "conversation": {"value": "zh-TW", "source": "explicit"}
     }
     assert contract["delivery_contract"]["schema_version"] == 3
     closeout_plan = contract["delivery_contract"]["closeout_plan"]
@@ -1743,9 +1788,18 @@ def test_kickoff_formatter_keeps_the_rendered_policy_stable_until_activation(
     issue_dir = tmp_path / "issues" / "issue346"
     issue_dir.mkdir(parents=True)
     (issue_dir / "blackboard.json").write_text(
-        json.dumps({"workflow_id": "prepared-346"}), encoding="utf-8"
+        json.dumps(
+            {
+                "workflow_id": "prepared-346",
+                "conversation_locale": "zh-TW",
+                "conversation_locale_source": "explicit",
+            }
+        ),
+        encoding="utf-8",
     )
-    normal_command = _kickoff_formatter_command(strategic_context)
+    normal_command = _kickoff_formatter_command(
+        strategic_context, "--issue-dir", str(issue_dir)
+    )
     normal = subprocess.run(
         normal_command,
         cwd=PROJECT_ROOT,
@@ -3039,18 +3093,27 @@ def test_use_cafe_workflow_prefers_user_conversation_locale() -> None:
     assert "playbook.conversation_locale" in reference
     assert "cafe playbook confirmation-gates <playbook-id>" in reference
     assert "`Conversation locale:` line" in normalized
-    assert "a locale the user directly requested for this thread" in normalized
-    assert "a locale reliably inferred from the user's own natural-language messages" in normalized
-    assert "Do not infer from quoted text, pasted artifacts, code, commands" in normalized
-    assert "If the evidence is mixed or ambiguous, use the playbook locale" in normalized
-    assert "For `auto`, infer from the user's messages using the same rules above" in normalized
-    assert "explicit BCP 47 value as the fallback" in normalized
+    assert "docs/language-policy.md" in normalized
+    assert "single source of truth" in normalized
+    assert "Supply, do not decide" in normalized
+    assert "--conversation-locale-source explicit|inferred" in normalized
+    assert "Never claim `explicit` for an inferred preference" in normalized
+    assert "Do not infer from quoted text, pasted artifacts, code, stack traces" in normalized
+    assert "supply nothing and let the playbook default apply" in normalized
+    assert "read the effective generic value and source from the workflow's own state" in normalized
+    assert "Do not re-resolve it" in normalized
+    assert "it is not a competing resolver" in normalized
+    assert "third precedence tier, not an override of a supplied user preference" in normalized
     assert "conversation_locale: zh-TW (inferred user preference from current thread)" in normalized
     assert "conversation_locale: en-US (from playbook: standard)" in normalized
     assert "required kickoff field, not a confirmation gate" in normalized
-    assert "asking why a language was used is not an override" in normalized
+    assert "just this once" in normalized
+    assert "--set-conversation-locale" in normalized
+    assert "never rewrites an already-pending task" in normalized
+    assert "asking why a language was used is neither" in normalized
     assert "Never claim this skill lacks a locale rule" in normalized
     assert "Do not copy the locale into `issue.yaml`" in normalized
+    assert "the stored value stands until the explicit change operation replaces it" in normalized
     assert "commands, paths, playbook and step names, intents, artifact keys" in normalized
     assert "Translate all presentation text into the effective conversation language" in normalized
     assert "capability prompts and outcomes" in normalized

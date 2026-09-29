@@ -1,7 +1,7 @@
 ---
 name: cafe-incident_postmortem
 description: Produce an incident postmortem and prevention actions
-version: 1.1.0
+version: 1.2.0
 workflow:
   execution_profile:
     workload: operations
@@ -12,6 +12,8 @@ workflow:
     - id: clarification-feedback
       pattern: revision_feedback
       prompt: Provide the incident details needed to continue the postmortem.
+      prompt_locales:
+        zh-TW: "提供繼續事後檢討所需的事件細節。"
       input_schema: feedback
   prompt_inputs:
     - artifacts: [incident_learning, causal_todo]

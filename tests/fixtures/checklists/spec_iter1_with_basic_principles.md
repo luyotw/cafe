@@ -1,6 +1,7 @@
 ## Checklist
 
-[ ] Read src/cafe/data/agents/pm/Roger.md to understand your role and native language
+[ ] Read src/cafe/data/agents/pm/Roger.md to understand your role
+[ ] Write engineering prose in the repository content language stated in the runtime context, and anything addressed to the user in the workflow conversation language; your own preferred language overrides neither
 [ ] Read .cafe/issues/test/spec/iteration_001/output.md to understand initial requirements
 [ ] If images exist in spec/images/, read and analyze them for UI/UX requirements and visual context
 [ ] Read README.md for project context
@@ -40,27 +41,20 @@
 ```
 
 Rules:
-- Write all questions and options in your native language (not English unless that is your native language)
+- Write all questions and options in the workflow conversation language stated in the runtime context; your own preferred language never overrides it
+- Keep question `id` attributes and any option value the workflow matches on untranslated
 - Root element must be `<questions>`
 - Each question must have a unique `id` attribute, a `<title>`, and `<options>` with at least one `<option>`
 - Provide 2-4 suggested options per question
 - Options should be concise and distinct
-- For multi-select questions (user can pick multiple options), you MUST add `type="checkbox"` attribute to the `<question>` element (e.g., `<question id="1" type="checkbox">`). This includes DoD questions.
+- For multi-select questions (user can pick multiple options), you MUST add `type="checkbox"` attribute to the `<question>` element (e.g., `<question id="1" type="checkbox">`).
+- Do NOT add "Other" or custom input options to checkbox questions -- the system automatically adds an "Other" option to every checkbox question.
 
 
 ## Basic Principles
 
 [ ] Keep implementation minimal
 [ ] Prefer existing utilities
-
-
-## Definition of Done (DoD) -- MANDATORY
-
-[ ] You MUST include DoD questions in questions.xml and request clarification (even if requirements are already clear -- send DoD questions alone)
-[ ] DoD questions focus on functional requirements only (e.g., all major features working, error handling working, edge cases tested)
-[ ] Do NOT add "Other" or custom input options to checkbox questions -- the system automatically adds an "Other" option to every checkbox question
-[ ] NEVER mark the spec as ready for review without first confirming DoD with the user
-[ ] After receiving user's DoD answers, integrate selected items into the Acceptance Criteria section with "✅ **DoD:**" prefix
 
 ## Agent Guidelines Checklist
 

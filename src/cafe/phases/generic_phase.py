@@ -20,6 +20,7 @@ from cafe.core.capabilities import (
     load_capability_registry,
     run_capability_request,
 )
+from cafe.core.conversation_locale import DEFAULT_CONVERSATION_LOCALE
 from cafe.core.execution_boundary import (
     EffectiveBoundary,
     ExecutionClass,
@@ -192,6 +193,27 @@ class GenericPhase:
             lines.extend(["Runtime files:"])
             lines.extend(runtime_files)
             lines.append("")
+
+        if context is not None:
+            conversation_locale = context.get("conversation_locale") or DEFAULT_CONVERSATION_LOCALE
+            runtime_context.append("Language policy (see docs/language-policy.md):")
+            runtime_context.append(
+                "- workflow conversation language: "
+                f"{conversation_locale} — use it for questions, task prompts and "
+                "anything addressed to the user, regardless of your own preferred language"
+            )
+            content_locale = (context.get("repository_content_locale") if context else None) or ""
+            if content_locale:
+                runtime_context.append(
+                    "- repository content language: "
+                    f"{content_locale} — use it for engineering artifacts, documentation "
+                    "and code comments, unless a task or artifact contract states an "
+                    "explicit delivery language"
+                )
+            runtime_context.append(
+                "- identifiers, schema keys, decision values, commands, paths, error "
+                "codes and parser markers stay untranslated"
+            )
 
         baton_intents = (context.get("valid_baton_intents", "") if context else "") or ", ".join(
             intent.value for intent in HandoffIntent
@@ -802,9 +824,7 @@ class GenericPhase:
             def request_for(
                 candidate: Path, *, runtime_root: Optional[Path] = None
             ) -> ScriptLaunchRequest:
-                command = self._build_script_command(
-                    script_path=candidate, args=resolved_args
-                )
+                command = self._build_script_command(script_path=candidate, args=resolved_args)
                 readable_roots = (cwd, runtime_root) if runtime_root is not None else (cwd,)
                 return ScriptLaunchRequest(
                     execution_class=ExecutionClass.SANDBOX,
@@ -1012,9 +1032,9 @@ class GenericPhase:
         }
         return HookResult(
             continue_pipeline=bool(run.receipt.get("success")),
-            override_status_code=None
-            if run.receipt.get("success")
-            else PhaseStatusCode.NEED_PERMISSION,
+            override_status_code=(
+                None if run.receipt.get("success") else PhaseStatusCode.NEED_PERMISSION
+            ),
             events=[event],
         )
 

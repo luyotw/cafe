@@ -949,8 +949,20 @@ class GenericWorkflowStepExecutor(Phase):
                 auto_continue=auto_continue,
             )
         outbound_validation_required = initial_outbound_validation[2]
+        # Artifact publication validates Todo syntax even when the current route
+        # has no checklist or causal Todo projection. Return that rejection to
+        # the producer through the existing bounded correction loop first.
+        produced_todo_invalid = (
+            agent_was_invoked
+            and execution.artifact_ready
+            and not self._validate_produced_todo_output(output_file)[0]
+        )
         checklist_validation_failed = False
-        if checklist_validation_required or (agent_was_invoked and outbound_validation_required):
+        if (
+            checklist_validation_required
+            or (agent_was_invoked and outbound_validation_required)
+            or produced_todo_invalid
+        ):
             resolved_user_input = self._get_resolved_iteration_user_input(step_name)
 
             def validate_output_contract(
@@ -1983,6 +1995,10 @@ class GenericWorkflowStepExecutor(Phase):
             "valid_to_steps": ", ".join(valid_to_steps),
             "valid_baton_intents": ", ".join(valid_baton_intents),
             "step_transitions": ", ".join(f"{i}→{s}" for i, s in step_transitions.items()),
+            # The stored workflow locale is stated to every agent so no phase
+            # falls back to the agent's own preferred language.
+            "conversation_locale": getattr(blackboard_state, "conversation_locale", None) or "",
+            "repository_content_locale": self._repository_content_locale(),
             "behavior_completion": behavior.completion,
             "allow_issue_decomposition": behavior.allow_issue_decomposition,
             "publish_confirmation": behavior.publish_confirmation,
@@ -4360,6 +4376,15 @@ class GenericWorkflowStepExecutor(Phase):
             return str(resolved.relative_to(repo_root))
         except ValueError:
             return str(resolved)
+
+    def _repository_content_locale(self) -> str:
+        """Resolve the confirmed repository content locale for the phase prompt."""
+        from cafe.core.strategic_context import DEFAULT_CONTENT_LOCALE, load_strategic_context
+
+        try:
+            return load_strategic_context(self._resolve_repo_root()).content_locale
+        except Exception:
+            return DEFAULT_CONTENT_LOCALE
 
     def _resolve_repo_root(self) -> Path:
         try:

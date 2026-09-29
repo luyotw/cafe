@@ -1,6 +1,7 @@
 ## Checklist
 
-[ ] Read {agent_file} to understand your role and native language
+[ ] Read {agent_file} to understand your role
+[ ] Write engineering prose in the repository content language stated in the runtime context, and anything addressed to the user in the workflow conversation language; your own preferred language overrides neither
 {spec_read_instruction}{plan_read_instruction}[ ] Review all commits in the current branch
 [ ] Edit {output_file} to fill in PR title and description (NOT in your response)
 [ ] Ensure PR title is concise and descriptive (max 80 characters)

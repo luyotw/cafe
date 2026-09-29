@@ -7,16 +7,26 @@ the workflow conversation language. Also read `playbook_selection.md`,
 
 ## Conversation locale checklist
 
-- [ ] Resolve the effective locale in this priority order:
-  1. a locale the user directly requested for this thread;
-  2. a locale reliably inferred from the user's own natural-language messages
-     in the current thread;
-  3. the active playbook's `playbook.conversation_locale`.
+`docs/language-policy.md` is the single source of truth for precedence,
+persistence, the language-change scope, and the fallback rules. This checklist
+only describes what the Driver does; it never states a competing rule.
+
+- [ ] Read `docs/language-policy.md` before answering any question about the
+  workflow conversation language.
+- [ ] Supply, do not decide. For a **new** workflow, infer a preference only
+  from the user's own natural-language messages, and pass it into the generic
+  contract with its tier: `--conversation-locale <tag>
+  --conversation-locale-source explicit|inferred` on `cafe prepare` or
+  `cafe workflow`. Never claim `explicit` for an inferred preference.
 - [ ] Infer a preference when the user's current request clearly uses one
   language, or when multiple user messages consistently use it. Do not infer
-  from quoted text, pasted artifacts, code, commands, proper nouns, or an
-  isolated token. If the evidence is mixed or ambiguous, use the playbook
-  locale.
+  from quoted text, pasted artifacts, code, stack traces, logs, commands,
+  proper nouns, or an isolated token such as `1` or `ok`. If the evidence is
+  mixed or ambiguous, supply nothing and let the playbook default apply.
+- [ ] On **resume**, read the effective generic value and source from the
+  workflow's own state. Do not re-resolve it, and do not supply a preference in
+  order to change it. Your `locales.conversation` snapshot mirrors that value;
+  it is not a competing resolver.
 - [ ] Resolve or select the active playbook using `playbook_selection.md`. When
   no authoritative choice exists, do not apply a builtin default without the
   required repository/issue assessment.
@@ -25,10 +35,8 @@ the workflow conversation language. Also read `playbook_selection.md`,
   belongs only in `.cafe/issues/<issue-name>/issue.yaml`.
 - [ ] Run `cafe playbook confirmation-gates <playbook-id>` and read the
   `Conversation locale:` line, assignable candidate section, and mandatory
-  HumanTask section.
-- [ ] Treat a configured explicit BCP 47 value as the fallback, not an override
-  of a direct or reliably inferred user preference. For `auto`, infer from the
-  user's messages using the same rules above.
+  HumanTask section. That `playbook.conversation_locale` value is the third
+  precedence tier, not an override of a supplied user preference.
 - [ ] Include the effective value and source in the kickoff, for example:
   `conversation_locale: zh-TW (inferred user preference from current thread)`
   or `conversation_locale: en-US (from playbook: standard)`. Locale is a
@@ -36,15 +44,20 @@ the workflow conversation language. Also read `playbook_selection.md`,
 - [ ] Apply it to kickoff, clarification, permission, alignment, progress,
   error, and completion messages. Preserve commands, paths, playbook and step
   names, intents, artifact keys, payload fields, and quoted source text.
-- [ ] Honor a direct thread language override over every other source. Merely
-  writing in another language is an inference signal, not a direct override;
-  asking why a language was used is not an override.
-- [ ] If asked about the language choice, report the configured value,
-  effective value, inference evidence when applicable, and source. Never claim
-  this skill lacks a locale rule.
+- [ ] Distinguish the two requests. "Reply to me in X, just this once" applies
+  to that reply only and changes nothing stored. A request to change the
+  *workflow* language is the explicit operation
+  `cafe workflow --set-conversation-locale <tag> --conversation-locale-source
+  explicit`; it never rewrites an already-pending task.
+- [ ] Merely writing in another language is an inference signal for a new
+  workflow, not a change request; asking why a language was used is neither.
+- [ ] If asked about the language choice, report the stored effective value and
+  its source, the playbook value, and the inference evidence when applicable.
+  Never claim this skill lacks a locale rule.
 
-Do not copy the locale into `issue.yaml`. Re-resolve it when starting or
-resuming and whenever the playbook changes.
+Do not copy the locale into `issue.yaml`. Do not re-resolve it on resume or when
+the playbook changes: the stored value stands until the explicit change
+operation replaces it.
 
 ## Repository content locale checklist
 
@@ -75,6 +88,8 @@ resuming and whenever the playbook changes.
 
 - [ ] On resume, reuse this confirmed repository-wide value. Reconfirm before
   mutation when it is absent, unconfirmed, or the user requests a change.
+- [ ] Keep engineering artifacts — spec, plan, review, and PR prose — in this
+  repository content language even when the conversation language differs.
 
 ## Repository-informed deliver and cleanup plan
 

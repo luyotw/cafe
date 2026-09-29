@@ -24,6 +24,7 @@ from cafe.workflow_execution.event_callback import (
     dispatch_workflow_event_callback,
     resolve_builtin_workflow_event_callback,
 )
+from cafe.core.conversation_locale import ConversationLocaleError, supplied_locale_from_inputs
 from cafe.core.issue_resolution import ActiveIssueResolutionError, resolve_active_issue
 from cafe.core.phase_state_mixin import next_runnable_iteration_number
 from cafe.core.playbook import resolve_step_behavior
@@ -629,9 +630,55 @@ def workflow(
         "--add-dir",
         help="Additional allowed directories (can be specified multiple times)",
     ),
+    conversation_locale: Optional[str] = typer.Option(
+        None,
+        "--conversation-locale",
+        help=(
+            "Conversation language for a workflow being created; "
+            "requires --conversation-locale-source"
+        ),
+    ),
+    conversation_locale_source: Optional[str] = typer.Option(
+        None,
+        "--conversation-locale-source",
+        help="Tier that supplied the conversation language: explicit or inferred",
+    ),
+    set_conversation_locale: Optional[str] = typer.Option(
+        None,
+        "--set-conversation-locale",
+        help=(
+            "Deliberately change an existing workflow's conversation language; "
+            "requires --conversation-locale-source"
+        ),
+    ),
 ) -> None:
     """Run playbook workflow using the new generic runner."""
     user_input = _normalize_cli_user_input(user_input)
+    # Validation happens before any state is touched so a rejected locale input
+    # leaves no partial workflow behind.
+    start_locale_value = _normalize_cli_user_input(conversation_locale)
+    change_locale_value = _normalize_cli_user_input(set_conversation_locale)
+    locale_source_value = _normalize_cli_user_input(conversation_locale_source)
+    supplied_locale = None
+    requested_locale_change = None
+    if start_locale_value is not None and change_locale_value is not None:
+        console.print(
+            "[red]Error: --conversation-locale and --set-conversation-locale "
+            "cannot be combined[/red]"
+        )
+        raise typer.Exit(1)
+    try:
+        if change_locale_value is not None:
+            requested_locale_change = supplied_locale_from_inputs(
+                value=change_locale_value, source=locale_source_value
+            )
+        else:
+            supplied_locale = supplied_locale_from_inputs(
+                value=start_locale_value, source=locale_source_value
+            )
+    except ConversationLocaleError as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(1)
     single_step = single_step if isinstance(single_step, bool) else False
     background = background if isinstance(background, bool) else False
     mute_agent_output = mute_agent_output if isinstance(mute_agent_output, bool) else False
@@ -762,10 +809,17 @@ def workflow(
         entry_point = str(
             playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))
         )
-        resume_blackboard = BlackboardStore(issue_dir).load_or_create(
+        resume_store = BlackboardStore(issue_dir)
+        resume_blackboard = resume_store.load_or_create(
             entry_point,
             playbook_id=str(playbook_data["playbook"]["id"]),
+            supplied_locale=supplied_locale,
+            playbook_conversation_locale=playbook_data["playbook"].get("conversation_locale"),
         )
+        if requested_locale_change is not None:
+            # A deliberate language change is its own operation on the owning
+            # state; it is never a side effect of resuming.
+            resume_store.set_conversation_locale(resume_blackboard, requested_locale_change)
         if (
             background
             and user_input is not None
@@ -892,9 +946,12 @@ def workflow(
             ):
                 raise ValueError(f"Unknown playbook step '{pending_start_step}'")
 
-            blackboard = BlackboardStore(issue_dir).load_or_create(
+            blackboard_store = BlackboardStore(issue_dir)
+            blackboard = blackboard_store.load_or_create(
                 str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
                 playbook_id=str(playbook_data["playbook"]["id"]),
+                supplied_locale=supplied_locale,
+                playbook_conversation_locale=playbook_data["playbook"].get("conversation_locale"),
             )
 
             active_step = pending_start_step or blackboard.current_step

@@ -17,6 +17,7 @@ from cafe.core.blackboard import (
     BlackboardStore,
     is_genuine_cold_start,
 )
+from cafe.core.conversation_locale import ConversationLocaleError, supplied_locale_from_inputs
 from cafe.updates.service import UpdateApplyError, UpdateService
 from cafe.utils.issue_config import resolve_issue_config_path, resolve_issue_id
 
@@ -429,6 +430,19 @@ def prepare(
         "--post-pr-todo-list/--no-post-pr-todo-list",
         help="Post organized PR comments as todo list to PR (default: True when auto-create PR is enabled)",
     ),
+    conversation_locale: Optional[str] = typer.Option(
+        None,
+        "--conversation-locale",
+        help=(
+            "Conversation language for the workflow created here; "
+            "requires --conversation-locale-source"
+        ),
+    ),
+    conversation_locale_source: Optional[str] = typer.Option(
+        None,
+        "--conversation-locale-source",
+        help="Tier that supplied the conversation language: explicit or inferred",
+    ),
 ) -> None:
     """Prepare issue environment (directory, config, git branch) before running spec phase.
 
@@ -475,6 +489,16 @@ def prepare(
                 "[yellow]Check --playbook, the legacy .cafe/config.yaml setting, "
                 "or add the playbook file.[/yellow]"
             )
+            raise typer.Exit(1)
+
+        try:
+            # Validated before any repository mutation so a rejected locale input
+            # leaves no partial preparation behind.
+            supplied_locale = supplied_locale_from_inputs(
+                value=conversation_locale, source=conversation_locale_source
+            )
+        except ConversationLocaleError as exc:
+            console.print(f"[red]Error: {exc}[/red]")
             raise typer.Exit(1)
 
         profile = PrepareProfile.from_playbook(loaded_playbook.model, is_github_repo())
@@ -1074,6 +1098,10 @@ def prepare(
         blackboard = BlackboardStore(issue_dir).load_or_create(
             entry_step_name,
             playbook_id=playbook_name,
+            supplied_locale=supplied_locale,
+            playbook_conversation_locale=getattr(
+                loaded_playbook.model.playbook, "conversation_locale", None
+            ),
         )
         if not is_genuine_cold_start(blackboard, entry_point=entry_step_name):
             raise ValueError("workflow state became active during prepare")

@@ -4820,3 +4820,104 @@ def test_resolve_initial_step_user_inputs_cold_start_maps_entry_point() -> None:
     )
     assert inputs == {"build": "initial requirement"}
     assert remaining is None
+
+
+def _run_single_step_workflow(tmp_path: Path, extra_args: list[str]) -> object:
+    """Run one real workflow step so state creation goes through production code."""
+
+    class FakeExecutor:
+        def execute_step(self, step_name, step_def, blackboard_state, **kwargs):
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-locale"
+        mock_git_cls.return_value = git
+        return runner.invoke(
+            app,
+            ["workflow", "--playbook", "standard", "--execute", "--single-step", *extra_args],
+        )
+
+
+def _stored_locale(tmp_path: Path) -> tuple[object, object]:
+    raw = json.loads(
+        (tmp_path / ".cafe" / "issues" / "issue-locale" / "blackboard.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    return raw.get("conversation_locale"), raw.get("conversation_locale_source")
+
+
+def test_workflow_start_persists_a_supplied_locale_with_its_declared_tier(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_local_only_publication_contract(tmp_path / ".cafe" / "issues" / "issue-locale")
+
+    result = _run_single_step_workflow(
+        tmp_path,
+        ["--conversation-locale", "zh-tw", "--conversation-locale-source", "inferred"],
+    )
+
+    assert result.exit_code == 0
+    assert _stored_locale(tmp_path) == ("zh-TW", "inferred")
+
+
+def test_workflow_start_without_a_supplied_locale_uses_the_playbook_default(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_local_only_publication_contract(tmp_path / ".cafe" / "issues" / "issue-locale")
+
+    result = _run_single_step_workflow(tmp_path, [])
+
+    assert result.exit_code == 0
+    assert _stored_locale(tmp_path) == ("en-US", "playbook_default")
+
+
+def test_workflow_rejects_a_locale_supplied_without_a_tier(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_local_only_publication_contract(tmp_path / ".cafe" / "issues" / "issue-locale")
+
+    result = _run_single_step_workflow(tmp_path, ["--conversation-locale", "zh-TW"])
+
+    assert result.exit_code != 0
+    assert not (tmp_path / ".cafe" / "issues" / "issue-locale" / "blackboard.json").exists()
+
+
+def test_a_resume_supplied_preference_never_overwrites_the_stored_locale(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_local_only_publication_contract(tmp_path / ".cafe" / "issues" / "issue-locale")
+    _run_single_step_workflow(
+        tmp_path,
+        ["--conversation-locale", "zh-TW", "--conversation-locale-source", "explicit"],
+    )
+
+    result = _run_single_step_workflow(
+        tmp_path,
+        ["--conversation-locale", "ja-JP", "--conversation-locale-source", "explicit"],
+    )
+
+    assert result.exit_code == 0
+    assert _stored_locale(tmp_path) == ("zh-TW", "explicit")
+
+
+def test_the_explicit_change_flag_updates_the_stored_workflow_language(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_local_only_publication_contract(tmp_path / ".cafe" / "issues" / "issue-locale")
+    _run_single_step_workflow(tmp_path, [])
+
+    result = _run_single_step_workflow(
+        tmp_path,
+        ["--set-conversation-locale", "zh-TW", "--conversation-locale-source", "explicit"],
+    )
+
+    assert result.exit_code == 0
+    assert _stored_locale(tmp_path) == ("zh-TW", "explicit")

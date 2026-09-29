@@ -39,6 +39,7 @@ from cafe.core.capabilities import (
     run_capability_request,
     validation_rejection_receipt,
 )
+from cafe.core.conversation_locale import DEFAULT_CONVERSATION_LOCALE
 from cafe.core.human_task_notifications import (
     load_human_task_notification_settings,
     sanitize_human_task_metadata,
@@ -51,6 +52,7 @@ from cafe.core.human_task_records import (
 )
 from cafe.core.human_tasks import (
     AGENT_EXECUTION_INTERRUPTED_TRIGGER,
+    HumanTaskPolicy,
     agent_execution_interrupted_human_task,
     resolve_step_human_task,
 )
@@ -272,6 +274,12 @@ class HumanTaskNotificationDispatcher:
             "task_id": sanitize_human_task_metadata(task.id),
             "step": sanitize_human_task_metadata(task.step),
             "task_type": sanitize_human_task_metadata(task.policy_id),
+            # A record with no stored locale keeps none; presentation resolves
+            # the documented English fallback without writing anything back.
+            "conversation_locale": (
+                getattr(self.blackboard, "conversation_locale", None)
+                or DEFAULT_CONVERSATION_LOCALE
+            ),
         }
 
     def _record_notification_outcome(
@@ -432,6 +440,7 @@ class BlackboardWorkflowRuntime:
             self.start_step,
             playbook_id=self.playbook_id,
             tolerate_invalid_baton=True,
+            playbook_conversation_locale=playbook_meta.get("conversation_locale"),
         )
         self._replaced_user_handoff: HandoffContract | None = None
         self._workflow_event_callback = workflow_event_callback
@@ -1137,6 +1146,7 @@ class BlackboardWorkflowRuntime:
         records = HumanTaskRecordStore(self.issue_dir)
         iteration = self._human_task_iteration(current_step)
         policy, binding = agent_execution_interrupted_human_task(step_name=current_step)
+        policy = self._policy_for_workflow_locale(policy)
         status_code = (
             "CHECKLIST_VALIDATION_FAILED"
             if reason == "checklist_validation_failed"
@@ -1827,6 +1837,15 @@ class BlackboardWorkflowRuntime:
             transition_intent=raw_intent, transition_source=transition_source,
         )
 
+    def _policy_for_workflow_locale(self, policy: HumanTaskPolicy) -> HumanTaskPolicy:
+        """Present a declared policy in the workflow language at materialization.
+
+        This is the only place a locale is applied to declared task text: the
+        materialized record then carries that presentation as its snapshot, so
+        no render or answer path re-resolves it afterwards.
+        """
+        return policy.for_locale(self.blackboard.conversation_locale)
+
     def _materialize_owned_human_task(
         self,
         *,
@@ -1846,6 +1865,7 @@ class BlackboardWorkflowRuntime:
                 trigger=trigger,
                 iteration=iteration,
             )
+            policy = self._policy_for_workflow_locale(policy)
         except (LookupError, TypeError, ValueError) as exc:
             records.record_configuration_error(
                 workflow_id=self.blackboard.workflow_id,
@@ -3214,6 +3234,7 @@ class BlackboardWorkflowRuntime:
                 trigger=trigger,
                 iteration=iteration,
             )
+            policy = self._policy_for_workflow_locale(policy)
         except (LookupError, TypeError, ValueError) as exc:
             records.record_configuration_error(
                 workflow_id=self.blackboard.workflow_id,
