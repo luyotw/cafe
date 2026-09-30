@@ -86,7 +86,13 @@ arrays, and `closeout_plan` is absent because the formatter constructs it.
 Blank product values are unfinished decisions. `deliver: null` and
 `cleanup: null` are unresolved slots; replace each with deliberate literal argv
 arrays, including `[]` only when justified by the current decision. They never
-become automatic empty action plans. The public schema includes lifecycle
+become automatic empty action plans. When supplying action descriptions, use
+`deliver_description` and `cleanup_description` as string arrays, with exactly
+one nonempty explanation per command. For `cleanup: []`, use
+`cleanup_description: []`; put the explanation for retaining resources in the
+product constraints, not in a description for a nonexistent command. The public
+`action_input_examples` covers both cases and assembly checks them through the
+existing formatter owner before final render. The public schema includes lifecycle
 examples checked by the existing closeout validator: `cafe close --archive-only`
 is not a valid closeout-plan command. No source-code inspection or trial render
 is needed to learn these shapes. `schema` remains available independently.

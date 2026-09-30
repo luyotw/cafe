@@ -53,6 +53,11 @@ def request_schema() -> dict[str, Any]:
         "delivery_contract": contract_schema,
         "input_template": {"delivery_contract": contract_template, "deliver": None, "cleanup": None},
         "closeout_examples": closeout_examples,
+        "action_input_examples": {
+            "described_action": {"actions": [["<executable>", "<literal argument>"]],
+                                 "descriptions": ["<current purpose of this command>"]},
+            "no_actions": {"actions": [], "descriptions": []},
+        },
         # Adapter examples only: _preflight_reports remains the validation owner.
         # None marks absent evidence, never a fabricated token, time or success.
         "preflight_report_examples": {
@@ -68,6 +73,7 @@ def request_schema() -> dict[str, Any]:
             "null": "Unresolved: replace with a deliberate value; never rendered as a default.",
             "delivery_contract": "Fill all product decisions, including intentionally empty lists. closeout_plan is added by the formatter.",
             "actions": "deliver/cleanup are literal argv arrays, not command objects or shell strings. Empty arrays require an explicit current decision.",
+            "action_descriptions": "deliver_description/cleanup_description are string arrays with exactly one nonempty explanation per command. An empty action array requires an empty description array; put resource-retention rationale in delivery_contract.constraints instead. Action examples describe shapes, never permission.",
             "closeout": "Examples validate syntax only, never recommend or authorize an action. cafe close must be last cleanup; archive-only is a separate terminal action, not a closeout_plan command.",
             "preflight": "Pass full existing reports through preflight_files. Missing tokens/dates/decisions must be resolved through their owner, never synthesized.",
         },
@@ -621,6 +627,20 @@ def assemble_kickoff(
                 except (OSError, json.JSONDecodeError):
                     missing.append({"owner": "manager_research", "requirement": f"read {file_key} preflight report"})
     normalized = normalize_formatter_inputs(raw_inputs) if isinstance(raw_inputs, dict) else None
+    if normalized is not None and normalized["status"] == "ready":
+        from argparse import Namespace
+
+        descriptions = {f"{stage}_description": raw_inputs.get(f"{stage}_description", [])
+                        for stage in ("deliver", "cleanup")}
+        try:
+            # Assemble through the existing owner before advertising render readiness.
+            # Low-level argv encoding remains compatible with partial formatter data.
+            _load_local_module("format_kickoff_contract")._closeout_descriptions(
+                Namespace(**descriptions), {stage: raw_inputs[stage] for stage in ("deliver", "cleanup")}
+            )
+        except ValueError as exc:
+            normalized["status"] = "invalid"
+            normalized["diagnostics"].append(str(exc))
     if selected is not None and isinstance(raw_inputs, dict) and raw_inputs.get("playbook_id") not in {None, selected}:
         return {
             "status": "invalid", "selected_playbook": selected,

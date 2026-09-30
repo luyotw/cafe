@@ -714,3 +714,38 @@ def test_normal_caller_keeps_evidence_stores_when_proposal_output_moves(
     distinct = json.loads(capsys.readouterr().out)
     assert distinct["delivery"]["status"] != "hit"
     assert distinct["storage"]["repository_identity"] != location["storage"]["repository_identity"]
+
+
+def test_public_action_description_shapes_render_without_type_or_count_repairs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """U15/I06: public examples cover described actions and intentionally empty cleanup."""
+    cli = load_kickoff_module("prepare_kickoff")
+    assert cli.main(["schema"]) == 0
+    schema = json.loads(capsys.readouterr().out)
+    # A caller takes the public shape, supplies its decisions, and renders once.
+    examples = schema["action_input_examples"]
+    described = examples["described_action"]
+    empty = examples["no_actions"]
+    values = _formatter_inputs("issue573-action-description-journey")
+    values.update(deliver=described["actions"], deliver_description=described["descriptions"],
+                  cleanup=empty["actions"], cleanup_description=empty["descriptions"])
+    values["deliver"][0] = ["git", "commit", "-m", "Implement chosen outcome"]
+    values["deliver_description"][0] = "Commit the reviewed implementation locally."
+    request = tmp_path / "request.json"
+    request.write_text(json.dumps({"schema_version": 1, "project_root": str(PROJECT_ROOT),
+        "issue_name": values["issue_name"], "playbook_id": values["playbook_id"], "formatter_inputs": values}))
+    args = ["--request-file", str(request), "--config-dir", str(tmp_path / "config"), "--cache-dir", str(tmp_path / "cache")]
+    assert cli.main(["render", *args]) == 0
+    rendered = json.loads(capsys.readouterr().out)["render"]
+    expected = load_kickoff_module("kickoff_inputs").render_kickoff(values)
+    assert rendered["output"] == expected["output"]
+    # Neither shape support nor early validation silently repairs an invalid decision.
+    values["cleanup_description"] = ["Keep resources."]
+    request.write_text(json.dumps({"schema_version": 1, "project_root": str(PROJECT_ROOT),
+        "issue_name": values["issue_name"], "playbook_id": values["playbook_id"], "formatter_inputs": values}))
+    assert cli.main(["assemble", *args, "--summary"]) != 0
+    mismatch = json.loads(capsys.readouterr().out)
+    assert mismatch["status"] != "ready"
+    assert mismatch["assembly_diagnostics"]
+    assert not (PROJECT_ROOT / ".cafe/issues" / values["issue_name"]).exists()
