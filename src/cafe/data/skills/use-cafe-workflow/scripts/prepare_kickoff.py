@@ -43,6 +43,12 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(allow_abbrev=False)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("schema", help="Show request fields and a partial starter; performs no discovery.")
+    capture = commands.add_parser("capture-report", allow_abbrev=False,
+                                  help="Capture one existing check's JSON stdin and reference it in an editable request; executes no checks.")
+    capture.add_argument("--request-file", type=Path, required=True)
+    capture.add_argument("--kind", choices=("update", "catalog"), required=True)
+    capture.add_argument("--report-output", type=Path, required=True)
+    capture.add_argument("--checked-at", required=True, help="Actual check observation timestamp; never inferred from capture time.")
     for name in ("stores", "discover", "assemble", "render"):
         command = commands.add_parser(name, allow_abbrev=False)
         command.add_argument("--request-file", type=Path, required=True)
@@ -221,6 +227,44 @@ def _request_command(args: argparse.Namespace) -> int:
         return 2
 
 
+def _capture_report(args: argparse.Namespace) -> int:
+    """Retain original check bytes and unresolved decisions, without executing checks."""
+    from datetime import datetime
+
+    try:
+        timestamp = datetime.fromisoformat(args.checked_at.replace("Z", "+00:00"))
+        if timestamp.tzinfo is None:
+            raise ValueError("checked_at must include a timezone")
+        raw = sys.stdin.read()
+        if not isinstance(json.loads(raw), dict):
+            raise ValueError("check output must be a JSON object")
+        request = _read_json(args.request_file)
+        if not isinstance(request, dict):
+            raise ValueError("request must be an object")
+        output = args.report_output.expanduser().resolve()
+        if output == args.request_file.resolve():
+            raise ValueError("report and request paths must differ")
+        for key in ("preflight_files", "preflight_metadata", "formatter_inputs", "current_explicit_inputs"):
+            if not isinstance(request.get(key, {}), dict):
+                raise ValueError(f"{key} must be an object")
+        field = args.kind + "_preflight"
+        if field in request.get("formatter_inputs", {}) or field in request.get("current_explicit_inputs", {}):
+            raise ValueError("remove the prior inline report explicitly before capturing a replacement")
+        request.setdefault("preflight_files", {})[args.kind] = str(output)
+        request.setdefault("preflight_metadata", {})[args.kind] = {
+            "checked_at": args.checked_at, "decision": None, "post_change_evidence": None,
+        }
+        output.write_text(raw, encoding="utf-8")
+        args.request_file.write_text(json.dumps(request, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        _json({"status": "captured", "report_file": str(output), "request_file": str(args.request_file.resolve()),
+               "missing_decisions": ["decision", "post_change_evidence"],
+               "authority": "Captured data only; existing formatter validates the full report after current decisions."})
+        return 0
+    except (OSError, ValueError, TypeError) as exc:
+        _json({"status": "invalid", "diagnostics": [str(exc)]})
+        return 2
+
+
 def _preference_command(args: argparse.Namespace) -> int:
     try:
         store = kickoff_preferences.PreferenceStore(
@@ -305,6 +349,8 @@ def _evidence_command(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "capture-report":
+        return _capture_report(args)
     if args.command == "schema":
         _json(kickoff_inputs.request_schema())
         return 0

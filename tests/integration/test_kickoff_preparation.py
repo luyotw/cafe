@@ -850,3 +850,59 @@ def test_raw_preflight_files_preserve_source_evidence_and_require_current_metada
     assert cli.main(["render", *args]) != 0
     capsys.readouterr()
     assert not (PROJECT_ROOT / ".cafe/issues" / values["issue_name"]).exists()
+
+
+def test_capture_report_retains_first_check_for_complete_public_render(tmp_path: Path) -> None:
+    """U14-U16/I06: capture original check output once, decide later, render once."""
+    import subprocess
+    import sys
+
+    inputs = load_kickoff_module("kickoff_inputs")
+    values = _formatter_inputs("issue573-capture-report")
+    request = {"schema_version": 1, "project_root": str(PROJECT_ROOT),
+               "issue_name": values["issue_name"], "playbook_id": values["playbook_id"],
+               "formatter_inputs": values.copy()}
+    path = tmp_path / "draft.json"
+    for kind in ("update", "catalog"):
+        request["formatter_inputs"].pop(kind + "_preflight")
+    path.write_text(json.dumps(request))
+    script = PROJECT_ROOT / "src/cafe/data/skills/use-cafe-workflow/scripts/prepare_kickoff.py"
+    for kind in ("update", "catalog"):
+        raw = values[kind + "_preflight"].copy()
+        actual_time = raw.pop("checked_at")
+        raw.pop("decision")
+        raw.pop("post_change_evidence")
+        if kind == "update":
+            raw["token"] = raw.pop("comparison_token")
+        else:
+            raw = {"catalog_check": raw}
+        original = json.dumps(raw, indent=2) + "\n"
+        output = tmp_path / (kind + ".json")
+        argv = [sys.executable, str(script), "capture-report", "--request-file", str(path),
+                "--kind", kind, "--report-output", str(output), "--checked-at", actual_time]
+        captured = subprocess.run(argv, input=original, text=True, capture_output=True)
+        assert captured.returncode == 0, captured.stderr
+        assert output.read_text() == original
+        updated = json.loads(path.read_text())
+        assert updated["preflight_files"][kind] == str(output)
+        assert updated["preflight_metadata"][kind] == {
+            "checked_at": actual_time, "decision": None, "post_change_evidence": None}
+        assert kind + "_preflight" not in updated["formatter_inputs"]
+        before = path.read_bytes()
+        rejected = subprocess.run(argv, input="not JSON", text=True, capture_output=True)
+        assert rejected.returncode != 0
+        assert output.read_text() == original and path.read_bytes() == before
+    # Capture conveys no decision or authority; render cannot succeed until actual decisions exist.
+    argv = [sys.executable, str(script), "render", "--request-file", str(path),
+            "--config-dir", str(tmp_path / "config"), "--cache-dir", str(tmp_path / "cache")]
+    unresolved = subprocess.run(argv, text=True, capture_output=True)
+    assert unresolved.returncode != 0
+    request = json.loads(path.read_text())
+    for kind in ("update", "catalog"):
+        for field in ("decision", "post_change_evidence"):
+            request["preflight_metadata"][kind][field] = values[kind + "_preflight"][field]
+    path.write_text(json.dumps(request))
+    rendered = subprocess.run(argv, text=True, capture_output=True)
+    assert rendered.returncode == 0, rendered.stderr
+    assert json.loads(rendered.stdout)["render"]["output"] == inputs.render_kickoff(values)["output"]
+    assert not (PROJECT_ROOT / ".cafe/issues" / values["issue_name"]).exists()

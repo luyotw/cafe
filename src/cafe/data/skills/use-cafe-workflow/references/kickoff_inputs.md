@@ -139,6 +139,27 @@ separately from the discovery manifest. A delivery hit with no current observati
 does not prove remote branch, PR state or current authorization. Resolve such
 issue-specific gaps explicitly without repeating unchanged convention research.
 
+Capture each required check's original output on its **first** execution using
+`capture-report`; this input adapter does not execute or modify preflight. For
+example, after the current policy permits the read-only check:
+
+```sh
+observed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+set -o pipefail
+cafe update check --json | python scripts/prepare_kickoff.py capture-report --request-file draft.json --kind update --report-output update.json --checked-at "$observed_at"
+observed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+python scripts/catalog_version_check.py | python scripts/prepare_kickoff.py capture-report --request-file draft.json --kind catalog --report-output catalog.json --checked-at "$observed_at"
+```
+
+Resolve the source script paths from the installed skill directory. Inspect the
+saved reports to make the current decisions; fill only `decision` and
+`post_change_evidence` in the draft's `preflight_metadata`. Capture preserves
+original JSON and actual caller-supplied time, never generates success or a
+policy decision. Keep a failing producer's status visible (`pipefail`); data
+capture is not successful preflight. Do not rerun a check merely because its
+output was not yet wrapped for the formatter. Explicit changes/expiry still
+require the normal owner-directed recheck.
+
 After filling the gaps, write the complete proposal once:
 
 ```sh

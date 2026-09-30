@@ -114,6 +114,11 @@ def request_schema() -> dict[str, Any]:
                         "effective_digests": {"playbook": None, "phase": None, "agent": None},
                         "decision": None, "post_change_evidence": None},
         },
+        "preflight_capture": {
+            "command": "prepare_kickoff.py capture-report --request-file <draft.json> --kind <update|catalog> --report-output <report.json> --checked-at <actual timezone-qualified observation time>",
+            "stdin": "Complete original check JSON, piped from its first execution; capture executes no check and invents no timestamp.",
+            "result": "Original bytes saved; draft references the file and actual time. decision/post_change_evidence stay null until Manager resolves them. Read captured files for status; do not rerun merely to recover output.",
+        },
         "preflight_file_adapter": {
             "files": "preflight_files.update/catalog accept full original check JSON or existing formatter-ready reports.",
             "metadata": {"checked_at": None, "decision": None, "post_change_evidence": None},
@@ -603,6 +608,8 @@ def _preflight_file_report(reference: str, kind: str, metadata: Any = None) -> d
     required = {"checked_at", "decision", "post_change_evidence"}
     if not isinstance(metadata, dict) or set(metadata) != required:
         raise ValueError("raw preflight metadata requires only checked_at, decision, post_change_evidence")
+    if any(metadata[key] is None for key in required):
+        raise ValueError("raw preflight metadata has unresolved current decisions")
     if not isinstance(metadata["checked_at"], str) or not metadata["checked_at"].strip():
         raise ValueError("raw preflight metadata requires the actual check timestamp")
     if kind == "catalog" and "catalog_check" in report:
