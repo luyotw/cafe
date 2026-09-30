@@ -147,7 +147,7 @@ python scripts/prepare_kickoff.py render --request-file draft.json --output prop
 
 This returns a compact status/file receipt. Failed rendering preserves any
 existing output file and reports `validation_error` plus missing decisions
-without dumping the selected graph. Pass the complete existing formatter-ready preflight reports via
+without dumping the selected graph. Pass the complete existing preflight reports via
 `preflight_files`; do not reconstruct a subset and lose comparison tokens.
 Raw check command output alone may lack the existing report metadata. Follow
 `guidance`'s Complete runtime and catalog preflight section and the preflight
@@ -297,3 +297,18 @@ python scripts/prepare_kickoff.py evidence clear --category models
 Catalog refresh derives current effective declarations. Delivery and model refresh require Manager-gathered evidence files; failed or incomplete refresh does not extend an older record. `inspect` reports the stored evidence without renewing it. `clear` affects only the chosen category/key. After clearing or encountering corruption, the next discovery is honestly cold and reports any evidence or decisions that must be gathered again.
 
 These records are preparation facts only. They do not authorize publication, issue changes, workflow activation, paid services, or exact delivery/cleanup actions. The complete formatter output and existing confirmation/activation boundaries remain required.
+
+
+### Raw check report files
+
+Keep the original complete update/catalog check JSON in `preflight_files.update`
+and `preflight_files.catalog`. For raw CLI reports, supply `preflight_metadata`
+with the corresponding `update`/`catalog` objects, each containing exactly the
+actual `checked_at`, current Manager `decision`, and `post_change_evidence`.
+The helper maps update `token` to `comparison_token` and projects `catalog_check`
+while preserving the complete source report. Existing formatter-ready files
+continue to work without metadata. Missing actual timestamps and conflicting or
+extra metadata are gaps, never synthesized evidence. `input_schema.preflight_file_adapter`
+describes this public mapping. The formatter owns validation; the helper does
+not execute or change preflight checks. No manual report reconstruction or
+formatter implementation lookup is needed.

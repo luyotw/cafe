@@ -114,6 +114,11 @@ def request_schema() -> dict[str, Any]:
                         "effective_digests": {"playbook": None, "phase": None, "agent": None},
                         "decision": None, "post_change_evidence": None},
         },
+        "preflight_file_adapter": {
+            "files": "preflight_files.update/catalog accept full original check JSON or existing formatter-ready reports.",
+            "metadata": {"checked_at": None, "decision": None, "post_change_evidence": None},
+            "use": "For raw check JSON supply preflight_metadata.update/catalog with exactly the actual checked_at and current decision/post_change_evidence. The helper maps update token and catalog_check, retains complete source fields and rejects conflicting/extra metadata. It never executes checks or invents evidence. Existing formatter validation remains authoritative.",
+        },
         "preflight_example_use": "These are field shapes, not valid evidence or defaults. Retain the full original report including optional diagnostics/mismatch IDs. Supply the actual check timestamp and current decision; copy source tokens/digests without invention. Explicit null can record an actually unavailable source value, not a successful check. Existing formatter validation remains authoritative.",
         "template_rules": {
             "null": "Unresolved: replace with a deliberate value; never rendered as a default.",
@@ -588,6 +593,34 @@ def decision_brief(request: dict[str, Any], missing: list[dict[str, str]]) -> di
     }
 
 
+def _preflight_file_report(reference: str, kind: str, metadata: Any = None) -> dict[str, Any]:
+    """Map complete check output to formatter fields without executing checks."""
+    report = json.loads(Path(reference).read_text(encoding="utf-8"))
+    if not isinstance(report, dict):
+        raise ValueError("preflight report must be an object")
+    if metadata is None:
+        return report  # Existing formatter-ready file compatibility.
+    required = {"checked_at", "decision", "post_change_evidence"}
+    if not isinstance(metadata, dict) or set(metadata) != required:
+        raise ValueError("raw preflight metadata requires only checked_at, decision, post_change_evidence")
+    if not isinstance(metadata["checked_at"], str) or not metadata["checked_at"].strip():
+        raise ValueError("raw preflight metadata requires the actual check timestamp")
+    if kind == "catalog" and "catalog_check" in report:
+        check = report["catalog_check"]
+        if not isinstance(check, dict):
+            raise ValueError("catalog_check must be an object")
+        if any(key in report and report[key] != value for key, value in check.items()):
+            raise ValueError("conflicting catalog report fields")
+        report = {**report, **check}
+    if kind == "update" and "token" in report:
+        if "comparison_token" in report and report["comparison_token"] != report["token"]:
+            raise ValueError("conflicting update comparison tokens")
+        report["comparison_token"] = report["token"]
+    if any(key in report and report[key] != value for key, value in metadata.items()):
+        raise ValueError("metadata conflicts with source report")
+    return {**report, **metadata}
+
+
 def assemble_kickoff(
     request: dict[str, Any], *, preference_store: Any = None,
     discovery: dict[str, Any] | None = None,
@@ -660,9 +693,12 @@ def assemble_kickoff(
             reference = preflight_files.get(file_key)
             if input_key not in raw_inputs and isinstance(reference, str):
                 try:
-                    raw_inputs[input_key] = json.loads(Path(reference).read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
-                    missing.append({"owner": "manager_research", "requirement": f"read {file_key} preflight report"})
+                    metadata = request.get("preflight_metadata", {})
+                    if not isinstance(metadata, dict):
+                        raise ValueError("preflight_metadata must be an object")
+                    raw_inputs[input_key] = _preflight_file_report(reference, file_key, metadata.get(file_key))
+                except (OSError, ValueError) as exc:
+                    missing.append({"owner": "manager_research", "requirement": f"read {file_key} preflight report: {exc}"})
     normalized = normalize_formatter_inputs(raw_inputs) if isinstance(raw_inputs, dict) else None
     if normalized is not None and normalized["status"] == "ready":
         from argparse import Namespace

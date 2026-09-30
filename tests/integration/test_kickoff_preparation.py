@@ -803,3 +803,50 @@ def test_public_formatter_field_shapes_cover_real_decisions_without_source_looku
         if "enum" in shape:
             assert shape["enum"] == list(owner[field].choices)
     assert not (PROJECT_ROOT / ".cafe/issues" / values["issue_name"]).exists()
+
+
+def test_raw_preflight_files_preserve_source_evidence_and_require_current_metadata(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """U14-U16/I06: normal check files feed the owner without manual report copies."""
+    cli = load_kickoff_module("prepare_kickoff")
+    values = _formatter_inputs("issue573-raw-preflight-files")
+    request = {"schema_version": 1, "project_root": str(PROJECT_ROOT), "issue_name": values["issue_name"],
+               "playbook_id": values["playbook_id"], "formatter_inputs": values.copy(),
+               "preflight_files": {}, "preflight_metadata": {}}
+    for kind in ("update", "catalog"):
+        full = values[kind + "_preflight"].copy()
+        metadata = {k: full.pop(k) for k in ("checked_at", "decision", "post_change_evidence")}
+        if kind == "update":
+            full["token"] = full.pop("comparison_token")
+            raw = {**full, "additional_source_diagnostic": "retained"}
+        else:
+            raw = {"catalog_check": full, "content_mismatch_entry_ids": [], "additional_source_diagnostic": "retained"}
+        path = tmp_path / (kind + ".json")
+        path.write_text(json.dumps(raw))
+        request["preflight_files"][kind] = str(path)
+        request["preflight_metadata"][kind] = metadata
+        request["formatter_inputs"].pop(kind + "_preflight")
+    path = tmp_path / "request.json"
+    path.write_text(json.dumps(request))
+    args = ["--request-file", str(path), "--config-dir", str(tmp_path / "config"), "--cache-dir", str(tmp_path / "cache")]
+    assert cli.main(["render", *args]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["render"]["output"] == load_kickoff_module("kickoff_inputs").render_kickoff(values)["output"]
+    for kind in ("update", "catalog"):
+        report = result["assembly"]["formatter_inputs"][kind + "_preflight"]
+        assert report["additional_source_diagnostic"] == "retained"
+        assert report["comparison_token"] == values[kind + "_preflight"]["comparison_token"]
+        assert report["checked_at"] == request["preflight_metadata"][kind]["checked_at"]
+    # Metadata cannot manufacture a source token/status; unavailable evidence stays unavailable.
+    request["preflight_metadata"]["update"]["comparison_token"] = "invented"
+    path.write_text(json.dumps(request))
+    assert cli.main(["render", *args]) != 0
+    failed = json.loads(capsys.readouterr().out)
+    assert failed["render"]["status"] != "rendered"
+    request["preflight_metadata"]["update"].pop("comparison_token")
+    request["preflight_metadata"]["update"].pop("checked_at")
+    path.write_text(json.dumps(request))
+    assert cli.main(["render", *args]) != 0
+    capsys.readouterr()
+    assert not (PROJECT_ROOT / ".cafe/issues" / values["issue_name"]).exists()
