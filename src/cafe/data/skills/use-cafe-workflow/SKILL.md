@@ -34,7 +34,11 @@ read the union once; do not preload the rest.
 | Render any user-visible kickoff, question, progress, error, or completion reply | `references/workflow_progress.md` |
 | Measure fresh-versus-resumed correction efficiency | `references/correction_ab_experiment.md` |
 
-For a new kickoff, obtain the local preparation summary before loading candidate
+For a new kickoff, keep inherited preference/evidence stores separate from temporary
+proposal outputs. First use `prepare_kickoff.py stores --request-file <request.json>`
+and execute its path-pinned `next_command`; intentional store overrides remain
+explicit. See `references/kickoff_inputs.md` for the request and store-selection
+interface. Obtain the local preparation summary before loading candidate
 playbooks, phase SKILL bodies, model research or delivery documentation. If a
 playbook is already explicitly chosen, start with `assemble --summary --guidance-output <guide.md> --draft-output <draft.json>` even
 while incomplete: it supplies the selected graph, validated evidence, a draft

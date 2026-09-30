@@ -43,7 +43,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(allow_abbrev=False)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("schema", help="Show request fields and a partial starter; performs no discovery.")
-    for name in ("discover", "assemble", "render"):
+    for name in ("stores", "discover", "assemble", "render"):
         command = commands.add_parser(name, allow_abbrev=False)
         command.add_argument("--request-file", type=Path, required=True)
         command.add_argument("--config-dir", type=Path, default=_default_config_dir())
@@ -96,6 +96,23 @@ def _request_command(args: argparse.Namespace) -> int:
         request = _read_json(args.request_file)
         if not isinstance(request, dict):
             raise ValueError("request file must contain an object")
+        storage = {
+            "config_dir": str(args.config_dir.expanduser().resolve()),
+            "cache_dir": str(args.cache_dir.expanduser().resolve()),
+            "repository_identity": repository_identity(Path(request.get("project_root", Path.cwd()))),
+        }
+        args.config_dir = Path(storage["config_dir"])
+        args.cache_dir = Path(storage["cache_dir"])
+
+        def continuation(command: str, request_file: Path) -> list[str]:
+            return [sys.executable, str(Path(__file__).resolve()), command,
+                    "--request-file", str(request_file.resolve()),
+                    "--config-dir", storage["config_dir"], "--cache-dir", storage["cache_dir"]]
+
+        if args.command == "stores":
+            stage = "assemble" if request.get("playbook_id") else "discover"
+            _json({"storage": storage, "next_command": continuation(stage, args.request_file) + ["--summary"]})
+            return 0
         summary_mode = getattr(args, "summary", False)
         inspect_references = {
             "catalog": [
@@ -121,11 +138,10 @@ def _request_command(args: argparse.Namespace) -> int:
                 request, config_dir=args.config_dir, cache_dir=args.cache_dir,
                 include_provenance=summary_mode,
             )
-            _json(
-                kickoff_inputs.compact_discovery_summary(
-                    report, inspect_references=inspect_references
-                ) if summary_mode else report
-            )
+            result = kickoff_inputs.compact_discovery_summary(
+                report, inspect_references=inspect_references
+            ) if summary_mode else report
+            _json({**result, "storage": storage})
             return 0 if report.get("status") in {"ready", "partial"} else 2
         discovery = kickoff_inputs.discover_kickoff(
             request, config_dir=args.config_dir, cache_dir=args.cache_dir,
@@ -151,6 +167,8 @@ def _request_command(args: argparse.Namespace) -> int:
                 )
                 compact.update({
                     "stage": "assembly_summary",
+                    "storage": storage,
+                    "render_command": continuation("render", args.draft_output or args.request_file),
                     "input_template": draft_request["formatter_inputs"] if assembled.get("status") != "ready" else None,
                     "input_schema": kickoff_inputs.request_schema(),
                     "decision_brief": kickoff_inputs.decision_brief(request, assembled.get("missing_decisions", [])),
@@ -182,7 +200,7 @@ def _request_command(args: argparse.Namespace) -> int:
                     compact["guidance"] = kickoff_inputs.kickoff_guidance()
                 _json(compact)
                 return 0 if assembled.get("status") == "ready" else 3
-            _json({"stage": "assembly", **assembled, "discovery": discovery})
+            _json({"stage": "assembly", **assembled, "discovery": discovery, "storage": storage, "render_command": continuation("render", args.draft_output or args.request_file)})
             return 0 if assembled.get("status") == "ready" else 3
         rendered = kickoff_inputs.render_kickoff(assembled.get("formatter_inputs"))
         if args.output is not None:
@@ -290,7 +308,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "schema":
         _json(kickoff_inputs.request_schema())
         return 0
-    if args.command in {"discover", "assemble", "render"}:
+    if args.command in {"stores", "discover", "assemble", "render"}:
         return _request_command(args)
     if args.command == "preferences":
         return _preference_command(args)

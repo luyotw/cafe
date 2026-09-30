@@ -7,9 +7,8 @@ The normal new-issue Manager path is `discover` → assessment → `assemble` �
 reading: `discover --summary` when selection is open, or `assemble --summary`
 when the user already chose a graph, even before formatter decisions are complete.
 Then assess current scope/strategy/suitability/authority, fill the reported gaps,
-and `assemble` → `render`. Use one request file and the same
-isolated user/cache directories across a cold preparation and its warm
-follow-ups. A warm session is a fresh Manager context that reads the saved
+and `assemble` → `render`. Use one request file and retain the effective preference/evidence directories
+throughout preparation and its follow-ups. A warm session is a fresh Manager context that reads the saved
 records; it must still assess the current issue and validate source freshness.
 For an existing workflow, read its confirmed contract and generic state rather
 than applying changed preferences to the issue.
@@ -22,6 +21,37 @@ evidence-file format and retain the same isolated cache directory. Refresh only
 evidence that the current assessment supports; incomplete research, a discovery
 gap, or an operational model probe alone is not reusable evidence. This local
 cache update does not confirm a model chain or authorize a delivery action.
+
+## Store selection before preparation
+
+A temporary proposal directory is an output location, not a new preference or
+evidence store. For a normal proposal inherit the caller's `XDG_CONFIG_HOME` and
+`XDG_CACHE_HOME` (or their home-directory defaults). Do not assign fresh XDG roots
+merely because the proposal is read-only or uses temporary request/draft files.
+Disposable evidence validation may update its existing cache; it does not modify
+saved preferences or authorize any proposed action.
+
+After writing the request, run the read-only locator first:
+
+```sh
+python scripts/prepare_kickoff.py stores --request-file request.json
+```
+
+It returns the effective `storage` paths and repository identity, plus a literal
+`next_command` argv for the selected stage with those paths pinned. Execute that
+argv; for selected assembly append `--guidance-output guidance.md --draft-output
+draft.json`. Later use the returned `render_command` and append `--output
+proposal.md`. These argv values prevent incidental environment changes from
+switching stores between stages. They are local invocation inputs, not saved
+issue authority or permission. Source/identity/freshness checks still run.
+
+Use `--config-dir` / `--cache-dir` on `stores` or any stage only for an intentional
+store choice, such as a user-requested isolated evaluation. Explicit choices
+are honored with no fallback to another directory. If changing them deliberately
+later, regenerate the stage command from the new choice. Empty stores honestly
+miss; a different repository or changed material source cannot borrow a prior hit.
+Reports expose effective `storage` so the caller can verify which records it used.
+No raw source needs reopening simply to verify a validated hit.
 
 ## Early selected-graph request
 

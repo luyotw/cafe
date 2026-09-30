@@ -215,6 +215,9 @@ def test_compact_cli_reports_preserve_selected_facts_and_full_render(
     compact_render = inputs.render_kickoff(compact_assembly["formatter_inputs"])
     assert compact_render["status"] == "rendered"
     assert compact_render["proposal"]
+    assert cli.main(compact_assembly["render_command"][2:]) == 0
+    continued = json.loads(capsys.readouterr().out)
+    assert continued["render"]["output"] == compact_render["output"]
     issue_dir = PROJECT_ROOT / ".cafe/issues" / issue_name
     assert not issue_dir.exists()
 
@@ -651,3 +654,63 @@ def test_public_guidance_file_and_preflight_examples_avoid_report_reprinting(
         assert text in owner.read_text()
         prior_end = section["end_line"]
     assert len(json.dumps(report).encode()) < len(guide.read_bytes())
+
+
+def test_normal_caller_keeps_evidence_stores_when_proposal_output_moves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """I01/I04/I05/I06: emitted argv retains context without overriding isolation."""
+    cli = load_kickoff_module("prepare_kickoff")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "settings"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "evidence"))
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "CONTRIBUTING.md"
+    source.write_text("Local commits require reviewed changes.\n")
+    delivery = tmp_path / "delivery.json"
+    delivery.write_text(json.dumps({"target": "local", "stable_conventions": ["Review before commit."],
+        "sources": [{"path": source.name, "fingerprint": hashlib.sha256(source.read_bytes()).hexdigest()}]}))
+    assert cli.main(["evidence", "refresh", "--category", "delivery", "--project-root", str(project), "--evidence-file", str(delivery)]) == 0
+    capsys.readouterr()
+    now = datetime.now(timezone.utc).isoformat()
+    model = tmp_path / "model.json"
+    model.write_text(json.dumps({"provider": "fixture", "model": "exact-v1", "version": "exact-v1",
+        "assessed_at": now, "workloads": ["implementation"], "reasoning": "high",
+        "capability_bands": {"coding": "fixture"}, "limitations": ["Test evidence only."],
+        "sources": [{"url": "https://provider.invalid/exact-v1", "retrieved_at": now, "fingerprint": "fixture-v1"}]}))
+    assert cli.main(["evidence", "refresh", "--category", "models", "--evidence-file", str(model)]) == 0
+    capsys.readouterr()
+    request = tmp_path / "request.json"
+    request.write_text(json.dumps({"schema_version": 1, "project_root": str(project), "issue_name": "new-issue"}))
+    assert cli.main(["stores", "--request-file", str(request)]) == 0
+    location = json.loads(capsys.readouterr().out)
+    command = location["next_command"]
+    # The output directory may be isolated without moving the evidence source.
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "scratch-settings"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "scratch-cache"))
+    assert cli.main(command[2:]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["delivery"]["status"] == "hit"
+    assert report["models"][0]["assessment"]["workloads"] == ["implementation"]
+    assert report["storage"]["repository_identity"] == location["storage"]["repository_identity"]
+    assert not (tmp_path / "scratch-cache").exists()
+    # A deliberately isolated request must not fall back to the original store.
+    assert cli.main(["stores", "--request-file", str(request), "--cache-dir", str(tmp_path / "empty")]) == 0
+    isolated = json.loads(capsys.readouterr().out)
+    assert cli.main(isolated["next_command"][2:]) == 0
+    missing = json.loads(capsys.readouterr().out)
+    assert missing["delivery"]["status"] != "hit"
+    assert not missing["models"]
+    # Reusing pinned locations never bypasses material-source validation.
+    source.write_text("Different delivery policy.\n")
+    assert cli.main(command[2:]) == 0
+    changed = json.loads(capsys.readouterr().out)
+    assert changed["delivery"]["status"] != "hit"
+    assert changed["models"][0]["status"] == "hit"
+    other = tmp_path / "other-project"
+    other.mkdir()
+    request.write_text(json.dumps({"schema_version": 1, "project_root": str(other), "issue_name": "new-issue"}))
+    assert cli.main(command[2:]) == 0
+    distinct = json.loads(capsys.readouterr().out)
+    assert distinct["delivery"]["status"] != "hit"
+    assert distinct["storage"]["repository_identity"] != location["storage"]["repository_identity"]
