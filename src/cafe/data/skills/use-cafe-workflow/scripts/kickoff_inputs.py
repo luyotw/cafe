@@ -608,8 +608,8 @@ def _preflight_file_report(reference: str, kind: str, metadata: Any = None) -> d
     required = {"checked_at", "decision", "post_change_evidence"}
     if not isinstance(metadata, dict) or set(metadata) != required:
         raise ValueError("raw preflight metadata requires only checked_at, decision, post_change_evidence")
-    if any(metadata[key] is None for key in required):
-        raise ValueError("raw preflight metadata has unresolved current decisions")
+    if metadata["decision"] is None:
+        raise ValueError("raw preflight metadata requires the current Manager decision")
     if not isinstance(metadata["checked_at"], str) or not metadata["checked_at"].strip():
         raise ValueError("raw preflight metadata requires the actual check timestamp")
     if kind == "catalog" and "catalog_check" in report:

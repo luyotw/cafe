@@ -859,6 +859,10 @@ def test_capture_report_retains_first_check_for_complete_public_render(tmp_path:
 
     inputs = load_kickoff_module("kickoff_inputs")
     values = _formatter_inputs("issue573-capture-report")
+    # The formatter accepts explicit absent post-change evidence when no change occurred.
+    # Capture must not force invented evidence text or an unnecessary render repair.
+    for kind in ("update", "catalog"):
+        values[kind + "_preflight"]["post_change_evidence"] = None
     request = {"schema_version": 1, "project_root": str(PROJECT_ROOT),
                "issue_name": values["issue_name"], "playbook_id": values["playbook_id"],
                "formatter_inputs": values.copy()}

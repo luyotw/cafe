@@ -330,6 +330,8 @@ The helper maps update `token` to `comparison_token` and projects `catalog_check
 while preserving the complete source report. Existing formatter-ready files
 continue to work without metadata. Missing actual timestamps and conflicting or
 extra metadata are gaps, never synthesized evidence. `input_schema.preflight_file_adapter`
-describes this public mapping. The formatter owns validation; the helper does
+describes this public mapping. An explicit `post_change_evidence: null` may represent absent post-change evidence
+under the existing formatter contract; do not invent text to replace it. The
+current Manager `decision` must still be supplied. The formatter owns validation; the helper does
 not execute or change preflight checks. No manual report reconstruction or
 formatter implementation lookup is needed.
