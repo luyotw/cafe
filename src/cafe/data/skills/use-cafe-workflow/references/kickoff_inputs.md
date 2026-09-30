@@ -4,7 +4,7 @@
 
 The normal new-issue Manager path is `discover` → assessment → `assemble` →
 `render` when selection is open. Start with a summary before broad source
-reading: `discover --summary` when selection is open, or `assemble --summary`
+reading: `discover --summary` when selection is open, or `assemble --summary decisions`
 when the user already chose a graph, even before formatter decisions are complete.
 Then assess current scope/strategy/suitability/authority, fill the reported gaps,
 and `assemble` → `render`. Use one request file and retain the effective preference/evidence directories
@@ -34,7 +34,7 @@ saved preferences or authorize any proposed action.
 After writing the request, run the read-only locator first:
 
 ```sh
-python scripts/prepare_kickoff.py stores --request-file request.json
+python scripts/prepare_kickoff.py stores --request-file request.json --summary decisions
 ```
 
 It returns the effective `storage` paths and repository identity, plus a literal
@@ -61,11 +61,12 @@ Create a request in a temporary directory with only the facts already known:
 ```
 
 ```sh
-python scripts/prepare_kickoff.py assemble --request-file request.json --summary --draft-output draft.json
+python scripts/prepare_kickoff.py assemble --request-file request.json --summary decisions --draft-output draft.json
 ```
 
 The first selected assembly writes the editable `draft.json` and returns a
-`decision_brief`. Add the verbatim request as `request_text`; current named choices
+`decision_brief`, directly readable on stdout; consume this response once without
+a separate pretty-print or key-reprint command. Add the verbatim request as `request_text`; current named choices
 belong in `current_explicit_inputs`. Start with these current-response fields:
 
 - `fixed_inputs`: supplied choices or applicable preferences and their origin;
@@ -88,8 +89,9 @@ belong in `current_explicit_inputs`. Start with these current-response fields:
   ranking or proof of suitability. Assess reasoning, risks, limitations and exact
   chosen-chain identities against the full valid payloads already in the response;
 - `field_shapes`: the single existing-owner type/contract index for editing the
-  draft; formatter-supplied fixed values reference that draft instead of printing
-  its full contents again;
+  draft, limited to unresolved fields and their owner constraints. Known choices
+  retain their provenance; blank product values and empty action arrays still
+  require current judgment;
 - top-level `source_index`: complete provenance records. Delivery/model `sources`
   use local JSON `$ref` pointers into this index; resolve them here, without raw
   evidence inspection merely to retrieve the same record;
@@ -110,7 +112,12 @@ its actual path, lines and source hash. Changed source invalidates that read pla
 `--guidance-output <guide.md>` and `--with-guidance` remain full owner projections
 for explicit inspection/legacy consumers. They are not a prerequisite to this
 reading path. Full schema is available through the returned `schema_reference`;
-summary without `--draft-output` and full `assemble` retain their existing data.
+bare `--summary` (also `--summary json`) and full `assemble` retain their
+existing data. `--summary decisions` defers unselected role defaults, artifact
+plumbing, discovery-only dependencies and unused schema/examples through
+`deferred_details`, using the existing discover/schema endpoints. All candidate
+applicability/diagnostics, selected profiles/routes/gates, usable evidence and
+limits stay visible. Only actual gaps justify opening those details.
 With a draft file, the response omits duplicate editable values/schema and points
 to that file plus the relevant field shapes. No policy or candidate is silently
 removed: selected facts, all candidate diagnostics/overview and detailed inspect

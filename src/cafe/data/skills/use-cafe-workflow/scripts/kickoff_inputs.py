@@ -762,11 +762,11 @@ def index_summary_sources(summary: dict[str, Any]) -> None:
 
     delivery = summary.get("delivery", {})
     for holder in [delivery, delivery.get("manifest", {})]:
-        if isinstance(holder.get("sources"), list):
+        if isinstance(holder, dict) and isinstance(holder.get("sources"), list):
             holder["sources"] = references(holder["sources"])
     for model in summary.get("models", []):
         for holder in [model.get("assessment", {}), model.get("provenance", {})]:
-            if isinstance(holder.get("sources"), list):
+            if isinstance(holder, dict) and isinstance(holder.get("sources"), list):
                 holder["sources"] = references(holder["sources"])
     for section in [summary.get("catalog", {}), delivery, *summary.get("models", [])]:
         reference = section.get("inspect_reference")
@@ -776,6 +776,102 @@ def index_summary_sources(summary: dict[str, Any]) -> None:
                 break
     summary["source_index"] = sources
 
+
+
+def current_decision_view(summary: dict[str, Any], request: dict[str, Any], draft: dict[str, Any]) -> dict[str, Any]:
+    """Present current decisions; defer only inspectable detail, never validation.
+
+    The legacy summary remains the input contract. Source fingerprints and all
+    validators run before this presentation projection; no policy is cached here.
+    """
+    view = json.loads(json.dumps(summary))
+    view["presentation"] = "decisions"
+    view["deferred_details"] = {
+        "candidate_roles_and_dependencies": {"inspect_reference": {"$ref": "#/inspect_references/catalog"},
+            "contents": "Complete candidates, role defaults, skills, artifact declarations and discovery dependencies."},
+        "discovery_dependencies": {"inspect_reference": {"$ref": "#/inspect_references/catalog"},
+            "contents": "Delivery manifest source inventory and watched paths; validation already used the complete manifest."},
+        "unused_fields_and_examples": {"inspect_reference": {"$ref": "#/schema_reference"},
+            "contents": "All optional formatter fields, action/closeout examples and raw-report adapter documentation."},
+    }
+    catalog = view["catalog"]
+    for candidate in catalog.get("candidate_overview", []):
+        # Roles and phase names alone do not establish suitability. The selected
+        # profiles stay below; full alternative graphs are available for a gap.
+        for key in ("roles", "steps"):
+            candidate.pop(key, None)
+    graph = view.get("selected_graph")
+    if graph:
+        for key in ("omitted_detail_fields", "omitted_step_detail_fields"):
+            graph.pop(key, None)
+        for step in graph.get("steps", {}).values():
+            for key in ("input_artifacts", "output_artifact"):
+                step.pop(key, None)
+    manifest = view["delivery"]["manifest"]
+    for key in ("sources", "watched"):
+        manifest.pop(key, None)
+    # Keep only source records used by actual conclusions/provenance. The full
+    # inventory remains inspectable, including when discovery reports a miss.
+    sources = view.pop("source_index", {})
+    referenced: set[str] = set()
+
+    def collect(value: Any) -> None:
+        if isinstance(value, dict):
+            ref = value.get("$ref", "")
+            if ref.startswith("#/source_index/"):
+                referenced.add(ref.rsplit("/", 1)[1])
+            for child in value.values():
+                collect(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect(child)
+
+    collect(view)
+    view["source_index"] = {key: value for key, value in sources.items() if key in referenced}
+    brief = view["decision_brief"]
+    # Preserve the seven judgments and their exact owner sections. Remove only
+    # reverse links and redundant numeric ranges, not policy text or questions.
+    for source in brief["reading_list"]:
+        for section in source["sections"]:
+            for key in ("questions", "start_line", "end_line"):
+                section.pop(key, None)
+    fields = draft.get("formatter_inputs", {})
+    shapes = brief["field_shapes"]
+    field_schema = shapes["formatter_field_schema"]
+    missing = {item["missing"] for item in brief["missing_fields"]}
+    unresolved = {key for key, value in fields.items() if value is None}
+    # Parser-optional values are still editable current judgments, not implied
+    # acceptance of defaults. Include their types until explicitly supplied.
+    judgment_fields = {"phase_chain", "capability_choice", "user_required", "manager_confirmable",
+        "manager_mode", "need_clarification", "need_permission", "proactive_review_decision",
+        "worktree", "current_checkout", "deliver", "cleanup"}
+    explicit_fields = set(request.get("formatter_inputs", {})) | set(request.get("current_explicit_inputs", {}))
+    needed = missing | unresolved | (judgment_fields - explicit_fields)
+    # Paired action descriptions must remain visible when actions need a choice.
+    for key in ("deliver", "cleanup"):
+        if key in needed:
+            needed.add(key + "_description")
+    if "checkout" in missing:
+        needed.update(("worktree", "current_checkout"))
+        for item in brief["missing_fields"]:
+            if item["missing"] == "checkout":
+                item.pop("field_reference", None)
+                item["field_references"] = ["#/decision_brief/field_shapes/formatter_field_schema/" + key
+                                            for key in ("worktree", "current_checkout")]
+    shapes["formatter_field_schema"] = {key: value for key, value in field_schema.items() if key in needed}
+    for key in ("action_input_examples", "closeout_examples", "preflight_capture", "preflight_file_adapter"):
+        shapes.pop(key, None)
+    if "delivery_contract" not in needed:
+        shapes.pop("delivery_contract", None)
+    # Explicit values remain visible rather than requiring a second draft read
+    # just to recover what the caller already supplied. Reports retain file refs.
+    for key, value in brief["fixed_inputs"].items():
+        if "draft_reference" in value:
+            value["value"] = request.get("formatter_inputs", {}).get(key)
+            value.pop("draft_reference")
+    view.pop("missing_decisions", None)  # Same complete list is indexed in brief.
+    brief.pop("missing_decisions_reference", None)
+    return view
 
 def _preflight_file_report(reference: str, kind: str, metadata: Any = None) -> dict[str, Any]:
     """Map complete check output to formatter fields without executing checks."""

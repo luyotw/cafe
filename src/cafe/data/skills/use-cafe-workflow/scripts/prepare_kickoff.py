@@ -54,8 +54,9 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--request-file", type=Path, required=True)
         command.add_argument("--config-dir", type=Path, default=_default_config_dir())
         command.add_argument("--cache-dir", type=Path, default=_default_cache_dir())
-        if name in {"discover", "assemble"}:
-            command.add_argument("--summary", action="store_true")
+        if name in {"stores", "discover", "assemble"}:
+            command.add_argument("--summary", nargs="?", const="json", choices=("json", "decisions"),
+                                 help="Legacy JSON summary, or directly readable current decisions with inspect references.")
         if name == "assemble":
             command.add_argument("--guidance-output", type=Path, help="Write current owner sections as plain text and return disjoint line references, without duplicating the body in JSON.")
             command.add_argument("--with-guidance", action="store_true", help="Include current kickoff policy sections once, with source fingerprints.")
@@ -117,7 +118,8 @@ def _request_command(args: argparse.Namespace) -> int:
 
         if args.command == "stores":
             stage = "assemble" if request.get("playbook_id") else "discover"
-            _json({"storage": storage, "next_command": continuation(stage, args.request_file) + ["--summary"]})
+            view = ["--summary", "decisions"] if args.summary == "decisions" else ["--summary"]
+            _json({"storage": storage, "next_command": continuation(stage, args.request_file) + view})
             return 0
         summary_mode = getattr(args, "summary", False)
         inspect_references = {
@@ -185,8 +187,9 @@ def _request_command(args: argparse.Namespace) -> int:
                 "stdin": "Pipe the complete check JSON to capture_argv; supply its actual timezone-qualified observation time. These read-only preparation checks are required even for proposal-only work; they execute no proposed case action.",
                 "owner": "references/kickoff.md#complete-runtime-and-catalog-preflight",
             })
-        normal_projection = (args.command == "assemble" and args.draft_output is not None
-                             and args.guidance_output is None and not args.with_guidance)
+        normal_projection = args.command == "assemble" and (
+            summary_mode == "decisions" or (args.draft_output is not None
+                and args.guidance_output is None and not args.with_guidance))
         if args.command == "assemble":
             draft_request = kickoff_inputs.preparation_template(request, assembled.get("formatter_draft") or {})
             if args.draft_output is not None:
@@ -212,9 +215,9 @@ def _request_command(args: argparse.Namespace) -> int:
                     "formatter_inputs": assembled.get("formatter_inputs"),
                     "formatter_draft": assembled.get("formatter_draft") if assembled.get("status") != "ready" else None,
                 })
-                if args.draft_output is None:
+                if args.draft_output is None and summary_mode != "decisions":
                     compact["decision_brief"].pop("field_shapes", None)
-                if args.draft_output is not None and args.guidance_output is None and not args.with_guidance:
+                if normal_projection:
                     # Editable data lives in the requested file. Old summary-only
                     # and full assembly consumers retain their complete payload.
                     for key in ("input_template", "formatter_draft", "formatter_inputs", "input_schema"):
@@ -240,7 +243,11 @@ def _request_command(args: argparse.Namespace) -> int:
                     compact["guidance_index"] = index
                 elif args.with_guidance:
                     compact["guidance"] = kickoff_inputs.kickoff_guidance()
-                _json(compact)
+                if summary_mode == "decisions":
+                    compact = kickoff_inputs.current_decision_view(compact, request, draft_request)
+                    print(json.dumps(compact, ensure_ascii=False, indent=2))
+                else:
+                    _json(compact)
                 return 0 if assembled.get("status") == "ready" else 3
             _json({"stage": "assembly", **assembled, "discovery": discovery, "storage": storage, "render_command": continuation("render", args.draft_output or args.request_file)})
             return 0 if assembled.get("status") == "ready" else 3

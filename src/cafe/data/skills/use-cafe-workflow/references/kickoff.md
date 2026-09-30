@@ -1,16 +1,12 @@
 # Kickoff And Preparation
 
-Read the applicable sections of this reference before presenting a kickoff, preparing an issue, resuming an
-issue whose first workflow execution has not run, or answering a question about
-the workflow conversation language. Start with the early summary in
-`kickoff_inputs.md` before loading decision references. Read
-`playbook_selection.md` when selection needs assessment, `model_selection.md`
-for current suitability policy and `strategic_context.md` for strategy; reuse
-these references if already read during this preparation. The first
-`assemble --summary --with-guidance` supplies the applicable owner sections
-verbatim; reading that projection satisfies the same read, without reopening
-the full documents. Load execution/activation sections when that operation is
-actually reached.
+For normal preparation, use the locator and directly readable decision view in
+`kickoff_inputs.md` first. Read this reference's applicable sections through the
+view's question-to-section index; share each unchanged section across its
+judgments. Complete locale, strategy, suitability, authority, gate and preflight
+judgments remain required. Full `--with-guidance` / `--guidance-output` projections
+are available for explicit inspection, not a normal prerequisite. Load execution
+and activation sections when that operation is actually reached.
 
 ## Reuse kickoff preferences and evidence
 
@@ -25,7 +21,7 @@ Manager decisions remain Manager-owned.
 
 Use `discover --request-file <request.json> --summary` and, after making the
 issue-owned selection and required decisions, `assemble --request-file
-<request.json> --summary` for the normal Manager path. The compact reports
+<request.json> --summary decisions --draft-output <draft.json>` for the normal Manager path. The compact reports
 preserve every candidate's decision-relevant facts and invalid diagnostics,
 evidence status, source fingerprints or provenance, ages, and full-inspection
 commands; assembly also preserves the selected graph, missing decisions, and

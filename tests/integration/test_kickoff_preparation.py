@@ -1138,9 +1138,10 @@ def test_decision_reading_path_preserves_required_judgments_and_complete_render(
     assert mandatory <= {q["id"] for q in complete["decision_brief"]["questions"] if q["requires_current_judgment"]}
 
 
+@pytest.mark.parametrize("presentation", ["json", "decisions"])
 @pytest.mark.parametrize("change", ["delivery_source", "model_source", "expired", "workload"])
 def test_reading_path_reopens_only_affected_evidence_questions(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], change: str
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], change: str, presentation: str
 ) -> None:
     """U05/U12/U14-U16/I05: a valid hit is useful evidence, never suitability or authority."""
     cli = load_kickoff_module("prepare_kickoff")
@@ -1166,7 +1167,7 @@ def test_reading_path_reopens_only_affected_evidence_questions(
     capsys.readouterr()
     request = tmp_path / "request.json"
     data = {"schema_version": 1, "project_root": str(project), "issue_name": "new-issue", "playbook_id": "standard-qa"}
-    args = ["assemble", "--request-file", str(request), "--summary", "--config-dir", str(tmp_path / "config"), "--cache-dir", str(cache)]
+    args = ["assemble", "--request-file", str(request), "--summary", presentation, "--config-dir", str(tmp_path / "config"), "--cache-dir", str(cache)]
     request.write_text(json.dumps(data))
     assert cli.main(args) == 3
     before = json.loads(capsys.readouterr().out)
@@ -1199,8 +1200,9 @@ def test_reading_path_reopens_only_affected_evidence_questions(
     assert after["selected_graph"]["mandatory_confirmation_gates"] == before["selected_graph"]["mandatory_confirmation_gates"]
 
 
+@pytest.mark.parametrize("presentation", ["json", "decisions"])
 def test_normal_summary_indexes_sources_and_routes_missing_reports_to_same_draft(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, presentation: str
 ) -> None:
     """U14-U16/I01/I06: one decision index and a usable check/capture/render continuation."""
     import io
@@ -1226,7 +1228,7 @@ def test_normal_summary_indexes_sources_and_routes_missing_reports_to_same_draft
     assert cli.main(["evidence", "refresh", "--category", "models", "--project-root", str(PROJECT_ROOT),
         "--cache-dir", str(tmp_path / "cache"), "--evidence-file", str(evidence)]) == 0
     capsys.readouterr()
-    argv = ["assemble", "--request-file", str(request), "--summary", "--draft-output", str(draft),
+    argv = ["assemble", "--request-file", str(request), "--summary", presentation, "--draft-output", str(draft),
             "--config-dir", str(tmp_path / "config"), "--cache-dir", str(tmp_path / "cache")]
     assert cli.main(argv) == 3
     report = json.loads(capsys.readouterr().out)
@@ -1236,7 +1238,11 @@ def test_normal_summary_indexes_sources_and_routes_missing_reports_to_same_draft
     assert len({json.dumps(v, sort_keys=True) for v in source_index.values()}) == len(source_index)
     resolved = [source_index[ref["$ref"].split("/")[-1]] for ref in report["delivery"]["sources"]]
     assert resolved[0]["fingerprint"] == hashlib.sha256(source.read_bytes()).hexdigest()
-    assert all(list(ref) == ["$ref"] for ref in report["delivery"]["manifest"]["sources"])
+    if presentation == "json":
+        assert all(list(ref) == ["$ref"] for ref in report["delivery"]["manifest"]["sources"])
+    else:
+        assert "sources" not in report["delivery"]["manifest"]
+        assert report["deferred_details"]["discovery_dependencies"]["inspect_reference"]
     assessment = report["models"][0]["assessment"]
     assert report["models"][0]["status"] == "hit"
     assert assessment["workloads"] == model["workloads"] and assessment["limitations"] == model["limitations"]
@@ -1314,3 +1320,101 @@ def test_missing_reports_block_with_actionable_continuation_not_a_null_type_erro
     assert result["status"] == "incomplete" and not result["diagnostics"]
     assert {step["kind"] for step in result["continuation"]["checks"]} == {"update", "catalog"}
     assert json.loads(path.read_text()) == request
+
+
+def test_decision_view_locator_preserves_facts_without_full_graph_or_schema_repetition(tmp_path, capsys):
+    """U14-U16/I01/I06: the public locator yields a usable view and unchanged render."""
+    cli = load_kickoff_module("prepare_kickoff")
+    values = _formatter_inputs("issue573-decisions-journey")
+    request, draft = tmp_path / "request.json", tmp_path / "draft.json"
+    request.write_text(json.dumps({"schema_version": 1, "project_root": str(PROJECT_ROOT),
+        "issue_name": values["issue_name"], "playbook_id": values["playbook_id"],
+        "current_explicit_inputs": {"effective_locale": values["effective_locale"]}}))
+    stores = ["stores", "--request-file", str(request), "--config-dir", str(tmp_path / "config"),
+              "--cache-dir", str(tmp_path / "cache")]
+    assert cli.main([*stores, "--summary", "decisions"]) == 0
+    locator = json.loads(capsys.readouterr().out)
+    # Removing presentation forwarding must fail this public normal-path journey.
+    assert cli.main([*locator["next_command"][2:], "--draft-output", str(draft)]) == 3
+    stdout = capsys.readouterr().out
+    view = json.loads(stdout)
+    assert view["presentation"] == "decisions"
+    assert view["storage"] == locator["storage"]
+    assert "\n  " in stdout  # Already directly readable; no consumer pretty printer.
+    assert cli.main([*locator["next_command"][2:-1], "json", "--draft-output", str(draft)]) == 3
+    legacy = json.loads(capsys.readouterr().out)
+    assert [(c["id"], c["eligible"], c["applicability"], c["diagnostics"]) for c in view["catalog"]["candidate_overview"]] == [
+        (c["id"], c["eligible"], c["applicability"], c["diagnostics"]) for c in legacy["catalog"]["candidate_overview"]]
+    for key in ("profiles", "mandatory_confirmation_gates", "confirmation_gates", "capability_setup", "behavior"):
+        assert view["selected_graph"][key] == legacy["selected_graph"][key]
+    for result in (view, legacy):
+        for question in result["decision_brief"]["questions"]:
+            question["evidence_gaps"].sort(key=lambda gap: json.dumps(gap, sort_keys=True))
+    assert view["decision_brief"]["questions"] == legacy["decision_brief"]["questions"]
+    assert view["decision_brief"]["field_shapes"]["delivery_contract"] == legacy["decision_brief"]["field_shapes"]["delivery_contract"]
+    assert "roles" not in view["catalog"]["candidate_overview"][0]
+    assert "action_input_examples" not in view["decision_brief"]["field_shapes"]
+    # Optional-to-parser choices still need types for the mandatory current judgments.
+    types = view["decision_brief"]["field_shapes"]["formatter_field_schema"]
+    assert types["phase_chain"]["items"]["type"] == "string"
+    assert types["user_required"]["items"]["type"] == "string"
+    assert types["current_checkout"]["type"] == "boolean"
+    # Every real gap navigates to an existing owner type, including composite checkout.
+    for gap in view["decision_brief"]["missing_fields"]:
+        references = gap.get("field_references", [gap.get("field_reference")])
+        for reference in references:
+            target = view
+            for component in reference.removeprefix("#/").split("/"):
+                target = target[component]
+            assert target["type"]
+    assert len(json.dumps(view)) < len(json.dumps(legacy))
+    for deferred in view["deferred_details"].values():
+        assert deferred["inspect_reference"]
+    prepared = json.loads(draft.read_text())
+    prepared["formatter_inputs"].update(values)
+    draft.write_text(json.dumps(prepared))
+    output = tmp_path / "proposal.md"
+    assert cli.main([*view["render_command"][2:], "--output", str(output)]) == 0
+    capsys.readouterr()
+    assert output.read_text() == load_kickoff_module("kickoff_inputs").render_kickoff(values)["output"]
+    assert not (PROJECT_ROOT / ".cafe/issues" / values["issue_name"]).exists()
+
+
+def test_decision_view_custom_graph_changes_and_invalid_candidates_remain_visible(tmp_path, capsys):
+    """U07-U09/I03: inspectable detail is deferred without hiding custom requirements."""
+    cli = load_kickoff_module("prepare_kickoff")
+    project = tmp_path / "project"
+    playbooks = project / ".cafe/playbooks"
+    playbooks.mkdir(parents=True)
+    (playbooks / "custom.yaml").write_text(
+        "playbook: {id: custom, applicability: {summary: Custom, use_when: [x], avoid_when: [y]}}\n"
+        "roles: {operator: {}}\nskills: {workflow: {shared: [cafe-workflow-common]}, chat: {shared: []}}\n"
+        "steps:\n  first: {role: operator, skill: custom-step, on: {await_agent: _done}}\n")
+    (playbooks / "broken.yaml").write_text("playbook: {id: broken}\nsteps: []\n")
+    skill = project / ".cafe/skills/custom-step/SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("---\nname: custom-step\ndescription: Custom\nworkflow:\n"
+        "  execution_profile:\n    workload: implementation\n    reasoning: high\n"
+        "    risk_domains: [integration]\n    fallback_strength: equivalent\n---\n")
+    request = tmp_path / "request.json"
+    request.write_text(json.dumps({"schema_version": 1, "project_root": str(project),
+        "issue_name": "custom-issue", "playbook_id": "custom"}))
+    argv = ["assemble", "--request-file", str(request), "--summary", "decisions",
+        "--draft-output", str(tmp_path / "draft.json"), "--config-dir", str(tmp_path / "config"),
+        "--cache-dir", str(tmp_path / "cache")]
+    assert cli.main(argv) == 3
+    before = json.loads(capsys.readouterr().out)
+    assert before["selected_graph"]["steps"]["first"]["on"]["await_agent"] == "_done"
+    assert "implementation" in before["selected_graph"]["profiles"]["first"]["workloads"]
+    assert any(d["id"] == "broken" for d in before["catalog"]["diagnostics"])
+    # Existing full inspection resolves deferred defaults without a new endpoint.
+    assert cli.main(before["inspect_references"]["catalog"][2:]) == 0
+    full = json.loads(capsys.readouterr().out)
+    assert full["selected_candidate"]["profiles"] == before["selected_graph"]["profiles"]
+    skill.write_text(skill.read_text().replace("workload: implementation", "workload: planning"))
+    assert cli.main(argv) == 3
+    after = json.loads(capsys.readouterr().out)
+    assert after["catalog"]["reuse"]["custom"] is False
+    assert "planning" in after["selected_graph"]["profiles"]["first"]["workloads"]
+    assert any(g.get("workload") == "planning" for q in after["decision_brief"]["questions"] for g in q["evidence_gaps"])
+    assert all(q["requires_current_judgment"] for q in after["decision_brief"]["questions"])
