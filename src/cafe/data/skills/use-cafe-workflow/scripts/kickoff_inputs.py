@@ -595,6 +595,7 @@ def preparation_template(request: dict[str, Any], draft: dict[str, Any]) -> dict
 def decision_brief(
     request: dict[str, Any], missing: list[dict[str, str]],
     *, summary: dict[str, Any] | None = None, assembled: dict[str, Any] | None = None,
+    indexed: bool = False,
 ) -> dict[str, Any]:
     """Join current gaps to existing owner sections; never decide applicability or authority."""
     summary, assembled = summary or {}, assembled or {}
@@ -634,7 +635,7 @@ def decision_brief(
                      if section["file"] in selectors or section["heading"] in selectors]
         if not consumers:
             raise ValueError(f"kickoff section has no decision owner: {section['heading']}")
-        section_id = section["file"] + ":" + section["heading"]
+        section_id = f"s{sum(len(v['sections']) for v in reading.values())}" if indexed else section["file"] + ":" + section["heading"]
         entry = reading.setdefault(section["path"], {
             "path": section["path"], "sha256": section["sha256"], "sections": []})
         entry["sections"].append({"id": section_id, "heading": section["heading"],
@@ -646,7 +647,11 @@ def decision_brief(
         # One argv per file reads the disjoint required sections, rather than
         # reading a whole concatenated guide and later recovering its slices.
         ranges = ";".join(f"{s['start_line']},{s['end_line']}p" for s in entry["sections"])
-        entry["read_argv"] = ["sed", "-n", ranges, entry["path"]]
+        if indexed:
+            for section in entry["sections"]:
+                section["line_range"] = f"{section['start_line']},{section['end_line']}p"
+        else:
+            entry["read_argv"] = ["sed", "-n", ranges, entry["path"]]
 
     if delivery.get("status") != "hit" or delivery.get("discovery_gap"):
         by_id["actions"]["evidence_gaps"].append({
@@ -675,7 +680,10 @@ def decision_brief(
     for source in ("current_explicit_inputs", "formatter_inputs"):
         supplied = request.get(source, {})
         for key, value in (supplied.items() if isinstance(supplied, dict) else []):
-            fixed[key] = {"value": value, "source": source}
+            if value is None:
+                continue
+            fixed[key] = ({"draft_reference": "/formatter_inputs/" + key, "source": source}
+                          if indexed and source == "formatter_inputs" else {"value": value, "source": source})
     for key, value in assembled.get("preferences", {}).items():
         field = {"conversation.locale": "effective_locale", "manager.mode": "manager_mode"}.get(key)
         if field and value.get("value") is not None and field not in fixed:
@@ -707,6 +715,10 @@ def decision_brief(
     for item in missing:
         field = item["requirement"].removeprefix("formatter input: ")
         question = by_id[field_owners.get(field, "scope")]
+        if indexed:
+            missing_fields.append({**item, "question_id": question["id"], "missing": field,
+                "field_reference": "#/decision_brief/field_shapes/formatter_field_schema/" + field})
+            continue
         missing_fields.append({**item, "question": "What current value resolves " + item["requirement"] + "?",
                                "available": question["available"], "missing": field,
                                "policy_sections": question["policy_sections"]})
@@ -718,6 +730,7 @@ def decision_brief(
         "fixed_inputs": fixed,
         "questions": questions,
         "reading_list": list(reading.values()),
+        "read_command_template": ["sed", "-n", "<section.line_range>", "<source.path>"],
         "repository_reading_candidates": list(repository_reads.values()),
         "current_mandate_path": str((root / ".cafe/strategic_context.yaml").resolve()),
         "workload_evidence": coverage,
@@ -728,6 +741,40 @@ def decision_brief(
         "missing_decision_count": len(missing),
         "evidence_use": "Apply the source-backed payloads already in this response. A hit supplies neither current authority nor model suitability. Read each policy range once for all its questions. Inspect raw evidence only for a named gap, contradiction or invalidation.",
     }
+
+
+def index_summary_sources(summary: dict[str, Any]) -> None:
+    """Intern repeated provenance only in the normal draft projection; retain all facts."""
+    sources: dict[str, Any] = {}
+    identities: dict[str, str] = {}
+
+    def references(values: list[Any]) -> list[dict[str, str]]:
+        result = []
+        for value in values:
+            identity = json.dumps(value, sort_keys=True, ensure_ascii=False)
+            key = identities.get(identity)
+            if key is None:
+                key = f"source{len(sources)}"
+                identities[identity] = key
+                sources[key] = value
+            result.append({"$ref": "#/source_index/" + key})
+        return result
+
+    delivery = summary.get("delivery", {})
+    for holder in [delivery, delivery.get("manifest", {})]:
+        if isinstance(holder.get("sources"), list):
+            holder["sources"] = references(holder["sources"])
+    for model in summary.get("models", []):
+        for holder in [model.get("assessment", {}), model.get("provenance", {})]:
+            if isinstance(holder.get("sources"), list):
+                holder["sources"] = references(holder["sources"])
+    for section in [summary.get("catalog", {}), delivery, *summary.get("models", [])]:
+        reference = section.get("inspect_reference")
+        for key, command in summary.get("inspect_references", {}).items():
+            if reference == command:
+                section["inspect_reference"] = {"$ref": "#/inspect_references/" + key}
+                break
+    summary["source_index"] = sources
 
 
 def _preflight_file_report(reference: str, kind: str, metadata: Any = None) -> dict[str, Any]:

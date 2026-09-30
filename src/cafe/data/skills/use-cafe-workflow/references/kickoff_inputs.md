@@ -72,10 +72,14 @@ belong in `current_explicit_inputs`. Start with these current-response fields:
 - `questions`: current scope, model suitability, actions/authority, gates, locale,
   preflight and presentation judgments, including available evidence and actual
   evidence gaps. These judgments remain necessary even when fields are complete;
-- `missing_fields`: concrete unresolved values and their owning policy sections;
-- `reading_list`: source-hashed, disjoint required sections, grouped by file with
-  ready-to-use `read_argv`. Read this union once for all linked questions. It is
-  the normal reading path; do not first open a complete guide or whole owner files;
+- `missing_fields`: unresolved fields referencing one `question_id` and one
+  `field_reference`; resolve both within this response instead of opening schema
+  or implementation files;
+- `reading_list`: one source index with short section IDs, file fingerprints and
+  disjoint line ranges. Each question references those IDs. For the judgment at
+  hand, use `read_command_template` with its source path and section line range;
+  reuse that section for later questions that reference the same ID. This is not
+  a command to concatenate the entire source union before considering the facts;
 - `repository_reading_candidates` and `current_mandate_path`: current strategy
   sources from the existing generic resolver. Inspect the mandate and applicable
   grounds once, sharing the same observations across scope, models and delivery.
@@ -83,14 +87,24 @@ belong in `current_explicit_inputs`. Start with these current-response fields:
 - `workload_evidence`: literal coverage references, not an assignment, equivalence
   ranking or proof of suitability. Assess reasoning, risks, limitations and exact
   chosen-chain identities against the full valid payloads already in the response;
-- `field_shapes`: existing-owner types, product schema and action/preflight shapes
-  for editing the draft without implementation-source lookup.
+- `field_shapes`: the single existing-owner type/contract index for editing the
+  draft; formatter-supplied fixed values reference that draft instead of printing
+  its full contents again;
+- top-level `source_index`: complete provenance records. Delivery/model `sources`
+  use local JSON `$ref` pointers into this index; resolve them here, without raw
+  evidence inspection merely to retrieve the same record;
+- top-level `continuation`: when check reports are absent, execute each existing
+  `check_argv` once, pipe its complete JSON into the supplied `capture_argv` with
+  the actual observation time, and assess the captured report's disposition in
+  this same draft. Then use `render_command` with `--output proposal.md`. Missing
+  reports block a complete endpoint even when all product decisions are filled.
+  Proposal-only excludes proposed case actions; it still requires these checks.
 
 A validated delivery fact satisfies only the convention it actually describes.
 An uncovered target, strategic question, changed source or contradiction still
 requires inspection. A model hit likewise does not prove issue suitability. Use
-these gaps to add needed reads to the union rather than reopening all supporting
-sources. The original policy text remains authoritative; every listed range has
+these gaps to identify the relevant section or evidence, sharing unchanged reads
+across judgments. The original policy text remains authoritative; every listed range has
 its actual path, lines and source hash. Changed source invalidates that read plan.
 
 `--guidance-output <guide.md>` and `--with-guidance` remain full owner projections

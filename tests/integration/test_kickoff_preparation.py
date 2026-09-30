@@ -1197,3 +1197,120 @@ def test_reading_path_reopens_only_affected_evidence_questions(
     assert questions[affected]["policy_sections"]
     assert questions["confirmation"]["requires_current_judgment"]
     assert after["selected_graph"]["mandatory_confirmation_gates"] == before["selected_graph"]["mandatory_confirmation_gates"]
+
+
+def test_normal_summary_indexes_sources_and_routes_missing_reports_to_same_draft(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """U14-U16/I01/I06: one decision index and a usable check/capture/render continuation."""
+    import io
+    cli = load_kickoff_module("prepare_kickoff")
+    values = _formatter_inputs("issue573-report-continuation")
+    request, draft, output = [tmp_path / name for name in ("request.json", "draft.json", "proposal.md")]
+    partial = {key: value for key, value in values.items() if not key.endswith("_preflight")}
+    request.write_text(json.dumps({"schema_version": 1, "project_root": str(PROJECT_ROOT),
+        "issue_name": values["issue_name"], "playbook_id": values["playbook_id"], "formatter_inputs": partial}))
+    source = PROJECT_ROOT / "docs/settings-updates.md"
+    evidence = tmp_path / "delivery.json"
+    evidence.write_text(json.dumps({"target": "local", "stable_conventions": ["Respect current delivery policy."],
+        "sources": [{"path": "docs/settings-updates.md", "fingerprint": hashlib.sha256(source.read_bytes()).hexdigest()}]}))
+    assert cli.main(["evidence", "refresh", "--category", "delivery", "--project-root", str(PROJECT_ROOT),
+        "--cache-dir", str(tmp_path / "cache"), "--evidence-file", str(evidence)]) == 0
+    capsys.readouterr()
+    now = datetime.now(timezone.utc).isoformat()
+    model = {"provider": "fixture", "model": "exact-v1", "version": "exact-v1", "assessed_at": now,
+        "workloads": ["implementation"], "reasoning": "high", "capability_bands": {"coding": "fixture"},
+        "limitations": ["Fixture only."],
+        "sources": [{"url": "https://provider.invalid/exact-v1", "retrieved_at": now, "fingerprint": "v1"}]}
+    evidence.write_text(json.dumps(model))
+    assert cli.main(["evidence", "refresh", "--category", "models", "--project-root", str(PROJECT_ROOT),
+        "--cache-dir", str(tmp_path / "cache"), "--evidence-file", str(evidence)]) == 0
+    capsys.readouterr()
+    argv = ["assemble", "--request-file", str(request), "--summary", "--draft-output", str(draft),
+            "--config-dir", str(tmp_path / "config"), "--cache-dir", str(tmp_path / "cache")]
+    assert cli.main(argv) == 3
+    report = json.loads(capsys.readouterr().out)
+    assert report["delivery"]["status"] == "hit"
+    assert report["delivery"]["stable_conventions"] == ["Respect current delivery policy."]
+    source_index = report["source_index"]
+    assert len({json.dumps(v, sort_keys=True) for v in source_index.values()}) == len(source_index)
+    resolved = [source_index[ref["$ref"].split("/")[-1]] for ref in report["delivery"]["sources"]]
+    assert resolved[0]["fingerprint"] == hashlib.sha256(source.read_bytes()).hexdigest()
+    assert all(list(ref) == ["$ref"] for ref in report["delivery"]["manifest"]["sources"])
+    assessment = report["models"][0]["assessment"]
+    assert report["models"][0]["status"] == "hit"
+    assert assessment["workloads"] == model["workloads"] and assessment["limitations"] == model["limitations"]
+    assert [source_index[r["$ref"].split("/")[-1]] for r in assessment["sources"]] == model["sources"]
+    brief = report["decision_brief"]
+    questions = {q["id"]: q for q in brief["questions"]}
+    assert len(questions) == 7 and all(q["requires_current_judgment"] for q in questions.values())
+    # Gaps refer to one question/source/type index; they do not repeat definitions.
+    for gap in brief["missing_fields"]:
+        assert gap["question_id"] in questions
+        assert "policy_sections" not in gap and "available" not in gap
+        assert gap["field_reference"].startswith("#/decision_brief/field_shapes/")
+    sections = {s["id"] for source in brief["reading_list"] for s in source["sections"]}
+    assert all(set(q["policy_sections"]) <= sections for q in questions.values())
+    assert all("read_argv" not in source for source in brief["reading_list"])
+    assert all("line_range" in section for source in brief["reading_list"] for section in source["sections"])
+    # Same draft, blocked before formatter execution: no misleading null-input error.
+    render = [*report["render_command"][2:], "--output", str(output)]
+    assert cli.main(render) == 3
+    blocked = json.loads(capsys.readouterr().out)
+    assert blocked["status"] == "incomplete"
+    assert "formatter_inputs_must_be_an_object" not in blocked["diagnostics"]
+    assert not output.exists()
+    assert blocked["continuation"] == report["continuation"]
+    steps = report["continuation"]["checks"]
+    assert {s["kind"] for s in steps} == {"update", "catalog"}
+    for step in steps:
+        kind = step["kind"]
+        assert step["check_argv"] == (["cafe", "update", "check", "--json"] if kind == "update" else
+            [sys.executable, str(PROJECT_ROOT / "src/cafe/data/skills/use-cafe-workflow/scripts/catalog_version_check.py")])
+        raw = values[kind + "_preflight"].copy()
+        observed = raw.pop("checked_at")
+        raw.pop("decision")
+        raw.pop("post_change_evidence")
+        if kind == "update":
+            raw["token"] = raw.pop("comparison_token")
+        else:
+            raw = {"catalog_check": raw}
+        original = json.dumps(raw) + "\n"
+        # Producer I/O is the only fixture boundary; use the public capture and real validator.
+        monkeypatch.setattr(cli.sys, "stdin", io.StringIO(original))
+        capture = [observed if value == "<actual-checked-at>" else value for value in step["capture_argv"]]
+        assert cli.main(capture[2:]) == 0
+        captured = json.loads(capsys.readouterr().out)
+        assert Path(captured["report_file"]).read_text() == original
+        assert captured["request_file"] == str(draft)
+    assert cli.main(render) != 0  # Captured facts do not decide report dispositions.
+    capsys.readouterr()
+    data = json.loads(draft.read_text())
+    for kind in ("update", "catalog"):
+        for field in ("decision", "post_change_evidence"):
+            data["preflight_metadata"][kind][field] = values[kind + "_preflight"][field]
+    draft.write_text(json.dumps(data))
+    assert cli.main(render) == 0
+    capsys.readouterr()
+    assert output.read_text() == load_kickoff_module("kickoff_inputs").render_kickoff(values)["output"]
+    assert not (PROJECT_ROOT / ".cafe/issues" / values["issue_name"]).exists()
+
+
+def test_missing_reports_block_with_actionable_continuation_not_a_null_type_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """U14/U16: a well-typed incomplete request is distinct from malformed inputs."""
+    cli = load_kickoff_module("prepare_kickoff")
+    values = _formatter_inputs("issue573-report-block")
+    for kind in ("update", "catalog"):
+        values.pop(kind + "_preflight")
+    path = tmp_path / "draft.json"
+    request = {"schema_version": 1, "project_root": str(PROJECT_ROOT),
+        "issue_name": values["issue_name"], "playbook_id": values["playbook_id"], "formatter_inputs": values}
+    path.write_text(json.dumps(request))
+    assert cli.main(["render", "--request-file", str(path), "--output", str(tmp_path / "proposal.md"),
+                    "--config-dir", str(tmp_path / "config"), "--cache-dir", str(tmp_path / "cache")]) == 3
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "incomplete" and not result["diagnostics"]
+    assert {step["kind"] for step in result["continuation"]["checks"]} == {"update", "catalog"}
+    assert json.loads(path.read_text()) == request

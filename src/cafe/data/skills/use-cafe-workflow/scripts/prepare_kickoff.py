@@ -161,6 +161,32 @@ def _request_command(args: argparse.Namespace) -> int:
             ),
             discovery=discovery,
         )
+        active_draft = getattr(args, "draft_output", None) or args.request_file
+        followup = {"request_file": str(active_draft.resolve()), "checks": [],
+                    "render_command": continuation("render", active_draft),
+                    "complete_endpoint": False,
+                    "report_decisions": "Read each complete captured report; set preflight_metadata.<kind>.decision and post_change_evidence from current facts before render. A manual draft is not a completed contract."}
+        raw_fields = request.get("formatter_inputs", {})
+        explicit = request.get("current_explicit_inputs", {})
+        report_files = request.get("preflight_files", {})
+        for kind in ("update", "catalog"):
+            if (isinstance(raw_fields, dict) and raw_fields.get(kind + "_preflight") is not None
+                    or isinstance(explicit, dict) and explicit.get(kind + "_preflight") is not None
+                    or isinstance(report_files, dict) and report_files.get(kind)):
+                continue
+            followup["checks"].append({
+                "kind": kind,
+                "check_argv": ["cafe", "update", "check", "--json"] if kind == "update" else
+                    [sys.executable, str(_SCRIPT_DIR / "catalog_version_check.py")],
+                "capture_argv": [sys.executable, str(Path(__file__).resolve()), "capture-report",
+                    "--request-file", str(active_draft.resolve()), "--kind", kind,
+                    "--report-output", str(active_draft.resolve().with_name(active_draft.stem + "." + kind + ".json")),
+                    "--checked-at", "<actual-checked-at>"],
+                "stdin": "Pipe the complete check JSON to capture_argv; supply its actual timezone-qualified observation time. These read-only preparation checks are required even for proposal-only work; they execute no proposed case action.",
+                "owner": "references/kickoff.md#complete-runtime-and-catalog-preflight",
+            })
+        normal_projection = (args.command == "assemble" and args.draft_output is not None
+                             and args.guidance_output is None and not args.with_guidance)
         if args.command == "assemble":
             draft_request = kickoff_inputs.preparation_template(request, assembled.get("formatter_draft") or {})
             if args.draft_output is not None:
@@ -177,7 +203,7 @@ def _request_command(args: argparse.Namespace) -> int:
                     "render_command": continuation("render", args.draft_output or args.request_file),
                     "input_template": draft_request["formatter_inputs"] if assembled.get("status") != "ready" else None,
                     "input_schema": kickoff_inputs.request_schema(),
-                    "decision_brief": kickoff_inputs.decision_brief(request, assembled.get("missing_decisions", []), summary=compact, assembled=assembled),
+                    "decision_brief": kickoff_inputs.decision_brief(request, assembled.get("missing_decisions", []), summary=compact, assembled=assembled, indexed=normal_projection),
                     "draft_output": str(args.draft_output.resolve()) if args.draft_output is not None else None,
                     "status": assembled.get("status", "invalid"),
                     "selected_playbook": assembled.get("selected_playbook"),
@@ -194,6 +220,8 @@ def _request_command(args: argparse.Namespace) -> int:
                     for key in ("input_template", "formatter_draft", "formatter_inputs", "input_schema"):
                         compact.pop(key, None)
                     compact["schema_reference"] = [sys.executable, str(Path(__file__).resolve()), "schema"]
+                    compact["continuation"] = followup
+                    kickoff_inputs.index_summary_sources(compact)
                 if args.guidance_output is not None:
                     if args.with_guidance:
                         raise ValueError("choose guidance-output or with-guidance, not both")
@@ -216,6 +244,13 @@ def _request_command(args: argparse.Namespace) -> int:
                 return 0 if assembled.get("status") == "ready" else 3
             _json({"stage": "assembly", **assembled, "discovery": discovery, "storage": storage, "render_command": continuation("render", args.draft_output or args.request_file)})
             return 0 if assembled.get("status") == "ready" else 3
+        if assembled.get("status") != "ready":
+            blocked = {"status": assembled.get("status", "invalid"),
+                       "diagnostics": assembled.get("diagnostics", []),
+                       "missing_decisions": assembled.get("missing_decisions", []), "continuation": followup}
+            _json({"stage": "render", **blocked} if args.output is not None else
+                  {"stage": "render", "assembly": assembled, "render": blocked})
+            return 3
         rendered = kickoff_inputs.render_kickoff(assembled.get("formatter_inputs"))
         if args.output is not None:
             if rendered.get("status") == "rendered":

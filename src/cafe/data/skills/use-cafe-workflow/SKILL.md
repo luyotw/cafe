@@ -50,7 +50,9 @@ evidence. The first summary links the current strategy and suitability owner
 sections. Apply them once; inspect source details only for missing or invalidated
 facts. Do not preload the full kickoff/model/strategy references before this
 summary or reread their projected sections. Fill the emitted typed draft and
-render it directly once decisions and complete preflight reports are available. A validated selected graph supplies resolved
+use the summary’s `continuation` to capture missing preparation reports into that
+same draft, resolve their dispositions, then render. A manual draft after a
+blocked render is not a complete kickoff endpoint. A validated selected graph supplies resolved
 profiles and gates without rereading every phase body. Reuse references already
 read in this preparation. Resume continues to use its confirmed contract.
 
