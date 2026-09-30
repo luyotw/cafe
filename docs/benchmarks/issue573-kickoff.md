@@ -521,3 +521,95 @@ Normal reference staging is the next concrete defect to address; changing only
 the projection cannot reduce a caller's direct read of those complete references.
 All raw logs, final proposal, original exact prompt/hash, copied Manager artifacts
 and actual cache/endpoint audit are retained. No reclassification as a speedup.
+
+
+### Staged-reference correction and observation
+
+Revision `dd00732d4ec30baadb3693f5b3fe461596e3c259` moves post-confirmation
+prepare/activation/polling and direct CLI examples to `kickoff_execution.md`, and
+advanced request/staged/maintenance formats to `kickoff_input_reference.md`.
+The normal entry links to both; all moved blocks were checked verbatim against
+the predecessor. Checkout recommendation remains in the preparation decision
+section. No implementation owner, runtime, preflight, formatter, saved authority
+or accepted requirement changed. The public CLI journey first exposes execution
+examples in the normal proposal read, then verifies their separation plus the
+same complete renderer output and no activation. Three related journeys, 95
+owner checks and three adjusted owner-path checks pass. All policy assertions
+remain; the initial hook attempt exposed three further old-path tests (495 pass,
+3 fail), then all 498 pass with the actual linked owner paths. No hook bypass.
+
+| Latest original-condition observation | Value |
+| --- | ---: |
+| Run | B-original-conditions-disclosure-1 |
+| Complete Manager elapsed | 260.021 s |
+| Difference from original 241.438 s median | +18.583 s (+7.697%) |
+| Completed shell commands | 18 |
+| Captured UTF-8 output | 293172 bytes |
+| Difference from original volume median 314693 | -21521 bytes (-6.839%) |
+| Shell receipt interval union | 8.364 s |
+| Warm store build/check, outside Manager elapsed | 6.013 s |
+| Rendered document / final message | 8311 / 10280 bytes |
+| Final-tool-to-final-message interval | 95.474142208 s |
+
+Original baseline observations remain 238.081 / 350.333 / 241.438 seconds;
+the latest single run is not a median. It is +21.940 s versus baseline 1,
+-90.312 s versus baseline 2 and +18.583 s versus baseline 3. The original
+1757-byte prompt/hash, CLI 0.156.1, Astra, medium, sandbox-disabled ephemeral
+session and local-commit/pr.auto_create=false proposal endpoint are unchanged.
+Actual item_6 confirms prepared store paths, repository identity, delivery hit
+and both useful exact-model assessments. This is actual caller evidence, not
+just a prelaunch claim. One render succeeds (19), full output is read in 21,
+and no case workflow, commit, preference mutation, PR or closeout executes.
+
+Initial reads now use SKILL then the smaller input reference before assembly.
+Nevertheless item_7 cats the full 62661-byte guide, 10/12/14/18 reread sections,
+8/11 repeat CONTRIBUTING/engineering guidance and the preflight owner is reread.
+Both checks run once in 16/17; capture and render repair failures do not recur.
+The tool-free tail runs from 163.995439949 to 259.469582156 seconds and still
+includes rewriting: the final adds an introduction, rephrases facts, repeats raw
+argv and shell command and changes closeout diagram labels/status wording.
+Some presentation headings/prose remain English. The fixed decisions and full
+proposal sections are present, but exact complete presentation equivalence is
+not established; this is not an accepted performance/functional completion sample.
+The full invocation ends at 260.021 s, not at the final event receipt.
+
+Cumulative provider-reported input (including cached input) is 623802 tokens,
+cached input 557824, output 7202 and reported reasoning output 277. Original
+baseline-3 has 510901 input, 447104 cached and 6900 output. These are cumulative
+turn counters, not unique evidence volume or measured pure reasoning duration.
+Lower captured bytes do not prove lower total model work or stable latency.
+All twelve distinct-revision observations are retained; none is pooled into a
+warm median or selected as proof of improvement. The observed work reduction
+and correct stores are real, but the original-condition elapsed requirement
+remains unmet. The original cold/changed-input coverage gaps also remain.
+
+### Concrete boundary requiring a scope decision
+
+The resumed work verified three successive hypotheses: include missing complete
+presentation policy, remove unconditional rereading directions in owner policy,
+and physically stage execution/maintenance references. Their complete times are
+309.257, 267.050 and 260.021 seconds. None beats 241.438. The last run reduces
+captured bytes, yet still has an approximately 95-second final presentation tail.
+No new reproducible store/schema/adapter defect was identified in that trace;
+another same-source run or another wording-only change would not be evidence
+of a known production fix. This is not a claim that all possible in-scope
+improvements are impossible.
+
+`format_kickoff_contract.py:render` (around lines 952-1011) emits fixed English
+headings/table labels/explanatory prose even with zh-TW input, mixed with localized
+closeout/progress. The current owner policy requires the Manager to translate
+that output. A concrete next proposal is to make that existing owner emit fixed
+presentation text in the effective supported locale, retaining Manager-supplied
+free-form facts, then verify exact commands, complete fields and diagram facts
+at the presentation boundary. No second renderer, contract owner, tool execution,
+new authority or acceptance relaxation is proposed. This would remove a required
+translation operation; it does not promise to remove all final-generation time
+or prevent every autonomous rewrite.
+
+That proposal crosses the user's explicit prohibition on formatter-internal
+changes and the accepted exclusion of standalone formatter optimization. It is
+not implemented or measured. Manager must obtain the bounded scope decision
+through existing spec/plan confirmation before such work. Preserving the current
+boundary leaves this candidate unavailable and all unmet gates open. Historical
+red/order exceptions remain accepted separately; no new waiver is requested.
+Raw records/audits: `/tmp/issue573-kickoff-benchmark/codex-formal/B-original-conditions-disclosure-1/`.
