@@ -613,3 +613,141 @@ through existing spec/plan confirmation before such work. Preserving the current
 boundary leaves this candidate unavailable and all unmet gates open. Historical
 red/order exceptions remain accepted separately; no new waiver is requested.
 Raw records/audits: `/tmp/issue573-kickoff-benchmark/codex-formal/B-original-conditions-disclosure-1/`.
+
+## Iteration 014: decision reading path — implementation and unsuccessful endpoint
+
+The user approved the bounded reading-path correction after the Manager/Develop
+consensus. The earlier formatter-internals proposal remains deferred and
+unapproved; no accepted criterion, plan, authority or formatter implementation
+changed. Historical red/order exceptions retain their narrow meaning.
+
+The subsequent diagnostic baseline replay (`B-baseline-timed-diagnostic-1`)
+changes the interpretation of the earlier presentation hypothesis. It took
+293.777 s, versus disclosure-1's 260.021 s, with preparation reads 79.132/92.845,
+drafting/render/repair 102.820/65.338, post-render tools 8.509/5.813, and final
+response through process exit 103.316/96.026 seconds respectively. Receipt unions
+were 12.211/8.364 seconds. The replay includes a list/string validation error
+and 44.111-second repair interval. Neither attributing the whole difference to
+caching nor subtracting that repair establishes causation. Both versions have a
+long final-response tail. Localization is a possible optimization, not an
+established regression cause. The replay is diagnostic only: it does not replace
+the original **238.081 / 350.333 / 241.438 s**, median **241.438 s**.
+
+### Bounded correction and local verification
+
+Source `3411c65e3f6d16a4379c7651839dd453cfde58f8` joins current fixed choices,
+validated evidence and missing fields to explicit questions and current owner
+sections. The reading list groups disjoint source ranges by file with hashes and
+literal read argv. A valid current graph defers the selection-without-a-choice
+section, while scope, QA applicability, suitability, authority, gates, locale,
+preflight and complete presentation judgments remain. The existing generic
+strategy resolver supplies document metadata; no policy store or new authority
+is introduced. Literal workload coverage references are not model assignments.
+Source changes, expiration and uncovered workloads restore affected questions.
+
+The normal `assemble --summary --draft-output` response uses the typed file as
+the editable copy and supplies current owner field shapes; it avoids repeating
+the full draft/schema. Summary without a draft, explicit full guidance and full
+assembly remain available. The normal entry uses the source reading list rather
+than requiring a concatenated guide file. Formatter/runtime/preflight/probe
+internals are unchanged.
+
+Five new public CLI examples failed first on absent fixed-input/question
+behavior. An initial green attempt passed four and exposed an inconsistent test
+locale in the fifth; correcting the fixture preserved the existing conflict
+validator. Then eight related journeys passed, followed by the final nine-case
+related selection and four input unit tests. They exercise real isolated stores,
+source/expiry/workload gaps, mandatory judgments even with complete fields,
+source spans, one successful full render with equivalent output and no activation.
+Mappings: U05/U12/U14-U16, I01/I05/I06. Normal commit hooks passed **344 tests**;
+no bypass. These checks establish the adapter behavior, not actual agent compliance.
+
+### One authorized original-prompt observation
+
+Run: `B-original-conditions-reading-1`. The original 1757-byte prompt SHA
+`dc1516efca94b75887b2ffccf30c6c1bc3396585fcf908e7d6f91c4454f01e92`, CLI 0.156.1,
+Astra/medium, sandbox-disabled ephemeral session and fixed local-commit proposal
+endpoint were retained. Exactly one provider invocation ran, with no retry or
+probe. Historical environment values remain unreconstructible; current isolated
+XDG/PYTHONPATH, source path/revision, service conditions and generated prose differ.
+Delivery fixture facts and model assessment dates are the same as disclosure-1;
+validity was rechecked against the actual new source/repository identity.
+
+| Observation | Value |
+| --- | ---: |
+| Original baselines | 238.081 / 350.333 / 241.438 s |
+| Historical baseline median | 241.438 s |
+| New invocation elapsed, **failed complete endpoint** | 239.514 s |
+| Arithmetic difference from historical median | -1.924 s (-0.797%) |
+| Difference from each original baseline | +1.433 / -110.819 / -1.924 s |
+| Completed shell commands | 14 |
+| Captured UTF-8 output | 337654 bytes |
+| Versus disclosure-1 output | +15.173% |
+| Versus original volume median 314693 | +7.296% |
+| Shell receipt interval union | 1.526 s |
+| Local warm build/check, outside invocation | 5.604 s |
+| Additional local normal-path check, outside invocation | 0.776 s |
+| Final manual draft | 11073 bytes |
+| Successful formatter output | **None** |
+
+**This is not a qualifying speedup or a complete comparable proposal.** Item_17
+attempts render without update/catalog reports; render returns 3 and creates no
+proposal file. The wrapping shell exits zero, and the provider also exits zero.
+Manager instead writes a manual final draft that explicitly admits the missing
+reports and defers a formatter-validated contract. It did not execute either
+required preflight check. Fewer commands and the lower receipt union therefore
+include omitted required work, not demonstrated elimination of equivalent work.
+No data was fabricated to bypass the rejecting validator.
+
+The draft retains standard-qa, zh-TW/en-US, the six fixed primary-only chains,
+local commit and pr.auto_create=false. It proposes the commit as develop work,
+with empty closeout deliver/cleanup, and preserves user/mandatory boundaries.
+Those fixed choices do not repair the absent complete formatter endpoint or
+establish equivalence of its manually reconstructed graph/presentation. It also
+assesses the already-present preference implementation rather than the original
+pre-change implementation surface. Item_8's repository search exposes excerpts
+from this benchmark report, another disclosed source-context difference.
+
+### Actual caller audit against the requested repeat reads
+
+| Prior target | Current trace and outcome |
+| --- | --- |
+| Full guide then kickoff/strategy slices | No guide file is produced. Item_9 prints the entire 60880-byte source union; item_11 repeats kickoff/playbook/strategy and 13/15 repeat strategy. **Not eliminated.** |
+| CONTRIBUTING/engineering repeated in 8/11 | Both read once in current item_8; that specific duplicate is absent. |
+| Preflight owner repeated in 12/14 | No repeated owner read after item_9, but neither check runs. This cannot count as an equivalent complete preflight improvement. |
+| Schema query and implementation lookup | No schema subcommand. Item_4 still cats prepare_kickoff.py; 12 reads preference implementation/tests; 14 reads the advanced input reference. Implementation lookup is not eliminated. |
+| Repeated report copying | Item_6 emits 61538 bytes; item_7 reprints 24643 bytes of brief/index. The normal brief is still too large to reliably avoid additional reads. |
+| Correct cache reuse | Actual item_6 and saved summary show pinned prepared stores, correct repository identity, delivery hit and both valid model assessment payloads. Cache I/O is not the demonstrated cause of repeated policy reads. |
+
+The pure local normal-path response measured 60204 bytes before issue-specific
+fields; its decision brief alone was about 24 KB in diagnostic JSON serialization.
+A file-grouped read list still allows the agent to concatenate all sources into
+one large response. The observed repeated reads and manual endpoint are concrete
+failures of the intended normal journey. Output truncation as their cause is not
+proven by these records; captured bytes are not guaranteed post-truncation model
+context. Merely adding more instructions would not establish a correction.
+
+Receipt-based segmentation, explicitly **not** the successful-render segments:
+through the last preparation read 84.502 s; thereafter through the rejected
+render 44.478 s; rejected render through process exit 110.535 s. Last tool to
+final message is 110.003 s. Receipt intervals are not precise subprocess CPU or
+wall execution, and the remainder mixes generation, orchestration, translation,
+transport and provider waiting. There is no measured successful post-render
+stage. Cumulative usage: 494796 input, 425984 cached input, 6780 output and 869
+reported reasoning-output tokens. None isolates pure reasoning seconds.
+
+All original 21 observations, twelve earlier distinct-revision original-condition
+observations, the diagnostic baseline replay and this failed observation remain.
+No favorable median is constructed, no historical evidence is relabeled, and no
+second invocation follows this failure. PLAN-001 nonhistorical coverage,
+PLAN-014/015 and criteria 9-12 remain open. This reading correction did not satisfy
+the requested actual-repeat-elimination/complete-proposal success condition.
+Further work needs a concrete correction to the still-large normal read payload
+and its incomplete-evidence transition, rather than another unchanged-source run.
+The pending formatter scope proposal is not approved by this result.
+
+Raw evidence, complete streams/receipt timestamps, command outputs, prompt,
+manual proposal, copied Manager request/draft/summary and endpoint audit:
+`/tmp/issue573-kickoff-benchmark/codex-formal/B-original-conditions-reading-1/`.
+Local red/green/hook logs and reused setup/runner scripts:
+`/tmp/issue573-kickoff-benchmark/iteration014/`.
