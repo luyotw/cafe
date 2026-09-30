@@ -770,3 +770,36 @@ def test_public_action_description_shapes_render_without_type_or_count_repairs(
     assert mismatch["status"] != "ready"
     assert mismatch["assembly_diagnostics"]
     assert not (PROJECT_ROOT / ".cafe/issues" / values["issue_name"]).exists()
+
+
+def test_public_formatter_field_shapes_cover_real_decisions_without_source_lookup(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """U15/I06: advertised choices/types can construct a complete real proposal."""
+    cli = load_kickoff_module("prepare_kickoff")
+    assert cli.main(["schema"]) == 0
+    schema = json.loads(capsys.readouterr().out)
+    fields = schema["formatter_field_schema"]
+    assert set(fields) == set(schema["formatter_fields"])
+    values = _formatter_inputs("issue573-field-shapes")
+    # Exercise both choices and list/scalar boundaries exposed by the public schema.
+    values["manager_mode"] = next(v for v in fields["manager_mode"]["enum"] if v == "event-driven")
+    values["need_clarification"] = next(v for v in fields["need_clarification"]["enum"] if v == "user_required")
+    values["event_manager"] = ["codex"]
+    values["current_checkout"] = True
+    values.pop("worktree", None)
+    for key, value in values.items():
+        kind = fields[key]["type"]
+        assert isinstance(value, {"string": str, "array": list, "object": dict, "boolean": bool, "integer": int}[kind])
+    request = tmp_path / "request.json"
+    request.write_text(json.dumps({"schema_version": 1, "project_root": str(PROJECT_ROOT),
+        "issue_name": values["issue_name"], "playbook_id": values["playbook_id"], "formatter_inputs": values}))
+    assert cli.main(["render", "--request-file", str(request), "--config-dir", str(tmp_path / "config"), "--cache-dir", str(tmp_path / "cache")]) == 0
+    result = json.loads(capsys.readouterr().out)["render"]
+    assert result["output"] == load_kickoff_module("kickoff_inputs").render_kickoff(values)["output"]
+    formatter = load_kickoff_module("format_kickoff_contract")
+    owner = {action.dest: action for action in formatter._parser()._actions}
+    for field, shape in fields.items():
+        if "enum" in shape:
+            assert shape["enum"] == list(owner[field].choices)
+    assert not (PROJECT_ROOT / ".cafe/issues" / values["issue_name"]).exists()

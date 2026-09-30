@@ -115,7 +115,15 @@ rejected. Lists such as `phase_chain` contain `phase=provider:model` strings;
 contain literal argv arrays. Reasoning effort is a separate confirmed execution
 setting; never append it to a model ID (for example, `@medium` would become
 part of the literal model identity). No action, model chain or contract is synthesized.
-The existing formatter still validates the complete decision set.
+`input_schema.formatter_field_schema` supplies every adapter field's JSON type,
+array item shape and parser-owned choices (including reactive policies and Manager
+mode). Use these fields directly; no formatter source or argparse lookup is needed
+to learn input types or legal values. This projection shares the adapter encoding
+maps and current formatter parser, so it cannot introduce another set of choices.
+Fields absent from this schema, such as a phase reasoning-effort override, are not
+accepted formatter inputs; keep those current execution decisions in the complete
+proposal under their existing owner. The existing formatter still validates the
+complete decision set.
 
 Selected assembly exposes the chosen graph and all invalid-candidate diagnostics,
 plus `catalog.candidate_overview`: every effective candidate's declared applicability,

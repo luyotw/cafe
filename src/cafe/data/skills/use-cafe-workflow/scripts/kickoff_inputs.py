@@ -28,6 +28,52 @@ _REQUIRED_FIELDS = {
 }
 
 
+_JSON_FLAGS = {
+    "delivery_contract": "--delivery-contract", "deliver": "--deliver", "cleanup": "--cleanup",
+    "update_preflight": "--update-preflight", "catalog_preflight": "--catalog-preflight",
+}
+_REPEATED_FLAGS = {
+    "deliver_description": "--deliver-description", "cleanup_description": "--cleanup-description",
+    "event_manager": "--event-manager", "phase_chain": "--phase-chain",
+    "capability_choice": "--capability-choice", "task_user_required": "--task-user-required",
+    "task_manager_confirmable": "--task-manager-confirmable",
+    "proactive_review_decision": "--proactive-review-decision",
+}
+_LIST_FLAGS = {
+    "user_required": "--user-required", "manager_confirmable": "--manager-confirmable",
+}
+_SCALAR_FLAGS = {
+    "manager_mode": "--manager-mode", "poll_interval_seconds": "--poll-interval-seconds",
+    "phase_config": "--phase-config", "effective_locale": "--effective-locale",
+    "locale_source": "--locale-source", "repository_content_locale": "--repository-content-locale",
+    "need_permission": "--need-permission", "need_clarification": "--need-clarification",
+    "alignment_checkpoint": "--alignment-checkpoint",
+}
+
+def formatter_field_schema() -> dict[str, Any]:
+    """Project the adapter's encoding and existing parser choices for public callers."""
+    owner = {action.dest: action for action in _load_local_module("format_kickoff_contract")._parser()._actions}
+    properties = {}
+    for field in sorted(_ALLOWED_FIELDS):
+        if field in _REPEATED_FLAGS or field in _LIST_FLAGS:
+            shape = {"type": "array", "items": {"type": "string"}}
+        elif field in ("deliver", "cleanup"):
+            shape = {"type": "array", "items": {"type": "array", "minItems": 1, "items": {"type": "string"}}}
+        elif field in _JSON_FLAGS:
+            shape = {"type": "object"}
+        elif field == "current_checkout":
+            shape = {"type": "boolean"}
+        elif field == "poll_interval_seconds":
+            shape = {"type": "integer", "minimum": 1}
+        else:
+            shape = {"type": "string"}
+        action = owner[field]
+        if action.choices is not None:
+            shape["enum"] = list(action.choices)
+        properties[field] = shape
+    return properties
+
+
 def request_schema() -> dict[str, Any]:
     """Describe the public adapter without creating a second formatter schema."""
     from cafe.manager.delivery import DeliveryContractV3, validate_closeout_plan_policy
@@ -78,6 +124,7 @@ def request_schema() -> dict[str, Any]:
             "preflight": "Pass full existing reports through preflight_files. Missing tokens/dates/decisions must be resolved through their owner, never synthesized.",
         },
         "formatter_fields": sorted(_ALLOWED_FIELDS),
+        "formatter_field_schema": formatter_field_schema(),
         "required_formatter_fields": sorted(_REQUIRED_FIELDS),
         "checkout_choice": ["worktree", "current_checkout=true"],
         "request_example": {
@@ -173,37 +220,20 @@ def formatter_argv(values: dict[str, Any]) -> list[str]:
     args = [data["playbook_id"], "--issue-name", data["issue_name"]]
     if data.get("project_root") is not None:
         args.extend(["--project-root", str(data["project_root"])])
-    json_flags = {
-        "delivery_contract": "--delivery-contract", "deliver": "--deliver", "cleanup": "--cleanup",
-        "update_preflight": "--update-preflight", "catalog_preflight": "--catalog-preflight",
-    }
-    for key, flag in json_flags.items():
+
+    for key, flag in _JSON_FLAGS.items():
         args.extend([flag, json.dumps(data[key], ensure_ascii=False, separators=(",", ":"))])
-    repeated_flags = {
-        "deliver_description": "--deliver-description", "cleanup_description": "--cleanup-description",
-        "event_manager": "--event-manager", "phase_chain": "--phase-chain",
-        "capability_choice": "--capability-choice", "task_user_required": "--task-user-required",
-        "task_manager_confirmable": "--task-manager-confirmable",
-        "proactive_review_decision": "--proactive-review-decision",
-    }
-    for key, flag in repeated_flags.items():
+
+    for key, flag in _REPEATED_FLAGS.items():
         for value in data.get(key, []):
             args.extend([flag, value])
-    list_flags = {
-        "user_required": "--user-required", "manager_confirmable": "--manager-confirmable",
-    }
-    for key, flag in list_flags.items():
+
+    for key, flag in _LIST_FLAGS.items():
         if key in data:
             args.append(flag)
             args.extend(data[key])
-    scalar_flags = {
-        "manager_mode": "--manager-mode", "poll_interval_seconds": "--poll-interval-seconds",
-        "phase_config": "--phase-config", "effective_locale": "--effective-locale",
-        "locale_source": "--locale-source", "repository_content_locale": "--repository-content-locale",
-        "need_permission": "--need-permission", "need_clarification": "--need-clarification",
-        "alignment_checkpoint": "--alignment-checkpoint",
-    }
-    for key, flag in scalar_flags.items():
+
+    for key, flag in _SCALAR_FLAGS.items():
         value = data.get(key)
         if value is not None:
             args.extend([flag, str(value)])
