@@ -751,3 +751,135 @@ manual proposal, copied Manager request/draft/summary and endpoint audit:
 `/tmp/issue573-kickoff-benchmark/codex-formal/B-original-conditions-reading-1/`.
 Local red/green/hook logs and reused setup/runner scripts:
 `/tmp/issue573-kickoff-benchmark/iteration014/`.
+
+## Iteration 015 — indexed sources and same-draft report continuation
+
+Source: `d0f4b3ef6049dc6bc446bfebe3758a9de2099e31`. This section preserves all
+prior observations, including iteration 014's **invalid** 239.514-second result.
+There was one newly authorized provider invocation, no retry or probe.
+
+| Original-condition observation | Full elapsed (s) | Completed shell commands | Captured command-output bytes |
+| --- | ---: | ---: | ---: |
+| Original B baseline 1 | 238.081 | 16 | 276609 |
+| Original B baseline 2 | 350.333 | 19 | 336270 |
+| Original B baseline 3 | 241.438 | 18 | 314693 |
+| Original baseline medians | **241.438** | 18 | 314693 |
+| Latest single continuation run | **272.097** | **16** | **340078** |
+
+The latest complete observation is **30.659 seconds (12.698%) slower** than the
+historical elapsed median. It is one observation, not a new median. Captured
+output is **8.067% greater** than the historical output median and **0.718%
+greater** than iteration 014. This does not demonstrate the required speedup or
+elimination of repeated reading. Required work omitted in iteration 014 cannot
+be counted as a successful reduction relative to this complete observation.
+
+### Correction and local verification
+
+The normal `assemble --summary --draft-output` response now uses short owner
+section IDs, one field-shape index and local JSON references to one provenance
+index. Question gaps refer to those definitions; formatter-supplied fixed values
+refer to the editable draft. Whole-file union commands are replaced by section
+ranges and one command template. Full legacy assembly, guidance and schema remain
+inspectable. All seven current scope/model/authority/confirmation/locale/
+preflight/presentation judgments remain, including for complete input sets.
+
+A missing preflight report now returns a blocked assembly continuation with the
+existing check argv and capture argv targeting that same draft. In the prior
+failure, `formatter_inputs` in the request was an object; assembly deliberately
+returned null because reports were missing, then render misleadingly reported a
+type error. The adapter now stops before that null call and reports the actual
+gaps. Existing complete report validation is unchanged. Capturing facts leaves
+report decisions unresolved and grants no action authority.
+
+Two public CLI regressions failed before implementation. They then passed with
+source/workload/expiry/mandatory-boundary journeys (7 selected checks). Adjacent
+checks exposed one legacy full-guidance response-size regression; keeping the
+new continuation in the normal projection repaired it (12 adjacent passes,
+followed by 3 affected passes). Normal implementation commit hooks passed **346**
+tests without bypass. Tests cover real isolated evidence, provenance resolution,
+model workloads/limits, same-draft complete raw-report capture, unresolved
+report dispositions, exact complete formatter equivalence and no activation.
+Mappings: U14-U16/I01/I06, plus retained U05/U12/I05 boundaries.
+
+Local normal-response size was **57382 bytes**, versus the previous local
+reading-path fixture's 60204 bytes. Paths/source/request context differ slightly;
+this is diagnostic projection size, not end-to-end improvement. Actual Manager
+pretty-printing and repeated output erased this saving.
+
+### Observed caller behavior
+
+Raw run and timestamped receipts:
+`/tmp/issue573-kickoff-benchmark/codex-formal/B-original-conditions-continuation-1/`.
+`endpoint-reading-audit.json` includes source, actual stores/payloads, sections,
+fixed-decision checks and hashes of copied `manager-artifacts`.
+
+- Item 4 still reads the complete `kickoff.md` before first assembly. The former
+  generated guide union is absent, but early whole-owner reading remains.
+- Item 7 pretty-prints the entire response (84261 bytes); item 8 repeats brief,
+  continuation and evidence sections (40311 bytes).
+- Items 10/12 repeat model selection lines 122–250 and project/global sync lines
+  1–83. Items 11/13 repeat CONTRIBUTING, language policy, positioning and roadmap
+  content; engineering-guidelines itself is read once.
+- No schema subcommand or formatter implementation read occurs. Item 13 still
+  reads helper parser lines 55–90; item 15 searches nonexistent preflight globs
+  and exits 2. No formatter type-repair loop occurs.
+- **Item 14 executes both required existing checks once**, captures their full
+  original JSON via the returned argv into the same draft, and prints reports
+  for current disposition. This is one shell tool round trip containing two
+  check subprocesses and two capture subprocesses, not one logical check.
+- Item 17 supplies the actual `current` / `not_requested` report decisions and
+  succeeds on the **first render**. Item 18 reads the complete 9815-byte formatter
+  output. The final 10964-byte Chinese proposal retains product scope, fixed
+  locales/chains/gates, local commit/no PR, literal argv, empty cleanup,
+  uncertainty disclosures and full confirmation boundary. It rewrites the
+  rendered presentation rather than copying it byte-for-byte.
+
+The real caller used the intended isolated XDG stores and repository identity;
+validated delivery evidence and both dated exact-model assessment payloads were
+hits. Model workload gaps remained disclosed. No raw evidence inspection was
+needed simply to recover those payloads. No case workflow, commit, PR, model
+probe, saved preference change or cleanup occurred; source checkout remained
+clean. The endpoint repair is demonstrated; reading elimination is not.
+
+### Timing and comparability limits
+
+| Receipt-defined segment | Seconds |
+| --- | ---: |
+| Through last preparation read, including report checks | 87.666 |
+| Then drafting through successful render | 79.723 |
+| Post-render tool/readback interval | 4.174 |
+| After last tool through process exit | 100.534 |
+| Total | 272.097 |
+
+Command receipt interval union: **4.288 s**. Receipt buffering and combined
+commands prevent exact helper/check execution-time attribution. The final tail
+includes generation, possible translation/rewording, transport and provider
+waiting; it is not pure reasoning or entirely removable cost. Both the original
+source diagnostic replay and earlier corrected runs already had long tails.
+Usage: 657241 input tokens (583424 cached), 7992 output tokens, 412 reported
+reasoning-output tokens. Captured stdout/stderr is an observable reading-volume
+proxy, not proof every byte was attended to by the model.
+
+Clone setup took 0.099 s; isolated warm write/check took 5.816 s; extra local
+normal-path validation took 0.990 s. These are separate from phase investigation
+and Manager elapsed. Original model evidence dates were retained; no fabricated
+freshness, cached proposal or new decision answer was injected.
+
+The original 1757-byte prompt SHA remains
+`dc1516efca94b75887b2ffccf30c6c1bc3396585fcf908e7d6f91c4454f01e92`:
+its fixed local-commit answer overrides its initial PR request unchanged.
+CLI 0.156.1 / gpt-6-astra / medium / sandbox disabled / ephemeral session and
+original argv structure are retained. Historical source is
+`6ce6bddade03e6ee31a60f437accd4d557467c50`. Historical XDG/Python/provider conditions
+cannot be fully reconstructed. Current source already implements much of the
+case's preference feature; generated scope text, future action detail and other
+nonfixed judgments differ. Fixed-input equality does not establish identical
+model work or causal attribution.
+
+The diagnostic replay's 293.777 s (including a 44.111 s type repair) remains a
+diagnostic observation, not a replacement baseline or a subtractable causal
+control. No new cold/changed-input measurements were performed. The original
+changed-input mismatch and incomplete warm evidence remain in the record.
+PLAN-001 nonhistorical coverage, PLAN-014 and PLAN-015 remain open. The narrow
+historical red/order exception is unchanged; no performance acceptance revision,
+formatter-scope expansion or successful Develop handoff is implied.
