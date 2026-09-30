@@ -883,3 +883,172 @@ changed-input mismatch and incomplete warm evidence remain in the record.
 PLAN-001 nonhistorical coverage, PLAN-014 and PLAN-015 remain open. The narrow
 historical red/order exception is unchanged; no performance acceptance revision,
 formatter-scope expansion or successful Develop handoff is implied.
+
+## Iteration 017 — current-decision view, one original-prompt observation
+
+The authorized bounded correction is source revision
+`070b5bc0cd992ed9041890add98f36d736276663`. It adds a compatible
+`--summary decisions` presentation to the existing locator/assembly route,
+retains bare-summary JSON, and reconciles the normal entry documents. No
+formatter, runtime, preflight/probe implementation or accepted contract changed.
+The public journey also exposed and fixed null assessment indexing on expiry
+and a missing type reference for the composite checkout decision. Source
+validation and current authority/suitability judgments remain required.
+
+**The complete observation did not improve the historical baseline.**
+
+| Observation | Complete elapsed (s) | Completed shell commands | Captured output bytes |
+| --- | ---: | ---: | ---: |
+| Original B-baseline-1 | 238.081 | 16 | 276609 |
+| Original B-baseline-2 | 350.333 | 19 | 336270 |
+| Original B-baseline-3 | 241.438 | 18 | 314693 |
+| Original median | **241.438** | 18 | 314693 |
+| Prior continuation-1, single | 272.097 | 16 | 340078 |
+| New decisions-1, single | **311.545** | **21** | **333316** |
+
+The new run is **70.107 s / 29.037% slower** than the unchanged historical
+median. It is 39.448 s slower than continuation-1. Output is 1.988% below
+continuation-1 but 5.918% above the original output median; shell round trips
+increase from 16 to 21 versus continuation-1. This is a single observation, not
+a new median or a causal speed estimate. Exactly one provider invocation ran;
+there was no retry, extra probe, baseline replacement or favorable-run selection.
+
+### Local proof required before the observation
+
+Evidence directory:
+`/tmp/issue573-kickoff-benchmark/iteration017/offline-verified/`.
+The exact saved continuation-1 `manager-artifacts/request.json` (SHA
+`6a80df7a00cfb86e78f5cf1cca82469618169d9fa3e42e3a747a6d4088b5feef`) and copied
+original private stores were used for both public presentations. Original files
+were not changed. Both calls use the same project identity, paths and source;
+the observation clock is fixed to the recorded continuation-1 start solely for
+this offline comparison. Evidence dates and validators are unchanged.
+
+| Measurement | Legacy normal response | New decision view |
+| --- | ---: | ---: |
+| Canonical serialized JSON bytes | 56648 | 42663 |
+| Actual CLI stdout bytes | 56649 | 60280 |
+| Both rendered with identical indentation | 83675 | 60280 |
+
+Canonical material decreases **24.688%** and equally indented material
+**27.959%**. Actual stdout increases versus old one-line JSON; indentation is
+reported separately, not counted as semantic improvement. The legacy response
+here is the preserved old normal interface on current source, not a rewritten
+historical item 7. Historical item 7's 84261-byte whole pretty print and item 8's
+40311-byte partial reprint remain unchanged. Different path/clock/source-index
+lengths prevent equating those historical bytes with the offline fixture.
+
+All 13 candidate applicability/eligibility/diagnostic records remain visible.
+Unselected role defaults/phase lists and selected artifact plumbing are deferred
+to existing full discovery. Selected profiles, behavior, capability setup,
+mandatory gates, human tasks and relevant routes remain visible. Discovery-only
+manifest records/watched paths are deferred after full validation; source_index
+shrinks from 45 to 14 records while preserving every source actually referenced
+by displayed delivery/model conclusions. Missing evidence still has an explicit
+inspection route. Optional unused schema/examples are deferred to existing
+`schema`; required types, nested product constraints, current judgment fields and
+checkout alternatives remain available. Owner section IDs/paths/hashes/ranges
+remain, with duplicate reverse links removed and no whole-source-union command.
+
+Public journeys cover locator forwarding, valid isolated stores, complete
+payloads, custom graph/material changes and invalid diagnostics, model expiry,
+source changes, missing workload coverage, same-draft raw report capture,
+unresolved report decisions blocking render, and one unchanged-formatter render
+with full semantic equivalence. They map to U05/U07-U09/U12/U14-U16 and
+I01/I03/I05/I06. External report producer I/O is the fixture boundary; tests may
+supply real decisions. No normal consumer Python output reconstruction is
+necessary. This proves interface capability, **not autonomous model compliance**.
+
+Red logs: `red.txt`, `red-current-types.txt`, `red-checkout.txt` in iteration017.
+Related checks: 38 passed before final checkout refinement; 11 presentation/
+invalidation cases passed; custom graph and checkout journeys each passed.
+Existing guidance checks: 90 passed, then the owner-link assertion passed after
+reconciliation. Final normal commit hooks: **353 passed** on final source.
+The custom fixture initially used unsupported workload `analysis`; correcting it
+to declared `planning` is recorded as a fixture correction, not a product fix.
+
+### Actual caller and endpoint audit
+
+Raw evidence:
+`/tmp/issue573-kickoff-benchmark/codex-formal/B-original-conditions-decisions-1/`:
+`prompt.txt`, `streaming.jsonl`, `event-times.jsonl`, `command-spans.json`,
+`run-record.json`, `proposal.txt`, `endpoint-reading-audit.json` and
+`manager-artifacts/` including original request/draft/reports, rendered proposal,
+and the exact first decision-view stdout.
+
+- **Early whole kickoff read eliminated:** item 4 only creates the output
+  directory; item 5 uses `stores --summary decisions`; item 6 consumes the
+  60684-byte decision view directly using the intended private stores.
+- **Whole summary pretty reprint eliminated; partial repetition remains:** item
+  12 executes assembly again and uses Python to print graph/questions (14700
+  bytes). Item 14 filters the reading index. No claim of zero repeated assembly
+  or no handwritten output filtering is warranted.
+- **Policy repetition remains:** item 7 reads full kickoff/playbook/model owners;
+  item 9 rereads kickoff 300–520 and playbook selection, then reads sync; item 11
+  rereads sync 1–83 and kickoff 510–600. Model-selection's second read disappears,
+  but kickoff/playbook/sync repeated reads do not.
+- **Earlier engineering-document duplication disappears:** CONTRIBUTING,
+  language-policy and engineering-guidelines are read once in item 10;
+  positioning/roadmap are first read in item 21. Additional preference
+  implementation/tests, store implementation and effort configuration research
+  still occur. Item 11 also reads selected graph YAML already projected by the
+  helper; item 12 repeats its projected data.
+- **Interface exploration remains:** item 14 reads helper parser/store source;
+  item 18 reads and pretty prints full schema. No failed preflight glob or
+  formatter type repair occurs, but the desired no-source-lookup journey was
+  not followed by this Manager.
+- **Checks/capture/render remain complete:** items 15/16 execute update/catalog
+  once each in parallel pipelines and capture full original bytes into the same
+  draft. Item 17 reads their full reports; actual current/not_requested decisions
+  are supplied in item 22, whose first render succeeds. Item 24 reads the
+  complete 9903-byte formatter output. The final 10746-byte Chinese response
+  retains product scope/invariants, locales/chains, exact local commit/no PR,
+  empty cleanup, mandatory/user gates and complete confirmation boundary. It is
+  a rewritten presentation, not byte-identical formatter stdout.
+
+Actual first-view storage/repository identity and source-backed delivery plus
+Astra/Luna payload hits were verified, including limitations and missing
+workload coverage. No raw evidence inspection was needed to recover payloads.
+No proposed case action, workflow activation, commit, PR, probe, preference
+mutation or cleanup occurred; the measurement checkout remained clean. Complete
+render success establishes endpoint validity, not acceptance success.
+
+### Time accounting and remaining gaps
+
+| Receipt-defined segment | Seconds |
+| --- | ---: |
+| Through final preparation read, including checks (item 21) | 130.107 |
+| Drafting through successful render (item 22) | 73.112 |
+| Post-render tool/readback (item 24) | 7.270 |
+| After last tool through process exit | 101.056 |
+| Complete total | **311.545** |
+
+Tool receipt interval union: **5.018 s**. The other 306.527 s cannot be assigned
+solely to reasoning: it includes generation, translation/rewording,
+orchestration, buffering, transmission and service waiting. Individual helper
+and check durations inside combined commands cannot be precisely isolated from
+receipt timestamps. The final-response tail is included in total elapsed.
+Usage: 818558 input tokens (729856 cached), 8727 output, 567 reported reasoning
+output. Captured output bytes are a reading-volume proxy, not attention telemetry.
+
+Setup is separate: clone 0.131 s; warm writes/checks 7.156 s; extra local view
+validation 1.016 s. Phase investigation/testing/commit time is outside the
+Manager observation and is not represented by those setup numbers.
+
+Original prompt remains exactly 1757 bytes / SHA
+`dc1516efca94b75887b2ffccf30c6c1bc3396585fcf908e7d6f91c4454f01e92`;
+CLI 0.156.1, Astra, medium, disabled sandbox, fresh ephemeral session and original
+local-commit override are retained. Source and warmed evidence are the treatment.
+Historical XDG/Python/provider conditions cannot be fully reconstructed. Latest
+source already implements the case feature; current issue naming, generated
+scope/actions/strategy and presentation differ. Input equality does not imply
+identical generated work. Diagnostic replay 293.777 s, including its 44.111 s
+repair, remains diagnostic only. The invalid 239.514 s endpoint stays invalid.
+
+The bounded correction has local evidence and partial caller adoption, but
+repeated exploration and original performance/coverage acceptance remain unmet.
+No extra observation or formatter scope change is inferred. PLAN-001
+nonhistorical coverage, PLAN-014 and PLAN-015 stay open; original cold/changed
+coverage and historical failures are preserved. The accepted narrow historical
+red/order exception does not waive these remaining gates. Develop is not
+complete and no successful Review handoff is authorized by this result.
