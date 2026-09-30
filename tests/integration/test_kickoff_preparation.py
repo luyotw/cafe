@@ -616,3 +616,38 @@ def test_public_draft_loads_current_owner_guidance_once_without_execution_sectio
     assert any(b["file"] == "strategic_context.md" for b in guided["guidance"])
     assert any(b["file"] == "model_selection.md" for b in guided["guidance"])
     assert not any(b["heading"] == "## Durable Manager authority" for b in guided["guidance"])
+
+
+def test_public_guidance_file_and_preflight_examples_avoid_report_reprinting(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """U14-U16/I06: caller reads disjoint owner sections and uses complete report shapes."""
+    cli = load_kickoff_module("prepare_kickoff")
+    values = _formatter_inputs("issue573-guidance-file")
+    path = tmp_path / "request.json"
+    path.write_text(json.dumps({"schema_version": 1, "project_root": str(PROJECT_ROOT),
+                                "issue_name": values["issue_name"], "playbook_id": values["playbook_id"]}))
+    args = ["assemble", "--request-file", str(path), "--summary", "--config-dir", str(tmp_path / "config"), "--cache-dir", str(tmp_path / "cache")]
+    assert cli.main(args) == 3
+    report = json.loads(capsys.readouterr().out)
+    examples = report["input_schema"]["preflight_report_examples"]
+    # Bind observed values to the public shape; the existing formatter validates it.
+    reports = {name: {key: values[f"{name}_preflight"][key] for key in example}
+               for name, example in examples.items()}
+    for name, data in reports.items():
+        values[f"{name}_preflight"] = data
+    assert load_kickoff_module("kickoff_inputs").render_kickoff(values)["status"] == "rendered"
+    guide = tmp_path / "guide.md"
+    assert cli.main([*args, "--guidance-output", str(guide)]) == 3
+    report = json.loads(capsys.readouterr().out)
+    assert "guidance" not in report
+    lines = guide.read_text().splitlines(keepends=True)
+    prior_end = 0
+    for section in report["guidance_index"]:
+        assert section["start_line"] > prior_end
+        text = "".join(lines[section["start_line"]-1:section["end_line"]])
+        assert text.startswith(section["heading"] + "\n")
+        owner = PROJECT_ROOT / "src/cafe/data/skills/use-cafe-workflow/references" / section["file"]
+        assert text in owner.read_text()
+        prior_end = section["end_line"]
+    assert len(json.dumps(report).encode()) < len(guide.read_bytes())

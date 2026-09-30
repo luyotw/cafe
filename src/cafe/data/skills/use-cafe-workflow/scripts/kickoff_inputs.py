@@ -53,6 +53,17 @@ def request_schema() -> dict[str, Any]:
         "delivery_contract": contract_schema,
         "input_template": {"delivery_contract": contract_template, "deliver": None, "cleanup": None},
         "closeout_examples": closeout_examples,
+        # Adapter examples only: _preflight_reports remains the validation owner.
+        # None marks absent evidence, never a fabricated token, time or success.
+        "preflight_report_examples": {
+            "update": {"checked_at": None, "status": None, "installed_version": None,
+                       "latest_version": None, "decision": None, "comparison_token": None,
+                       "post_change_evidence": None},
+            "catalog": {"checked_at": None, "status": None, "comparison_token": None,
+                        "effective_digests": {"playbook": None, "phase": None, "agent": None},
+                        "decision": None, "post_change_evidence": None},
+        },
+        "preflight_example_use": "These are field shapes, not valid evidence or defaults. Retain the full original report including optional diagnostics/mismatch IDs. Supply the actual check timestamp and current decision; copy source tokens/digests without invention. Explicit null can record an actually unavailable source value, not a successful check. Existing formatter validation remains authoritative.",
         "template_rules": {
             "null": "Unresolved: replace with a deliberate value; never rendered as a default.",
             "delivery_contract": "Fill all product decisions, including intentionally empty lists. closeout_plan is added by the formatter.",

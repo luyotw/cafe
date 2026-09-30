@@ -51,6 +51,7 @@ def _parser() -> argparse.ArgumentParser:
         if name in {"discover", "assemble"}:
             command.add_argument("--summary", action="store_true")
         if name == "assemble":
+            command.add_argument("--guidance-output", type=Path, help="Write current owner sections as plain text and return disjoint line references, without duplicating the body in JSON.")
             command.add_argument("--with-guidance", action="store_true", help="Include current kickoff policy sections once, with source fingerprints.")
             command.add_argument("--draft-output", type=Path, help="Write an editable request with owner-typed product fields and unresolved action slots.")
         if name == "render":
@@ -161,7 +162,23 @@ def _request_command(args: argparse.Namespace) -> int:
                     "formatter_inputs": assembled.get("formatter_inputs"),
                     "formatter_draft": assembled.get("formatter_draft") if assembled.get("status") != "ready" else None,
                 })
-                if args.with_guidance:
+                if args.guidance_output is not None:
+                    if args.with_guidance:
+                        raise ValueError("choose guidance-output or with-guidance, not both")
+                    if args.guidance_output.resolve() in {args.request_file.resolve(), args.draft_output.resolve() if args.draft_output else None}:
+                        raise ValueError("guidance output must differ from request and draft")
+                    sections = kickoff_inputs.kickoff_guidance()
+                    text = ""
+                    index = []
+                    for section in sections:
+                        start = len(text.splitlines()) + 1
+                        text += section["text"]
+                        index.append({key: section[key] for key in ("file", "heading", "sha256")})
+                        index[-1].update(start_line=start, end_line=len(text.splitlines()))
+                    args.guidance_output.write_text(text, encoding="utf-8")
+                    compact["guidance_file"] = str(args.guidance_output.resolve())
+                    compact["guidance_index"] = index
+                elif args.with_guidance:
                     compact["guidance"] = kickoff_inputs.kickoff_guidance()
                 _json(compact)
                 return 0 if assembled.get("status") == "ready" else 3

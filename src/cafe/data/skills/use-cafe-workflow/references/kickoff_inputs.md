@@ -32,19 +32,23 @@ Create a request in a temporary directory with only the facts already known:
 ```
 
 ```sh
-python scripts/prepare_kickoff.py assemble --request-file request.json --summary --with-guidance --draft-output draft.json
+python scripts/prepare_kickoff.py assemble --request-file request.json --summary --guidance-output guidance.md --draft-output draft.json
 ```
 
 The first selected assembly returns a decision brief, owner-derived nested
 `input_schema`, and an editable `draft.json`. Add the verbatim request as
 `request_text`; current named choices belong in `current_explicit_inputs`.
-Read this single response before opening other kickoff references. `--with-guidance`
+Read this response before opening other kickoff references. `--guidance-output`
 projects the current normative owner sections, with file hashes, including
 strategy, model suitability, locale, action authority, gates, preflight and
-presentation. These are the original sections, not another policy owner.
+presentation into a plain-text file. `guidance_index` gives disjoint line ranges
+and source hashes. Read each applicable range once; do not print the entire
+assembly JSON and then reprint its guidance. These are the original sections,
+not another policy owner. `--with-guidance` remains an optional embedded JSON
+form for consumers that need it, not the normal conversational reading path.
 Apply them to this issue once. They replace rereading those same sections;
 load omitted execution/activation sections only when entering that operation.
-Subsequent assembly calls omit `--with-guidance`.
+Subsequent assembly calls omit both guidance options.
 
 Edit `draft.json` directly. The product skeleton is generated from
 `DeliveryContractV3`: `implementation_direction` is a string, list fields are
@@ -99,7 +103,12 @@ Raw check command output alone may lack the existing report metadata. Follow
 `guidance`'s Complete runtime and catalog preflight section and the preflight
 owner for those decisions; never invent `comparison_token`, `checked_at` or
 post-change evidence. Draft output retains file references instead of copying
-report payloads. Read `proposal.md` once and present
+report payloads. `input_schema.preflight_report_examples` shows the complete
+required field shapes, not valid check results. Retain extra original fields
+such as mismatch IDs. Use the actual observation timestamp/current decision
+and source-provided tokens/digests; an explicitly unavailable source value may
+remain null, never a made-up token or successful status. These examples do not
+change the existing formatter/preflight owners. Read `proposal.md` once and present
 it completely. Existing callers without `--output` still receive JSON with text
 at `render.output`; do not guess a top-level output field. Use a new issue identity
 for a new proposal; an existing identity intentionally retains its workflow locale.
