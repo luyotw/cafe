@@ -133,7 +133,7 @@ def assess_delivery(
             diagnostics.append("source_record_invalid")
             continue
         path = source.get("path")
-        if not isinstance(path, str) or current_hashes.get(path) != source.get("fingerprint"):
+        if not isinstance(path, str) or path not in current_hashes or current_hashes[path] != source.get("fingerprint"):
             diagnostics.append("material_source_changed")
     instant = now.astimezone(timezone.utc) if now.tzinfo else None
     if instant is None:
@@ -203,7 +203,7 @@ def refresh_delivery(record: dict[str, Any], *, evidence: Any, project_root: Pat
         if not isinstance(source, dict):
             return {"record": record, "refreshed": False, "diagnostic": "delivery_source_invalid"}
         if isinstance(source.get("path"), str):
-            if source_hashes.get(source["path"]) != source.get("fingerprint"):
+            if source["path"] not in source_hashes or source_hashes[source["path"]] != source.get("fingerprint"):
                 return {"record": record, "refreshed": False, "diagnostic": "delivery_source_changed"}
         elif not (
             isinstance(source.get("url"), str)

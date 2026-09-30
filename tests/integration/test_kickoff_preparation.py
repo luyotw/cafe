@@ -959,6 +959,11 @@ def test_delivery_evidence_reuses_explicit_repository_sources_beyond_discovery_p
     assert cli.main(refresh) != 0
     capsys.readouterr()
     assert delivery()["status"] == "miss"
+    evidence["sources"][0].pop("fingerprint")
+    data.write_text(json.dumps(evidence))
+    assert cli.main(refresh) != 0  # Missing source and missing fingerprint are not matching evidence.
+    capsys.readouterr()
+    assert delivery()["status"] == "miss"
 
 
 def test_parallel_report_capture_preserves_both_original_report_references(
