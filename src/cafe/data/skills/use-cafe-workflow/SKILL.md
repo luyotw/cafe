@@ -22,9 +22,10 @@ read the union once; do not preload the rest.
 | Current decision | Read before acting |
 | --- | --- |
 | Check or apply runtime, catalog, or bundled-helper updates | `references/project_global_skill_sync.md` |
-| Select a playbook for a new kickoff | Use the preparation route below; its owner guidance includes selection policy |
+| Select a playbook for a new kickoff | Use the preparation route below; its owner guidance includes `references/playbook_selection.md` policy |
 | Prepare kickoff inputs, render, or reconfirm a kickoff | Start with `references/kickoff_inputs.md` and its early summary command; use `assemble --summary --guidance-output <guide.md> --draft-output <draft.json>` for the current `references/kickoff.md` and other owner sections plus editable inputs; load other owner sections only for uncovered decisions |
 | Write or change confirmed phase chains after confirmation | `references/model_selection.md`, then `references/phases_yaml.md` |
+| Prepare and activate after kickoff confirmation | `references/kickoff_execution.md` |
 | Start, resume, or supply declared input to ordinary execution | `references/project_global_skill_sync.md`, then `references/running_workflow.md` |
 | Supervise active work or classify a pause, timeout, interruption, retry, or recovery | `references/supervision_and_recovery.md`; read `references/running_workflow.md` only when its disposition permits a retry/resume, and `references/diagnosis_and_repair.md` only for incorrect or ambiguous behavior |
 | Handle a HumanTask, confirmation, clarification, permission, alignment, or scheduled proactive review | `references/handoffs_and_alignment.md` and `references/strategic_context.md`; also read the proactive-review section of `references/running_workflow.md` when a configured review is due |

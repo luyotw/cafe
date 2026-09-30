@@ -494,3 +494,30 @@ missing-fact research and current target/authorization checks. Existing public
 store/summary/complete-render journeys pass (3); this does not prove actual agent
 reading behavior. The next observation tests this explicit information hypothesis,
 not a retry of the same source or another helper interface.
+
+
+### Source-policy observation (retained, no improvement)
+
+`B-original-conditions-source-policy-1`, source
+`7cb84c83e3c964f284c76d33f8d281ab841a89cf`: **267.050 s**, **+25.612 s
+(+10.608%)** versus 241.438; 18 commands, 347559 captured bytes, 7.643 s
+receipt union. Warm build/check cost is 6.363 s, separate from Manager elapsed.
+Actual item_7 and its retained summary confirm prepared stores and useful
+source-backed delivery/model hits. One render succeeds (item_19); last full
+contract read is item_21 at 177.957362686 s, final message at 266.606660232 s,
+a further 88.649297546 s without tools. Formatter output is 6736 bytes and final
+proposal 9167 bytes. Final presentation still rewrites and adds an introduction;
+local commit/pr.auto_create=false, fixed chains/locales, gates, exact actions,
+explicit gaps and proposal-only boundary remain visible. No case action ran.
+
+The source-policy text change is not demonstrated to eliminate repeated reading.
+Item_2 cats SKILL plus kickoff/input/selection/model references (102697 bytes),
+item_3 rereads kickoff_inputs (23273 bytes), then 10/12/14 read overlapping
+projected/owner policy. Engineering guidance is read twice (11/12).
+Each runtime/catalog check executes once (16/17), and no render type repair occurs.
+The first combined read includes post-confirmation prepare/activation examples
+and input-maintenance material unrelated to the current proposal endpoint.
+Normal reference staging is the next concrete defect to address; changing only
+the projection cannot reduce a caller's direct read of those complete references.
+All raw logs, final proposal, original exact prompt/hash, copied Manager artifacts
+and actual cache/endpoint audit are retained. No reclassification as a speedup.

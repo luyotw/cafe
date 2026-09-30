@@ -870,8 +870,8 @@ def test_use_cafe_workflow_uses_structured_human_task_resume_payloads() -> None:
 
 def test_use_cafe_workflow_skill_requires_playbook_derived_kickoff_contract() -> None:
     skill = _read_skill_resource("SKILL.md")
-    reference = _read_skill_resource("references/kickoff.md")
-    kickoff_inputs = _read_skill_resource("references/kickoff_inputs.md")
+    reference = (_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md"))
+    kickoff_inputs = (_read_skill_resource("references/kickoff_inputs.md") + "\n" + _read_skill_resource("references/kickoff_input_reference.md"))
     selection = _read_skill_resource("references/playbook_selection.md")
     model_selection = _read_skill_resource("references/model_selection.md")
     normalized = " ".join(reference.split())
@@ -939,7 +939,7 @@ def test_use_cafe_workflow_keeps_playbook_selection_issue_owned() -> None:
     skill = _read_skill_resource("SKILL.md")
     selection = _read_skill_resource("references/playbook_selection.md")
     strategic = _read_skill_resource("references/strategic_context.md")
-    kickoff = _read_skill_resource("references/kickoff.md")
+    kickoff = (_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md"))
     normalized_skill = " ".join(skill.split())
     normalized_selection = " ".join(selection.split())
     normalized_strategic = " ".join(strategic.split())
@@ -2033,7 +2033,7 @@ def test_minimal_non_software_kickoff_renders_only_its_two_declared_steps(
 
 
 def test_kickoff_contract_keeps_issue_preflight_separate_from_manager_policy() -> None:
-    kickoff = _read_skill_resource("references/kickoff.md")
+    kickoff = (_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md"))
     normalized = " ".join(kickoff.split())
 
     assert "preflight:" in kickoff
@@ -2224,7 +2224,7 @@ def test_kickoff_contract_formatter_rejects_invalid_operating_mode(
 
 def test_kickoff_formatter_documents_structural_validation_boundary() -> None:
     script = (SKILL_ROOT / "scripts" / "format_kickoff_contract.py").read_text(encoding="utf-8")
-    kickoff = (SKILL_ROOT / "references" / "kickoff.md").read_text(encoding="utf-8")
+    kickoff = (_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md"))
 
     assert "structurally validated" in script
     assert "validates chain structure only; it does not validate model suitability" in kickoff
@@ -2233,7 +2233,7 @@ def test_kickoff_formatter_documents_structural_validation_boundary() -> None:
 
 
 def test_kickoff_reference_distinguishes_new_and_legacy_manager_contract_versions() -> None:
-    kickoff = " ".join(_read_skill_resource("references/kickoff.md").split())
+    kickoff = " ".join((_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md")).split())
 
     assert (
         "Existing v7 Driver contracts remain valid through the legacy Driver authority"
@@ -3824,7 +3824,7 @@ def test_use_cafe_workflow_requires_confirmed_repository_content_locale() -> Non
 
 def test_use_cafe_workflow_defines_event_driven_mode_and_model_authority() -> None:
     skill = _read_skill_resource("SKILL.md")
-    kickoff = _read_skill_resource("references/kickoff.md")
+    kickoff = (_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md"))
     running = _read_skill_resource("references/running_workflow.md")
     models = _read_skill_resource("references/model_selection.md")
     normalized_kickoff = " ".join(kickoff.split())
@@ -3860,7 +3860,7 @@ def test_use_cafe_workflow_defines_event_driven_mode_and_model_authority() -> No
 
 def test_event_manager_documentation_defines_the_contract_managed_lifecycle() -> None:
     skill = _read_skill_resource("SKILL.md")
-    kickoff = _read_skill_resource("references/kickoff.md")
+    kickoff = (_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md"))
     running = _read_skill_resource("references/running_workflow.md")
     contract = " ".join((skill + kickoff + running).split())
 
@@ -4033,7 +4033,7 @@ def test_manager_handles_git_delivery_conflicts_before_offering_repair() -> None
 class TestPollingContract:
     def test_first_poll_waits_for_the_full_confirmed_interval(self) -> None:
         skill = " ".join(_read_skill_resource("SKILL.md").split())
-        kickoff = " ".join(_read_skill_resource("references/kickoff.md").split())
+        kickoff = " ".join((_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md")).split())
         running = " ".join(_read_skill_resource("references/running_workflow.md").split())
 
         assert "references/running_workflow.md" in skill
@@ -4044,7 +4044,7 @@ class TestPollingContract:
         assert "wait on the same deferred operation" in running
 
     def test_transport_yields_do_not_trigger_workflow_inspection(self) -> None:
-        kickoff = " ".join(_read_skill_resource("references/kickoff.md").split())
+        kickoff = " ".join((_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md")).split())
         running = " ".join(_read_skill_resource("references/running_workflow.md").split())
 
         assert "is transport state rather than an event-driven signal" in kickoff

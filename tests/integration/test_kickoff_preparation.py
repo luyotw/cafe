@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import hashlib
 import json
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -701,6 +702,15 @@ def test_guided_caller_can_present_complete_render_without_reopening_policy(
     assert ("kickoff.md", "### Attached execution polling") not in sections
     assert ("strategic_context.md", "## Applying authority") in sections
     assert ("model_selection.md", "## Classify the required capability band") in sections
+    # Even callers that open the normal reference directly should not preload
+    # post-confirmation execution examples while preparing a read-only proposal.
+    refs = PROJECT_ROOT / "src/cafe/data/skills/use-cafe-workflow/references"
+    entry = (refs / "kickoff.md").read_text()
+    examples = re.findall(r"```[^\n]*\n(.*?)```", entry, flags=re.S)
+    assert not any("cafe prepare " in example or "--activate" in example for example in examples)
+    execution = (refs / "kickoff_execution.md").read_text()
+    assert "cafe prepare " in execution
+    assert "kickoff_execution.md" in entry
     # Consume only the emitted guidance ranges once; no second owner-file read is needed.
     lines = guide.read_text().splitlines(keepends=True)
     visited = set()
