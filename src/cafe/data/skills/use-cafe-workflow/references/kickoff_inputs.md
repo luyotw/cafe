@@ -39,8 +39,7 @@ python scripts/prepare_kickoff.py stores --request-file request.json
 
 It returns the effective `storage` paths and repository identity, plus a literal
 `next_command` argv for the selected stage with those paths pinned. Execute that
-argv; for selected assembly append `--guidance-output guidance.md --draft-output
-draft.json`. Later use the returned `render_command` and append `--output
+argv; for selected assembly append `--draft-output draft.json`. Later use the returned `render_command` and append `--output
 proposal.md`. These argv values prevent incidental environment changes from
 switching stores between stages. They are local invocation inputs, not saved
 issue authority or permission. Source/identity/freshness checks still run.
@@ -62,27 +61,47 @@ Create a request in a temporary directory with only the facts already known:
 ```
 
 ```sh
-python scripts/prepare_kickoff.py assemble --request-file request.json --summary --guidance-output guidance.md --draft-output draft.json
+python scripts/prepare_kickoff.py assemble --request-file request.json --summary --draft-output draft.json
 ```
 
-The first selected assembly returns a decision brief, owner-derived nested
-`input_schema`, and an editable `draft.json`. Add the verbatim request as
-`request_text`; current named choices belong in `current_explicit_inputs`.
-Read this response before opening other kickoff references. `--guidance-output`
-projects the current normative owner sections, with file hashes, including
-strategy, model suitability, locale, action authority, gates, preflight and
-presentation into a plain-text file. `guidance_index` gives disjoint line ranges
-and source hashes. Read the emitted file once, or each applicable range once;
-after reading the file, use the existing response to apply its sections rather
-than issuing new `cat`/`sed` calls for them. The file includes the complete
-render-and-translation boundary; polling, established-workflow progress and
-direct formatter CLI examples remain at their owner paths for those operations.
-These are the original sections,
-not another policy owner. `--with-guidance` remains an optional embedded JSON
-form for consumers that need it, not the normal conversational reading path.
-Apply them to this issue once. They replace rereading those same sections;
-load omitted execution/activation sections only when entering that operation.
-Subsequent assembly calls omit both guidance options.
+The first selected assembly writes the editable `draft.json` and returns a
+`decision_brief`. Add the verbatim request as `request_text`; current named choices
+belong in `current_explicit_inputs`. Start with these current-response fields:
+
+- `fixed_inputs`: supplied choices or applicable preferences and their origin;
+- `questions`: current scope, model suitability, actions/authority, gates, locale,
+  preflight and presentation judgments, including available evidence and actual
+  evidence gaps. These judgments remain necessary even when fields are complete;
+- `missing_fields`: concrete unresolved values and their owning policy sections;
+- `reading_list`: source-hashed, disjoint required sections, grouped by file with
+  ready-to-use `read_argv`. Read this union once for all linked questions. It is
+  the normal reading path; do not first open a complete guide or whole owner files;
+- `repository_reading_candidates` and `current_mandate_path`: current strategy
+  sources from the existing generic resolver. Inspect the mandate and applicable
+  grounds once, sharing the same observations across scope, models and delivery.
+  Missing or ambiguous grounds remain decisions, not permission to skip them;
+- `workload_evidence`: literal coverage references, not an assignment, equivalence
+  ranking or proof of suitability. Assess reasoning, risks, limitations and exact
+  chosen-chain identities against the full valid payloads already in the response;
+- `field_shapes`: existing-owner types, product schema and action/preflight shapes
+  for editing the draft without implementation-source lookup.
+
+A validated delivery fact satisfies only the convention it actually describes.
+An uncovered target, strategic question, changed source or contradiction still
+requires inspection. A model hit likewise does not prove issue suitability. Use
+these gaps to add needed reads to the union rather than reopening all supporting
+sources. The original policy text remains authoritative; every listed range has
+its actual path, lines and source hash. Changed source invalidates that read plan.
+
+`--guidance-output <guide.md>` and `--with-guidance` remain full owner projections
+for explicit inspection/legacy consumers. They are not a prerequisite to this
+reading path. Full schema is available through the returned `schema_reference`;
+summary without `--draft-output` and full `assemble` retain their existing data.
+With a draft file, the response omits duplicate editable values/schema and points
+to that file plus the relevant field shapes. No policy or candidate is silently
+removed: selected facts, all candidate diagnostics/overview and detailed inspect
+references remain available. Execution/activation sections remain at their linked
+owner paths until entering those operations.
 
 Edit `draft.json` directly. The product skeleton is generated from
 `DeliveryContractV3`: `implementation_direction` is a string, list fields are
@@ -123,7 +142,7 @@ rejected. Lists such as `phase_chain` contain `phase=provider:model` strings;
 contain literal argv arrays. Reasoning effort is a separate confirmed execution
 setting; never append it to a model ID (for example, `@medium` would become
 part of the literal model identity). No action, model chain or contract is synthesized.
-`input_schema.formatter_field_schema` supplies every adapter field's JSON type,
+`decision_brief.field_shapes.formatter_field_schema` supplies every adapter field's JSON type,
 array item shape and parser-owned choices (including reactive policies and Manager
 mode). Use these fields directly; no formatter source or argparse lookup is needed
 to learn input types or legal values. This projection shares the adapter encoding
@@ -140,7 +159,7 @@ candidates even when the graph was already explicitly selected; do not reopen th
 YAML or rerun list/show merely to recover that comparison. The selected graph retains
 its complete decision facts; the inspect reference retains every other candidate's
 full details for a specific uncovered question. Current playbook-selection policy
-is included in the owner guidance projection, so its source need not be read again. Valid model
+is linked by the reading list; read each required section once. Valid model
 `assessment` includes workloads, reasoning, capability bands, limitations and
 sources; delivery `sources` identifies the evidence supporting its conventions,
 separately from the discovery manifest. A delivery hit with no current observations
@@ -179,10 +198,10 @@ existing output file and reports `validation_error` plus missing decisions
 without dumping the selected graph. Pass the complete existing preflight reports via
 `preflight_files`; do not reconstruct a subset and lose comparison tokens.
 Raw check command output alone may lack the existing report metadata. Follow
-`guidance`'s Complete runtime and catalog preflight section and the preflight
+the reading list's Complete runtime and catalog preflight section and the preflight
 owner for those decisions; never invent `comparison_token`, `checked_at` or
 post-change evidence. Draft output retains file references instead of copying
-report payloads. `input_schema.preflight_report_examples` shows the complete
+report payloads. the standalone schema's `preflight_report_examples` shows the complete
 required field shapes, not valid check results. Retain extra original fields
 such as mismatch IDs. Use the actual observation timestamp/current decision
 and source-provided tokens/digests; an explicitly unavailable source value may

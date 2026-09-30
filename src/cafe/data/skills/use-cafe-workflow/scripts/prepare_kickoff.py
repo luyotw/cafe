@@ -177,7 +177,7 @@ def _request_command(args: argparse.Namespace) -> int:
                     "render_command": continuation("render", args.draft_output or args.request_file),
                     "input_template": draft_request["formatter_inputs"] if assembled.get("status") != "ready" else None,
                     "input_schema": kickoff_inputs.request_schema(),
-                    "decision_brief": kickoff_inputs.decision_brief(request, assembled.get("missing_decisions", [])),
+                    "decision_brief": kickoff_inputs.decision_brief(request, assembled.get("missing_decisions", []), summary=compact, assembled=assembled),
                     "draft_output": str(args.draft_output.resolve()) if args.draft_output is not None else None,
                     "status": assembled.get("status", "invalid"),
                     "selected_playbook": assembled.get("selected_playbook"),
@@ -186,6 +186,14 @@ def _request_command(args: argparse.Namespace) -> int:
                     "formatter_inputs": assembled.get("formatter_inputs"),
                     "formatter_draft": assembled.get("formatter_draft") if assembled.get("status") != "ready" else None,
                 })
+                if args.draft_output is None:
+                    compact["decision_brief"].pop("field_shapes", None)
+                if args.draft_output is not None and args.guidance_output is None and not args.with_guidance:
+                    # Editable data lives in the requested file. Old summary-only
+                    # and full assembly consumers retain their complete payload.
+                    for key in ("input_template", "formatter_draft", "formatter_inputs", "input_schema"):
+                        compact.pop(key, None)
+                    compact["schema_reference"] = [sys.executable, str(Path(__file__).resolve()), "schema"]
                 if args.guidance_output is not None:
                     if args.with_guidance:
                         raise ValueError("choose guidance-output or with-guidance, not both")

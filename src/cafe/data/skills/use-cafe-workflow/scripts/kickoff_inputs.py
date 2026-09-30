@@ -522,7 +522,9 @@ def discover_kickoff(
         "delivery": delivery, "models": models, "diagnostics": list(catalog.get("diagnostics", [])),
     }
 
-def kickoff_guidance() -> list[dict[str, str]]:
+def kickoff_guidance(
+    request: dict[str, Any] | None = None, summary: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     """Read current owner sections once; this projection owns no policy or saved state."""
     selections = {
         "kickoff.md": ["## Conversation locale checklist", "## Repository content locale checklist",
@@ -540,6 +542,14 @@ def kickoff_guidance() -> list[dict[str, str]]:
                                          "## Manager-managed runtime-update decision"],
         "workflow_progress.md": ["## Initial kickoff presentation"],
     }
+    # A valid current selection ends candidate selection, not scope assessment,
+    # independent QA judgment, model suitability or confirmation. No cached
+    # repository-wide selection is accepted here. No-argument inspection is full.
+    if request and summary and (summary.get("selected_graph") or {}).get("eligible"):
+        if request.get("playbook_id") == summary["selected_graph"].get("id"):
+            selections["playbook_selection.md"] = [
+                "# Playbook Selection", "## Resolve authoritative selections first",
+                "## Independent QA decision", "## Record and reconfirm"]
     result = []
     for filename, headings in selections.items():
         path = Path(__file__).resolve().parent.parent / "references" / filename
@@ -562,7 +572,8 @@ def kickoff_guidance() -> list[dict[str, str]]:
             found.add(heading)
             end = starts[i + 1][0] if i + 1 < len(starts) else len(lines)
             result.append({"file": filename, "heading": heading,
-                           "sha256": hashlib.sha256(raw).hexdigest(), "text": "".join(lines[start:end])})
+                           "sha256": hashlib.sha256(raw).hexdigest(), "text": "".join(lines[start:end]),
+                           "path": str(path), "start_line": start + 1, "end_line": end})
         if headings is not None and set(headings) - found:
             raise ValueError(f"kickoff guidance owner headings changed: {filename}")
     return result
@@ -581,21 +592,141 @@ def preparation_template(request: dict[str, Any], draft: dict[str, Any]) -> dict
     return result
 
 
-def decision_brief(request: dict[str, Any], missing: list[dict[str, str]]) -> dict[str, Any]:
-    """Point current judgments to the supplied graph/evidence, without duplicating reports."""
+def decision_brief(
+    request: dict[str, Any], missing: list[dict[str, str]],
+    *, summary: dict[str, Any] | None = None, assembled: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Join current gaps to existing owner sections; never decide applicability or authority."""
+    summary, assembled = summary or {}, assembled or {}
+    graph = summary.get("selected_graph") or {}
+    delivery = summary.get("delivery") or {}
+    models = summary.get("models", [])
+    # These questions route judgments to their existing owners. They are not a
+    # completeness/authorization gate, and remain present for a fully filled draft.
+    definitions = [
+        ("scope", "Does this issue fit the current mandate, strategy and selected graph?",
+         ["request_text", "selected_graph.applicability", "catalog.candidate_overview"],
+         ["strategic_context.md", "playbook_selection.md"]),
+        ("models", "Which exact chains meet each selected phase's workload, reasoning and risks?",
+         ["selected_graph.profiles", "models[].assessment", "models[].provenance"], ["model_selection.md"]),
+        ("actions", "What exact delivery/cleanup targets and effects are proposed, and what is currently authorized?",
+         ["delivery.stable_conventions", "delivery.current_observations", "delivery.sources", "selected_graph.capability_setup"],
+         ["## Repository-informed deliver and cleanup plan", "### Delivery facts to confirm", "### Checkout and existing contracts"]),
+        ("confirmation", "Who owns each assignable decision and mandatory stop, and what still needs full confirmation?",
+         ["selected_graph.confirmation_gates", "selected_graph.mandatory_confirmation_gates", "selected_graph.steps"],
+         ["## Kickoff contract: first blocking gate", "### Derive confirmation gates"]),
+        ("locale", "Are conversation and repository content locales resolved with their actual provenance?",
+         ["preferences", "current_explicit_inputs"],
+         ["## Conversation locale checklist", "## Repository content locale checklist"]),
+        ("preflight", "What do the complete current check reports require before this proposal can proceed?",
+         ["preflight_files", "preflight_metadata"],
+         ["### Complete runtime and catalog preflight", "project_global_skill_sync.md"]),
+        ("presentation", "How will the complete rendered proposal, literal actions and confirmation be presented faithfully?",
+         ["render_command", "draft_output"], ["### Render the proposal", "workflow_progress.md"]),
+    ]
+    questions = [{"id": key, "question": question, "available": refs,
+                  "requires_current_judgment": True, "evidence_gaps": [], "policy_sections": []}
+                 for key, question, refs, _ in definitions]
+    by_id = {item["id"]: item for item in questions}
+    reading = {}
+    for section in kickoff_guidance(request, summary):
+        consumers = [key for key, _, _, selectors in definitions
+                     if section["file"] in selectors or section["heading"] in selectors]
+        if not consumers:
+            raise ValueError(f"kickoff section has no decision owner: {section['heading']}")
+        section_id = section["file"] + ":" + section["heading"]
+        entry = reading.setdefault(section["path"], {
+            "path": section["path"], "sha256": section["sha256"], "sections": []})
+        entry["sections"].append({"id": section_id, "heading": section["heading"],
+                                  "start_line": section["start_line"], "end_line": section["end_line"],
+                                  "questions": consumers})
+        for key in consumers:
+            by_id[key]["policy_sections"].append(section_id)
+    for entry in reading.values():
+        # One argv per file reads the disjoint required sections, rather than
+        # reading a whole concatenated guide and later recovering its slices.
+        ranges = ";".join(f"{s['start_line']},{s['end_line']}p" for s in entry["sections"])
+        entry["read_argv"] = ["sed", "-n", ranges, entry["path"]]
+
+    if delivery.get("status") != "hit" or delivery.get("discovery_gap"):
+        by_id["actions"]["evidence_gaps"].append({
+            "question": "Which missing or changed repository sources establish the delivery route?",
+            "diagnostics": delivery.get("diagnostics", []), "inspect_reference": delivery.get("inspect_reference")})
+    if not models:
+        by_id["models"]["evidence_gaps"].append({"question": "Where is dated primary-source evidence for the proposed exact models?"})
+    for index, model in enumerate(models):
+        if model.get("status") != "hit":
+            by_id["models"]["evidence_gaps"].append({"question": "What fresh evidence resolves this model miss?",
+                "reference": f"#/models/{index}", "diagnostics": model.get("diagnostics", []),
+                "inspect_reference": model.get("inspect_reference")})
+    # Literal workload coverage is evidence, not a ranking or suitability decision.
+    # Unknown transfers remain questions for Manager; general is not a wildcard.
+    coverage = {}
+    for phase, profile in graph.get("profiles", {}).items():
+        for workload in profile.get("workloads", []):
+            references = [f"#/models/{i}/assessment" for i, model in enumerate(models)
+                          if model.get("status") == "hit" and workload in model.get("assessment", {}).get("workloads", [])]
+            coverage.setdefault(phase, {})[workload] = references
+            if not references:
+                by_id["models"]["evidence_gaps"].append({"question": "Which exact-model evidence covers this phase workload?",
+                    "phase": phase, "workload": workload, "available": "#/models", "missing": "workload assessment"})
+    fixed = {key: {"value": request[key], "source": "request"}
+             for key in ("project_root", "issue_name", "playbook_id") if key in request}
+    for source in ("current_explicit_inputs", "formatter_inputs"):
+        supplied = request.get(source, {})
+        for key, value in (supplied.items() if isinstance(supplied, dict) else []):
+            fixed[key] = {"value": value, "source": source}
+    for key, value in assembled.get("preferences", {}).items():
+        field = {"conversation.locale": "effective_locale", "manager.mode": "manager_mode"}.get(key)
+        if field and value.get("value") is not None and field not in fixed:
+            fixed[field] = {**value, "source": "preferences." + key}
+    # The generic strategy owner resolves document metadata, not this projection.
+    # Do not duplicate its authority table or treat delivery facts as current mandate.
+    from cafe.core.strategic_context import load_strategic_context
+
+    root = Path(request.get("project_root", Path.cwd()))
+    repository_reads = {}
+    try:
+        documents = load_strategic_context(root, request.get("issue_name")).documents
+    except (ValueError, TypeError, OSError) as exc:
+        documents = {}
+        by_id["scope"]["evidence_gaps"].append({"question": "How is the current strategic context repaired?",
+                                               "diagnostics": [str(exc)]})
+    for category, document in documents.items():
+        if not document.exists or document.status not in {"exists", "draft"}:
+            by_id["scope"]["evidence_gaps"].append({"question": "What confirmed grounds cover this strategic category?",
+                                                   "category": category, "source": document.to_dict()})
+        if document.path:
+            path = str((root / document.path).resolve())
+            item = repository_reads.setdefault(path, {"path": path, "sha256": document.sha256,
+                "exists": document.exists, "categories": [], "questions": ["scope", "models"]})
+            item["categories"].append({"category": category, "status": document.status})
+    field_owners = {"delivery_contract": "scope", "checkout": "actions", "deliver": "actions", "cleanup": "actions",
+                    "catalog_preflight": "preflight", "update_preflight": "preflight", "repository_content_locale": "locale"}
+    missing_fields = []
+    for item in missing:
+        field = item["requirement"].removeprefix("formatter input: ")
+        question = by_id[field_owners.get(field, "scope")]
+        missing_fields.append({**item, "question": "What current value resolves " + item["requirement"] + "?",
+                               "available": question["available"], "missing": field,
+                               "policy_sections": question["policy_sections"]})
+    schema = request_schema()
     return {
         "request_text": request.get("request_text"),
         "graph_reference": "#/selected_graph",
         "evidence_references": {"delivery": "#/delivery", "models": "#/models"},
-        "judgments": [
-            {"decision": "scope and strategy", "inputs": ["request_text", "selected_graph.applicability"], "owner": "references/strategic_context.md"},
-            {"decision": "phase suitability", "inputs": ["selected_graph.profiles", "models[].assessment"], "owner": "references/model_selection.md"},
-            {"decision": "exact actions and current authority", "inputs": ["delivery.stable_conventions", "delivery.current_observations", "selected_graph.capability_setup"], "owner": "references/kickoff.md#repository-informed-deliver-and-cleanup-plan"},
-            {"decision": "confirmation ownership", "inputs": ["selected_graph.confirmation_gates", "selected_graph.mandatory_confirmation_gates", "selected_graph.steps"], "owner": "references/kickoff.md#derive-confirmation-gates"},
-        ],
+        "fixed_inputs": fixed,
+        "questions": questions,
+        "reading_list": list(reading.values()),
+        "repository_reading_candidates": list(repository_reads.values()),
+        "current_mandate_path": str((root / ".cafe/strategic_context.yaml").resolve()),
+        "workload_evidence": coverage,
+        "missing_fields": missing_fields,
+        "field_shapes": {key: schema[key] for key in ("formatter_field_schema", "delivery_contract", "template_rules",
+            "action_input_examples", "closeout_examples", "preflight_capture", "preflight_file_adapter")},
         "missing_decisions_reference": "#/missing_decisions",
         "missing_decision_count": len(missing),
-        "evidence_use": "Use sufficient valid assessments and their sources directly. Inspect raw evidence only for a specific gap, contradiction or invalidation. A hit grants no action authority or model suitability decision.",
+        "evidence_use": "Apply the source-backed payloads already in this response. A hit supplies neither current authority nor model suitability. Read each policy range once for all its questions. Inspect raw evidence only for a named gap, contradiction or invalidation.",
     }
 
 

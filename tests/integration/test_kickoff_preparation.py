@@ -1076,3 +1076,124 @@ def test_parallel_report_capture_preserves_both_original_report_references(
     for kind, path in request["preflight_files"].items():
         assert json.loads(Path(path).read_text()) == {"producer": kind}
         assert request["preflight_metadata"][kind]["decision"] is None
+
+
+def test_decision_reading_path_preserves_required_judgments_and_complete_render(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """U14-U16/I01/I06: public first response routes decisions, not a whole guide reread."""
+    cli = load_kickoff_module("prepare_kickoff")
+    values = _formatter_inputs("issue573-reading-path")
+    values.update(effective_locale="zh-TW", locale_source="explicit", repository_content_locale="en-US")
+    request, draft, output = [tmp_path / name for name in ("request.json", "draft.json", "proposal.md")]
+    data = {"schema_version": 1, "request_text": "Prepare the confirmed scope.",
+            **{key: values[key] for key in ("project_root", "issue_name", "playbook_id")},
+            "current_explicit_inputs": {"effective_locale": "zh-TW", "locale_source": "explicit",
+                                        "repository_content_locale": "en-US"}}
+    request.write_text(json.dumps(data))
+    args = ["assemble", "--request-file", str(request), "--summary", "--draft-output", str(draft),
+            "--config-dir", str(tmp_path / "config"), "--cache-dir", str(tmp_path / "cache")]
+    assert cli.main(args) == 3
+    report = json.loads(capsys.readouterr().out)
+    brief = report["decision_brief"]
+    assert brief["fixed_inputs"]["effective_locale"]["value"] == "zh-TW"
+    assert brief["fixed_inputs"]["effective_locale"]["source"] == "current_explicit_inputs"
+    mandatory = {"scope", "models", "actions", "confirmation", "locale", "preflight", "presentation"}
+    assert mandatory <= {q["id"] for q in brief["questions"] if q["requires_current_judgment"]}
+    # Every question maps to a real source section; each section is read once
+    # even when it serves multiple decisions. No prose equality asserts judgment.
+    indexed = {}
+    for source in brief["reading_list"]:
+        raw = Path(source["path"]).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == source["sha256"]
+        lines = raw.decode().splitlines()
+        visited = set()
+        for section in source["sections"]:
+            span = set(range(section["start_line"] - 1, section["end_line"]))
+            assert not span & visited
+            visited |= span
+            assert lines[section["start_line"] - 1] == section["heading"]
+            indexed[section["id"]] = section
+    assert not any(section["heading"] == "## Select when no authoritative choice exists" for section in indexed.values())
+    for question in brief["questions"]:
+        assert question["policy_sections"]
+        assert all(key in indexed for key in question["policy_sections"])
+    # The draft is the only full copy of editable values in the normal response;
+    # standalone schema and old summary remain available for existing consumers.
+    assert "formatter_draft" not in report and "input_template" not in report
+    assert "field_shapes" in brief
+    assert cli.main(["schema"]) == 0
+    schema = json.loads(capsys.readouterr().out)
+    assert brief["field_shapes"]["formatter_field_schema"] == schema["formatter_field_schema"]
+    prepared = json.loads(draft.read_text())
+    prepared["formatter_inputs"].update(values)
+    draft.write_text(json.dumps(prepared))
+    assert cli.main([*report["render_command"][2:], "--output", str(output)]) == 0
+    capsys.readouterr()
+    assert output.read_text() == load_kickoff_module("kickoff_inputs").render_kickoff(values)["output"]
+    assert not (PROJECT_ROOT / ".cafe/issues" / values["issue_name"]).exists()
+    # Field completeness must never erase current authority/suitability judgments.
+    assert cli.main(["assemble", *report["render_command"][3:], "--summary"]) == 0
+    complete = json.loads(capsys.readouterr().out)
+    assert mandatory <= {q["id"] for q in complete["decision_brief"]["questions"] if q["requires_current_judgment"]}
+
+
+@pytest.mark.parametrize("change", ["delivery_source", "model_source", "expired", "workload"])
+def test_reading_path_reopens_only_affected_evidence_questions(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], change: str
+) -> None:
+    """U05/U12/U14-U16/I05: a valid hit is useful evidence, never suitability or authority."""
+    cli = load_kickoff_module("prepare_kickoff")
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "CONTRIBUTING.md"
+    source.write_text("Local commits require review.\n")
+    cache = tmp_path / "cache"
+    delivery = tmp_path / "delivery.json"
+    delivery.write_text(json.dumps({"target": "local", "stable_conventions": ["Review before commit."],
+        "sources": [{"path": source.name, "fingerprint": hashlib.sha256(source.read_bytes()).hexdigest()}]}))
+    common = ["--project-root", str(project), "--cache-dir", str(cache)]
+    assert cli.main(["evidence", "refresh", *common, "--category", "delivery", "--evidence-file", str(delivery)]) == 0
+    capsys.readouterr()
+    now = datetime.now(timezone.utc).isoformat()
+    model = {"provider": "fixture", "model": "exact-v1", "version": "exact-v1", "assessed_at": now,
+        "workloads": ["requirements", "planning", "implementation", "review", "publication"],
+        "reasoning": "high", "capability_bands": {"coding": "fixture"}, "limitations": ["Fixture only."],
+        "sources": [{"url": "https://provider.invalid/exact-v1", "retrieved_at": now, "fingerprint": "v1"}]}
+    model_file = tmp_path / "model.json"
+    model_file.write_text(json.dumps(model))
+    assert cli.main(["evidence", "refresh", *common, "--category", "models", "--evidence-file", str(model_file)]) == 0
+    capsys.readouterr()
+    request = tmp_path / "request.json"
+    data = {"schema_version": 1, "project_root": str(project), "issue_name": "new-issue", "playbook_id": "standard-qa"}
+    args = ["assemble", "--request-file", str(request), "--summary", "--config-dir", str(tmp_path / "config"), "--cache-dir", str(cache)]
+    request.write_text(json.dumps(data))
+    assert cli.main(args) == 3
+    before = json.loads(capsys.readouterr().out)
+    questions = {q["id"]: q for q in before["decision_brief"]["questions"]}
+    assert questions["models"]["evidence_gaps"] == []
+    assert questions["actions"]["evidence_gaps"] == []
+    assert questions["models"]["requires_current_judgment"]
+    assert questions["actions"]["requires_current_judgment"]
+    if change == "delivery_source":
+        source.write_text("Changed delivery policy.\n")
+    elif change == "model_source":
+        data["current_model_sources"] = {"https://provider.invalid/exact-v1": "v2"}
+    else:
+        if change == "expired":
+            old = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+            model["assessed_at"] = old
+            model["sources"][0]["retrieved_at"] = old
+        else:
+            model["workloads"] = ["implementation"]
+        data["model_assessments"] = [model]
+    request.write_text(json.dumps(data))
+    assert cli.main(args) == 3
+    after = json.loads(capsys.readouterr().out)
+    questions = {q["id"]: q for q in after["decision_brief"]["questions"]}
+    affected, untouched = ("actions", "models") if change == "delivery_source" else ("models", "actions")
+    assert questions[affected]["evidence_gaps"]
+    assert questions[untouched]["evidence_gaps"] == []
+    assert questions[affected]["policy_sections"]
+    assert questions["confirmation"]["requires_current_judgment"]
+    assert after["selected_graph"]["mandatory_confirmation_gates"] == before["selected_graph"]["mandatory_confirmation_gates"]

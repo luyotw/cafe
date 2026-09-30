@@ -23,7 +23,7 @@ read the union once; do not preload the rest.
 | --- | --- |
 | Check or apply runtime, catalog, or bundled-helper updates | `references/project_global_skill_sync.md` |
 | Select a playbook for a new kickoff | Use the preparation route below; its owner guidance includes `references/playbook_selection.md` policy |
-| Prepare kickoff inputs, render, or reconfirm a kickoff | Start with `references/kickoff_inputs.md` and its early summary command; use `assemble --summary --guidance-output <guide.md> --draft-output <draft.json>` for the current `references/kickoff.md` and other owner sections plus editable inputs; load other owner sections only for uncovered decisions |
+| Prepare kickoff inputs, render, or reconfirm a kickoff | Start with `references/kickoff_inputs.md` and its early summary command; use `assemble --summary --draft-output <draft.json>` for a current decision brief, deduplicated source reading list and editable inputs; load other owner sections only for uncovered decisions |
 | Write or change confirmed phase chains after confirmation | `references/model_selection.md`, then `references/phases_yaml.md` |
 | Prepare and activate after kickoff confirmation | `references/kickoff_execution.md` |
 | Start, resume, or supply declared input to ordinary execution | `references/project_global_skill_sync.md`, then `references/running_workflow.md` |
@@ -42,11 +42,11 @@ and execute its path-pinned `next_command`; intentional store overrides remain
 explicit. See `references/kickoff_inputs.md` for the request and store-selection
 interface. Obtain the local preparation summary before loading candidate
 playbooks, phase SKILL bodies, model research or delivery documentation. If a
-playbook is already explicitly chosen, start with `assemble --summary --guidance-output <guide.md> --draft-output <draft.json>` even
+playbook is already explicitly chosen, start with `assemble --summary --draft-output <draft.json>` even
 while incomplete: it supplies the selected graph, validated evidence, a draft
 and missing decisions. Otherwise use `discover --summary` for the full candidate
 set. Assess current scope, strategy, suitability and authority against that
-evidence. The first guided summary includes the current strategy and suitability owner
+evidence. The first summary links the current strategy and suitability owner
 sections. Apply them once; inspect source details only for missing or invalidated
 facts. Do not preload the full kickoff/model/strategy references before this
 summary or reread their projected sections. Fill the emitted typed draft and
