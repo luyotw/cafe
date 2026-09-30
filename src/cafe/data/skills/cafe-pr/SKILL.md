@@ -1,7 +1,7 @@
 ---
 name: cafe-pr
 description: "Prepare the local pull request title and description for publication"
-version: 1.6.0
+version: 1.7.0
 workflow:
   execution_profile:
     workload: publication
@@ -130,12 +130,13 @@ the review task can expose a verified PR URL.
 When `workflow_feedback_file` contains feedback for this cycle, or `Current user input for this iteration` contains PR review comments, this is PR iteration 2:
 
  - When runtime provides `workflow_feedback_batch_file`, it is the only immutable source context for this cycle. Select Todo items only from that batch; later items remain for a later cycle. Use the paired ID and Source from runtime's `Canonical Todo fields for this batch` block exactly as shown for each selected batch entry; do not derive or substitute a generic PR-comment prefix or source. Otherwise, `workflow_feedback_file` and review comments are PR-agent context, not a Develop worklist. Process only unresolved corrective input declared for this step; do not import resolved, stale, duplicate, informational, ordinary PR-body, `## Test Plan`, or open follow-up proposal text.
- - Normalize each applicable source from the current corrective cycle into the output's one `## Todo List` of at most 100 rows. Preserve one-to-one source identity, and never merge distinct sources because their text matches. Use only `No actionable work.` when there is no applicable source.
- - Todo rows must use ``- [ ] `<id>` — Source: `<source>` — Work: ... — Closure: ... — Evidence: ...``. Write only the normalized list; do not include raw PR comments or HumanTask feedback.
- - After curation, write the declared `manual_handoff` using the injected discretionary route marked `carries_feedback`. Do not hardcode step names, skip the curator, or select an undeclared route.
+ - Decide which sources in the current corrective batch need implementation. Normalize each applicable source into the output's one `## Todo List` of at most 100 rows. Preserve one-to-one source identity, and never merge distinct sources because their text matches.
+ - For applicable work, Todo rows must use ``- [ ] `<id>` — Source: `<source>` — Work: ... — Closure: ... — Evidence: ...``. Write only the normalized list; do not include raw PR comments or HumanTask feedback.
+ - When this batch has applicable corrective work, write the declared `manual_handoff` using the injected discretionary route marked `carries_feedback`. Do not hardcode step names or select an undeclared route.
+ - When this batch has no applicable corrective work, prepare the complete PR title and description using the PR content steps below. Include exactly one `## Todo List` containing only `No actionable work.` so the runtime can settle this batch as excluded. Choose the declared `confirm_output` route to `user`, or the declared `workflow_complete` default to `done` when no review gate exists. Do not send an empty worklist to a correction consumer or decide the user's follow-up proposals.
 
 ### PR content mode
-Otherwise (there are no PR review comments):
+When there is no corrective feedback for this cycle, or this batch has no applicable corrective work:
 
 1. Read the requirements, implementation plan, and current branch commits supplied by the workflow.
 2. Edit `{output_file}` with a PR title and description:
