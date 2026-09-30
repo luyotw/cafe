@@ -847,6 +847,17 @@ def current_decision_view(summary: dict[str, Any], request: dict[str, Any], draf
         "worktree", "current_checkout", "deliver", "cleanup"}
     explicit_fields = set(request.get("formatter_inputs", {})) | set(request.get("current_explicit_inputs", {}))
     needed = missing | unresolved | (judgment_fields - explicit_fields)
+    # A mode choice includes its dependent input types. Reuse the owner's
+    # definitions and existing policy references without choosing any values.
+    mode = fields.get("manager_mode")
+    mode_fields = ("event_manager", "poll_interval_seconds")
+    if mode == "event-driven":
+        mode_fields = ("event_manager",)
+    elif mode == "attached":
+        mode_fields = ("poll_interval_seconds",)
+    elif mode == "unattended":
+        mode_fields = ()
+    needed.update(key for key in mode_fields if fields.get(key) is None)
     # Paired action descriptions must remain visible when actions need a choice.
     for key in ("deliver", "cleanup"):
         if key in needed:

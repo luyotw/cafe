@@ -1200,16 +1200,23 @@ def test_reading_path_reopens_only_affected_evidence_questions(
     assert after["selected_graph"]["mandatory_confirmation_gates"] == before["selected_graph"]["mandatory_confirmation_gates"]
 
 
-@pytest.mark.parametrize("presentation", ["json", "decisions"])
+@pytest.mark.parametrize("presentation,mode_values", [
+    ("json", {}),
+    ("decisions", {"manager_mode": "event-driven", "event_manager": ["codex"]}),
+    ("decisions", {"manager_mode": "attached", "poll_interval_seconds": 30}),
+    ("decisions", {"manager_mode": "unattended"}),
+])
 def test_normal_summary_indexes_sources_and_routes_missing_reports_to_same_draft(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, presentation: str
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, presentation: str, mode_values: dict
 ) -> None:
     """U14-U16/I01/I06: one decision index and a usable check/capture/render continuation."""
     import io
     cli = load_kickoff_module("prepare_kickoff")
     values = _formatter_inputs("issue573-report-continuation")
+    values.update(mode_values)
     request, draft, output = [tmp_path / name for name in ("request.json", "draft.json", "proposal.md")]
-    partial = {key: value for key, value in values.items() if not key.endswith("_preflight")}
+    partial = {key: value for key, value in values.items()
+               if not key.endswith("_preflight") and key not in mode_values}
     request.write_text(json.dumps({"schema_version": 1, "project_root": str(PROJECT_ROOT),
         "issue_name": values["issue_name"], "playbook_id": values["playbook_id"], "formatter_inputs": partial}))
     source = PROJECT_ROOT / "docs/settings-updates.md"
@@ -1248,6 +1255,13 @@ def test_normal_summary_indexes_sources_and_routes_missing_reports_to_same_draft
     assert assessment["workloads"] == model["workloads"] and assessment["limitations"] == model["limitations"]
     assert [source_index[r["$ref"].split("/")[-1]] for r in assessment["sources"]] == model["sources"]
     brief = report["decision_brief"]
+    if mode_values:
+        types = brief["field_shapes"]["formatter_field_schema"]
+        for key in ("event_manager", "poll_interval_seconds"):
+            assert key in types  # An unresolved mode exposes both alternatives.
+        data = json.loads(draft.read_text())
+        data["formatter_inputs"].update(mode_values)
+        draft.write_text(json.dumps(data))
     questions = {q["id"]: q for q in brief["questions"]}
     assert len(questions) == 7 and all(q["requires_current_judgment"] for q in questions.values())
     # Gaps refer to one question/source/type index; they do not repeat definitions.
@@ -1418,3 +1432,63 @@ def test_decision_view_custom_graph_changes_and_invalid_candidates_remain_visibl
     assert "planning" in after["selected_graph"]["profiles"]["first"]["workloads"]
     assert any(g.get("workload") == "planning" for q in after["decision_brief"]["questions"] for g in q["evidence_gaps"])
     assert all(q["requires_current_judgment"] for q in after["decision_brief"]["questions"])
+
+
+@pytest.mark.parametrize("mode_values,needed,valid", [
+    ({}, {"event_manager", "poll_interval_seconds"}, False),
+    ({"manager_mode": "event-driven"}, {"event_manager"}, False),
+    ({"manager_mode": "event-driven", "event_manager": ["codex"]}, set(), True),
+    ({"manager_mode": "event-driven", "event_manager": []}, set(), False),
+    ({"manager_mode": "event-driven", "event_manager": ["codex:invented"]}, set(), False),
+    ({"manager_mode": "event-driven", "event_manager": "codex"}, set(), False),
+    ({"manager_mode": "attached"}, {"poll_interval_seconds"}, False),
+    ({"manager_mode": "attached", "poll_interval_seconds": 30}, set(), True),
+    ({"manager_mode": "attached", "poll_interval_seconds": 0}, set(), False),
+    ({"manager_mode": "attached", "poll_interval_seconds": "invalid"}, set(), False),
+    ({"manager_mode": "unattended"}, set(), True),
+    ({"manager_mode": "unattended", "event_manager": ["codex"]}, set(), False),
+    ({"manager_mode": "unattended", "poll_interval_seconds": 30}, set(), False),
+    ({"manager_mode": "attached", "event_manager": ["codex"], "poll_interval_seconds": 30}, set(), False),
+    ({"manager_mode": "event-driven", "event_manager": ["codex"], "poll_interval_seconds": 30}, set(), False),
+    ({"manager_mode": "unknown"}, {"event_manager", "poll_interval_seconds"}, False),
+])
+def test_operating_mode_decisions_expose_owner_types_without_changing_validation(
+    tmp_path, capsys, mode_values, needed, valid
+):
+    """U14-U16/I06: current mode choices reveal dependencies, never authorize them."""
+    cli = load_kickoff_module("prepare_kickoff")
+    values = _formatter_inputs("issue573-mode-types")
+    values.pop("manager_mode")
+    values.update(mode_values)
+    request, draft, output = [tmp_path / name for name in ("request.json", "draft.json", "proposal.md")]
+    request.write_text(json.dumps({"schema_version": 1, "project_root": str(PROJECT_ROOT),
+        "issue_name": values["issue_name"], "playbook_id": values["playbook_id"], "formatter_inputs": values}))
+    argv = ["assemble", "--request-file", str(request), "--summary", "decisions", "--draft-output", str(draft),
+        "--config-dir", str(tmp_path / "config"), "--cache-dir", str(tmp_path / "cache")]
+    assert cli.main(argv) in (0, 3)
+    view = json.loads(capsys.readouterr().out)
+    types = view["decision_brief"]["field_shapes"]["formatter_field_schema"]
+    dependents = {"event_manager", "poll_interval_seconds"}
+    assert set(types) & dependents == needed
+    # Owner equality is an offline assertion; the normal caller uses this view only.
+    owner = load_kickoff_module("kickoff_inputs").request_schema()["formatter_field_schema"]
+    for key in needed:
+        assert types[key] == owner[key]
+    for key, value in mode_values.items():
+        assert view["decision_brief"]["fixed_inputs"][key]["value"] == value
+    sections = {s["id"] for r in view["decision_brief"]["reading_list"] for s in r["sections"]}
+    assert all(q["requires_current_judgment"] and set(q["policy_sections"]) <= sections
+               for q in view["decision_brief"]["questions"])
+    before = json.loads(request.read_text())
+    # Use the original supplied data: projection must not sanitize bad decisions.
+    result = cli.main(["render", "--request-file", str(request), "--output", str(output),
+        "--config-dir", str(tmp_path / "config"), "--cache-dir", str(tmp_path / "cache")])
+    rendered = json.loads(capsys.readouterr().out)
+    assert (result == 0) is valid, rendered
+    assert output.exists() is valid
+    assert json.loads(request.read_text()) == before
+    if valid:
+        assert output.read_text() == load_kickoff_module("kickoff_inputs").render_kickoff(values)["output"]
+    else:
+        assert rendered.get("diagnostics") or rendered.get("missing") or rendered.get("missing_decisions")
+    assert not (PROJECT_ROOT / ".cafe/issues" / values["issue_name"]).exists()
