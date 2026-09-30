@@ -154,10 +154,17 @@ def _request_command(args: argparse.Namespace) -> int:
             _json({"stage": "assembly", **assembled, "discovery": discovery})
             return 0 if assembled.get("status") == "ready" else 3
         rendered = kickoff_inputs.render_kickoff(assembled.get("formatter_inputs"))
-        if args.output is not None and rendered.get("status") == "rendered":
-            args.output.write_text(rendered["output"], encoding="utf-8")
-            _json({"stage": "render", "status": "rendered", "output_file": str(args.output.resolve())})
-            return 0
+        if args.output is not None:
+            if rendered.get("status") == "rendered":
+                args.output.write_text(rendered["output"], encoding="utf-8")
+                _json({"stage": "render", "status": "rendered", "output_file": str(args.output.resolve())})
+                return 0
+            _json({
+                "stage": "render", **rendered,
+                "assembly_diagnostics": assembled.get("diagnostics", []),
+                "missing_decisions": assembled.get("missing_decisions", []),
+            })
+            return 3
         _json({"stage": "render", "assembly": assembled, "render": rendered})
         return 0 if rendered.get("status") == "rendered" else 3
     except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:

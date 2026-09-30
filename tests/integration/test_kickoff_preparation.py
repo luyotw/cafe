@@ -465,3 +465,47 @@ def test_confirmed_inputs_fill_selected_journey_without_copying_full_reports(
     path.write_text(json.dumps(request))
     assert cli.main(["assemble", *common, "--summary"]) != 0
     assert json.loads(capsys.readouterr().out)["assembly_diagnostics"]
+
+
+def test_invalid_preflight_reports_actionable_gap_without_repeating_assembly(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """U14-U16/I06: a caller can repair invalid input without inspecting code or losing output."""
+    cli = load_kickoff_module("prepare_kickoff")
+    values = _formatter_inputs("issue573-invalid-preflight")
+    values["update_preflight"].pop("comparison_token")
+    request = {"schema_version": 1, "project_root": str(PROJECT_ROOT),
+               "issue_name": values["issue_name"], "playbook_id": values["playbook_id"],
+               "formatter_inputs": values}
+    request_file = tmp_path / "request.json"
+    request_file.write_text(json.dumps(request))
+    output = tmp_path / "proposal.md"
+    output.write_text("Preserve the last proposal until a valid replacement is ready.")
+    assert cli.main(["render", "--request-file", str(request_file), "--output", str(output),
+                     "--config-dir", str(tmp_path / "config"), "--cache-dir", str(tmp_path / "cache")]) == 3
+    report = json.loads(capsys.readouterr().out)
+    assert "comparison_token" in report["validation_error"]
+    assert report["status"] == "invalid"
+    assert "assembly" not in report and "selected_candidate" not in report
+    assert output.read_text() == "Preserve the last proposal until a valid replacement is ready."
+
+
+def test_public_schema_example_preserves_exact_model_identity_through_render(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """U12/U15/I06: following the public example must not alter the selected model ID."""
+    cli = load_kickoff_module("prepare_kickoff")
+    assert cli.main(["schema"]) == 0
+    schema = json.loads(capsys.readouterr().out)
+    values = _formatter_inputs("issue573-schema-model-identity")
+    selected = "fixture-exact-model"
+    example = schema["decision_examples"]["phase_chain"][0].replace("<exact-model>", selected)
+    values["phase_chain"] = [entry for entry in values["phase_chain"] if not entry.startswith("develop=")] + [example]
+    request = {"schema_version": 1, "project_root": str(PROJECT_ROOT), "issue_name": values["issue_name"],
+               "playbook_id": values["playbook_id"], "formatter_inputs": values}
+    path = tmp_path / "request.json"
+    path.write_text(json.dumps(request))
+    assert cli.main(["render", "--request-file", str(path), "--config-dir", str(tmp_path / "config"),
+                     "--cache-dir", str(tmp_path / "cache")]) == 0
+    phases = json.loads(capsys.readouterr().out)["render"]["proposal"]["phases"]
+    assert next(phase["chain"] for phase in phases if phase["name"] == "develop") == [{"cli": "codex", "model": selected}]

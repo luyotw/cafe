@@ -42,7 +42,7 @@ def request_schema() -> dict[str, Any]:
             "formatter_inputs": {},
         },
         "decision_examples": {
-            "phase_chain": ["develop=codex:<exact-model>@medium"],
+            "phase_chain": ["develop=codex:<exact-model>"],
             "capability_choice": ["pr.auto_create=true"],
             "deliver": [["<executable>", "<literal argument>"]],
             "cleanup": [],
@@ -550,5 +550,5 @@ def render_kickoff(values: dict[str, Any]) -> dict[str, Any]:
         proposal = formatter.build_confirmed_proposal(args)
         output = formatter.render(args, confirmed_proposal=proposal)
     except (SystemExit, OSError, ValueError, KeyError, TypeError) as exc:
-        return {"status": "invalid", "diagnostics": [type(exc).__name__]}
+        return {"status": "invalid", "diagnostics": [type(exc).__name__], "validation_error": str(exc)}
     return {"status": "rendered", "proposal": proposal, "output": output}

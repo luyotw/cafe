@@ -42,9 +42,11 @@ prefills request identity, explicit fields and applicable preferences, while
 examples without reading implementation code or doing discovery. Keep one
 request; put already confirmed named fields in `current_explicit_inputs`, and
 newly assessed decisions in `formatter_inputs`. Conflicting duplicates are
-rejected. Lists such as `phase_chain` contain `phase=provider:model@effort` strings;
+rejected. Lists such as `phase_chain` contain `phase=provider:model` strings;
 `capability_choice` contains `name=true|false` strings; `deliver` and `cleanup`
-contain literal argv arrays. No action, model chain or contract is synthesized.
+contain literal argv arrays. Reasoning effort is a separate confirmed execution
+setting; never append it to a model ID (for example, `@medium` would become
+part of the literal model identity). No action, model chain or contract is synthesized.
 The existing formatter still validates the complete decision set.
 
 Selected assembly exposes the chosen graph and all invalid-candidate diagnostics,
@@ -61,7 +63,10 @@ After filling the gaps, write the complete proposal once:
 python scripts/prepare_kickoff.py render --request-file request.json --output proposal.md
 ```
 
-This returns a compact status/file receipt. Read `proposal.md` once and present
+This returns a compact status/file receipt. Failed rendering preserves any
+existing output file and reports `validation_error` plus missing decisions
+without dumping the selected graph. Pass original preflight JSON via
+`preflight_files`; do not reconstruct a subset and lose comparison tokens. Read `proposal.md` once and present
 it completely. Existing callers without `--output` still receive JSON with text
 at `render.output`; do not guess a top-level output field. Use a new issue identity
 for a new proposal; an existing identity intentionally retains its workflow locale.
