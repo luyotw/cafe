@@ -509,3 +509,110 @@ def test_public_schema_example_preserves_exact_model_identity_through_render(
                      "--cache-dir", str(tmp_path / "cache")]) == 0
     phases = json.loads(capsys.readouterr().out)["render"]["proposal"]["phases"]
     assert next(phase["chain"] for phase in phases if phase["name"] == "develop") == [{"cli": "codex", "model": selected}]
+
+
+def test_selected_draft_supplies_owner_typed_contract_and_renders_without_repairs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """U14-U16/I01/I06: fill decisions in a public draft, not guessed nested types."""
+    from cafe.manager.delivery import DeliveryContractV3
+
+    cli = load_kickoff_module("prepare_kickoff")
+    values = _formatter_inputs("issue573-typed-draft-journey")
+    request = {"schema_version": 1, "request_text": "Prepare the specified outcome.",
+               **{k: values[k] for k in ("project_root", "issue_name", "playbook_id")}}
+    request["current_explicit_inputs"] = {
+        k: v for k, v in values.items()
+        if k not in request and k not in {"delivery_contract", "deliver", "cleanup", "update_preflight", "catalog_preflight"}
+    }
+    request["preflight_files"] = {}
+    for name in ("update", "catalog"):
+        report = tmp_path / f"{name}.json"
+        report.write_text(json.dumps(values[f"{name}_preflight"]))
+        request["preflight_files"][name] = str(report)
+    path = tmp_path / "request.json"
+    draft = tmp_path / "draft.json"
+    path.write_text(json.dumps(request))
+    common = ["--request-file", str(path), "--config-dir", str(tmp_path / "config"), "--cache-dir", str(tmp_path / "cache")]
+    assert cli.main(["assemble", *common, "--summary"]) == 3
+    summary = json.loads(capsys.readouterr().out)
+    template = summary["input_template"]
+    schema = summary["input_schema"]["delivery_contract"]
+    owner = DeliveryContractV3.model_json_schema()
+    assert schema["properties"] == {k: v for k, v in owner["properties"].items() if k != "closeout_plan"}
+    assert isinstance(template["delivery_contract"]["implementation_direction"], str)
+    assert set(template["delivery_contract"]) == set(values["delivery_contract"])
+    assert template["deliver"] is None and template["cleanup"] is None
+    assert summary["decision_brief"]["request_text"] == request["request_text"]
+    assert summary["decision_brief"]["graph_reference"] == "#/selected_graph"
+    assert summary["decision_brief"]["evidence_references"] == {"delivery": "#/delivery", "models": "#/models"}
+    assert cli.main(["assemble", *common, "--summary", "--draft-output", str(draft)]) == 3
+    capsys.readouterr()
+    draft_request = json.loads(draft.read_text())
+    assert draft_request["preflight_files"] == request["preflight_files"]
+    assert "update_preflight" not in draft_request["formatter_inputs"]
+    assert "catalog_preflight" not in draft_request["formatter_inputs"]
+    # The undecided template cannot accidentally render or turn absent actions into [].
+    draft_common = ["--request-file", str(draft), *common[2:]]
+    assert cli.main(["render", *draft_common]) == 3
+    capsys.readouterr()
+    for key, decision in values["delivery_contract"].items():
+        draft_request["formatter_inputs"]["delivery_contract"][key] = decision
+    for key in ("deliver", "cleanup"):
+        draft_request["formatter_inputs"][key] = values[key]
+    draft.write_text(json.dumps(draft_request))
+    output = tmp_path / "proposal.md"
+    assert cli.main(["render", *draft_common, "--output", str(output)]) == 0
+    capsys.readouterr()
+    expected = load_kickoff_module("kickoff_inputs").render_kickoff(values)
+    assert output.read_text() == expected["output"]
+    assert not (PROJECT_ROOT / ".cafe/issues" / values["issue_name"]).exists()
+
+
+def test_public_closeout_examples_follow_existing_policy_without_authority(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """U15/I06: discover invalid lifecycle forms before constructing a proposal."""
+    from cafe.manager.delivery import validate_closeout_plan_policy
+
+    cli = load_kickoff_module("prepare_kickoff")
+    assert cli.main(["schema"]) == 0
+    schema = json.loads(capsys.readouterr().out)
+    for example in schema["closeout_examples"]:
+        try:
+            validate_closeout_plan_policy({"deliver": [], "cleanup": [{"argv": example["argv"]}]}, allow_squash=False)
+            valid = True
+        except ValueError:
+            valid = False
+        assert example["valid_in_pr_mode"] == valid
+    archive = next(e for e in schema["closeout_examples"] if "--archive-only" in e["argv"])
+    assert not archive["valid_in_pr_mode"]
+    assert schema["input_template"]["cleanup"] is None
+
+
+def test_public_draft_loads_current_owner_guidance_once_without_execution_sections(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """U14/U16/I01: first assembly supplies inspectable policy with the actual decision inputs."""
+    cli = load_kickoff_module("prepare_kickoff")
+    request = tmp_path / "request.json"
+    request.write_text(json.dumps({"schema_version": 1, "project_root": str(PROJECT_ROOT),
+                                   "issue_name": "issue573-guidance-journey", "playbook_id": "standard-qa"}))
+    args = ["assemble", "--request-file", str(request), "--summary",
+            "--config-dir", str(tmp_path / "config"), "--cache-dir", str(tmp_path / "cache")]
+    assert cli.main(args) == 3
+    plain = json.loads(capsys.readouterr().out)
+    assert cli.main([*args, "--with-guidance"]) == 3
+    guided = json.loads(capsys.readouterr().out)
+    assert guided["missing_decisions"] == plain["missing_decisions"]
+    refs = PROJECT_ROOT / "src/cafe/data/skills/use-cafe-workflow/references"
+    assert guided["guidance"]
+    for block in guided["guidance"]:
+        source = (refs / block["file"]).read_bytes()
+        assert block["sha256"] == hashlib.sha256(source).hexdigest()
+        assert block["text"] in source.decode()
+        assert block["text"].startswith(block["heading"] + "\n")
+    assert not plain.get("guidance")
+    assert any(b["file"] == "strategic_context.md" for b in guided["guidance"])
+    assert any(b["file"] == "model_selection.md" for b in guided["guidance"])
+    assert not any(b["heading"] == "## Durable Manager authority" for b in guided["guidance"])

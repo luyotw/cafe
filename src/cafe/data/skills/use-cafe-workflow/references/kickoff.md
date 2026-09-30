@@ -1,12 +1,16 @@
 # Kickoff And Preparation
 
-Read this reference before presenting a kickoff, preparing an issue, resuming an
+Read the applicable sections of this reference before presenting a kickoff, preparing an issue, resuming an
 issue whose first workflow execution has not run, or answering a question about
 the workflow conversation language. Start with the early summary in
 `kickoff_inputs.md` before loading decision references. Read
 `playbook_selection.md` when selection needs assessment, `model_selection.md`
 for current suitability policy and `strategic_context.md` for strategy; reuse
-these references if already read during this preparation.
+these references if already read during this preparation. The first
+`assemble --summary --with-guidance` supplies the applicable owner sections
+verbatim; reading that projection satisfies the same read, without reopening
+the full documents. Load execution/activation sections when that operation is
+actually reached.
 
 ## Reuse kickoff preferences and evidence
 
@@ -381,7 +385,10 @@ confirmation before preparation or workflow execution.
 
 ### Derive confirmation gates
 
-1. Run:
+1. Use `selected_graph.confirmation_gates`,
+   `selected_graph.mandatory_confirmation_gates` and the resolved step HumanTasks
+   from the current validated assembly. If these facts are missing or invalid,
+   use the existing owner query:
    ```bash
    cafe playbook confirmation-gates <playbook-id>
    ```

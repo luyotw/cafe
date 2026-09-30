@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -29,8 +30,36 @@ _REQUIRED_FIELDS = {
 
 def request_schema() -> dict[str, Any]:
     """Describe the public adapter without creating a second formatter schema."""
+    from cafe.manager.delivery import DeliveryContractV3, validate_closeout_plan_policy
+
+    contract_schema = DeliveryContractV3.model_json_schema()
+    contract_schema["properties"].pop("closeout_plan")
+    contract_schema["required"].remove("closeout_plan")
+    contract_schema.pop("$defs", None)
+    contract_template = {
+        key: 3 if key == "schema_version" else [] if field.get("type") == "array" else ""
+        for key, field in contract_schema["properties"].items()
+    }
+    closeout_examples = []
+    for argv in (["cafe", "close"], ["cafe", "close", "--archive-only"], ["cafe", "close", "--squash"]):
+        example = {"argv": argv, "valid_in_pr_mode": True}
+        try:
+            validate_closeout_plan_policy({"deliver": [], "cleanup": [{"argv": argv}]}, allow_squash=False)
+        except ValueError as exc:
+            example.update(valid_in_pr_mode=False, diagnostic=str(exc))
+        closeout_examples.append(example)
     return {
         "schema_version": 1,
+        "delivery_contract": contract_schema,
+        "input_template": {"delivery_contract": contract_template, "deliver": None, "cleanup": None},
+        "closeout_examples": closeout_examples,
+        "template_rules": {
+            "null": "Unresolved: replace with a deliberate value; never rendered as a default.",
+            "delivery_contract": "Fill all product decisions, including intentionally empty lists. closeout_plan is added by the formatter.",
+            "actions": "deliver/cleanup are literal argv arrays, not command objects or shell strings. Empty arrays require an explicit current decision.",
+            "closeout": "Examples validate syntax only, never recommend or authorize an action. cafe close must be last cleanup; archive-only is a separate terminal action, not a closeout_plan command.",
+            "preflight": "Pass full existing reports through preflight_files. Missing tokens/dates/decisions must be resolved through their owner, never synthesized.",
+        },
         "formatter_fields": sorted(_ALLOWED_FIELDS),
         "required_formatter_fields": sorted(_REQUIRED_FIELDS),
         "checkout_choice": ["worktree", "current_checkout=true"],
@@ -429,6 +458,81 @@ def discover_kickoff(
         "preferences": preferences, "catalog": catalog, "selected_candidate": selected_candidate,
         "delivery": delivery, "models": models, "diagnostics": list(catalog.get("diagnostics", [])),
     }
+
+def kickoff_guidance() -> list[dict[str, str]]:
+    """Read current owner sections once; this projection owns no policy or saved state."""
+    selections = {
+        "kickoff.md": ["## Conversation locale checklist", "## Repository content locale checklist",
+                       "## Repository-informed deliver and cleanup plan", "## Kickoff contract: first blocking gate",
+                       "### Complete runtime and catalog preflight", "### Derive confirmation gates",
+                       "### Delivery facts to confirm"],
+        "strategic_context.md": None,
+        "model_selection.md": ["# Issue Assessment And Model Selection", "## Assess before proposing models",
+                               "## Resolve phase execution requirements", "## Keep model ownership outside phase agents",
+                               "## Classify the required capability band", "## Select exact chains",
+                               "## Model and fallback preflight", "### Reuse successful preflight evidence"],
+        "project_global_skill_sync.md": ["# Runtime And Catalog Preflight", "## Route the check results",
+                                         "## Manager-managed runtime-update decision"],
+        "workflow_progress.md": None,
+    }
+    result = []
+    for filename, headings in selections.items():
+        path = Path(__file__).resolve().parent.parent / "references" / filename
+        raw = path.read_bytes()
+        text = raw.decode("utf-8")
+        lines = text.splitlines(keepends=True)
+        starts = []
+        fenced = False
+        for index, line in enumerate(lines):
+            if line.startswith(("```", "~~~")):
+                fenced = not fenced
+            if not fenced and line.startswith("#") and " " in line:
+                prefix = line.split(" ", 1)[0]
+                if set(prefix) == {"#"}:
+                    starts.append((index, line.strip()))
+        found = set()
+        for i, (start, heading) in enumerate(starts):
+            if headings is not None and heading not in headings:
+                continue
+            found.add(heading)
+            end = starts[i + 1][0] if i + 1 < len(starts) else len(lines)
+            result.append({"file": filename, "heading": heading,
+                           "sha256": hashlib.sha256(raw).hexdigest(), "text": "".join(lines[start:end])})
+        if headings is not None and set(headings) - found:
+            raise ValueError(f"kickoff guidance owner headings changed: {filename}")
+    return result
+
+
+def preparation_template(request: dict[str, Any], draft: dict[str, Any]) -> dict[str, Any]:
+    """Return an editable request; placeholders never become resolved assembly inputs."""
+    template = request_schema()["input_template"]
+    template.update(draft)
+    result = json.loads(json.dumps(request))
+    result["formatter_inputs"] = template
+    # Retain report references, not another hand-copied report or new metadata.
+    for file_key, field in (("update", "update_preflight"), ("catalog", "catalog_preflight")):
+        if file_key in request.get("preflight_files", {}) and field not in request.get("formatter_inputs", {}) and field not in request.get("current_explicit_inputs", {}):
+            result["formatter_inputs"].pop(field, None)
+    return result
+
+
+def decision_brief(request: dict[str, Any], missing: list[dict[str, str]]) -> dict[str, Any]:
+    """Point current judgments to the supplied graph/evidence, without duplicating reports."""
+    return {
+        "request_text": request.get("request_text"),
+        "graph_reference": "#/selected_graph",
+        "evidence_references": {"delivery": "#/delivery", "models": "#/models"},
+        "judgments": [
+            {"decision": "scope and strategy", "inputs": ["request_text", "selected_graph.applicability"], "owner": "references/strategic_context.md"},
+            {"decision": "phase suitability", "inputs": ["selected_graph.profiles", "models[].assessment"], "owner": "references/model_selection.md"},
+            {"decision": "exact actions and current authority", "inputs": ["delivery.stable_conventions", "delivery.current_observations", "selected_graph.capability_setup"], "owner": "references/kickoff.md#repository-informed-deliver-and-cleanup-plan"},
+            {"decision": "confirmation ownership", "inputs": ["selected_graph.confirmation_gates", "selected_graph.mandatory_confirmation_gates", "selected_graph.steps"], "owner": "references/kickoff.md#derive-confirmation-gates"},
+        ],
+        "missing_decisions_reference": "#/missing_decisions",
+        "missing_decision_count": len(missing),
+        "evidence_use": "Use sufficient valid assessments and their sources directly. Inspect raw evidence only for a specific gap, contradiction or invalidation. A hit grants no action authority or model suitability decision.",
+    }
+
 
 def assemble_kickoff(
     request: dict[str, Any], *, preference_store: Any = None,

@@ -32,9 +32,37 @@ Create a request in a temporary directory with only the facts already known:
 ```
 
 ```sh
-python scripts/prepare_kickoff.py assemble --request-file request.json --summary
-python scripts/prepare_kickoff.py schema
+python scripts/prepare_kickoff.py assemble --request-file request.json --summary --with-guidance --draft-output draft.json
 ```
+
+The first selected assembly returns a decision brief, owner-derived nested
+`input_schema`, and an editable `draft.json`. Add the verbatim request as
+`request_text`; current named choices belong in `current_explicit_inputs`.
+Read this single response before opening other kickoff references. `--with-guidance`
+projects the current normative owner sections, with file hashes, including
+strategy, model suitability, locale, action authority, gates, preflight and
+presentation. These are the original sections, not another policy owner.
+Apply them to this issue once. They replace rereading those same sections;
+load omitted execution/activation sections only when entering that operation.
+Subsequent assembly calls omit `--with-guidance`.
+
+Edit `draft.json` directly. The product skeleton is generated from
+`DeliveryContractV3`: `implementation_direction` is a string, list fields are
+arrays, and `closeout_plan` is absent because the formatter constructs it.
+Blank product values are unfinished decisions. `deliver: null` and
+`cleanup: null` are unresolved slots; replace each with deliberate literal argv
+arrays, including `[]` only when justified by the current decision. They never
+become automatic empty action plans. The public schema includes lifecycle
+examples checked by the existing closeout validator: `cafe close --archive-only`
+is not a valid closeout-plan command. No source-code inspection or trial render
+is needed to learn these shapes. `schema` remains available independently.
+
+`decision_brief` links the current judgment to the selected graph and validated
+evidence already in this response. Read hit assessment payloads, source dates,
+limits and provenance here; do not reopen raw records merely to verify the hit.
+Inspect the named source only for an actual uncovered workload, target,
+contradiction or invalidation. The brief does not decide scope, suitability or
+authority. Read current repository strategy documents as required by the owner.
 
 An incomplete assembly (exit 3) is expected at this stage. Its `formatter_draft`
 prefills request identity, explicit fields and applicable preferences, while
@@ -60,13 +88,18 @@ issue-specific gaps explicitly without repeating unchanged convention research.
 After filling the gaps, write the complete proposal once:
 
 ```sh
-python scripts/prepare_kickoff.py render --request-file request.json --output proposal.md
+python scripts/prepare_kickoff.py render --request-file draft.json --output proposal.md
 ```
 
 This returns a compact status/file receipt. Failed rendering preserves any
 existing output file and reports `validation_error` plus missing decisions
-without dumping the selected graph. Pass original preflight JSON via
-`preflight_files`; do not reconstruct a subset and lose comparison tokens. Read `proposal.md` once and present
+without dumping the selected graph. Pass the complete existing formatter-ready preflight reports via
+`preflight_files`; do not reconstruct a subset and lose comparison tokens.
+Raw check command output alone may lack the existing report metadata. Follow
+`guidance`'s Complete runtime and catalog preflight section and the preflight
+owner for those decisions; never invent `comparison_token`, `checked_at` or
+post-change evidence. Draft output retains file references instead of copying
+report payloads. Read `proposal.md` once and present
 it completely. Existing callers without `--output` still receive JSON with text
 at `render.output`; do not guess a top-level output field. Use a new issue identity
 for a new proposal; an existing identity intentionally retains its workflow locale.

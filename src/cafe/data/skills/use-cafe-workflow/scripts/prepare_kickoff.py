@@ -50,6 +50,9 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--cache-dir", type=Path, default=_default_cache_dir())
         if name in {"discover", "assemble"}:
             command.add_argument("--summary", action="store_true")
+        if name == "assemble":
+            command.add_argument("--with-guidance", action="store_true", help="Include current kickoff policy sections once, with source fingerprints.")
+            command.add_argument("--draft-output", type=Path, help="Write an editable request with owner-typed product fields and unresolved action slots.")
         if name == "render":
             command.add_argument("--output", type=Path, help="Write the complete formatter text and print a compact receipt.")
     preferences = commands.add_parser("preferences", allow_abbrev=False).add_subparsers(
@@ -136,12 +139,21 @@ def _request_command(args: argparse.Namespace) -> int:
             discovery=discovery,
         )
         if args.command == "assemble":
+            draft_request = kickoff_inputs.preparation_template(request, assembled.get("formatter_draft") or {})
+            if args.draft_output is not None:
+                if args.draft_output.resolve() == args.request_file.resolve():
+                    raise ValueError("draft output must differ from the input request")
+                args.draft_output.write_text(json.dumps(draft_request, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             if summary_mode:
                 compact = kickoff_inputs.compact_discovery_summary(
                     discovery, selected_only=True, inspect_references=inspect_references
                 )
                 compact.update({
                     "stage": "assembly_summary",
+                    "input_template": draft_request["formatter_inputs"] if assembled.get("status") != "ready" else None,
+                    "input_schema": kickoff_inputs.request_schema(),
+                    "decision_brief": kickoff_inputs.decision_brief(request, assembled.get("missing_decisions", [])),
+                    "draft_output": str(args.draft_output.resolve()) if args.draft_output is not None else None,
                     "status": assembled.get("status", "invalid"),
                     "selected_playbook": assembled.get("selected_playbook"),
                     "missing_decisions": assembled.get("missing_decisions", []),
@@ -149,6 +161,8 @@ def _request_command(args: argparse.Namespace) -> int:
                     "formatter_inputs": assembled.get("formatter_inputs"),
                     "formatter_draft": assembled.get("formatter_draft") if assembled.get("status") != "ready" else None,
                 })
+                if args.with_guidance:
+                    compact["guidance"] = kickoff_inputs.kickoff_guidance()
                 _json(compact)
                 return 0 if assembled.get("status") == "ready" else 3
             _json({"stage": "assembly", **assembled, "discovery": discovery})
