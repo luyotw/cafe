@@ -910,3 +910,52 @@ def test_capture_report_retains_first_check_for_complete_public_render(tmp_path:
     assert rendered.returncode == 0, rendered.stderr
     assert json.loads(rendered.stdout)["render"]["output"] == inputs.render_kickoff(values)["output"]
     assert not (PROJECT_ROOT / ".cafe/issues" / values["issue_name"]).exists()
+
+
+def test_delivery_evidence_reuses_explicit_repository_sources_beyond_discovery_patterns(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """U10-U11/I01/I05: referenced lifecycle/hook facts remain verifiable dependencies."""
+    cli = load_kickoff_module("prepare_kickoff")
+    project = tmp_path / "project"
+    source = project / "src/closeout.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("# closeout requires explicit target and authorization\n")
+    import subprocess
+    subprocess.run(["git", "init", "-q", str(project)], check=True)
+    unrelated = project / "src/product.py"
+    unrelated.write_text("version = 1\n")
+    evidence = {"target": "repository-delivery", "stable_conventions": ["Closeout requires explicit target and authorization."],
+                "sources": [{"path": "src/closeout.py", "fingerprint": hashlib.sha256(source.read_bytes()).hexdigest()}],
+                "observations": []}
+    data = tmp_path / "evidence.json"
+    data.write_text(json.dumps(evidence))
+    cache = tmp_path / "cache"
+    refresh = ["evidence", "refresh", "--category", "delivery", "--project-root", str(project),
+               "--cache-dir", str(cache), "--evidence-file", str(data)]
+    assert cli.main(refresh) == 0
+    capsys.readouterr()
+    request = tmp_path / "request.json"
+    request.write_text(json.dumps({"schema_version": 1, "project_root": str(project), "issue_name": "new-issue"}))
+    discover = ["discover", "--summary", "--request-file", str(request),
+                "--config-dir", str(tmp_path / "config"), "--cache-dir", str(cache)]
+    def delivery():
+        cli.main(discover)
+        return json.loads(capsys.readouterr().out)["delivery"]
+    assert delivery()["status"] == "hit"
+    unrelated.write_text("version = 2\n")
+    assert delivery()["stable_conventions"] == evidence["stable_conventions"]
+    source.write_text("# changed closeout semantics\n")
+    assert delivery()["status"] == "miss"
+    assert cli.main(refresh) != 0  # stale fingerprint cannot refresh the record
+    capsys.readouterr()
+    # An existing inventory entry pointing outside the repo is not a valid source.
+    outside = tmp_path / "outside.py"
+    outside.write_text("outside evidence\n")
+    source.unlink()
+    source.symlink_to(outside)
+    evidence["sources"][0]["fingerprint"] = hashlib.sha256(outside.read_bytes()).hexdigest()
+    data.write_text(json.dumps(evidence))
+    assert cli.main(refresh) != 0
+    capsys.readouterr()
+    assert delivery()["status"] == "miss"

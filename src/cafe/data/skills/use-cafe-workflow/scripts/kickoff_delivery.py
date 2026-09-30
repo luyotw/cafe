@@ -6,6 +6,7 @@ import hashlib
 import os
 import subprocess
 from datetime import datetime, timedelta, timezone
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -57,18 +58,22 @@ def _is_source(path: str) -> bool:
 
 def _hash_file(root: Path, relative: str) -> str | None:
     try:
-        return hashlib.sha256((root / relative).read_bytes()).hexdigest()
-    except OSError:
+        path = root / relative
+        if Path(relative).is_absolute() or not path.resolve().is_relative_to(root.resolve()):
+            return None
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except (OSError, ValueError, RuntimeError):
         return None
 
 
-def discover_delivery_manifest(project_root: Path) -> dict[str, Any]:
+def discover_delivery_manifest(project_root: Path, *, referenced_paths: Iterable[str] = ()) -> dict[str, Any]:
     root = Path(project_root).expanduser().resolve()
     inventory = _inventory(root)
+    referenced = set(referenced_paths)
     sources = [
         {"path": path, "fingerprint": digest}
         for path in inventory
-        if _is_source(path) and (digest := _hash_file(root, path)) is not None
+        if (_is_source(path) or path in referenced) and (digest := _hash_file(root, path)) is not None
     ]
     return {
         "repository": repository_identity(root),
@@ -95,7 +100,9 @@ def assess_delivery(
     contradictions: list[str] | None = None,
 ) -> dict[str, Any]:
     root = Path(project_root).expanduser().resolve()
-    manifest = discover_delivery_manifest(root)
+    references = [source["path"] for source in record.get("sources", [])
+                  if isinstance(source, dict) and isinstance(source.get("path"), str)]
+    manifest = discover_delivery_manifest(root, referenced_paths=references)
     diagnostics: list[str] = []
     discovery_gap = False
     if record.get("repository") != manifest["repository"]:
@@ -179,7 +186,9 @@ def assess_delivery(
 def refresh_delivery(record: dict[str, Any], *, evidence: Any, project_root: Path, now: datetime) -> dict[str, Any]:
     if not isinstance(evidence, dict):
         return {"record": record, "refreshed": False, "diagnostic": "refresh_evidence_missing"}
-    manifest = discover_delivery_manifest(project_root)
+    references = [source["path"] for source in evidence.get("sources", [])
+                  if isinstance(source, dict) and isinstance(source.get("path"), str)] if isinstance(evidence.get("sources"), list) else []
+    manifest = discover_delivery_manifest(project_root, referenced_paths=references)
     conventions = evidence.get("stable_conventions")
     sources = evidence.get("sources")
     target = evidence.get("target")

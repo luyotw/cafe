@@ -335,3 +335,11 @@ under the existing formatter contract; do not invent text to replace it. The
 current Manager `decision` must still be supplied. The formatter owns validation; the helper does
 not execute or change preflight checks. No manual report reconstruction or
 formatter implementation lookup is needed.
+
+
+Explicit delivery source references may include repository lifecycle or hook files
+outside the automatic discovery patterns. They must be in the current repository
+inventory, remain inside that repository after path resolution, and match the
+supplied fingerprint. Refresh and assessment track those explicit dependencies;
+editing one invalidates the record while editing an unrelated implementation file
+does not. This adds no action permission or issue-specific decision to stable facts.
