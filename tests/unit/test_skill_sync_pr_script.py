@@ -3,6 +3,8 @@ import subprocess
 from pathlib import Path
 from unittest.mock import Mock
 
+import pytest
+
 from cafe.utils.github import post_pr_todo_list
 
 
@@ -76,7 +78,9 @@ exit 1
     (bin_dir / "gh").chmod(0o755)
 
 
-def _run_sync_pr(project_root: Path, output_file: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+def _run_sync_pr(
+    project_root: Path, output_file: Path, env: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
     script = project_root / "src/cafe/data/skills/cafe-pr/scripts/sync_pr.sh"
     return subprocess.run(
         ["/bin/bash", str(script), "--output", str(output_file), "--base", "main"],
@@ -113,6 +117,73 @@ def test_post_pr_todo_list_skips_comment_when_items_unchecked(tmp_path: Path) ->
 
     github_ops.add_pr_comment.assert_not_called()
 
+
+@pytest.mark.parametrize(
+    ("body", "expect_comment"),
+    [
+        ("## Todo List\n\nNo actionable work.\n", False),
+        ("## Test Plan\n- [x] passed\n\n## Todo List\n\nNo actionable work.\n", False),
+        ("## Todo List\n\nNo actionable work.\n\n## Test Plan\n- [x] passed\n", False),
+        ("## Test Plan\n- [x] passed\n", False),
+        ("## Todo List\n- [x] done\n- [ ] pending\n", False),
+        ("## Todo List\n- [x] done\n", True),
+    ],
+)
+def test_sync_pr_posts_only_nonempty_completed_todo(
+    tmp_path: Path, body: str, expect_comment: bool
+) -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    pr_iter = issue_dir / "pr" / "iteration_007"
+    pr_iter.mkdir(parents=True)
+    (pr_iter / "user_input.md").write_text("review comments", encoding="utf-8")
+    output_file = pr_iter / "output.md"
+    output_file.write_text("# PR title\n\n" + body, encoding="utf-8")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_file = tmp_path / "gh.log"
+    _write_fake_git(bin_dir)
+    _write_fake_gh(bin_dir, log_file)
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+
+    result = _run_sync_pr(project_root, output_file, env)
+
+    assert result.returncode == 0, result.stderr
+    calls = log_file.read_text(encoding="utf-8")
+    assert "edit:pr edit" in calls
+    assert ("comment:pr comment" in calls) is expect_comment
+
+
+def test_sync_pr_does_not_repost_older_todo_after_latest_empty_batch(tmp_path: Path) -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    issue_dir = tmp_path / ".cafe" / "issues" / "demo"
+    for number, body in (
+        (6, "## Todo List\n- [x] previously done\n"),
+        (7, "## Todo List\n\nNo actionable work.\n"),
+    ):
+        pr_iter = issue_dir / "pr" / f"iteration_{number:03d}"
+        pr_iter.mkdir(parents=True)
+        (pr_iter / "user_input.md").write_text("review comments", encoding="utf-8")
+        (pr_iter / "output.md").write_text(
+            "# PR title\n\n" + body, encoding="utf-8"
+        )
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log_file = tmp_path / "gh.log"
+    _write_fake_git(bin_dir)
+    _write_fake_gh(bin_dir, log_file)
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+
+    result = _run_sync_pr(project_root, issue_dir / "pr" / "iteration_007" / "output.md", env)
+
+    assert result.returncode == 0, result.stderr
+    assert "comment:pr comment" not in log_file.read_text(encoding="utf-8")
+
+
 def test_builtin_playbooks_publish_pr_through_sync_hook() -> None:
     project_root = Path(__file__).resolve().parents[2]
     for rel_path in [
@@ -127,7 +198,12 @@ def test_builtin_playbooks_publish_pr_through_sync_hook() -> None:
         "src/cafe/data/playbooks/hotfix.yaml",
     ]:
         content = (project_root / rel_path).read_text(encoding="utf-8")
-        assert "publish_output: [GitHubPRCreator, LocalReviewContextProvider, PRLinkOpener]" in content
+        assert (
+            "publish_output: [GitHubPRCreator, LocalReviewContextProvider, PRLinkOpener]"
+            in content
+        )
+
+
 def test_sync_pr_rejects_uncommitted_changes(tmp_path: Path) -> None:
     project_root = Path(__file__).resolve().parents[2]
     issue_dir = tmp_path / ".cafe" / "issues" / "demo"

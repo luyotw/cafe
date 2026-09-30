@@ -30,6 +30,7 @@ from cafe.core.blackboard import (
     HandoffContract,
     HandoffIntent,
     HandoffOwner,
+    OutcomeOnlyHandoff,
 )
 from cafe.core.capabilities import (
     CAPABILITY_PR_PUBLISH_ID,
@@ -1167,13 +1168,22 @@ class BlackboardWorkflowRuntime:
         contract = self.blackboard.handoff_contract
         if contract is None:
             raise RuntimeError("agent interruption did not create a handoff contract")
+        prompt = policy.prompt
+        if reason == "agent_artifact_format_exhausted":
+            rejection = next((
+                event.data.get("detail", "") for event in reversed(self.blackboard.events)
+                if event.event_type == "step_interrupted"
+                and event.data.get("step") == current_step
+                and event.data.get("reason") == reason
+            ), "")
+            prompt = f"{prompt}\n\n{rejection}"
         materialization = records.materialize_with_status(
             workflow_id=self.blackboard.workflow_id,
             step=current_step,
             iteration=iteration,
             trigger=AGENT_EXECUTION_INTERRUPTED_TRIGGER,
             policy_id=policy.id,
-            prompt=policy.prompt,
+            prompt=prompt,
             expected_result=policy.model_dump(mode="json"),
             continuations=binding.outcomes,
             assignee_type="user",
@@ -1610,6 +1620,43 @@ class BlackboardWorkflowRuntime:
             or str(explicit_status_code or "")
             or f"BATON_{contract.intent.value.upper()}"
         )
+
+    def _validate_producer_handoff(self, *, current_step: str, path: Path) -> None:
+        """Check a correction's authored handoff without publishing or deciding it.
+
+        Final normalization, confirmation and capability gates remain at the
+        runtime boundary. This check only prevents replaying a phase to repair
+        a rejected handoff after its report has been corrected.
+        """
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError) as exc:
+            raise BatonRejected(
+                field="payload", invalid_value=str(exc), valid_values=["JSON handoff object"]
+            ) from exc
+        if not isinstance(payload, dict):
+            raise BatonRejected(
+                field="payload", invalid_value=type(payload).__name__, valid_values=["JSON object"]
+            )
+        if "to_owner" not in payload and "to_step" not in payload:
+            outcome = OutcomeOnlyHandoff.from_dict(payload)
+            target = self._mapped_target_for_intent(current_step=current_step, intent=outcome.intent)
+            if target not in {*self.steps, "user", "done", "_done"}:
+                raise BatonRejected(
+                    field="intent", invalid_value=outcome.intent.value,
+                    valid_values=list(self.steps[current_step].get("on", {})),
+                )
+            return
+        contract = HandoffContract.from_dict_with_current_step(payload, current_step=current_step)
+        contract.validate(allowed_steps=list(self.steps))
+        if contract.from_step != current_step:
+            raise BatonRejected(field="from_step", invalid_value=contract.from_step,
+                                valid_values=[current_step])
+        valid_intents = effective_step_handoff_intents(self.steps[current_step])
+        if contract.intent.value not in valid_intents:
+            raise BatonRejected(field="intent", invalid_value=contract.intent.value,
+                                valid_values=valid_intents)
+        self._validate_mapped_handoff_target(current_step=current_step, contract=contract)
 
     def _load_step_handoff_contract(self, *, current_step: str) -> Optional[HandoffContract]:
         contract = self._load_agent_written_handoff_contract(
@@ -2499,6 +2546,9 @@ class BlackboardWorkflowRuntime:
             execute_kwargs = {
                 "extra_prompt": extra_prompt,
                 "same_invocation_retry": same_invocation_retry,
+                "validate_producer_handoff": lambda path: self._validate_producer_handoff(
+                    current_step=current_step, path=path
+                ),
             }
             try:
                 execute_parameters = inspect.signature(self.executor).parameters
@@ -2541,9 +2591,13 @@ class BlackboardWorkflowRuntime:
             from cafe.agents.executor import AgentExecutionError
             from cafe.core.types import CriticalPhaseError
 
+            from cafe.core.artifact_validation import ArtifactCorrectionExhausted
+
             reason = "agent_error"
             detail = str(exc)
-            if isinstance(exc, (AgentExecutionError, CriticalPhaseError)) and getattr(
+            if isinstance(exc, ArtifactCorrectionExhausted):
+                reason = "agent_artifact_format_exhausted"
+            elif isinstance(exc, (AgentExecutionError, CriticalPhaseError)) and getattr(
                 exc, "error_type", None
             ):
                 reason = f"agent_{exc.error_type}"
@@ -3336,6 +3390,17 @@ class BlackboardWorkflowRuntime:
             return int(iteration_dir.name.removeprefix("iteration_"))
         except ValueError:
             return 1
+
+    def _preserve_artifact_correction_iteration(self, current_step: str) -> None:
+        """A rejected baton must not grant a repaired report a new iteration budget."""
+        iteration_dir = self._latest_iteration_dir(current_step)
+        if iteration_dir is None:
+            return
+        context_file = iteration_dir / "iteration.json"
+        if context_file.is_file():
+            context = json.loads(context_file.read_text(encoding="utf-8"))
+            if context.get("artifact_correction"):
+                self._mark_latest_iteration_completion_untrusted(current_step)
 
     def _mark_latest_iteration_completion_untrusted(self, current_step: str) -> None:
         """Keep a clean provider exit retryable when workflow completion was unusable."""
@@ -4573,6 +4638,7 @@ class BlackboardWorkflowRuntime:
                         return checklist_rejection
                     break
                 except BatonRejected as br:
+                    self._preserve_artifact_correction_iteration(current_step)
                     retry_num = _baton_attempt + 1
                     self.blackboard_store.record_event(
                         self.blackboard,
@@ -4968,6 +5034,7 @@ class BlackboardWorkflowRuntime:
                             continue
                     break
                 except BatonRejected as br:
+                    self._preserve_artifact_correction_iteration(current_step)
                     retry_num = _baton_attempt + 1
                     self.blackboard_store.record_event(
                         self.blackboard,

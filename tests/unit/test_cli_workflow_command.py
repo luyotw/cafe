@@ -2831,6 +2831,77 @@ def test_workflow_command_does_not_treat_generic_user_input_as_alignment_approva
     assert reloaded.current_step == "user"
 
 
+def test_workflow_command_resumes_non_task_clarification_with_user_input(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-non-task-handoff"
+    issue_dir.mkdir(parents=True)
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("user", playbook_id="non-task")
+    store.set_current_step(blackboard, "user")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="closeout",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.NEED_CLARIFICATION,
+        status_code="need_clarification",
+        source="test",
+    )
+    playbook_data = {
+        "playbook": {"id": "non-task"},
+        "entry_point": "closeout",
+        "steps": {
+            "closeout": {
+                "role": "developer",
+                "on": {"await_agent": "done"},
+            }
+        },
+    }
+
+    class FakeExecutor:
+        def execute_step(
+            self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
+        ) -> StepExecutionResult:
+            return _result(status_code="await_agent", step_name=step_name, step_def=step_def)
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch(
+            "cafe.ui.commands.workflow.PlaybookLoader.load", return_value=playbook_data
+        ),
+        patch(
+            "cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()
+        ),
+        patch("cafe.ui.commands.workflow.apply_human_task_payload") as task_payload,
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-non-task-handoff"
+        mock_git_cls.return_value = git
+        result = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--issue",
+                "issue-non-task-handoff",
+                "--playbook",
+                "standard",
+                "--execute",
+                "--single-step",
+                "--user-input",
+                "1",
+            ],
+        )
+
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    assert "Resuming closeout with --user-input" in result.stdout
+    task_payload.assert_not_called()
+    assert (issue_dir / "closeout" / "iteration_001" / "user_input.md").read_text(
+        encoding="utf-8"
+    ) == "1"
+
+
 def test_workflow_command_resume_confirm_output_keeps_await_agent_intent(
     tmp_path: Path, monkeypatch
 ) -> None:
