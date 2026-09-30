@@ -143,13 +143,14 @@ operation replaces it.
 
 ## Repository-informed deliver and cleanup plan
 
-At the beginning of every new kickoff, inspect the repository context needed to
-find its actual delivery path: relevant documentation and runbooks, CI/CD
-configuration, scripts and make targets, repository conventions, and recent
-delivery evidence when it is available. This is Manager reasoning, not a
-provider detector or a fixed shipping checklist. Do not enumerate CI/CD vendors,
-match trigger keywords, or silently choose a generic merge/deploy/cleanup
-sequence.
+At the beginning of every new kickoff, inspect the validated delivery summary
+from assembly: source-backed conventions, routes, discovery coverage, freshness
+and gaps. Sufficient valid facts satisfy inspection of the unchanged documentation,
+CI/CD configuration and scripts they cover; apply them to the current endpoint.
+Open original sources only for uncovered facts, invalidation or contradictions,
+and verify current action targets separately. A hit neither chooses the endpoint
+nor grants authority. This remains Manager reasoning, not a provider detector:
+do not enumerate vendors or silently choose a generic merge/deploy/cleanup route.
 
 Discover the intended end state beyond merely opening a PR. Propose the
 repository-appropriate delivery and cleanup actions for user approval; an action

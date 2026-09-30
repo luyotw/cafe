@@ -244,3 +244,253 @@ Raw directories: `/tmp/issue573-kickoff-benchmark/codex-formal/B-decision-fixed-
 - warm-fixed proposal: 11,265 bytes / SHA-256 `1f2c0e6b3a2f7c77b747e68c454feb5bcf76a5e8a474e2058eb995e239cd2c3a`.
 
 PLAN-001 and PLAN-010 historical fidelity/red/order gaps remain open and cannot be repaired retroactively. PLAN-014 has new favorable single-pair evidence but remains incomplete: accepted three-per-condition Case A/B and changed-input protocol, variation, original input fidelity gaps and complete repeated-inspection elimination remain unmet. PLAN-015/overall acceptance also remains open. These historical gates never prevented the authorized technical corrections above; they and the remaining measurement conditions prevent a successful Develop handoff. No accepted criterion, Plan, spec, mandatory PR gate or closeout command is waived or changed.
+
+
+## Original-condition caller/store corrections (iteration 013)
+
+The user authorized continued bounded corrections and necessary original-condition
+observations until verifiable progress, with a new verified defect/fix or concrete
+information hypothesis before each invocation. The historical red/order exception
+is accepted; the iteration 011 acceptance amendment is still unapproved. No
+accepted specification, Plan, Manager contract, formatter internal, runtime,
+preflight producer/validator, or model-probe implementation was changed.
+
+### Fixed measurement definition
+
+Original baseline is retained: 238.081 / 350.333 / 241.438 seconds; median
+**241.438 seconds**, source `6ce6bddade03e6ee31a60f437accd4d557467c50`.
+Original shell command counts are 16 / 19 / 18 and captured output bytes
+276609 / 336270 / 314693 (medians 18 and 314693). Every observation below reuses
+all three baselines' identical 1757-byte prompt, SHA-256
+`dc1516efca94b75887b2ffccf30c6c1bc3396585fcf908e7d6f91c4454f01e92`.
+The embedded request is 180 bytes / SHA
+`960e3b8ed55a5b7de5c8455f836164b946c4c2285a994d126b56dacd246704be`.
+Its original PR request followed by a fixed local-commit answer is preserved.
+The proposal endpoint is local commit / pr.auto_create=false; proposal-only
+forbids executing case actions. CLI 0.156.1, gpt-6-astra, medium, sandbox disabled,
+ephemeral session, ignore-user-config and original argument order are unchanged.
+Neither the later 367-second PR baseline nor a fastest warm is the denominator.
+
+Each source revision is a separate diagnostic observation, not a repetition or a
+new median. There is no automatic retry or additional model/provider probe. All
+adverse timings, tool failures, original 21 observations and later supplements
+remain preserved. Checks below are the existing required read-only preparation
+checks, not extra model probes. Actual #573 Develop remains Astra; the fixed
+synthetic proposal phase chains retain their original Luna develop/pr answers.
+
+### Observations, including every unsuccessful correction
+
+| Run suffix | Source | Complete elapsed (s) | Delta vs 241.438 | Shell events | Captured output bytes | Shell receipt interval union (s) | Warm store build/check (s) |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| stores-1 | `eac5ef3e2ef4` | 289.147 | +47.709 s (+19.76%) | 19 | 305391 | 11.193 | 5.664 |
+| actions-1 | `99b155ac5806` | 256.137 | +14.699 s (+6.09%) | 20 | 355287 | 8.022 | 5.584 |
+| overview-1 | `7fd8fb3f2475` | 297.136 | +55.698 s (+23.07%) | 21 | 316200 | 6.804 | 5.984 |
+| fields-1 | `2de684148784` | 338.831 | +97.393 s (+40.34%) | 22 | 300255 | 9.404 | 6.261 |
+| reports-1 | `04331ff97fc5` | 247.066 | +5.628 s (+2.33%) | 19 | 294747 | 10.568 | 5.663 |
+| capture-1 | `8887c70b5082` | 280.198 | +38.760 s (+16.05%) | 15 | 286135 | 8.374 | 5.864 |
+| null-1 | `dc7f3446589e` | 298.522 | +57.084 s (+23.64%) | 16 | 335077 | 8.346 | 5.678 |
+| dependencies-1 | `dc422c0e140b` | 257.470 | +16.032 s (+6.64%) | 16 | 291189 | 7.032 | 5.789 |
+| race-1 | `4734c7c63b5a` | 302.110 | +60.672 s (+25.13%) | 22 | 418441 | 7.264 | 5.537 |
+
+The previous iteration 012 observation remains 279.371 seconds / 19 commands /
+376096 bytes: its Manager overwrote inherited XDG locations and missed the
+prepared stores. It is not relabeled as a warm hit.
+
+### Concrete correction chain and trace evidence
+
+1. `eac5ef3e2ef43161e00b83438f1e0856653242c8`: public store locator and pinned
+   continuation argv retain effective XDG/config/cache and repo identity while
+   keeping output directories separate. Explicit isolation overrides are honored.
+   Actual stores-1 item_5/6 uses the prepared stores and useful delivery/model
+   assessments. It exposes description shape/count errors in items 17/18.
+2. `99b155ac5806ff632ca1abb2ce36269d72815ce9`: public action shapes and existing
+   formatter-owner assembly validation remove those description repairs.
+   actions-1 renders once at item_20; remaining candidate/source reading stays visible.
+3. `7fd8fb3f247581ce7b7ccd6a2feafed381fc9c65`: selected summaries retain a compact
+   comparison overview for every effective candidate, with eligibility, roles,
+   provenance and inspectability. The public journey selects an alternative graph
+   from that overview, reuses the index, and renders equivalent complete output.
+   overview-1 removes candidate YAML loops but still inspects formatter fields.
+4. `2de68414878492b1e9e7d68a9f53015cb626fb4e`: all public adapter field types and
+   real parser choices are projected from existing flag maps/owner declarations.
+   fields-1 still manually reconstructs preflight reports and repeats checks.
+5. `04331ff97fc56f8602a887b1e106941d5cf0cecc`: full raw report files plus actual
+   current metadata map through the input adapter without source-field loss,
+   fabricated tokens/timestamps, or preflight execution changes. reports-1 item_20
+   uses the mapping, but reruns earlier checks merely to save their outputs.
+6. `8887c70b50822b00696937b4cd7996f544c3c35c`: capture-report receives existing
+   check JSON stdin, preserves original bytes and caller-supplied actual time,
+   and references it in the editable draft while leaving decisions unresolved.
+   capture-1 item_13 runs each check once and captures both; its item_15 reveals
+   an added adapter null restriction, repaired in item_16. This failure is retained.
+7. `dc7f3446589eb315ebac15fb79a5bf580f5f93ec`: restores the unchanged formatter's
+   acceptance of explicit absent post-change evidence; no invented explanatory
+   fact is required. null-1 removes that repair but still reads lifecycle/PR sources.
+8. `dc422c0e140bccef563f2c252d2d525472c62c1b`: explicitly referenced delivery
+   source dependencies outside heuristic prefixes can now be reused when present
+   in the repository inventory, contained in the repository after resolution,
+   and fingerprint-matched. Related edits invalidate; unrelated implementation
+   edits preserve reuse; stale refresh and outside-repository symlinks fail.
+   This permits a normally refreshed warm record to contain actual lifecycle/hook
+   evidence rather than only three general PR conventions.
+
+Every correction has a meaningful public behavior red before green. Current logs
+are `/tmp/issue573-013-{stores,actions,overview,fields,reports,capture,null,dependencies}-*.txt`.
+Targeted checks cover U07-U11/U14-U16 and I01/I03-I06 as appropriate; they exercise
+normal CLI journeys, real formatter output equality, explicit isolation, source
+invalidation, incomplete decision refusal, and no activation. Normal commit hooks
+passed 328, 333, 333, 334, 335, 336, 336 and 338 tests, respectively. The actions
+selection's partial-argv compatibility failure was corrected before its commit;
+it and the capture null regression remain recorded. Later red/green does not
+rewrite the historical PLAN-001/010 order or missing-red evidence.
+
+### Evidence state and comparability limits
+
+All runs use private per-run source/config/cache roots and the normal evidence
+refresh interfaces. Actual helper outputs, not just prelaunch warming, identify
+the effective paths, repository key, delivery hit and both exact-model assessment
+payloads/provenance. Model evidence files and their original dates are unchanged;
+no availability probe, refreshed date, dynamic observation, case decision or full
+proposal was injected. Earlier runs use three general PR conventions. The dependencies and race
+runs instead have nine documented general facts backed by eight source
+files, including lifecycle.py, cafe-pr/SKILL.md, completion_and_authority.md,
+.githooks/pre-commit and engineering-guidelines.md. This evidence-content treatment
+is explicit; it is not claimed to be byte-identical to earlier warm fixtures.
+Each actual source fingerprint is recorded and verified in the run's evidence.
+
+The original runner did not save ambient XDG values or Python resolution; these
+cannot be reconstructed exactly. Current runs explicitly isolate XDG and select
+their source through PYTHONPATH, remove BENCH shortcut variables, and have no
+strategic overlay. Clone origin matches the original local baseline repository;
+source files are read-only. Current time, provider state and checkout paths differ.
+The latest source already contains preference functionality; current scope judgments
+therefore discuss gaps rather than the original baseline's greenfield scope.
+Identical prompts fix endpoint/models/locales, not every checkout, cleanup,
+clarification policy, scope wording or generated length. reports-1 proposes a
+current checkout with an explicit detached-HEAD limitation; others propose worktrees.
+No identical-workload or stable causal claim follows from prompt equality alone.
+
+Elapsed is the entire invocation through the final complete user-facing proposal,
+not just the formatter call or last event receipt. reports-1's last event at
+246.523 seconds is distinct from its full 247.066 seconds; the interim report was
+corrected. Local warm store build/check time is separately listed above. Source
+inspection, tests, commits and phase preparation are outside Manager elapsed and
+are not all represented by the roughly six-second store setup figure.
+
+Shell events are observable completed commands, not hidden provider round trips.
+UTF-8 aggregated shell output bytes are a reproducible reading-volume proxy, not
+unique bytes, attention, or exact post-truncation context. Command receipt intervals
+are unioned, not summed across parallel commands. Residual elapsed combines model
+generation/reasoning, orchestration, transport and provider waiting; it is not
+pure reasoning. Helper-containing shell envelopes do not isolate pure helper CPU
+time. No human clarification wait occurs before complete confirmation. No new
+cold/changed-input matrix or variance estimate is supplied by these distinct
+revisions, and their results must not be pooled as repeated measurements.
+
+Raw run directories are `/tmp/issue573-kickoff-benchmark/codex-formal/B-original-conditions-<suffix>-1/`.
+Each preserves prompt/request, setup/source/evidence hashes, raw streaming JSONL,
+event receipt timestamps, stderr, command spans, proposal, run record, isolated
+stores and copied Manager artifacts. Actual evidence audits accompany completed
+runs. Setup/runner scripts, source fact preparation, and ledger revalidation are
+under `/tmp/issue573-kickoff-benchmark/iteration013/`.
+
+Full accepted performance/overall conditions remain open. The historical red/order
+exception does not approve the pending iteration 011 amendment. Original A/B
+cold/warm repetitions and valid fixed changed-input comparative coverage remain
+unsatisfied; precise pure-reasoning/wait attribution is unavailable from these
+traces. Repeated general guidance and some source inspection remain visible.
+PLAN-014/015 are not marked complete, and Review/QA and mandatory human confirmation
+remain required. No existing requirement is silently removed or split into another
+issue.
+
+
+### Interrupted-run reconciliation and presentation diagnosis
+
+The ninth observation, race-1, finished before the Manager stopped the worker;
+there was no unfinished benchmark at interruption. Revision
+`4734c7c63b5af364c8c3e06c62f616ff2b8b63c6` fixes parallel capture lost updates with
+the existing file lock. Its public concurrency red/green and full-render journey
+pass, and hooks pass 334 tests. Both report references survive in the actual
+race-1 draft; item_9 contains correct stores, eight delivery sources/nine facts
+and useful exact-model payloads. Nevertheless reading grows to 418441 bytes,
+22 commands and 302.110 seconds. Store hits alone did not address presentation.
+A later negative-input guard, `74a9a15071858fe5e37b445b4dfcae50f29692fb`, rejects
+an unknown delivery source with no fingerprint rather than accepting equality
+of two absent values (8 targeted tests, 339 hook tests); it has no standalone
+benchmark. Historical measurements are not relabeled as testing that guard.
+
+Reports-1 completed its final cat of the 5991-byte rendered document at
+162.353826764 seconds. Its final 8891-byte agent message arrived at
+246.493753575 seconds: 84.139926811 seconds with no shell tool activity.
+Fields-1's corresponding gap is 121.931395268 seconds. The final documents
+restructure/localize and repeat already-rendered facts, plus some useful
+limitations. These intervals include output generation, translation/rewrite,
+orchestration, transport and provider waiting; they are neither pure reasoning
+nor entirely avoidable time. Original baseline-3 also rendered first (6666 bytes)
+then produced a final message (10790 bytes), and lacks receipt timestamps.
+Thus the newer path is not proved to have introduced a second generation stage;
+unnecessary duplication within that existing stage is the observable concern.
+
+The resumed public CLI regression reproduces a concrete projection defect:
+`kickoff_guidance()` omitted the complete Render the proposal owner section,
+while projecting full established-workflow progress and attached polling policy.
+Revision `015517dcf9826559d0604d578e43ce1e7ad3f1a7` includes the presentation
+section, projects kickoff-only progress rules, retains checkout/strategy/authority
+and suitability rules, and routes initial reading through that projection.
+The canonical presentation owner now explicitly retains already-localized
+rendered blocks verbatim, translates only remaining presentation text and avoids
+a second introduction/rationale/recap. Literal commands, policy semantics,
+complete output, locale and the one confirmation/diagram remain mandatory.
+No formatter internals, runtime, preflight or new helper interface changed.
+
+The meaningful public missing-section regression fails before this correction;
+four related guidance/draft/render journeys and 91 kickoff/preflight regressions
+pass afterwards, with 339 normal-hook tests. The journey consumes disjoint
+owner ranges, supplies actual decision inputs and produces exactly the unchanged
+formatter's full output without activation. Projected guidance is 61485 bytes,
+versus 64893 before. This is local diagnostic evidence, not proof that a real
+Manager obeys the reading/presentation route or that model elapsed improves.
+Logs: `/tmp/issue573-kickoff-benchmark/iteration013/presentation-{red,green,guidance-tests,commit}.txt`.
+
+
+### Presentation-policy observation (retained, no improvement)
+
+`B-original-conditions-presentation-1`, source `015517dcf9826559d0604d578e43ce1e7ad3f1a7`:
+**309.257 s**, **+67.819 s
+(+28.090%)** versus the original 241.438 s median;
+20 completed shell commands, 347823 captured UTF-8 bytes, 7.544 s receipt union.
+Warm state build/check: 5.782 s, separate from the full Manager interval.
+Same 1757-byte original prompt/hash and CLI/model/effort/sandbox/endpoint settings.
+The actual item_6 uses the prepared stores and useful delivery/model assessments.
+One successful render occurs in item_21, full output read in item_22.
+Local commit, pr.auto_create=false, full phase chains, user/mandatory gates,
+limits, exact argv and confirmation boundary remain visible; no case action ran.
+
+The formatter output is 10310 bytes, final proposal 10860 bytes. Last tool at
+207.515305465 s, final message at 308.769984963 s:
+101.254679498 s without tool activity. Source-to-final reading
+shows rewritten product bullets, some English headings and added raw argv beside
+the shell command. The document is not a verbatim same-language relay. No claim
+that the revised guidance eliminated rewriting or reduced end-to-end time is made.
+The public local regression established available policy and full render, not
+model compliance. The actual trace remains the decisive negative evidence.
+
+Item_7 reads the full 61485-byte guidance, then 11/12/13 reread overlapping ranges.
+Item_8 reads CONTRIBUTING and strategy docs, 10 rereads CONTRIBUTING, 18 rereads
+positioning/roadmap. Item_8 also searches nonexistent src/cafe/cli.py (exit 2).
+Items 15/16 capture each required check once; no capture race/null repair recurs.
+Item_20 reads phase/Codex configuration to address requested reasoning settings.
+Original prompt explicitly asks for model/reasoning and missing evidence; these
+cannot simply be removed to shorten the workload. All raw records, copied Manager
+artifacts and actual cache/endpoint audit are retained in that run directory.
+
+A further owner-policy conflict is visible: the summary permits valid evidence
+reuse, but the delivery owner still directs raw repository inspection at every
+kickoff and the model owner independently directs reading the same strategy,
+implementation and tests. The bounded documentation correction makes validated
+facts satisfy inspection only for covered unchanged conventions, reuses already
+gathered observations for model judgment, and retains current mandate/strategy,
+missing-fact research and current target/authorization checks. Existing public
+store/summary/complete-render journeys pass (3); this does not prove actual agent
+reading behavior. The next observation tests this explicit information hypothesis,
+not a retry of the same source or another helper interface.

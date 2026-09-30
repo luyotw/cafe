@@ -16,8 +16,12 @@ Manager's responsibility.
 
 ## Assess before proposing models
 
-Read the issue, relevant strategic documents, nearby implementation, existing
-tests, dependencies, and linked issues. Assess internally:
+Read the issue and apply the repository evidence already gathered for this
+preparation: relevant strategy, nearby implementation, tests, dependencies and
+linked issues. Read additional sources only for an uncovered assessment question;
+the same unchanged document need not be read again for model selection. Use the
+assembly's valid exact-model assessments and selected profiles for their covered
+facts, while assessing current issue applicability internally:
 
 - `issue_nature`: the dominant kind of work, such as documentation/config,
   localized defect, feature/integration, refactor, migration, or security/trust
