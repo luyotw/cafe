@@ -115,4 +115,8 @@ def assess_model_evidence(
         "identity": identity,
         "expires_at": None if expires_at is None else expires_at.isoformat(),
         "diagnostics": diagnostics,
+        "assessment": {
+            key: record[key]
+            for key in ("workloads", "reasoning", "capability_bands", "limitations", "sources", "assessed_at")
+        } if status == "hit" else None,
     }

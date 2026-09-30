@@ -52,6 +52,13 @@ Every phase skill should declare a provider-neutral
 - `fallback_strength`: `equivalent` or `equivalent_or_stronger`; this constrains
   a fallback when one is configured and does not require a fallback to exist.
 
+Use the validated selected graph's resolved `profiles` from the preparation
+summary first; do not reread phase SKILL bodies to extract unchanged declarations.
+Inspect the named source only if a profile is missing, invalidated or ambiguous.
+The model report's `assessment` contains workloads, reasoning, capability bands,
+limitations and dated sources on a validated hit; a miss supplies no reusable
+assessment. Assess applicability to the current issue even on a hit.
+
 Do not infer this profile from a conventional step name. Resolve the skill bound
 by the active playbook. For an iteration selector, kickoff conservatively
 aggregates all variants so every execution mode has a valid initial chain.

@@ -183,6 +183,9 @@ def test_compact_cli_reports_preserve_selected_facts_and_full_render(
         assert step["role"] == full_selected["steps"][step_name]["role"]
         assert step["on"] == full_selected["steps"][step_name]["on"]
     assert compact_discovery["delivery"]["status"] == "hit"
+    assert compact_discovery["delivery"]["sources"] == json.loads(delivery_file.read_text())["sources"]
+    assert compact_discovery["models"][0]["assessment"]["capability_bands"] == model_record["capability_bands"]
+    assert compact_discovery["models"][0]["assessment"]["limitations"] == model_record["limitations"]
     assert compact_discovery["delivery"]["manifest"]["sources"]
     assert compact_discovery["models"][0]["status"] == "hit"
     assert compact_discovery["models"][0]["provenance"]["sources"][0]["fingerprint"] == "fixture-source-v1"
@@ -416,3 +419,49 @@ def test_expired_model_research_stays_unresolved_despite_successful_probe(tmp_pa
     assert discovery["catalog"]["candidates"]
     assert discovery["models"][0]["status"] == "miss"
     assert "assessment_expired" in discovery["models"][0]["diagnostics"]
+
+
+def test_confirmed_inputs_fill_selected_journey_without_copying_full_reports(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """U14-U16/I01/I06: public caller fills only real gaps and renders an equivalent contract."""
+    cli = load_kickoff_module("prepare_kickoff")
+    values = _formatter_inputs("issue573-isolated-journey")
+    assert cli.main(["schema"]) == 0
+    schema = json.loads(capsys.readouterr().out)
+    assert set(values) <= set(schema["formatter_fields"])
+    request = {"schema_version": 1, **{key: values[key] for key in ("project_root", "issue_name", "playbook_id")}}
+    explicit = {key: value for key, value in values.items() if key not in request and key not in {"delivery_contract", "deliver", "cleanup"}}
+    request["current_explicit_inputs"] = explicit
+    path = tmp_path / "request.json"
+    common = ["--request-file", str(path), "--config-dir", str(tmp_path / "config"), "--cache-dir", str(tmp_path / "cache")]
+    path.write_text(json.dumps(request))
+    assert cli.main(["assemble", *common, "--summary"]) == 3
+    partial_text = capsys.readouterr().out
+    partial = json.loads(partial_text)
+    assert partial["formatter_draft"]["issue_name"] == values["issue_name"]
+    assert partial["formatter_draft"]["phase_chain"] == values["phase_chain"]
+    assert {item["requirement"] for item in partial["missing_decisions"]} == {
+        "formatter input: delivery_contract", "formatter input: deliver", "formatter input: cleanup"
+    }
+    assert partial["selected_graph"]["id"] == values["playbook_id"]
+    assert partial["catalog"]["candidates"] == []
+    assert partial["catalog"]["candidate_count"] > 1
+    request["formatter_inputs"] = {key: values[key] for key in ("delivery_contract", "deliver", "cleanup")}
+    path.write_text(json.dumps(request))
+    assert cli.main(["assemble", *common, "--summary"]) == 0
+    ready = json.loads(capsys.readouterr().out)
+    assert ready["formatter_inputs"] == values
+    expected = load_kickoff_module("kickoff_inputs").render_kickoff(values)
+    output = tmp_path / "proposal.md"
+    assert cli.main(["render", *common, "--output", str(output)]) == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert output.read_text() == expected["output"]
+    assert receipt["status"] == "rendered"
+    assert "assembly" not in receipt and "proposal" not in receipt
+    assert not (PROJECT_ROOT / ".cafe/issues" / values["issue_name"]).exists()
+    # Explicit activation metadata cannot enter through the prefill channel.
+    request["current_explicit_inputs"]["activate_confirmed"] = True
+    path.write_text(json.dumps(request))
+    assert cli.main(["assemble", *common, "--summary"]) != 0
+    assert json.loads(capsys.readouterr().out)["assembly_diagnostics"]

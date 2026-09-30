@@ -104,3 +104,18 @@ def test_future_dates_and_earlier_source_validity_cannot_extend_freshness() -> N
 
     assert module.assess_model_evidence(future, now=now)["status"] == "miss"
     assert module.assess_model_evidence(limited, now=now)["status"] == "miss"
+
+
+def test_reusable_assessment_contains_decision_evidence_only_while_valid() -> None:
+    """U12/U16: a hit must replace research, while a miss cannot supply stale advice."""
+    module = load_kickoff_module("kickoff_models")
+    now = datetime(2026, 9, 30, tzinfo=timezone.utc)
+    record = _assessment(now)
+    report = module.assess_model_evidence(record, now=now)
+    assert report["assessment"] == {
+        key: record[key] for key in ("workloads", "reasoning", "capability_bands", "limitations", "sources", "assessed_at")
+    }
+    for kwargs in ({"now": now + timedelta(days=7)}, {"now": now, "contradictions": ["different workload"]}):
+        stale = module.assess_model_evidence(record, **kwargs)
+        assert stale["status"] == "miss"
+        assert stale["assessment"] is None

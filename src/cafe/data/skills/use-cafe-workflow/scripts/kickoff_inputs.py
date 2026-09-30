@@ -27,6 +27,31 @@ _REQUIRED_FIELDS = {
 }
 
 
+def request_schema() -> dict[str, Any]:
+    """Describe the public adapter without creating a second formatter schema."""
+    return {
+        "schema_version": 1,
+        "formatter_fields": sorted(_ALLOWED_FIELDS),
+        "required_formatter_fields": sorted(_REQUIRED_FIELDS),
+        "checkout_choice": ["worktree", "current_checkout=true"],
+        "request_example": {
+            "schema_version": 1, "project_root": "/work/project", "issue_name": "new-issue",
+            "playbook_id": "<current selection>",
+            "current_explicit_inputs": {"effective_locale": "zh-TW", "locale_source": "explicit", "repository_content_locale": "en-US"},
+            "preflight_files": {"update": "/tmp/update.json", "catalog": "/tmp/catalog.json"},
+            "formatter_inputs": {},
+        },
+        "decision_examples": {
+            "phase_chain": ["develop=codex:<exact-model>@medium"],
+            "capability_choice": ["pr.auto_create=true"],
+            "deliver": [["<executable>", "<literal argument>"]],
+            "cleanup": [],
+        },
+        "guidance": "kickoff_inputs.md documents staged requests; kickoff.md owns the delivery contract and authority rules. Examples are placeholders, never approved decisions.",
+        "render_output": "Default JSON: render.output; --output PATH writes the complete text and returns status/output_file only.",
+    }
+
+
 def _is_string_list(value: Any) -> bool:
     return isinstance(value, list) and all(isinstance(item, str) for item in value)
 
@@ -288,6 +313,7 @@ def compact_discovery_summary(
             "diagnostics": delivery.get("diagnostics", []),
             "discovery_gap": delivery.get("discovery_gap"),
             "stable_conventions": delivery.get("stable_conventions", []),
+            "sources": delivery.get("sources", []),
             "current_observations": observations,
             "manifest": {
                 "repository": manifest.get("repository"),
@@ -428,9 +454,27 @@ def assemble_kickoff(
         selected_candidate = next((item for item in candidates if item.get("id") == selected), None)
         if selected_candidate is None or not selected_candidate.get("eligible"):
             missing.append({"owner": "manager_decision", "requirement": "resolve an eligible selected playbook"})
-    raw_inputs = request.get("formatter_inputs")
-    if isinstance(raw_inputs, dict):
-        raw_inputs = dict(raw_inputs)
+    # Prefill only current, explicit facts. Suitability and action decisions
+    # remain with the caller; no cached model or delivery fact grants authority.
+    supplied = request.get("formatter_inputs", {})
+    explicit = request.get("current_explicit_inputs", {})
+    if not isinstance(supplied, dict) or not isinstance(explicit, dict):
+        return {"status": "invalid", "selected_playbook": selected,
+                "diagnostics": ["input_fields_must_be_objects"],
+                "missing_decisions": missing, "formatter_inputs": None}
+    raw_inputs = {key: request[key] for key in ("project_root", "issue_name", "playbook_id") if key in request}
+    raw_inputs.update(explicit)
+    conflicts = sorted(key for key in supplied if key in explicit and supplied[key] != explicit[key])
+    if conflicts:
+        return {"status": "invalid", "selected_playbook": selected,
+                "diagnostics": [f"conflicting_explicit_input:{key}" for key in conflicts],
+                "missing_decisions": missing, "formatter_inputs": None}
+    raw_inputs.update(supplied)
+    for key in ("project_root", "issue_name"):
+        if key in request and raw_inputs.get(key) != request[key]:
+            return {"status": "invalid", "selected_playbook": selected,
+                    "diagnostics": [f"request_identity_conflict:{key}"],
+                    "missing_decisions": missing, "formatter_inputs": None}
     preference_report: dict[str, Any] = {}
     if preference_store is not None and isinstance(raw_inputs, dict):
         preference_mapping = {
@@ -450,6 +494,8 @@ def assemble_kickoff(
             }
             if resolved.value is not None:
                 raw_inputs[input_key] = resolved.value
+                if input_key == "effective_locale":
+                    raw_inputs.setdefault("locale_source", resolved.origin)
     preflight_files = request.get("preflight_files", {})
     if isinstance(preflight_files, dict) and isinstance(raw_inputs, dict):
         for file_key, input_key in (("update", "update_preflight"), ("catalog", "catalog_preflight")):
@@ -480,6 +526,7 @@ def assemble_kickoff(
         "diagnostics": [] if normalized is None else normalized.get("diagnostics", []),
         "missing_decisions": missing,
         "formatter_inputs": normalized["values"] if complete else None,
+        "formatter_draft": normalized.get("values") if normalized is not None else None,
     }
 
 

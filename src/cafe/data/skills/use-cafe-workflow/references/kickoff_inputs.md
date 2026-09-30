@@ -2,8 +2,12 @@
 
 `prepare_kickoff.py` gathers local preferences and evidence in two stages, then maps an explicit complete decision set into the existing kickoff formatter. It reports missing research and decisions; it does not choose a playbook, infer issue acceptance criteria, determine model suitability, or invent delivery commands.
 
-The normal new-issue Manager path is `discover` → Manager assessment and
-decision gathering → `assemble` → `render`. Use one request file and the same
+The normal new-issue Manager path is `discover` → assessment → `assemble` →
+`render` when selection is open. Start with a summary before broad source
+reading: `discover --summary` when selection is open, or `assemble --summary`
+when the user already chose a graph, even before formatter decisions are complete.
+Then assess current scope/strategy/suitability/authority, fill the reported gaps,
+and `assemble` → `render`. Use one request file and the same
 isolated user/cache directories across a cold preparation and its warm
 follow-ups. A warm session is a fresh Manager context that reads the saved
 records; it must still assess the current issue and validate source freshness.
@@ -18,6 +22,49 @@ evidence-file format and retain the same isolated cache directory. Refresh only
 evidence that the current assessment supports; incomplete research, a discovery
 gap, or an operational model probe alone is not reusable evidence. This local
 cache update does not confirm a model chain or authorize a delivery action.
+
+## Early selected-graph request
+
+Create a request in a temporary directory with only the facts already known:
+
+```json
+{"schema_version":1,"project_root":"/work/project","issue_name":"new-issue","playbook_id":"standard-qa","current_explicit_inputs":{"effective_locale":"zh-TW","locale_source":"explicit","repository_content_locale":"en-US"}}
+```
+
+```sh
+python scripts/prepare_kickoff.py assemble --request-file request.json --summary
+python scripts/prepare_kickoff.py schema
+```
+
+An incomplete assembly (exit 3) is expected at this stage. Its `formatter_draft`
+prefills request identity, explicit fields and applicable preferences, while
+`missing_decisions` names what remains. `schema` lists the accepted fields and
+examples without reading implementation code or doing discovery. Keep one
+request; put already confirmed named fields in `current_explicit_inputs`, and
+newly assessed decisions in `formatter_inputs`. Conflicting duplicates are
+rejected. Lists such as `phase_chain` contain `phase=provider:model@effort` strings;
+`capability_choice` contains `name=true|false` strings; `deliver` and `cleanup`
+contain literal argv arrays. No action, model chain or contract is synthesized.
+The existing formatter still validates the complete decision set.
+
+Selected assembly exposes the chosen graph and all invalid-candidate diagnostics,
+with counts and inspection references for the complete candidate set. Valid model
+`assessment` includes workloads, reasoning, capability bands, limitations and
+sources; delivery `sources` identifies the evidence supporting its conventions,
+separately from the discovery manifest. A delivery hit with no current observations
+does not prove remote branch, PR state or current authorization. Resolve such
+issue-specific gaps explicitly without repeating unchanged convention research.
+
+After filling the gaps, write the complete proposal once:
+
+```sh
+python scripts/prepare_kickoff.py render --request-file request.json --output proposal.md
+```
+
+This returns a compact status/file receipt. Read `proposal.md` once and present
+it completely. Existing callers without `--output` still receive JSON with text
+at `render.output`; do not guess a top-level output field. Use a new issue identity
+for a new proposal; an existing identity intentionally retains its workflow locale.
 
 ## Request file
 

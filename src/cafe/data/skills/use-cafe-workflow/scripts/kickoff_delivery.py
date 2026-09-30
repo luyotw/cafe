@@ -171,6 +171,7 @@ def assess_delivery(
         "discovery_gap": discovery_gap,
         "stable_conventions": list(record.get("stable_conventions", [])) if not blocked else [],
         "current_observations": observations,
+        "sources": list(record.get("sources", [])) if not blocked else [],
         "manifest": manifest,
     }
 

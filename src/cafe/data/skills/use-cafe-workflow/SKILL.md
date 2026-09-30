@@ -23,7 +23,7 @@ read the union once; do not preload the rest.
 | --- | --- |
 | Check or apply runtime, catalog, or bundled-helper updates | `references/project_global_skill_sync.md` |
 | Select a playbook | `references/playbook_selection.md` |
-| Prepare kickoff inputs, render, or reconfirm a kickoff | `references/kickoff.md`, `references/kickoff_inputs.md`, `references/playbook_selection.md`, `references/model_selection.md`, `references/strategic_context.md` |
+| Prepare kickoff inputs, render, or reconfirm a kickoff | Start with `references/kickoff_inputs.md` and its early summary command; then read `references/kickoff.md` for the contract and only the decision references needed for gaps |
 | Write or change confirmed phase chains | `references/model_selection.md`, then `references/phases_yaml.md` |
 | Start, resume, or supply declared input to ordinary execution | `references/project_global_skill_sync.md`, then `references/running_workflow.md` |
 | Supervise active work or classify a pause, timeout, interruption, retry, or recovery | `references/supervision_and_recovery.md`; read `references/running_workflow.md` only when its disposition permits a retry/resume, and `references/diagnosis_and_repair.md` only for incorrect or ambiguous behavior |
@@ -33,6 +33,18 @@ read the union once; do not preload the rest.
 | Consider direct closeout, verify completion, handle a Git delivery conflict, or handle follow-up work | `references/completion_and_authority.md` |
 | Render any user-visible kickoff, question, progress, error, or completion reply | `references/workflow_progress.md` |
 | Measure fresh-versus-resumed correction efficiency | `references/correction_ab_experiment.md` |
+
+For a new kickoff, obtain the local preparation summary before loading candidate
+playbooks, phase SKILL bodies, model research or delivery documentation. If a
+playbook is already explicitly chosen, start with `assemble --summary` even
+while incomplete: it supplies the selected graph, validated evidence, a draft
+and missing decisions. Otherwise use `discover --summary` for the full candidate
+set. Assess current scope, strategy, suitability and authority against that
+evidence. Read `strategic_context.md` for the current strategy judgment and
+`model_selection.md` for suitability policy once; inspect source details only
+for missing or invalidated facts. A validated selected graph supplies resolved
+profiles and gates without rereading every phase body. Reuse references already
+read in this preparation. Resume continues to use its confirmed contract.
 
 ## Operating sequence
 

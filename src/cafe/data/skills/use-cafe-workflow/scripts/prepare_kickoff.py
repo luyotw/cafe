@@ -42,6 +42,7 @@ def _default_cache_dir() -> Path:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(allow_abbrev=False)
     commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("schema", help="Show request fields and a partial starter; performs no discovery.")
     for name in ("discover", "assemble", "render"):
         command = commands.add_parser(name, allow_abbrev=False)
         command.add_argument("--request-file", type=Path, required=True)
@@ -49,6 +50,8 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--cache-dir", type=Path, default=_default_cache_dir())
         if name in {"discover", "assemble"}:
             command.add_argument("--summary", action="store_true")
+        if name == "render":
+            command.add_argument("--output", type=Path, help="Write the complete formatter text and print a compact receipt.")
     preferences = commands.add_parser("preferences", allow_abbrev=False).add_subparsers(
         dest="operation", required=True
     )
@@ -144,12 +147,17 @@ def _request_command(args: argparse.Namespace) -> int:
                     "missing_decisions": assembled.get("missing_decisions", []),
                     "assembly_diagnostics": assembled.get("diagnostics", []),
                     "formatter_inputs": assembled.get("formatter_inputs"),
+                    "formatter_draft": assembled.get("formatter_draft") if assembled.get("status") != "ready" else None,
                 })
                 _json(compact)
                 return 0 if assembled.get("status") == "ready" else 3
             _json({"stage": "assembly", **assembled, "discovery": discovery})
             return 0 if assembled.get("status") == "ready" else 3
         rendered = kickoff_inputs.render_kickoff(assembled.get("formatter_inputs"))
+        if args.output is not None and rendered.get("status") == "rendered":
+            args.output.write_text(rendered["output"], encoding="utf-8")
+            _json({"stage": "render", "status": "rendered", "output_file": str(args.output.resolve())})
+            return 0
         _json({"stage": "render", "assembly": assembled, "render": rendered})
         return 0 if rendered.get("status") == "rendered" else 3
     except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
@@ -241,6 +249,9 @@ def _evidence_command(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "schema":
+        _json(kickoff_inputs.request_schema())
+        return 0
     if args.command in {"discover", "assemble", "render"}:
         return _request_command(args)
     if args.command == "preferences":

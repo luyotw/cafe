@@ -2,8 +2,11 @@
 
 Read this reference before presenting a kickoff, preparing an issue, resuming an
 issue whose first workflow execution has not run, or answering a question about
-the workflow conversation language. Also read `kickoff_inputs.md`,
-`playbook_selection.md`, `model_selection.md`, and `strategic_context.md`.
+the workflow conversation language. Start with the early summary in
+`kickoff_inputs.md` before loading decision references. Read
+`playbook_selection.md` when selection needs assessment, `model_selection.md`
+for current suitability policy and `strategic_context.md` for strategy; reuse
+these references if already read during this preparation.
 
 ## Reuse kickoff preferences and evidence
 
@@ -75,7 +78,8 @@ only describes what the Manager does; it never states a competing rule.
 - [ ] Keep the choice issue-owned. Do not write the selected playbook to
   `.cafe/config.yaml` or `.cafe/strategic_context.yaml`; after confirmation it
   belongs only in `.cafe/issues/<issue-name>/issue.yaml`.
-- [ ] Run `cafe playbook confirmation-gates <playbook-id>` and read the
+- [ ] Use validated selected-graph confirmation gates from the preparation
+  summary, or run `cafe playbook confirmation-gates <playbook-id>` for a gap. Read the
   `Conversation locale:` line, assignable candidate section, and mandatory
   HumanTask section. That `playbook.conversation_locale` value is the third
   precedence tier, not an override of a supplied user preference.
