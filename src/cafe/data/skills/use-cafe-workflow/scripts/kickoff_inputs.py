@@ -349,6 +349,12 @@ def compact_discovery_summary(
             "unlisted_candidate_count": omitted_count,
             "selected_candidate_count": 1 if selected_summary is not None else 0,
             "candidates": listed_candidates,
+            "candidate_overview": [
+                {**{key: item.get(key) for key in (
+                    "id", "eligible", "applicability", "roles", "source", "fingerprint", "diagnostics"
+                )}, "steps": list(item["steps"])}
+                for item in candidates
+            ] if selected_only else [],
             "ineligible_candidate_diagnostics": invalid_diagnostics,
             "diagnostics": raw_catalog.get("diagnostics", []),
             "reuse": raw_catalog.get("reuse", {}),
@@ -484,6 +490,7 @@ def kickoff_guidance() -> list[dict[str, str]]:
                        "### Complete runtime and catalog preflight", "### Derive confirmation gates",
                        "### Delivery facts to confirm"],
         "strategic_context.md": None,
+        "playbook_selection.md": None,
         "model_selection.md": ["# Issue Assessment And Model Selection", "## Assess before proposing models",
                                "## Resolve phase execution requirements", "## Keep model ownership outside phase agents",
                                "## Classify the required capability band", "## Select exact chains",

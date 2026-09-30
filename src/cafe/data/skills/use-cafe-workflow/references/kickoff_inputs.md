@@ -118,7 +118,13 @@ part of the literal model identity). No action, model chain or contract is synth
 The existing formatter still validates the complete decision set.
 
 Selected assembly exposes the chosen graph and all invalid-candidate diagnostics,
-with counts and inspection references for the complete candidate set. Valid model
+plus `catalog.candidate_overview`: every effective candidate's declared applicability,
+roles, step IDs, eligibility and source fingerprint. Use this overview to inspect
+candidates even when the graph was already explicitly selected; do not reopen their
+YAML or rerun list/show merely to recover that comparison. The selected graph retains
+its complete decision facts; the inspect reference retains every other candidate's
+full details for a specific uncovered question. Current playbook-selection policy
+is included in the owner guidance projection, so its source need not be read again. Valid model
 `assessment` includes workloads, reasoning, capability bands, limitations and
 sources; delivery `sources` identifies the evidence supporting its conventions,
 separately from the discovery manifest. A delivery hit with no current observations

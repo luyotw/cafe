@@ -204,6 +204,27 @@ def test_compact_cli_reports_preserve_selected_facts_and_full_render(
     assert compact_assembly["selected_graph"]["profiles"] == full_assembly["selected_candidate"]["profiles"]
     assert compact_assembly["missing_decisions"] == full_assembly["missing_decisions"] == []
     assert compact_assembly["catalog"]["candidate_count"] == len(full_candidates)
+    overview = compact_assembly["catalog"]["candidate_overview"]
+    assert {item["id"] for item in overview} == {item["id"] for item in full_candidates}
+    for candidate in full_candidates:
+        item = next(row for row in overview if row["id"] == candidate["id"])
+        assert item["applicability"] == candidate["applicability"]
+        assert item["steps"] == list(candidate["steps"])
+        assert item["source"] == candidate["source"]
+        assert item["fingerprint"] == candidate["fingerprint"]
+    # A caller can select another effective candidate from this same report,
+    # then assemble its actual graph without a per-candidate show/source read.
+    alternative = next(item for item in overview if item["id"] == "direct-qa")
+    alternative_request = json.loads(request_file.read_text())
+    alternative_request["playbook_id"] = alternative["id"]
+    alternative_request.pop("formatter_inputs")
+    alternate_file = tmp_path / "alternative.json"
+    alternate_file.write_text(json.dumps(alternative_request))
+    assert cli.main(["assemble", "--request-file", str(alternate_file), "--summary",
+                     "--config-dir", str(config), "--cache-dir", str(cache)]) == 3
+    alternate = json.loads(capsys.readouterr().out)
+    assert set(alternate["selected_graph"]["steps"]) == set(alternative["steps"])
+    assert all(alternate["catalog"]["reuse"].values())
     assert compact_assembly["catalog"]["selected_candidate_count"] == 1
     assert compact_assembly["catalog"]["ineligible_candidate_diagnostics"] == (
         compact_discovery["catalog"]["ineligible_candidate_diagnostics"]
