@@ -314,6 +314,8 @@ contract. Configuration confirmation covers only the displayed action and
 target; it never implies authority for another external action. Follow
 `completion_and_authority.md` for ambiguous terminal wording or follow-up work.
 
+### Attached execution polling
+
 Attached polling applies to proactive `cafe status`, `cafe show`, blackboard,
 artifact, or similar liveness checks. Start the timer when a workflow process
 starts or resumes, and apply the full confirmed interval before the very first
@@ -333,6 +335,8 @@ afterward, restart the timer. Stop the timer when the command exits, the
 workflow reaches a user-owned handoff or `done`, or execution stops on an error.
 Host-required user communication may occur more often but must not trigger
 extra workflow polling.
+
+### Checkout and existing contracts
 
 Before proposing the worktree choice, detect whether the target folder is
 already a Git repository. When it is not:
@@ -528,6 +532,16 @@ self-contained initial confirmation request: present the complete output so the
 user sees every field being confirmed, including `deliver` and `cleanup`. Do not
 substitute a shorter hand-written recap.
 
+Use the rendered document as the response body, preserving its section order and
+already-localized facts and action descriptions verbatim. Translate only the
+presentation text that is not yet in the effective conversation language; do not
+rewrite already-localized scope, acceptance, constraints or explanations into a
+second version. The translation rules below still apply to every remaining label
+and fixed sentence. Put task-specific limitations in the delivery facts before
+rendering; add only an actionable warning absent from the rendered document.
+Review the document once for completeness and exact commands, then present it
+without a separate introduction, model-rationale table or closing recap.
+
 Render the descriptive delivery facts as separate subheadings with bullet
 points, not a two-column table with long cells or HTML line breaks. Keep purpose,
 scope, and implementation direction separate. Preserve literal-text escaping
@@ -579,6 +593,11 @@ applicable task-specific permissions and fixed limits into the compact contract,
 not the mandate table, preset, axes or grounds. Do not add a second
 confirmation prompt or repeat the reason for requesting confirmation after the
 formatter output. Ordinary follow-up discussion may be concise.
+
+### Formatter CLI example
+
+The consolidated helper already supplies typed inputs and invokes this owner.
+Read this direct-CLI example only when using the formatter without that helper.
 
 ```bash
 python3 <skill-dir>/scripts/format_kickoff_contract.py <playbook-id> \

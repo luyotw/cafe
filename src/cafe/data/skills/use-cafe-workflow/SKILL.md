@@ -22,16 +22,17 @@ read the union once; do not preload the rest.
 | Current decision | Read before acting |
 | --- | --- |
 | Check or apply runtime, catalog, or bundled-helper updates | `references/project_global_skill_sync.md` |
-| Select a playbook | `references/playbook_selection.md` |
+| Select a playbook for a new kickoff | Use the preparation route below; its owner guidance includes selection policy |
 | Prepare kickoff inputs, render, or reconfirm a kickoff | Start with `references/kickoff_inputs.md` and its early summary command; use `assemble --summary --guidance-output <guide.md> --draft-output <draft.json>` for the current `references/kickoff.md` and other owner sections plus editable inputs; load other owner sections only for uncovered decisions |
-| Write or change confirmed phase chains | `references/model_selection.md`, then `references/phases_yaml.md` |
+| Write or change confirmed phase chains after confirmation | `references/model_selection.md`, then `references/phases_yaml.md` |
 | Start, resume, or supply declared input to ordinary execution | `references/project_global_skill_sync.md`, then `references/running_workflow.md` |
 | Supervise active work or classify a pause, timeout, interruption, retry, or recovery | `references/supervision_and_recovery.md`; read `references/running_workflow.md` only when its disposition permits a retry/resume, and `references/diagnosis_and_repair.md` only for incorrect or ambiguous behavior |
 | Handle a HumanTask, confirmation, clarification, permission, alignment, or scheduled proactive review | `references/handoffs_and_alignment.md` and `references/strategic_context.md`; also read the proactive-review section of `references/running_workflow.md` when a configured review is due |
 | Receive an issue split proposal from any step, or start/resume linked work | `references/issue_decomposition.md`, `references/strategic_context.md`, and `references/handoffs_and_alignment.md` |
 | Diagnose or repair a playbook, phase, Manager, or runtime defect | `references/diagnosis_and_repair.md` plus the reference for the failing boundary |
 | Consider direct closeout, verify completion, handle a Git delivery conflict, or handle follow-up work | `references/completion_and_authority.md` |
-| Render any user-visible kickoff, question, progress, error, or completion reply | `references/workflow_progress.md` |
+| Present the initial kickoff | Use the rendered contract and the preparation guidance's presentation section |
+| Render any other user-visible question, progress, error, or completion reply | `references/workflow_progress.md` |
 | Measure fresh-versus-resumed correction efficiency | `references/correction_ab_experiment.md` |
 
 For a new kickoff, keep inherited preference/evidence stores separate from temporary

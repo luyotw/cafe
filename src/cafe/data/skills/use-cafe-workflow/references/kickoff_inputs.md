@@ -72,8 +72,12 @@ Read this response before opening other kickoff references. `--guidance-output`
 projects the current normative owner sections, with file hashes, including
 strategy, model suitability, locale, action authority, gates, preflight and
 presentation into a plain-text file. `guidance_index` gives disjoint line ranges
-and source hashes. Read each applicable range once; do not print the entire
-assembly JSON and then reprint its guidance. These are the original sections,
+and source hashes. Read the emitted file once, or each applicable range once;
+after reading the file, use the existing response to apply its sections rather
+than issuing new `cat`/`sed` calls for them. The file includes the complete
+render-and-translation boundary; polling, established-workflow progress and
+direct formatter CLI examples remain at their owner paths for those operations.
+These are the original sections,
 not another policy owner. `--with-guidance` remains an optional embedded JSON
 form for consumers that need it, not the normal conversational reading path.
 Apply them to this issue once. They replace rereading those same sections;
@@ -102,7 +106,11 @@ evidence already in this response. Read hit assessment payloads, source dates,
 limits and provenance here; do not reopen raw records merely to verify the hit.
 Inspect the named source only for an actual uncovered workload, target,
 contradiction or invalidation. The brief does not decide scope, suitability or
-authority. Read current repository strategy documents as required by the owner.
+authority. Read current repository strategy documents as required by the owner,
+using the union of paths needed for scope, model suitability and delivery. One
+read of an unchanged document serves all three judgments; use sufficient validated
+delivery facts for their covered conventions and open only the uncovered strategy
+sections. A new contradiction or changed source still requires inspection.
 
 An incomplete assembly (exit 3) is expected at this stage. Its `formatter_draft`
 prefills request identity, explicit fields and applicable preferences, while

@@ -677,6 +677,52 @@ def test_public_guidance_file_and_preflight_examples_avoid_report_reprinting(
     assert len(json.dumps(report).encode()) < len(guide.read_bytes())
 
 
+def test_guided_caller_can_present_complete_render_without_reopening_policy(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """U14-U16/I01/I06: the normal read supplies presentation policy and one full render."""
+    cli = load_kickoff_module("prepare_kickoff")
+    values = _formatter_inputs("issue573-presentation-journey")
+    request, draft, guide, output = [tmp_path / name for name in
+                                     ("request.json", "draft.json", "guide.md", "proposal.md")]
+    request.write_text(json.dumps({"schema_version": 1, "project_root": str(PROJECT_ROOT),
+        "issue_name": values["issue_name"], "playbook_id": values["playbook_id"]}))
+    assert cli.main(["assemble", "--request-file", str(request), "--summary",
+        "--guidance-output", str(guide), "--draft-output", str(draft),
+        "--config-dir", str(tmp_path / "config"), "--cache-dir", str(tmp_path / "cache")]) == 3
+    report = json.loads(capsys.readouterr().out)
+    sections = {(section["file"], section["heading"]) for section in report["guidance_index"]}
+    # These are public owner sections, not a copy assertion about prescribed wording.
+    assert ("kickoff.md", "### Render the proposal") in sections
+    assert ("workflow_progress.md", "## Initial kickoff presentation") in sections
+    assert ("workflow_progress.md", "## Established workflow presentation") not in sections
+    assert ("workflow_progress.md", "## Minimal calls") not in sections
+    assert ("kickoff.md", "### Formatter CLI example") not in sections
+    assert ("kickoff.md", "### Attached execution polling") not in sections
+    assert ("strategic_context.md", "## Applying authority") in sections
+    assert ("model_selection.md", "## Classify the required capability band") in sections
+    # Consume only the emitted guidance ranges once; no second owner-file read is needed.
+    lines = guide.read_text().splitlines(keepends=True)
+    visited = set()
+    for section in report["guidance_index"]:
+        span = set(range(section["start_line"] - 1, section["end_line"]))
+        assert not visited.intersection(span)
+        visited.update(span)
+    assert visited == set(range(len(lines)))
+    supplied = json.loads(draft.read_text())
+    supplied["formatter_inputs"].update(values)
+    draft.write_text(json.dumps(supplied))
+    before = set((PROJECT_ROOT / ".cafe/issues").glob(values["issue_name"] + "*"))
+    assert cli.main([*report["render_command"][2:], "--output", str(output)]) == 0
+    receipt = json.loads(capsys.readouterr().out)
+    expected = load_kickoff_module("kickoff_inputs").render_kickoff(values)
+    assert receipt["status"] == "rendered"
+    assert output.read_text() == expected["output"]
+    assert expected["proposal"]["delivery_contract"]
+    assert expected["proposal"]["phases"]
+    assert set((PROJECT_ROOT / ".cafe/issues").glob(values["issue_name"] + "*")) == before
+
+
 def test_normal_caller_keeps_evidence_stores_when_proposal_output_moves(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -528,7 +528,8 @@ def kickoff_guidance() -> list[dict[str, str]]:
         "kickoff.md": ["## Conversation locale checklist", "## Repository content locale checklist",
                        "## Repository-informed deliver and cleanup plan", "## Kickoff contract: first blocking gate",
                        "### Complete runtime and catalog preflight", "### Derive confirmation gates",
-                       "### Delivery facts to confirm"],
+                       "### Delivery facts to confirm", "### Checkout and existing contracts",
+                       "### Render the proposal"],
         "strategic_context.md": None,
         "playbook_selection.md": None,
         "model_selection.md": ["# Issue Assessment And Model Selection", "## Assess before proposing models",
@@ -537,7 +538,7 @@ def kickoff_guidance() -> list[dict[str, str]]:
                                "## Model and fallback preflight", "### Reuse successful preflight evidence"],
         "project_global_skill_sync.md": ["# Runtime And Catalog Preflight", "## Route the check results",
                                          "## Manager-managed runtime-update decision"],
-        "workflow_progress.md": None,
+        "workflow_progress.md": ["## Initial kickoff presentation"],
     }
     result = []
     for filename, headings in selections.items():
