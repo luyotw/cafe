@@ -959,3 +959,59 @@ def test_delivery_evidence_reuses_explicit_repository_sources_beyond_discovery_p
     assert cli.main(refresh) != 0
     capsys.readouterr()
     assert delivery()["status"] == "miss"
+
+
+def test_parallel_report_capture_preserves_both_original_report_references(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """U14-U16/I06: parallel producer outputs cannot lose a sibling report."""
+    from concurrent.futures import ThreadPoolExecutor
+    from contextlib import contextmanager
+    import threading
+
+    cli = load_kickoff_module("prepare_kickoff")
+    stores = load_kickoff_module("_kickoff_store")
+    draft = tmp_path / "draft.json"
+    draft.write_text(json.dumps({"schema_version": 1, "formatter_inputs": {}}))
+    first_read = threading.Event()
+    release_first = threading.Event()
+    local = threading.local()
+    read = cli._read_json
+    def staged_read(path):
+        data = read(path)
+        if local.kind == "update":
+            first_read.set()
+            assert release_first.wait(5), "second capture did not reach the coordinated boundary"
+        return data
+    @contextmanager
+    def coordinated_lock(path):
+        if local.kind == "catalog":
+            release_first.set()  # First writer may finish while the second waits for its lock.
+        with stores._lock(path):
+            yield
+    class Input:
+        def read(self):
+            return json.dumps({"producer": local.kind}) + "\n"
+    monkeypatch.setattr(cli, "_read_json", staged_read)
+    monkeypatch.setattr(cli, "_lock", coordinated_lock, raising=False)
+    monkeypatch.setattr(cli.sys, "stdin", Input())
+    monkeypatch.setattr(cli, "_json", lambda value: None)
+    def capture(kind):
+        local.kind = kind
+        try:
+            return cli.main(["capture-report", "--request-file", str(draft), "--kind", kind,
+                "--report-output", str(tmp_path / (kind + ".json")), "--checked-at", "2026-09-30T00:00:00Z"])
+        finally:
+            if kind == "catalog":
+                release_first.set()  # Reproduce the unlocked overwrite after the second writer finishes.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(capture, "update")
+        assert first_read.wait(5)
+        second = pool.submit(capture, "catalog")
+        assert first.result(timeout=10) == second.result(timeout=10) == 0
+    request = json.loads(draft.read_text())
+    assert set(request["preflight_files"]) == {"update", "catalog"}
+    assert set(request["preflight_metadata"]) == {"update", "catalog"}
+    for kind, path in request["preflight_files"].items():
+        assert json.loads(Path(path).read_text()) == {"producer": kind}
+        assert request["preflight_metadata"][kind]["decision"] is None

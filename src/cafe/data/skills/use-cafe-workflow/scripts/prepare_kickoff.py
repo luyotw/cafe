@@ -14,7 +14,7 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
-from _kickoff_store import VersionedJsonStore, repository_identity
+from _kickoff_store import VersionedJsonStore, repository_identity, _lock
 import kickoff_inputs
 import kickoff_preferences
 
@@ -238,24 +238,26 @@ def _capture_report(args: argparse.Namespace) -> int:
         raw = sys.stdin.read()
         if not isinstance(json.loads(raw), dict):
             raise ValueError("check output must be a JSON object")
-        request = _read_json(args.request_file)
-        if not isinstance(request, dict):
-            raise ValueError("request must be an object")
-        output = args.report_output.expanduser().resolve()
-        if output == args.request_file.resolve():
-            raise ValueError("report and request paths must differ")
-        for key in ("preflight_files", "preflight_metadata", "formatter_inputs", "current_explicit_inputs"):
-            if not isinstance(request.get(key, {}), dict):
-                raise ValueError(f"{key} must be an object")
-        field = args.kind + "_preflight"
-        if field in request.get("formatter_inputs", {}) or field in request.get("current_explicit_inputs", {}):
-            raise ValueError("remove the prior inline report explicitly before capturing a replacement")
-        request.setdefault("preflight_files", {})[args.kind] = str(output)
-        request.setdefault("preflight_metadata", {})[args.kind] = {
-            "checked_at": args.checked_at, "decision": None, "post_change_evidence": None,
-        }
-        output.write_text(raw, encoding="utf-8")
-        args.request_file.write_text(json.dumps(request, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        args.request_file = args.request_file.expanduser().resolve()
+        with _lock(args.request_file):
+            request = _read_json(args.request_file)
+            if not isinstance(request, dict):
+                raise ValueError("request must be an object")
+            output = args.report_output.expanduser().resolve()
+            if output == args.request_file.resolve():
+                raise ValueError("report and request paths must differ")
+            for key in ("preflight_files", "preflight_metadata", "formatter_inputs", "current_explicit_inputs"):
+                if not isinstance(request.get(key, {}), dict):
+                    raise ValueError(f"{key} must be an object")
+            field = args.kind + "_preflight"
+            if field in request.get("formatter_inputs", {}) or field in request.get("current_explicit_inputs", {}):
+                raise ValueError("remove the prior inline report explicitly before capturing a replacement")
+            request.setdefault("preflight_files", {})[args.kind] = str(output)
+            request.setdefault("preflight_metadata", {})[args.kind] = {
+                "checked_at": args.checked_at, "decision": None, "post_change_evidence": None,
+            }
+            output.write_text(raw, encoding="utf-8")
+            args.request_file.write_text(json.dumps(request, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         _json({"status": "captured", "report_file": str(output), "request_file": str(args.request_file.resolve()),
                "missing_decisions": ["decision", "post_change_evidence"],
                "authority": "Captured data only; existing formatter validates the full report after current decisions."})

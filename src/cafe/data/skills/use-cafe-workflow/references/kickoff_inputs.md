@@ -153,8 +153,8 @@ python scripts/catalog_version_check.py | python scripts/prepare_kickoff.py capt
 
 Resolve the source script paths from the installed skill directory. Inspect the
 saved reports to make the current decisions; fill only `decision` and
-`post_change_evidence` in the draft's `preflight_metadata`. Capture preserves
-original JSON and actual caller-supplied time, never generates success or a
+`post_change_evidence` in the draft's `preflight_metadata`. Capture serializes updates to the same draft so parallel update/catalog producers
+retain both references. It preserves original JSON and actual caller-supplied time, never generates success or a
 policy decision. Keep a failing producer's status visible (`pipefail`); data
 capture is not successful preflight. Do not rerun a check merely because its
 output was not yet wrapped for the formatter. Explicit changes/expiry still
