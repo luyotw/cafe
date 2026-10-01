@@ -4,11 +4,53 @@ from __future__ import annotations
 
 import sys
 import subprocess
+import pytest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _kickoff_test_support import load_kickoff_module
+
+
+def test_delivery_template_is_reusable_only_while_its_source_is_valid(tmp_path):
+    module = load_kickoff_module("kickoff_delivery")
+    now = datetime.now(timezone.utc)
+    record = _record(module, tmp_path, observed_at=now)
+    record["delivery_template"] = {"deliver": [["gh", "pr", "merge", "--merge"]],
+                                   "deliver_description": ["Merge the PR for {issue_name}."]}
+    refreshed = module.refresh_delivery({}, evidence=record, project_root=tmp_path, now=now)
+    assert refreshed["refreshed"]
+    warm = module.assess_delivery(refreshed["record"], project_root=tmp_path, now=now)
+    assert warm["delivery_template"] == record["delivery_template"]
+    (tmp_path / "docs/delivery.md").write_text("New delivery route")
+    stale = module.assess_delivery(refreshed["record"], project_root=tmp_path, now=now)
+    assert stale["status"] == "miss" and stale["delivery_template"] is None
+
+
+@pytest.mark.parametrize("template", [
+    {"deliver": "gh pr merge", "deliver_description": ["Merge"]},
+    {"deliver": [["gh", "pr", "merge"]], "deliver_description": []},
+    {"deliver": [["echo", "{issue_id.__class__}"]], "deliver_description": ["Bad template"]},
+    {"deliver": [["echo", "{future_pr}"]], "deliver_description": ["Unknown target"]},
+])
+def test_invalid_delivery_template_cannot_replace_or_reuse_evidence(tmp_path, template):
+    module = load_kickoff_module("kickoff_delivery")
+    now = datetime.now(timezone.utc)
+    record = _record(module, tmp_path, observed_at=now)
+    evidence = {**record, "delivery_template": template}
+    result = module.refresh_delivery(record, evidence=evidence, project_root=tmp_path, now=now)
+    assert not result["refreshed"] and result["record"] == record
+    assert module.assess_delivery(evidence, project_root=tmp_path, now=now)["status"] == "miss"
+
+
+def test_template_expansion_retains_literal_arguments_without_shell_evaluation():
+    module = load_kickoff_module("kickoff_delivery")
+    template = {"deliver": [["tool", "{worktree}", "literal; $(echo nope)"]],
+                "deliver_description": ["Deliver {issue_name}."]}
+    rendered = module.render_delivery_template(template, {"worktree": "/a path/with spaces", "issue_name": "sample"})
+    assert rendered["deliver"] == [["tool", "/a path/with spaces", "literal; $(echo nope)"]]
+    with pytest.raises(ValueError, match="requires worktree"):
+        module.render_delivery_template(template, {"issue_name": "sample"})
 
 
 def _record(module, project: Path, *, observed_at: datetime) -> dict:

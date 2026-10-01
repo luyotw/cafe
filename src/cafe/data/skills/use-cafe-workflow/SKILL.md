@@ -22,8 +22,8 @@ read the union once; do not preload the rest.
 | Current decision | Read before acting |
 | --- | --- |
 | Check or apply runtime, catalog, or bundled-helper updates | `references/project_global_skill_sync.md` |
-| Select a playbook for a new kickoff | Use the preparation route below; its owner guidance includes `references/playbook_selection.md` policy |
-| Prepare kickoff inputs, render, or reconfirm a kickoff | Start with `references/kickoff_inputs.md` and its early summary command; use `assemble --summary decisions --draft-output <draft.json>` for a current decision brief, deduplicated source reading list and editable inputs; load other owner sections only for uncovered decisions |
+| Select a playbook for a new kickoff | `references/playbook_selection.md` |
+| Prepare kickoff inputs, render, or reconfirm a kickoff | `references/kickoff_inputs.md`, `references/kickoff.md`, `references/model_selection.md`, `references/strategic_context.md` |
 | Write or change confirmed phase chains after confirmation | `references/model_selection.md`, then `references/phases_yaml.md` |
 | Prepare and activate after kickoff confirmation | `references/kickoff_execution.md` |
 | Start, resume, or supply declared input to ordinary execution | `references/project_global_skill_sync.md`, then `references/running_workflow.md` |
@@ -32,29 +32,24 @@ read the union once; do not preload the rest.
 | Receive an issue split proposal from any step, or start/resume linked work | `references/issue_decomposition.md`, `references/strategic_context.md`, and `references/handoffs_and_alignment.md` |
 | Diagnose or repair a playbook, phase, Manager, or runtime defect | `references/diagnosis_and_repair.md` plus the reference for the failing boundary |
 | Consider direct closeout, verify completion, handle a Git delivery conflict, or handle follow-up work | `references/completion_and_authority.md` |
-| Present the initial kickoff | Use the rendered contract and the preparation guidance's presentation section |
+| Present the initial kickoff | `references/kickoff.md`, `references/workflow_progress.md` |
 | Render any other user-visible question, progress, error, or completion reply | `references/workflow_progress.md` |
 | Measure fresh-versus-resumed correction efficiency | `references/correction_ab_experiment.md` |
 
-For a new kickoff, keep inherited preference/evidence stores separate from temporary
-proposal outputs. First use `prepare_kickoff.py stores --request-file <request.json> --summary decisions`
-and execute its path-pinned `next_command`; intentional store overrides remain
-explicit. See `references/kickoff_inputs.md` for the request and store-selection
-interface. Obtain the local preparation summary before loading candidate
-playbooks, phase SKILL bodies, model research or delivery documentation. If a
-playbook is already explicitly chosen, start with `assemble --summary decisions --draft-output <draft.json>` even
-while incomplete: it supplies the selected graph, validated evidence, a draft
-and missing decisions. Otherwise use `discover --summary` for the full candidate
-set. Assess current scope, strategy, suitability and authority against that
-evidence. The first summary links applicable `references/kickoff.md`, strategy and
-suitability owner sections. Apply them once; inspect source details only for missing or invalidated
-facts. Do not preload the full kickoff/model/strategy references before this
-summary or reread their projected sections. Fill the emitted typed draft and
-use the summary’s `continuation` to capture missing preparation reports into that
-same draft, resolve their dispositions, then render. A manual draft after a
-blocked render is not a complete kickoff endpoint. A validated selected graph supplies resolved
-profiles and gates without rereading every phase body. Reuse references already
-read in this preparation. Resume continues to use its confirmed contract.
+For a new kickoff, start with `prepare_kickoff.py draft --issue-id <id> --output
+<draft.json>` (or `--issue-name <name>`). Pass an already selected playbook via
+`--playbook-id` and explicit model overrides via repeated `--phase-chain`.
+The program creates the request and prefills reusable values before you edit it;
+do not write a starter request JSON yourself. If the playbook is undecided,
+select from the returned discovery and reassemble the same request into an
+updated draft. Read the generated draft and fill its unresolved fields, retaining
+the prefilled values unless current requirements demand an override. Keep the
+same preference/evidence stores throughout, capture the required check reports
+and render the complete proposal. Invalid fields block rendering while remaining
+editable alongside the preserved values; repair those fields instead of
+reconstructing the request. Validated evidence
+can be reused for the facts it covers. Existing workflows retain their confirmed
+contract; new preferences never rewrite it.
 
 ## Operating sequence
 

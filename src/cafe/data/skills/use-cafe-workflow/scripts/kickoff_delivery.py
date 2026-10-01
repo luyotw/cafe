@@ -8,6 +8,7 @@ import subprocess
 from datetime import datetime, timedelta, timezone
 from collections.abc import Iterable
 from pathlib import Path
+from string import Formatter
 from typing import Any
 
 from _kickoff_store import repository_identity
@@ -18,6 +19,41 @@ _IGNORED_DIRS = {
 }
 _SOURCE_PREFIXES = ("docs/", ".github/", ".cafe/", "scripts/")
 _SOURCE_NAMES = {"README", "README.md", "CONTRIBUTING.md", "Makefile", "pyproject.toml"}
+
+
+def render_delivery_template(template: Any, context: dict[str, str]) -> dict[str, Any]:
+    """Expand a source-backed proposal template as argv, never shell code."""
+    if not isinstance(template, dict) or set(template) != {"deliver", "deliver_description"}:
+        raise ValueError("delivery_template requires deliver and deliver_description")
+    commands, descriptions = template["deliver"], template["deliver_description"]
+    if (not isinstance(commands, list) or not isinstance(descriptions, list)
+            or len(commands) != len(descriptions)
+            or any(not isinstance(argv, list) or not argv for argv in commands)):
+        raise ValueError("delivery_template requires argv arrays with one description each")
+    allowed = {"issue_name", "issue_id", "project_root", "worktree"}
+    formatter = Formatter()
+
+    def expand(text: Any) -> str:
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("delivery_template arguments and descriptions must be nonempty strings")
+        for _, field, spec, conversion in formatter.parse(text):
+            if field is not None:
+                if field not in allowed or spec or conversion:
+                    raise ValueError("unsupported delivery_template placeholder")
+                if not context.get(field):
+                    raise ValueError(f"delivery_template requires {field}")
+        return formatter.vformat(text, (), context)
+
+    return {"deliver": [[expand(arg) for arg in argv] for argv in commands],
+            "deliver_description": [expand(text) for text in descriptions]}
+
+
+def _valid_template(template: Any) -> bool:
+    try:
+        render_delivery_template(template, {key: key for key in ("issue_name", "issue_id", "project_root", "worktree")})
+    except (ValueError, KeyError, TypeError):
+        return False
+    return True
 
 
 def _inventory(project_root: Path) -> list[str]:
@@ -167,16 +203,21 @@ def assess_delivery(
         diagnostics.append("delivery_observation_expired_or_invalid")
     if contradictions:
         diagnostics.append("contradictory_current_delivery_evidence")
+    template = record.get("delivery_template")
+    template_invalid = "delivery_template" in record and not _valid_template(template)
+    if template_invalid:
+        diagnostics.append("delivery_template_invalid")
     blocked = any(
         item in diagnostics
         for item in ("repository_identity_changed", "discovery_manifest_missing", "watched_membership_changed", "material_source_changed")
     )
-    status = "hit" if not blocked and not discovery_gap and not expired and not contradictions else "miss"
+    status = "hit" if not blocked and not discovery_gap and not expired and not contradictions and not template_invalid else "miss"
     return {
         "status": status,
         "diagnostics": diagnostics,
         "discovery_gap": discovery_gap,
         "stable_conventions": list(record.get("stable_conventions", [])) if not blocked else [],
+        "delivery_template": template if status == "hit" else None,
         "current_observations": observations,
         "sources": list(record.get("sources", [])) if not blocked else [],
         "manifest": manifest,
@@ -186,6 +227,8 @@ def assess_delivery(
 def refresh_delivery(record: dict[str, Any], *, evidence: Any, project_root: Path, now: datetime) -> dict[str, Any]:
     if not isinstance(evidence, dict):
         return {"record": record, "refreshed": False, "diagnostic": "refresh_evidence_missing"}
+    if "delivery_template" in evidence and not _valid_template(evidence["delivery_template"]):
+        return {"record": record, "refreshed": False, "diagnostic": "delivery_template_invalid"}
     references = [source["path"] for source in evidence.get("sources", [])
                   if isinstance(source, dict) and isinstance(source.get("path"), str)] if isinstance(evidence.get("sources"), list) else []
     manifest = discover_delivery_manifest(project_root, referenced_paths=references)

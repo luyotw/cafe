@@ -1,27 +1,26 @@
 # Kickoff And Preparation
 
-For normal preparation, use the locator and directly readable decision view in
-`kickoff_inputs.md` first. Read this reference's applicable sections through the
-view's question-to-section index; share each unchanged section across its
-judgments. Complete locale, strategy, suitability, authority, gate and preflight
-judgments remain required. Full `--with-guidance` / `--guidance-output` projections
-are available for explicit inspection, not a normal prerequisite. Load execution
-and activation sections when that operation is actually reached.
+Use `kickoff_inputs.md` for the preparation CLI and editable draft. Apply this
+reference and the model, strategy and playbook policies to the current request.
+Execution and activation instructions are in `kickoff_execution.md`.
 
 ## Reuse kickoff preferences and evidence
 
 For a new issue, start with the staged `prepare_kickoff.py` path in
-`kickoff_inputs.md`. Build one request file from the current user request and
-confirmed inputs, then run `discover` before repeating candidate-listing,
-preference, delivery, or model-evidence reads. Treat its catalog, preference,
+`kickoff_inputs.md`. Have `draft` create the request and prefill it before
+supplying product decisions. It performs discovery and assembly itself; use its
+reports before repeating candidate-listing, preference, delivery, or model-evidence
+reads. Treat its catalog, preference,
 delivery, and model reports as sourced facts with explicit freshness and gaps;
 they do not decide issue scope, acceptance criteria, playbook suitability,
 model capability, or action authority. The selected graph and all unresolved
 Manager decisions remain Manager-owned.
 
-Use `discover --request-file <request.json> --summary` and, after making the
-issue-owned selection and required decisions, `assemble --request-file
-<request.json> --summary decisions --draft-output <draft.json>` for the normal Manager path. The compact reports
+Use `draft --issue-id <id> --output <draft.json>` for the normal Manager path,
+adding `--playbook-id` when already selected. Edit unresolved fields in that
+draft; `assemble --request-file <draft.json> --summary --draft-output
+<updated-draft.json>` refreshes it after choosing a playbook or repairing inputs.
+The compact reports
 preserve every candidate's decision-relevant facts and invalid diagnostics,
 evidence status, source fingerprints or provenance, ages, and full-inspection
 commands; assembly also preserves the selected graph, missing decisions, and
@@ -144,9 +143,11 @@ from assembly: source-backed conventions, routes, discovery coverage, freshness
 and gaps. Sufficient valid facts satisfy inspection of the unchanged documentation,
 CI/CD configuration and scripts they cover; apply them to the current endpoint.
 Open original sources only for uncovered facts, invalidation or contradictions,
-and verify current action targets separately. A hit neither chooses the endpoint
-nor grants authority. This remains Manager reasoning, not a provider detector:
-do not enumerate vendors or silently choose a generic merge/deploy/cleanup route.
+and verify current action targets separately. A valid cached delivery template
+prefills the proposed actions with current issue values; standard worktree and
+cleanup conventions are also prefilled. Review these values against the current
+request. A hit does not authorize execution. Do not enumerate vendors or invent
+a generic merge/deploy route when the repository has no reusable template.
 
 Discover the intended end state beyond merely opening a PR. Propose the
 repository-appropriate delivery and cleanup actions for user approval; an action

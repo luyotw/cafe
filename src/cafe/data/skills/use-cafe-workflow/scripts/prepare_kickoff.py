@@ -43,6 +43,20 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(allow_abbrev=False)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("schema", help="Show request fields and a partial starter; performs no discovery.")
+    draft = commands.add_parser("draft", allow_abbrev=False,
+                                help="Create a prefilled editable request without hand-writing request JSON.")
+    identity = draft.add_mutually_exclusive_group(required=True)
+    identity.add_argument("--issue-id", type=int)
+    identity.add_argument("--issue-name")
+    draft.add_argument("--project-root", type=Path, default=Path.cwd())
+    draft.add_argument("--playbook-id")
+    draft.add_argument("--manager-cli")
+    draft.add_argument("--phase-chain", action="append", default=[],
+                       help="Explicit phase=cli:model[,cli:model] override; omitted phases use configuration.")
+    draft.add_argument("--output", type=Path, required=True, help="New draft path; existing files are never overwritten.")
+    draft.add_argument("--config-dir", type=Path, default=_default_config_dir())
+    draft.add_argument("--cache-dir", type=Path, default=_default_cache_dir())
+    draft.set_defaults(summary=True)
     capture = commands.add_parser("capture-report", allow_abbrev=False,
                                   help="Capture one existing check's JSON stdin and reference it in an editable request; executes no checks.")
     capture.add_argument("--request-file", type=Path, required=True)
@@ -55,11 +69,8 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--config-dir", type=Path, default=_default_config_dir())
         command.add_argument("--cache-dir", type=Path, default=_default_cache_dir())
         if name in {"stores", "discover", "assemble"}:
-            command.add_argument("--summary", nargs="?", const="json", choices=("json", "decisions"),
-                                 help="Legacy JSON summary, or directly readable current decisions with inspect references.")
+            command.add_argument("--summary", action="store_true", help="Show discovery facts and preparation inputs.")
         if name == "assemble":
-            command.add_argument("--guidance-output", type=Path, help="Write current owner sections as plain text and return disjoint line references, without duplicating the body in JSON.")
-            command.add_argument("--with-guidance", action="store_true", help="Include current kickoff policy sections once, with source fingerprints.")
             command.add_argument("--draft-output", type=Path, help="Write an editable request with owner-typed product fields and unresolved action slots.")
         if name == "render":
             command.add_argument("--output", type=Path, help="Write the complete formatter text and print a compact receipt.")
@@ -100,9 +111,22 @@ def _parser() -> argparse.ArgumentParser:
 
 def _request_command(args: argparse.Namespace) -> int:
     try:
-        request = _read_json(args.request_file)
+        if args.command == "draft":
+            if args.output.exists():
+                raise ValueError("draft output already exists; edit that draft instead")
+            request = {"schema_version": 1, "project_root": str(args.project_root.resolve())}
+            for field in ("issue_id", "issue_name", "playbook_id", "manager_cli"):
+                if getattr(args, field) is not None:
+                    request[field] = getattr(args, field)
+            if args.phase_chain:
+                request["formatter_inputs"] = {"phase_chain": args.phase_chain}
+            args.request_file = args.output
+            args.draft_output = args.output
+        else:
+            request = _read_json(args.request_file)
         if not isinstance(request, dict):
             raise ValueError("request file must contain an object")
+        request = kickoff_inputs.normalize_request_identity(request)
         storage = {
             "config_dir": str(args.config_dir.expanduser().resolve()),
             "cache_dir": str(args.cache_dir.expanduser().resolve()),
@@ -118,8 +142,7 @@ def _request_command(args: argparse.Namespace) -> int:
 
         if args.command == "stores":
             stage = "assemble" if request.get("playbook_id") else "discover"
-            view = ["--summary", "decisions"] if args.summary == "decisions" else ["--summary"]
-            _json({"storage": storage, "next_command": continuation(stage, args.request_file) + view})
+            _json({"storage": storage, "next_command": continuation(stage, args.request_file) + ["--summary"]})
             return 0
         summary_mode = getattr(args, "summary", False)
         inspect_references = {
@@ -187,15 +210,13 @@ def _request_command(args: argparse.Namespace) -> int:
                 "stdin": "Pipe the complete check JSON to capture_argv; supply its actual timezone-qualified observation time. These read-only preparation checks are required even for proposal-only work; they execute no proposed case action.",
                 "owner": "references/kickoff.md#complete-runtime-and-catalog-preflight",
             })
-        normal_projection = args.command == "assemble" and (
-            summary_mode == "decisions" or (args.draft_output is not None
-                and args.guidance_output is None and not args.with_guidance))
-        if args.command == "assemble":
+        if args.command in {"draft", "assemble"}:
             draft_request = kickoff_inputs.preparation_template(request, assembled.get("formatter_draft") or {})
             if args.draft_output is not None:
-                if args.draft_output.resolve() == args.request_file.resolve():
+                if args.command != "draft" and args.draft_output.resolve() == args.request_file.resolve():
                     raise ValueError("draft output must differ from the input request")
-                args.draft_output.write_text(json.dumps(draft_request, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                with args.draft_output.open("x" if args.command == "draft" else "w", encoding="utf-8") as handle:
+                    handle.write(json.dumps(draft_request, ensure_ascii=False, indent=2) + "\n")
             if summary_mode:
                 compact = kickoff_inputs.compact_discovery_summary(
                     discovery, selected_only=True, inspect_references=inspect_references
@@ -206,48 +227,17 @@ def _request_command(args: argparse.Namespace) -> int:
                     "render_command": continuation("render", args.draft_output or args.request_file),
                     "input_template": draft_request["formatter_inputs"] if assembled.get("status") != "ready" else None,
                     "input_schema": kickoff_inputs.request_schema(),
-                    "decision_brief": kickoff_inputs.decision_brief(request, assembled.get("missing_decisions", []), summary=compact, assembled=assembled, indexed=normal_projection),
                     "draft_output": str(args.draft_output.resolve()) if args.draft_output is not None else None,
                     "status": assembled.get("status", "invalid"),
                     "selected_playbook": assembled.get("selected_playbook"),
                     "missing_decisions": assembled.get("missing_decisions", []),
                     "assembly_diagnostics": assembled.get("diagnostics", []),
+                    "prefilled": assembled.get("prefilled", {}),
                     "formatter_inputs": assembled.get("formatter_inputs"),
                     "formatter_draft": assembled.get("formatter_draft") if assembled.get("status") != "ready" else None,
                 })
-                if args.draft_output is None and summary_mode != "decisions":
-                    compact["decision_brief"].pop("field_shapes", None)
-                if normal_projection:
-                    # Editable data lives in the requested file. Old summary-only
-                    # and full assembly consumers retain their complete payload.
-                    for key in ("input_template", "formatter_draft", "formatter_inputs", "input_schema"):
-                        compact.pop(key, None)
-                    compact["schema_reference"] = [sys.executable, str(Path(__file__).resolve()), "schema"]
-                    compact["continuation"] = followup
-                    kickoff_inputs.index_summary_sources(compact)
-                if args.guidance_output is not None:
-                    if args.with_guidance:
-                        raise ValueError("choose guidance-output or with-guidance, not both")
-                    if args.guidance_output.resolve() in {args.request_file.resolve(), args.draft_output.resolve() if args.draft_output else None}:
-                        raise ValueError("guidance output must differ from request and draft")
-                    sections = kickoff_inputs.kickoff_guidance()
-                    text = ""
-                    index = []
-                    for section in sections:
-                        start = len(text.splitlines()) + 1
-                        text += section["text"]
-                        index.append({key: section[key] for key in ("file", "heading", "sha256")})
-                        index[-1].update(start_line=start, end_line=len(text.splitlines()))
-                    args.guidance_output.write_text(text, encoding="utf-8")
-                    compact["guidance_file"] = str(args.guidance_output.resolve())
-                    compact["guidance_index"] = index
-                elif args.with_guidance:
-                    compact["guidance"] = kickoff_inputs.kickoff_guidance()
-                if summary_mode == "decisions":
-                    compact = kickoff_inputs.current_decision_view(compact, request, draft_request)
-                    print(json.dumps(compact, ensure_ascii=False, indent=2))
-                else:
-                    _json(compact)
+                compact["continuation"] = followup
+                _json(compact)
                 return 0 if assembled.get("status") == "ready" else 3
             _json({"stage": "assembly", **assembled, "discovery": discovery, "storage": storage, "render_command": continuation("render", args.draft_output or args.request_file)})
             return 0 if assembled.get("status") == "ready" else 3
@@ -273,7 +263,7 @@ def _request_command(args: argparse.Namespace) -> int:
         _json({"stage": "render", "assembly": assembled, "render": rendered})
         return 0 if rendered.get("status") == "rendered" else 3
     except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
-        _json({"status": "invalid", "diagnostics": [type(exc).__name__]})
+        _json({"status": "invalid", "diagnostics": [type(exc).__name__], "message": str(exc)})
         return 2
 
 
@@ -406,7 +396,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "schema":
         _json(kickoff_inputs.request_schema())
         return 0
-    if args.command in {"stores", "discover", "assemble", "render"}:
+    if args.command in {"draft", "stores", "discover", "assemble", "render"}:
         return _request_command(args)
     if args.command == "preferences":
         return _preference_command(args)

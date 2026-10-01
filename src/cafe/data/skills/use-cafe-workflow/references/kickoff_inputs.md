@@ -1,195 +1,112 @@
 # Reusable kickoff inputs
 
-`prepare_kickoff.py` gathers local preferences and evidence in two stages, then maps an explicit complete decision set into the existing kickoff formatter. It reports missing research and decisions; it does not choose a playbook, infer issue acceptance criteria, determine model suitability, or invent delivery commands.
+`prepare_kickoff.py` discovers reusable evidence, assembles one editable request,
+and passes completed inputs to the existing kickoff formatter. It does not
+activate a workflow or execute proposed delivery actions.
 
-The normal new-issue Manager path is `discover` → assessment → `assemble` →
-`render` when selection is open. Start with a summary before broad source
-reading: `discover --summary` when selection is open, or `assemble --summary decisions`
-when the user already chose a graph, even before formatter decisions are complete.
-Then assess current scope/strategy/suitability/authority, fill the reported gaps,
-and `assemble` → `render`. Use one request file and retain the effective preference/evidence directories
-throughout preparation and its follow-ups. A warm session is a fresh Manager context that reads the saved
-records; it must still assess the current issue and validate source freshness.
-For an existing workflow, read its confirmed contract and generic state rather
-than applying changed preferences to the issue.
+## Prepare a draft
 
-After gathering complete, source-backed delivery conventions or an exact model
-capability assessment during the current preparation, persist that Manager
-evidence for later warm preparations with `evidence refresh --category delivery`
-or `evidence refresh --category models`, respectively. Use the documented
-evidence-file format and retain the same isolated cache directory. Refresh only
-evidence that the current assessment supports; incomplete research, a discovery
-gap, or an operational model probe alone is not reusable evidence. This local
-cache update does not confirm a model chain or authorize a delivery action.
-
-## Store selection before preparation
-
-A temporary proposal directory is an output location, not a new preference or
-evidence store. For a normal proposal inherit the caller's `XDG_CONFIG_HOME` and
-`XDG_CACHE_HOME` (or their home-directory defaults). Do not assign fresh XDG roots
-merely because the proposal is read-only or uses temporary request/draft files.
-Disposable evidence validation may update its existing cache; it does not modify
-saved preferences or authorize any proposed action.
-
-After writing the request, run the read-only locator first:
+Create the draft directly; no handwritten request JSON is needed:
 
 ```sh
-python scripts/prepare_kickoff.py stores --request-file request.json --summary decisions
+python scripts/prepare_kickoff.py draft --issue-id 123 --playbook-id standard-qa --output draft.json
 ```
 
-It returns the effective `storage` paths and repository identity, plus a literal
-`next_command` argv for the selected stage with those paths pinned. Execute that
-argv; for selected assembly append `--draft-output draft.json`. Later use the returned `render_command` and append `--output
-proposal.md`. These argv values prevent incidental environment changes from
-switching stores between stages. They are local invocation inputs, not saved
-issue authority or permission. Source/identity/freshness checks still run.
+Use `--issue-name` for an issue without a numeric ID. The current directory is
+the project root unless `--project-root` is supplied. Pass `--manager-cli` when
+the caller cannot be identified from its session, and repeated `--phase-chain
+phase=cli:model` only for explicit model overrides. Configured values need no
+manual transcription. The command refuses to overwrite an existing draft.
 
-Use `--config-dir` / `--cache-dir` on `stores` or any stage only for an intentional
-store choice, such as a user-requested isolated evaluation. Explicit choices
-are honored with no fallback to another directory. If changing them deliberately
-later, regenerate the stage command from the new choice. Empty stores honestly
-miss; a different repository or changed material source cannot borrow a prior hit.
-Reports expose effective `storage` so the caller can verify which records it used.
-No raw source needs reopening simply to verify a validated hit.
-
-## Early selected-graph request
-
-Create a request in a temporary directory with only the facts already known:
-
-```json
-{"schema_version":1,"project_root":"/work/project","issue_name":"new-issue","playbook_id":"standard-qa","current_explicit_inputs":{"effective_locale":"zh-TW","locale_source":"explicit","repository_content_locale":"en-US"}}
-```
+Read `draft.json` and fill the unresolved fields in place. Keep the computed
+worktree, mode, actions and configured values unless the current request calls
+for an exception. Product fields, `phase_chain` and `capability_choice` use their
+actual names and types in the generated draft; do not reconstruct this schema.
+If the playbook is not selected, omit `--playbook-id`, apply
+`playbook_selection.md` to the returned candidates, then set `playbook_id` and
+reassemble to populate that playbook's defaults:
 
 ```sh
-python scripts/prepare_kickoff.py assemble --request-file request.json --summary decisions --draft-output draft.json
+python scripts/prepare_kickoff.py assemble --request-file draft.json --summary --draft-output updated-draft.json
 ```
 
-The first selected assembly writes the editable `draft.json` and returns a
-`decision_brief`, directly readable on stdout; consume this response once without
-a separate pretty-print or key-reprint command. Add the verbatim request as `request_text`; current named choices
-belong in `current_explicit_inputs`. Start with these current-response fields:
+Use inherited preference/evidence directories throughout preparation. Temporary
+proposal files do not require empty stores. Explicit `--config-dir` and
+`--cache-dir` select isolated stores without fallback. The optional `stores`
+command returns the effective paths and a stage command with those paths pinned.
 
-- `fixed_inputs`: supplied choices or applicable preferences and their origin;
-- `questions`: current scope, model suitability, actions/authority, gates, locale,
-  preflight and presentation judgments, including available evidence and actual
-  evidence gaps. These judgments remain necessary even when fields are complete;
-- `missing_fields`: unresolved fields referencing one `question_id` and one
-  `field_reference`; resolve both within this response instead of opening schema
-  or implementation files;
-- `reading_list`: one source index with short section IDs, file fingerprints and
-  disjoint line ranges. Each question references those IDs. For the judgment at
-  hand, use `read_command_template` with its source path and section line range;
-  reuse that section for later questions that reference the same ID. This is not
-  a command to concatenate the entire source union before considering the facts;
-- `repository_reading_candidates` and `current_mandate_path`: current strategy
-  sources from the existing generic resolver. Inspect the mandate and applicable
-  grounds once, sharing the same observations across scope, models and delivery.
-  Missing or ambiguous grounds remain decisions, not permission to skip them;
-- `workload_evidence`: literal coverage references, not an assignment, equivalence
-  ranking or proof of suitability. Assess reasoning, risks, limitations and exact
-  chosen-chain identities against the full valid payloads already in the response;
-- `field_shapes`: the single existing-owner type/contract index for editing the
-  draft, limited to unresolved fields and their owner constraints. Known choices
-  retain their provenance; blank product values and empty action arrays still
-  require current judgment;
-- top-level `source_index`: complete provenance records. Delivery/model `sources`
-  use local JSON `$ref` pointers into this index; resolve them here, without raw
-  evidence inspection merely to retrieve the same record;
-- top-level `continuation`: when check reports are absent, execute each existing
-  `check_argv` once, pipe its complete JSON into the supplied `capture_argv` with
-  the actual observation time, and assess the captured report's disposition in
-  this same draft. Then use `render_command` with `--output proposal.md`. Missing
-  reports block a complete endpoint even when all product decisions are filled.
-  Proposal-only excludes proposed case actions; it still requires these checks.
+The program writes known values into `draft.json`, rather than asking the caller
+to copy them from the discovery report:
 
-A validated delivery fact satisfies only the convention it actually describes.
-An uncovered target, strategic question, changed source or contradiction still
-requires inspection. A model hit likewise does not prove issue suitability. Use
-these gaps to identify the relevant section or evidence, sharing unchanged reads
-across judgments. The original policy text remains authoritative; every listed range has
-its actual path, lines and source hash. Changed source invalidates that read plan.
+- request identity and explicit current inputs;
+- saved conversation language and Manager mode, plus the explicitly saved
+  `manager.poll_interval_seconds` or `manager.event_manager` preference when
+  applicable to that mode;
+- `event-driven` when no mode is specified or saved; the current caller's CLI
+  supplies the event Manager, not a phase model or a new provider choice;
+- `.cafe/worktrees/issue<id>` in the main repository, or the explicitly named
+  issue's equivalent path; non-Git first tasks use the current checkout;
+- cleanup: close the explicitly identified GitHub issue in the current repository
+  when a GitHub remote is available, then `cafe close`; without that binding,
+  propose only `cafe close`;
+- `deliver` and its descriptions from a validated cached `delivery_template`,
+  expanding current issue/worktree values into literal argv;
+- repository content language through the existing strategic-context resolver;
+- conversation language through the existing workflow/playbook locale owner
+  when no current preference was supplied;
+- configured model chains for omitted phases, preserving explicit overrides;
+- existing formatter defaults for confirmation ownership, proactive review,
+  permission, clarification and alignment policies;
+- empty description lists for explicitly empty action plans, and original
+  check report payloads supplied by file reference.
 
-`--guidance-output <guide.md>` and `--with-guidance` remain full owner projections
-for explicit inspection/legacy consumers. They are not a prerequisite to this
-reading path. Full schema is available through the returned `schema_reference`;
-bare `--summary` (also `--summary json`) and full `assemble` retain their
-existing data. `--summary decisions` defers unselected role defaults, artifact
-plumbing, discovery-only dependencies and unused schema/examples through
-`deferred_details`, using the existing discover/schema endpoints. All candidate
-applicability/diagnostics, selected profiles/routes/gates, usable evidence and
-limits stay visible. Only actual gaps justify opening those details.
-With a draft file, the response omits duplicate editable values/schema and points
-to that file plus the relevant field shapes. No policy or candidate is silently
-removed: selected facts, all candidate diagnostics/overview and detailed inspect
-references remain available. Execution/activation sections remain at their linked
-owner paths until entering those operations.
+The response's `prefilled` map identifies configuration/default sources. These
+are editable proposal values, not a confirmed contract. Model suitability still
+requires assessment. Missing or invalid configuration is reported instead of
+inventing a model or replacing the user's value. Cached narrative conventions
+alone are not executable templates. Store a structured delivery template once
+the repository route is established; source changes invalidate it normally.
 
-Edit `draft.json` directly. The product skeleton is generated from
-`DeliveryContractV3`: `implementation_direction` is a string, list fields are
-arrays, and `closeout_plan` is absent because the formatter constructs it.
-Blank product values are unfinished decisions. `deliver: null` and
-`cleanup: null` are unresolved slots; replace each with deliberate literal argv
-arrays, including `[]` only when justified by the current decision. They never
-become automatic empty action plans. When supplying action descriptions, use
-`deliver_description` and `cleanup_description` as string arrays, with exactly
-one nonempty explanation per command. For `cleanup: []`, use
-`cleanup_description: []`; put the explanation for retaining resources in the
-product constraints, not in a description for a nonexistent command. The public
-`action_input_examples` covers both cases and assembly checks them through the
-existing formatter owner before final render. The public schema includes lifecycle
-examples checked by the existing closeout validator: `cafe close --archive-only`
-is not a valid closeout-plan command. No source-code inspection or trial render
-is needed to learn these shapes. `schema` remains available independently.
+The caller still supplies the current product outcome, scope, acceptance,
+implementation direction, constraints and permission boundaries; chooses the
+playbook when unspecified; resolves a missing/stale delivery template and any
+non-default mode parameters; and makes capability/preflight decisions. Review
+prefilled choices, concrete targets and requested exceptions. The complete
+proposal still requires confirmation before creating a worktree or executing
+delivery and cleanup.
+No raw documentation needs rereading solely to transcribe a configured value.
 
-`decision_brief` links the current judgment to the selected graph and validated
-evidence already in this response. Read hit assessment payloads, source dates,
-limits and provenance here; do not reopen raw records merely to verify the hit.
-Inspect the named source only for an actual uncovered workload, target,
-contradiction or invalidation. The brief does not decide scope, suitability or
-authority. Read current repository strategy documents as required by the owner,
-using the union of paths needed for scope, model suitability and delivery. One
-read of an unchanged document serves all three judgments; use sufficient validated
-delivery facts for their covered conventions and open only the uncovered strategy
-sections. A new contradiction or changed source still requires inspection.
+Assembly returns the selected graph, candidate applicability, evidence and its
+provenance, the formatter's complete input schema, and missing inputs. Exit 3
+means preparation is incomplete. The draft is the editable request used by all
+subsequent commands. There is no separate decision view, source-reference index
+or generated policy reading plan. Read applicable policy from its owner:
+`kickoff.md`, `model_selection.md` and `strategic_context.md`.
 
-An incomplete assembly (exit 3) is expected at this stage. Its `formatter_draft`
-prefills request identity, explicit fields and applicable preferences, while
-`missing_decisions` names what remains. `schema` lists the accepted fields and
-examples without reading implementation code or doing discovery. Keep one
-request; put already confirmed named fields in `current_explicit_inputs`, and
-newly assessed decisions in `formatter_inputs`. Conflicting duplicates are
-rejected. Lists such as `phase_chain` contain `phase=provider:model` strings;
-`capability_choice` contains `name=true|false` strings; `deliver` and `cleanup`
-contain literal argv arrays. Reasoning effort is a separate confirmed execution
-setting; never append it to a model ID (for example, `@medium` would become
-part of the literal model identity). No action, model chain or contract is synthesized.
-`decision_brief.field_shapes.formatter_field_schema` supplies every adapter field's JSON type,
-array item shape and parser-owned choices (including reactive policies and Manager
-mode). Use these fields directly; no formatter source or argparse lookup is needed
-to learn input types or legal values. This projection shares the adapter encoding
-maps and current formatter parser, so it cannot introduce another set of choices.
-Fields absent from this schema, such as a phase reasoning-effort override, are not
-accepted formatter inputs; keep those current execution decisions in the complete
-proposal under their existing owner. The existing formatter still validates the
-complete decision set.
+Put current named choices in `current_explicit_inputs` and assessed decisions
+in `formatter_inputs`; conflicting duplicates are rejected. Supplied false and
+empty values are preserved. Product fields use the existing `DeliveryContractV3`
+schema. `implementation_direction` is a string; list fields are arrays.
+`closeout_plan` is built by the formatter. An unresolved delivery route remains
+null, not an automatic empty array. A null draft action slot may receive a
+valid template/default later; an explicit `[]` excludes that stage and wins over
+the defaults. Deliberate `deliver`/`cleanup` choices are literal
+argv arrays, with one description per action. `schema` exposes all field types
+and the existing parser's allowed values without conditional filtering.
+An unknown or invalid field blocks rendering but preserves the editable values
+and computed defaults in the draft. Correct the reported field; do not discard
+the remaining draft or silently drop the error to render.
 
-Selected assembly exposes the chosen graph and all invalid-candidate diagnostics,
-plus `catalog.candidate_overview`: every effective candidate's declared applicability,
-roles, step IDs, eligibility and source fingerprint. Use this overview to inspect
-candidates even when the graph was already explicitly selected; do not reopen their
-YAML or rerun list/show merely to recover that comparison. The selected graph retains
-its complete decision facts; the inspect reference retains every other candidate's
-full details for a specific uncovered question. Current playbook-selection policy
-is linked by the reading list; read each required section once. Valid model
-`assessment` includes workloads, reasoning, capability bands, limitations and
-sources; delivery `sources` identifies the evidence supporting its conventions,
-separately from the discovery manifest. A delivery hit with no current observations
-does not prove remote branch, PR state or current authorization. Resolve such
-issue-specific gaps explicitly without repeating unchanged convention research.
+Delivery and model cache hits provide evidence, not action authority or proof
+that a model suits the current issue. Inspect missing, stale or contradictory
+sources; reuse valid facts for the conventions they cover. Saved preferences
+apply only to new proposals. An existing workflow keeps its confirmed contract.
 
-Capture each required check's original output on its **first** execution using
-`capture-report`; this input adapter does not execute or modify preflight. For
-example, after the current policy permits the read-only check:
+## Complete checks and render
+
+The response's `continuation` identifies missing checks and capture commands
+using the same draft. Run each required check under `project_global_skill_sync.md`
+and capture its complete original JSON with the actual observation timestamp:
 
 ```sh
 observed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -199,42 +116,31 @@ observed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 python scripts/catalog_version_check.py | python scripts/prepare_kickoff.py capture-report --request-file draft.json --kind catalog --report-output catalog.json --checked-at "$observed_at"
 ```
 
-Resolve the source script paths from the installed skill directory. Inspect the
-saved reports to make the current decisions; fill only `decision` and
-`post_change_evidence` in the draft's `preflight_metadata`. Capture serializes updates to the same draft so parallel update/catalog producers
-retain both references. It preserves original JSON and actual caller-supplied time, never generates success or a
-policy decision. Keep a failing producer's status visible (`pipefail`); data
-capture is not successful preflight. Do not rerun a check merely because its
-output was not yet wrapped for the formatter. Explicit changes/expiry still
-require the normal owner-directed recheck.
+Resolve script paths from the installed skill directory. Capture only records
+original report bytes and the supplied observation time; it does not execute
+checks or approve a disposition. Parallel captures preserve both references.
+Inspect the reports and resolve `decision` and `post_change_evidence` in
+`preflight_metadata`. Existing report files can instead be supplied through
+`preflight_files`; preserve their complete tokens, diagnostics and digests.
+Do not invent successful reports or timestamps. Explicitly unavailable values
+may remain null where the existing owner permits them.
 
-After filling the gaps, write the complete proposal once:
+After resolving the draft:
 
 ```sh
 python scripts/prepare_kickoff.py render --request-file draft.json --output proposal.md
 ```
 
-This returns a compact status/file receipt. Failed rendering preserves any
-existing output file and reports `validation_error` plus missing decisions
-without dumping the selected graph. Pass the complete existing preflight reports via
-`preflight_files`; do not reconstruct a subset and lose comparison tokens.
-Raw check command output alone may lack the existing report metadata. Follow
-the reading list's Complete runtime and catalog preflight section and the preflight
-owner for those decisions; never invent `comparison_token`, `checked_at` or
-post-change evidence. Draft output retains file references instead of copying
-report payloads. the standalone schema's `preflight_report_examples` shows the complete
-required field shapes, not valid check results. Retain extra original fields
-such as mismatch IDs. Use the actual observation timestamp/current decision
-and source-provided tokens/digests; an explicitly unavailable source value may
-remain null, never a made-up token or successful status. These examples do not
-change the existing formatter/preflight owners. Read `proposal.md` once and present
-it completely. Existing callers without `--output` still receive JSON with text
-at `render.output`; do not guess a top-level output field. Use a new issue identity
-for a new proposal; an existing identity intentionally retains its workflow locale.
+The command uses the existing formatter, writes the complete proposal and returns
+a file receipt. Failure preserves an existing output file and reports unresolved
+inputs. Without `--output`, the rendered text is at `render.output`. Present the
+complete formatter output for confirmation. A manually written draft is not a
+completed kickoff. No workflow or delivery action runs before confirmation.
 
-## Detailed formats and maintenance
+## Maintenance
 
-Read `kickoff_input_reference.md` when inspecting the complete request format,
-calling maintenance operations, refreshing evidence or mapping raw check reports
-without capture. Normal preparation uses the typed draft, source-backed summary
-and commands above; it need not preload those additional examples.
+Use `preferences inspect/set/clear` for explicitly reusable user or repository
+preferences. Do not save one-off choices or authorization as preferences.
+Use `evidence inspect/refresh/clear` for source-backed catalog, delivery and model
+records; an operational probe does not establish model capability. See
+`kickoff_input_reference.md` for evidence formats and maintenance commands.

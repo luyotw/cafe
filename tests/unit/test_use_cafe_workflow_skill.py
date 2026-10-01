@@ -907,18 +907,15 @@ def test_use_cafe_workflow_skill_requires_playbook_derived_kickoff_contract() ->
     assert "Do not require rationale, assessment or preflight records" in normalized
     assert "references/kickoff_inputs.md" in skill
     assert "Reuse kickoff preferences and evidence" in reference
-    assert "run `discover` before repeating candidate-listing" in normalized
+    assert "Have `draft` create the request and prefill it" in normalized
     assert "through `assemble`" in normalized
     assert "use `render` to produce the complete contract" in normalized
-    assert "normal new-issue Manager path is `discover`" in normalized_inputs
-    assert "discover --request-file <request.json> --summary" in normalized_inputs
-    assert "assemble --request-file <request.json> --summary" in normalized_inputs
-    assert "full candidate and diagnostic details remain available" in normalized_inputs
-    assert "Do not repeat unchanged source inspection after a validated hit" in normalized_inputs
-    assert "Do not dump the full cached discovery or assembly report again" in normalized_inputs
-    assert "persist that Manager evidence for later warm preparations" in normalized_inputs
-    assert "evidence refresh --category delivery" in normalized_inputs
-    assert "evidence refresh --category models" in normalized_inputs
+    assert "draft --issue-id 123 --playbook-id standard-qa --output draft.json" in normalized_inputs
+    assert "no handwritten request JSON is needed" in normalized_inputs
+    assert "assemble --request-file draft.json --summary --draft-output updated-draft.json" in normalized_inputs
+    assert "The program writes known values into `draft.json`" in normalized_inputs
+    assert "Model suitability still requires assessment" in normalized_inputs
+    assert "an operational probe does not establish model capability" in normalized_inputs
     assert "cafe playbook list" not in selection
     assert "prepare_kickoff.py discover" in selection
     assert "do not repeat list/show/read" in " ".join(selection.split())

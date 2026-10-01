@@ -7,7 +7,23 @@ new schema, authority or freshness owner.
 
 ## Request file
 
-A request is UTF-8 JSON with `schema_version: 1`, `project_root`, and `issue_name`. Optional fields include `playbook_id`, `current_explicit_inputs`, `manager_decisions`, `required_decisions`, `delivery_evidence`, `model_assessments`, `current_model_sources`, `model_contradictions`, `preflight_files`, and normalized `formatter_inputs`.
+The normal entry point is `prepare_kickoff.py draft --issue-id <id> --output
+<draft.json>`, with optional `--project-root`, `--playbook-id`, `--manager-cli`
+and repeated `--phase-chain`. Use `--issue-name` instead for a nonnumeric local
+identity. The program creates and prefills this request; edit only its gaps or
+intentional overrides. Existing output files are not overwritten. The schema
+below is for inspecting or integrating requests, not a requirement to author
+a starter JSON object by hand.
+
+A request is UTF-8 JSON with `schema_version: 1`, `project_root`, and either `issue_name` or a positive numeric `issue_id` (which supplies `issue<id>`). Optional fields include `playbook_id`, `manager_cli`, `current_explicit_inputs`, `manager_decisions`, `required_decisions`, `delivery_evidence`, `model_assessments`, `current_model_sources`, `model_contradictions`, `preflight_files`, and normalized `formatter_inputs`.
+
+`manager_cli` identifies the calling Manager, not a phase model. In a Codex
+session its existing `CODEX_THREAD_ID` context also identifies that caller.
+Without a known caller or saved event chain, the event Manager remains unresolved;
+the helper does not choose another provider. Explicit inputs override saved
+preferences, which override proposal defaults. Issue-like names are never parsed
+as GitHub IDs. Only a supplied `issue_id` and the current GitHub repository can
+produce a default `gh issue close <id> --repo <repository>` proposal.
 
 `formatter_inputs` uses named JSON fields that map to the existing formatter. For example:
 
@@ -34,7 +50,12 @@ A request is UTF-8 JSON with `schema_version: 1`, `project_root`, and `issue_nam
 }
 ```
 
-An absent value remains missing. An explicitly empty `deliver` or `cleanup` list and an explicit `false` capability choice remain distinct values. The helper accepts only the declared formatter fields, encodes each value as a JSON or argv element, and rejects activation metadata, shell commands, and unknown fields.
+An absent value is filled only by the documented preference, configuration,
+template or default rules; otherwise it remains missing. An explicitly empty
+`deliver` or `cleanup` list and an explicit `false` capability choice remain
+distinct values. The helper accepts only the declared formatter fields, encodes
+each value as a JSON or argv element, and rejects activation metadata, shell
+commands, and unknown fields.
 
 ## Staged commands
 
@@ -139,6 +160,34 @@ python scripts/prepare_kickoff.py evidence clear --category models
 Catalog refresh derives current effective declarations. Delivery and model refresh require Manager-gathered evidence files; failed or incomplete refresh does not extend an older record. `inspect` reports the stored evidence without renewing it. `clear` affects only the chosen category/key. After clearing or encountering corruption, the next discovery is honestly cold and reports any evidence or decisions that must be gathered again.
 
 These records are preparation facts only. They do not authorize publication, issue changes, workflow activation, paid services, or exact delivery/cleanup actions. The complete formatter output and existing confirmation/activation boundaries remain required.
+
+### Reusable delivery template
+
+Delivery evidence may include this optional structured template alongside its
+existing `target`, `stable_conventions` and fingerprinted `sources`:
+
+```json
+{
+  "delivery_template": {
+    "deliver": [["gh", "pr", "merge", "--merge"]],
+    "deliver_description": ["Merge the reviewed PR for {issue_name}."]
+  }
+}
+```
+
+The example is applicable only to a repository whose sourced delivery route
+is a PR merge. First establish that route, then save its reusable template with
+the existing `evidence refresh --category delivery` command. Do not save a prior
+issue's concrete PR number or one-time target as a repository-wide convention.
+
+Allowed substitutions are `{issue_name}`, `{issue_id}`, `{project_root}` and
+`{worktree}`. Expansion operates on individual argv strings, with no shell or
+attribute evaluation. Escape literal braces as `{{` and `}}`. Unknown or missing
+substitutions, invalid argv shapes and mismatched descriptions remain gaps.
+The command and description arrays must have equal lengths. Only a fully valid
+cache hit supplies the template; stale, contradictory or corrupt records do not.
+Explicit current commands (including `[]`) override the template. Old narrative
+records remain readable but cannot be silently converted into executable routes.
 
 
 ### Raw check report files

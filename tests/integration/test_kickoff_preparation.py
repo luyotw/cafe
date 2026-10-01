@@ -5,7 +5,6 @@ from __future__ import annotations
 import importlib.util
 import hashlib
 import json
-import re
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -277,6 +276,82 @@ def test_returning_user_renders_same_complete_proposal_with_warm_preferences(tmp
     assert first["output"]
 
 
+def test_public_draft_prefills_owner_defaults_and_renders_the_same_contract(tmp_path, capsys):
+    cli = load_kickoff_module("prepare_kickoff")
+    inputs = load_kickoff_module("kickoff_inputs")
+    values = _formatter_inputs("issue573-prefill-journey")
+    for key in ("phase_chain", "effective_locale", "locale_source", "user_required", "manager_confirmable",
+                "proactive_review_decision"):
+        values.pop(key, None)
+    expected = inputs.render_kickoff(values)
+    assert expected["status"] == "rendered", expected
+    request, draft, output = [tmp_path / name for name in ("request.json", "draft.json", "proposal.md")]
+    request.write_text(json.dumps({"schema_version": 1, "project_root": str(PROJECT_ROOT),
+        "issue_name": values["issue_name"], "playbook_id": values["playbook_id"], "formatter_inputs": values}))
+    stores = ["--config-dir", str(tmp_path / "config"), "--cache-dir", str(tmp_path / "cache")]
+    assert cli.main(["assemble", "--request-file", str(request), "--summary", "--draft-output", str(draft), *stores]) == 0
+    report = json.loads(capsys.readouterr().out)
+    fields = json.loads(draft.read_text())["formatter_inputs"]
+    assert fields["phase_chain"] and fields["proactive_review_decision"]
+    assert fields["manager_confirmable"] and fields["user_required"] == []
+    assert {"phase_chain", "proactive_review_decision", "effective_locale"} <= set(report["prefilled"])
+    assert not {"decision_brief", "source_index", "deferred_details", "guidance"} & report.keys()
+    assert cli.main(["render", "--request-file", str(draft), "--output", str(output), *stores]) == 0
+    capsys.readouterr()
+    assert output.read_text() == expected["output"]
+    assert not (PROJECT_ROOT / ".cafe/issues" / values["issue_name"]).exists()
+
+
+def test_cached_delivery_and_issue_defaults_reach_the_complete_formatter(tmp_path, capsys, monkeypatch):
+    from cafe.utils import git_utils
+
+    monkeypatch.setattr(git_utils, "get_github_repo_name", lambda root: "example/project")
+    cli = load_kickoff_module("prepare_kickoff")
+    source = PROJECT_ROOT / "docs/settings-updates.md"
+    evidence = tmp_path / "delivery.json"
+    evidence.write_text(json.dumps({"target": "github-pr", "stable_conventions": ["Merge the reviewed PR."],
+        "sources": [{"path": "docs/settings-updates.md", "fingerprint": hashlib.sha256(source.read_bytes()).hexdigest()}],
+        "delivery_template": {"deliver": [["gh", "pr", "merge", "--merge"]],
+                              "deliver_description": ["Merge the reviewed PR for {issue_name}."]}}))
+    cache = tmp_path / "cache"
+    assert cli.main(["evidence", "refresh", "--category", "delivery", "--project-root", str(PROJECT_ROOT),
+                     "--cache-dir", str(cache), "--evidence-file", str(evidence)]) == 0
+    capsys.readouterr()
+    values = _formatter_inputs("issue999573")
+    draft, output = [tmp_path / name for name in ("draft.json", "proposal.md")]
+    stores = ["--config-dir", str(tmp_path / "config"), "--cache-dir", str(cache)]
+    create = ["draft", "--project-root", str(PROJECT_ROOT), "--issue-id", "999573",
+              "--playbook-id", values["playbook_id"], "--manager-cli", "codex", "--output", str(draft), *stores]
+    for chain in values["phase_chain"]:
+        create.extend(["--phase-chain", chain])
+    assert cli.main(create) == 3  # Product decisions and reports remain to be supplied.
+    report = json.loads(capsys.readouterr().out)
+    request = json.loads(draft.read_text())
+    fields = request["formatter_inputs"]
+    assert fields["phase_chain"] == values["phase_chain"]
+    assert fields["capability_choice"] == []
+    assert fields["delivery_contract"]["outcome"] == ""
+    original = draft.read_bytes()
+    assert cli.main(create) == 2
+    assert "already exists" in json.loads(capsys.readouterr().out)["message"]
+    assert draft.read_bytes() == original
+    assert report["delivery"]["status"] == "hit"
+    assert fields["deliver"] == [["gh", "pr", "merge", "--merge"]]
+    assert fields["cleanup"] == [["gh", "issue", "close", "999573", "--repo", "example/project"], ["cafe", "close"]]
+    assert fields["manager_mode"] == "event-driven" and fields["event_manager"] == ["codex"]
+    assert fields["worktree"].endswith("/.cafe/worktrees/" + values["issue_name"])
+    # Only fill the actual gaps; do not hand-copy any prefilled field.
+    for key in ("delivery_contract", "capability_choice", "update_preflight", "catalog_preflight"):
+        fields[key] = values[key]
+    draft.write_text(json.dumps(request))
+    assert cli.main(["render", "--request-file", str(draft), "--output", str(output), *stores]) == 0
+    capsys.readouterr()
+    assert "gh pr merge --merge" in output.read_text()
+    assert "gh issue close 999573 --repo example/project" in output.read_text()
+    assert not Path(fields["worktree"]).exists()
+    assert not (PROJECT_ROOT / ".cafe/issues" / values["issue_name"]).exists()
+
+
 def test_complete_format_render_does_not_create_contract_or_run_delivery(tmp_path: Path) -> None:
     inputs = load_kickoff_module("kickoff_inputs")
     issue_name = "issue573-kickoff-render-only-test"
@@ -467,7 +542,7 @@ def test_confirmed_inputs_fill_selected_journey_without_copying_full_reports(
     assert partial["formatter_draft"]["issue_name"] == values["issue_name"]
     assert partial["formatter_draft"]["phase_chain"] == values["phase_chain"]
     assert {item["requirement"] for item in partial["missing_decisions"]} == {
-        "formatter input: delivery_contract", "formatter input: deliver", "formatter input: cleanup"
+        "formatter input: delivery_contract", "formatter input: deliver"
     }
     assert partial["selected_graph"]["id"] == values["playbook_id"]
     assert partial["catalog"]["candidates"] == []
@@ -476,7 +551,11 @@ def test_confirmed_inputs_fill_selected_journey_without_copying_full_reports(
     path.write_text(json.dumps(request))
     assert cli.main(["assemble", *common, "--summary"]) == 0
     ready = json.loads(capsys.readouterr().out)
-    assert ready["formatter_inputs"] == values
+    assert {key: ready["formatter_inputs"][key] for key in values} == values
+    defaults = load_kickoff_module("format_kickoff_contract")._parser()
+    added = set(ready["formatter_inputs"]) - set(values)
+    assert added == set(ready["prefilled"])
+    assert all(ready["formatter_inputs"][key] == defaults.get_default(key) for key in added)
     expected = load_kickoff_module("kickoff_inputs").render_kickoff(values)
     output = tmp_path / "proposal.md"
     assert cli.main(["render", *common, "--output", str(output)]) == 0
@@ -567,10 +646,7 @@ def test_selected_draft_supplies_owner_typed_contract_and_renders_without_repair
     assert schema["properties"] == {k: v for k, v in owner["properties"].items() if k != "closeout_plan"}
     assert isinstance(template["delivery_contract"]["implementation_direction"], str)
     assert set(template["delivery_contract"]) == set(values["delivery_contract"])
-    assert template["deliver"] is None and template["cleanup"] is None
-    assert summary["decision_brief"]["request_text"] == request["request_text"]
-    assert summary["decision_brief"]["graph_reference"] == "#/selected_graph"
-    assert summary["decision_brief"]["evidence_references"] == {"delivery": "#/delivery", "models": "#/models"}
+    assert template["deliver"] is None and template["cleanup"] == [["cafe", "close"]]
     assert cli.main(["assemble", *common, "--summary", "--draft-output", str(draft)]) == 3
     capsys.readouterr()
     draft_request = json.loads(draft.read_text())
@@ -613,124 +689,6 @@ def test_public_closeout_examples_follow_existing_policy_without_authority(
     archive = next(e for e in schema["closeout_examples"] if "--archive-only" in e["argv"])
     assert not archive["valid_in_pr_mode"]
     assert schema["input_template"]["cleanup"] is None
-
-
-def test_public_draft_loads_current_owner_guidance_once_without_execution_sections(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """U14/U16/I01: first assembly supplies inspectable policy with the actual decision inputs."""
-    cli = load_kickoff_module("prepare_kickoff")
-    request = tmp_path / "request.json"
-    request.write_text(json.dumps({"schema_version": 1, "project_root": str(PROJECT_ROOT),
-                                   "issue_name": "issue573-guidance-journey", "playbook_id": "standard-qa"}))
-    args = ["assemble", "--request-file", str(request), "--summary",
-            "--config-dir", str(tmp_path / "config"), "--cache-dir", str(tmp_path / "cache")]
-    assert cli.main(args) == 3
-    plain = json.loads(capsys.readouterr().out)
-    assert cli.main([*args, "--with-guidance"]) == 3
-    guided = json.loads(capsys.readouterr().out)
-    assert guided["missing_decisions"] == plain["missing_decisions"]
-    refs = PROJECT_ROOT / "src/cafe/data/skills/use-cafe-workflow/references"
-    assert guided["guidance"]
-    for block in guided["guidance"]:
-        source = (refs / block["file"]).read_bytes()
-        assert block["sha256"] == hashlib.sha256(source).hexdigest()
-        assert block["text"] in source.decode()
-        assert block["text"].startswith(block["heading"] + "\n")
-    assert not plain.get("guidance")
-    assert any(b["file"] == "strategic_context.md" for b in guided["guidance"])
-    assert any(b["file"] == "model_selection.md" for b in guided["guidance"])
-    assert not any(b["heading"] == "## Durable Manager authority" for b in guided["guidance"])
-
-
-def test_public_guidance_file_and_preflight_examples_avoid_report_reprinting(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """U14-U16/I06: caller reads disjoint owner sections and uses complete report shapes."""
-    cli = load_kickoff_module("prepare_kickoff")
-    values = _formatter_inputs("issue573-guidance-file")
-    path = tmp_path / "request.json"
-    path.write_text(json.dumps({"schema_version": 1, "project_root": str(PROJECT_ROOT),
-                                "issue_name": values["issue_name"], "playbook_id": values["playbook_id"]}))
-    args = ["assemble", "--request-file", str(path), "--summary", "--config-dir", str(tmp_path / "config"), "--cache-dir", str(tmp_path / "cache")]
-    assert cli.main(args) == 3
-    report = json.loads(capsys.readouterr().out)
-    examples = report["input_schema"]["preflight_report_examples"]
-    # Bind observed values to the public shape; the existing formatter validates it.
-    reports = {name: {key: values[f"{name}_preflight"][key] for key in example}
-               for name, example in examples.items()}
-    for name, data in reports.items():
-        values[f"{name}_preflight"] = data
-    assert load_kickoff_module("kickoff_inputs").render_kickoff(values)["status"] == "rendered"
-    guide = tmp_path / "guide.md"
-    assert cli.main([*args, "--guidance-output", str(guide)]) == 3
-    report = json.loads(capsys.readouterr().out)
-    assert "guidance" not in report
-    lines = guide.read_text().splitlines(keepends=True)
-    prior_end = 0
-    for section in report["guidance_index"]:
-        assert section["start_line"] > prior_end
-        text = "".join(lines[section["start_line"]-1:section["end_line"]])
-        assert text.startswith(section["heading"] + "\n")
-        owner = PROJECT_ROOT / "src/cafe/data/skills/use-cafe-workflow/references" / section["file"]
-        assert text in owner.read_text()
-        prior_end = section["end_line"]
-    assert len(json.dumps(report).encode()) < len(guide.read_bytes())
-
-
-def test_guided_caller_can_present_complete_render_without_reopening_policy(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """U14-U16/I01/I06: the normal read supplies presentation policy and one full render."""
-    cli = load_kickoff_module("prepare_kickoff")
-    values = _formatter_inputs("issue573-presentation-journey")
-    request, draft, guide, output = [tmp_path / name for name in
-                                     ("request.json", "draft.json", "guide.md", "proposal.md")]
-    request.write_text(json.dumps({"schema_version": 1, "project_root": str(PROJECT_ROOT),
-        "issue_name": values["issue_name"], "playbook_id": values["playbook_id"]}))
-    assert cli.main(["assemble", "--request-file", str(request), "--summary",
-        "--guidance-output", str(guide), "--draft-output", str(draft),
-        "--config-dir", str(tmp_path / "config"), "--cache-dir", str(tmp_path / "cache")]) == 3
-    report = json.loads(capsys.readouterr().out)
-    sections = {(section["file"], section["heading"]) for section in report["guidance_index"]}
-    # These are public owner sections, not a copy assertion about prescribed wording.
-    assert ("kickoff.md", "### Render the proposal") in sections
-    assert ("workflow_progress.md", "## Initial kickoff presentation") in sections
-    assert ("workflow_progress.md", "## Established workflow presentation") not in sections
-    assert ("workflow_progress.md", "## Minimal calls") not in sections
-    assert ("kickoff.md", "### Formatter CLI example") not in sections
-    assert ("kickoff.md", "### Attached execution polling") not in sections
-    assert ("strategic_context.md", "## Applying authority") in sections
-    assert ("model_selection.md", "## Classify the required capability band") in sections
-    # Even callers that open the normal reference directly should not preload
-    # post-confirmation execution examples while preparing a read-only proposal.
-    refs = PROJECT_ROOT / "src/cafe/data/skills/use-cafe-workflow/references"
-    entry = (refs / "kickoff.md").read_text()
-    examples = re.findall(r"```[^\n]*\n(.*?)```", entry, flags=re.S)
-    assert not any("cafe prepare " in example or "--activate" in example for example in examples)
-    execution = (refs / "kickoff_execution.md").read_text()
-    assert "cafe prepare " in execution
-    assert "kickoff_execution.md" in entry
-    # Consume only the emitted guidance ranges once; no second owner-file read is needed.
-    lines = guide.read_text().splitlines(keepends=True)
-    visited = set()
-    for section in report["guidance_index"]:
-        span = set(range(section["start_line"] - 1, section["end_line"]))
-        assert not visited.intersection(span)
-        visited.update(span)
-    assert visited == set(range(len(lines)))
-    supplied = json.loads(draft.read_text())
-    supplied["formatter_inputs"].update(values)
-    draft.write_text(json.dumps(supplied))
-    before = set((PROJECT_ROOT / ".cafe/issues").glob(values["issue_name"] + "*"))
-    assert cli.main([*report["render_command"][2:], "--output", str(output)]) == 0
-    receipt = json.loads(capsys.readouterr().out)
-    expected = load_kickoff_module("kickoff_inputs").render_kickoff(values)
-    assert receipt["status"] == "rendered"
-    assert output.read_text() == expected["output"]
-    assert expected["proposal"]["delivery_contract"]
-    assert expected["proposal"]["phases"]
-    assert set((PROJECT_ROOT / ".cafe/issues").glob(values["issue_name"] + "*")) == before
 
 
 def test_normal_caller_keeps_evidence_stores_when_proposal_output_moves(
@@ -1078,70 +1036,9 @@ def test_parallel_report_capture_preserves_both_original_report_references(
         assert request["preflight_metadata"][kind]["decision"] is None
 
 
-def test_decision_reading_path_preserves_required_judgments_and_complete_render(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """U14-U16/I01/I06: public first response routes decisions, not a whole guide reread."""
-    cli = load_kickoff_module("prepare_kickoff")
-    values = _formatter_inputs("issue573-reading-path")
-    values.update(effective_locale="zh-TW", locale_source="explicit", repository_content_locale="en-US")
-    request, draft, output = [tmp_path / name for name in ("request.json", "draft.json", "proposal.md")]
-    data = {"schema_version": 1, "request_text": "Prepare the confirmed scope.",
-            **{key: values[key] for key in ("project_root", "issue_name", "playbook_id")},
-            "current_explicit_inputs": {"effective_locale": "zh-TW", "locale_source": "explicit",
-                                        "repository_content_locale": "en-US"}}
-    request.write_text(json.dumps(data))
-    args = ["assemble", "--request-file", str(request), "--summary", "--draft-output", str(draft),
-            "--config-dir", str(tmp_path / "config"), "--cache-dir", str(tmp_path / "cache")]
-    assert cli.main(args) == 3
-    report = json.loads(capsys.readouterr().out)
-    brief = report["decision_brief"]
-    assert brief["fixed_inputs"]["effective_locale"]["value"] == "zh-TW"
-    assert brief["fixed_inputs"]["effective_locale"]["source"] == "current_explicit_inputs"
-    mandatory = {"scope", "models", "actions", "confirmation", "locale", "preflight", "presentation"}
-    assert mandatory <= {q["id"] for q in brief["questions"] if q["requires_current_judgment"]}
-    # Every question maps to a real source section; each section is read once
-    # even when it serves multiple decisions. No prose equality asserts judgment.
-    indexed = {}
-    for source in brief["reading_list"]:
-        raw = Path(source["path"]).read_bytes()
-        assert hashlib.sha256(raw).hexdigest() == source["sha256"]
-        lines = raw.decode().splitlines()
-        visited = set()
-        for section in source["sections"]:
-            span = set(range(section["start_line"] - 1, section["end_line"]))
-            assert not span & visited
-            visited |= span
-            assert lines[section["start_line"] - 1] == section["heading"]
-            indexed[section["id"]] = section
-    assert not any(section["heading"] == "## Select when no authoritative choice exists" for section in indexed.values())
-    for question in brief["questions"]:
-        assert question["policy_sections"]
-        assert all(key in indexed for key in question["policy_sections"])
-    # The draft is the only full copy of editable values in the normal response;
-    # standalone schema and old summary remain available for existing consumers.
-    assert "formatter_draft" not in report and "input_template" not in report
-    assert "field_shapes" in brief
-    assert cli.main(["schema"]) == 0
-    schema = json.loads(capsys.readouterr().out)
-    assert brief["field_shapes"]["formatter_field_schema"] == schema["formatter_field_schema"]
-    prepared = json.loads(draft.read_text())
-    prepared["formatter_inputs"].update(values)
-    draft.write_text(json.dumps(prepared))
-    assert cli.main([*report["render_command"][2:], "--output", str(output)]) == 0
-    capsys.readouterr()
-    assert output.read_text() == load_kickoff_module("kickoff_inputs").render_kickoff(values)["output"]
-    assert not (PROJECT_ROOT / ".cafe/issues" / values["issue_name"]).exists()
-    # Field completeness must never erase current authority/suitability judgments.
-    assert cli.main(["assemble", *report["render_command"][3:], "--summary"]) == 0
-    complete = json.loads(capsys.readouterr().out)
-    assert mandatory <= {q["id"] for q in complete["decision_brief"]["questions"] if q["requires_current_judgment"]}
-
-
-@pytest.mark.parametrize("presentation", ["json", "decisions"])
 @pytest.mark.parametrize("change", ["delivery_source", "model_source", "expired", "workload"])
-def test_reading_path_reopens_only_affected_evidence_questions(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], change: str, presentation: str
+def test_summary_reports_changed_evidence_without_assigning_models(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], change: str
 ) -> None:
     """U05/U12/U14-U16/I05: a valid hit is useful evidence, never suitability or authority."""
     cli = load_kickoff_module("prepare_kickoff")
@@ -1167,15 +1064,12 @@ def test_reading_path_reopens_only_affected_evidence_questions(
     capsys.readouterr()
     request = tmp_path / "request.json"
     data = {"schema_version": 1, "project_root": str(project), "issue_name": "new-issue", "playbook_id": "standard-qa"}
-    args = ["assemble", "--request-file", str(request), "--summary", presentation, "--config-dir", str(tmp_path / "config"), "--cache-dir", str(cache)]
+    args = ["assemble", "--request-file", str(request), "--summary", "--config-dir", str(tmp_path / "config"), "--cache-dir", str(cache)]
     request.write_text(json.dumps(data))
     assert cli.main(args) == 3
     before = json.loads(capsys.readouterr().out)
-    questions = {q["id"]: q for q in before["decision_brief"]["questions"]}
-    assert questions["models"]["evidence_gaps"] == []
-    assert questions["actions"]["evidence_gaps"] == []
-    assert questions["models"]["requires_current_judgment"]
-    assert questions["actions"]["requires_current_judgment"]
+    assert before["delivery"]["status"] == "hit"
+    assert before["models"][0]["status"] == "hit"
     if change == "delivery_source":
         source.write_text("Changed delivery policy.\n")
     elif change == "model_source":
@@ -1191,23 +1085,26 @@ def test_reading_path_reopens_only_affected_evidence_questions(
     request.write_text(json.dumps(data))
     assert cli.main(args) == 3
     after = json.loads(capsys.readouterr().out)
-    questions = {q["id"]: q for q in after["decision_brief"]["questions"]}
-    affected, untouched = ("actions", "models") if change == "delivery_source" else ("models", "actions")
-    assert questions[affected]["evidence_gaps"]
-    assert questions[untouched]["evidence_gaps"] == []
-    assert questions[affected]["policy_sections"]
-    assert questions["confirmation"]["requires_current_judgment"]
+    if change == "delivery_source":
+        assert after["delivery"]["status"] == "miss"
+        assert after["models"][0]["status"] == "hit"
+    elif change == "workload":
+        assert after["models"][0]["assessment"]["workloads"] == ["implementation"]
+        assert after["delivery"]["status"] == "hit"
+    else:
+        assert after["models"][0]["status"] == "miss"
+        assert after["delivery"]["status"] == "hit"
     assert after["selected_graph"]["mandatory_confirmation_gates"] == before["selected_graph"]["mandatory_confirmation_gates"]
 
 
-@pytest.mark.parametrize("presentation,mode_values", [
-    ("json", {}),
-    ("decisions", {"manager_mode": "event-driven", "event_manager": ["codex"]}),
-    ("decisions", {"manager_mode": "attached", "poll_interval_seconds": 30}),
-    ("decisions", {"manager_mode": "unattended"}),
+@pytest.mark.parametrize("mode_values", [
+    {},
+    {"manager_mode": "event-driven", "event_manager": ["codex"]},
+    {"manager_mode": "attached", "poll_interval_seconds": 30},
+    {"manager_mode": "unattended"},
 ])
-def test_normal_summary_indexes_sources_and_routes_missing_reports_to_same_draft(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, presentation: str, mode_values: dict
+def test_summary_preserves_evidence_and_routes_missing_reports_to_same_draft(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, mode_values: dict
 ) -> None:
     """U14-U16/I01/I06: one decision index and a usable check/capture/render continuation."""
     import io
@@ -1235,44 +1132,24 @@ def test_normal_summary_indexes_sources_and_routes_missing_reports_to_same_draft
     assert cli.main(["evidence", "refresh", "--category", "models", "--project-root", str(PROJECT_ROOT),
         "--cache-dir", str(tmp_path / "cache"), "--evidence-file", str(evidence)]) == 0
     capsys.readouterr()
-    argv = ["assemble", "--request-file", str(request), "--summary", presentation, "--draft-output", str(draft),
+    argv = ["assemble", "--request-file", str(request), "--summary", "--draft-output", str(draft),
             "--config-dir", str(tmp_path / "config"), "--cache-dir", str(tmp_path / "cache")]
     assert cli.main(argv) == 3
     report = json.loads(capsys.readouterr().out)
     assert report["delivery"]["status"] == "hit"
     assert report["delivery"]["stable_conventions"] == ["Respect current delivery policy."]
-    source_index = report["source_index"]
-    assert len({json.dumps(v, sort_keys=True) for v in source_index.values()}) == len(source_index)
-    resolved = [source_index[ref["$ref"].split("/")[-1]] for ref in report["delivery"]["sources"]]
-    assert resolved[0]["fingerprint"] == hashlib.sha256(source.read_bytes()).hexdigest()
-    if presentation == "json":
-        assert all(list(ref) == ["$ref"] for ref in report["delivery"]["manifest"]["sources"])
-    else:
-        assert "sources" not in report["delivery"]["manifest"]
-        assert report["deferred_details"]["discovery_dependencies"]["inspect_reference"]
+    assert report["delivery"]["sources"][0]["fingerprint"] == hashlib.sha256(source.read_bytes()).hexdigest()
     assessment = report["models"][0]["assessment"]
     assert report["models"][0]["status"] == "hit"
     assert assessment["workloads"] == model["workloads"] and assessment["limitations"] == model["limitations"]
-    assert [source_index[r["$ref"].split("/")[-1]] for r in assessment["sources"]] == model["sources"]
-    brief = report["decision_brief"]
+    assert assessment["sources"] == model["sources"]
     if mode_values:
-        types = brief["field_shapes"]["formatter_field_schema"]
-        for key in ("event_manager", "poll_interval_seconds"):
-            assert key in types  # An unresolved mode exposes both alternatives.
         data = json.loads(draft.read_text())
+        # Changing modes replaces the previous mode's prefilled dependencies.
+        for field in ("event_manager", "poll_interval_seconds"):
+            data["formatter_inputs"].pop(field, None)
         data["formatter_inputs"].update(mode_values)
         draft.write_text(json.dumps(data))
-    questions = {q["id"]: q for q in brief["questions"]}
-    assert len(questions) == 7 and all(q["requires_current_judgment"] for q in questions.values())
-    # Gaps refer to one question/source/type index; they do not repeat definitions.
-    for gap in brief["missing_fields"]:
-        assert gap["question_id"] in questions
-        assert "policy_sections" not in gap and "available" not in gap
-        assert gap["field_reference"].startswith("#/decision_brief/field_shapes/")
-    sections = {s["id"] for source in brief["reading_list"] for s in source["sections"]}
-    assert all(set(q["policy_sections"]) <= sections for q in questions.values())
-    assert all("read_argv" not in source for source in brief["reading_list"])
-    assert all("line_range" in section for source in brief["reading_list"] for section in source["sections"])
     # Same draft, blocked before formatter execution: no misleading null-input error.
     render = [*report["render_command"][2:], "--output", str(output)]
     assert cli.main(render) == 3
@@ -1336,104 +1213,6 @@ def test_missing_reports_block_with_actionable_continuation_not_a_null_type_erro
     assert json.loads(path.read_text()) == request
 
 
-def test_decision_view_locator_preserves_facts_without_full_graph_or_schema_repetition(tmp_path, capsys):
-    """U14-U16/I01/I06: the public locator yields a usable view and unchanged render."""
-    cli = load_kickoff_module("prepare_kickoff")
-    values = _formatter_inputs("issue573-decisions-journey")
-    request, draft = tmp_path / "request.json", tmp_path / "draft.json"
-    request.write_text(json.dumps({"schema_version": 1, "project_root": str(PROJECT_ROOT),
-        "issue_name": values["issue_name"], "playbook_id": values["playbook_id"],
-        "current_explicit_inputs": {"effective_locale": values["effective_locale"]}}))
-    stores = ["stores", "--request-file", str(request), "--config-dir", str(tmp_path / "config"),
-              "--cache-dir", str(tmp_path / "cache")]
-    assert cli.main([*stores, "--summary", "decisions"]) == 0
-    locator = json.loads(capsys.readouterr().out)
-    # Removing presentation forwarding must fail this public normal-path journey.
-    assert cli.main([*locator["next_command"][2:], "--draft-output", str(draft)]) == 3
-    stdout = capsys.readouterr().out
-    view = json.loads(stdout)
-    assert view["presentation"] == "decisions"
-    assert view["storage"] == locator["storage"]
-    assert "\n  " in stdout  # Already directly readable; no consumer pretty printer.
-    assert cli.main([*locator["next_command"][2:-1], "json", "--draft-output", str(draft)]) == 3
-    legacy = json.loads(capsys.readouterr().out)
-    assert [(c["id"], c["eligible"], c["applicability"], c["diagnostics"]) for c in view["catalog"]["candidate_overview"]] == [
-        (c["id"], c["eligible"], c["applicability"], c["diagnostics"]) for c in legacy["catalog"]["candidate_overview"]]
-    for key in ("profiles", "mandatory_confirmation_gates", "confirmation_gates", "capability_setup", "behavior"):
-        assert view["selected_graph"][key] == legacy["selected_graph"][key]
-    for result in (view, legacy):
-        for question in result["decision_brief"]["questions"]:
-            question["evidence_gaps"].sort(key=lambda gap: json.dumps(gap, sort_keys=True))
-    assert view["decision_brief"]["questions"] == legacy["decision_brief"]["questions"]
-    assert view["decision_brief"]["field_shapes"]["delivery_contract"] == legacy["decision_brief"]["field_shapes"]["delivery_contract"]
-    assert "roles" not in view["catalog"]["candidate_overview"][0]
-    assert "action_input_examples" not in view["decision_brief"]["field_shapes"]
-    # Optional-to-parser choices still need types for the mandatory current judgments.
-    types = view["decision_brief"]["field_shapes"]["formatter_field_schema"]
-    assert types["phase_chain"]["items"]["type"] == "string"
-    assert types["user_required"]["items"]["type"] == "string"
-    assert types["current_checkout"]["type"] == "boolean"
-    # Every real gap navigates to an existing owner type, including composite checkout.
-    for gap in view["decision_brief"]["missing_fields"]:
-        references = gap.get("field_references", [gap.get("field_reference")])
-        for reference in references:
-            target = view
-            for component in reference.removeprefix("#/").split("/"):
-                target = target[component]
-            assert target["type"]
-    assert len(json.dumps(view)) < len(json.dumps(legacy))
-    for deferred in view["deferred_details"].values():
-        assert deferred["inspect_reference"]
-    prepared = json.loads(draft.read_text())
-    prepared["formatter_inputs"].update(values)
-    draft.write_text(json.dumps(prepared))
-    output = tmp_path / "proposal.md"
-    assert cli.main([*view["render_command"][2:], "--output", str(output)]) == 0
-    capsys.readouterr()
-    assert output.read_text() == load_kickoff_module("kickoff_inputs").render_kickoff(values)["output"]
-    assert not (PROJECT_ROOT / ".cafe/issues" / values["issue_name"]).exists()
-
-
-def test_decision_view_custom_graph_changes_and_invalid_candidates_remain_visible(tmp_path, capsys):
-    """U07-U09/I03: inspectable detail is deferred without hiding custom requirements."""
-    cli = load_kickoff_module("prepare_kickoff")
-    project = tmp_path / "project"
-    playbooks = project / ".cafe/playbooks"
-    playbooks.mkdir(parents=True)
-    (playbooks / "custom.yaml").write_text(
-        "playbook: {id: custom, applicability: {summary: Custom, use_when: [x], avoid_when: [y]}}\n"
-        "roles: {operator: {}}\nskills: {workflow: {shared: [cafe-workflow-common]}, chat: {shared: []}}\n"
-        "steps:\n  first: {role: operator, skill: custom-step, on: {await_agent: _done}}\n")
-    (playbooks / "broken.yaml").write_text("playbook: {id: broken}\nsteps: []\n")
-    skill = project / ".cafe/skills/custom-step/SKILL.md"
-    skill.parent.mkdir(parents=True)
-    skill.write_text("---\nname: custom-step\ndescription: Custom\nworkflow:\n"
-        "  execution_profile:\n    workload: implementation\n    reasoning: high\n"
-        "    risk_domains: [integration]\n    fallback_strength: equivalent\n---\n")
-    request = tmp_path / "request.json"
-    request.write_text(json.dumps({"schema_version": 1, "project_root": str(project),
-        "issue_name": "custom-issue", "playbook_id": "custom"}))
-    argv = ["assemble", "--request-file", str(request), "--summary", "decisions",
-        "--draft-output", str(tmp_path / "draft.json"), "--config-dir", str(tmp_path / "config"),
-        "--cache-dir", str(tmp_path / "cache")]
-    assert cli.main(argv) == 3
-    before = json.loads(capsys.readouterr().out)
-    assert before["selected_graph"]["steps"]["first"]["on"]["await_agent"] == "_done"
-    assert "implementation" in before["selected_graph"]["profiles"]["first"]["workloads"]
-    assert any(d["id"] == "broken" for d in before["catalog"]["diagnostics"])
-    # Existing full inspection resolves deferred defaults without a new endpoint.
-    assert cli.main(before["inspect_references"]["catalog"][2:]) == 0
-    full = json.loads(capsys.readouterr().out)
-    assert full["selected_candidate"]["profiles"] == before["selected_graph"]["profiles"]
-    skill.write_text(skill.read_text().replace("workload: implementation", "workload: planning"))
-    assert cli.main(argv) == 3
-    after = json.loads(capsys.readouterr().out)
-    assert after["catalog"]["reuse"]["custom"] is False
-    assert "planning" in after["selected_graph"]["profiles"]["first"]["workloads"]
-    assert any(g.get("workload") == "planning" for q in after["decision_brief"]["questions"] for g in q["evidence_gaps"])
-    assert all(q["requires_current_judgment"] for q in after["decision_brief"]["questions"])
-
-
 @pytest.mark.parametrize("mode_values,needed,valid", [
     ({}, {"event_manager", "poll_interval_seconds"}, False),
     ({"manager_mode": "event-driven"}, {"event_manager"}, False),
@@ -1453,9 +1232,10 @@ def test_decision_view_custom_graph_changes_and_invalid_candidates_remain_visibl
     ({"manager_mode": "unknown"}, {"event_manager", "poll_interval_seconds"}, False),
 ])
 def test_operating_mode_decisions_expose_owner_types_without_changing_validation(
-    tmp_path, capsys, mode_values, needed, valid
+    tmp_path, capsys, monkeypatch, mode_values, needed, valid
 ):
     """U14-U16/I06: current mode choices reveal dependencies, never authorize them."""
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
     cli = load_kickoff_module("prepare_kickoff")
     values = _formatter_inputs("issue573-mode-types")
     values.pop("manager_mode")
@@ -1463,22 +1243,15 @@ def test_operating_mode_decisions_expose_owner_types_without_changing_validation
     request, draft, output = [tmp_path / name for name in ("request.json", "draft.json", "proposal.md")]
     request.write_text(json.dumps({"schema_version": 1, "project_root": str(PROJECT_ROOT),
         "issue_name": values["issue_name"], "playbook_id": values["playbook_id"], "formatter_inputs": values}))
-    argv = ["assemble", "--request-file", str(request), "--summary", "decisions", "--draft-output", str(draft),
+    argv = ["assemble", "--request-file", str(request), "--summary", "--draft-output", str(draft),
         "--config-dir", str(tmp_path / "config"), "--cache-dir", str(tmp_path / "cache")]
     assert cli.main(argv) in (0, 3)
     view = json.loads(capsys.readouterr().out)
-    types = view["decision_brief"]["field_shapes"]["formatter_field_schema"]
-    dependents = {"event_manager", "poll_interval_seconds"}
-    assert set(types) & dependents == needed
-    # Owner equality is an offline assertion; the normal caller uses this view only.
+    types = view["input_schema"]["formatter_field_schema"]
     owner = load_kickoff_module("kickoff_inputs").request_schema()["formatter_field_schema"]
-    for key in needed:
-        assert types[key] == owner[key]
+    assert types == owner  # No conditional type projection to omit dependent fields.
     for key, value in mode_values.items():
-        assert view["decision_brief"]["fixed_inputs"][key]["value"] == value
-    sections = {s["id"] for r in view["decision_brief"]["reading_list"] for s in r["sections"]}
-    assert all(q["requires_current_judgment"] and set(q["policy_sections"]) <= sections
-               for q in view["decision_brief"]["questions"])
+        assert json.loads(draft.read_text())["formatter_inputs"][key] == value
     before = json.loads(request.read_text())
     # Use the original supplied data: projection must not sanitize bad decisions.
     result = cli.main(["render", "--request-file", str(request), "--output", str(output),

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import hashlib
 import importlib.util
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -97,7 +97,8 @@ def request_schema() -> dict[str, Any]:
     return {
         "schema_version": 1,
         "delivery_contract": contract_schema,
-        "input_template": {"delivery_contract": contract_template, "deliver": None, "cleanup": None},
+        "input_template": {"delivery_contract": contract_template, "deliver": None, "cleanup": None,
+                           "phase_chain": [], "capability_choice": []},
         "closeout_examples": closeout_examples,
         "action_input_examples": {
             "described_action": {"actions": [["<executable>", "<literal argument>"]],
@@ -144,6 +145,8 @@ def request_schema() -> dict[str, Any]:
             "preflight_files": {"update": "/tmp/update.json", "catalog": "/tmp/catalog.json"},
             "formatter_inputs": {},
         },
+        "issue_id": "An explicit positive numeric issue ID supplies issue<id> when issue_name is absent. It is never inferred from an issue-like name.",
+        "manager_cli": "Current calling Manager CLI; context, not a model choice. Codex sessions are also recognized by CODEX_THREAD_ID.",
         "decision_examples": {
             "phase_chain": ["develop=codex:<exact-model>"],
             "capability_choice": ["pr.auto_create=true"],
@@ -159,6 +162,18 @@ def _is_string_list(value: Any) -> bool:
     return isinstance(value, list) and all(isinstance(item, str) for item in value)
 
 
+def normalize_request_identity(request: dict[str, Any]) -> dict[str, Any]:
+    """An explicit numeric issue ID can supply the conventional local name."""
+    result = dict(request)
+    if "issue_id" in result:
+        issue_id = result["issue_id"]
+        if isinstance(issue_id, bool) or not re.fullmatch(r"[1-9][0-9]*", str(issue_id)):
+            raise ValueError("issue_id must be a positive integer")
+        result["issue_id"] = str(issue_id)
+        result.setdefault("issue_name", "issue" + str(issue_id))
+    return result
+
+
 def normalize_formatter_inputs(values: dict[str, Any]) -> dict[str, Any]:
     """Validate normalized fields without collapsing absent, false, or empty values."""
     if not isinstance(values, dict):
@@ -169,19 +184,15 @@ def normalize_formatter_inputs(values: dict[str, Any]) -> dict[str, Any]:
     }
     found_prohibited = sorted(prohibited.intersection(values))
     unknown = sorted(set(values) - _ALLOWED_FIELDS - prohibited)
-    if found_prohibited or unknown:
-        return {
-            "status": "invalid",
-            "diagnostics": [
-                *(f"activation_or_authority_field_rejected:{key}" for key in found_prohibited),
-                *(f"unknown_formatter_field:{key}" for key in unknown),
-            ],
-            "missing": [],
-        }
+    # Keep the editable values even on failure. Invalid fields still block argv
+    # construction/rendering; they must never erase unrelated prefilled values.
+    diagnostics: list[str] = [
+        *(f"activation_or_authority_field_rejected:{key}" for key in found_prohibited),
+        *(f"unknown_formatter_field:{key}" for key in unknown),
+    ]
     missing = sorted(key for key in _REQUIRED_FIELDS if key not in values or values[key] is None)
     if "worktree" not in values and values.get("current_checkout") is not True:
         missing.append("checkout")
-    diagnostics: list[str] = []
     if "playbook_id" in values and (not isinstance(values["playbook_id"], str) or not values["playbook_id"].strip()):
         diagnostics.append("playbook_id_must_be_nonempty")
     if "issue_name" in values and (not isinstance(values["issue_name"], str) or not values["issue_name"].strip()):
@@ -405,6 +416,7 @@ def compact_discovery_summary(
             "diagnostics": delivery.get("diagnostics", []),
             "discovery_gap": delivery.get("discovery_gap"),
             "stable_conventions": delivery.get("stable_conventions", []),
+            "delivery_template": delivery.get("delivery_template"),
             "sources": delivery.get("sources", []),
             "current_observations": observations,
             "manifest": {
@@ -436,6 +448,7 @@ def discover_kickoff(
     """Gather reusable inputs while leaving issue assessment and selection to Manager."""
     if not isinstance(request, dict) or request.get("schema_version") != 1:
         return {"stage": "discovery", "status": "invalid", "diagnostics": ["unsupported_request_schema"]}
+    request = normalize_request_identity(request)
     project_root = Path(request.get("project_root", Path.cwd())).expanduser().resolve()
     issue_name = request.get("issue_name")
     if not isinstance(issue_name, str) or not issue_name.strip():
@@ -522,367 +535,22 @@ def discover_kickoff(
         "delivery": delivery, "models": models, "diagnostics": list(catalog.get("diagnostics", [])),
     }
 
-def kickoff_guidance(
-    request: dict[str, Any] | None = None, summary: dict[str, Any] | None = None,
-) -> list[dict[str, Any]]:
-    """Read current owner sections once; this projection owns no policy or saved state."""
-    selections = {
-        "kickoff.md": ["## Conversation locale checklist", "## Repository content locale checklist",
-                       "## Repository-informed deliver and cleanup plan", "## Kickoff contract: first blocking gate",
-                       "### Complete runtime and catalog preflight", "### Derive confirmation gates",
-                       "### Delivery facts to confirm", "### Checkout and existing contracts",
-                       "### Render the proposal"],
-        "strategic_context.md": None,
-        "playbook_selection.md": None,
-        "model_selection.md": ["# Issue Assessment And Model Selection", "## Assess before proposing models",
-                               "## Resolve phase execution requirements", "## Keep model ownership outside phase agents",
-                               "## Classify the required capability band", "## Select exact chains",
-                               "## Model and fallback preflight", "### Reuse successful preflight evidence"],
-        "project_global_skill_sync.md": ["# Runtime And Catalog Preflight", "## Route the check results",
-                                         "## Manager-managed runtime-update decision"],
-        "workflow_progress.md": ["## Initial kickoff presentation"],
-    }
-    # A valid current selection ends candidate selection, not scope assessment,
-    # independent QA judgment, model suitability or confirmation. No cached
-    # repository-wide selection is accepted here. No-argument inspection is full.
-    if request and summary and (summary.get("selected_graph") or {}).get("eligible"):
-        if request.get("playbook_id") == summary["selected_graph"].get("id"):
-            selections["playbook_selection.md"] = [
-                "# Playbook Selection", "## Resolve authoritative selections first",
-                "## Independent QA decision", "## Record and reconfirm"]
-    result = []
-    for filename, headings in selections.items():
-        path = Path(__file__).resolve().parent.parent / "references" / filename
-        raw = path.read_bytes()
-        text = raw.decode("utf-8")
-        lines = text.splitlines(keepends=True)
-        starts = []
-        fenced = False
-        for index, line in enumerate(lines):
-            if line.startswith(("```", "~~~")):
-                fenced = not fenced
-            if not fenced and line.startswith("#") and " " in line:
-                prefix = line.split(" ", 1)[0]
-                if set(prefix) == {"#"}:
-                    starts.append((index, line.strip()))
-        found = set()
-        for i, (start, heading) in enumerate(starts):
-            if headings is not None and heading not in headings:
-                continue
-            found.add(heading)
-            end = starts[i + 1][0] if i + 1 < len(starts) else len(lines)
-            result.append({"file": filename, "heading": heading,
-                           "sha256": hashlib.sha256(raw).hexdigest(), "text": "".join(lines[start:end]),
-                           "path": str(path), "start_line": start + 1, "end_line": end})
-        if headings is not None and set(headings) - found:
-            raise ValueError(f"kickoff guidance owner headings changed: {filename}")
-    return result
-
-
 def preparation_template(request: dict[str, Any], draft: dict[str, Any]) -> dict[str, Any]:
     """Return an editable request; placeholders never become resolved assembly inputs."""
     template = request_schema()["input_template"]
     template.update(draft)
     result = json.loads(json.dumps(request))
     result["formatter_inputs"] = template
+    # Explicit values already have an editable home. Do not duplicate a typo
+    # (or a valid override) and force the caller to correct two copies.
+    for field in result.get("current_explicit_inputs", {}):
+        result["formatter_inputs"].pop(field, None)
     # Retain report references, not another hand-copied report or new metadata.
     for file_key, field in (("update", "update_preflight"), ("catalog", "catalog_preflight")):
         if file_key in request.get("preflight_files", {}) and field not in request.get("formatter_inputs", {}) and field not in request.get("current_explicit_inputs", {}):
             result["formatter_inputs"].pop(field, None)
     return result
 
-
-def decision_brief(
-    request: dict[str, Any], missing: list[dict[str, str]],
-    *, summary: dict[str, Any] | None = None, assembled: dict[str, Any] | None = None,
-    indexed: bool = False,
-) -> dict[str, Any]:
-    """Join current gaps to existing owner sections; never decide applicability or authority."""
-    summary, assembled = summary or {}, assembled or {}
-    graph = summary.get("selected_graph") or {}
-    delivery = summary.get("delivery") or {}
-    models = summary.get("models", [])
-    # These questions route judgments to their existing owners. They are not a
-    # completeness/authorization gate, and remain present for a fully filled draft.
-    definitions = [
-        ("scope", "Does this issue fit the current mandate, strategy and selected graph?",
-         ["request_text", "selected_graph.applicability", "catalog.candidate_overview"],
-         ["strategic_context.md", "playbook_selection.md"]),
-        ("models", "Which exact chains meet each selected phase's workload, reasoning and risks?",
-         ["selected_graph.profiles", "models[].assessment", "models[].provenance"], ["model_selection.md"]),
-        ("actions", "What exact delivery/cleanup targets and effects are proposed, and what is currently authorized?",
-         ["delivery.stable_conventions", "delivery.current_observations", "delivery.sources", "selected_graph.capability_setup"],
-         ["## Repository-informed deliver and cleanup plan", "### Delivery facts to confirm", "### Checkout and existing contracts"]),
-        ("confirmation", "Who owns each assignable decision and mandatory stop, and what still needs full confirmation?",
-         ["selected_graph.confirmation_gates", "selected_graph.mandatory_confirmation_gates", "selected_graph.steps"],
-         ["## Kickoff contract: first blocking gate", "### Derive confirmation gates"]),
-        ("locale", "Are conversation and repository content locales resolved with their actual provenance?",
-         ["preferences", "current_explicit_inputs"],
-         ["## Conversation locale checklist", "## Repository content locale checklist"]),
-        ("preflight", "What do the complete current check reports require before this proposal can proceed?",
-         ["preflight_files", "preflight_metadata"],
-         ["### Complete runtime and catalog preflight", "project_global_skill_sync.md"]),
-        ("presentation", "How will the complete rendered proposal, literal actions and confirmation be presented faithfully?",
-         ["render_command", "draft_output"], ["### Render the proposal", "workflow_progress.md"]),
-    ]
-    questions = [{"id": key, "question": question, "available": refs,
-                  "requires_current_judgment": True, "evidence_gaps": [], "policy_sections": []}
-                 for key, question, refs, _ in definitions]
-    by_id = {item["id"]: item for item in questions}
-    reading = {}
-    for section in kickoff_guidance(request, summary):
-        consumers = [key for key, _, _, selectors in definitions
-                     if section["file"] in selectors or section["heading"] in selectors]
-        if not consumers:
-            raise ValueError(f"kickoff section has no decision owner: {section['heading']}")
-        section_id = f"s{sum(len(v['sections']) for v in reading.values())}" if indexed else section["file"] + ":" + section["heading"]
-        entry = reading.setdefault(section["path"], {
-            "path": section["path"], "sha256": section["sha256"], "sections": []})
-        entry["sections"].append({"id": section_id, "heading": section["heading"],
-                                  "start_line": section["start_line"], "end_line": section["end_line"],
-                                  "questions": consumers})
-        for key in consumers:
-            by_id[key]["policy_sections"].append(section_id)
-    for entry in reading.values():
-        # One argv per file reads the disjoint required sections, rather than
-        # reading a whole concatenated guide and later recovering its slices.
-        ranges = ";".join(f"{s['start_line']},{s['end_line']}p" for s in entry["sections"])
-        if indexed:
-            for section in entry["sections"]:
-                section["line_range"] = f"{section['start_line']},{section['end_line']}p"
-        else:
-            entry["read_argv"] = ["sed", "-n", ranges, entry["path"]]
-
-    if delivery.get("status") != "hit" or delivery.get("discovery_gap"):
-        by_id["actions"]["evidence_gaps"].append({
-            "question": "Which missing or changed repository sources establish the delivery route?",
-            "diagnostics": delivery.get("diagnostics", []), "inspect_reference": delivery.get("inspect_reference")})
-    if not models:
-        by_id["models"]["evidence_gaps"].append({"question": "Where is dated primary-source evidence for the proposed exact models?"})
-    for index, model in enumerate(models):
-        if model.get("status") != "hit":
-            by_id["models"]["evidence_gaps"].append({"question": "What fresh evidence resolves this model miss?",
-                "reference": f"#/models/{index}", "diagnostics": model.get("diagnostics", []),
-                "inspect_reference": model.get("inspect_reference")})
-    # Literal workload coverage is evidence, not a ranking or suitability decision.
-    # Unknown transfers remain questions for Manager; general is not a wildcard.
-    coverage = {}
-    for phase, profile in graph.get("profiles", {}).items():
-        for workload in profile.get("workloads", []):
-            references = [f"#/models/{i}/assessment" for i, model in enumerate(models)
-                          if model.get("status") == "hit" and workload in model.get("assessment", {}).get("workloads", [])]
-            coverage.setdefault(phase, {})[workload] = references
-            if not references:
-                by_id["models"]["evidence_gaps"].append({"question": "Which exact-model evidence covers this phase workload?",
-                    "phase": phase, "workload": workload, "available": "#/models", "missing": "workload assessment"})
-    fixed = {key: {"value": request[key], "source": "request"}
-             for key in ("project_root", "issue_name", "playbook_id") if key in request}
-    for source in ("current_explicit_inputs", "formatter_inputs"):
-        supplied = request.get(source, {})
-        for key, value in (supplied.items() if isinstance(supplied, dict) else []):
-            if value is None:
-                continue
-            fixed[key] = ({"draft_reference": "/formatter_inputs/" + key, "source": source}
-                          if indexed and source == "formatter_inputs" else {"value": value, "source": source})
-    for key, value in assembled.get("preferences", {}).items():
-        field = {"conversation.locale": "effective_locale", "manager.mode": "manager_mode"}.get(key)
-        if field and value.get("value") is not None and field not in fixed:
-            fixed[field] = {**value, "source": "preferences." + key}
-    # The generic strategy owner resolves document metadata, not this projection.
-    # Do not duplicate its authority table or treat delivery facts as current mandate.
-    from cafe.core.strategic_context import load_strategic_context
-
-    root = Path(request.get("project_root", Path.cwd()))
-    repository_reads = {}
-    try:
-        documents = load_strategic_context(root, request.get("issue_name")).documents
-    except (ValueError, TypeError, OSError) as exc:
-        documents = {}
-        by_id["scope"]["evidence_gaps"].append({"question": "How is the current strategic context repaired?",
-                                               "diagnostics": [str(exc)]})
-    for category, document in documents.items():
-        if not document.exists or document.status not in {"exists", "draft"}:
-            by_id["scope"]["evidence_gaps"].append({"question": "What confirmed grounds cover this strategic category?",
-                                                   "category": category, "source": document.to_dict()})
-        if document.path:
-            path = str((root / document.path).resolve())
-            item = repository_reads.setdefault(path, {"path": path, "sha256": document.sha256,
-                "exists": document.exists, "categories": [], "questions": ["scope", "models"]})
-            item["categories"].append({"category": category, "status": document.status})
-    field_owners = {"delivery_contract": "scope", "checkout": "actions", "deliver": "actions", "cleanup": "actions",
-                    "catalog_preflight": "preflight", "update_preflight": "preflight", "repository_content_locale": "locale"}
-    missing_fields = []
-    for item in missing:
-        field = item["requirement"].removeprefix("formatter input: ")
-        question = by_id[field_owners.get(field, "scope")]
-        if indexed:
-            missing_fields.append({**item, "question_id": question["id"], "missing": field,
-                "field_reference": "#/decision_brief/field_shapes/formatter_field_schema/" + field})
-            continue
-        missing_fields.append({**item, "question": "What current value resolves " + item["requirement"] + "?",
-                               "available": question["available"], "missing": field,
-                               "policy_sections": question["policy_sections"]})
-    schema = request_schema()
-    return {
-        "request_text": request.get("request_text"),
-        "graph_reference": "#/selected_graph",
-        "evidence_references": {"delivery": "#/delivery", "models": "#/models"},
-        "fixed_inputs": fixed,
-        "questions": questions,
-        "reading_list": list(reading.values()),
-        "read_command_template": ["sed", "-n", "<section.line_range>", "<source.path>"],
-        "repository_reading_candidates": list(repository_reads.values()),
-        "current_mandate_path": str((root / ".cafe/strategic_context.yaml").resolve()),
-        "workload_evidence": coverage,
-        "missing_fields": missing_fields,
-        "field_shapes": {key: schema[key] for key in ("formatter_field_schema", "delivery_contract", "template_rules",
-            "action_input_examples", "closeout_examples", "preflight_capture", "preflight_file_adapter")},
-        "missing_decisions_reference": "#/missing_decisions",
-        "missing_decision_count": len(missing),
-        "evidence_use": "Apply the source-backed payloads already in this response. A hit supplies neither current authority nor model suitability. Read each policy range once for all its questions. Inspect raw evidence only for a named gap, contradiction or invalidation.",
-    }
-
-
-def index_summary_sources(summary: dict[str, Any]) -> None:
-    """Intern repeated provenance only in the normal draft projection; retain all facts."""
-    sources: dict[str, Any] = {}
-    identities: dict[str, str] = {}
-
-    def references(values: list[Any]) -> list[dict[str, str]]:
-        result = []
-        for value in values:
-            identity = json.dumps(value, sort_keys=True, ensure_ascii=False)
-            key = identities.get(identity)
-            if key is None:
-                key = f"source{len(sources)}"
-                identities[identity] = key
-                sources[key] = value
-            result.append({"$ref": "#/source_index/" + key})
-        return result
-
-    delivery = summary.get("delivery", {})
-    for holder in [delivery, delivery.get("manifest", {})]:
-        if isinstance(holder, dict) and isinstance(holder.get("sources"), list):
-            holder["sources"] = references(holder["sources"])
-    for model in summary.get("models", []):
-        for holder in [model.get("assessment", {}), model.get("provenance", {})]:
-            if isinstance(holder, dict) and isinstance(holder.get("sources"), list):
-                holder["sources"] = references(holder["sources"])
-    for section in [summary.get("catalog", {}), delivery, *summary.get("models", [])]:
-        reference = section.get("inspect_reference")
-        for key, command in summary.get("inspect_references", {}).items():
-            if reference == command:
-                section["inspect_reference"] = {"$ref": "#/inspect_references/" + key}
-                break
-    summary["source_index"] = sources
-
-
-
-def current_decision_view(summary: dict[str, Any], request: dict[str, Any], draft: dict[str, Any]) -> dict[str, Any]:
-    """Present current decisions; defer only inspectable detail, never validation.
-
-    The legacy summary remains the input contract. Source fingerprints and all
-    validators run before this presentation projection; no policy is cached here.
-    """
-    view = json.loads(json.dumps(summary))
-    view["presentation"] = "decisions"
-    view["deferred_details"] = {
-        "candidate_roles_and_dependencies": {"inspect_reference": {"$ref": "#/inspect_references/catalog"},
-            "contents": "Complete candidates, role defaults, skills, artifact declarations and discovery dependencies."},
-        "discovery_dependencies": {"inspect_reference": {"$ref": "#/inspect_references/catalog"},
-            "contents": "Delivery manifest source inventory and watched paths; validation already used the complete manifest."},
-        "unused_fields_and_examples": {"inspect_reference": {"$ref": "#/schema_reference"},
-            "contents": "All optional formatter fields, action/closeout examples and raw-report adapter documentation."},
-    }
-    catalog = view["catalog"]
-    for candidate in catalog.get("candidate_overview", []):
-        # Roles and phase names alone do not establish suitability. The selected
-        # profiles stay below; full alternative graphs are available for a gap.
-        for key in ("roles", "steps"):
-            candidate.pop(key, None)
-    graph = view.get("selected_graph")
-    if graph:
-        for key in ("omitted_detail_fields", "omitted_step_detail_fields"):
-            graph.pop(key, None)
-        for step in graph.get("steps", {}).values():
-            for key in ("input_artifacts", "output_artifact"):
-                step.pop(key, None)
-    manifest = view["delivery"]["manifest"]
-    for key in ("sources", "watched"):
-        manifest.pop(key, None)
-    # Keep only source records used by actual conclusions/provenance. The full
-    # inventory remains inspectable, including when discovery reports a miss.
-    sources = view.pop("source_index", {})
-    referenced: set[str] = set()
-
-    def collect(value: Any) -> None:
-        if isinstance(value, dict):
-            ref = value.get("$ref", "")
-            if ref.startswith("#/source_index/"):
-                referenced.add(ref.rsplit("/", 1)[1])
-            for child in value.values():
-                collect(child)
-        elif isinstance(value, list):
-            for child in value:
-                collect(child)
-
-    collect(view)
-    view["source_index"] = {key: value for key, value in sources.items() if key in referenced}
-    brief = view["decision_brief"]
-    # Preserve the seven judgments and their exact owner sections. Remove only
-    # reverse links and redundant numeric ranges, not policy text or questions.
-    for source in brief["reading_list"]:
-        for section in source["sections"]:
-            for key in ("questions", "start_line", "end_line"):
-                section.pop(key, None)
-    fields = draft.get("formatter_inputs", {})
-    shapes = brief["field_shapes"]
-    field_schema = shapes["formatter_field_schema"]
-    missing = {item["missing"] for item in brief["missing_fields"]}
-    unresolved = {key for key, value in fields.items() if value is None}
-    # Parser-optional values are still editable current judgments, not implied
-    # acceptance of defaults. Include their types until explicitly supplied.
-    judgment_fields = {"phase_chain", "capability_choice", "user_required", "manager_confirmable",
-        "manager_mode", "need_clarification", "need_permission", "proactive_review_decision",
-        "worktree", "current_checkout", "deliver", "cleanup"}
-    explicit_fields = set(request.get("formatter_inputs", {})) | set(request.get("current_explicit_inputs", {}))
-    needed = missing | unresolved | (judgment_fields - explicit_fields)
-    # A mode choice includes its dependent input types. Reuse the owner's
-    # definitions and existing policy references without choosing any values.
-    mode = fields.get("manager_mode")
-    mode_fields = ("event_manager", "poll_interval_seconds")
-    if mode == "event-driven":
-        mode_fields = ("event_manager",)
-    elif mode == "attached":
-        mode_fields = ("poll_interval_seconds",)
-    elif mode == "unattended":
-        mode_fields = ()
-    needed.update(key for key in mode_fields if fields.get(key) is None)
-    # Paired action descriptions must remain visible when actions need a choice.
-    for key in ("deliver", "cleanup"):
-        if key in needed:
-            needed.add(key + "_description")
-    if "checkout" in missing:
-        needed.update(("worktree", "current_checkout"))
-        for item in brief["missing_fields"]:
-            if item["missing"] == "checkout":
-                item.pop("field_reference", None)
-                item["field_references"] = ["#/decision_brief/field_shapes/formatter_field_schema/" + key
-                                            for key in ("worktree", "current_checkout")]
-    shapes["formatter_field_schema"] = {key: value for key, value in field_schema.items() if key in needed}
-    for key in ("action_input_examples", "closeout_examples", "preflight_capture", "preflight_file_adapter"):
-        shapes.pop(key, None)
-    if "delivery_contract" not in needed:
-        shapes.pop("delivery_contract", None)
-    # Explicit values remain visible rather than requiring a second draft read
-    # just to recover what the caller already supplied. Reports retain file refs.
-    for key, value in brief["fixed_inputs"].items():
-        if "draft_reference" in value:
-            value["value"] = request.get("formatter_inputs", {}).get(key)
-            value.pop("draft_reference")
-    view.pop("missing_decisions", None)  # Same complete list is indexed in brief.
-    brief.pop("missing_decisions_reference", None)
-    return view
 
 def _preflight_file_report(reference: str, kind: str, metadata: Any = None) -> dict[str, Any]:
     """Map complete check output to formatter fields without executing checks."""
@@ -914,12 +582,123 @@ def _preflight_file_report(reference: str, kind: str, metadata: Any = None) -> d
     return {**report, **metadata}
 
 
+def _prefill_configured_inputs(values: dict[str, Any], *, project_root: Path, sources: dict[str, str],
+                              request: dict[str, Any], discovery: dict[str, Any] | None) -> None:
+    """Materialize defaults and reusable routes in a proposal without execution."""
+    from cafe.core.strategic_context import load_strategic_context
+
+    owner = _load_local_module("format_kickoff_contract")
+    parser = owner._parser()
+
+    def fill(key: str, value: Any, source: str) -> None:
+        if key not in values or action_slot(key):
+            values[key] = value
+            sources[key] = source
+
+    def action_slot(key: str) -> bool:
+        return (key in {"deliver", "cleanup"} and values.get(key) is None
+                and key not in request.get("current_explicit_inputs", {}))
+
+    from cafe.utils.git_utils import get_repo_root, get_github_repo_name
+
+    if "worktree" not in values and "current_checkout" not in values:
+        name = values.get("issue_name")
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name):
+            raise ValueError("a safe issue_name is required for the default worktree")
+        try:
+            root = get_repo_root(project_root)
+        except ValueError:
+            fill("current_checkout", True, "first task in a non-Git folder")
+        else:
+            fill("worktree", str(root / ".cafe" / "worktrees" / name), "issue worktree convention")
+    if values.get("manager_mode") == "event-driven" and "event_manager" not in values:
+        cli = request.get("manager_cli") or ("codex" if os.environ.get("CODEX_THREAD_ID") else None)
+        if cli:
+            fill("event_manager", [cli], "current Manager CLI")
+    if "cleanup" not in values or action_slot("cleanup"):
+        commands, descriptions = [], []
+        issue_id = request.get("issue_id")
+        if issue_id:
+            try:
+                repository = get_github_repo_name(project_root)
+            except (OSError, ValueError):
+                repository = None
+            if repository:
+                commands.append(["gh", "issue", "close", issue_id, "--repo", repository])
+                descriptions.append(f"Close GitHub issue {repository}#{issue_id}.")
+        commands.append(["cafe", "close"])
+        descriptions.append("Archive this CAFE issue and remove its managed worktree and branch.")
+        fill("cleanup", commands, "default issue cleanup proposal")
+        fill("cleanup_description", descriptions, "default issue cleanup proposal")
+    delivery = (discovery or {}).get("delivery", {})
+    if ("deliver" not in values or action_slot("deliver")) and delivery.get("status") == "hit" and delivery.get("delivery_template") is not None:
+        rendered = _load_local_module("kickoff_delivery").render_delivery_template(
+            delivery["delivery_template"], {"issue_name": values["issue_name"],
+                "issue_id": request.get("issue_id", ""), "project_root": str(project_root),
+                "worktree": values.get("worktree") or (str(project_root) if values.get("current_checkout") is True else "")},
+        )
+        for key, value in rendered.items():
+            fill(key, value, "validated repository delivery template")
+
+    for key in ("need_permission", "need_clarification", "alignment_checkpoint"):
+        fill(key, parser.get_default(key), "formatter default")
+    if "repository_content_locale" not in values:
+        context = load_strategic_context(project_root)
+        fill("repository_content_locale", context.content_locale, "repository language policy")
+    for stage in ("deliver", "cleanup"):
+        if values.get(stage) == []:
+            fill(stage + "_description", [], "explicit empty action plan")
+
+    selected = values.get("playbook_id")
+    if not selected:
+        return
+    model = owner.PlaybookLoader(project_root=project_root).load_model(selected).model
+    if "effective_locale" not in values and "locale_source" not in values:
+        snapshot = owner.contract_locale_snapshot(
+            project_root / ".cafe" / "issues" / values["issue_name"],
+            playbook_id=selected, playbook_locale=model.playbook.conversation_locale,
+        )
+        if snapshot["value"] and snapshot["value"] != "auto":
+            fill("effective_locale", snapshot["value"], snapshot["source"])
+            fill("locale_source", snapshot["source"], "conversation locale owner")
+
+    gates = owner.confirmation_gate_steps(model)
+    if "user_required" not in values and "manager_confirmable" not in values:
+        user, manager = owner._resolve_partition(candidates=gates, user_values=None, manager_values=None)
+        fill("user_required", user, "formatter confirmation default")
+        fill("manager_confirmable", manager, "formatter confirmation default")
+    phases = {name: step for name, step in model.steps.items() if step.assignee_type in {"agent", "hybrid"}}
+    if "proactive_review_decision" not in values:
+        reviews = owner._proactive_review_decisions(
+            [], agent_phases=list(phases),
+            eligible_phases=set(gates) | set(owner.mandatory_confirmation_gate_steps(model)),
+        )
+        fill("proactive_review_decision", [f"{r['phase']}={r['decision']}" for r in reviews],
+             "formatter review default")
+    # The formatter already resolves omitted chains from phase configuration.
+    # Put those exact values in the draft so the caller reviews instead of copies.
+    supplied_chains = values.get("phase_chain", [])
+    if _is_string_list(supplied_chains):
+        overrides = owner._parse_phase_chains(supplied_chains, step_names=set(model.steps))
+        config = owner._project_path(Path(values.get("phase_config", parser.get_default("phase_config"))), project_root)
+        chains = list(supplied_chains)
+        for name, step in phases.items():
+            if name in overrides:
+                continue
+            chain, _ = owner._resolve_configured_chain(step_name=name, role=step.role, phase_config=config)
+            chains.append(name + "=" + ",".join(f"{cli}:{model_name}" for cli, model_name in chain))
+        if chains != supplied_chains:
+            values["phase_chain"] = chains
+            sources["phase_chain"] = "configured phase chains; explicit overrides retained; suitability still requires assessment"
+
+
 def assemble_kickoff(
     request: dict[str, Any], *, preference_store: Any = None,
     discovery: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not isinstance(request, dict) or request.get("schema_version") != 1:
         return {"status": "invalid", "selected_playbook": None, "diagnostics": ["unsupported_request_schema"], "missing_decisions": [], "formatter_inputs": None}
+    request = normalize_request_identity(request)
     selected = request.get("playbook_id")
     if not isinstance(selected, str) or not selected.strip():
         selected = None
@@ -938,8 +717,8 @@ def assemble_kickoff(
         selected_candidate = next((item for item in candidates if item.get("id") == selected), None)
         if selected_candidate is None or not selected_candidate.get("eligible"):
             missing.append({"owner": "manager_decision", "requirement": "resolve an eligible selected playbook"})
-    # Prefill only current, explicit facts. Suitability and action decisions
-    # remain with the caller; no cached model or delivery fact grants authority.
+    # Explicit inputs precede preferences, configured defaults, and cached routes.
+    # The resulting proposal still requires confirmation before execution.
     supplied = request.get("formatter_inputs", {})
     explicit = request.get("current_explicit_inputs", {})
     if not isinstance(supplied, dict) or not isinstance(explicit, dict):
@@ -960,6 +739,7 @@ def assemble_kickoff(
                     "diagnostics": [f"request_identity_conflict:{key}"],
                     "missing_decisions": missing, "formatter_inputs": None}
     preference_report: dict[str, Any] = {}
+    prefilled: dict[str, str] = {}
     if preference_store is not None and isinstance(raw_inputs, dict):
         preference_mapping = {
             "manager.mode": "manager_mode",
@@ -980,6 +760,25 @@ def assemble_kickoff(
                 raw_inputs[input_key] = resolved.value
                 if input_key == "effective_locale":
                     raw_inputs.setdefault("locale_source", resolved.origin)
+    if "manager_mode" not in raw_inputs:
+        raw_inputs["manager_mode"] = "event-driven"
+        prefilled["manager_mode"] = "default Manager mode"
+    if preference_store is not None:
+        # Resolve the applicable dependency after the preference/default mode.
+        mode = raw_inputs.get("manager_mode")
+        dependent = ({"attached": ("manager.poll_interval_seconds", "poll_interval_seconds"),
+                      "event-driven": ("manager.event_manager", "event_manager")}.get(mode)
+                     if isinstance(mode, str) else None)
+        if dependent and dependent[1] not in raw_inputs:
+            resolved = preference_store.effective(dependent[0])
+            preference_report[dependent[0]] = {"value": resolved.value, "scope": resolved.scope, "origin": resolved.origin}
+            if resolved.value is not None:
+                raw_inputs[dependent[1]] = resolved.value
+    try:
+        _prefill_configured_inputs(raw_inputs, project_root=Path(request.get("project_root", Path.cwd())).resolve(),
+                                  sources=prefilled, request=request, discovery=discovery)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        missing.append({"owner": "manager_research", "requirement": f"resolve configured inputs: {exc}"})
     preflight_files = request.get("preflight_files", {})
     if isinstance(preflight_files, dict) and isinstance(raw_inputs, dict):
         for file_key, input_key in (("update", "update_preflight"), ("catalog", "catalog_preflight")):
@@ -1024,6 +823,7 @@ def assemble_kickoff(
         "selected_playbook": selected,
         "selected_candidate": None if discovery is None else discovery.get("selected_candidate"),
         "preferences": preference_report,
+        "prefilled": prefilled,
         "diagnostics": [] if normalized is None else normalized.get("diagnostics", []),
         "missing_decisions": missing,
         "formatter_inputs": normalized["values"] if complete else None,
