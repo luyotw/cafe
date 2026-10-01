@@ -1052,3 +1052,138 @@ nonhistorical coverage, PLAN-014 and PLAN-015 stay open; original cold/changed
 coverage and historical failures are preserved. The accepted narrow historical
 red/order exception does not waive these remaining gates. Develop is not
 complete and no successful Review handoff is authorized by this result.
+
+## Direct prefill comparison — 2026-10-01
+
+After the user requested direct code changes outside the workflow, one baseline
+and one current warm preparation were measured sequentially. No workflow was
+resumed. Both calls used the historical 1,757-byte prompt (SHA-256
+`dc1516efca94b75887b2ffccf30c6c1bc3396585fcf908e7d6f91c4454f01e92`),
+Codex CLI 0.156.1, `gpt-6-astra`, medium reasoning, ephemeral sessions, ignored
+user config, and disabled sandbox. The prompt's explicit local-commit override
+was retained, including its conflict with the original PR request. Each call
+ended only after the complete Chinese proposal was output. Neither call
+executed case delivery or activated a workflow.
+
+Raw evidence and runner scripts are under
+`/tmp/issue573-kickoff-benchmark/direct-prefill-20261001/`. Each condition has
+`setup.json`, the exact prompt, `streaming.jsonl`, receipt timestamps,
+`command-spans.json`, `run-record.json`, and `proposal.txt`. `comparison.json`
+contains the totals. The current source is HEAD
+`81fd05c5815fbba2bf40f2c1b8b468611e1c4ace` plus the recorded uncommitted overlay;
+`warm/source.patch` and per-file hashes preserve that treatment. Its tracked
+patch and overlay files were unchanged after the run. The baseline revision is
+`6ce6bddade03e6ee31a60f437accd4d557467c50` and its checkout stayed clean.
+
+The warm condition used isolated stores populated before timing. Existing
+source-backed delivery conventions and the original dated Astra/Luna assessments
+were retained; a generic local-commit argv template was added. No case product
+scope, acceptance criteria or complete proposal was cached. Actual discovery
+confirmed delivery/template and both model hits. Setup logs/time are separate
+from Manager elapsed; this is a warm-path measurement, not cold-start cost.
+
+| Measurement | Baseline | Current warm |
+| --- | ---: | ---: |
+| Complete elapsed | 240.226 s | 354.645 s |
+| Through first successful contract render | 143.690 s | 229.683 s |
+| From successful render through final output | 96.536 s | 124.962 s |
+| Tool receipt interval union (included above) | 11.649 s | 6.239 s |
+| Completed command spans | 16 | 19 |
+| Captured command-output bytes | 296,372 | 546,779 |
+| Input tokens, including cached tokens | 525,589 | 1,041,672 |
+| Output tokens | 6,524 | 10,391 |
+| Final proposal bytes | 9,957 | 12,023 |
+
+The current observation is **114.419 seconds (47.63%) slower**. Both formatter
+invocations succeeded. The first successful render is baseline item 18 and warm
+item 20; source reads mentioning the formatter are not renders. Warm item 21
+adds an AGENTS.md lookup after rendering. Receipt intervals do not isolate
+provider reasoning, generation, buffering or network wait.
+
+The normal consumer did not successfully adopt the prefill path:
+
+- Warm item 8 wrote the nonexistent `phase_models` field instead of
+  `phase_chain`. Item 14 assembly reported
+  `unknown_formatter_field:phase_models`; its formatter draft was null. It also
+  reported missing configured phase chains because the explicit mapping used
+  the wrong field. The `prefilled` report records that delivery, cleanup,
+  worktree, mode and other defaults were computed, but normalization discarded
+  the usable draft after that input error.
+- The generated `draft.json` therefore contained placeholder product fields and
+  null action slots. Item 19 fixed the field name, then manually supplied
+  worktree, mode/event manager, gates, review choices and actions instead of
+  recovering the populated draft. The final request retained only two newly
+  prefilled parser defaults.
+- The Manager reread owner documents and implementation, reprinted discovery,
+  and generated a larger proposal. It replaced deliver/cleanup with explicit
+  empty arrays and put suggested local-commit commands in product constraints,
+  citing commit ownership in develop and the local-only endpoint. Thus this
+  observation does not demonstrate an effective cached-delivery-template path.
+
+`warm/manager-artifacts/` retains the actual initial request, discovery,
+assembly diagnostics, placeholder draft, complete request, checks and rendered
+proposal. This is one actual end-to-end observation per condition, not a
+statistical performance claim. Current source already contains the case's
+preference implementation, and generated scope/action placement differs from
+baseline. The same prompt therefore does not establish identical generated
+work or isolate prefill alone as the cause. It does establish that this normal
+caller run failed to realize the intended speedup. No follow-up provider run,
+code correction, workflow acceptance or performance acceptance is inferred.
+
+## Draft-first consumer measurement — 2026-10-01
+
+The user requested one measurement after the new `draft` entry point and
+error-preserving draft behavior were implemented. One fresh warm Manager call
+used the same exact historical prompt, CLI 0.156.1, Astra, medium reasoning,
+ephemeral/ignored-user-config settings, disabled sandbox, and private warmed
+stores as the direct-prefill comparison. The baseline was **reused**, not rerun:
+240.226 s from the immediately preceding pair. Preparation remained proposal-only.
+
+Raw evidence is under
+`/tmp/issue573-kickoff-benchmark/draft-first-20261001/`; `warm/` contains the
+runner, source revision plus overlay hashes and patch, prompt, raw/timed events,
+command spans, final proposal, initial draft and actual Manager artifacts.
+`comparison.json` records the comparison and field-by-field draft audit.
+Source patch and overlay hashes were unchanged after the call. Setup and cache
+warming are recorded separately and excluded from Manager elapsed.
+
+| Measurement | Reused baseline | Previous warm | Draft-first warm |
+| --- | ---: | ---: | ---: |
+| Complete elapsed | 240.226 s | 354.645 s | 257.255 s |
+| Through successful formatter render | 143.690 s | 229.683 s | 158.712 s |
+| After render through process exit | 96.536 s | 124.962 s | 98.543 s |
+| Tool receipt interval union | 11.649 s | 6.239 s | 6.746 s |
+| Completed command spans | 16 | 19 | 18 |
+| Captured command-output bytes | 296,372 | 546,779 | 350,476 |
+| Input tokens, including cached tokens | 525,589 | 1,041,672 | 573,698 |
+| Output tokens | 6,524 | 10,391 | 7,061 |
+| Final proposal bytes | 9,957 | 12,023 | 9,839 |
+
+This observation is **27.46% faster than the previous warm run**, but still
+**7.09% slower than baseline**. It does not establish a stable speedup or meet
+performance acceptance. The same source/feature-state and generated-scope
+limitations recorded above still apply; only one new observation was taken.
+
+The consumer now followed the intended entry path. Item 9 invoked `draft` with
+issue name, selected playbook, current CLI and the six explicit model chains.
+It completed at 43.291 s with exit 3, the expected incomplete-product status,
+and wrote a populated draft. `initial-draft.json` preserves that draft before
+editing. The actual delivery template and model evidence were valid hits.
+
+Item 19 loaded and edited the draft in place, then rendered successfully at
+158.712 s. It retained the exact delivery argv, phase chain, worktree, Manager
+mode/CLI, and permission/clarification/alignment defaults. It filled the product
+contract and PR capability choice, chose the explicit user confirmation gates,
+translated action descriptions, and excluded cleanup for the fixed local-only
+endpoint. Language values were moved to explicit inputs without changing their
+values. No unknown-field repair or loss of prefilled values occurred.
+
+Remaining work included repeated owner/playbook reads, implementation inspection,
+an additional assembly, and printing up to 18,000 characters of schema. The
+last preparation/schema read ended at 90.574 s; drafting and successful render
+then took 68.138 s. A complete formatter readback ended at 162.846 s, followed
+by 94.409 s through final response completion. These are receipt-based elapsed
+segments, not isolated reasoning or generation measurements. No source change,
+workflow activation, case commit, PR, cleanup or additional provider retry was
+performed. This run demonstrates adoption of prefilled drafts, while total
+performance remains slightly behind the measured baseline.
