@@ -42,6 +42,7 @@ from cafe.skills.loader import SkillLoader, canonical_skill_name
 from cafe.skills.native_bridge import NativeSkillBridge
 
 AgentExecutor = Callable[[str], str]
+CompletionValidator = Callable[..., tuple[str, Optional[PhaseStatusCode], bool]]
 
 
 @dataclass
@@ -441,7 +442,7 @@ class GenericPhase:
         prepare_agent_context: Optional[Callable[[Dict[str, str]], Dict[str, str]]] = None,
         execution_guard: Optional[Callable[[], None]] = None,
         validate_output: Optional[Callable[[], None]] = None,
-        completion_validator: Optional[Callable[..., tuple[str, Optional[PhaseStatusCode], bool]]] = None,
+        completion_validator: Optional[CompletionValidator] = None,
         execution_lease: Optional[Callable[[], Any]] = None,
         max_retries: int = 3,
     ) -> GenericPhaseExecution:
@@ -499,7 +500,7 @@ class GenericPhase:
         prepare_agent_context: Optional[Callable[[Dict[str, str]], Dict[str, str]]] = None,
         execution_guard: Optional[Callable[[], None]] = None,
         validate_output: Optional[Callable[[], None]] = None,
-        completion_validator: Optional[Callable[..., tuple[str, Optional[PhaseStatusCode], bool]]] = None,
+        completion_validator: Optional[CompletionValidator] = None,
         max_retries: int = 3,
     ) -> GenericPhaseExecution:
         runtime_context = dict(context or {})
@@ -606,9 +607,16 @@ class GenericPhase:
             if completion_validator is not None:
                 response, status_code, ready = completion_validator(response, status_code, repair=True)
                 if not ready:
-                    return GenericPhaseExecution(response=response, status_code=status_code,
-                        goto_target=goto_target, context_updates=runtime_context, events=events,
-                        artifact_ready=False, published=False, agent_invoked=True)
+                    return GenericPhaseExecution(
+                        response=response,
+                        status_code=status_code,
+                        goto_target=goto_target,
+                        context_updates=runtime_context,
+                        events=events,
+                        artifact_ready=False,
+                        published=False,
+                        agent_invoked=True,
+                    )
 
             guard_stable_boundary()
             after = self._run_hook_stage(

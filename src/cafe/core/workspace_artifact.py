@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from cafe.core.conversation_locale import select_text_locale
+
 WORKSPACE_SCHEMA_VERSION = 1
 _SHA = re.compile(r"^[0-9a-f]{40}$")
 _NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
@@ -42,17 +44,34 @@ class DirtyWorkspaceError(WorkspaceArtifactError):
         super().__init__(f"workspace worktree is dirty: {list(changes)}")
 
     def correction_prompt(self, *, consumed: int, remaining: int) -> str:
+        return workspace_correction_prompt(str(self), consumed=consumed, remaining=remaining)
+
+
+def workspace_correction_prompt(
+    reason: str, *, consumed: int, remaining: int, locale: str | None = None
+) -> str:
+    """Actionable ownership feedback, using the workflow conversation language."""
+    if select_text_locale(locale) == "zh-TW":
         return (
-            f"Workspace completion rejected: {self}.\n"
-            f"Correction opportunities consumed: {consumed}; remaining: {remaining}.\n"
-            "Verify the origin of every affected change and preserve pre-existing work. "
-            "Act only within the original task scope and authorization. "
-            "Dirty files do not grant authorization to stage, commit, stash, restore or delete. "
-            "If authorized disposition is unavailable, request clarification or permission "
-            "through the existing human handoff. Do not infer a human answer. "
-            "Keep the same phase, iteration, CLI, model, session, tools and permissions. "
-            "Revalidate current output, checklist and evidence, and resubmit the ordinary handoff."
+            f"工作目錄完成檢查未通過：{reason}\n"
+            f"已使用修正機會：{consumed}；本次返回後剩餘：{remaining}。\n"
+            "請核對每項修改的來源並保留執行前已有的工作，只在原任務範圍與授權內處理。"
+            "未提交檔案不代表授權你暫存、提交、stash、還原或刪除。"
+            "若檔案處置需要人決定，沿用澄清或權限交接；不要推測人的回答。"
+            "保留原 phase、iteration、CLI、model、session、工具、目錄與權限。"
+            "重新驗證目前成果、checklist 與 Todo evidence，並重新提交一般 handoff。"
         )
+    return (
+        f"Workspace completion rejected: {reason}.\n"
+        f"Correction opportunities consumed: {consumed}; remaining: {remaining}.\n"
+        "Verify the origin of every affected change and preserve pre-existing work. "
+        "Act only within the original task scope and authorization. "
+        "Dirty files do not grant authorization to stage, commit, stash, restore or delete. "
+        "If authorized disposition is unavailable, request clarification or permission "
+        "through the existing human handoff. Do not infer a human answer. "
+        "Keep the same phase, iteration, CLI, model, session, tools and permissions. "
+        "Revalidate current output, checklist and evidence, and resubmit the ordinary handoff."
+    )
 
 
 def inspect_workspace(repo: Path) -> WorkspaceInspection:

@@ -25,6 +25,7 @@ from cafe.core.blackboard import (
     HandoffContract,
     HandoffIntent,
     HandoffOwner,
+    OutcomeOnlyHandoff,
 )
 from cafe.core.capabilities import CAPABILITY_PR_PUBLISH_ID
 from cafe.core.context_packet import (
@@ -107,6 +108,7 @@ from cafe.core.workspace_artifact import (
     WorkspaceArtifact,
     WorkspaceArtifactError,
     DirtyWorkspaceError,
+    workspace_correction_prompt,
     build_workspace_artifact,
     verify_workspace_artifact,
 )
@@ -785,8 +787,10 @@ class GenericWorkflowStepExecutor(Phase):
 
         workspace_eligible = bool(step_def.get("workspace_artifact"))
         workspace_budget = self._load_workspace_completion(iteration_dir) if workspace_eligible else None
+        producing_directories = None
 
         def run_agent(prompt: str) -> str:
+            nonlocal producing_directories
             last_prompt[:] = [prompt]
             if workspace_eligible:
                 progress = self._load_workspace_publication(iteration_dir)
@@ -797,6 +801,8 @@ class GenericWorkflowStepExecutor(Phase):
                 # Reclassify the current handoff before reserving another provider call.
                 metadata = json.loads(self._resolve_iteration_context_file(iteration_dir).read_text(encoding="utf-8"))
                 return str(metadata.get("response", ""))
+            if workspace_eligible:
+                producing_directories = self._get_allowed_directories()
             # A baton retry or automatic re-entry is still the same correction
             # sequence. Reserve its opportunity before invoking any provider.
             budget = self._load_artifact_correction(iteration_dir)
@@ -841,6 +847,8 @@ class GenericWorkflowStepExecutor(Phase):
                     ),
                 )
 
+                if workspace_eligible and self._load_workspace_publication(iteration_dir) is not None:
+                    raise RuntimeError("Agent changed host-owned workspace publication progress")
                 response = self._correct_artifact_format(
                     response=response,
                     step_name=step_name,
@@ -930,54 +938,108 @@ class GenericWorkflowStepExecutor(Phase):
 
         def validate_completion_now(response, status, *, repair):
             nonlocal workspace_budget
+            repair = repair and self._load_workspace_publication(iteration_dir) is None
             while True:
                 if require_status_code:
                     status = StatusCodeParser.extract(response, valid_intents) if status is None else status
                 completion_state.update(response=response, status=status)
                 reason = None
+                checklist_repair = False
                 try:
                     decision_path = portion_baton_path or baton_path
-                    payload = json.loads(decision_path.read_text(encoding="utf-8")) if decision_path.exists() else None
-                    authored = isinstance(payload, dict) and payload.get("source") != "workflow.start_step_override"
+                    payload = (
+                        json.loads(decision_path.read_text(encoding="utf-8"))
+                        if decision_path.exists()
+                        else None
+                    )
+                    authored = (
+                        isinstance(payload, dict)
+                        and payload.get("source") != "workflow.start_step_override"
+                    )
                     if authored:
                         if validate_producer_handoff is not None:
                             validate_producer_handoff(decision_path)
-                        # Runtime validates mapping/authority; this only classifies current intent.
-                        intent = HandoffIntent(payload["intent"])
+                        if "to_owner" in payload or "to_step" in payload:
+                            current_handoff = HandoffContract.from_dict_with_current_step(
+                                payload, current_step=step_name
+                            )
+                            current_handoff.validate(allowed_steps=list(self.playbook["steps"]))
+                            if current_handoff.from_step != step_name:
+                                raise ValueError("Current handoff belongs to a different producer")
+                            intent = current_handoff.intent
+                        else:
+                            intent = OutcomeOnlyHandoff.from_dict(payload).intent
+                        if intent.value not in effective_step_handoff_intents(step_def):
+                            raise ValueError("Current handoff intent is not declared")
                         human = payload.get("to_owner") == "user" or intent in (
-                            HandoffIntent.NEED_CLARIFICATION, HandoffIntent.NEED_PERMISSION,
+                            HandoffIntent.NEED_CLARIFICATION,
+                            HandoffIntent.NEED_PERMISSION,
                             HandoffIntent.CONFIRM_OUTPUT,
                         )
+                        if intent == HandoffIntent.NO_CHANGES_NEEDED:
+                            human = (
+                                human
+                                or self.interactive
+                                or bool(self._declared_human_task_id(step_def, intent.value))
+                            )
                         required = completion_requires_checklist(baton_intent=intent.value)
+                        if intent == HandoffIntent.NO_CHANGES_NEEDED and not human:
+                            required = True
                     elif require_status_code and status is not None:
                         human = self._resolve_handoff_intent(step_def, status) in (
-                            "need_clarification", "need_permission", "confirm_output",
+                            "need_clarification",
+                            "need_permission",
+                            "confirm_output",
                         )
                         required = self._output_requires_contract_validation(
-                            step_name=step_name, status_code=status, baton_path=decision_path,
-                            hybrid_portion=is_hybrid_portion, default_required=True,
+                            step_name=step_name,
+                            status_code=status,
+                            baton_path=decision_path,
+                            hybrid_portion=is_hybrid_portion,
+                            default_required=True,
                         )
                     else:
                         raise ValueError("Current producer handoff is missing")
                     if human:
                         return response, status, False
+                    if (
+                        producing_directories is not None
+                        and producing_directories != self._get_allowed_directories()
+                    ):
+                        raise RuntimeError("Workspace completion changed producing directories")
+                    if workspace_budget["context"] is not None and workspace_budget[
+                        "context"
+                    ] != self._workspace_execution_context(iteration_dir, agent_name):
+                        raise RuntimeError("Workspace completion changed the pinned execution context")
                     self._validate_current_artifact(step_name, step_def, output_file)
                     if not output_file.exists():
                         raise ValueError("Current output is missing")
+                    # Evidence also requires a clean worktree. Diagnose dirtiness before
+                    # that dependent check so it can enter the bounded repair sequence.
+                    self._inspect_completion_workspace(step_name, step_def, blackboard_state)
                     if required:
-                        checklist = validate_checklist(checklist_file, expected=getattr(self, "_effective_checklist", None))
+                        checklist = validate_checklist(
+                            checklist_file, expected=getattr(self, "_effective_checklist", None)
+                        )
                         if not checklist.is_complete:
+                            checklist_repair = True
                             raise ValueError(f"Current checklist is incomplete: {checklist.detail}")
                         projected, detail = self._validate_projected_todo_completion_detail(checklist_file)
                         if not projected:
+                            checklist_repair = True
                             raise ValueError(detail)
                     valid, detail, _ = self._validate_outbound_causal_todo(
-                        step_name=step_name, step_def=step_def, blackboard_state=blackboard_state,
-                        output_file=output_file, response=response, status_code=status, auto_continue=False,
+                        step_name=step_name,
+                        step_def=step_def,
+                        blackboard_state=blackboard_state,
+                        output_file=output_file,
+                        response=response,
+                        status_code=status,
+                        auto_continue=False,
                     )
                     if not valid:
+                        checklist_repair = True
                         raise ValueError(detail)
-                    self._inspect_completion_workspace(step_name, step_def, blackboard_state)
                     return response, status, True
                 except DirtyWorkspaceError as error:
                     reason = str(error)
@@ -986,6 +1048,61 @@ class GenericWorkflowStepExecutor(Phase):
                 except (ArtifactFormatError, BatonRejected, ValueError) as error:
                     # Only dirty failures start this sequence; later conditions share its budget.
                     if workspace_budget is None or not workspace_budget["rejections"]:
+                        if repair and isinstance(error, ArtifactFormatError):
+                            response = self._correct_artifact_format(
+                                response=response,
+                                step_name=step_name,
+                                step_def=step_def,
+                                blackboard_state=blackboard_state,
+                                agent_name=agent_name,
+                                allowed_tools=allowed_tools,
+                                output_file=output_file,
+                                checklist_file=checklist_file,
+                                iteration_dir=iteration_dir,
+                                budget=self._load_artifact_correction(iteration_dir),
+                                validate_handoff=(
+                                    (lambda: validate_producer_handoff(decision_path))
+                                    if validate_producer_handoff is not None
+                                    else None
+                                ),
+                            )
+                            status = None
+                            continue
+                        if repair and checklist_repair:
+                            response, status, passed = self._validate_and_retry_checklist_completion(
+                                agent_name=agent_name,
+                                prompt=last_prompt[0],
+                                user_input=self._get_resolved_iteration_user_input(step_name),
+                                valid_intents=valid_intents,
+                                allowed_tools=allowed_tools,
+                                max_retries=3,
+                                completion_response=response,
+                                completion_status=status,
+                                validate_checklist_completion=required,
+                                checklist_required_for_status=lambda current: self._output_requires_contract_validation(
+                                    step_name=step_name,
+                                    status_code=current,
+                                    baton_path=decision_path,
+                                    hybrid_portion=is_hybrid_portion,
+                                    default_required=required,
+                                ),
+                                additional_validation=lambda current_response, current_status: self._validate_outbound_causal_todo(
+                                    step_name=step_name,
+                                    step_def=step_def,
+                                    blackboard_state=blackboard_state,
+                                    output_file=output_file,
+                                    response=current_response,
+                                    status_code=current_status,
+                                    auto_continue=False,
+                                )[
+                                    :2
+                                ],
+                            )
+                            if not passed:
+                                raise RuntimeError(
+                                    f"Current completion validation failed: {error}"
+                                ) from error
+                            continue
                         raise
                     if repair and isinstance(error, ArtifactFormatError):
                         report_budget = self._load_artifact_correction(iteration_dir)
@@ -998,37 +1115,56 @@ class GenericWorkflowStepExecutor(Phase):
                 if not repair:
                     raise RuntimeError(f"Workspace completion changed after publication began: {reason}")
                 response = self._dispatch_workspace_correction(
-                    iteration_dir=iteration_dir, budget=workspace_budget, reason=reason,
-                    agent_name=agent_name, step_name=step_name, step_def=step_def,
+                    iteration_dir=iteration_dir,
+                    budget=workspace_budget,
+                    reason=reason,
+                    agent_name=agent_name,
+                    step_name=step_name,
+                    step_def=step_def,
                     blackboard_state=blackboard_state,
                 )
                 status = None
 
         def delivery_identity():
             return self._workspace_delivery_identity(
-                iteration_dir=iteration_dir, output_file=output_file, checklist_file=checklist_file,
-                baton_path=portion_baton_path or baton_path, response=completion_state["response"],
-                step_name=step_name, step_def=step_def,
+                iteration_dir=iteration_dir,
+                output_file=output_file,
+                checklist_file=checklist_file,
+                baton_path=portion_baton_path or baton_path,
+                response=completion_state["response"],
+                step_name=step_name,
+                step_def=step_def,
             )
 
         def publication_progress(stage, index, identity, invoke):
             return self._run_workspace_publication_hook(
-                iteration_dir=iteration_dir, delivery=delivery_identity(),
-                response=completion_state["response"], stage=stage, index=index,
-                identity=identity, invoke=invoke,
+                iteration_dir=iteration_dir,
+                delivery=delivery_identity(),
+                response=completion_state["response"],
+                stage=stage,
+                index=index,
+                identity=identity,
+                invoke=invoke,
             )
 
         def validate_publication() -> None:
             if workspace_eligible:
-                _, _, ready = validate_completion_now(completion_state["response"], completion_state["status"], repair=False)
+                _, _, ready = validate_completion_now(
+                    completion_state["response"], completion_state["status"], repair=False
+                )
                 if not ready:
                     raise RuntimeError("Human handoff cannot publish a completed workspace")
                 progress = self._load_workspace_publication(iteration_dir)
                 if progress is not None and progress["delivery"] != delivery_identity():
-                    raise RuntimeError("Workspace publication delivery changed; automatic effect replay is refused")
+                    raise RuntimeError(
+                        "Workspace publication delivery changed; automatic effect replay is refused"
+                    )
                 return
             self._validate_current_artifact(step_name, step_def, output_file)
-            if validate_producer_handoff is not None and self._load_artifact_correction(iteration_dir).rejections:
+            if (
+                validate_producer_handoff is not None
+                and self._load_artifact_correction(iteration_dir).rejections
+            ):
                 validate_producer_handoff(portion_baton_path or baton_path)
 
         execution = self.generic_phase.execute(
@@ -1195,7 +1331,11 @@ class GenericWorkflowStepExecutor(Phase):
         artifacts: Dict[str, str] = {}
         artifact_metadata: Dict[str, Dict[str, Any]] = {}
         if execution.artifact_ready and not checklist_validation_failed and output_file.exists():
-            with workspace_execution_lock(Path(self.git_ops.repo_path)) if workspace_eligible else nullcontext():
+            registration_lease = (
+                workspace_execution_lock(Path(self.git_ops.repo_path))
+                if workspace_eligible else nullcontext()
+            )
+            with registration_lease:
                 if workspace_eligible:
                     validate_publication()
                 # Context packets are an optional runtime view.  Their structural
@@ -1215,7 +1355,10 @@ class GenericWorkflowStepExecutor(Phase):
                 # the same content digest and Todo identities that were written to
                 # the iteration artifact record.
                 artifact_metadata[output_key] = summary_record.to_dict()
-                publisher = self._publish_workspace_artifact_under_lock if workspace_eligible else self._publish_workspace_artifact
+                publisher = (
+                    self._publish_workspace_artifact_under_lock
+                    if workspace_eligible else self._publish_workspace_artifact
+                )
                 workspace = publisher(
                     step_name=step_name,
                     step_def=step_def,
@@ -1225,7 +1368,9 @@ class GenericWorkflowStepExecutor(Phase):
                 )
                 if workspace_eligible:
                     validate_publication()
-                    self._persist_plan_artifact_record(iteration_dir / "artifact.json", summary_record.to_dict())
+                    self._persist_plan_artifact_record(
+                        iteration_dir / "artifact.json", summary_record.to_dict()
+                    )
                 if workspace is not None:
                     workspace_path, workspace_metadata = workspace
                     workspace_key = str(step_def["workspace_artifact"])
@@ -1386,13 +1531,21 @@ class GenericWorkflowStepExecutor(Phase):
         if "workspace_publication" not in metadata:
             return None
         value = metadata["workspace_publication"]
-        if (not isinstance(value, dict) or set(value) != {"delivery", "response", "hooks"}
-                or not isinstance(value["delivery"], str) or len(value["delivery"]) != 64
-                or not isinstance(value["response"], str) or not isinstance(value["hooks"], dict)):
+        if (
+            not isinstance(value, dict)
+            or set(value) != {"delivery", "response", "hooks"}
+            or not isinstance(value["delivery"], str)
+            or len(value["delivery"]) != 64
+            or not isinstance(value["response"], str)
+            or not isinstance(value["hooks"], dict)
+        ):
             raise ValueError("Invalid workspace publication diagnostics")
         for item in value["hooks"].values():
-            if (not isinstance(item, dict) or item.get("state") not in ("started", "completed")
-                    or (item["state"] == "completed" and not isinstance(item.get("result"), dict))):
+            if (
+                not isinstance(item, dict)
+                or item.get("state") not in ("started", "completed")
+                or (item["state"] == "completed" and not isinstance(item.get("result"), dict))
+            ):
                 raise ValueError("Invalid workspace publication hook progress")
         return value
 
@@ -1402,37 +1555,63 @@ class GenericWorkflowStepExecutor(Phase):
         metadata["workspace_publication"] = progress
         self._persist_plan_artifact_record(path, metadata)
 
-    def _workspace_delivery_identity(self, *, iteration_dir, output_file, checklist_file,
-                                     baton_path, response, step_name, step_def):
-        metadata = json.loads(self._resolve_iteration_context_file(iteration_dir).read_text(encoding="utf-8"))
+    def _workspace_delivery_identity(
+        self, *, iteration_dir, output_file, checklist_file, baton_path, response, step_name, step_def
+    ):
+        metadata = json.loads(
+            self._resolve_iteration_context_file(iteration_dir).read_text(encoding="utf-8")
+        )
         payload = json.loads(baton_path.read_text(encoding="utf-8")) if baton_path.exists() else None
         if isinstance(payload, dict):
-            payload = {key: payload[key] for key in ("version", "to_owner", "to_step", "intent") if key in payload}
+            payload = {
+                key: payload[key]
+                for key in ("version", "to_owner", "to_step", "intent")
+                if key in payload
+            }
         facts = {
-            "step": step_name, "iteration": self.iteration, "response": response,
+            "step": step_name,
+            "iteration": self.iteration,
+            "response": response,
             "output": hashlib.sha256(output_file.read_bytes()).hexdigest(),
             "checklist": hashlib.sha256(checklist_file.read_bytes()).hexdigest(),
-            "handoff": payload, "declaration": step_def,
+            "handoff": payload,
+            "declaration": step_def,
             "head": self.git_ops.run_git("rev-parse", "HEAD"),
-            "context": {key: metadata.get(key) for key in (
-                "cli", "session_id", "model", "allowed_tools", "denied_tools",
-                "effective_checklist", "todo_projection_snapshot", "cli_environment",
-            )},
+            "context": {
+                key: metadata.get(key)
+                for key in (
+                    "cli",
+                    "session_id",
+                    "model",
+                    "allowed_tools",
+                    "denied_tools",
+                    "effective_checklist",
+                    "todo_projection_snapshot",
+                    "cli_environment",
+                )
+            },
         }
-        return hashlib.sha256(json.dumps(facts, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        return hashlib.sha256(
+            json.dumps(facts, sort_keys=True, ensure_ascii=False).encode()
+        ).hexdigest()
 
-    def _run_workspace_publication_hook(self, *, iteration_dir, delivery, response,
-                                        stage, index, identity, invoke):
+    def _run_workspace_publication_hook(
+        self, *, iteration_dir, delivery, response, stage, index, identity, invoke
+    ):
         progress = self._load_workspace_publication(iteration_dir)
         if progress is None:
             progress = {"delivery": delivery, "response": response, "hooks": {}}
         if progress["delivery"] != delivery:
-            raise RuntimeError("Workspace publication delivery changed; automatic effect replay is refused")
+            raise RuntimeError(
+                "Workspace publication delivery changed; automatic effect replay is refused"
+            )
         key = json.dumps([stage, index, identity], sort_keys=True)
         previous = progress["hooks"].get(key)
         if previous is not None:
             if previous["state"] == "started":
-                raise RuntimeError(f"Workspace publication hook {stage}[{index}] has an ambiguous in-flight effect; human recovery required")
+                raise RuntimeError(
+                    f"Workspace publication hook {stage}[{index}] has an ambiguous in-flight effect; human recovery required"
+                )
             result = dict(previous["result"])
             if result.get("override_status_code") is not None:
                 result["override_status_code"] = PhaseStatusCode(result["override_status_code"])
@@ -1457,15 +1636,29 @@ class GenericWorkflowStepExecutor(Phase):
         if "workspace_completion" not in metadata:
             return {"consumed": 0, "rejections": [], "context": None}
         value = metadata["workspace_completion"]
-        if (not isinstance(value, dict) or type(value.get("consumed")) is not int
-                or not 0 <= value["consumed"] <= 3
-                or not isinstance(value.get("rejections"), list)
-                or len(value["rejections"]) > 8
-                or any(not isinstance(item, str) for item in value["rejections"])
-                or not isinstance(value.get("context"), (dict, type(None)))):
+        if (
+            not isinstance(value, dict)
+            or set(value) != {"consumed", "rejections", "context"}
+            or type(value.get("consumed")) is not int
+            or not 0 <= value["consumed"] <= 3
+            or not isinstance(value.get("rejections"), list)
+            or len(value["rejections"]) > 8
+            or any(not isinstance(item, str) for item in value["rejections"])
+            or not isinstance(value.get("context"), (dict, type(None)))
+        ):
             raise ValueError("Invalid durable workspace completion diagnostics")
-        if value["consumed"] and not value["rejections"]:
-            raise ValueError("Workspace correction count has no diagnostic authority")
+        if value["consumed"] and (not value["rejections"] or value["context"] is None):
+            raise ValueError("Workspace correction count has no diagnostic/session authority")
+        pinned = value["context"]
+        if pinned is not None and (
+            set(pinned) != {"metadata", "directories", "agent"}
+            or not isinstance(pinned["metadata"], dict)
+            or not isinstance(pinned["directories"], list)
+            or any(not isinstance(item, str) for item in pinned["directories"])
+            or not isinstance(pinned["agent"], str)
+            or not pinned["agent"]
+        ):
+            raise ValueError("Workspace correction has malformed pinned context")
         return value
 
     def _save_workspace_completion(self, iteration_dir: Path, budget: dict[str, Any]) -> None:
@@ -1475,7 +1668,10 @@ class GenericWorkflowStepExecutor(Phase):
         self._persist_plan_artifact_record(path, metadata)
 
     def _reserve_workspace_correction(
-        self, iteration_dir: Path, budget: dict[str, Any], reason: str,
+        self,
+        iteration_dir: Path,
+        budget: dict[str, Any],
+        reason: str,
     ) -> None:
         budget["rejections"] = [*budget["rejections"], reason][-8:]
         if budget["consumed"] >= 3:
@@ -1484,69 +1680,118 @@ class GenericWorkflowStepExecutor(Phase):
         budget["consumed"] += 1
         self._save_workspace_completion(iteration_dir, budget)
 
+    def _workspace_execution_context(self, iteration_dir: Path, agent_name: str) -> dict[str, Any]:
+        metadata = json.loads(
+            self._resolve_iteration_context_file(iteration_dir).read_text(encoding="utf-8")
+        )
+        keys = (
+            "effective_checklist",
+            "iteration",
+            "step_name",
+            "skill_name",
+            "playbook_id",
+            "cli",
+            "session_id",
+            "model",
+            "allowed_tools",
+            "denied_tools",
+            "session_continuation",
+            "cli_environment",
+            "execution_chain",
+        )
+        return {
+            "metadata": {key: metadata.get(key) for key in keys},
+            "directories": self._get_allowed_directories(),
+            "agent": agent_name,
+        }
+
     def _dispatch_workspace_correction(
-        self, *, iteration_dir: Path, budget: dict[str, Any], reason: str,
-        agent_name: str, step_name: str, step_def: dict[str, Any],
+        self,
+        *,
+        iteration_dir: Path,
+        budget: dict[str, Any],
+        reason: str,
+        agent_name: str,
+        step_name: str,
+        step_def: dict[str, Any],
         blackboard_state: BlackboardState,
     ) -> str:
         """Reserve before exact dispatch, retaining host-owned authority on every exit."""
         path = self._resolve_iteration_context_file(iteration_dir)
         metadata = json.loads(path.read_text(encoding="utf-8"))
-        keys = (
-            "effective_checklist", "iteration", "step_name", "skill_name", "playbook_id",
-            "cli", "session_id", "model", "allowed_tools", "denied_tools",
-            "session_continuation", "cli_environment", "execution_chain", "workspace_publication",
-        )
-        observed = {key: metadata.get(key) for key in keys}
-        directories = self._get_allowed_directories()
+        if self._load_workspace_publication(iteration_dir) is not None:
+            raise RuntimeError("Cannot correct a workspace after publication effects have started")
+        actual_context = self._workspace_execution_context(iteration_dir, agent_name)
+        observed = actual_context["metadata"]
+        directories = actual_context["directories"]
         pinned = budget.get("context")
         if pinned is None:
-            pinned = {"metadata": observed, "directories": directories, "agent": agent_name}
+            pinned = actual_context
             budget["context"] = pinned
             self._save_workspace_completion(iteration_dir, budget)
-        if (pinned.get("metadata") != observed or pinned.get("directories") != directories
-                or pinned.get("agent") != agent_name):
+        if (
+            pinned.get("metadata") != observed
+            or pinned.get("directories") != directories
+            or pinned.get("agent") != agent_name
+        ):
             raise RuntimeError(f"Workspace correction changed the pinned execution context: {reason}")
         continuation = exact_continuation_from_context(observed)
-        if continuation is None or not self._call_accepts_keyword(self.agent_manager.execute, "continuation"):
+        if continuation is None or not self._call_accepts_keyword(
+            self.agent_manager.execute, "continuation"
+        ):
             budget["rejections"] = [*budget["rejections"], reason][-8:]
             self._save_workspace_completion(iteration_dir, budget)
-            raise RuntimeError(f"Workspace correction requires the exact producing session; consumed {budget['consumed']}: {reason}")
+            raise RuntimeError(
+                f"Workspace correction requires the exact producing session; consumed {budget['consumed']}: {reason}"
+            )
         self._reserve_workspace_correction(iteration_dir, budget, reason)
-        prompt = (
-            f"Workspace completion rejected: {reason}\n"
-            f"Correction opportunities consumed: {budget['consumed']}; remaining: {3 - budget['consumed']}.\n"
-            "Verify the origin of affected changes and preserve pre-existing work. "
-            "Act only within the original scope and authorization. Dirty files grant no "
-            "authorization to stage, commit, stash, restore or delete. If disposition needs "
-            "a human decision, use the existing clarification or permission handoff. "
-            "Keep the same phase, iteration, CLI, model, session, tools and permissions. "
-            "Revalidate current report, checklist and projected evidence; resubmit the ordinary handoff."
+        prompt = workspace_correction_prompt(
+            reason,
+            consumed=budget["consumed"],
+            remaining=3 - budget["consumed"],
+            locale=blackboard_state.conversation_locale,
         )
         try:
-            self._refresh_and_validate_workspace_inputs(step_def=step_def, blackboard_state=blackboard_state)
+            self._refresh_and_validate_workspace_inputs(
+                step_def=step_def, blackboard_state=blackboard_state
+            )
             authority_kwargs = {}
             if self._call_accepts_keyword(self.agent_manager.execute, "denied_tools"):
                 authority_kwargs["denied_tools"] = observed["denied_tools"]
             elif observed["denied_tools"]:
                 raise RuntimeError("Exact workspace continuation cannot preserve denied tools")
             response, usage, _, _, streaming_log, model = self.agent_manager.execute(
-                agent_name, prompt, continuation=continuation, phase_name=step_name,
-                allowed_tools=observed["allowed_tools"], **authority_kwargs,
+                agent_name,
+                prompt,
+                continuation=continuation,
+                phase_name=step_name,
+                allowed_tools=observed["allowed_tools"],
+                **authority_kwargs,
                 allowed_directories=directories,
                 streaming_output_file=str(iteration_dir / "streaming.jsonl"),
             )
             self._merge_iteration_token_usage(usage)
             current = json.loads(path.read_text(encoding="utf-8"))
-            if any(current.get(key) != value for key, value in observed.items()):
+            if any(current.get(key) != value for key, value in observed.items()) or current.get(
+                "workspace_publication"
+            ) != metadata.get("workspace_publication"):
                 raise RuntimeError("Workspace correction changed pinned metadata")
             actual_cli = getattr(self.agent_manager, "get_last_cli", lambda: None)()
             actual_session = getattr(self.agent_manager, "get_last_session_id", lambda: None)()
-            actual_model = model or getattr(self.agent_manager, "get_last_model", lambda: None)() or getattr(self.agent_manager.get_agent(agent_name).config, "model", None)
-            if (actual_cli != continuation.cli or actual_session != continuation.session_id
-                    or actual_model != observed["model"]):
+            actual_model = (
+                model
+                or getattr(self.agent_manager, "get_last_model", lambda: None)()
+                or getattr(self.agent_manager.get_agent(agent_name).config, "model", None)
+            )
+            if (
+                actual_cli != continuation.cli
+                or actual_session != continuation.session_id
+                or actual_model != observed["model"]
+            ):
                 raise RuntimeError("Workspace correction did not preserve CLI/model/producing session")
-            self._refresh_and_validate_workspace_inputs(step_def=step_def, blackboard_state=blackboard_state)
+            self._refresh_and_validate_workspace_inputs(
+                step_def=step_def, blackboard_state=blackboard_state
+            )
             current["response"] = response
             current.setdefault("streaming_log", []).extend(streaming_log or [])
             self._persist_plan_artifact_record(path, current)
@@ -3841,8 +4086,14 @@ class GenericWorkflowStepExecutor(Phase):
             base_ref = self.git_ops.get_default_base_branch()
         head_sha = self.git_ops.run_git("rev-parse", "HEAD")
         base_sha = self.git_ops.run_git("merge-base", str(base_ref), head_sha)
-        return build_workspace_artifact(repo=repo, name=workspace_name, version=1,
-            base_sha=base_sha, head_sha=head_sha, producer_step=step_name)
+        return build_workspace_artifact(
+            repo=repo,
+            name=workspace_name,
+            version=1,
+            base_sha=base_sha,
+            head_sha=head_sha,
+            producer_step=step_name,
+        )
 
     def _publish_workspace_artifact(
         self,

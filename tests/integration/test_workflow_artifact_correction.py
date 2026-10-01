@@ -47,7 +47,7 @@ def _assert_correction_context_preserved(manager):
 @pytest.fixture
 def journey(tmp_path, monkeypatch):
     def build(submissions, *, mode="baton", completed_checklist=False, human=None,
-              reverse=False, unchecked=False, mutate=None, provider_mutation=None, capability=None, publication_mutation=False, workspace=None, workspace_action=None, effect_action=None, extra_publication=False):
+              reverse=False, unchecked=False, mutate=None, provider_mutation=None, capability=None, publication_mutation=False, workspace=None, workspace_action=None, effect_action=None, extra_publication=False, projected=False, post_submission=None):
         repo = tmp_path / "repo"
         repo.mkdir()
         subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
@@ -70,7 +70,7 @@ def journey(tmp_path, monkeypatch):
             workflow["human_tasks"] = [{"id": "decision", "pattern": "confirm_output" if human == "confirm_output" else "revision_feedback",
                 "prompt": "Review report", "input_schema": "feedback" if human != "confirm_output" else "decision",
                 **({"decisions": [{"id": "accept", "label": "Accept"}]} if human == "confirm_output" else {})}]
-        if completed_checklist or unchecked:
+        if completed_checklist or unchecked or projected:
             # Existing checklist guidance uses the developer directory for
             # custom roles; this journey does not change that separate policy.
             guidance = config / "agents" / "developer" / "Author.md"
@@ -79,6 +79,8 @@ def journey(tmp_path, monkeypatch):
             (skill / "references").mkdir()
             (skill / "references" / "gates.md").write_text("[ ] Preserve evidence\n")
             workflow["checklist"] = {"include_role_guidance": False, "variants": [{"when": {}, "sections": [{"reference": "gates.md"}]}]}
+        if projected:
+            workflow["checklist"] = {"include_role_guidance": False, "variants": [{"when": {}, "sections": [{"todo_projection": {"artifact": "blueprint", "source": "bespoke"}}]}]}
         (skill / "SKILL.md").write_text("---\n" + yaml.safe_dump({
             "name": "custom-report", "description": "Write evidence", "workflow": workflow,
         }) + "---\n\nWrite {output_file} and submit {next_step_file}.\n")
@@ -123,6 +125,8 @@ def journey(tmp_path, monkeypatch):
             "hooks": {"prepare_input": ["Prepare"], "after_execute": ["After"]},
             "on": {"await_agent": "deliver_custom", "confirm_output": "inspect_custom",
                    "need_permission": "inspect_custom", "need_clarification": "inspect_custom"}}
+        if projected:
+            producer["input_artifacts"] = ["blueprint"]
         if extra_publication:
             producer["hooks"]["publish_output"] = ["Publish", "Publish"]
         if workspace:
@@ -139,6 +143,11 @@ def journey(tmp_path, monkeypatch):
         successor = {"skill": "custom-report", "role": "author_custom",
             "input_artifacts": ["evidence_bundle"], "output_artifact": "delivery_receipt",
             "valid_intents": ["await_agent"], "on": {"await_agent": "_done"}}
+        if projected:
+            receipt = config / "skills" / "receipt-skill"
+            receipt.mkdir()
+            (receipt / "SKILL.md").write_text("---\nname: receipt-skill\ndescription: Record delivery\n---\nWrite delivery.\n")
+            successor["skill"] = "receipt-skill"
         steps = {"inspect_custom": producer, "deliver_custom": successor}
         if reverse:
             steps = dict(reversed(list(steps.items())))
@@ -195,6 +204,12 @@ def journey(tmp_path, monkeypatch):
                     raise submission
                 content, intent = submission if isinstance(submission, tuple) else (submission, "await_agent")
                 (iteration / "output.md").write_text(content)
+                if projected:
+                    from tests.integration.test_checklist_overlay_workflow import complete_ledger
+                    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+                    complete_ledger(iteration, commit)
+                    output = iteration / "output.md"
+                    output.write_text(content + "\n" + output.read_text().replace("`work.txt`", "`owned.txt`"))
                 if provider_mutation:
                     provider_mutation(iteration, len(self.calls))
                 baton = {"version": 1, "intent": intent}
@@ -209,11 +224,14 @@ def journey(tmp_path, monkeypatch):
                         "credentials": [], "permissions": {},
                     }))
                 (issue / "next_step.txt").write_text(json.dumps(baton))
+                if post_submission:
+                    post_submission(repo, iteration, len(self.calls))
                 return "" if mode == "baton" else intent, TokenUsage(), [], [], [], None
 
         if workspace is not None:
             (repo / ".gitignore").write_text(".cafe/\n")
             (repo / "owned.txt").write_text("baseline\n")
+            (repo / "work.txt").write_text("evidence\n")
             for index in range(6):
                 (repo / f"template-{index}.txt").write_text("baseline template\n")
             subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
@@ -233,9 +251,18 @@ def journey(tmp_path, monkeypatch):
             decoy.write_text(REJECTED)
             runtime.blackboard.artifacts[name] = ArtifactEntry(name=name, kind=ArtifactKind.DOCUMENT,
                 path=str(decoy), version=1, updated_by="decoy", updated_at="2026-01-01T00:00:00+00:00")
+        if projected:
+            source = issue / "blueprint.md"
+            source.write_text("## Todo List\n- [ ] `TASK-001` — Source: `bespoke` — Work: implement — Closure: correct — Evidence: tests\n")
+            runtime.blackboard_store.set_artifact(runtime.blackboard, "blueprint", str(source))
         runtime.blackboard_store.save(runtime.blackboard)
+        def reconstruct():
+            renewed = GenericWorkflowStepExecutor(issue_dir=issue, issue_name="correction", playbook=playbook,
+                generic_phase=phase, agent_manager=manager, git_ops=GitOperations(repo),
+                role_agent_map={"author_custom": "Author"})
+            return BlackboardWorkflowRuntime(issue_dir=issue, playbook=playbook, executor=renewed.execute_step)
         return SimpleNamespace(runtime=runtime, manager=manager, effects=effects, issue=issue,
-            iteration=iteration, executor=executor, playbook=playbook, repo=repo)
+            iteration=iteration, executor=executor, playbook=playbook, repo=repo, reconstruct=reconstruct)
     return build
 
 
