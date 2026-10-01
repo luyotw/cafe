@@ -1554,7 +1554,6 @@ class GenericWorkflowStepExecutor(Phase):
         self._persist_plan_artifact_record(path, metadata)
 
     def _load_workspace_publication(self, iteration_dir: Path) -> dict[str, Any] | None:
-        path = self._resolve_iteration_context_file(iteration_dir)
         metadata = self._load_workspace_metadata(iteration_dir)
         if "workspace_publication" not in metadata:
             return None
@@ -1614,9 +1613,11 @@ class GenericWorkflowStepExecutor(Phase):
         for placeholder, declared_path in (authoritative_inputs or {}).items():
             path = Path(declared_path)
             path = (path if path.is_absolute() else repo / path).resolve(strict=True)
+            digest = hashlib.sha256()
             with path.open("rb") as stream:
-                digest = hashlib.file_digest(stream, "sha256").hexdigest()
-            inputs[placeholder] = {"path": str(path), "sha256": digest}
+                for chunk in iter(lambda: stream.read(65536), b""):
+                    digest.update(chunk)
+            inputs[placeholder] = {"path": str(path), "sha256": digest.hexdigest()}
         facts = {
             "repository": str(repo),
             "base": self.git_ops.run_git("merge-base", str(base_ref), head),
@@ -1685,7 +1686,6 @@ class GenericWorkflowStepExecutor(Phase):
 
     def _load_workspace_completion(self, iteration_dir: Path) -> dict[str, Any]:
         """Missing legacy diagnostics mean zero; malformed authority never does."""
-        path = self._resolve_iteration_context_file(iteration_dir)
         metadata = self._load_workspace_metadata(iteration_dir)
         if not isinstance(metadata, dict):
             raise ValueError("Invalid iteration metadata for workspace completion")
