@@ -11,32 +11,32 @@ workflow:
   human_tasks:
     - id: editorial-output-review
       pattern: confirm_output
-      prompt: Approve the editorial brief or request a revision.
+      prompt: {message_key: human_task.cafe_brief_revise.editorial_output_review.prompt}
       prompt_locales:
-        zh-TW: "核可編輯綱要，或要求修訂。"
+        zh-TW: {message_key: human_task.cafe_brief_revise.editorial_output_review.prompt}
       input_schema: decision
       decisions:
         - id: approve
-          label: Approve brief
+          label: {message_key: human_task.cafe_brief_revise.editorial_output_review.decisions.approve.label}
           label_locales:
-            zh-TW: "核可綱要"
+            zh-TW: {message_key: human_task.cafe_brief_revise.editorial_output_review.decisions.approve.label}
         - id: revise
-          label: Request brief revision
+          label: {message_key: human_task.cafe_brief_revise.editorial_output_review.decisions.revise.label}
           label_locales:
-            zh-TW: "要求修訂綱要"
+            zh-TW: {message_key: human_task.cafe_brief_revise.editorial_output_review.decisions.revise.label}
           requires_feedback: true
           correction: true
     - id: editorial-clarification
       pattern: answer_questions
-      prompt: Answer the editorial clarification questions.
+      prompt: {message_key: human_task.cafe_brief_revise.editorial_clarification.prompt}
       prompt_locales:
-        zh-TW: "回覆編輯相關的釐清問題。"
+        zh-TW: {message_key: human_task.cafe_brief_revise.editorial_clarification.prompt}
       input_schema: answers
       questions:
         - id: audience
-          prompt: Who is the intended audience?
+          prompt: {message_key: human_task.cafe_brief_revise.editorial_clarification.questions.audience.prompt}
           prompt_locales:
-            zh-TW: "目標讀者是誰？"
+            zh-TW: {message_key: human_task.cafe_brief_revise.editorial_clarification.questions.audience.prompt}
   prompt_inputs:
     - artifacts: [review_feedback, causal_todo]
       placeholder: correction_source

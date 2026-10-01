@@ -11,26 +11,26 @@ workflow:
   human_tasks:
     - id: output-review
       pattern: confirm_output
-      prompt: Review the requirements specification and choose how to continue.
+      prompt: {message_key: human_task.cafe_spec.output_review.prompt}
       prompt_locales:
-        zh-TW: "檢視需求規格，並選擇如何繼續。"
+        zh-TW: {message_key: human_task.cafe_spec.output_review.prompt}
       input_schema: decision
       decisions:
         - id: confirm
-          label: Confirm and continue
+          label: {message_key: human_task.cafe_spec.output_review.decisions.confirm.label}
           label_locales:
-            zh-TW: "確認並繼續"
+            zh-TW: {message_key: human_task.cafe_spec.output_review.decisions.confirm.label}
         - id: revise
-          label: Request revision
+          label: {message_key: human_task.cafe_spec.output_review.decisions.revise.label}
           label_locales:
-            zh-TW: "要求修訂"
+            zh-TW: {message_key: human_task.cafe_spec.output_review.decisions.revise.label}
           requires_feedback: true
           correction: true
     - id: clarification-answers
       pattern: answer_questions
-      prompt: Answer the requested clarification questions.
+      prompt: {message_key: human_task.cafe_spec.clarification_answers.prompt}
       prompt_locales:
-        zh-TW: "回覆所要求的釐清問題。"
+        zh-TW: {message_key: human_task.cafe_spec.clarification_answers.prompt}
       input_schema: answers
       questions_from_xml: true
   checklist:

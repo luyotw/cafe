@@ -11,9 +11,9 @@ workflow:
   human_tasks:
     - id: clarification-feedback
       pattern: revision_feedback
-      prompt: Provide the clarification needed to complete the report.
+      prompt: {message_key: human_task.cafe_research_report.clarification_feedback.prompt}
       prompt_locales:
-        zh-TW: "提供完成報告所需的釐清說明。"
+        zh-TW: {message_key: human_task.cafe_research_report.clarification_feedback.prompt}
       input_schema: feedback
   prompt_inputs:
     - artifacts: [research_report_doc, causal_todo]

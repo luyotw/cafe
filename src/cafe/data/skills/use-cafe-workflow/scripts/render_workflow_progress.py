@@ -36,6 +36,7 @@ try:
     import yaml  # type: ignore[import-untyped]
 
     from cafe.core.audit_events import AuditEventStore
+    from cafe.core.runtime_locales import render_text
     from cafe.playbooks.loader import PlaybookLoader, apply_issue_playbook_overrides
 except ModuleNotFoundError:
     _reexec_with_cafe_python()
@@ -64,48 +65,6 @@ _TEXT_STATUS_SYMBOLS = {
     "skipped": "−",
     "blocked": "!",
     "unknown": "？",
-}
-_TEXT = {
-    "zh": {
-        "missing": "流程尚未建立",
-        "iteration": "第 {iteration} 輪",
-        "review": "流程管理員主動審查",
-        "confirmation": "使用者確認",
-        "delegable": "流程管理員可代理",
-        "not_delegable": "流程管理員不可代理",
-        "closeout": "收尾",
-        "status": {
-            "pending": "待執行",
-            "in_progress": "進行中",
-            "awaiting_input": "等待回覆",
-            "completed": "已完成",
-            "returned": "已退回",
-            "awaiting_confirmation": "等待確認",
-            "skipped": "已略過",
-            "blocked": "受阻",
-            "unknown": "狀態未知",
-        },
-    },
-    "en": {
-        "missing": "Workflow has not been established.",
-        "iteration": "iteration {iteration}",
-        "review": "manager proactive review",
-        "confirmation": "user confirmation",
-        "delegable": "manager may act",
-        "not_delegable": "manager may not act",
-        "closeout": "closeout",
-        "status": {
-            "pending": "Pending",
-            "in_progress": "In progress",
-            "awaiting_input": "Awaiting response",
-            "completed": "Completed",
-            "returned": "Returned",
-            "awaiting_confirmation": "Awaiting confirmation",
-            "skipped": "Skipped",
-            "blocked": "Blocked",
-            "unknown": "Unknown",
-        },
-    },
 }
 
 
@@ -621,7 +580,15 @@ def render_progress(
 ) -> str:
     """Render progress without creating, resuming, or mutating workflow state."""
     language = _language(locale)
-    text = _TEXT[language]
+    copy_locale = "zh-TW" if language == "zh" else "en-US"
+    text: dict[str, Any] = {
+        name: render_text(f"manager.progress.{name}", locale=copy_locale)
+        for name in ("missing", "review", "confirmation", "delegable", "not_delegable", "closeout")
+    }
+    text["status"] = {
+        status: render_text(f"manager.progress.status.{status}", locale=copy_locale)
+        for status in _STATUSES
+    }
     if playbook is None:
         return str(text["missing"])
     if manager_state is not None and driver_state is not None:
@@ -644,7 +611,9 @@ def render_progress(
     for step in _phase_order(model):
         label = step
         if iterations.get(step, 0) > 1:
-            label += " · " + str(text["iteration"]).format(iteration=iterations[step])
+            label += " · " + render_text(
+                "manager.progress.iteration", locale=copy_locale, iteration=iterations[step]
+            )
         block = [_line(phase_statuses[step], label, status_text)]
         if step in required_reviews:
             review_status = reviews.get(
@@ -655,8 +624,8 @@ def render_progress(
                     else "unknown"
                 ),
             )
-            review_label = (
-                f"{step}：{text['review']}" if language == "zh" else f"{step}: {text['review']}"
+            review_label = render_text(
+                "manager.progress.review_line", locale=copy_locale, step=step, review=text["review"]
             )
             block.append(_line(review_status, review_label, status_text))
         if step in gate_steps:
@@ -674,10 +643,12 @@ def render_progress(
                     else text["delegable"] if step in manager_confirmable else text["not_delegable"]
                 )
             )
-            confirmation_label = (
-                f"{step}：{text['confirmation']}（{proxy}）"
-                if language == "zh"
-                else f"{step}: {text['confirmation']} ({proxy})"
+            confirmation_label = render_text(
+                "manager.progress.confirmation_line",
+                locale=copy_locale,
+                step=step,
+                confirmation=text["confirmation"],
+                proxy=proxy,
             )
             block.append(
                 _line(
@@ -699,10 +670,11 @@ def render_progress(
     for item in _CLOSEOUT_ITEMS:
         closeout_line = _line(
             closeout.get(item, "unknown"),
-            (
-                f"{item}（{text['closeout']}）"
-                if language == "zh"
-                else f"{item} ({text['closeout']})"
+            render_text(
+                "manager.progress.closeout_line",
+                locale=copy_locale,
+                item=item,
+                closeout=text["closeout"],
             ),
             status_text,
         )

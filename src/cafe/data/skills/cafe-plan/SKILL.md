@@ -11,33 +11,33 @@ workflow:
   human_tasks:
     - id: development-guide
       pattern: revision_feedback
-      prompt: "Please enter development guide (can be left empty)"
+      prompt: {message_key: human_task.cafe_plan.development_guide.prompt}
       prompt_locales:
-        zh-TW: "請輸入開發指引（可留空）"
+        zh-TW: {message_key: human_task.cafe_plan.development_guide.prompt}
       input_schema: feedback
       required: false
     - id: output-review
       pattern: confirm_output
-      prompt: Review the implementation plan and choose how to continue.
+      prompt: {message_key: human_task.cafe_plan.output_review.prompt}
       prompt_locales:
-        zh-TW: "檢視實作計畫，並選擇如何繼續。"
+        zh-TW: {message_key: human_task.cafe_plan.output_review.prompt}
       input_schema: decision
       decisions:
         - id: confirm
-          label: Confirm and continue
+          label: {message_key: human_task.cafe_plan.output_review.decisions.confirm.label}
           label_locales:
-            zh-TW: "確認並繼續"
+            zh-TW: {message_key: human_task.cafe_plan.output_review.decisions.confirm.label}
         - id: revise
-          label: Request revision
+          label: {message_key: human_task.cafe_plan.output_review.decisions.revise.label}
           label_locales:
-            zh-TW: "要求修訂"
+            zh-TW: {message_key: human_task.cafe_plan.output_review.decisions.revise.label}
           requires_feedback: true
           correction: true
     - id: clarification-answers
       pattern: answer_questions
-      prompt: Review the proposed direction, then confirm it or describe the needed adjustment.
+      prompt: {message_key: human_task.cafe_plan.clarification_answers.prompt}
       prompt_locales:
-        zh-TW: "檢視提出的方向，確認該方向或說明需要調整之處。"
+        zh-TW: {message_key: human_task.cafe_plan.clarification_answers.prompt}
       input_schema: answers
       questions_from_xml: true
   prompt_inputs:

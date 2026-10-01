@@ -1,4 +1,107 @@
-workspace.correction: |-
-  工作目錄完成檢查未通過：{reason}
+workspace.correction: '工作目錄完成檢查未通過：{reason}
+
   已使用修正機會：{consumed}；本次返回後剩餘：{remaining}。
-  請核對每項修改的來源並保留執行前已有的工作，只在原任務範圍與授權內處理。未提交檔案不代表授權你暫存、提交、stash、還原或刪除。若檔案處置需要人決定，沿用澄清或權限交接；不要推測人的回答。保留原 phase、iteration、CLI、model、session、工具、目錄與權限。重新驗證目前成果、checklist 與 Todo evidence，並重新提交一般 handoff。
+
+  請核對每項修改的來源並保留執行前已有的工作，只在原任務範圍與授權內處理。未提交檔案不代表授權你暫存、提交、stash、還原或刪除。若檔案處置需要人決定，沿用澄清或權限交接；不要推測人的回答。保留原 phase、iteration、CLI、model、session、工具、目錄與權限。重新驗證目前成果、checklist 與 Todo evidence，並重新提交一般 handoff。'
+notification.step_labels.spec: 需求規格
+notification.step_labels.plan: 規劃
+notification.step_labels.develop: 開發
+notification.step_labels.review: 審查
+notification.step_labels.pr: PR 準備與審閱
+notification.action_labels.clarification_feedback: 回覆釐清問題
+notification.action_labels.clarification_answers: 回覆釐清問題
+notification.action_labels.local_review: 審閱變更與後續建議，決定修正或確認繼續
+notification.action_labels.output_review: 確認結果
+notification.action_labels.permission_answers: 回覆權限相關問題
+notification.action_labels.alignment_decision: 確認方向
+notification.action_labels.no_changes_needed: 確認沒有需要變更
+notification.action_labels.agent_execution_interrupted: 決定如何繼續
+notification.repository_fallback: 目前專案
+notification.issue_fallback: 未命名工作項目
+notification.step_fallback: 工作流程
+notification.action_fallback: 處理 CAFE 工作項目
+notification.unknown_step: 未知階段
+notification.field_separator: ：
+notification.task_headline: CAFE 需要你的處理
+notification.repository_field: 專案
+notification.issue_field: 對話
+notification.step_field: 目前階段
+notification.action_field: 需要你做的事
+notification.task_closing: 請回到 CAFE 的「{issue}」工作項目處理。
+notification.callback_headline: CAFE 自動通知未完成
+notification.status_field: 狀況
+notification.reason_state: CAFE 無法讀取自動通知所需的狀態或設定。
+notification.reason_queue: CAFE 無法將通知送達原對話。
+notification.reason_generic: CAFE 的自動通知發生錯誤。
+notification.callback_impact: 影響：原對話可能收不到這次更新；這不代表工作流程已停止。
+notification.callback_closing: 請回到 CAFE 的「{issue}」原對話，請流程管理員檢查目前進度與下一步。
+manager.progress.missing: 流程尚未建立
+manager.progress.iteration: 第 {iteration} 輪
+manager.progress.review: 流程管理員主動審查
+manager.progress.confirmation: 使用者確認
+manager.progress.delegable: 流程管理員可代理
+manager.progress.not_delegable: 流程管理員不可代理
+manager.progress.closeout: 收尾
+manager.progress.status.pending: 待執行
+manager.progress.status.in_progress: 進行中
+manager.progress.status.awaiting_input: 等待回覆
+manager.progress.status.completed: 已完成
+manager.progress.status.returned: 已退回
+manager.progress.status.awaiting_confirmation: 等待確認
+manager.progress.status.skipped: 已略過
+manager.progress.status.blocked: 受阻
+manager.progress.status.unknown: 狀態未知
+manager.progress.review_line: '{step}：{review}'
+manager.progress.confirmation_line: '{step}：{confirmation}（{proxy}）'
+manager.progress.closeout_line: '{item}（{closeout}）'
+manager.kickoff.header_field: 欄位
+manager.kickoff.header_value: 值
+manager.kickoff.confirmation: 請確認上述完整契約；確認後流程管理員才會準備並啟動 workflow。
+manager.kickoff.checks: '### 檢查結果'
+manager.kickoff.global_sync_heading: '### 可選的 Global catalog 同步'
+manager.kickoff.global_sync_reminder: 下列既有 Global entries 與 project 內容不同：{entries}。確認 kickoff 不代表同意發布；如需同步請另行提出。
+manager.kickoff.commands_confirmation: 確認後依序執行上述命令；更改命令、順序、目標或影響時另行確認。
+manager.kickoff.no_commands: 無需執行命令（[]）。
+human_task.cafe_brief_first.editorial_output_review.prompt: 核可編輯綱要，或要求修訂。
+human_task.cafe_brief_first.editorial_output_review.decisions.approve.label: 核可綱要
+human_task.cafe_brief_first.editorial_output_review.decisions.revise.label: 要求修訂綱要
+human_task.cafe_brief_first.editorial_clarification.prompt: 回覆編輯相關的釐清問題。
+human_task.cafe_brief_first.editorial_clarification.questions.audience.prompt: 目標讀者是誰？
+human_task.cafe_brief_revise.editorial_output_review.prompt: 核可編輯綱要，或要求修訂。
+human_task.cafe_brief_revise.editorial_output_review.decisions.approve.label: 核可綱要
+human_task.cafe_brief_revise.editorial_output_review.decisions.revise.label: 要求修訂綱要
+human_task.cafe_brief_revise.editorial_clarification.prompt: 回覆編輯相關的釐清問題。
+human_task.cafe_brief_revise.editorial_clarification.questions.audience.prompt: 目標讀者是誰？
+human_task.cafe_develop.no_change_decision.prompt: 檢視實作判斷的理由，並選擇如何繼續。
+human_task.cafe_develop.no_change_decision.decisions.agree.label: 同意不需要再進行變更
+human_task.cafe_develop.no_change_decision.decisions.disagree.label: 要求進一步變更
+human_task.cafe_develop.clarification_feedback.prompt: 提供繼續所需的釐清說明或實作回饋。
+human_task.cafe_develop.permission_answers.prompt: 提供繼續開發所需的權限決定或存取資訊。
+human_task.cafe_draft.clarification_feedback.prompt: 提供繼續撰稿所需的釐清說明。
+human_task.cafe_incident_detect.clarification_feedback.prompt: 提供繼續偵測所需的事件細節。
+human_task.cafe_incident_mitigate.clarification_feedback.prompt: 提供繼續緩解所需的事件細節。
+human_task.cafe_incident_postmortem.clarification_feedback.prompt: 提供繼續事後檢討所需的事件細節。
+human_task.cafe_incident_triage.clarification_feedback.prompt: 提供繼續分級所需的事件細節。
+human_task.cafe_plan.development_guide.prompt: 請輸入開發指引（可留空）
+human_task.cafe_plan.output_review.prompt: 檢視實作計畫，並選擇如何繼續。
+human_task.cafe_plan.output_review.decisions.confirm.label: 確認並繼續
+human_task.cafe_plan.output_review.decisions.revise.label: 要求修訂
+human_task.cafe_plan.clarification_answers.prompt: 檢視提出的方向，確認該方向或說明需要調整之處。
+human_task.cafe_pr.local_review.prompt: 檢視已備妥的本機變更，以及 PR 描述中的 Follow-up Proposals 段落。你的決定會套用到所有未處理的 FUP，不支援逐項混合處置。請選擇現在修正全部提議、記錄全部提議另開 issue，或核可並在不開 issue 的情況下繼續。
+human_task.cafe_pr.local_review.decisions.fix_now.label: 現在修正所有提議項目
+human_task.cafe_pr.local_review.decisions.create_follow_up.label: 為所有提議記錄 issue
+human_task.cafe_pr.local_review.decisions.continue_without_issue.label: 核可／不建立 issue 直接繼續
+human_task.cafe_qa.clarification_feedback.prompt: 提供完成受阻驗收檢查所需的資訊或權限。
+human_task.cafe_qa.iteration_limit.prompt: 工作流程已達設定的迭代上限。若已授權再做一次驗收檢查，請調高此工作項目的上限後再恢復此階段。
+human_task.cafe_qa.iteration_limit.decisions.resume.label: 調高迭代上限後恢復
+human_task.cafe_research_collect.clarification_feedback.prompt: 提供繼續蒐集證據所需的釐清說明。
+human_task.cafe_research_question.clarification_feedback.prompt: 提供精煉研究問題所需的釐清說明。
+human_task.cafe_research_report.clarification_feedback.prompt: 提供完成報告所需的釐清說明。
+human_task.cafe_research_synthesize.clarification_feedback.prompt: 提供繼續綜整所需的釐清說明。
+human_task.cafe_review.clarification_feedback.prompt: 提供繼續審查所需的釐清說明。
+human_task.cafe_review.iteration_limit.prompt: 工作流程已達設定的迭代上限。若已授權再做一次審查，請調高此工作項目的上限後再恢復此階段。
+human_task.cafe_review.iteration_limit.decisions.resume.label: 調高迭代上限後恢復
+human_task.cafe_spec.output_review.prompt: 檢視需求規格，並選擇如何繼續。
+human_task.cafe_spec.output_review.decisions.confirm.label: 確認並繼續
+human_task.cafe_spec.output_review.decisions.revise.label: 要求修訂
+human_task.cafe_spec.clarification_answers.prompt: 回覆所要求的釐清問題。

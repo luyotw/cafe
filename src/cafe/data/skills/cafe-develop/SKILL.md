@@ -11,32 +11,32 @@ workflow:
   human_tasks:
     - id: no-change-decision
       pattern: no_changes_needed
-      prompt: Review the implementation reasoning and choose how to continue.
+      prompt: {message_key: human_task.cafe_develop.no_change_decision.prompt}
       prompt_locales:
-        zh-TW: "檢視實作判斷的理由，並選擇如何繼續。"
+        zh-TW: {message_key: human_task.cafe_develop.no_change_decision.prompt}
       input_schema: decision
       decisions:
         - id: agree
-          label: Agree that no further changes are needed
+          label: {message_key: human_task.cafe_develop.no_change_decision.decisions.agree.label}
           label_locales:
-            zh-TW: "同意不需要再進行變更"
+            zh-TW: {message_key: human_task.cafe_develop.no_change_decision.decisions.agree.label}
         - id: disagree
-          label: Request further changes
+          label: {message_key: human_task.cafe_develop.no_change_decision.decisions.disagree.label}
           label_locales:
-            zh-TW: "要求進一步變更"
+            zh-TW: {message_key: human_task.cafe_develop.no_change_decision.decisions.disagree.label}
           requires_feedback: true
           correction: true
     - id: clarification-feedback
       pattern: revision_feedback
-      prompt: Provide the clarification or implementation feedback needed to continue.
+      prompt: {message_key: human_task.cafe_develop.clarification_feedback.prompt}
       prompt_locales:
-        zh-TW: "提供繼續所需的釐清說明或實作回饋。"
+        zh-TW: {message_key: human_task.cafe_develop.clarification_feedback.prompt}
       input_schema: feedback
     - id: permission-answers
       pattern: revision_feedback
-      prompt: Provide the permission decision or access details needed to continue development.
+      prompt: {message_key: human_task.cafe_develop.permission_answers.prompt}
       prompt_locales:
-        zh-TW: "提供繼續開發所需的權限決定或存取資訊。"
+        zh-TW: {message_key: human_task.cafe_develop.permission_answers.prompt}
       input_schema: feedback
   prompt_inputs:
     - artifacts: [spec]

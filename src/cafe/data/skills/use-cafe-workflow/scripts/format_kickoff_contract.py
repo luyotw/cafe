@@ -54,6 +54,7 @@ try:
         mandatory_confirmation_gate_steps,
         resolve_playbook_skills,
     )
+    from cafe.core.runtime_locales import render_text
     from cafe.core.types import AgentCLI, AgentConfig
     from cafe.manager import ActivateConfirmedContract, activate_confirmed_contract
     from cafe.manager.delivery import normalize_delivery_contract, validate_closeout_plan_policy
@@ -257,7 +258,9 @@ def _render_closeout(plan: dict[str, Any], descriptions: dict[str, list[str]], *
     for stage in ("deliver", "cleanup"):
         entries = [f"#### {stage}"]
         if not plan[stage]:
-            entries.append("無需執行命令（[]）。" if zh else "No commands ([]).")
+            entries.append(
+                render_text("manager.kickoff.no_commands", locale="zh-TW" if zh else "en-US")
+            )
         for index, (action, description) in enumerate(
             zip(plan[stage], descriptions[stage], strict=True), start=1
         ):
@@ -806,13 +809,13 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
     effective_locale = locale["value"]
     locale_token = effective_locale.strip().lower().replace("_", "-")
     zh = locale_token == "zh-tw" or locale_token.startswith("zh-hant")
-    headers = ["欄位", "值"] if zh else ["Field", "Value"]
-    confirmation_prompt = (
-        "請確認上述完整契約；確認後流程管理員才會準備並啟動 workflow。"
-        if zh
-        else "Please confirm the complete contract above before the Manager prepares "
-        "and starts the workflow."
-    )
+    copy_locale = "zh-TW" if zh else "en-US"
+
+    def text(name: str, **values: str) -> str:
+        return render_text(f"manager.kickoff.{name}", locale=copy_locale, **values)
+
+    headers = [text("header_field"), text("header_value")]
+    confirmation_prompt = text("confirmation")
     manager = proposal["manager"]
     manager_rows: list[list[Any]] = [["manager.mode", manager["mode"]]]
     if manager["mode"] == "attached":
@@ -865,11 +868,7 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
             if report.get("error"):
                 details.append(str(report["error"]))
             preflight_rows.append([label, "; ".join(details)])
-    preflight = (
-        ["### 檢查結果" if zh else "### Checks", _table(headers, preflight_rows)]
-        if preflight_rows
-        else []
-    )
+    preflight = [text("checks"), _table(headers, preflight_rows)] if preflight_rows else []
     chains = {phase["name"]: phase["chain"] for phase in proposal["phases"]}
     model_rows: list[list[Any]] = []
     for step_name, step in model.steps.items():
@@ -933,19 +932,8 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
     catalog_reminder = []
     if mismatch_ids:
         catalog_reminder = [
-            "### 可選的 Global catalog 同步" if zh else "### Optional Global catalog sync",
-            (
-                "下列既有 Global entries 與 project 內容不同："
-                if zh
-                else "These existing Global entries differ from the project content: "
-            )
-            + ", ".join(mismatch_ids)
-            + (
-                "。確認 kickoff 不代表同意發布；如需同步請另行提出。"
-                if zh
-                else ". Kickoff confirmation does not approve publication; request "
-                "synchronization separately if desired."
-            ),
+            text("global_sync_heading"),
+            text("global_sync_reminder", entries=", ".join(mismatch_ids)),
         ]
     return "\n\n".join(
         [
@@ -994,12 +982,7 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
             ),
             "### Deliver and cleanup plan to confirm",
             _render_closeout(closeout, _closeout_descriptions(args, closeout), zh=zh),
-            (
-                "確認後依序執行上述命令；更改命令、順序、目標或影響時另行確認。"
-                if zh
-                else "Confirmation authorizes these commands in order; changes to commands, order, "
-                "targets or effects require reconfirmation."
-            ),
+            text("commands_confirmation"),
             *catalog_reminder,
             confirmation_prompt,
             "### Workflow progress",

@@ -168,10 +168,10 @@ language rather than silently approximated.
 
 New localized runtime messages belong in `src/cafe/data/locales/en-US.yaml` and
 `src/cafe/data/locales/zh-TW.yaml`. These packaged resources are separate from
-message selection and runtime behavior. The initial consumer is the workspace
-completion correction prompt (`workspace.correction`). Existing notification
-copy remains in its current module; this directory does not imply general CLI
-translation or additional supported languages.
+message selection and runtime behavior. Existing localized runtime copy now uses
+stable keys here: workspace correction, HumanTask/failed-callback Slack messages,
+Manager progress and kickoff presentation, and the packaged HumanTask declarations.
+This directory does not imply general CLI translation or additional languages.
 
 Each catalog is a flat YAML mapping from stable, untranslated message keys to
 non-empty strings. Use lowercase names separated by dots, with underscores or
@@ -206,3 +206,53 @@ current working directory in a source checkout or installed distribution.
 `render_text` delegates selection to the existing `select_text_locale` resolver.
 Traditional Chinese aliases and silent English fallback remain unchanged;
 rendering never updates the workflow's stored locale or imports Manager policy.
+
+### HumanTask declarations and snapshots
+
+A presentation field can reference a catalog message with
+`{message_key: human_task.cafe_spec.output_review.prompt}`. Use the same reference
+in the base `prompt` and its explicitly authored `prompt_locales` entries:
+
+```yaml
+prompt: {message_key: human_task.cafe_spec.output_review.prompt}
+prompt_locales:
+  zh-TW: {message_key: human_task.cafe_spec.output_review.prompt}
+```
+
+References are supported in policy/question prompts, decision labels, correction
+guidance, and their existing locale-variant maps. They must contain only a string
+`message_key` naming a message without interpolation arguments. They expand at
+declaration validation to the same plain strings used by inline declarations.
+Custom inline copy and locale maps continue to work unchanged. `for_locale`
+retains exact canonical-tag variant matching and declared-text fallback: a
+`zh-TW` variant alone does not create a `zh-Hant` or `zh-HK` declaration variant.
+Manager presentation retains its existing `zh-TW`/`zh-Hant` selection before
+rendering; notification and correction selection use the canonical text resolver.
+
+Materialized HumanTasks persist plain prompts, decisions, and correction guidance
+with the existing snapshot schema. Reading or answering an outstanding task never
+resolves a catalog reference again. IDs, input schemas, options as answer identity,
+flags, routes, permissions, and ownership remain in their declarations. Do not
+replace these with translated keys or retranslate agent-generated questions.
+
+### Migrated source and consumer inventory
+
+| Original source | Catalog keys | Runtime consumer |
+| --- | --- | --- |
+| `core/workspace_artifact.py` | `workspace.correction` | Bounded workspace correction prompt |
+| `core/human_task_notifications.py` | `notification.*` | HumanTask and failed-callback Slack payloads, including labels, fallback text, separators and closings |
+| `use-cafe-workflow/scripts/render_workflow_progress.py` | `manager.progress.*` | Missing state, iteration/status/review/confirmation/closeout presentation and localized punctuation |
+| `use-cafe-workflow/scripts/format_kickoff_contract.py` | `manager.kickoff.*` | Localized table headers, checks, confirmation, empty closeout, command authorization and optional catalog-sync reminder |
+| Packaged `cafe-*` skill frontmatter | `human_task.<skill>.<task>.*` | HumanTask policy validation, then existing task materialization and snapshots |
+
+The frontmatter migration covers `cafe-brief_first`, `cafe-brief_revise`,
+`cafe-develop`, `cafe-draft`, `cafe-incident_detect`, `cafe-incident_mitigate`,
+`cafe-incident_postmortem`, `cafe-incident_triage`, `cafe-plan`, `cafe-pr`,
+`cafe-qa`, `cafe-research_collect`, `cafe-research_question`,
+`cafe-research_report`, `cafe-research_synthesize`, `cafe-review`, and `cafe-spec`.
+It includes every declared localized prompt and decision label, output/no-change
+confirmations, and both editorial question prompts. No packaged question options
+or correction-guidance variants had localized copy to move. Their identity and
+custom authored variants remain supported. Monolingual CLI/help and unlocalized
+runtime defaults, repository instructions/documentation/examples, detector
+vocabulary, locale settings, and presentation symbols are outside this inventory.

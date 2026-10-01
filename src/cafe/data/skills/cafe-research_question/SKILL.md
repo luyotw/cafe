@@ -11,9 +11,9 @@ workflow:
   human_tasks:
     - id: clarification-feedback
       pattern: revision_feedback
-      prompt: Provide the clarification needed to refine the research question.
+      prompt: {message_key: human_task.cafe_research_question.clarification_feedback.prompt}
       prompt_locales:
-        zh-TW: "提供精煉研究問題所需的釐清說明。"
+        zh-TW: {message_key: human_task.cafe_research_question.clarification_feedback.prompt}
       input_schema: feedback
   prompt_inputs:
     - artifacts: [research_notes, causal_todo]
