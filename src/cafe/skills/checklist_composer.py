@@ -163,6 +163,7 @@ def compose_declared_checklist(
         feedback=feedback,
     )
     parts: list[str] = []
+    literal_parts: set[int] = set()
     for section in variant.sections:
         if section.reference:
             parts.append(_load_skill_checklist_reference(skill_name, section.reference))
@@ -191,7 +192,9 @@ def compose_declared_checklist(
                 )
             except (OSError, TodoContractError) as exc:
                 raise ValueError(f"Cannot project authoritative Todo List: {exc}") from exc
-            parts.extend(item.checklist_row() for item in items)
+            # Authoritative artifact text is data, not a skill template.
+            literal_parts.add(len(parts))
+            parts.append("\n".join(item.checklist_row() for item in items))
 
     role_dirs = {
         "pm": "pm",
@@ -227,9 +230,13 @@ def compose_declared_checklist(
             f"{skill_name}: {', '.join(sorted(overlap))}"
         )
     placeholders.update(reference_context)
+    unresolved_names: set[str] = set()
+    for index, part in enumerate(parts):
+        if index not in literal_parts:
+            parts[index] = resolve_checklist_placeholders(part, placeholders)
+            unresolved_names.update(_PLACEHOLDER_PATTERN.findall(parts[index]))
     content = "\n".join(part for part in parts if part)
-    content = resolve_checklist_placeholders(content, placeholders)
-    unresolved = sorted(set(_PLACEHOLDER_PATTERN.findall(content)))
+    unresolved = sorted(unresolved_names)
     if unresolved:
         raise ValueError(
             f"Unresolved checklist placeholders for {skill_name}: {', '.join(unresolved)}"
@@ -916,14 +923,17 @@ def compose_effective_checklist(
                         }
                     )
                     identity = [identity, projections[-1]]
-                content = resolve_checklist_placeholders(content, local)
-                unresolved = sorted(set(_PLACEHOLDER_PATTERN.findall(content)))
-                if unresolved:
-                    raise ValueError(
-                        f"Step {composition.step_name!r}, skill {source!r}"
-                        f", {location}.sections[{section_index}]: unresolved placeholders "
-                        f"{unresolved}"
-                    )
+                if section.todo_projection is None:
+                    # Projected Todo rows must retain their original text and
+                    # fingerprint, even when braces match a context variable.
+                    content = resolve_checklist_placeholders(content, local)
+                    unresolved = sorted(set(_PLACEHOLDER_PATTERN.findall(content)))
+                    if unresolved:
+                        raise ValueError(
+                            f"Step {composition.step_name!r}, skill {source!r}"
+                            f", {location}.sections[{section_index}]: unresolved placeholders "
+                            f"{unresolved}"
+                        )
                 append(content, source, identity)
         if include_guidance and guidance:
             compact = (
