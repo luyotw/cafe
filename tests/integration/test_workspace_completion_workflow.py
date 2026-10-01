@@ -358,14 +358,28 @@ def test_i3_observed_execution_drift_blocks_publication(journey, drift, monkeypa
     assert len(HumanTaskRecordStore(j.issue).tasks()) == 1
 
 
-def test_u5_i1_correction_prompt_uses_workflow_conversation_locale(journey):
-    j = journey([CORRECTED], workspace=True, workspace_action=change_then_commit)
-    j.runtime.blackboard.conversation_locale = "zh-TW"
+@pytest.mark.parametrize("mode", ["baton", "legacy"])
+@pytest.mark.parametrize(
+    "locale,meanings",
+    [
+        ("zh-TW", ("來源", "權限")),
+        ("zh-Hant", ("來源", "權限")),
+        ("zh-CN", ("origin", "authorization")),
+        ("fr-FR", ("origin", "authorization")),
+        (None, ("origin", "authorization")),
+    ],
+)
+def test_u5_i1_correction_prompt_uses_workflow_conversation_locale(journey, mode, locale, meanings):
+    j = journey([CORRECTED], workspace=True, workspace_action=change_then_commit, mode=mode)
+    j.runtime.blackboard.conversation_locale = locale
     j.runtime.blackboard_store.save(j.runtime.blackboard)
     j.runtime.run(start_step="inspect_custom")
     prompt = j.manager.calls[1][1]
-    assert "owned.txt" in prompt and "來源" in prompt and "權限" in prompt
+    assert "owned.txt" in prompt and all(meaning in prompt for meaning in meanings)
+    assert j.runtime.blackboard_store.load_or_create("inspect_custom").conversation_locale == locale
     assert j.manager.deliveries == 1
+    assert len(j.manager.calls) == 2 and j.manager.calls[1][2].is_exact
+    assert j.effects == ["prepare", "after"]
 
 
 @pytest.mark.parametrize("progress", [False, True])

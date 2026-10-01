@@ -17,6 +17,31 @@ _NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
 _STATUSES = frozenset({"A", "D", "M", "R"})
 
 
+# Developer-authored correction text; locale selection uses the shared resolver.
+WORKSPACE_CORRECTION_TEXT_CATALOGS: dict[str, str] = {
+    "en-US": (
+        "Workspace completion rejected: {reason}.\n"
+        "Correction opportunities consumed: {consumed}; remaining: {remaining}.\n"
+        "Verify the origin of every affected change and preserve pre-existing work. "
+        "Act only within the original task scope and authorization. "
+        "Dirty files do not grant authorization to stage, commit, stash, restore or delete. "
+        "If authorized disposition is unavailable, request clarification or permission "
+        "through the existing human handoff. Do not infer a human answer. "
+        "Keep the same phase, iteration, CLI, model, session, tools, directories and permissions. "
+        "Revalidate current output, checklist and evidence, and resubmit the ordinary handoff."
+    ),
+    "zh-TW": (
+        "工作目錄完成檢查未通過：{reason}\n"
+        "已使用修正機會：{consumed}；本次返回後剩餘：{remaining}。\n"
+        "請核對每項修改的來源並保留執行前已有的工作，只在原任務範圍與授權內處理。"
+        "未提交檔案不代表授權你暫存、提交、stash、還原或刪除。"
+        "若檔案處置需要人決定，沿用澄清或權限交接；不要推測人的回答。"
+        "保留原 phase、iteration、CLI、model、session、工具、目錄與權限。"
+        "重新驗證目前成果、checklist 與 Todo evidence，並重新提交一般 handoff。"
+    ),
+}
+
+
 class WorkspaceArtifactError(ValueError):
     """Raised when a workspace identity cannot be safely constructed or read."""
 
@@ -77,26 +102,8 @@ def workspace_correction_prompt(
 ) -> str:
     """Actionable ownership feedback, using the workflow conversation language."""
     reason = bounded_workspace_reason(reason)
-    if select_text_locale(locale) == "zh-TW":
-        return (
-            f"工作目錄完成檢查未通過：{reason}\n"
-            f"已使用修正機會：{consumed}；本次返回後剩餘：{remaining}。\n"
-            "請核對每項修改的來源並保留執行前已有的工作，只在原任務範圍與授權內處理。"
-            "未提交檔案不代表授權你暫存、提交、stash、還原或刪除。"
-            "若檔案處置需要人決定，沿用澄清或權限交接；不要推測人的回答。"
-            "保留原 phase、iteration、CLI、model、session、工具、目錄與權限。"
-            "重新驗證目前成果、checklist 與 Todo evidence，並重新提交一般 handoff。"
-        )
-    return (
-        f"Workspace completion rejected: {reason}.\n"
-        f"Correction opportunities consumed: {consumed}; remaining: {remaining}.\n"
-        "Verify the origin of every affected change and preserve pre-existing work. "
-        "Act only within the original task scope and authorization. "
-        "Dirty files do not grant authorization to stage, commit, stash, restore or delete. "
-        "If authorized disposition is unavailable, request clarification or permission "
-        "through the existing human handoff. Do not infer a human answer. "
-        "Keep the same phase, iteration, CLI, model, session, tools and permissions. "
-        "Revalidate current output, checklist and evidence, and resubmit the ordinary handoff."
+    return WORKSPACE_CORRECTION_TEXT_CATALOGS[select_text_locale(locale)].format(
+        reason=reason, consumed=consumed, remaining=remaining
     )
 
 
