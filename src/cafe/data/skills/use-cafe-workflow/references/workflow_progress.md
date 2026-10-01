@@ -1,5 +1,17 @@
 # Workflow Progress Diagram
 
+## Initial kickoff presentation
+
+For an initial kickoff, `format_kickoff_contract.py` supplies the complete
+confirmation request and final progress diagram. Present that document once,
+following `kickoff.md`'s translation boundary; retain the diagram's structure,
+step IDs, status meanings and symbols, counts, ownership, node order and connectors.
+All scheduled reviews, deliver and cleanup are pending. No established-workflow
+state lookup or separate progress-renderer call is needed to present this output.
+The remaining sections apply to replies about an established workflow.
+
+## Established workflow presentation
+
 Read this reference before every user-visible Manager reply. For an initial
 kickoff, `format_kickoff_contract.py` owns the complete response and places the
 renderer-produced progress diagram at its end. For every other question,

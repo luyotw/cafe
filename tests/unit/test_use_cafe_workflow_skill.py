@@ -871,9 +871,12 @@ def test_use_cafe_workflow_uses_structured_human_task_resume_payloads() -> None:
 
 def test_use_cafe_workflow_skill_requires_playbook_derived_kickoff_contract() -> None:
     skill = _read_skill_resource("SKILL.md")
-    reference = _read_skill_resource("references/kickoff.md")
+    reference = (_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md"))
+    kickoff_inputs = (_read_skill_resource("references/kickoff_inputs.md") + "\n" + _read_skill_resource("references/kickoff_input_reference.md"))
     selection = _read_skill_resource("references/playbook_selection.md")
+    model_selection = _read_skill_resource("references/model_selection.md")
     normalized = " ".join(reference.split())
+    normalized_inputs = " ".join(kickoff_inputs.split())
 
     assert "references/kickoff.md" in skill
     assert "## Kickoff contract: first blocking gate" in reference
@@ -903,8 +906,23 @@ def test_use_cafe_workflow_skill_requires_playbook_derived_kickoff_contract() ->
     assert "self-contained initial confirmation request" in normalized
     assert "Do not substitute a shorter hand-written recap" in normalized
     assert "Do not require rationale, assessment or preflight records" in normalized
-    assert "cafe playbook list" in selection
+    assert "references/kickoff_inputs.md" in skill
+    assert "Reuse kickoff preferences and evidence" in reference
+    assert "Have `draft` create the request and prefill it" in normalized
+    assert "through `assemble`" in normalized
+    assert "use `render` to produce the complete contract" in normalized
+    assert "draft --issue-id 123 --playbook-id standard-qa --output draft.json" in normalized_inputs
+    assert "no handwritten request JSON is needed" in normalized_inputs
+    assert "assemble --request-file draft.json --summary --draft-output updated-draft.json" in normalized_inputs
+    assert "The program writes known values into `draft.json`" in normalized_inputs
+    assert "Model suitability still requires assessment" in normalized_inputs
+    assert "an operational probe does not establish model capability" in normalized_inputs
+    assert "cafe playbook list" not in selection
+    assert "prepare_kickoff.py discover" in selection
+    assert "do not repeat list/show/read" in " ".join(selection.split())
     assert "cafe playbook show <id>" in selection
+    assert "inspect the model evidence returned by `prepare_kickoff.py discover`" in model_selection
+    assert "Manager's responsibility" in model_selection
     assert "repository instructions require an independent QA" in selection
     assert "Compare the closest alternatives internally" in " ".join(selection.split())
     assert "do not infer behavior from a playbook name" in " ".join(selection.split())
@@ -919,7 +937,7 @@ def test_use_cafe_workflow_keeps_playbook_selection_issue_owned() -> None:
     skill = _read_skill_resource("SKILL.md")
     selection = _read_skill_resource("references/playbook_selection.md")
     strategic = _read_skill_resource("references/strategic_context.md")
-    kickoff = _read_skill_resource("references/kickoff.md")
+    kickoff = (_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md"))
     normalized_skill = " ".join(skill.split())
     normalized_selection = " ".join(selection.split())
     normalized_strategic = " ".join(strategic.split())
@@ -2013,7 +2031,7 @@ def test_minimal_non_software_kickoff_renders_only_its_two_declared_steps(
 
 
 def test_kickoff_contract_keeps_issue_preflight_separate_from_manager_policy() -> None:
-    kickoff = _read_skill_resource("references/kickoff.md")
+    kickoff = (_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md"))
     normalized = " ".join(kickoff.split())
 
     assert "preflight:" in kickoff
@@ -2204,7 +2222,7 @@ def test_kickoff_contract_formatter_rejects_invalid_operating_mode(
 
 def test_kickoff_formatter_documents_structural_validation_boundary() -> None:
     script = (SKILL_ROOT / "scripts" / "format_kickoff_contract.py").read_text(encoding="utf-8")
-    kickoff = (SKILL_ROOT / "references" / "kickoff.md").read_text(encoding="utf-8")
+    kickoff = (_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md"))
 
     assert "structurally validated" in script
     assert "validates chain structure only; it does not validate model suitability" in kickoff
@@ -2213,7 +2231,7 @@ def test_kickoff_formatter_documents_structural_validation_boundary() -> None:
 
 
 def test_kickoff_reference_distinguishes_new_and_legacy_manager_contract_versions() -> None:
-    kickoff = " ".join(_read_skill_resource("references/kickoff.md").split())
+    kickoff = " ".join((_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md")).split())
 
     assert (
         "Existing v7 Driver contracts remain valid through the legacy Driver authority"
@@ -3087,7 +3105,9 @@ def test_recovery_inspection_and_callback_policy_are_mode_neutral() -> None:
 def test_use_cafe_workflow_prefers_user_conversation_locale() -> None:
     skill = _read_skill_resource("SKILL.md")
     reference = _read_skill_resource("references/kickoff.md")
+    policy = (PROJECT_ROOT / "docs" / "language-policy.md").read_text()
     normalized = " ".join(reference.split())
+    normalized_policy = " ".join(policy.split())
 
     assert "references/kickoff.md" in skill
     assert "## Conversation locale checklist" in reference
@@ -3115,6 +3135,10 @@ def test_use_cafe_workflow_prefers_user_conversation_locale() -> None:
     assert "Never claim this skill lacks a locale rule" in normalized
     assert "Do not copy the locale into `issue.yaml`" in normalized
     assert "the stored value stands until the explicit change operation replaces it" in normalized
+    assert "current explicit instruction for this workflow" in normalized_policy
+    assert "applicable explicit repository-scoped saved preference" in normalized_policy
+    assert "explicit user-scoped saved preference" in normalized_policy
+    assert "A saved preference is reused only after an explicit request to save it" in normalized_policy
     assert "commands, paths, playbook and step names, intents, artifact keys" in normalized
     assert "Translate all presentation text into the effective conversation language" in normalized
     assert "capability prompts and outcomes" in normalized
@@ -3780,7 +3804,7 @@ def test_use_cafe_workflow_requires_confirmed_repository_content_locale() -> Non
     normalized_skill = " ".join(skill.split())
     normalized = " ".join(reference.split())
 
-    assert "Render, prepare, or reconfirm a kickoff" in normalized_skill
+    assert "Prepare kickoff inputs, render, or reconfirm a kickoff" in normalized_skill
     assert "`references/kickoff.md`" in normalized_skill
     assert "## Repository content locale checklist" in reference
     assert "Before `cafe init` or any other repository mutation" in normalized
@@ -3798,7 +3822,7 @@ def test_use_cafe_workflow_requires_confirmed_repository_content_locale() -> Non
 
 def test_use_cafe_workflow_defines_event_driven_mode_and_model_authority() -> None:
     skill = _read_skill_resource("SKILL.md")
-    kickoff = _read_skill_resource("references/kickoff.md")
+    kickoff = (_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md"))
     running = _read_skill_resource("references/running_workflow.md")
     models = _read_skill_resource("references/model_selection.md")
     normalized_kickoff = " ".join(kickoff.split())
@@ -3834,7 +3858,7 @@ def test_use_cafe_workflow_defines_event_driven_mode_and_model_authority() -> No
 
 def test_event_manager_documentation_defines_the_contract_managed_lifecycle() -> None:
     skill = _read_skill_resource("SKILL.md")
-    kickoff = _read_skill_resource("references/kickoff.md")
+    kickoff = (_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md"))
     running = _read_skill_resource("references/running_workflow.md")
     contract = " ".join((skill + kickoff + running).split())
 
@@ -4007,7 +4031,7 @@ def test_manager_handles_git_delivery_conflicts_before_offering_repair() -> None
 class TestPollingContract:
     def test_first_poll_waits_for_the_full_confirmed_interval(self) -> None:
         skill = " ".join(_read_skill_resource("SKILL.md").split())
-        kickoff = " ".join(_read_skill_resource("references/kickoff.md").split())
+        kickoff = " ".join((_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md")).split())
         running = " ".join(_read_skill_resource("references/running_workflow.md").split())
 
         assert "references/running_workflow.md" in skill
@@ -4018,7 +4042,7 @@ class TestPollingContract:
         assert "wait on the same deferred operation" in running
 
     def test_transport_yields_do_not_trigger_workflow_inspection(self) -> None:
-        kickoff = " ".join(_read_skill_resource("references/kickoff.md").split())
+        kickoff = " ".join((_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md")).split())
         running = " ".join(_read_skill_resource("references/running_workflow.md").split())
 
         assert "is transport state rather than an event-driven signal" in kickoff

@@ -5,10 +5,23 @@ whenever execution returns control with agent phases still unexecuted. Also read
 `kickoff.md` before asking for confirmation and `running_workflow.md` before
 execution.
 
+At kickoff, inspect the model evidence returned by `prepare_kickoff.py discover`
+before repeating research. Reuse only an exact provider/model/version record
+whose supporting-source fingerprints and freshness are still valid. Gather
+current primary-source evidence for a miss, expiry, changed source, or
+contradiction, then pass the verified assessment through the documented
+evidence refresh path. The helper exposes evidence and gaps; capability-band
+classification, task suitability, and exact chain selection remain the
+Manager's responsibility.
+
 ## Assess before proposing models
 
-Read the issue, relevant strategic documents, nearby implementation, existing
-tests, dependencies, and linked issues. Assess internally:
+Read the issue and apply the repository evidence already gathered for this
+preparation: relevant strategy, nearby implementation, tests, dependencies and
+linked issues. Read additional sources only for an uncovered assessment question;
+the same unchanged document need not be read again for model selection. Use the
+assembly's valid exact-model assessments and selected profiles for their covered
+facts, while assessing current issue applicability internally:
 
 - `issue_nature`: the dominant kind of work, such as documentation/config,
   localized defect, feature/integration, refactor, migration, or security/trust
@@ -42,6 +55,13 @@ Every phase skill should declare a provider-neutral
 - `risk_domains`: stable failure surfaces;
 - `fallback_strength`: `equivalent` or `equivalent_or_stronger`; this constrains
   a fallback when one is configured and does not require a fallback to exist.
+
+Use the validated selected graph's resolved `profiles` from the preparation
+summary first; do not reread phase SKILL bodies to extract unchanged declarations.
+Inspect the named source only if a profile is missing, invalidated or ambiguous.
+The model report's `assessment` contains workloads, reasoning, capability bands,
+limitations and dated sources on a validated hit; a miss supplies no reusable
+assessment. Assess applicability to the current issue even on a hit.
 
 Do not infer this profile from a conventional step name. Resolve the skill bound
 by the active playbook. For an iteration selector, kickoff conservatively

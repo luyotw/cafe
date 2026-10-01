@@ -3,7 +3,12 @@
 Use `.cafe/strategic_context.yaml` as the one project-root file for strategic
 documents and decision authority. Read it and only the relevant linked
 documents before kickoff decisions, manager-confirming outputs, answering
-workflow questions, declared reviews, or separately authorized actions.
+workflow questions, declared reviews, or separately authorized actions. Within
+one kickoff, gather the union needed for scope, delivery and model suitability
+once and apply those observations to each judgment. Reopen a source for changed
+content or an uncovered question, not merely because another policy refers to it.
+Cached delivery conventions do not replace reading the current mandate or
+assessing this issue against the applicable strategic grounds.
 
 Do not split this information into `mandate.yaml` or another parallel config.
 
