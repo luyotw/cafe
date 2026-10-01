@@ -128,7 +128,7 @@ def test_i5_correction_revalidates_current_conditions_with_one_budget(journey, i
     assert len(HumanTaskRecordStore(j.issue).tasks()) == 1
 
 
-@pytest.mark.parametrize("stage", ["after", "publish", pytest.param("final", marks=pytest.mark.xfail(reason="Final registration ordering in PLAN-007", strict=True))])
+@pytest.mark.parametrize("stage", ["after", "publish", "final"])
 def test_i6_late_dirty_state_blocks_later_effects_and_registration(journey, monkeypatch, stage):
     def effect(current, repo, count):
         if current == stage:
@@ -149,7 +149,6 @@ def test_i6_late_dirty_state_blocks_later_effects_and_registration(journey, monk
     assert len(j.manager.calls) == 1
 
 
-@pytest.mark.xfail(reason="Durable publication progress implemented by PLAN-007", strict=True)
 @pytest.mark.parametrize("ambiguous", [False, True])
 def test_i8_same_iteration_reentry_never_replays_effects(journey, monkeypatch, ambiguous):
     def effect(stage, repo, count):
@@ -160,11 +159,14 @@ def test_i8_same_iteration_reentry_never_replays_effects(journey, monkeypatch, a
     before = j.effects.count("after"), j.effects.count("publish")
     monkeypatch.setattr(j.executor, "_get_next_iteration_number", lambda *args: 1)
     step = j.playbook["steps"]["inspect_custom"]
+    # Simulate retrying the producing delivery, before a new runtime transition.
+    (j.issue / "next_step.txt").write_text(json.dumps({"version": 1, "intent": "await_agent"}))
     if ambiguous:
         with pytest.raises(RuntimeError):
             j.executor.execute_step("inspect_custom", step, j.runtime.blackboard)
     else:
         result = j.executor.execute_step("inspect_custom", step, j.runtime.blackboard)
         assert result.artifact_ready
+        assert {"type": "effect", "stage": "after"} in result.events
     assert (j.effects.count("after"), j.effects.count("publish")) == before
     assert len(j.manager.calls) == 1

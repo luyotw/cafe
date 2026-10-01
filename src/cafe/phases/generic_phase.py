@@ -718,7 +718,7 @@ class GenericPhase:
         hook_entries = [*trusted_hooks, *defaults, *declared]
         aggregate = HookResult()
 
-        for hook_entry in hook_entries:
+        for hook_index, hook_entry in enumerate(hook_entries):
             before_use_guard = kwargs.get("_execution_guard")
             if callable(before_use_guard):
                 before_use_guard()
@@ -726,36 +726,44 @@ class GenericPhase:
                 publication_guard = kwargs.get("_publication_guard")
                 if callable(publication_guard):
                     publication_guard()
-            result: HookResult
-            if hook_entry is self._CONFIRMED_ARTIFACT_SYNC_HOOK:
-                result = self._run_confirmed_artifact_sync_hook(
-                    stage=stage,
-                    step_def=kwargs["step_def"],
-                    skill_name=str(kwargs.get("skill_name", "")),
-                    context=kwargs.get("context"),
-                    response=kwargs.get("response"),
-                    hook_kwargs=kwargs,
-                )
-            elif isinstance(hook_entry, str):
-                hook_cls = self.hook_registry.get(str(hook_entry))
-                if hook_cls is None:
-                    raise ValueError(f"Unknown hook '{hook_entry}' in stage '{stage}'")
-                hook = hook_cls()
-                result = hook.run(stage=stage, **kwargs)
-            elif isinstance(hook_entry, dict):
-                result = self._run_script_hook(
-                    stage=stage,
-                    declaration=hook_entry,
-                    step_def=kwargs["step_def"],
-                    skill_name=str(kwargs.get("skill_name", "")),
-                    context=kwargs.get("context"),
-                    response=kwargs.get("response"),
-                    hook_kwargs=kwargs,
-                )
+            def invoke_hook() -> HookResult:
+                if hook_entry is self._CONFIRMED_ARTIFACT_SYNC_HOOK:
+                    result = self._run_confirmed_artifact_sync_hook(
+                        stage=stage,
+                        step_def=kwargs["step_def"],
+                        skill_name=str(kwargs.get("skill_name", "")),
+                        context=kwargs.get("context"),
+                        response=kwargs.get("response"),
+                        hook_kwargs=kwargs,
+                    )
+                elif isinstance(hook_entry, str):
+                    hook_cls = self.hook_registry.get(str(hook_entry))
+                    if hook_cls is None:
+                        raise ValueError(f"Unknown hook '{hook_entry}' in stage '{stage}'")
+                    hook = hook_cls()
+                    result = hook.run(stage=stage, **kwargs)
+                elif isinstance(hook_entry, dict):
+                    result = self._run_script_hook(
+                        stage=stage,
+                        declaration=hook_entry,
+                        step_def=kwargs["step_def"],
+                        skill_name=str(kwargs.get("skill_name", "")),
+                        context=kwargs.get("context"),
+                        response=kwargs.get("response"),
+                        hook_kwargs=kwargs,
+                    )
+                else:
+                    raise ValueError(
+                        f"Unsupported hook entry type '{type(hook_entry).__name__}' in stage '{stage}'"
+                    )
+                return result
+
+            progress = kwargs.get("_hook_progress")
+            if callable(progress) and stage in ("after_execute", "publish_output"):
+                identity = "confirmed_artifact_sync" if hook_entry is self._CONFIRMED_ARTIFACT_SYNC_HOOK else hook_entry
+                result = progress(stage, hook_index, identity, invoke_hook)
             else:
-                raise ValueError(
-                    f"Unsupported hook entry type '{type(hook_entry).__name__}' in stage '{stage}'"
-                )
+                result = invoke_hook()
 
             aggregate.context_updates.update(result.context_updates)
             stage_context = kwargs.get("context")

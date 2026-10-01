@@ -10,6 +10,8 @@ import re
 import shutil
 import stat
 import tempfile
+from contextlib import nullcontext
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional
@@ -46,6 +48,7 @@ from cafe.core.human_tasks import (
     AGENT_EXECUTION_INTERRUPTED_TASK_ID,
     AGENT_EXECUTION_INTERRUPTED_TRIGGER,
 )
+from cafe.core.hooks import HookResult
 from cafe.core.phase import Phase
 from cafe.core.playbook import resolve_playbook_skills, resolve_step_behavior
 from cafe.core.resume_user_input import (
@@ -785,12 +788,15 @@ class GenericWorkflowStepExecutor(Phase):
 
         def run_agent(prompt: str) -> str:
             last_prompt[:] = [prompt]
+            if workspace_eligible:
+                progress = self._load_workspace_publication(iteration_dir)
+                if progress is not None:
+                    # Revalidate the existing delivery and replay only conclusive hook results.
+                    return progress["response"]
             if workspace_budget is not None and workspace_budget["context"] is not None:
-                return self._dispatch_workspace_correction(
-                    iteration_dir=iteration_dir, budget=workspace_budget,
-                    reason=workspace_budget["rejections"][-1], agent_name=agent_name,
-                    step_name=step_name, step_def=step_def, blackboard_state=blackboard_state,
-                )
+                # Reclassify the current handoff before reserving another provider call.
+                metadata = json.loads(self._resolve_iteration_context_file(iteration_dir).read_text(encoding="utf-8"))
+                return str(metadata.get("response", ""))
             # A baton retry or automatic re-entry is still the same correction
             # sequence. Reserve its opportunity before invoking any provider.
             budget = self._load_artifact_correction(iteration_dir)
@@ -998,11 +1004,28 @@ class GenericWorkflowStepExecutor(Phase):
                 )
                 status = None
 
+        def delivery_identity():
+            return self._workspace_delivery_identity(
+                iteration_dir=iteration_dir, output_file=output_file, checklist_file=checklist_file,
+                baton_path=portion_baton_path or baton_path, response=completion_state["response"],
+                step_name=step_name, step_def=step_def,
+            )
+
+        def publication_progress(stage, index, identity, invoke):
+            return self._run_workspace_publication_hook(
+                iteration_dir=iteration_dir, delivery=delivery_identity(),
+                response=completion_state["response"], stage=stage, index=index,
+                identity=identity, invoke=invoke,
+            )
+
         def validate_publication() -> None:
             if workspace_eligible:
                 _, _, ready = validate_completion_now(completion_state["response"], completion_state["status"], repair=False)
                 if not ready:
                     raise RuntimeError("Human handoff cannot publish a completed workspace")
+                progress = self._load_workspace_publication(iteration_dir)
+                if progress is not None and progress["delivery"] != delivery_identity():
+                    raise RuntimeError("Workspace publication delivery changed; automatic effect replay is refused")
                 return
             self._validate_current_artifact(step_name, step_def, output_file)
             if validate_producer_handoff is not None and self._load_artifact_correction(iteration_dir).rejections:
@@ -1029,6 +1052,7 @@ class GenericWorkflowStepExecutor(Phase):
                 Path(getattr(self.git_ops, "repo_path", Path.cwd()))
             ),
             hook_context={
+                **({"_hook_progress": publication_progress} if workspace_eligible else {}),
                 "phase": self,
                 "step_name": step_name,
                 "agent_name": agent_name,
@@ -1171,36 +1195,42 @@ class GenericWorkflowStepExecutor(Phase):
         artifacts: Dict[str, str] = {}
         artifact_metadata: Dict[str, Dict[str, Any]] = {}
         if execution.artifact_ready and not checklist_validation_failed and output_file.exists():
-            if workspace_eligible:
-                validate_publication()
-            # Context packets are an optional runtime view.  Their structural
-            # eligibility is resolved at the consuming edge, where any failure
-            # safely selects the complete authoritative artifact.
-            output_path = str(output_file)
-            artifacts[output_key] = output_path
-            summary_record = self._write_artifact_record(
-                blackboard_state=blackboard_state,
-                output_key=output_key,
-                output_path=output_path,
-                updated_by=step_name,
-            )
-            # Carry the complete producer record into the runtime publication
-            # boundary.  The transition emitted after publication must bind
-            # the same content digest and Todo identities that were written to
-            # the iteration artifact record.
-            artifact_metadata[output_key] = summary_record.to_dict()
-            workspace = self._publish_workspace_artifact(
-                step_name=step_name,
-                step_def=step_def,
-                output_file=output_file,
-                blackboard_state=blackboard_state,
-                updated_at=summary_record.updated_at,
-            )
-            if workspace is not None:
-                workspace_path, workspace_metadata = workspace
-                workspace_key = str(step_def["workspace_artifact"])
-                artifacts[workspace_key] = workspace_path
-                artifact_metadata[workspace_key] = workspace_metadata
+            with workspace_execution_lock(Path(self.git_ops.repo_path)) if workspace_eligible else nullcontext():
+                if workspace_eligible:
+                    validate_publication()
+                # Context packets are an optional runtime view.  Their structural
+                # eligibility is resolved at the consuming edge, where any failure
+                # safely selects the complete authoritative artifact.
+                output_path = str(output_file)
+                artifacts[output_key] = output_path
+                summary_record = self._write_artifact_record(
+                    blackboard_state=blackboard_state,
+                    output_key=output_key,
+                    output_path=output_path,
+                    updated_by=step_name,
+                    persist=not workspace_eligible,
+                )
+                # Carry the complete producer record into the runtime publication
+                # boundary.  The transition emitted after publication must bind
+                # the same content digest and Todo identities that were written to
+                # the iteration artifact record.
+                artifact_metadata[output_key] = summary_record.to_dict()
+                publisher = self._publish_workspace_artifact_under_lock if workspace_eligible else self._publish_workspace_artifact
+                workspace = publisher(
+                    step_name=step_name,
+                    step_def=step_def,
+                    output_file=output_file,
+                    blackboard_state=blackboard_state,
+                    updated_at=summary_record.updated_at,
+                )
+                if workspace_eligible:
+                    validate_publication()
+                    self._persist_plan_artifact_record(iteration_dir / "artifact.json", summary_record.to_dict())
+                if workspace is not None:
+                    workspace_path, workspace_metadata = workspace
+                    workspace_key = str(step_def["workspace_artifact"])
+                    artifacts[workspace_key] = workspace_path
+                    artifact_metadata[workspace_key] = workspace_metadata
 
         # READY_FOR_REVIEW / CONFIRM_OUTPUT / NEED_CLARIFICATION always
         # hand off to the user step.  In interactive mode the user sees
@@ -1350,6 +1380,74 @@ class GenericWorkflowStepExecutor(Phase):
         context_file.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
         return True
 
+    def _load_workspace_publication(self, iteration_dir: Path) -> dict[str, Any] | None:
+        path = self._resolve_iteration_context_file(iteration_dir)
+        metadata = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        if "workspace_publication" not in metadata:
+            return None
+        value = metadata["workspace_publication"]
+        if (not isinstance(value, dict) or set(value) != {"delivery", "response", "hooks"}
+                or not isinstance(value["delivery"], str) or len(value["delivery"]) != 64
+                or not isinstance(value["response"], str) or not isinstance(value["hooks"], dict)):
+            raise ValueError("Invalid workspace publication diagnostics")
+        for item in value["hooks"].values():
+            if (not isinstance(item, dict) or item.get("state") not in ("started", "completed")
+                    or (item["state"] == "completed" and not isinstance(item.get("result"), dict))):
+                raise ValueError("Invalid workspace publication hook progress")
+        return value
+
+    def _save_workspace_publication(self, iteration_dir: Path, progress: dict[str, Any]) -> None:
+        path = self._resolve_iteration_context_file(iteration_dir)
+        metadata = json.loads(path.read_text(encoding="utf-8"))
+        metadata["workspace_publication"] = progress
+        self._persist_plan_artifact_record(path, metadata)
+
+    def _workspace_delivery_identity(self, *, iteration_dir, output_file, checklist_file,
+                                     baton_path, response, step_name, step_def):
+        metadata = json.loads(self._resolve_iteration_context_file(iteration_dir).read_text(encoding="utf-8"))
+        payload = json.loads(baton_path.read_text(encoding="utf-8")) if baton_path.exists() else None
+        if isinstance(payload, dict):
+            payload = {key: payload[key] for key in ("version", "to_owner", "to_step", "intent") if key in payload}
+        facts = {
+            "step": step_name, "iteration": self.iteration, "response": response,
+            "output": hashlib.sha256(output_file.read_bytes()).hexdigest(),
+            "checklist": hashlib.sha256(checklist_file.read_bytes()).hexdigest(),
+            "handoff": payload, "declaration": step_def,
+            "head": self.git_ops.run_git("rev-parse", "HEAD"),
+            "context": {key: metadata.get(key) for key in (
+                "cli", "session_id", "model", "allowed_tools", "denied_tools",
+                "effective_checklist", "todo_projection_snapshot", "cli_environment",
+            )},
+        }
+        return hashlib.sha256(json.dumps(facts, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+    def _run_workspace_publication_hook(self, *, iteration_dir, delivery, response,
+                                        stage, index, identity, invoke):
+        progress = self._load_workspace_publication(iteration_dir)
+        if progress is None:
+            progress = {"delivery": delivery, "response": response, "hooks": {}}
+        if progress["delivery"] != delivery:
+            raise RuntimeError("Workspace publication delivery changed; automatic effect replay is refused")
+        key = json.dumps([stage, index, identity], sort_keys=True)
+        previous = progress["hooks"].get(key)
+        if previous is not None:
+            if previous["state"] == "started":
+                raise RuntimeError(f"Workspace publication hook {stage}[{index}] has an ambiguous in-flight effect; human recovery required")
+            result = dict(previous["result"])
+            if result.get("override_status_code") is not None:
+                result["override_status_code"] = PhaseStatusCode(result["override_status_code"])
+            return HookResult(**result)
+        progress["hooks"][key] = {"state": "started"}
+        self._save_workspace_publication(iteration_dir, progress)
+        result = invoke()
+        serialized = asdict(result)
+        # Bound diagnostic amplification; an unrecordable result remains ambiguous.
+        if len(json.dumps(serialized, ensure_ascii=False).encode()) > 32768:
+            raise RuntimeError("Workspace publication hook result exceeds bounded diagnostics")
+        progress["hooks"][key] = {"state": "completed", "result": serialized}
+        self._save_workspace_publication(iteration_dir, progress)
+        return result
+
     def _load_workspace_completion(self, iteration_dir: Path) -> dict[str, Any]:
         """Missing legacy diagnostics mean zero; malformed authority never does."""
         path = self._resolve_iteration_context_file(iteration_dir)
@@ -1397,7 +1495,7 @@ class GenericWorkflowStepExecutor(Phase):
         keys = (
             "effective_checklist", "iteration", "step_name", "skill_name", "playbook_id",
             "cli", "session_id", "model", "allowed_tools", "denied_tools",
-            "session_continuation", "cli_environment", "execution_chain",
+            "session_continuation", "cli_environment", "execution_chain", "workspace_publication",
         )
         observed = {key: metadata.get(key) for key in keys}
         directories = self._get_allowed_directories()
@@ -3853,6 +3951,7 @@ class GenericWorkflowStepExecutor(Phase):
         output_key: str,
         output_path: str,
         updated_by: str,
+        persist: bool = True,
     ) -> ArtifactEntry:
         previous = blackboard_state.artifacts.get(output_key)
         version = previous.version + 1 if previous else 1
@@ -3957,6 +4056,8 @@ class GenericWorkflowStepExecutor(Phase):
             todo_work_identities=todo_work_identities,
             todo_identity_baseline=todo_identity_baseline,
         )
+        if not persist:
+            return artifact
         artifact_path = self._get_iteration_dir(self.iteration) / "artifact.json"
         temporary = artifact_path.with_name(f".{artifact_path.name}.{os.getpid()}.tmp")
         temporary.write_text(

@@ -101,7 +101,7 @@ def journey(tmp_path, monkeypatch):
                     effect_action("after", repo, len(effects))
                 if mutate and not publication_mutation:
                     mutate(Path(kwargs["output_file"]))
-                return HookResult()
+                return HookResult(context_updates={"after_effect": "retained"}, events=[{"type": "effect", "stage": "after"}])
 
         class MutatePublication:
             def run(self, **kwargs):
@@ -111,6 +111,7 @@ def journey(tmp_path, monkeypatch):
 
         class Publish:
             def run(self, **kwargs):
+                assert kwargs["context"]["after_effect"] == "retained"
                 effects.append("publish")
                 if effect_action:
                     effect_action("publish", repo, len(effects))
