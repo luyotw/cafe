@@ -604,10 +604,11 @@ def _delivery_dependency(discovery: dict[str, Any] | None, values: dict[str, Any
     })
 
 
-def _prefill_checkout(values: dict[str, Any], *, project_root: Path, sources: dict[str, str]) -> None:
+def _prefill_checkout(values: dict[str, Any], *, project_root: Path, sources: dict[str, str],
+                      blocked: frozenset[str] | set[str] = frozenset()) -> None:
     from cafe.utils.git_utils import get_repo_root
 
-    if "worktree" not in values and "current_checkout" not in values:
+    if not blocked.intersection({"worktree", "current_checkout"}) and "worktree" not in values and "current_checkout" not in values:
         name = values.get("issue_name")
         if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name):
             raise ValueError("a safe issue_name is required for the default worktree")
@@ -622,14 +623,19 @@ def _prefill_checkout(values: dict[str, Any], *, project_root: Path, sources: di
 
 
 def _prefill_saved_inputs(values: dict[str, Any], *, store: Any, request: dict[str, Any],
-                         report: dict[str, Any], missing: list[dict[str, str]], sources: dict[str, str]) -> None:
+                         report: dict[str, Any], missing: list[dict[str, str]], sources: dict[str, str]) -> set[str]:
     """Apply scoped proposal conventions using the existing formatter owners."""
     root = Path(request.get("project_root", Path.cwd())).resolve()
     owner = _load_local_module("format_kickoff_contract")
     model = owner.PlaybookLoader(project_root=root).load_model(values["playbook_id"]).model if values.get("playbook_id") else None
     phases = {name: step for name, step in model.steps.items() if step.assignee_type in {"agent", "hybrid"}} if model else {}
 
-    def apply(key, needed, callback):
+    blocked: set[str] = set()
+
+    def unresolved(key):
+        return key not in values or (values[key] is None and key not in request.get("current_explicit_inputs", {}))
+
+    def apply(key, fields, needed, callback):
         if not needed:
             return
         resolved = store.effective(key)
@@ -643,6 +649,9 @@ def _prefill_saved_inputs(values: dict[str, Any], *, store: Any, request: dict[s
         except (ValueError, TypeError, KeyError) as exc:
             report[key]["diagnostic"] = str(exc)
             missing.append({"owner": "manager_decision", "requirement": f"resolve preference {key}: {exc}"})
+            # Never persist a lower-priority fallback as if it resolved this
+            # choice. The next draft reader must encounter the same gap.
+            blocked.update(fields)
 
     delivery = _load_local_module("kickoff_delivery")
     def context():
@@ -654,7 +663,7 @@ def _prefill_saved_inputs(values: dict[str, Any], *, store: Any, request: dict[s
             return value
         rendered = delivery.render_delivery_template({"deliver": [["path", value]], "deliver_description": ["Checkout"]}, context())
         return {"worktree": rendered["deliver"][0][1]}
-    apply("worktree.convention", "worktree" not in values and "current_checkout" not in values, checkout)
+    apply("worktree.convention", {"worktree", "current_checkout"}, "worktree" not in values and "current_checkout" not in values, checkout)
 
     def chains(value):
         if model is None:
@@ -681,7 +690,7 @@ def _prefill_saved_inputs(values: dict[str, Any], *, store: Any, request: dict[s
         return {"phase_chain": result}
     explicit_chain = values.get("phase_chain")
     covered = {item.split("=", 1)[0] for item in explicit_chain} if _is_string_list(explicit_chain) else set()
-    apply("phase.chains", not phases or not set(phases) <= covered, chains)
+    apply("phase.chains", {"phase_chain"}, not phases or not set(phases) <= covered, chains)
 
     def assignments(value):
         if model is None or not isinstance(value, dict) or set(value) != {"user_required", "manager_confirmable"}:
@@ -691,7 +700,7 @@ def _prefill_saved_inputs(values: dict[str, Any], *, store: Any, request: dict[s
         user, manager = owner._resolve_partition(candidates=owner.confirmation_gate_steps(model),
             user_values=value["user_required"], manager_values=value["manager_confirmable"])
         return {"user_required": user, "manager_confirmable": manager}
-    apply("confirmation.assignments", "user_required" not in values and "manager_confirmable" not in values, assignments)
+    apply("confirmation.assignments", {"user_required", "manager_confirmable"}, "user_required" not in values and "manager_confirmable" not in values, assignments)
 
     def reviews(value):
         if model is None or not isinstance(value, dict):
@@ -699,23 +708,25 @@ def _prefill_saved_inputs(values: dict[str, Any], *, store: Any, request: dict[s
         rows = owner._proactive_review_decisions([f"{k}={v}" for k, v in value.items()], agent_phases=list(phases),
             eligible_phases=set(owner.confirmation_gate_steps(model)) | set(owner.mandatory_confirmation_gate_steps(model)))
         return {"proactive_review_decision": [f"{r['phase']}={r['decision']}" for r in rows]}
-    apply("review.decisions", "proactive_review_decision" not in values, reviews)
+    apply("review.decisions", {"proactive_review_decision"}, "proactive_review_decision" not in values, reviews)
 
-    _prefill_checkout(values, project_root=root, sources=sources)
+    _prefill_checkout(values, project_root=root, sources=sources, blocked=blocked)
 
     def convention(stage, value):
         if not isinstance(value, dict) or set(value) != {stage, stage + "_description"}:
             raise ValueError("expected only action template and matching descriptions")
         rendered = delivery.render_delivery_template({"deliver": value[stage], "deliver_description": value[stage + "_description"]}, context())
         updates = {stage: rendered["deliver"], stage + "_description": rendered["deliver_description"]}
-        return {key: value for key, value in updates.items() if key not in values}
+        return {key: value for key, value in updates.items() if unresolved(key)}
     for stage in ("deliver", "cleanup"):
-        apply(stage.replace("deliver", "delivery") + ".convention", stage not in values,
+        apply(stage.replace("deliver", "delivery") + ".convention", {stage, stage + "_description"}, unresolved(stage),
               lambda value, stage=stage: convention(stage, value))
+    return blocked
 
 
 def _prefill_configured_inputs(values: dict[str, Any], *, project_root: Path, sources: dict[str, str],
-                              request: dict[str, Any], discovery: dict[str, Any] | None) -> None:
+                              request: dict[str, Any], discovery: dict[str, Any] | None,
+                              blocked: frozenset[str] | set[str] = frozenset()) -> None:
     """Materialize defaults and reusable routes in a proposal without execution."""
     from cafe.core.strategic_context import load_strategic_context
 
@@ -723,7 +734,7 @@ def _prefill_configured_inputs(values: dict[str, Any], *, project_root: Path, so
     parser = owner._parser()
 
     def fill(key: str, value: Any, source: str) -> None:
-        if key not in values or action_slot(key):
+        if key not in blocked and (key not in values or action_slot(key)):
             values[key] = value
             sources[key] = source
 
@@ -733,7 +744,7 @@ def _prefill_configured_inputs(values: dict[str, Any], *, project_root: Path, so
 
     from cafe.utils.git_utils import get_github_repo_name
 
-    _prefill_checkout(values, project_root=project_root, sources=sources)
+    _prefill_checkout(values, project_root=project_root, sources=sources, blocked=blocked)
     if values.get("manager_mode") == "event-driven" and "event_manager" not in values:
         cli = request.get("manager_cli") or ("codex" if os.environ.get("CODEX_THREAD_ID") else None)
         if cli:
@@ -754,7 +765,7 @@ def _prefill_configured_inputs(values: dict[str, Any], *, project_root: Path, so
         fill("cleanup", commands, "default issue cleanup proposal")
         fill("cleanup_description", descriptions, "default issue cleanup proposal")
     delivery = (discovery or {}).get("delivery", {})
-    if ("deliver" not in values or action_slot("deliver")) and delivery.get("status") == "hit" and delivery.get("delivery_template") is not None:
+    if "deliver" not in blocked and ("deliver" not in values or action_slot("deliver")) and delivery.get("status") == "hit" and delivery.get("delivery_template") is not None:
         rendered = _load_local_module("kickoff_delivery").render_delivery_template(
             delivery["delivery_template"], {"issue_name": values["issue_name"],
                 "issue_id": request.get("issue_id", ""), "project_root": str(project_root),
@@ -801,7 +812,7 @@ def _prefill_configured_inputs(values: dict[str, Any], *, project_root: Path, so
     # The formatter already resolves omitted chains from phase configuration.
     # Put those exact values in the draft so the caller reviews instead of copies.
     supplied_chains = values.get("phase_chain", [])
-    if _is_string_list(supplied_chains):
+    if "phase_chain" not in blocked and _is_string_list(supplied_chains):
         overrides = owner._parse_phase_chains(supplied_chains, step_names=set(model.steps))
         config = owner._project_path(Path(values.get("phase_config", parser.get_default("phase_config"))), project_root)
         chains = list(supplied_chains)
@@ -905,11 +916,12 @@ def assemble_kickoff(
             if resolved.value is not None:
                 raw_inputs[dependent[1]] = resolved.value
     try:
+        blocked = set()
         if preference_store is not None:
-            _prefill_saved_inputs(raw_inputs, store=preference_store, request=request,
-                                  report=preference_report, missing=missing, sources=prefilled)
+            blocked = _prefill_saved_inputs(raw_inputs, store=preference_store, request=request,
+                                           report=preference_report, missing=missing, sources=prefilled)
         _prefill_configured_inputs(raw_inputs, project_root=Path(request.get("project_root", Path.cwd())).resolve(),
-                                  sources=prefilled, request=request, discovery=discovery)
+                                  sources=prefilled, request=request, discovery=discovery, blocked=blocked)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         missing.append({"owner": "manager_research", "requirement": f"resolve configured inputs: {exc}"})
     generated = {}

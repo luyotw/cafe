@@ -218,3 +218,83 @@ def test_saved_action_preserves_current_description(tmp_path, capsys):
     _, report = _call(cli, capsys, ['assemble', '--request-file', str(path), *_settings(tmp_path)])
     assert report['formatter_draft']['deliver'] == [['git', 'status']]
     assert report['formatter_draft']['deliver_description'] == request['current_explicit_inputs']['deliver_description']
+
+
+@pytest.mark.parametrize('key,invalid,fields,resolution', [
+    ('phase.chains', {'steps': {'absent': ['codex:model']}}, ['phase_chain'], {'phase_chain': ['outline=codex:chosen']}),
+    ('worktree.convention', '{unknown}', ['worktree', 'current_checkout'], {'current_checkout': True}),
+    ('confirmation.assignments', {'mandatory_task': False}, ['user_required', 'manager_confirmable'], {'user_required': [], 'manager_confirmable': []}),
+    ('review.decisions', {'absent': 'required'}, ['proactive_review_decision'], {'proactive_review_decision': ['outline=not_required']}),
+    ('delivery.convention', {'wrong': []}, ['deliver', 'deliver_description'], {'deliver': [], 'deliver_description': []}),
+    ('cleanup.convention', {'wrong': []}, ['cleanup', 'cleanup_description'], {'cleanup': [], 'cleanup_description': []}),
+])
+def test_incompatible_preferences_survive_draft_roundtrip_until_resolution(tmp_path, capsys, key, invalid, fields, resolution):
+    """U01/U02/U14/I01/I06: generated defaults cannot resolve a rejected preference."""
+    cli = load_kickoff_module('prepare_kickoff')
+    project = tmp_path / 'project'; project.mkdir()
+    request = _project(project)
+    _save_preference(cli, capsys, tmp_path, project, key, invalid)
+    request['formatter_inputs'] = {'manager_mode': 'unattended', 'deliver': [], 'cleanup': []}
+    for field in fields:
+        request['formatter_inputs'].pop(field, None)
+    initial, draft, proposal = (tmp_path / name for name in ('initial.json', 'draft.json', 'proposal.md'))
+    initial.write_text(json.dumps(request))
+    code, first = _call(cli, capsys, ['assemble', '--request-file', str(initial), '--draft-output', str(draft), *_settings(tmp_path)])
+    assert code == 3 and first['preferences'][key]['diagnostic']
+    data = json.loads(draft.read_text())
+    complete = _formatter_inputs('new')
+    for field in ('delivery_contract', 'update_preflight', 'catalog_preflight'):
+        data['formatter_inputs'][field] = complete[field]
+    draft.write_text(json.dumps(data))
+    render = ['render', '--request-file', str(draft), '--output', str(proposal), *_settings(tmp_path)]
+    code, blocked = _call(cli, capsys, render)
+    assert code == 3 and not proposal.exists()
+    assert any(key in row['requirement'] for row in blocked['missing_decisions'])
+    assert json.loads(draft.read_text())['formatter_inputs']['delivery_contract'] == complete['delivery_contract']
+    # Clearing the rejected preference is also a genuine resolution. No stale
+    # error flag or generated fallback needs a manual request repair.
+    assert _call(cli, capsys, ['preferences', 'clear', '--project-root', str(project),
+        '--config-dir', str(tmp_path / 'config'), '--scope', 'repository', '--key', key])[0] == 0
+    if key == 'delivery.convention':
+        # Delivery has no policy default; clearing leaves that real decision open.
+        assert _call(cli, capsys, render)[0] == 3
+    else:
+        code, result = _call(cli, capsys, render)
+        assert code == 0, result
+        proposal.unlink()
+    _save_preference(cli, capsys, tmp_path, project, key, invalid)
+    for field in fields:
+        data['formatter_inputs'].pop(field, None)
+    data['current_explicit_inputs'] = resolution
+    draft.write_text(json.dumps(data))
+    code, result = _call(cli, capsys, render)
+    assert code == 0, result
+    assert proposal.read_text() and not (project / '.cafe/issues').exists()
+
+
+def test_null_action_slots_use_saved_conventions_through_public_render(tmp_path, capsys):
+    """U01/U15/I01: normal placeholders fall through, deliberate empty choices do not."""
+    cli = load_kickoff_module('prepare_kickoff')
+    project = tmp_path / 'project'; project.mkdir()
+    request = _project(project)
+    _save_preference(cli, capsys, tmp_path, project, 'delivery.convention', {
+        'deliver': [['git', '-C', '{worktree}', 'status']], 'deliver_description': ['Inspect current checkout.']})
+    _save_preference(cli, capsys, tmp_path, project, 'cleanup.convention', {'cleanup': [], 'cleanup_description': []})
+    request['formatter_inputs'] = {'deliver': None, 'cleanup': None, 'manager_mode': 'unattended'}
+    values = _formatter_inputs('new')
+    for key in ('delivery_contract', 'update_preflight', 'catalog_preflight'):
+        request['formatter_inputs'][key] = values[key]
+    path, draft, proposal = (tmp_path / name for name in ('request.json', 'draft.json', 'proposal.md'))
+    path.write_text(json.dumps(request))
+    code, result = _call(cli, capsys, ['assemble', '--request-file', str(path), '--draft-output', str(draft), *_settings(tmp_path)])
+    assert code == 0, result
+    fields = json.loads(draft.read_text())['formatter_inputs']
+    assert fields['deliver'] == [['git', '-C', str(project), 'status']]
+    assert fields['cleanup'] == []
+    assert _call(cli, capsys, ['render', '--request-file', str(draft), '--output', str(proposal), *_settings(tmp_path)])[0] == 0
+    request['current_explicit_inputs'] = {'deliver': [], 'cleanup': []}
+    for field in ('deliver', 'cleanup'):
+        request['formatter_inputs'].pop(field)
+    path.write_text(json.dumps(request))
+    _, current = _call(cli, capsys, ['assemble', '--request-file', str(path), *_settings(tmp_path)])
+    assert current['formatter_draft']['deliver'] == current['formatter_draft']['cleanup'] == []

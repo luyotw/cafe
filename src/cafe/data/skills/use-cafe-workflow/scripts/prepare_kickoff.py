@@ -296,7 +296,10 @@ def _capture_report(args: argparse.Namespace) -> int:
             # Do not overwrite bytes referenced by the previous complete draft.
             # A failed request publication may leave an unreferenced report, but
             # its previous decisions and evidence remain recoverable.
-            if str(output) in request.get("preflight_files", {}).values() and output.exists():
+            if output.exists() and any(
+                isinstance(reference, str) and Path(reference).resolve() == output
+                for reference in request.get("preflight_files", {}).values()
+            ):
                 import hashlib
                 output = output.with_name(output.stem + "." + hashlib.sha256(raw.encode()).hexdigest() + output.suffix)
             request.setdefault("preflight_files", {})[args.kind] = str(output)
@@ -397,9 +400,18 @@ def _evidence_command(args: argparse.Namespace) -> int:
                 for other_key, record in records.items():
                     if other_key == key:
                         continue
-                    invalid = set(record.get("invalidated_sources", []))
-                    invalid.update(s["url"] for s in record.get("sources", []) if isinstance(s, dict)
-                                   and s.get("url") in changed and s.get("fingerprint") != changed[s["url"]])
+                    markers = record.get("invalidated_sources", [])
+                    sources = record.get("sources")
+                    # Keep corrupt siblings inspectable; assessment reports their
+                    # own miss, without preventing independent valid maintenance.
+                    if (not isinstance(markers, list)
+                            or any(not isinstance(url, str) or not url.strip() for url in markers)
+                            or not isinstance(sources, list)):
+                        continue
+                    invalid = set(markers)
+                    invalid.update(s["url"] for s in sources if isinstance(s, dict)
+                                   and isinstance(s.get("url"), str) and s["url"] in changed
+                                   and s.get("fingerprint") != changed[s["url"]])
                     if invalid:
                         record["invalidated_sources"] = sorted(invalid)
             records[key] = replacement

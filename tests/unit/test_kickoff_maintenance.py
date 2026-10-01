@@ -73,12 +73,22 @@ def test_concurrent_public_maintenance_preserves_each_selected_scope(tmp_path, m
     assert set(records) == expected
 
 
-def test_capture_failure_preserves_draft_and_previously_referenced_report(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("reference_kind", ["canonical", "relative", "symlink"])
+def test_capture_failure_preserves_draft_and_previously_referenced_report(tmp_path, monkeypatch, capsys, reference_kind):
     cli = load_kickoff_module('prepare_kickoff')
     request, report = tmp_path / 'draft.json', tmp_path / 'report.json'
     report.write_text('{"old": true}\n')
+    reference = report
+    if reference_kind == 'relative':
+        monkeypatch.chdir(tmp_path)
+        reference = Path('report.json')
+    elif reference_kind == 'symlink':
+        reference = tmp_path / 'report-alias.json'
+        reference.symlink_to(report)
     request.write_text(json.dumps({'schema_version': 1, 'formatter_inputs': {'delivery_contract': {'outcome': 'keep me'}},
-                                  'preflight_files': {'update': str(report)}}))
+                                  'preflight_files': {'update': str(reference)},
+                                  'preflight_metadata': {'update': {'checked_at': '2026-10-01T00:00:00+00:00',
+                                      'decision': 'continue', 'post_change_evidence': None}}}))
     before = request.read_bytes()
     original = report.read_bytes()
     raw = '{"new": true}\n'
@@ -104,7 +114,7 @@ def test_capture_failure_preserves_draft_and_previously_referenced_report(tmp_pa
         assert cli.main(argv) == 2
     capsys.readouterr()
     assert request.read_bytes() == before
-    assert report.read_bytes() == original
+    assert report.read_bytes() == reference.read_bytes() == original
     monkeypatch.setattr(cli.sys, 'stdin', io.StringIO(raw))
     assert cli.main(argv) == 0
     captured = json.loads(capsys.readouterr().out)
@@ -112,3 +122,31 @@ def test_capture_failure_preserves_draft_and_previously_referenced_report(tmp_pa
     assert result['formatter_inputs'] == json.loads(before)['formatter_inputs']
     assert Path(result['preflight_files']['update']).read_text() == raw
     assert captured['report_file'] == result['preflight_files']['update']
+
+
+@pytest.mark.parametrize('bad_field,bad_value', [
+    ('sources', None), ('sources', {}), ('sources', [None]), ('sources', [{'url': []}]),
+    ('invalidated_sources', None), ('invalidated_sources', {}), ('invalidated_sources', [None]),
+])
+def test_refresh_isolates_malformed_siblings_without_losing_invalidation(tmp_path, capsys, bad_field, bad_value):
+    """U04/U12/I05/I07: bad siblings miss, valid maintenance and sharing still work."""
+    cli = load_kickoff_module('prepare_kickoff')
+    for name in ('one', 'dependent'):
+        assert cli.main(_refresh(cli, tmp_path, name)) == 0
+    assert cli.main(_refresh(cli, tmp_path, 'unrelated', url='https://provider.test/unrelated')) == 0
+    store = cli.VersionedJsonStore(tmp_path / 'cache/models-v1.json', schema_version=1, collection='evidence')
+    corrupt = {**_model('corrupt'), bad_field: bad_value}
+    store.update(lambda rows: {**rows, 'corrupt': corrupt})
+    assert cli.main(_refresh(cli, tmp_path, 'one', fingerprint='v2')) == 0
+    assert store.read()['corrupt'] == corrupt
+    capsys.readouterr()
+    request = tmp_path / 'request.json'
+    request.write_text(json.dumps({'schema_version': 1, 'project_root': str(tmp_path), 'issue_name': 'sample'}))
+    assert cli.main(['discover', '--request-file', str(request), '--cache-dir', str(tmp_path / 'cache'),
+                     '--config-dir', str(tmp_path / 'config')]) == 0
+    result = json.loads(capsys.readouterr().out)
+    models = {m['identity']['model']: m for m in result['models']}
+    assert models['one']['status'] == models['unrelated']['status'] == 'hit'
+    for name in ('corrupt', 'dependent'):
+        assert models[name]['status'] == 'miss' and models[name]['diagnostics']
+        assert models[name]['assessment'] is None

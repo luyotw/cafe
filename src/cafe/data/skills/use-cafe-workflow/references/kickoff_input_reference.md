@@ -218,7 +218,12 @@ does not. This adds no action permission or issue-specific decision to stable fa
 
 The normal `draft`/`assemble` consumer applies these reusable keys. Missing keys
 fall through to existing policy/configuration defaults; malformed or graph-
-incompatible values produce a missing decision with a diagnostic. Current
+incompatible values produce a missing decision with a diagnostic. Their lower-priority
+fallbacks are not written into the draft as resolved choices: completing unrelated
+gaps and rendering again retains the incompatibility until the saved value is
+corrected/cleared or a deliberate current choice resolves it. Normal null action
+placeholders consult saved conventions before policy defaults; explicit current
+empty arrays still win. Current
 values (including empty lists and `false`) take precedence. Repository values
 precede user values; clearing a repository key exposes the user value.
 
@@ -252,5 +257,11 @@ their explicit-input semantics. This metadata is freshness evidence, not authori
 Report capture publishes the raw report and request atomically per file. When
 replacing a report already referenced by the draft, it uses a content-addressed
 sibling so a failed request publication preserves the previous request and its
-report. An interruption can leave an unreferenced report; retry safely retains
+report, including relative or symlink reference spellings that resolve to the
+same file. An interruption can leave an unreferenced report; retry safely retains
 the decisions and publishes the new reference.
+
+Malformed sibling model records remain inspectable misses with diagnostics; they
+do not prevent a valid selected refresh. Source invalidation metadata is itself
+validated, so damaged metadata cannot become a hit or disable shared-source
+invalidation for other valid records.

@@ -25,7 +25,10 @@ def assess_model_evidence(
     contradictions: list[str] | None = None, expected_identity: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     diagnostics: list[str] = []
-    if record.get("invalidated_sources"):
+    invalidated = record.get("invalidated_sources", [])
+    if not isinstance(invalidated, list) or any(not isinstance(url, str) or not url.strip() for url in invalidated):
+        diagnostics.append("source_invalidation_metadata_invalid")
+    elif invalidated:
         diagnostics.append("source_fingerprint_changed")
     provider = record.get("provider")
     model = record.get("model")
