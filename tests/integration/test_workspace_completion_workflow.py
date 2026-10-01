@@ -20,7 +20,6 @@ def change_then_commit(repo, iteration, call):
         git(repo, "commit", "-m", "authorized change")
 
 
-@pytest.mark.xfail(reason="Completion callback implemented by PLAN-006", strict=True)
 @pytest.mark.parametrize("mode", ["baton", "legacy"])
 def test_i1_custom_step_corrects_before_effects_in_exact_context(journey, mode):
     j = journey([CORRECTED], mode=mode, workspace=True, workspace_action=change_then_commit)
@@ -37,7 +36,6 @@ def test_i1_custom_step_corrects_before_effects_in_exact_context(journey, mode):
     assert j.manager.deliveries == 1
 
 
-@pytest.mark.xfail(reason="Human precedence implemented by PLAN-006", strict=True)
 @pytest.mark.parametrize("intent", ["need_clarification", "need_permission"])
 @pytest.mark.parametrize("initial", [True, False])
 def test_i4_preserves_preexisting_changes_and_human_handoff(journey, intent, initial):
@@ -71,7 +69,6 @@ def test_i7_undeclared_step_keeps_dirty_workspace_behavior(journey):
     assert "custom_snapshot" not in j.runtime.blackboard.artifacts
 
 
-@pytest.mark.xfail(reason="Completion callback implemented by PLAN-006", strict=True)
 def test_i2_three_opportunities_exhaust_without_publication(journey):
     def dirty(repo, iteration, call):
         (repo / "owned.txt").write_text("dirty")
@@ -87,7 +84,6 @@ def test_i2_three_opportunities_exhaust_without_publication(journey):
     assert len(HumanTaskRecordStore(j.issue).tasks()) == 1
 
 
-@pytest.mark.xfail(reason="Completion callback implemented by PLAN-006", strict=True)
 @pytest.mark.parametrize("failure", ["missing", "drift", "provider", "metadata"])
 def test_i3_exact_session_failure_never_substitutes_provider(journey, failure):
     def mutation(iteration, call):
@@ -108,3 +104,67 @@ def test_i3_exact_session_failure_never_substitutes_provider(journey, failure):
     assert j.manager.deliveries == 0 and j.effects == ["prepare"]
     assert "custom_snapshot" not in j.runtime.blackboard.artifacts
     assert len(HumanTaskRecordStore(j.issue).tasks()) == 1
+
+
+@pytest.mark.parametrize("invalid", ["checklist", "report", "handoff"])
+def test_i5_correction_revalidates_current_conditions_with_one_budget(journey, invalid):
+    from tests.integration.test_workflow_artifact_correction import REJECTED
+    def mutation(iteration, call):
+        if call >= 2:
+            if invalid == "checklist":
+                p = iteration / "checklist.md"
+                p.write_text(p.read_text().replace("[x]", "[ ]"))
+            elif invalid == "report":
+                (iteration / "output.md").write_text(REJECTED)
+            else:
+                (iteration.parents[1] / "next_step.txt").write_text('{"version":1,"intent":"invalid"}')
+    j = journey([CORRECTED, (CORRECTED, "invalid")] if invalid == "handoff" else [CORRECTED],
+                workspace=True, workspace_action=change_then_commit,
+                completed_checklist=invalid == "checklist", provider_mutation=mutation)
+    j.runtime.run(start_step="inspect_custom")
+    assert 2 <= len(j.manager.calls) <= 4
+    assert j.effects == ["prepare"] and j.manager.deliveries == 0
+    assert "custom_snapshot" not in j.runtime.blackboard.artifacts
+    assert len(HumanTaskRecordStore(j.issue).tasks()) == 1
+
+
+@pytest.mark.parametrize("stage", ["after", "publish", pytest.param("final", marks=pytest.mark.xfail(reason="Final registration ordering in PLAN-007", strict=True))])
+def test_i6_late_dirty_state_blocks_later_effects_and_registration(journey, monkeypatch, stage):
+    def effect(current, repo, count):
+        if current == stage:
+            (repo / "late.txt").write_text("late dirty")
+    j = journey([CORRECTED], workspace=True, extra_publication=True, effect_action=effect)
+    if stage == "final":
+        original = j.executor._publish_workspace_artifact_under_lock
+        def late(**kwargs):
+            (j.repo / "late.txt").write_text("late dirty")
+            return original(**kwargs)
+        monkeypatch.setattr(j.executor, "_publish_workspace_artifact_under_lock", late)
+    j.runtime.run(start_step="inspect_custom")
+    assert j.manager.deliveries == 0
+    assert "custom_snapshot" not in j.runtime.blackboard.artifacts
+    assert "evidence_bundle" not in j.runtime.blackboard.artifacts
+    assert not (j.iteration / "artifact.json").exists()
+    assert j.effects.count("publish") == (0 if stage == "after" else 1 if stage == "publish" else 2)
+    assert len(j.manager.calls) == 1
+
+
+@pytest.mark.xfail(reason="Durable publication progress implemented by PLAN-007", strict=True)
+@pytest.mark.parametrize("ambiguous", [False, True])
+def test_i8_same_iteration_reentry_never_replays_effects(journey, monkeypatch, ambiguous):
+    def effect(stage, repo, count):
+        if ambiguous and stage == "after":
+            raise RuntimeError("interrupted after effect dispatch")
+    j = journey([CORRECTED], workspace=True, extra_publication=True, effect_action=effect)
+    j.runtime.run(start_step="inspect_custom")
+    before = j.effects.count("after"), j.effects.count("publish")
+    monkeypatch.setattr(j.executor, "_get_next_iteration_number", lambda *args: 1)
+    step = j.playbook["steps"]["inspect_custom"]
+    if ambiguous:
+        with pytest.raises(RuntimeError):
+            j.executor.execute_step("inspect_custom", step, j.runtime.blackboard)
+    else:
+        result = j.executor.execute_step("inspect_custom", step, j.runtime.blackboard)
+        assert result.artifact_ready
+    assert (j.effects.count("after"), j.effects.count("publish")) == before
+    assert len(j.manager.calls) == 1

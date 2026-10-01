@@ -103,6 +103,7 @@ from cafe.core.workflow_models import BatonRejected, StepExecutionResult
 from cafe.core.workspace_artifact import (
     WorkspaceArtifact,
     WorkspaceArtifactError,
+    DirtyWorkspaceError,
     build_workspace_artifact,
     verify_workspace_artifact,
 )
@@ -126,7 +127,7 @@ from cafe.skills.workflow_composition import (
     resolve_step_workflow_composition,
 )
 from cafe.templates.manager import TemplateManager
-from cafe.utils.checklist_validator import completion_requires_checklist, validate_projected_todos
+from cafe.utils.checklist_validator import completion_requires_checklist, validate_checklist, validate_projected_todos
 from cafe.utils.git_utils import get_git_toplevel, get_repo_root, to_cwd_relative_path
 from cafe.utils.phase_config import load_phase_step_model
 
@@ -779,8 +780,17 @@ class GenericWorkflowStepExecutor(Phase):
             phase_specific_data["session_recovery"] = dict(self._session_recovery)
         require_status_code = self._step_requires_status_code(step_name)
 
+        workspace_eligible = bool(step_def.get("workspace_artifact"))
+        workspace_budget = self._load_workspace_completion(iteration_dir) if workspace_eligible else None
+
         def run_agent(prompt: str) -> str:
             last_prompt[:] = [prompt]
+            if workspace_budget is not None and workspace_budget["context"] is not None:
+                return self._dispatch_workspace_correction(
+                    iteration_dir=iteration_dir, budget=workspace_budget,
+                    reason=workspace_budget["rejections"][-1], agent_name=agent_name,
+                    step_name=step_name, step_def=step_def, blackboard_state=blackboard_state,
+                )
             # A baton retry or automatic re-entry is still the same correction
             # sequence. Reserve its opportunity before invoking any provider.
             budget = self._load_artifact_correction(iteration_dir)
@@ -910,7 +920,90 @@ class GenericWorkflowStepExecutor(Phase):
                 )
             return runtime_context
 
+        completion_state = {"response": "", "status": None}
+
+        def validate_completion_now(response, status, *, repair):
+            nonlocal workspace_budget
+            while True:
+                if require_status_code:
+                    status = StatusCodeParser.extract(response, valid_intents) if status is None else status
+                completion_state.update(response=response, status=status)
+                reason = None
+                try:
+                    decision_path = portion_baton_path or baton_path
+                    payload = json.loads(decision_path.read_text(encoding="utf-8")) if decision_path.exists() else None
+                    authored = isinstance(payload, dict) and payload.get("source") != "workflow.start_step_override"
+                    if authored:
+                        if validate_producer_handoff is not None:
+                            validate_producer_handoff(decision_path)
+                        # Runtime validates mapping/authority; this only classifies current intent.
+                        intent = HandoffIntent(payload["intent"])
+                        human = payload.get("to_owner") == "user" or intent in (
+                            HandoffIntent.NEED_CLARIFICATION, HandoffIntent.NEED_PERMISSION,
+                            HandoffIntent.CONFIRM_OUTPUT,
+                        )
+                        required = completion_requires_checklist(baton_intent=intent.value)
+                    elif require_status_code and status is not None:
+                        human = self._resolve_handoff_intent(step_def, status) in (
+                            "need_clarification", "need_permission", "confirm_output",
+                        )
+                        required = self._output_requires_contract_validation(
+                            step_name=step_name, status_code=status, baton_path=decision_path,
+                            hybrid_portion=is_hybrid_portion, default_required=True,
+                        )
+                    else:
+                        raise ValueError("Current producer handoff is missing")
+                    if human:
+                        return response, status, False
+                    self._validate_current_artifact(step_name, step_def, output_file)
+                    if not output_file.exists():
+                        raise ValueError("Current output is missing")
+                    if required:
+                        checklist = validate_checklist(checklist_file, expected=getattr(self, "_effective_checklist", None))
+                        if not checklist.is_complete:
+                            raise ValueError(f"Current checklist is incomplete: {checklist.detail}")
+                        projected, detail = self._validate_projected_todo_completion_detail(checklist_file)
+                        if not projected:
+                            raise ValueError(detail)
+                    valid, detail, _ = self._validate_outbound_causal_todo(
+                        step_name=step_name, step_def=step_def, blackboard_state=blackboard_state,
+                        output_file=output_file, response=response, status_code=status, auto_continue=False,
+                    )
+                    if not valid:
+                        raise ValueError(detail)
+                    self._inspect_completion_workspace(step_name, step_def, blackboard_state)
+                    return response, status, True
+                except DirtyWorkspaceError as error:
+                    reason = str(error)
+                except WorkspaceArtifactError:
+                    raise
+                except (ArtifactFormatError, BatonRejected, ValueError) as error:
+                    # Only dirty failures start this sequence; later conditions share its budget.
+                    if workspace_budget is None or not workspace_budget["rejections"]:
+                        raise
+                    if repair and isinstance(error, ArtifactFormatError):
+                        report_budget = self._load_artifact_correction(iteration_dir)
+                        report_budget.reject(error)
+                        try:
+                            report_budget.consume()
+                        finally:
+                            self._save_artifact_correction(iteration_dir, report_budget)
+                    reason = str(error)
+                if not repair:
+                    raise RuntimeError(f"Workspace completion changed after publication began: {reason}")
+                response = self._dispatch_workspace_correction(
+                    iteration_dir=iteration_dir, budget=workspace_budget, reason=reason,
+                    agent_name=agent_name, step_name=step_name, step_def=step_def,
+                    blackboard_state=blackboard_state,
+                )
+                status = None
+
         def validate_publication() -> None:
+            if workspace_eligible:
+                _, _, ready = validate_completion_now(completion_state["response"], completion_state["status"], repair=False)
+                if not ready:
+                    raise RuntimeError("Human handoff cannot publish a completed workspace")
+                return
             self._validate_current_artifact(step_name, step_def, output_file)
             if validate_producer_handoff is not None and self._load_artifact_correction(iteration_dir).rejections:
                 validate_producer_handoff(portion_baton_path or baton_path)
@@ -920,6 +1013,7 @@ class GenericWorkflowStepExecutor(Phase):
             step_def=step_def,
             agent_executor=run_agent,
             validate_output=validate_publication,
+            **({"completion_validator": validate_completion_now} if workspace_eligible else {}),
             skill_invocation=skill_invocation,
             shared_skill_invocations=shared_skill_invocations,
             context=context,
@@ -994,8 +1088,8 @@ class GenericWorkflowStepExecutor(Phase):
             self._validate_current_artifact(step_name, step_def, output_file)
         checklist_validation_failed = False
         if (
-            checklist_validation_required
-            or (agent_was_invoked and outbound_validation_required)
+            not workspace_eligible and (checklist_validation_required
+            or (agent_was_invoked and outbound_validation_required))
         ):
             resolved_user_input = self._get_resolved_iteration_user_input(step_name)
 
@@ -1077,6 +1171,8 @@ class GenericWorkflowStepExecutor(Phase):
         artifacts: Dict[str, str] = {}
         artifact_metadata: Dict[str, Dict[str, Any]] = {}
         if execution.artifact_ready and not checklist_validation_failed and output_file.exists():
+            if workspace_eligible:
+                validate_publication()
             # Context packets are an optional runtime view.  Their structural
             # eligibility is resolved at the consuming edge, where any failure
             # safely selects the complete authoritative artifact.
@@ -1331,9 +1427,14 @@ class GenericWorkflowStepExecutor(Phase):
         )
         try:
             self._refresh_and_validate_workspace_inputs(step_def=step_def, blackboard_state=blackboard_state)
+            authority_kwargs = {}
+            if self._call_accepts_keyword(self.agent_manager.execute, "denied_tools"):
+                authority_kwargs["denied_tools"] = observed["denied_tools"]
+            elif observed["denied_tools"]:
+                raise RuntimeError("Exact workspace continuation cannot preserve denied tools")
             response, usage, _, _, streaming_log, model = self.agent_manager.execute(
                 agent_name, prompt, continuation=continuation, phase_name=step_name,
-                allowed_tools=observed["allowed_tools"], denied_tools=observed["denied_tools"],
+                allowed_tools=observed["allowed_tools"], **authority_kwargs,
                 allowed_directories=directories,
                 streaming_output_file=str(iteration_dir / "streaming.jsonl"),
             )
@@ -1343,7 +1444,7 @@ class GenericWorkflowStepExecutor(Phase):
                 raise RuntimeError("Workspace correction changed pinned metadata")
             actual_cli = getattr(self.agent_manager, "get_last_cli", lambda: None)()
             actual_session = getattr(self.agent_manager, "get_last_session_id", lambda: None)()
-            actual_model = model or getattr(self.agent_manager.get_agent(agent_name).config, "model", None)
+            actual_model = model or getattr(self.agent_manager, "get_last_model", lambda: None)() or getattr(self.agent_manager.get_agent(agent_name).config, "model", None)
             if (actual_cli != continuation.cli or actual_session != continuation.session_id
                     or actual_model != observed["model"]):
                 raise RuntimeError("Workspace correction did not preserve CLI/model/producing session")
@@ -2522,6 +2623,7 @@ class GenericWorkflowStepExecutor(Phase):
                     ValueError,
                     json.JSONDecodeError,
                     WorkspaceArtifactError,
+    DirtyWorkspaceError,
                 ) as exc:
                     raise ValueError(
                         f"workspace artifact {required_name!r} is malformed and cannot be "
@@ -3629,6 +3731,20 @@ class GenericWorkflowStepExecutor(Phase):
         template_file = self._resolved_template_file(step_name, step_def, skill_name, contract)
         if template_file is not None:
             context["template_file"] = template_file
+
+    def _inspect_completion_workspace(self, step_name, step_def, blackboard_state):
+        """Construct an unregistered preflight with the full snapshot rules."""
+        workspace_name = step_def["workspace_artifact"]
+        if workspace_name == str(step_def.get("output_artifact", step_name)):
+            raise WorkspaceArtifactError("workspace artifact must be distinct from summary")
+        repo = Path(getattr(self.git_ops, "repo_path", Path.cwd())).resolve()
+        base_ref = self._get_issue_config_value(self.issue_dir / "issue.yaml", "base_branch")
+        if not base_ref:
+            base_ref = self.git_ops.get_default_base_branch()
+        head_sha = self.git_ops.run_git("rev-parse", "HEAD")
+        base_sha = self.git_ops.run_git("merge-base", str(base_ref), head_sha)
+        return build_workspace_artifact(repo=repo, name=workspace_name, version=1,
+            base_sha=base_sha, head_sha=head_sha, producer_step=step_name)
 
     def _publish_workspace_artifact(
         self,

@@ -47,7 +47,7 @@ def _assert_correction_context_preserved(manager):
 @pytest.fixture
 def journey(tmp_path, monkeypatch):
     def build(submissions, *, mode="baton", completed_checklist=False, human=None,
-              reverse=False, unchecked=False, mutate=None, provider_mutation=None, capability=None, publication_mutation=False, workspace=None, workspace_action=None, effect_action=None):
+              reverse=False, unchecked=False, mutate=None, provider_mutation=None, capability=None, publication_mutation=False, workspace=None, workspace_action=None, effect_action=None, extra_publication=False):
         repo = tmp_path / "repo"
         repo.mkdir()
         subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
@@ -109,12 +109,21 @@ def journey(tmp_path, monkeypatch):
                 mutate(Path(kwargs["output_file"]))
                 return HookResult()
 
+        class Publish:
+            def run(self, **kwargs):
+                effects.append("publish")
+                if effect_action:
+                    effect_action("publish", repo, len(effects))
+                return HookResult(context_updates={"completed_effect": "retained"})
+
         producer = {"skill": "custom-report", "role": "author_custom",
             "output_artifact": "evidence_bundle", "valid_intents": ["await_agent", "confirm_output", "need_permission", "need_clarification"],
             "allowed_tools": ["Read", "Write"],
             "hooks": {"prepare_input": ["Prepare"], "after_execute": ["After"]},
             "on": {"await_agent": "deliver_custom", "confirm_output": "inspect_custom",
                    "need_permission": "inspect_custom", "need_clarification": "inspect_custom"}}
+        if extra_publication:
+            producer["hooks"]["publish_output"] = ["Publish", "Publish"]
         if workspace:
             producer["workspace_artifact"] = "custom_snapshot"
         if capability:
@@ -204,13 +213,15 @@ def journey(tmp_path, monkeypatch):
         if workspace is not None:
             (repo / ".gitignore").write_text(".cafe/\n")
             (repo / "owned.txt").write_text("baseline\n")
+            for index in range(6):
+                (repo / f"template-{index}.txt").write_text("baseline template\n")
             subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
             subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
             subprocess.run(["git", "add", "."], cwd=repo, check=True)
             subprocess.run(["git", "commit", "-m", "baseline"], cwd=repo, check=True, capture_output=True)
         manager = Provider()
         loader = SkillLoader(project_root=repo, global_root=tmp_path / "global")
-        phase = GenericPhase(loader, hook_registry={"Prepare": Prepare, "After": After, "MutatePublication": MutatePublication},
+        phase = GenericPhase(loader, hook_registry={"Prepare": Prepare, "After": After, "MutatePublication": MutatePublication, "Publish": Publish},
             skill_bridge=NativeSkillBridge(loader, project_root=repo, home_dir=tmp_path / "home"))
         executor = GenericWorkflowStepExecutor(issue_dir=issue, issue_name="correction", playbook=playbook,
             generic_phase=phase, agent_manager=manager, git_ops=GitOperations(repo),

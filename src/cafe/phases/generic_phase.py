@@ -441,6 +441,7 @@ class GenericPhase:
         prepare_agent_context: Optional[Callable[[Dict[str, str]], Dict[str, str]]] = None,
         execution_guard: Optional[Callable[[], None]] = None,
         validate_output: Optional[Callable[[], None]] = None,
+        completion_validator: Optional[Callable[..., tuple[str, Optional[PhaseStatusCode], bool]]] = None,
         execution_lease: Optional[Callable[[], Any]] = None,
         max_retries: int = 3,
     ) -> GenericPhaseExecution:
@@ -460,6 +461,7 @@ class GenericPhase:
                 prepare_agent_context=prepare_agent_context,
                 execution_guard=execution_guard,
                 validate_output=validate_output,
+                completion_validator=completion_validator,
                 max_retries=max_retries,
             )
         with execution_lease():
@@ -477,6 +479,7 @@ class GenericPhase:
                 prepare_agent_context=prepare_agent_context,
                 execution_guard=execution_guard,
                 validate_output=validate_output,
+                completion_validator=completion_validator,
                 max_retries=max_retries,
             )
 
@@ -496,6 +499,7 @@ class GenericPhase:
         prepare_agent_context: Optional[Callable[[Dict[str, str]], Dict[str, str]]] = None,
         execution_guard: Optional[Callable[[], None]] = None,
         validate_output: Optional[Callable[[], None]] = None,
+        completion_validator: Optional[Callable[..., tuple[str, Optional[PhaseStatusCode], bool]]] = None,
         max_retries: int = 3,
     ) -> GenericPhaseExecution:
         runtime_context = dict(context or {})
@@ -519,6 +523,7 @@ class GenericPhase:
 
         hook_kwargs["_execution_guard"] = guard_stable_boundary
         hook_kwargs["_publication_guard"] = validate_output
+        hook_kwargs["_completion_guarded"] = completion_validator is not None
 
         guard_stable_boundary()
         before = self._run_hook_stage(
@@ -598,6 +603,12 @@ class GenericPhase:
                 prompt = f"{prompt}\n\n{continuation}"
             response = agent_executor(prompt)
             agent_invoked = True
+            if completion_validator is not None:
+                response, status_code, ready = completion_validator(response, status_code, repair=True)
+                if not ready:
+                    return GenericPhaseExecution(response=response, status_code=status_code,
+                        goto_target=goto_target, context_updates=runtime_context, events=events,
+                        artifact_ready=False, published=False, agent_invoked=True)
 
             guard_stable_boundary()
             after = self._run_hook_stage(
@@ -628,6 +639,11 @@ class GenericPhase:
                     agent_invoked=agent_invoked,
                 )
 
+            if completion_validator is not None:
+                response, status_code, ready = completion_validator(response, status_code, repair=False)
+                artifact_ready = artifact_ready and ready
+                if after.retry_requested:
+                    raise RuntimeError("Cannot replay result-consuming hooks for completion correction")
             if not after.retry_requested:
                 break
             attempt += 1
@@ -656,6 +672,9 @@ class GenericPhase:
             if publish.override_status_code is not None:
                 status_code = publish.override_status_code
 
+        if completion_validator is not None and artifact_ready:
+            response, status_code, ready = completion_validator(response, status_code, repair=False)
+            artifact_ready = artifact_ready and ready
         return GenericPhaseExecution(
             response=response,
             status_code=status_code,
@@ -703,7 +722,7 @@ class GenericPhase:
             before_use_guard = kwargs.get("_execution_guard")
             if callable(before_use_guard):
                 before_use_guard()
-            if stage == "publish_output":
+            if stage == "publish_output" or (stage == "after_execute" and kwargs.get("_completion_guarded")):
                 publication_guard = kwargs.get("_publication_guard")
                 if callable(publication_guard):
                     publication_guard()
