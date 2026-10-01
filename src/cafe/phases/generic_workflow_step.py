@@ -138,6 +138,10 @@ from cafe.utils.git_utils import get_git_toplevel, get_repo_root, to_cwd_relativ
 from cafe.utils.phase_config import load_phase_step_model
 
 
+class WorkspaceDiagnosticCapacityError(RuntimeError):
+    """Auxiliary iteration diagnostics cannot fit the recovery-safe record."""
+
+
 def _plan_work_identity(item: Any) -> str:
     """Hash the retained work payload without making the mutable ID part of it."""
     return plan_work_fingerprint(str(item.work))
@@ -937,6 +941,65 @@ class GenericWorkflowStepExecutor(Phase):
 
         completion_state = {"response": "", "status": None}
 
+        def classify_completion(response, status):
+            if require_status_code and status is None:
+                status = StatusCodeParser.extract(response, valid_intents)
+            decision_path = portion_baton_path or baton_path
+            payload = (
+                json.loads(decision_path.read_text(encoding="utf-8"))
+                if decision_path.exists()
+                else None
+            )
+            authored = (
+                isinstance(payload, dict)
+                and payload.get("source") != "workflow.start_step_override"
+            )
+            if authored:
+                if validate_producer_handoff is not None:
+                    validate_producer_handoff(decision_path)
+                if "to_owner" in payload or "to_step" in payload:
+                    current_handoff = HandoffContract.from_dict_with_current_step(
+                        payload, current_step=step_name
+                    )
+                    current_handoff.validate(allowed_steps=list(self.playbook["steps"]))
+                    if current_handoff.from_step != step_name:
+                        raise ValueError("Current handoff belongs to a different producer")
+                    intent = current_handoff.intent
+                else:
+                    intent = OutcomeOnlyHandoff.from_dict(payload).intent
+                if intent.value not in effective_step_handoff_intents(step_def):
+                    raise ValueError("Current handoff intent is not declared")
+                human = payload.get("to_owner") == "user" or intent in (
+                    HandoffIntent.NEED_CLARIFICATION,
+                    HandoffIntent.NEED_PERMISSION,
+                    HandoffIntent.CONFIRM_OUTPUT,
+                )
+                if intent == HandoffIntent.NO_CHANGES_NEEDED:
+                    human = (
+                        human
+                        or self.interactive
+                        or bool(self._declared_human_task_id(step_def, intent.value))
+                    )
+                required = completion_requires_checklist(baton_intent=intent.value)
+                if intent == HandoffIntent.NO_CHANGES_NEEDED and not human:
+                    required = True
+            elif require_status_code and status is not None:
+                human = self._resolve_handoff_intent(step_def, status) in (
+                    "need_clarification",
+                    "need_permission",
+                    "confirm_output",
+                )
+                required = self._output_requires_contract_validation(
+                    step_name=step_name,
+                    status_code=status,
+                    baton_path=decision_path,
+                    hybrid_portion=is_hybrid_portion,
+                    default_required=True,
+                )
+            else:
+                raise ValueError("Current producer handoff is missing")
+            return status, human, required
+
         def validate_completion_now(response, status, *, repair):
             nonlocal workspace_budget
             repair = repair and self._load_workspace_publication(iteration_dir) is None
@@ -948,59 +1011,7 @@ class GenericWorkflowStepExecutor(Phase):
                 checklist_repair = False
                 try:
                     decision_path = portion_baton_path or baton_path
-                    payload = (
-                        json.loads(decision_path.read_text(encoding="utf-8"))
-                        if decision_path.exists()
-                        else None
-                    )
-                    authored = (
-                        isinstance(payload, dict)
-                        and payload.get("source") != "workflow.start_step_override"
-                    )
-                    if authored:
-                        if validate_producer_handoff is not None:
-                            validate_producer_handoff(decision_path)
-                        if "to_owner" in payload or "to_step" in payload:
-                            current_handoff = HandoffContract.from_dict_with_current_step(
-                                payload, current_step=step_name
-                            )
-                            current_handoff.validate(allowed_steps=list(self.playbook["steps"]))
-                            if current_handoff.from_step != step_name:
-                                raise ValueError("Current handoff belongs to a different producer")
-                            intent = current_handoff.intent
-                        else:
-                            intent = OutcomeOnlyHandoff.from_dict(payload).intent
-                        if intent.value not in effective_step_handoff_intents(step_def):
-                            raise ValueError("Current handoff intent is not declared")
-                        human = payload.get("to_owner") == "user" or intent in (
-                            HandoffIntent.NEED_CLARIFICATION,
-                            HandoffIntent.NEED_PERMISSION,
-                            HandoffIntent.CONFIRM_OUTPUT,
-                        )
-                        if intent == HandoffIntent.NO_CHANGES_NEEDED:
-                            human = (
-                                human
-                                or self.interactive
-                                or bool(self._declared_human_task_id(step_def, intent.value))
-                            )
-                        required = completion_requires_checklist(baton_intent=intent.value)
-                        if intent == HandoffIntent.NO_CHANGES_NEEDED and not human:
-                            required = True
-                    elif require_status_code and status is not None:
-                        human = self._resolve_handoff_intent(step_def, status) in (
-                            "need_clarification",
-                            "need_permission",
-                            "confirm_output",
-                        )
-                        required = self._output_requires_contract_validation(
-                            step_name=step_name,
-                            status_code=status,
-                            baton_path=decision_path,
-                            hybrid_portion=is_hybrid_portion,
-                            default_required=True,
-                        )
-                    else:
-                        raise ValueError("Current producer handoff is missing")
+                    status, human, required = classify_completion(response, status)
                     if human:
                         return response, status, False
                     if (
@@ -1123,6 +1134,7 @@ class GenericWorkflowStepExecutor(Phase):
                     step_name=step_name,
                     step_def=step_def,
                     blackboard_state=blackboard_state,
+                    is_human_handoff=lambda current: classify_completion(current, None)[1],
                 )
                 status = None
 
@@ -1548,7 +1560,7 @@ class GenericWorkflowStepExecutor(Phase):
         # room for the runtime interruption marker and later recovery bookkeeping.
         payload = (json.dumps(metadata, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
         if len(payload) > 1_048_576 - 65_536:
-            raise RuntimeError(
+            raise WorkspaceDiagnosticCapacityError(
                 "Workspace iteration diagnostics exceed bounded recovery capacity; human recovery required"
             )
         self._persist_plan_artifact_record(path, metadata)
@@ -1772,6 +1784,7 @@ class GenericWorkflowStepExecutor(Phase):
         step_name: str,
         step_def: dict[str, Any],
         blackboard_state: BlackboardState,
+        is_human_handoff: Callable[[str], bool] | None = None,
     ) -> str:
         """Reserve before exact dispatch, retaining host-owned authority on every exit."""
         reason = bounded_workspace_reason(reason)
@@ -1828,9 +1841,6 @@ class GenericWorkflowStepExecutor(Phase):
                 allowed_directories=directories,
                 streaming_output_file=str(iteration_dir / "streaming.jsonl"),
             )
-            self._merge_iteration_token_usage(
-                usage, persist_metadata=self._persist_workspace_metadata
-            )
             current = json.loads(path.read_text(encoding="utf-8"))
             if any(current.get(key) != value for key, value in observed.items()) or current.get(
                 "workspace_publication"
@@ -1852,9 +1862,30 @@ class GenericWorkflowStepExecutor(Phase):
             self._refresh_and_validate_workspace_inputs(
                 step_def=step_def, blackboard_state=blackboard_state
             )
-            current["response"] = response
-            current.setdefault("streaming_log", []).extend(streaming_log or [])
-            self._persist_workspace_metadata(path, current)
+            try:
+                self._merge_iteration_token_usage(
+                    usage, persist_metadata=self._persist_workspace_metadata
+                )
+                current = self._load_workspace_metadata(iteration_dir)
+                current["response"] = response
+                current.setdefault("streaming_log", []).extend(streaming_log or [])
+                self._persist_workspace_metadata(path, current)
+            except WorkspaceDiagnosticCapacityError as error:
+                # Auxiliary telemetry must not replace a valid current human request.
+                # Use the same producer classifier as the completion gate, after
+                # enforcing the original execution identity and input authority.
+                if is_human_handoff is None or not is_human_handoff(response):
+                    raise
+                prior_rejections = budget["rejections"]
+                budget["rejections"] = [
+                    *prior_rejections, bounded_workspace_reason(f"{reason}; {error}")
+                ][-8:]
+                try:
+                    self._save_workspace_completion(iteration_dir, budget)
+                except WorkspaceDiagnosticCapacityError:
+                    # The reserved count is already durable. Retain its admitted
+                    # history if even this optional diagnostic cannot fit.
+                    budget["rejections"] = prior_rejections
             return response
         except Exception as error:
             budget["rejections"] = [

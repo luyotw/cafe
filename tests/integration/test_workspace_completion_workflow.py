@@ -835,6 +835,7 @@ def test_u3_i2_telemetry_admission_and_reader_boundaries(journey, candidate_byte
     assert len(HumanTaskRecordStore(j.issue).tasks()) == 1
     assert j.effects == ["prepare"]
     assert j.executor._load_workspace_completion(j.iteration)["consumed"] == 1
+
     path = j.iteration / "iteration.json"
     assert path.stat().st_size <= 1_048_576
     actual = json.loads(path.read_text())
@@ -847,3 +848,114 @@ def test_u3_i2_telemetry_admission_and_reader_boundaries(journey, candidate_byte
     j.runtime._mark_latest_iteration_completion_untrusted("inspect_custom")
     assert path.stat().st_size <= 1_048_576
     assert j.executor._load_workspace_completion(j.iteration)["consumed"] == 1
+
+
+@pytest.mark.parametrize("intent", ["need_permission", "need_clarification"])
+@pytest.mark.parametrize("mode", ["baton", "legacy"])
+@pytest.mark.parametrize(
+    "diagnostic,turns",
+    [("ordinary", 20), ("usage", 6000), ("stream", 20), ("full_record", 6000)],
+)
+def test_u4_i4_human_correction_survives_auxiliary_telemetry_limit(
+    journey, intent, mode, diagnostic, turns
+):
+    observations = []
+
+    def preserve_owner_work(repo, iteration, call):
+        if call == 1:
+            for index in range(6):
+                (repo / f"template-{index}.txt").write_text(f"owner {index}")
+        observations.append((git(repo, "rev-parse", "HEAD"), git(repo, "diff", "--cached")))
+
+    def status_only(repo, iteration, call):
+        if mode == "legacy":
+            (iteration.parents[1] / "next_step.txt").unlink(missing_ok=True)
+        if call == 2 and diagnostic == "full_record":
+            path = iteration / "iteration.json"
+            metadata = json.loads(path.read_text())
+            size = len((json.dumps(metadata, ensure_ascii=False, indent=2) + "\n").encode())
+            metadata["prompt"] += "p" * (983040 - size)
+            j.executor._persist_workspace_metadata(path, metadata)
+
+    j = journey(
+        [CORRECTED, (CORRECTED, intent)],
+        workspace=True,
+        human=intent,
+        mode=mode,
+        workspace_action=preserve_owner_work,
+        post_submission=status_only,
+        provider_usage=lambda call: parsed_turn_usage(turns if call == 2 else 0),
+    )
+    if diagnostic == "stream":
+        execute = j.manager.execute
+
+        def oversized_stream(agent_name, prompt, *, continuation=None, **kwargs):
+            result = list(execute(agent_name, prompt, continuation=continuation, **kwargs))
+            if len(j.manager.calls) == 2:
+                result[4] = ["s" * 1_048_576]
+            return tuple(result)
+
+        j.manager.execute = oversized_stream
+    result = j.runtime.run(start_step="inspect_custom")
+    assert not result.completed and j.manager.deliveries == 0
+    assert j.runtime.blackboard.handoff_contract.intent.value == intent
+    assert j.runtime.blackboard.handoff_contract.to_owner.value == "user"
+    tasks = HumanTaskRecordStore(j.issue).tasks()
+    assert all(task.policy_id != "agent-execution-interrupted" for task in tasks)
+    assert (j.iteration / "questions.xml").exists()
+    assert len(j.manager.calls) == 2 and j.manager.calls[-1][2].is_exact
+    assert j.manager.calls[-1][2].session_id == "exact-report-session"
+    assert j.effects == ["prepare"]
+    assert "custom_snapshot" not in j.runtime.blackboard.artifacts
+    assert "evidence_bundle" not in j.runtime.blackboard.artifacts
+    assert observations[0] == observations[1]
+    assert git(j.repo, "rev-parse", "HEAD") == observations[0][0]
+    assert git(j.repo, "diff", "--cached") == observations[0][1]
+    assert [(j.repo / f"template-{index}.txt").read_text() for index in range(6)] == [
+        f"owner {index}" for index in range(6)
+    ]
+    path = j.iteration / "iteration.json"
+    assert path.stat().st_size <= 1_048_576
+    metadata = json.loads(path.read_text())
+    assert len(metadata["stats"]["turn_usages"]) == (turns if turns == 20 else 0)
+    budget = j.executor._load_workspace_completion(j.iteration)
+    assert budget["consumed"] == 1
+    if diagnostic in ("usage", "stream"):
+        assert any("capacity" in reason for reason in budget["rejections"])
+
+
+@pytest.mark.parametrize("defect", ["malformed", "wrong-owner", "undeclared"])
+def test_u4_i5_auxiliary_limit_cannot_authorize_invalid_human_baton(journey, defect):
+    def invalid_control(repo, iteration, call):
+        if call != 2:
+            return
+        path = iteration.parents[1] / "next_step.txt"
+        if defect == "malformed":
+            path.write_text("{")
+        else:
+            payload = json.loads(path.read_text())
+            if defect == "wrong-owner":
+                payload.update(to_owner="agent", to_step="deliver_custom")
+            else:
+                payload["intent"] = "confirm_output"
+            path.write_text(json.dumps(payload))
+
+    j = journey(
+        [CORRECTED, (CORRECTED, "need_permission")],
+        workspace=True,
+        human="need_permission",
+        workspace_action=lambda repo, iteration, call: (repo / "owned.txt").write_text("dirty"),
+        post_submission=invalid_control,
+        provider_usage=lambda call: parsed_turn_usage(6000 if call == 2 else 0),
+    )
+    if defect == "undeclared":
+        j.playbook["steps"]["inspect_custom"]["valid_intents"].remove("confirm_output")
+    assert not j.runtime.run(start_step="inspect_custom").completed
+    assert len(j.manager.calls) == 2 and j.manager.deliveries == 0
+    assert j.effects == ["prepare"]
+    assert j.runtime.blackboard.handoff_contract.intent.value == "manual_handoff"
+    tasks = HumanTaskRecordStore(j.issue).tasks()
+    assert len(tasks) == 1 and tasks[0].policy_id == "agent-execution-interrupted"
+    assert j.executor._load_workspace_completion(j.iteration)["consumed"] == 1
+    assert (j.iteration / "iteration.json").stat().st_size <= 1_048_576
+    assert "custom_snapshot" not in j.runtime.blackboard.artifacts
