@@ -111,15 +111,15 @@ def validate_checklist(
         pinned = load_materialization(checklist_path.parent / "iteration.json")
         integrity_valid = expected is None or pinned == expected
         expected = expected or pinned
-        # The materialized checklist fixes how many gates this iteration has.
+        # A declared checklist fixes how many gates this iteration has. An
+        # explicitly agent-owned checklist instead checks all authored items
+        # for completion, without pinning their count at phase initialization.
         # Reviewers may annotate or paraphrase a gate while recording evidence;
         # text equality is not a useful completion signal. Projected Todo rows
         # retain their separate exact-identity and evidence validation.
-        gate_count = sum(
-            1 for line in content.splitlines() if _CHECKBOX_LINE.match(line)
-        )
+        gate_count = sum(1 for line in content.splitlines() if _CHECKBOX_LINE.match(line))
         integrity_valid = integrity_valid and (
-            expected is None or gate_count == len(expected.gates)
+            expected is None or expected.agent_owned or gate_count == len(expected.gates)
         )
     except ValueError as exc:
         integrity_valid = False

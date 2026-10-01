@@ -162,6 +162,57 @@ def generate(executor, step, state, directory, **kwargs):
     return (directory / "checklist.md").read_text()
 
 
+def test_undeclared_checklist_accepts_agent_items_across_rebuild(tmp_path, monkeypatch):
+    """An undeclared phase can create its checklist and resume without freezing it."""
+    from cafe.utils.checklist_validator import validate_checklist
+
+    write_skill(tmp_path / ".cafe/skills", "primary")
+    executor, step, state, directory = executor_fixture(tmp_path, monkeypatch, injections=())
+    assert generate(executor, step, state, directory) == ""
+    path = directory / "checklist.md"
+    path.write_text("- [x] Verify the requested behavior\n- [ ] Check recovery\n")
+    assert not validate_checklist(path, expected=executor._effective_checklist).is_complete
+    path.write_text(path.read_text().replace("[ ]", "[x]"))
+    assert validate_checklist(path, expected=executor._effective_checklist).is_complete
+    before = path.read_text()
+    assert generate(executor, step, state, directory) == before
+    path.write_text(before + "- [x] Additional observed scenario\n")
+    assert validate_checklist(path, expected=executor._effective_checklist).is_complete
+
+
+@pytest.mark.parametrize("source", ["declared", "legacy", "overlay"])
+def test_empty_checklist_source_still_has_fixed_gates(tmp_path, monkeypatch, source):
+    """An intentionally empty source is distinct from having no source at all."""
+    from cafe.utils.checklist_validator import validate_checklist
+
+    root = tmp_path / ".cafe/skills"
+    workflow = {
+        "checklist": {
+            "include_role_guidance": False,
+            "variants": [{"sections": [{"reference": "empty.md"}]}],
+        }
+    }
+    write_skill(
+        root,
+        "primary",
+        workflow if source == "declared" else None,
+        (
+            {"empty.md": ""}
+            if source == "declared"
+            else {"execution_steps_normal.md": ""} if source == "legacy" else None
+        ),
+    )
+    if source == "overlay":
+        write_skill(root, "policy", overlay(), {"review.md": ""})
+    executor, step, state, directory = executor_fixture(
+        tmp_path, monkeypatch, injections=("policy",) if source == "overlay" else ()
+    )
+    generate(executor, step, state, directory)
+    path = directory / "checklist.md"
+    path.write_text(path.read_text() + "\n- [x] Unrequested gate\n")
+    assert not validate_checklist(path, expected=executor._effective_checklist).is_complete
+
+
 @pytest.mark.parametrize("legacy", [False, True])
 def test_custom_fallback_appends_overlay_before_single_guidance(tmp_path, monkeypatch, legacy):
     """I03/U08: both empty and legacy fallbacks retain independent overlays."""

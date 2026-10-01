@@ -788,6 +788,21 @@ def compose_effective_checklist(
         parts = []
         gates = []
         projections = []
+        # Only phases with no checklist source may author their own items.
+        # Empty declared/legacy templates and inactive overlays are still policy.
+        legacy_references = ["execution_steps_normal.md"]
+        if feedback:
+            legacy_references.append("execution_steps_correction.md")
+        agent_owned = (
+            primary_contract.checklist is None
+            and not any(
+                item.declaration.checklist_overlay is not None for item in composition.contributors
+            )
+            and not any(
+                (primary.source.skill_root / "references" / name).exists()
+                for name in legacy_references
+            )
+        )
 
         def append(content, source, identity):
             if not content:
@@ -952,21 +967,15 @@ def compose_effective_checklist(
                 [str(primary.source.skill_root), "role_guidance", agent_file],
             )
         content = "\n".join(part for part in parts if part)
-        if not content and primary_contract.checklist is None and not has_overlays:
+        if agent_owned:
             from cafe.utils.checklist_utils import _read_existing_regular_file
 
+            # Retain working notes across retries without promoting their item
+            # count to an immutable, runtime-declared checklist contract.
             content = _read_existing_regular_file(checklist_file_path) or ""
-            for occurrence, (_, block, _) in enumerate(_checklist_item_blocks(content)):
-                gates.append(
-                    ChecklistGate(
-                        checklist_digest(
-                            [str(primary.source.skill_root), "legacy", occurrence, block]
-                        ),
-                        primary.source.skill_identity,
-                        block,
-                    )
-                )
-        result = ChecklistMaterialization(content, tuple(gates), tuple(projections), has_overlays)
+        result = ChecklistMaterialization(
+            content, tuple(gates), tuple(projections), has_overlays, agent_owned
+        )
         result.to_dict()  # Enforce persistence bounds before publishing either file.
         from cafe.utils.checklist_utils import publish_materialized_checklist
 
