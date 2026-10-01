@@ -42,6 +42,7 @@ from cafe.skills.loader import SkillLoader, canonical_skill_name
 from cafe.skills.native_bridge import NativeSkillBridge
 
 AgentExecutor = Callable[[str], str]
+CompletionValidator = Callable[..., tuple[str, Optional[PhaseStatusCode], bool]]
 
 
 @dataclass
@@ -440,7 +441,8 @@ class GenericPhase:
         hook_context: Optional[Dict[str, Any]] = None,
         prepare_agent_context: Optional[Callable[[Dict[str, str]], Dict[str, str]]] = None,
         execution_guard: Optional[Callable[[], None]] = None,
-        validate_output: Optional[Callable[[], None]] = None,
+        validate_output: Optional[Callable[[], bool | None]] = None,
+        completion_validator: Optional[CompletionValidator] = None,
         execution_lease: Optional[Callable[[], Any]] = None,
         max_retries: int = 3,
     ) -> GenericPhaseExecution:
@@ -460,6 +462,7 @@ class GenericPhase:
                 prepare_agent_context=prepare_agent_context,
                 execution_guard=execution_guard,
                 validate_output=validate_output,
+                completion_validator=completion_validator,
                 max_retries=max_retries,
             )
         with execution_lease():
@@ -477,6 +480,7 @@ class GenericPhase:
                 prepare_agent_context=prepare_agent_context,
                 execution_guard=execution_guard,
                 validate_output=validate_output,
+                completion_validator=completion_validator,
                 max_retries=max_retries,
             )
 
@@ -495,7 +499,8 @@ class GenericPhase:
         hook_context: Optional[Dict[str, Any]] = None,
         prepare_agent_context: Optional[Callable[[Dict[str, str]], Dict[str, str]]] = None,
         execution_guard: Optional[Callable[[], None]] = None,
-        validate_output: Optional[Callable[[], None]] = None,
+        validate_output: Optional[Callable[[], bool | None]] = None,
+        completion_validator: Optional[CompletionValidator] = None,
         max_retries: int = 3,
     ) -> GenericPhaseExecution:
         runtime_context = dict(context or {})
@@ -519,6 +524,7 @@ class GenericPhase:
 
         hook_kwargs["_execution_guard"] = guard_stable_boundary
         hook_kwargs["_publication_guard"] = validate_output
+        hook_kwargs["_completion_guarded"] = completion_validator is not None
 
         guard_stable_boundary()
         before = self._run_hook_stage(
@@ -598,6 +604,19 @@ class GenericPhase:
                 prompt = f"{prompt}\n\n{continuation}"
             response = agent_executor(prompt)
             agent_invoked = True
+            if completion_validator is not None:
+                response, status_code, ready = completion_validator(response, status_code, repair=True)
+                if not ready:
+                    return GenericPhaseExecution(
+                        response=response,
+                        status_code=status_code,
+                        goto_target=goto_target,
+                        context_updates=runtime_context,
+                        events=events,
+                        artifact_ready=False,
+                        published=False,
+                        agent_invoked=True,
+                    )
 
             guard_stable_boundary()
             after = self._run_hook_stage(
@@ -616,6 +635,11 @@ class GenericPhase:
             guard_stable_boundary()
             if after.override_status_code is not None:
                 status_code = after.override_status_code
+            if completion_validator is not None:
+                response, status_code, ready = completion_validator(response, status_code, repair=False)
+                artifact_ready = artifact_ready and ready
+                if after.retry_requested:
+                    raise RuntimeError("Cannot replay result-consuming hooks for completion correction")
             if not after.continue_pipeline:
                 return GenericPhaseExecution(
                     response=response,
@@ -652,10 +676,15 @@ class GenericPhase:
             runtime_context.update(publish.context_updates)
             events.extend(publish.events)
             published = publish.continue_pipeline
+            if completion_validator is not None:
+                artifact_ready = artifact_ready and publish.artifact_ready
             guard_stable_boundary()
             if publish.override_status_code is not None:
                 status_code = publish.override_status_code
 
+        if completion_validator is not None and artifact_ready:
+            response, status_code, ready = completion_validator(response, status_code, repair=False)
+            artifact_ready = artifact_ready and ready
         return GenericPhaseExecution(
             response=response,
             status_code=status_code,
@@ -699,44 +728,54 @@ class GenericPhase:
         hook_entries = [*trusted_hooks, *defaults, *declared]
         aggregate = HookResult()
 
-        for hook_entry in hook_entries:
+        for hook_index, hook_entry in enumerate(hook_entries):
             before_use_guard = kwargs.get("_execution_guard")
             if callable(before_use_guard):
                 before_use_guard()
-            if stage == "publish_output":
+            if stage == "publish_output" or (stage == "after_execute" and kwargs.get("_completion_guarded")):
                 publication_guard = kwargs.get("_publication_guard")
-                if callable(publication_guard):
-                    publication_guard()
-            result: HookResult
-            if hook_entry is self._CONFIRMED_ARTIFACT_SYNC_HOOK:
-                result = self._run_confirmed_artifact_sync_hook(
-                    stage=stage,
-                    step_def=kwargs["step_def"],
-                    skill_name=str(kwargs.get("skill_name", "")),
-                    context=kwargs.get("context"),
-                    response=kwargs.get("response"),
-                    hook_kwargs=kwargs,
-                )
-            elif isinstance(hook_entry, str):
-                hook_cls = self.hook_registry.get(str(hook_entry))
-                if hook_cls is None:
-                    raise ValueError(f"Unknown hook '{hook_entry}' in stage '{stage}'")
-                hook = hook_cls()
-                result = hook.run(stage=stage, **kwargs)
-            elif isinstance(hook_entry, dict):
-                result = self._run_script_hook(
-                    stage=stage,
-                    declaration=hook_entry,
-                    step_def=kwargs["step_def"],
-                    skill_name=str(kwargs.get("skill_name", "")),
-                    context=kwargs.get("context"),
-                    response=kwargs.get("response"),
-                    hook_kwargs=kwargs,
-                )
+                if callable(publication_guard) and publication_guard() is False:
+                    aggregate.continue_pipeline = False
+                    aggregate.artifact_ready = False
+                    break
+            def invoke_hook() -> HookResult:
+                if hook_entry is self._CONFIRMED_ARTIFACT_SYNC_HOOK:
+                    result = self._run_confirmed_artifact_sync_hook(
+                        stage=stage,
+                        step_def=kwargs["step_def"],
+                        skill_name=str(kwargs.get("skill_name", "")),
+                        context=kwargs.get("context"),
+                        response=kwargs.get("response"),
+                        hook_kwargs=kwargs,
+                    )
+                elif isinstance(hook_entry, str):
+                    hook_cls = self.hook_registry.get(str(hook_entry))
+                    if hook_cls is None:
+                        raise ValueError(f"Unknown hook '{hook_entry}' in stage '{stage}'")
+                    hook = hook_cls()
+                    result = hook.run(stage=stage, **kwargs)
+                elif isinstance(hook_entry, dict):
+                    result = self._run_script_hook(
+                        stage=stage,
+                        declaration=hook_entry,
+                        step_def=kwargs["step_def"],
+                        skill_name=str(kwargs.get("skill_name", "")),
+                        context=kwargs.get("context"),
+                        response=kwargs.get("response"),
+                        hook_kwargs=kwargs,
+                    )
+                else:
+                    raise ValueError(
+                        f"Unsupported hook entry type '{type(hook_entry).__name__}' in stage '{stage}'"
+                    )
+                return result
+
+            progress = kwargs.get("_hook_progress")
+            if callable(progress) and stage in ("after_execute", "publish_output"):
+                identity = "confirmed_artifact_sync" if hook_entry is self._CONFIRMED_ARTIFACT_SYNC_HOOK else hook_entry
+                result = progress(stage, hook_index, identity, invoke_hook)
             else:
-                raise ValueError(
-                    f"Unsupported hook entry type '{type(hook_entry).__name__}' in stage '{stage}'"
-                )
+                result = invoke_hook()
 
             aggregate.context_updates.update(result.context_updates)
             stage_context = kwargs.get("context")

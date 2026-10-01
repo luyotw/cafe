@@ -9,14 +9,124 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from cafe.core.conversation_locale import select_text_locale
+
 WORKSPACE_SCHEMA_VERSION = 1
 _SHA = re.compile(r"^[0-9a-f]{40}$")
 _NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
 _STATUSES = frozenset({"A", "D", "M", "R"})
 
 
+# Developer-authored correction text; locale selection uses the shared resolver.
+WORKSPACE_CORRECTION_TEXT_CATALOGS: dict[str, str] = {
+    "en-US": (
+        "Workspace completion rejected: {reason}.\n"
+        "Correction opportunities consumed: {consumed}; remaining: {remaining}.\n"
+        "Verify the origin of every affected change and preserve pre-existing work. "
+        "Act only within the original task scope and authorization. "
+        "Dirty files do not grant authorization to stage, commit, stash, restore or delete. "
+        "If authorized disposition is unavailable, request clarification or permission "
+        "through the existing human handoff. Do not infer a human answer. "
+        "Keep the same phase, iteration, CLI, model, session, tools, directories and permissions. "
+        "Revalidate current output, checklist and evidence, and resubmit the ordinary handoff."
+    ),
+    "zh-TW": (
+        "工作目錄完成檢查未通過：{reason}\n"
+        "已使用修正機會：{consumed}；本次返回後剩餘：{remaining}。\n"
+        "請核對每項修改的來源並保留執行前已有的工作，只在原任務範圍與授權內處理。"
+        "未提交檔案不代表授權你暫存、提交、stash、還原或刪除。"
+        "若檔案處置需要人決定，沿用澄清或權限交接；不要推測人的回答。"
+        "保留原 phase、iteration、CLI、model、session、工具、目錄與權限。"
+        "重新驗證目前成果、checklist 與 Todo evidence，並重新提交一般 handoff。"
+    ),
+}
+
+
 class WorkspaceArtifactError(ValueError):
     """Raised when a workspace identity cannot be safely constructed or read."""
+
+
+@dataclass(frozen=True)
+class WorkspaceInspection:
+    """Read-only porcelain facts, including both sides of a rename."""
+
+    changes: tuple[dict[str, str], ...] = ()
+
+    @property
+    def clean(self) -> bool:
+        return not self.changes
+
+    def require_clean(self) -> None:
+        if self.changes:
+            raise DirtyWorkspaceError(self.changes)
+
+
+class DirtyWorkspaceError(WorkspaceArtifactError):
+    """Only this workspace rejection is eligible for completion correction."""
+
+    def __init__(self, changes: tuple[dict[str, str], ...]):
+        self.changes = changes
+        details = []
+        size = 0
+        for change in changes:
+            entry = str(change)
+            if size + len(entry.encode("utf-8")) > 7000:
+                break
+            details.append(entry)
+            size += len(entry.encode("utf-8"))
+        omitted = len(changes) - len(details)
+        summary = f"workspace worktree is dirty: {len(changes)} affected paths; " + "; ".join(
+            details
+        )
+        if omitted:
+            summary += f"; {omitted} paths omitted; inspect git status --porcelain=v1 --untracked-files=all"
+        super().__init__(bounded_workspace_reason(summary))
+
+    def correction_prompt(self, *, consumed: int, remaining: int) -> str:
+        return workspace_correction_prompt(str(self), consumed=consumed, remaining=remaining)
+
+
+def bounded_workspace_reason(reason: str) -> str:
+    """Keep actionable diagnostics bounded in UTF-8, including escaped paths."""
+    encoded = str(reason).encode("utf-8")
+    if len(encoded) <= 8192:
+        return str(reason)
+    return (
+        encoded[:8000].decode("utf-8", errors="ignore")
+        + f" [diagnostic truncated; original bytes: {len(encoded)}]"
+    )
+
+
+def workspace_correction_prompt(
+    reason: str, *, consumed: int, remaining: int, locale: str | None = None
+) -> str:
+    """Actionable ownership feedback, using the workflow conversation language."""
+    reason = bounded_workspace_reason(reason)
+    return WORKSPACE_CORRECTION_TEXT_CATALOGS[select_text_locale(locale)].format(
+        reason=reason, consumed=consumed, remaining=remaining
+    )
+
+
+def inspect_workspace(repo: Path) -> WorkspaceInspection:
+    """Use Git's ignore rules while retaining tracked and non-ignored changes."""
+    root = _repo_root(Path(repo))
+    raw = _git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+    tokens = raw.split("\x00") if raw else []
+    changes: list[dict[str, str]] = []
+    index = 0
+    while index < len(tokens) and tokens[index]:
+        entry = tokens[index]
+        index += 1
+        if len(entry) < 4 or entry[2] != " ":
+            raise WorkspaceArtifactError("Git workspace status is malformed")
+        record = {"state": entry[:2], "path": entry[3:]}
+        if "R" in entry[:2] or "C" in entry[:2]:
+            if index >= len(tokens) or not tokens[index]:
+                raise WorkspaceArtifactError("Git workspace rename is incomplete")
+            record["old_path"] = tokens[index]
+            index += 1
+        changes.append(record)
+    return WorkspaceInspection(tuple(changes))
 
 
 @dataclass(frozen=True)
@@ -37,7 +147,7 @@ def _git(repo: Path, *args: str) -> str:
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or "unknown Git error"
         raise WorkspaceArtifactError(f"git {' '.join(args)} failed: {detail}")
-    return result.stdout.strip()
+    return result.stdout.rstrip("\r\n")
 
 
 def _repo_root(repo: Path) -> Path:
@@ -225,8 +335,7 @@ def build_workspace_artifact(
         raise WorkspaceArtifactError("workspace version must be a positive integer")
     if _git(root, "rev-parse", "HEAD") != resolved_head:
         raise WorkspaceArtifactError("workspace head changed before snapshot creation")
-    if _git(root, "status", "--porcelain", "--untracked-files=all"):
-        raise WorkspaceArtifactError("workspace worktree is dirty")
+    inspect_workspace(root).require_clean()
     return WorkspaceArtifact(
         name=name,
         version=version,
@@ -266,7 +375,7 @@ def verify_workspace_artifact(
         actual_head = _git(root, "rev-parse", "HEAD")
         if actual_head != head:
             reasons.append("workspace head is stale")
-        if _git(root, "status", "--porcelain", "--untracked-files=all"):
+        if not inspect_workspace(root).clean:
             reasons.append("workspace worktree is dirty")
         if tuple(current.changed_files) != _changed_files(root, base, head):
             reasons.append("workspace changed-file set does not match Git comparison")
