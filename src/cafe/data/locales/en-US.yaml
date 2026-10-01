@@ -1,0 +1,4 @@
+workspace.correction: |-
+  Workspace completion rejected: {reason}.
+  Correction opportunities consumed: {consumed}; remaining: {remaining}.
+  Verify the origin of every affected change and preserve pre-existing work. Act only within the original task scope and authorization. Dirty files do not grant authorization to stage, commit, stash, restore or delete. If authorized disposition is unavailable, request clarification or permission through the existing human handoff. Do not infer a human answer. Keep the same phase, iteration, CLI, model, session, tools, directories and permissions. Revalidate current output, checklist and evidence, and resubmit the ordinary handoff.

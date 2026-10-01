@@ -203,10 +203,12 @@ def test_u5_dirty_feedback_preserves_ownership_and_authority(tmp_path):
 def test_u5_workspace_prompt_has_complete_authored_locale_templates():
     from string import Formatter
 
-    from cafe.core.workspace_artifact import WORKSPACE_CORRECTION_TEXT_CATALOGS
+    from cafe.core.runtime_locales import load_catalogs
 
-    assert set(WORKSPACE_CORRECTION_TEXT_CATALOGS) == {"en-US", "zh-TW"}
-    for template in WORKSPACE_CORRECTION_TEXT_CATALOGS.values():
+    catalogs = load_catalogs()
+    assert set(catalogs) == {"en-US", "zh-TW"}
+    for catalog in catalogs.values():
+        template = catalog["workspace.correction"]
         fields = {field for _, field, _, _ in Formatter().parse(template) if field is not None}
         assert fields == {"reason", "consumed", "remaining"}
 

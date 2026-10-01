@@ -364,9 +364,12 @@ def test_i3_observed_execution_drift_blocks_publication(journey, drift, monkeypa
     [
         ("zh-TW", ("來源", "權限")),
         ("zh-Hant", ("來源", "權限")),
+        ("zh-HK", ("來源", "權限")),
         ("zh-CN", ("origin", "authorization")),
+        ("zh-Hans-TW", ("origin", "authorization")),
         ("fr-FR", ("origin", "authorization")),
         (None, ("origin", "authorization")),
+        ("zh//TW", ("origin", "authorization")),
     ],
 )
 def test_u5_i1_correction_prompt_uses_workflow_conversation_locale(journey, mode, locale, meanings):

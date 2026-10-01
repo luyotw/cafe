@@ -163,3 +163,46 @@ boundary is:
 
 A channel that cannot render a language's script is unsupported for that
 language rather than silently approximated.
+
+## Developer-authored runtime copy
+
+New localized runtime messages belong in `src/cafe/data/locales/en-US.yaml` and
+`src/cafe/data/locales/zh-TW.yaml`. These packaged resources are separate from
+message selection and runtime behavior. The initial consumer is the workspace
+completion correction prompt (`workspace.correction`). Existing notification
+copy remains in its current module; this directory does not imply general CLI
+translation or additional supported languages.
+
+Each catalog is a flat YAML mapping from stable, untranslated message keys to
+non-empty strings. Use lowercase names separated by dots, with underscores or
+digits within a name, for example `workspace.correction`. Add every new key to
+both catalogs, with the same named placeholders in each language. Duplicate
+keys, invalid YAML, missing keys, incompatible placeholders, and non-string
+messages raise `LocaleCatalogError` with resource and message context rather
+than silently accepting incomplete authored data.
+
+Use simple `{name}` placeholders with ASCII identifiers. Attribute/index access,
+format specifications, conversions, and positional fields are unsupported. Write
+`{{` and `}}` for literal braces in a template. YAML literal blocks (`|-`) are
+useful for multi-line copy without an extra trailing newline. For example, add
+the same key and placeholder contract to each catalog:
+
+```yaml
+workspace.example: |-
+  Affected path: {path}
+```
+
+Call `cafe.core.runtime_locales.render_text("workspace.example", locale=locale,
+path=bounded_path)` from generic runtime code. Supply exactly the declared
+placeholder names using string or integer values. Bound untrusted values at the
+consumer's existing diagnostic boundary before rendering; the workspace
+correction consumer retains `bounded_workspace_reason` and its UTF-8 limits.
+Interpolation happens once, so braces inside inserted paths or diagnostics stay
+literal. Keep ownership, permissions, budgets, and execution behavior in Python.
+
+`load_catalogs()` reads and validates both resources through
+`importlib.resources`, caches immutable mappings, and works independently of the
+current working directory in a source checkout or installed distribution.
+`render_text` delegates selection to the existing `select_text_locale` resolver.
+Traditional Chinese aliases and silent English fallback remain unchanged;
+rendering never updates the workflow's stored locale or imports Manager policy.
