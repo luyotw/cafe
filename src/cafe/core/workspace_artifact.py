@@ -41,16 +41,42 @@ class DirtyWorkspaceError(WorkspaceArtifactError):
 
     def __init__(self, changes: tuple[dict[str, str], ...]):
         self.changes = changes
-        super().__init__(f"workspace worktree is dirty: {list(changes)}")
+        details = []
+        size = 0
+        for change in changes:
+            entry = str(change)
+            if size + len(entry.encode("utf-8")) > 7000:
+                break
+            details.append(entry)
+            size += len(entry.encode("utf-8"))
+        omitted = len(changes) - len(details)
+        summary = f"workspace worktree is dirty: {len(changes)} affected paths; " + "; ".join(
+            details
+        )
+        if omitted:
+            summary += f"; {omitted} paths omitted; inspect git status --porcelain=v1 --untracked-files=all"
+        super().__init__(bounded_workspace_reason(summary))
 
     def correction_prompt(self, *, consumed: int, remaining: int) -> str:
         return workspace_correction_prompt(str(self), consumed=consumed, remaining=remaining)
+
+
+def bounded_workspace_reason(reason: str) -> str:
+    """Keep actionable diagnostics bounded in UTF-8, including escaped paths."""
+    encoded = str(reason).encode("utf-8")
+    if len(encoded) <= 8192:
+        return str(reason)
+    return (
+        encoded[:8000].decode("utf-8", errors="ignore")
+        + f" [diagnostic truncated; original bytes: {len(encoded)}]"
+    )
 
 
 def workspace_correction_prompt(
     reason: str, *, consumed: int, remaining: int, locale: str | None = None
 ) -> str:
     """Actionable ownership feedback, using the workflow conversation language."""
+    reason = bounded_workspace_reason(reason)
     if select_text_locale(locale) == "zh-TW":
         return (
             f"工作目錄完成檢查未通過：{reason}\n"

@@ -109,6 +109,7 @@ from cafe.core.workspace_artifact import (
     WorkspaceArtifactError,
     DirtyWorkspaceError,
     workspace_correction_prompt,
+    bounded_workspace_reason,
     build_workspace_artifact,
     verify_workspace_artifact,
 )
@@ -1526,9 +1527,27 @@ class GenericWorkflowStepExecutor(Phase):
         context_file.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
         return True
 
+    def _load_workspace_metadata(self, iteration_dir: Path) -> dict[str, Any]:
+        path = self._resolve_iteration_context_file(iteration_dir)
+        if not path.exists():
+            return {}
+        if path.stat().st_size > 1_048_576:
+            raise RuntimeError("Workspace iteration diagnostics exceed runtime recovery capacity")
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def _persist_workspace_metadata(self, path: Path, metadata: dict[str, Any]) -> None:
+        # Include the entire record, JSON escaping/indentation and newline. Leave
+        # room for the runtime interruption marker and later recovery bookkeeping.
+        payload = (json.dumps(metadata, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        if len(payload) > 1_048_576 - 65_536:
+            raise RuntimeError(
+                "Workspace iteration diagnostics exceed bounded recovery capacity; human recovery required"
+            )
+        self._persist_plan_artifact_record(path, metadata)
+
     def _load_workspace_publication(self, iteration_dir: Path) -> dict[str, Any] | None:
         path = self._resolve_iteration_context_file(iteration_dir)
-        metadata = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        metadata = self._load_workspace_metadata(iteration_dir)
         if "workspace_publication" not in metadata:
             return None
         value = metadata["workspace_publication"]
@@ -1552,12 +1571,20 @@ class GenericWorkflowStepExecutor(Phase):
 
     def _save_workspace_publication(self, iteration_dir: Path, progress: dict[str, Any]) -> None:
         path = self._resolve_iteration_context_file(iteration_dir)
-        metadata = json.loads(path.read_text(encoding="utf-8"))
+        metadata = self._load_workspace_metadata(iteration_dir)
         metadata["workspace_publication"] = progress
-        self._persist_plan_artifact_record(path, metadata)
+        self._persist_workspace_metadata(path, metadata)
 
     def _workspace_delivery_identity(
-        self, *, iteration_dir, output_file, checklist_file, baton_path, response, step_name, step_def,
+        self,
+        *,
+        iteration_dir,
+        output_file,
+        checklist_file,
+        baton_path,
+        response,
+        step_name,
+        step_def,
         authoritative_inputs=None,
     ):
         metadata = json.loads(
@@ -1647,7 +1674,7 @@ class GenericWorkflowStepExecutor(Phase):
     def _load_workspace_completion(self, iteration_dir: Path) -> dict[str, Any]:
         """Missing legacy diagnostics mean zero; malformed authority never does."""
         path = self._resolve_iteration_context_file(iteration_dir)
-        metadata = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        metadata = self._load_workspace_metadata(iteration_dir)
         if not isinstance(metadata, dict):
             raise ValueError("Invalid iteration metadata for workspace completion")
         if "workspace_completion" not in metadata:
@@ -1680,9 +1707,10 @@ class GenericWorkflowStepExecutor(Phase):
 
     def _save_workspace_completion(self, iteration_dir: Path, budget: dict[str, Any]) -> None:
         path = self._resolve_iteration_context_file(iteration_dir)
-        metadata = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        metadata = self._load_workspace_metadata(iteration_dir)
+        budget["rejections"] = [bounded_workspace_reason(reason) for reason in budget["rejections"]]
         metadata["workspace_completion"] = budget
-        self._persist_plan_artifact_record(path, metadata)
+        self._persist_workspace_metadata(path, metadata)
 
     def _reserve_workspace_correction(
         self,
@@ -1690,7 +1718,7 @@ class GenericWorkflowStepExecutor(Phase):
         budget: dict[str, Any],
         reason: str,
     ) -> None:
-        budget["rejections"] = [*budget["rejections"], reason][-8:]
+        budget["rejections"] = [*budget["rejections"], bounded_workspace_reason(reason)][-8:]
         if budget["consumed"] >= 3:
             self._save_workspace_completion(iteration_dir, budget)
             raise RuntimeError(f"Workspace correction exhausted after 3 opportunities: {reason}")
@@ -1734,8 +1762,9 @@ class GenericWorkflowStepExecutor(Phase):
         blackboard_state: BlackboardState,
     ) -> str:
         """Reserve before exact dispatch, retaining host-owned authority on every exit."""
+        reason = bounded_workspace_reason(reason)
         path = self._resolve_iteration_context_file(iteration_dir)
-        metadata = json.loads(path.read_text(encoding="utf-8"))
+        metadata = self._load_workspace_metadata(iteration_dir)
         if self._load_workspace_publication(iteration_dir) is not None:
             raise RuntimeError("Cannot correct a workspace after publication effects have started")
         actual_context = self._workspace_execution_context(iteration_dir, agent_name)
@@ -1756,7 +1785,7 @@ class GenericWorkflowStepExecutor(Phase):
         if continuation is None or not self._call_accepts_keyword(
             self.agent_manager.execute, "continuation"
         ):
-            budget["rejections"] = [*budget["rejections"], reason][-8:]
+            budget["rejections"] = [*budget["rejections"], bounded_workspace_reason(reason)][-8:]
             self._save_workspace_completion(iteration_dir, budget)
             raise RuntimeError(
                 f"Workspace correction requires the exact producing session; consumed {budget['consumed']}: {reason}"
@@ -1811,10 +1840,13 @@ class GenericWorkflowStepExecutor(Phase):
             )
             current["response"] = response
             current.setdefault("streaming_log", []).extend(streaming_log or [])
-            self._persist_plan_artifact_record(path, current)
+            self._persist_workspace_metadata(path, current)
             return response
         except Exception as error:
-            budget["rejections"] = [*budget["rejections"], f"{reason}; {error}"][-8:]
+            budget["rejections"] = [
+                *budget["rejections"],
+                bounded_workspace_reason(f"{reason}; {error}"),
+            ][-8:]
             raise
         finally:
             # A provider cannot replenish the count, including on interruption.

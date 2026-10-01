@@ -578,7 +578,63 @@ def test_i8_recovery_refuses_changed_authoritative_delivery(journey, monkeypatch
     (j.issue / "next_step.txt").write_text(json.dumps({"version": 1, "intent": "await_agent"}))
     before = list(j.effects)
     with pytest.raises(RuntimeError):
-        j.executor.execute_step("inspect_custom", j.playbook["steps"]["inspect_custom"], j.runtime.blackboard)
+        j.executor.execute_step(
+            "inspect_custom", j.playbook["steps"]["inspect_custom"], j.runtime.blackboard
+        )
     assert j.effects.count("after") == before.count("after")
     assert j.effects.count("publish") == before.count("publish")
     assert len(j.manager.calls) == 1
+
+
+def test_u3_u5_i2_large_dirty_workspace_preserves_usable_recovery(journey):
+    def dirty(repo, iteration, call):
+        if call == 1:
+            for index in range(5000):
+                (repo / (f"generated-{index:05d}-" + "x" * 180 + ".txt")).write_text("dirty")
+
+    j = journey([CORRECTED], workspace=True, workspace_action=dirty)
+    result = j.runtime.run(start_step="inspect_custom")
+    assert not result.completed and j.manager.deliveries == 0
+    assert len(j.manager.calls) == 4
+    assert j.effects == ["prepare"]
+    for _, prompt, _, _ in j.manager.calls[1:]:
+        assert len(prompt.encode()) < 32768
+        assert "5000" in prompt and "generated-00000" in prompt
+    assert (j.iteration / "iteration.json").stat().st_size <= 1_048_576
+    assert j.executor._load_workspace_completion(j.iteration)["consumed"] == 3
+    assert len(HumanTaskRecordStore(j.issue).tasks()) == 1
+    assert j.runtime.blackboard.handoff_contract.to_owner.value == "user"
+    assert "custom_snapshot" not in j.runtime.blackboard.artifacts
+    assert (
+        len(git(j.repo, "ls-files", "--others", "--exclude-standard", "-z").split(b"\0")) - 1
+        == 5000
+    )
+
+
+def test_i8_aggregate_hook_results_cannot_break_human_recovery(journey, monkeypatch):
+    from cafe.phases.generic_phase import HookResult
+
+    calls = []
+
+    class LargeEffect:
+        def run(self, **kwargs):
+            calls.append(len(calls))
+            if len(calls) == 70:
+                raise RuntimeError("interrupted after bounded results")
+            return HookResult(context_updates={str(len(calls)): "x" * 16000})
+
+    j = journey([CORRECTED], workspace=True)
+    j.executor.generic_phase.hook_registry["LargeEffect"] = LargeEffect
+    step = j.playbook["steps"]["inspect_custom"]
+    step["hooks"]["after_execute"] = ["LargeEffect"] * 70
+    result = j.runtime.run(start_step="inspect_custom")
+    assert not result.completed and j.manager.deliveries == 0
+    assert len(HumanTaskRecordStore(j.issue).tasks()) == 1
+    assert (j.iteration / "iteration.json").stat().st_size <= 1_048_576
+    assert j.runtime.blackboard.handoff_contract.to_owner.value == "user"
+    before = len(calls)
+    monkeypatch.setattr(j.executor, "_get_next_iteration_number", lambda *args: 1)
+    (j.issue / "next_step.txt").write_text(json.dumps({"version": 1, "intent": "await_agent"}))
+    with pytest.raises(RuntimeError):
+        j.executor.execute_step("inspect_custom", step, j.runtime.blackboard)
+    assert len(calls) == before
