@@ -4,14 +4,18 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import copy
 import hashlib
 import json
 import os
+import select
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1711,6 +1715,179 @@ def _with_current_task_authority(
     }
 
 
+class _HostRPCError(RuntimeError):
+    """A daemon rejection; never include provider output in durable errors."""
+
+
+class _HostConnection:
+    """Bounded JSON-RPC over a proxy to the existing daemon, without approvals."""
+
+    def __init__(self, process: Any, *, timeout: float = 30) -> None:
+        self.process = process
+        self.deadline = time.monotonic() + timeout
+        self.buffer = bytearray()
+        self.received = 0
+        self.sequence = 0
+        os.set_blocking(process.stdin.fileno(), False)
+        os.set_blocking(process.stdout.fileno(), False)
+        # The control socket (and its byte proxy) uses RFC 6455, not the
+        # newline-delimited JSON transport used by standalone app-server.
+        key = base64.b64encode(os.urandom(16)).decode()
+        self._write(
+            (
+                "GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n"
+                "Connection: Upgrade\r\nSec-WebSocket-Version: 13\r\n"
+                f"Sec-WebSocket-Key: {key}\r\n\r\n"
+            ).encode()
+        )
+        while b"\r\n\r\n" not in self.buffer:
+            self._receive()
+            if len(self.buffer) > 16 * 1024:
+                raise ValueError("Codex host handshake limit exceeded")
+        headers, _, rest = self.buffer.partition(b"\r\n\r\n")
+        self.buffer = bytearray(rest)
+        lines = headers.decode("ascii").split("\r\n")
+        fields = {name.lower(): value for name, value in (line.split(":", 1) for line in lines[1:])}
+        accept = base64.b64encode(
+            hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()
+        ).decode()
+        if (
+            lines[0].split()[1] != "101"
+            or fields.get("sec-websocket-accept", "").strip() != accept
+            or fields.get("upgrade", "").strip().lower() != "websocket"
+            or "upgrade" not in fields.get("connection", "").lower()
+        ):
+            raise ConnectionError("Invalid Codex host WebSocket handshake")
+
+    def _remaining(self) -> float:
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Codex host transport timed out")
+        return remaining
+
+    def _write(self, payload: bytes) -> None:
+        data = memoryview(payload)
+        while data:
+            if not select.select([], [self.process.stdin], [], self._remaining())[1]:
+                raise TimeoutError("Codex host transport timed out")
+            try:
+                written = os.write(self.process.stdin.fileno(), data)
+            except BlockingIOError:
+                continue
+            if not written:
+                raise ConnectionError("Codex host proxy closed")
+            data = data[written:]
+
+    def _receive(self) -> None:
+        if not select.select([self.process.stdout], [], [], self._remaining())[0]:
+            raise TimeoutError("Codex host transport timed out")
+        try:
+            chunk = os.read(self.process.stdout.fileno(), 64 * 1024)
+        except BlockingIOError:
+            return
+        if not chunk:
+            raise ConnectionError("Codex host proxy closed")
+        self.received += len(chunk)
+        if self.received > 2 * 1024 * 1024:
+            raise ValueError("Codex host transport output limit exceeded")
+        self.buffer.extend(chunk)
+
+    def _read(self, count: int) -> bytes:
+        if count > 2 * 1024 * 1024:
+            raise ValueError("Codex host frame limit exceeded")
+        while len(self.buffer) < count:
+            self._receive()
+        result = bytes(self.buffer[:count])
+        del self.buffer[:count]
+        return result
+
+    def _frame(self, payload: bytes, opcode: int = 1) -> None:
+        mask = os.urandom(4)
+        length = len(payload)
+        prefix = bytes([0x80 | opcode])
+        if length < 126:
+            prefix += bytes([0x80 | length])
+        elif length < 65536:
+            prefix += bytes([0x80 | 126]) + struct.pack("!H", length)
+        else:
+            prefix += bytes([0x80 | 127]) + struct.pack("!Q", length)
+        self._write(
+            prefix + mask + bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
+        )
+
+    def send(self, message: dict[str, Any]) -> None:
+        self._frame(json.dumps(message).encode())
+
+    def _message(self) -> dict[str, Any]:
+        payload = bytearray()
+        fragmented = False
+        while True:
+            self._remaining()
+            first, second = self._read(2)
+            opcode = first & 15
+            if first & 0x70 or second & 0x80:
+                raise ValueError("Invalid Codex host WebSocket frame")
+            length = second & 127
+            if length == 126:
+                length = struct.unpack("!H", self._read(2))[0]
+            elif length == 127:
+                length = struct.unpack("!Q", self._read(8))[0]
+            if opcode >= 8 and (length > 125 or not first & 0x80):
+                raise ValueError("Invalid Codex host control frame")
+            chunk = self._read(length)
+            if opcode == 8:
+                raise ConnectionError("Codex host proxy closed")
+            if opcode == 9:
+                self._frame(chunk, opcode=10)
+                continue
+            if opcode == 10:
+                continue
+            if opcode != (0 if fragmented else 1):
+                raise ValueError("Invalid Codex host message frame")
+            payload.extend(chunk)
+            if first & 0x80:
+                message = json.loads(payload)
+                if not isinstance(message, dict):
+                    raise ValueError("Invalid Codex host response")
+                return message
+            fragmented = True
+
+    def request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        self.sequence += 1
+        request_id = self.sequence
+        self.send({"id": request_id, "method": method, "params": params})
+        while True:
+            message = self._message()
+            # Notifications and server requests belong to the original UI. This
+            # connection never answers permission, capability or user questions.
+            if "method" in message:
+                continue
+            if message.get("id") != request_id:
+                raise ValueError("Unexpected Codex host response identity")
+            if "error" in message:
+                raise _HostRPCError(f"Codex host rejected {method}")
+            result = message.get("result")
+            if not isinstance(result, dict):
+                raise ValueError("Invalid Codex host response result")
+            return result
+
+
+def _host_thread(connection: _HostConnection, thread_id: str) -> dict[str, Any]:
+    result = connection.request("thread/read", {"threadId": thread_id})
+    thread = result.get("thread")
+    if not isinstance(thread, dict) or thread.get("id") != thread_id:
+        raise ValueError("Codex host returned a different thread")
+    status = thread.get("status")
+    if not isinstance(status, dict) or status.get("type") not in {
+        "notLoaded",
+        "idle",
+        "active",
+        "systemError",
+    }:
+        raise ValueError("Unknown Codex host thread status")
+    return thread
+
+
 def _queue_host_callback(
     prompt: str,
     *,
@@ -1718,18 +1895,98 @@ def _queue_host_callback(
     model: str | None,
     repository_root: Path,
 ) -> None:
-    """Ask the Codex host daemon to wake its existing visible session."""
-    command = ["codex", "queue", "--thread", thread_id, "--message", prompt]
-    if model is not None:
-        command.extend(["--model", model])
-    command.extend(["--cd", str(repository_root)])
-    subprocess.run(
-        command,
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=30,
+    """Load and wake the bound thread through the already running host daemon."""
+    # No new daemon, session, config, cwd, model or permission override. The
+    # repository root is already in the event prompt; the host owns its cwd.
+    process = subprocess.Popen(
+        ["codex", "app-server", "proxy"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
     )
+    try:
+        connection = _HostConnection(process)
+        connection.request(
+            "initialize",
+            {
+                "clientInfo": {"name": "cafe_callback", "version": "1"},
+                "capabilities": {"experimentalApi": True},
+            },
+        )
+        connection.send({"method": "initialized", "params": {}})
+        thread = _host_thread(connection, thread_id)
+        if thread.get("ephemeral") or thread.get("canAcceptDirectInput") is False:
+            raise _HostRPCError("Codex host thread cannot accept queued input")
+        if model is not None and thread.get("model") != model:
+            raise _HostRPCError("Codex host model differs from confirmed binding")
+        latest = connection.request(
+            "thread/turns/list",
+            {
+                "threadId": thread_id,
+                "limit": 1,
+                "sortDirection": "desc",
+                "itemsView": "notLoaded",
+            },
+        ).get("data")
+        if not isinstance(latest, list) or any(not isinstance(t, dict) for t in latest):
+            raise ValueError("Invalid Codex host turn history")
+        if thread["status"]["type"] == "systemError" or (
+            thread["status"]["type"] != "active"
+            and latest
+            and latest[0].get("status") == "interrupted"
+        ):
+            raise _HostRPCError("Codex host thread requires explicit user recovery")
+        if thread["status"]["type"] == "notLoaded":
+            resumed = connection.request(
+                "thread/resume",
+                {
+                    "threadId": thread_id,
+                    "excludeTurns": True,
+                },
+            ).get("thread")
+            if not isinstance(resumed, dict) or resumed.get("id") != thread_id:
+                raise ValueError("Codex host resumed a different thread")
+            thread = _host_thread(connection, thread_id)
+            if thread["status"]["type"] not in {"idle", "active"}:
+                raise _HostRPCError("Codex host thread did not become available")
+        client_id = "cafe-" + hashlib.sha256(prompt.encode()).hexdigest()
+        queued = connection.request(
+            "thread/queue/add",
+            {
+                "threadId": thread_id,
+                "clientUserMessageId": client_id,
+                "input": [{"type": "text", "text": prompt}],
+            },
+        ).get("queuedSubmission")
+        if (
+            not isinstance(queued, dict)
+            or not isinstance(queued.get("id"), str)
+            or not queued["id"]
+            or queued.get("clientUserMessageId") != client_id
+            or queued.get("input") != [{"type": "text", "text": prompt, "text_elements": []}]
+            and queued.get("input") != [{"type": "text", "text": prompt}]
+        ):
+            raise ValueError("Invalid Codex host queue acknowledgement")
+        # queue/add wakes the loaded thread through the daemon's dispatcher,
+        # which preserves FIFO and excludes user-interrupted threads. Never use
+        # queue/start here: its explicit selection can overtake a concurrently
+        # reordered user message or override a stop after our status snapshot.
+        thread = _host_thread(connection, thread_id)
+        if thread["status"]["type"] not in {"idle", "active"}:
+            raise RuntimeError("Codex host unloaded or failed after queue acceptance")
+    finally:
+        # Only terminate our stdio proxy. Never unload/interrupt the thread or
+        # stop the shared app-server when this short-lived connection closes.
+        if process.poll() is None:
+            process.terminate()
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=1)
+        for stream in (process.stdin, process.stdout):
+            if stream is not None:
+                stream.close()
 
 
 def _accept_delivery(

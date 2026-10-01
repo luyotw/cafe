@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import importlib.util
 import json
+import os
+import struct
 import subprocess
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -1579,13 +1583,11 @@ def test_confirmed_activation_delivers_to_host_after_detaching_environment(
         },
     )
 
-    with patch.object(callback.subprocess, "run") as run:
+    with patch.object(callback, "_queue_host_callback") as queue:
         callback.run_callback(event, repository_root=tmp_path)
 
-    command = run.call_args.args[0]
-    assert command[:4] == ["codex", "queue", "--thread", "visible-thread"]
-    assert "--model" not in command
-    assert "say" not in command
+    assert queue.call_args.kwargs["thread_id"] == "visible-thread"
+    assert queue.call_args.kwargs["model"] is None
     state = json.loads((issue_dir / "driver" / "dispatch_state.json").read_text(encoding="utf-8"))
     assert state["entries"][0]["session"]["source"] == "host_session"
     assert state["events"][event["event_id"]]["status"] == "accepted"
@@ -2286,22 +2288,18 @@ def test_callback_queues_the_bound_codex_host_thread(tmp_path: Path, monkeypatch
         event_type="human_task",
         bind_host=True,
     )
-    with patch.object(callback.subprocess, "run") as run:
+    daemon = _HostDaemon(status="notLoaded")
+    proxy = _HostProxy(daemon)
+    with patch.object(callback.subprocess, "Popen", return_value=proxy) as launch:
         callback.run_callback(event, repository_root=tmp_path)
 
-    command = run.call_args.args[0]
-    assert command[:4] == ["codex", "queue", "--thread", "visible-thread"]
-    assert "--model" not in command
-    assert command[command.index("--cd") + 1] == str(tmp_path)
-    prompt = command[command.index("--message") + 1]
+    assert launch.call_args.args[0] == ["codex", "app-server", "proxy"]
+    assert daemon.resume_params == {"threadId": "visible-thread", "excludeTurns": True}
+    prompt = daemon.input[0]["text"]
     assert "event-driven CAFE workflow manager" in prompt
     assert '"event_type": "human_task"' in prompt
-    assert run.call_args.kwargs == {
-        "check": True,
-        "capture_output": True,
-        "text": True,
-        "timeout": 30,
-    }
+    assert str(tmp_path) in prompt
+    assert daemon.starts == 0
     persisted = json.loads((driver_dir / "dispatch_state.json").read_text(encoding="utf-8"))
     assert persisted["entries"][0]["session"]["id"] == "visible-thread"
 
@@ -2320,7 +2318,7 @@ def test_bound_host_thread_queue_failure_never_creates_a_new_session(
         bind_host=True,
     )
     failure = subprocess.CalledProcessError(1, ["codex", "queue"], stderr="not found")
-    with patch.object(callback.subprocess, "run", side_effect=failure) as run:
+    with patch.object(callback, "_queue_host_callback", side_effect=failure) as run:
         callback.run_callback(event, repository_root=tmp_path)
 
     assert run.call_count == 1
@@ -2742,3 +2740,382 @@ def test_manager_event_contract_uses_manager_state_path(tmp_path: Path) -> None:
     store.save_session(store.agent_name, AgentCLI.CODEX, "manager-session")
     store.commit()
     assert store.path.is_file()
+
+
+class _HostProxy:
+    """In-process control-socket peer exercising actual bytes over OS pipes."""
+
+    def __init__(self, handler, *, bad_handshake=False):
+        server_read, client_write = os.pipe()
+        client_read, server_write = os.pipe()
+        self.stdin = os.fdopen(client_write, "wb", buffering=0)
+        self.stdout = os.fdopen(client_read, "rb", buffering=0)
+        self.returncode = None
+        self.requests = []
+        self.failure = None
+        self.worker = threading.Thread(
+            target=self._serve,
+            args=(server_read, server_write, handler, bad_handshake),
+            daemon=True,
+        )
+        self.worker.start()
+
+    def _serve(self, reader_fd, writer_fd, handler, bad_handshake):
+        try:
+            with os.fdopen(reader_fd, "rb", buffering=0) as reader, os.fdopen(
+                writer_fd, "wb", buffering=0
+            ) as writer:
+
+                def read(count):
+                    data = bytearray()
+                    while len(data) < count:
+                        chunk = reader.read(count - len(data))
+                        if not chunk:
+                            raise EOFError
+                        data.extend(chunk)
+                    return bytes(data)
+
+                def frame(payload, opcode=1, final=True):
+                    length = len(payload)
+                    prefix = bytes([(0x80 if final else 0) | opcode])
+                    if length < 126:
+                        prefix += bytes([length])
+                    elif length < 65536:
+                        prefix += bytes([126]) + struct.pack("!H", length)
+                    else:
+                        prefix += bytes([127]) + struct.pack("!Q", length)
+                    writer.write(prefix + payload)
+
+                headers = bytearray()
+                while not headers.endswith(b"\r\n\r\n"):
+                    headers.extend(read(1))
+                key = next(
+                    line.split(b":", 1)[1].strip()
+                    for line in headers.split(b"\r\n")
+                    if line.startswith(b"Sec-WebSocket-Key:")
+                )
+                accept = base64.b64encode(
+                    hashlib.sha1(key + b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest()
+                )
+                if bad_handshake:
+                    accept = b"incorrect"
+                writer.write(
+                    b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\n"
+                    b"Upgrade: websocket\r\nSec-WebSocket-Accept: " + accept + b"\r\n\r\n"
+                )
+                while True:
+                    first, second = read(2)
+                    assert first & 0x80 and second & 0x80
+                    length = second & 127
+                    if length == 126:
+                        length = struct.unpack("!H", read(2))[0]
+                    elif length == 127:
+                        length = struct.unpack("!Q", read(8))[0]
+                    mask = read(4)
+                    payload = bytes(
+                        value ^ mask[index % 4] for index, value in enumerate(read(length))
+                    )
+                    if first & 15 == 10:
+                        assert payload == b"ping"
+                        continue
+                    message = json.loads(payload)
+                    self.requests.append(message)
+                    if "id" not in message:
+                        continue
+                    result = handler(message)
+                    if result is None:
+                        return  # Lost response after server-side admission.
+                    if isinstance(result, tuple):
+                        frame(b"ping", opcode=9)
+                        # Notifications and server requests must never be answered.
+                        frame(
+                            json.dumps(
+                                {
+                                    "method": "item/commandExecution/requestApproval",
+                                    "id": "server-request",
+                                    "params": {},
+                                }
+                            ).encode()
+                        )
+                        result = result[0]
+                        payload = json.dumps({"id": message["id"], "result": result}).encode()
+                        frame(payload[:5], final=False)
+                        frame(payload[5:], opcode=0)
+                    else:
+                        envelope = {"id": message["id"]}
+                        envelope["error" if isinstance(result, _RPCRejection) else "result"] = (
+                            {"code": -32600, "message": "rejected"}
+                            if isinstance(result, _RPCRejection)
+                            else result
+                        )
+                        frame(json.dumps(envelope).encode())
+        except (EOFError, BrokenPipeError):
+            pass
+        except BaseException as error:
+            self.failure = error
+
+    def poll(self):
+        return self.returncode
+
+    def terminate(self):
+        self.returncode = 0
+        self.stdin.close()
+        self.stdout.close()
+
+    def kill(self):
+        self.terminate()
+
+    def wait(self, timeout):
+        self.worker.join(timeout)
+        assert not self.worker.is_alive(), "fake host leaked its transport"
+        if self.failure is not None:
+            raise self.failure
+        return self.returncode
+
+
+class _RPCRejection:
+    pass
+
+
+class _HostDaemon:
+    def __init__(self, *, status="idle", latest="completed", behavior="normal"):
+        self.status = status
+        self.latest = latest
+        self.behavior = behavior
+        self.resume_params = None
+        self.input = None
+        self.client_id = None
+        self.pending = []
+        self.starts = 0
+
+    def __call__(self, message):
+        method, params = message["method"], message["params"]
+        if method == "initialize":
+            assert params["capabilities"] == {"experimentalApi": True}
+            return {}
+        assert params["threadId"] == "visible-thread"
+        if method == "thread/read":
+            return {
+                "thread": {
+                    "id": "visible-thread",
+                    "status": {
+                        "type": self.status,
+                        **(
+                            {"activeFlags": ["waitingOnApproval"]}
+                            if self.status == "active"
+                            else {}
+                        ),
+                    },
+                    "model": "saved-model",
+                }
+            }
+        if method == "thread/turns/list":
+            assert params == {
+                "threadId": "visible-thread",
+                "limit": 1,
+                "sortDirection": "desc",
+                "itemsView": "notLoaded",
+            }
+            return {"data": [{"id": "previous-turn", "status": self.latest}]}
+        if method == "thread/resume":
+            self.resume_params = params
+            if self.behavior == "resume_rejected":
+                return _RPCRejection()
+            self.status = "idle"
+            return {"thread": {"id": "visible-thread"}}
+        if method == "thread/queue/add":
+            self.input = params["input"]
+            self.client_id = params["clientUserMessageId"]
+            self.pending = [{"id": "queued-callback"}]
+            if self.behavior == "lost_ack":
+                return None
+            queued = {
+                "queuedSubmission": {
+                    "id": "queued-callback",
+                    "clientUserMessageId": self.client_id,
+                    "input": self.input,
+                }
+            }
+            if self.behavior == "corrupt_ack":
+                queued["queuedSubmission"]["clientUserMessageId"] = "someone-else"
+            if self.behavior == "auto_started":
+                self.pending = []
+                self.status = "active"
+            if self.behavior == "older_message":
+                self.pending.insert(0, {"id": "older-user-message"})
+            if self.behavior == "unloaded_after_ack":
+                self.status = "notLoaded"
+            if self.behavior == "stopped_after_add":
+                self.status = "idle"
+                self.latest = "interrupted"
+            return (queued,) if self.behavior == "fragmented" else queued
+        raise AssertionError(f"Unexpected RPC {method}")
+
+
+@pytest.mark.parametrize("initial", ["notLoaded", "idle", "active"])
+def test_host_callback_loads_original_thread_and_defers_dispatch_to_daemon(tmp_path, initial):
+    callback = _callback_module()
+    daemon = _HostDaemon(status=initial)
+    proxy = _HostProxy(daemon)
+    with patch.object(callback.subprocess, "Popen", return_value=proxy) as launch:
+        callback._queue_host_callback(
+            "wake", thread_id="visible-thread", model=None, repository_root=tmp_path
+        )
+    assert launch.call_count == 1
+    assert daemon.resume_params == (
+        {"threadId": "visible-thread", "excludeTurns": True} if initial == "notLoaded" else None
+    )
+    assert daemon.starts == 0
+    assert daemon.input == [{"type": "text", "text": "wake"}]
+    assert proxy.returncode == 0
+    methods = [request["method"] for request in proxy.requests]
+    assert not set(methods) & {
+        "thread/start",
+        "turn/start",
+        "thread/queue/start",
+        "thread/unarchive",
+        "turn/interrupt",
+    }
+
+
+@pytest.mark.parametrize(
+    "behavior,starts",
+    [
+        ("auto_started", 0),
+        ("older_message", 0),
+        ("stopped_after_add", 0),
+        ("fragmented", 0),
+    ],
+)
+def test_host_callback_handles_dispatch_races_and_preserves_fifo(tmp_path, behavior, starts):
+    callback = _callback_module()
+    daemon = _HostDaemon(behavior=behavior)
+    proxy = _HostProxy(daemon)
+    with patch.object(callback.subprocess, "Popen", return_value=proxy):
+        callback._queue_host_callback(
+            "wake" * 40000, thread_id="visible-thread", model=None, repository_root=tmp_path
+        )
+    assert daemon.starts == starts
+    assert all(request.get("id") != "server-request" for request in proxy.requests)
+
+
+@pytest.mark.parametrize(
+    "initial,latest,behavior",
+    [
+        ("idle", "interrupted", "normal"),
+        ("notLoaded", "interrupted", "normal"),
+        ("systemError", "completed", "normal"),
+        ("notLoaded", "completed", "resume_rejected"),
+    ],
+)
+def test_host_callback_does_not_restart_paused_or_unresumable_threads(
+    tmp_path, initial, latest, behavior
+):
+    callback = _callback_module()
+    daemon = _HostDaemon(status=initial, latest=latest, behavior=behavior)
+    proxy = _HostProxy(daemon)
+    with patch.object(callback.subprocess, "Popen", return_value=proxy):
+        with pytest.raises(callback._HostRPCError):
+            callback._queue_host_callback(
+                "wake", thread_id="visible-thread", model=None, repository_root=tmp_path
+            )
+    assert daemon.input is None
+    assert daemon.starts == 0
+
+
+@pytest.mark.parametrize("behavior", ["lost_ack", "corrupt_ack", "unloaded_after_ack"])
+def test_host_callback_uncertain_delivery_stops_without_replay_or_fallback(
+    tmp_path, monkeypatch, behavior
+):
+    callback = _callback_module()
+    monkeypatch.setenv("CODEX_THREAD_ID", "visible-thread")
+    driver_dir, _state, event = _contract_event_context(
+        callback,
+        tmp_path,
+        [("codex", "exact"), ("gemini", "backup")],
+        issue_name="issue456",
+        event_type="human_task",
+        bind_host=True,
+    )
+    daemon = _HostDaemon(behavior=behavior)
+    proxy = _HostProxy(daemon)
+    with patch.object(callback.subprocess, "Popen", return_value=proxy) as launch:
+        callback.run_callback(event, repository_root=tmp_path)
+        callback.run_callback(event, repository_root=tmp_path)
+    assert launch.call_count == 1
+    state = json.loads((driver_dir / "dispatch_state.json").read_text())
+    delivery = state["events"][event["event_id"]]
+    assert delivery["status"] == "recovery_pending"
+    assert delivery["attempts"][-1]["outcome"] == "ambiguous"
+    assert delivery["recovery_pending"] is True
+    assert state["entries"][1]["session"] is None
+    assert len([r for r in proxy.requests if r["method"] == "thread/queue/add"]) == 1
+
+
+def test_host_callback_rejects_invalid_websocket_handshake(tmp_path):
+    callback = _callback_module()
+    proxy = _HostProxy(_HostDaemon(), bad_handshake=True)
+    with patch.object(callback.subprocess, "Popen", return_value=proxy):
+        with pytest.raises(ConnectionError, match="handshake"):
+            callback._queue_host_callback(
+                "wake", thread_id="visible-thread", model=None, repository_root=tmp_path
+            )
+    assert not proxy.requests
+
+
+def test_host_transport_enforces_response_timeout_and_closes_proxy(tmp_path):
+    callback = _callback_module()
+    original_connection = callback._HostConnection
+
+    def slow_initialize(_message):
+        threading.Event().wait(0.2)
+        return {}
+
+    proxy = _HostProxy(slow_initialize)
+    with patch.object(callback.subprocess, "Popen", return_value=proxy), patch.object(
+        callback,
+        "_HostConnection",
+        side_effect=lambda process: original_connection(process, timeout=0.05),
+    ):
+        with pytest.raises(TimeoutError):
+            callback._queue_host_callback(
+                "wake", thread_id="visible-thread", model=None, repository_root=tmp_path
+            )
+    assert proxy.returncode == 0
+    assert proxy.stdin.closed and proxy.stdout.closed
+
+
+def test_host_transport_bounds_incoming_output_and_closes_proxy(tmp_path):
+    callback = _callback_module()
+    proxy = _HostProxy(lambda _message: {"oversized": "x" * (2 * 1024 * 1024)})
+    with patch.object(callback.subprocess, "Popen", return_value=proxy):
+        with pytest.raises(ValueError, match="limit exceeded"):
+            callback._queue_host_callback(
+                "wake", thread_id="visible-thread", model=None, repository_root=tmp_path
+            )
+    assert proxy.returncode == 0
+    assert proxy.stdin.closed and proxy.stdout.closed
+
+
+@pytest.mark.parametrize("mismatch", ["thread", "model"])
+def test_host_callback_rejects_identity_or_model_changes_before_enqueue(tmp_path, mismatch):
+    callback = _callback_module()
+    daemon = _HostDaemon(status="notLoaded")
+
+    def changed_identity(message):
+        result = daemon(message)
+        if mismatch == "thread" and message["method"] == "thread/read":
+            result["thread"]["id"] = "different-thread"
+        return result
+
+    proxy = _HostProxy(changed_identity)
+    with patch.object(callback.subprocess, "Popen", return_value=proxy):
+        with pytest.raises((ValueError, callback._HostRPCError)):
+            callback._queue_host_callback(
+                "wake",
+                thread_id="visible-thread",
+                model="different-model" if mismatch == "model" else None,
+                repository_root=tmp_path,
+            )
+    assert daemon.resume_params is None
+    assert daemon.input is None

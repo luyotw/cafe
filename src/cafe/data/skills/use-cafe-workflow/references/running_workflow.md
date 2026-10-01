@@ -131,9 +131,33 @@ a caller-selected new-session ID.
 When the first entry is Codex and activation runs from the Codex App, its
 runtime-owned host thread is a best-effort hint for the first session. A
 persisted acquired session always wins, and host-binding failure warns without
-blocking workflow execution. A successfully bound host session uses
-`codex queue`; no fallback inherits it. Otherwise the actual callback resumes
-only that entry's persisted provider session or bootstraps an unbound entry.
+blocking workflow execution. A successfully bound host session connects through
+`codex app-server proxy` to the already running daemon. It reads the original
+thread and, when unloaded, resumes that exact thread before enqueueing the wake
+notice. `codex queue` alone wakes only loaded threads; resuming the bound thread
+makes delivery independent of opening its conversation in the UI. Resume
+supplies no model, cwd, sandbox, approval or configuration changes; the daemon restores the saved thread settings. Missing, archived,
+interrupted or otherwise unresumable threads require explicit recovery. No new
+daemon or Manager conversation is created, and no fallback inherits this host
+binding. This transport requires a Codex daemon exposing the experimental
+`thread/queue/*` and paginated turn-history APIs; an unsupported API leaves the
+failure visible rather than silently switching transports.
+
+The callback checks the original thread's status and latest turn, then adds a
+submission identified by the dispatched prompt. A running thread, including one
+waiting for approval or user input, retains the submission in its queue. Adding
+to the loaded thread wakes the daemon's normal dispatcher, which owns FIFO and
+respects user interruption. The callback never calls `thread/queue/start` or
+`turn/start`: explicit queue selection could overtake another user message or
+restart a thread stopped after the callback's status check. The connection
+handles notifications without answering permission or user requests.
+Enqueue acknowledgements are checked against the submitted identity and input.
+A lost acknowledgement or an unresolved failure after enqueue is ambiguous:
+retain the event for explicit recovery without replay or fallback. Closing the
+proxy does not interrupt the original thread or stop the shared daemon.
+
+Otherwise the actual callback resumes only that entry's persisted provider
+session or bootstraps an unbound entry.
 Bootstrap never counts as event delivery or acceptance. Only actual callback durable acceptance stops
 forward routing, makes that entry active for later events, and records a
 takeover. The provider acknowledgement is bound to the exact event identity in
