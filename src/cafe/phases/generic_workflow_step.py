@@ -1134,6 +1134,7 @@ class GenericWorkflowStepExecutor(Phase):
                 response=completion_state["response"],
                 step_name=step_name,
                 step_def=step_def,
+                authoritative_inputs=context.get("authoritative_inputs", {}),
             )
 
         def publication_progress(stage, index, identity, invoke):
@@ -1556,7 +1557,8 @@ class GenericWorkflowStepExecutor(Phase):
         self._persist_plan_artifact_record(path, metadata)
 
     def _workspace_delivery_identity(
-        self, *, iteration_dir, output_file, checklist_file, baton_path, response, step_name, step_def
+        self, *, iteration_dir, output_file, checklist_file, baton_path, response, step_name, step_def,
+        authoritative_inputs=None,
     ):
         metadata = json.loads(
             self._resolve_iteration_context_file(iteration_dir).read_text(encoding="utf-8")
@@ -1568,7 +1570,22 @@ class GenericWorkflowStepExecutor(Phase):
                 for key in ("version", "to_owner", "to_step", "intent")
                 if key in payload
             }
+        repo = Path(self.git_ops.repo_path).resolve()
+        base_ref = self._get_issue_config_value(self.issue_dir / "issue.yaml", "base_branch")
+        if not base_ref:
+            base_ref = self.git_ops.get_default_base_branch()
+        head = self.git_ops.run_git("rev-parse", "HEAD")
+        inputs = {}
+        for placeholder, declared_path in (authoritative_inputs or {}).items():
+            path = Path(declared_path)
+            path = (path if path.is_absolute() else repo / path).resolve(strict=True)
+            with path.open("rb") as stream:
+                digest = hashlib.file_digest(stream, "sha256").hexdigest()
+            inputs[placeholder] = {"path": str(path), "sha256": digest}
         facts = {
+            "repository": str(repo),
+            "base": self.git_ops.run_git("merge-base", str(base_ref), head),
+            "inputs": inputs,
             "step": step_name,
             "iteration": self.iteration,
             "response": response,

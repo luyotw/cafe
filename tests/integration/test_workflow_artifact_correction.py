@@ -47,7 +47,7 @@ def _assert_correction_context_preserved(manager):
 @pytest.fixture
 def journey(tmp_path, monkeypatch):
     def build(submissions, *, mode="baton", completed_checklist=False, human=None,
-              reverse=False, unchecked=False, mutate=None, provider_mutation=None, capability=None, publication_mutation=False, workspace=None, workspace_action=None, effect_action=None, extra_publication=False, projected=False, post_submission=None):
+              reverse=False, unchecked=False, mutate=None, provider_mutation=None, capability=None, publication_mutation=False, workspace=None, workspace_action=None, effect_action=None, extra_publication=False, projected=False, post_submission=None, declared_input=False):
         repo = tmp_path / "repo"
         repo.mkdir()
         subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
@@ -66,6 +66,8 @@ def journey(tmp_path, monkeypatch):
         skill.mkdir(parents=True)
         workflow = {"execution_profile": {"workload": "implementation", "reasoning": "standard",
                     "risk_domains": ["integration"], "fallback_strength": "equivalent_or_stronger"}}
+        if declared_input:
+            workflow["prompt_inputs"] = [{"artifacts": ["brief"], "placeholder": "brief_file", "required": True}]
         if human:
             workflow["human_tasks"] = [{"id": "decision", "pattern": "confirm_output" if human == "confirm_output" else "revision_feedback",
                 "prompt": "Review report", "input_schema": "feedback" if human != "confirm_output" else "decision",
@@ -125,6 +127,8 @@ def journey(tmp_path, monkeypatch):
             "hooks": {"prepare_input": ["Prepare"], "after_execute": ["After"]},
             "on": {"await_agent": "deliver_custom", "confirm_output": "inspect_custom",
                    "need_permission": "inspect_custom", "need_clarification": "inspect_custom"}}
+        if declared_input:
+            producer["input_artifacts"] = ["brief"]
         if projected:
             producer["input_artifacts"] = ["blueprint"]
         if extra_publication:
@@ -143,6 +147,8 @@ def journey(tmp_path, monkeypatch):
         successor = {"skill": "custom-report", "role": "author_custom",
             "input_artifacts": ["evidence_bundle"], "output_artifact": "delivery_receipt",
             "valid_intents": ["await_agent"], "on": {"await_agent": "_done"}}
+        if declared_input:
+            successor["input_artifacts"].append("brief")
         if projected:
             receipt = config / "skills" / "receipt-skill"
             receipt.mkdir()
@@ -255,6 +261,10 @@ def journey(tmp_path, monkeypatch):
             source = issue / "blueprint.md"
             source.write_text("## Todo List\n- [ ] `TASK-001` — Source: `bespoke` — Work: implement — Closure: correct — Evidence: tests\n")
             runtime.blackboard_store.set_artifact(runtime.blackboard, "blueprint", str(source))
+        if declared_input:
+            source = issue / "brief.md"
+            source.write_text("original brief")
+            runtime.blackboard_store.set_artifact(runtime.blackboard, "brief", str(source))
         runtime.blackboard_store.save(runtime.blackboard)
         def reconstruct():
             renewed = GenericWorkflowStepExecutor(issue_dir=issue, issue_name="correction", playbook=playbook,

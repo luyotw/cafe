@@ -539,3 +539,46 @@ def test_i8_agent_cannot_author_host_publication_results(journey):
     assert len(j.manager.calls) == 1 and j.manager.deliveries == 0
     assert j.effects == ["prepare"]
     assert "custom_snapshot" not in j.runtime.blackboard.artifacts
+
+
+def test_i6_changed_comparison_base_cannot_certify_consumed_delivery(journey):
+    def commit(repo, iteration, call):
+        git(repo, "checkout", "-b", "feature")
+        change_then_commit(repo, iteration, 1)
+        change_then_commit(repo, iteration, 2)
+
+    def change_base(stage, repo, count):
+        git(repo, "branch", "new-base", "HEAD")
+        (j.issue / "issue.yaml").write_text("base_branch: new-base\n")
+
+    j = journey([CORRECTED], workspace=True, workspace_action=commit, effect_action=change_base)
+    j.runtime.run(start_step="inspect_custom")
+    assert j.manager.deliveries == 0
+    assert "custom_snapshot" not in j.runtime.blackboard.artifacts
+    assert "evidence_bundle" not in j.runtime.blackboard.artifacts
+    assert j.effects == ["prepare", "after"]
+
+
+@pytest.mark.parametrize("changed", ["base", "input"])
+def test_i8_recovery_refuses_changed_authoritative_delivery(journey, monkeypatch, changed):
+    def commit(repo, iteration, call):
+        git(repo, "checkout", "-b", "feature")
+        change_then_commit(repo, iteration, 1)
+        change_then_commit(repo, iteration, 2)
+
+    j = journey([CORRECTED], workspace=True, workspace_action=commit, declared_input=True)
+    j.runtime.run(start_step="inspect_custom")
+    assert j.manager.deliveries == 1
+    if changed == "base":
+        git(j.repo, "branch", "new-base", "HEAD")
+        (j.issue / "issue.yaml").write_text("base_branch: new-base\n")
+    else:
+        (j.issue / "brief.md").write_text("replacement brief")
+    monkeypatch.setattr(j.executor, "_get_next_iteration_number", lambda *args: 1)
+    (j.issue / "next_step.txt").write_text(json.dumps({"version": 1, "intent": "await_agent"}))
+    before = list(j.effects)
+    with pytest.raises(RuntimeError):
+        j.executor.execute_step("inspect_custom", j.playbook["steps"]["inspect_custom"], j.runtime.blackboard)
+    assert j.effects.count("after") == before.count("after")
+    assert j.effects.count("publish") == before.count("publish")
+    assert len(j.manager.calls) == 1
