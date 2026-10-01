@@ -25,6 +25,8 @@ def assess_model_evidence(
     contradictions: list[str] | None = None, expected_identity: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     diagnostics: list[str] = []
+    if record.get("invalidated_sources"):
+        diagnostics.append("source_fingerprint_changed")
     provider = record.get("provider")
     model = record.get("model")
     version = record.get("version")

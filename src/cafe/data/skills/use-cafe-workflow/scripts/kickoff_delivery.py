@@ -136,10 +136,34 @@ def assess_delivery(
     contradictions: list[str] | None = None,
 ) -> dict[str, Any]:
     root = Path(project_root).expanduser().resolve()
-    references = [source["path"] for source in record.get("sources", [])
+    sources = record.get("sources")
+    sources = sources if isinstance(sources, list) else []
+    references = [source["path"] for source in sources
                   if isinstance(source, dict) and isinstance(source.get("path"), str)]
     manifest = discover_delivery_manifest(root, referenced_paths=references)
     diagnostics: list[str] = []
+    # Persisted records receive the same required-field validation as refresh.
+    conventions = record.get("stable_conventions")
+    discovery = record.get("discovery")
+    if (not isinstance(conventions, list) or not conventions
+            or any(not isinstance(item, str) or not item.strip() for item in conventions)):
+        diagnostics.append("stable_conventions_missing")
+    if not sources or any(not isinstance(item, dict) for item in sources):
+        diagnostics.append("delivery_sources_invalid")
+    if not isinstance(record.get("target"), str) or not record["target"].strip():
+        diagnostics.append("delivery_target_missing")
+    if not isinstance(record.get("observations", []), list):
+        diagnostics.append("delivery_observations_invalid")
+    if not isinstance(discovery, dict) or any(
+        not isinstance(discovery.get(key, []), list)
+        or any(not isinstance(item, str) for item in discovery.get(key, []))
+        for key in ("inventory", "classified_paths", "watched")
+    ) or "inventory" not in discovery:
+        diagnostics.append("discovery_manifest_invalid")
+    if diagnostics:
+        return {"status": "miss", "diagnostics": diagnostics, "discovery_gap": True,
+                "stable_conventions": [], "delivery_template": None,
+                "current_observations": [], "sources": [], "manifest": manifest}
     discovery_gap = False
     if record.get("repository") != manifest["repository"]:
         diagnostics.append("repository_identity_changed")
@@ -169,8 +193,13 @@ def assess_delivery(
             diagnostics.append("source_record_invalid")
             continue
         path = source.get("path")
-        if not isinstance(path, str) or path not in current_hashes or current_hashes[path] != source.get("fingerprint"):
-            diagnostics.append("material_source_changed")
+        if isinstance(path, str):
+            if path not in current_hashes or current_hashes[path] != source.get("fingerprint"):
+                diagnostics.append("material_source_changed")
+        elif not (isinstance(source.get("url"), str) and source["url"].startswith(("https://", "http://"))
+                  and _date(source.get("retrieved_at")) is not None
+                  and isinstance(source.get("fingerprint"), str) and source["fingerprint"]):
+            diagnostics.append("source_record_invalid")
     instant = now.astimezone(timezone.utc) if now.tzinfo else None
     if instant is None:
         diagnostics.append("current_time_requires_timezone")
@@ -186,7 +215,8 @@ def assess_delivery(
         valid_until = _date(observation.get("valid_until"))
         target = observation.get("target")
         if (
-            observed_at is None
+            ("valid_until" in observation and valid_until is None)
+            or observed_at is None
             or retrieved_at is None
             or observed_at > retrieved_at
             or retrieved_at > instant
@@ -209,7 +239,7 @@ def assess_delivery(
         diagnostics.append("delivery_template_invalid")
     blocked = any(
         item in diagnostics
-        for item in ("repository_identity_changed", "discovery_manifest_missing", "watched_membership_changed", "material_source_changed")
+        for item in ("repository_identity_changed", "discovery_manifest_missing", "watched_membership_changed", "material_source_changed", "source_record_invalid")
     )
     status = "hit" if not blocked and not discovery_gap and not expired and not contradictions and not template_invalid else "miss"
     return {
@@ -268,4 +298,7 @@ def refresh_delivery(record: dict[str, Any], *, evidence: Any, project_root: Pat
             ),
         },
     }
+    assessed = assess_delivery(updated, project_root=project_root, now=now)
+    if assessed["status"] != "hit":
+        return {"record": record, "refreshed": False, "diagnostic": assessed["diagnostics"][0]}
     return {"record": updated, "refreshed": True}

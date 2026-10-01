@@ -149,3 +149,33 @@ def test_membership_changes_are_observed_and_root_errors_are_not_complete(
     )
     assert failed["candidates"] == []
     assert failed["diagnostics"]
+
+
+def test_installed_catalog_binds_running_dependency_files_and_refuses_unknown_identity(tmp_path, monkeypatch):
+    """U08/U09: deployed skill layout must invalidate on effective code changes."""
+    import importlib.util
+    import shutil
+    import cafe.catalogs.resolver as resolver
+    module = load_kickoff_module('kickoff_catalog')
+    installed = tmp_path / 'site-packages/cafe/data/skills/use-cafe-workflow/scripts/kickoff_catalog.py'
+    installed.parent.mkdir(parents=True)
+    shutil.copyfile(module.__file__, installed)
+    spec = importlib.util.spec_from_file_location('installed_kickoff_catalog', installed)
+    deployed = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(deployed)
+    dependency = tmp_path / 'effective-resolver.py'
+    dependency.write_bytes(Path(resolver.__file__).read_bytes())
+    monkeypatch.setattr(resolver, '__file__', str(dependency))
+    args = dict(project_root=tmp_path / 'project', global_root=tmp_path / 'global',
+                builtin_root=Path(__file__).resolve().parents[2] / 'src/cafe/data', cache_file=tmp_path / 'cache.json')
+    cold = deployed.discover_index(**args)
+    assert cold['candidates']
+    assert all(deployed.discover_index(**args)['reuse'].values())
+    dependency.write_text(dependency.read_text() + '\n# changed effective implementation\n')
+    changed = deployed.discover_index(**args)
+    assert not any(changed['reuse'].values())
+    dependency.unlink()
+    missing = deployed.discover_index(**args)
+    again = deployed.discover_index(**args)
+    assert not any(missing['reuse'].values()) and not any(again['reuse'].values())
+    assert missing['diagnostics'] and again['diagnostics']

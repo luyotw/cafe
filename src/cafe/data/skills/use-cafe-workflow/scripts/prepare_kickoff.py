@@ -14,7 +14,7 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
-from _kickoff_store import VersionedJsonStore, repository_identity, _lock
+from _kickoff_store import atomic_write_text, VersionedJsonStore, repository_identity, _lock
 import kickoff_inputs
 import kickoff_preferences
 
@@ -292,12 +292,18 @@ def _capture_report(args: argparse.Namespace) -> int:
             field = args.kind + "_preflight"
             if field in request.get("formatter_inputs", {}) or field in request.get("current_explicit_inputs", {}):
                 raise ValueError("remove the prior inline report explicitly before capturing a replacement")
+            # Do not overwrite bytes referenced by the previous complete draft.
+            # A failed request publication may leave an unreferenced report, but
+            # its previous decisions and evidence remain recoverable.
+            if str(output) in request.get("preflight_files", {}).values() and output.exists():
+                import hashlib
+                output = output.with_name(output.stem + "." + hashlib.sha256(raw.encode()).hexdigest() + output.suffix)
             request.setdefault("preflight_files", {})[args.kind] = str(output)
             request.setdefault("preflight_metadata", {})[args.kind] = {
                 "checked_at": args.checked_at, "decision": None, "post_change_evidence": None,
             }
-            output.write_text(raw, encoding="utf-8")
-            args.request_file.write_text(json.dumps(request, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            atomic_write_text(output, raw)
+            atomic_write_text(args.request_file, json.dumps(request, ensure_ascii=False, indent=2) + "\n")
         _json({"status": "captured", "report_file": str(output), "request_file": str(args.request_file.resolve()),
                "missing_decisions": ["decision", "post_change_evidence"],
                "authority": "Captured data only; existing formatter validates the full report after current decisions."})
@@ -336,17 +342,20 @@ def _evidence_command(args: argparse.Namespace) -> int:
     store = VersionedJsonStore(
         args.cache_dir / f"{args.category}-v1.json", schema_version=1, collection=collection
     )
-    records = store.read()
     if args.operation == "inspect":
+        records = store.read()
         _json({"category": args.category, "evidence": records if args.key is None else records.get(args.key)})
         return 0
     if args.operation == "clear":
-        if args.key is None:
-            records.clear()
-            cleared = True
-        else:
-            cleared = records.pop(args.key, None) is not None
-        store.write(records)
+        cleared = False
+        def clear(records):
+            nonlocal cleared
+            cleared = args.key is None or args.key in records
+            if args.key is None:
+                return {}
+            records.pop(args.key, None)
+            return records
+        store.update(clear)
         _json({"category": args.category, "cleared": cleared})
         return 0
     try:
@@ -370,7 +379,7 @@ def _evidence_command(args: argparse.Namespace) -> int:
                 _json(refreshed)
                 return 3
             key = repo_key
-            records[key] = refreshed["record"]
+            replacement = refreshed["record"]
         else:
             module = kickoff_inputs._load_local_module("kickoff_models")
             from datetime import datetime, timezone
@@ -380,8 +389,21 @@ def _evidence_command(args: argparse.Namespace) -> int:
                 _json(result)
                 return 3
             key = ":".join((evidence["provider"], evidence["model"], evidence["version"]))
-            records[key] = evidence
-        store.write(records)
+            replacement = evidence
+        def refresh(records):
+            if args.category == "models":
+                changed = {s["url"]: s["fingerprint"] for s in replacement["sources"]}
+                for other_key, record in records.items():
+                    if other_key == key:
+                        continue
+                    invalid = set(record.get("invalidated_sources", []))
+                    invalid.update(s["url"] for s in record.get("sources", []) if isinstance(s, dict)
+                                   and s.get("url") in changed and s.get("fingerprint") != changed[s["url"]])
+                    if invalid:
+                        record["invalidated_sources"] = sorted(invalid)
+            records[key] = replacement
+            return records
+        store.update(refresh)
         _json({"category": args.category, "refreshed": True, "key": key})
         return 0
     except (OSError, json.JSONDecodeError, KeyError, ValueError, TypeError) as exc:

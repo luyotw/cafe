@@ -175,3 +175,31 @@ def test_linked_worktree_shares_delivery_identity_but_material_divergence_isolat
     assert divergent["status"] == "miss"
     assert stable["status"] == "hit"
     assert separate["status"] == "miss"
+
+
+@pytest.mark.parametrize('mutation', [
+    {'sources': None}, {'sources': []}, {'sources': [None]},
+    {'stable_conventions': None}, {'stable_conventions': []}, {'target': None},
+    {'discovery': {'inventory': None}}, {'observations': 'invalid'},
+])
+def test_corrupt_persisted_delivery_never_exposes_reusable_payload(tmp_path, mutation):
+    """U05/U10/I05: persisted records must satisfy the refresh contract too."""
+    module = load_kickoff_module('kickoff_delivery')
+    now = datetime.now(timezone.utc)
+    record = _record(module, tmp_path, observed_at=now)
+    record.update(mutation)
+    result = module.assess_delivery(record, project_root=tmp_path, now=now)
+    assert result['status'] == 'miss'
+    assert result['diagnostics']
+    assert not result['delivery_template'] and not result['current_observations']
+
+
+def test_explicit_invalid_delivery_expiry_is_not_an_absent_expiry(tmp_path):
+    """U05/U10: malformed explicit expiry rejects refresh and persisted reuse."""
+    module = load_kickoff_module('kickoff_delivery')
+    now = datetime.now(timezone.utc)
+    record = _record(module, tmp_path, observed_at=now)
+    record['observations'][0]['valid_until'] = 'not-a-date'
+    assert not module.refresh_delivery({}, evidence=record, project_root=tmp_path, now=now)['refreshed']
+    result = module.assess_delivery(record, project_root=tmp_path, now=now)
+    assert result['status'] == 'miss' and not result['current_observations']

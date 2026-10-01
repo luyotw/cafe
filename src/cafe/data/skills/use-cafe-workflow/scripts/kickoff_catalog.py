@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 from pathlib import Path
 from typing import Any
@@ -196,13 +197,17 @@ def discover_index(
             "reuse": {},
         }
     dependency_code: list[tuple[str, str]] = []
-    source_root = Path(__file__).resolve().parents[6]
+    dependencies_available = True
     for relative in _DEPENDENCY_FILES:
-        path = source_root / relative
         try:
+            module_name = relative.removeprefix("src/").removesuffix(".py").replace("/", ".")
+            module = importlib.import_module(module_name)
+            path = Path(module.__file__)
             dependency_code.append((relative, hashlib.sha256(path.read_bytes()).hexdigest()))
-        except OSError:
+        except (OSError, ImportError, TypeError):
+            dependencies_available = False
             dependency_code.append((relative, "missing"))
+            diagnostics.append({"status": "dependency_unavailable", "path": relative})
     for directory in default_capability_definition_dirs(project_root):
         try:
             for path in sorted(directory.glob("*")):
@@ -220,7 +225,7 @@ def discover_index(
                 [("entry", entry.digest), ("source", entry.source), *dependencies, *dependency_code]
             )
             cached = previous.get(candidate_id)
-            if isinstance(cached, dict) and cached.get("fingerprint") == fingerprint and isinstance(cached.get("candidate"), dict):
+            if dependencies_available and isinstance(cached, dict) and cached.get("fingerprint") == fingerprint and isinstance(cached.get("candidate"), dict):
                 candidate = cached["candidate"]
                 reuse[candidate_id] = True
             else:

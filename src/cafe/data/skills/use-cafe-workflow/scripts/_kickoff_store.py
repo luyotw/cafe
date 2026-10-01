@@ -38,6 +38,26 @@ def _lock(path: Path) -> Iterator[None]:
         os.close(descriptor)
 
 
+def atomic_write_text(path: Path, text: str) -> None:
+    """Publish a complete private file; failed writes leave the old bytes intact."""
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    descriptor, name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    temporary = Path(name)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        path.chmod(0o600)
+    except OSError as exc:
+        temporary.unlink(missing_ok=True)
+        raise StoreError(f"Could not persist kickoff store: {path}") from exc
+
+
 class VersionedJsonStore:
     """Persist a named collection with atomic replacement and record recovery."""
 
@@ -67,28 +87,10 @@ class VersionedJsonStore:
         }
 
     def _write_unlocked(self, records: dict[str, dict[str, Any]]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        descriptor, name = tempfile.mkstemp(
-            prefix=f".{self.path.name}.", suffix=".tmp", dir=self.path.parent
-        )
-        temporary = Path(name)
-        try:
-            os.fchmod(descriptor, 0o600)
-            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-                json.dump(
-                    {"schema_version": self.schema_version, self.collection: records},
-                    stream,
-                    sort_keys=True,
-                    indent=2,
-                )
-                stream.write("\n")
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, self.path)
-            self.path.chmod(0o600)
-        except OSError as exc:
-            temporary.unlink(missing_ok=True)
-            raise StoreError(f"Could not persist kickoff store: {self.path}") from exc
+        atomic_write_text(self.path, json.dumps(
+            {"schema_version": self.schema_version, self.collection: records},
+            sort_keys=True, indent=2,
+        ) + "\n")
 
     def write(self, records: dict[str, dict[str, Any]]) -> None:
         with _lock(self.path):
