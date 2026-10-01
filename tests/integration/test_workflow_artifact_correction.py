@@ -47,7 +47,7 @@ def _assert_correction_context_preserved(manager):
 @pytest.fixture
 def journey(tmp_path, monkeypatch):
     def build(submissions, *, mode="baton", completed_checklist=False, human=None,
-              reverse=False, unchecked=False, mutate=None, provider_mutation=None, capability=None, publication_mutation=False):
+              reverse=False, unchecked=False, mutate=None, provider_mutation=None, capability=None, publication_mutation=False, workspace=None, workspace_action=None, effect_action=None):
         repo = tmp_path / "repo"
         repo.mkdir()
         subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
@@ -97,6 +97,8 @@ def journey(tmp_path, monkeypatch):
                 content = Path(kwargs["output_file"]).read_text()
                 parse_todo_list(content)
                 effects.append("after")
+                if effect_action:
+                    effect_action("after", repo, len(effects))
                 if mutate and not publication_mutation:
                     mutate(Path(kwargs["output_file"]))
                 return HookResult()
@@ -113,6 +115,8 @@ def journey(tmp_path, monkeypatch):
             "hooks": {"prepare_input": ["Prepare"], "after_execute": ["After"]},
             "on": {"await_agent": "deliver_custom", "confirm_output": "inspect_custom",
                    "need_permission": "inspect_custom", "need_clarification": "inspect_custom"}}
+        if workspace:
+            producer["workspace_artifact"] = "custom_snapshot"
         if capability:
             producer["capability_requests"] = ["cafe.browser.open"]
             producer["hooks"]["publish_output"] = (
@@ -167,6 +171,8 @@ def journey(tmp_path, monkeypatch):
                     (issue / "next_step.txt").write_text(json.dumps({"version": 1, "intent": "await_agent"}))
                     return "await_agent", TokenUsage(), [], [], [], None
                 self.calls.append((name, prompt, continuation, kwargs))
+                if workspace_action:
+                    workspace_action(repo, iteration, len(self.calls))
                 assert not any(t.status.value == "pending" for t in HumanTaskRecordStore(issue).tasks())
                 assert not any(e.event_type == "step_completed" for e in BlackboardStore(issue).load_or_create("inspect_custom").events)
                 if len(self.calls) == 1 and completed_checklist:
@@ -195,6 +201,13 @@ def journey(tmp_path, monkeypatch):
                 (issue / "next_step.txt").write_text(json.dumps(baton))
                 return "" if mode == "baton" else intent, TokenUsage(), [], [], [], None
 
+        if workspace is not None:
+            (repo / ".gitignore").write_text(".cafe/\n")
+            (repo / "owned.txt").write_text("baseline\n")
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-m", "baseline"], cwd=repo, check=True, capture_output=True)
         manager = Provider()
         loader = SkillLoader(project_root=repo, global_root=tmp_path / "global")
         phase = GenericPhase(loader, hook_registry={"Prepare": Prepare, "After": After, "MutatePublication": MutatePublication},
@@ -210,7 +223,7 @@ def journey(tmp_path, monkeypatch):
                 path=str(decoy), version=1, updated_by="decoy", updated_at="2026-01-01T00:00:00+00:00")
         runtime.blackboard_store.save(runtime.blackboard)
         return SimpleNamespace(runtime=runtime, manager=manager, effects=effects, issue=issue,
-            iteration=iteration, executor=executor, playbook=playbook)
+            iteration=iteration, executor=executor, playbook=playbook, repo=repo)
     return build
 
 

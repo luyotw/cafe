@@ -20,6 +20,64 @@ class WorkspaceArtifactError(ValueError):
 
 
 @dataclass(frozen=True)
+class WorkspaceInspection:
+    """Read-only porcelain facts, including both sides of a rename."""
+
+    changes: tuple[dict[str, str], ...] = ()
+
+    @property
+    def clean(self) -> bool:
+        return not self.changes
+
+    def require_clean(self) -> None:
+        if self.changes:
+            raise DirtyWorkspaceError(self.changes)
+
+
+class DirtyWorkspaceError(WorkspaceArtifactError):
+    """Only this workspace rejection is eligible for completion correction."""
+
+    def __init__(self, changes: tuple[dict[str, str], ...]):
+        self.changes = changes
+        super().__init__(f"workspace worktree is dirty: {list(changes)}")
+
+    def correction_prompt(self, *, consumed: int, remaining: int) -> str:
+        return (
+            f"Workspace completion rejected: {self}.\n"
+            f"Correction opportunities consumed: {consumed}; remaining: {remaining}.\n"
+            "Verify the origin of every affected change and preserve pre-existing work. "
+            "Act only within the original task scope and authorization. "
+            "Dirty files do not grant authorization to stage, commit, stash, restore or delete. "
+            "If authorized disposition is unavailable, request clarification or permission "
+            "through the existing human handoff. Do not infer a human answer. "
+            "Keep the same phase, iteration, CLI, model, session, tools and permissions. "
+            "Revalidate current output, checklist and evidence, and resubmit the ordinary handoff."
+        )
+
+
+def inspect_workspace(repo: Path) -> WorkspaceInspection:
+    """Use Git's ignore rules while retaining tracked and non-ignored changes."""
+    root = _repo_root(Path(repo))
+    raw = _git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+    tokens = raw.split("\x00") if raw else []
+    changes: list[dict[str, str]] = []
+    index = 0
+    while index < len(tokens) and tokens[index]:
+        entry = tokens[index]
+        index += 1
+        if len(entry) < 4 or entry[2] != " ":
+            raise WorkspaceArtifactError("Git workspace status is malformed")
+        record = {"state": entry[:2], "path": entry[3:]}
+        if "R" in entry[:2] or "C" in entry[:2]:
+            if index >= len(tokens) or not tokens[index]:
+                raise WorkspaceArtifactError("Git workspace rename is incomplete")
+            record["old_path"] = tokens[index]
+            index += 1
+        changes.append(record)
+    return WorkspaceInspection(tuple(changes))
+
+
+@dataclass(frozen=True)
 class WorkspaceVerification:
     """Bounded result of checking a workspace identity against repository facts."""
 
@@ -37,7 +95,7 @@ def _git(repo: Path, *args: str) -> str:
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or "unknown Git error"
         raise WorkspaceArtifactError(f"git {' '.join(args)} failed: {detail}")
-    return result.stdout.strip()
+    return result.stdout.rstrip("\r\n")
 
 
 def _repo_root(repo: Path) -> Path:
@@ -225,8 +283,7 @@ def build_workspace_artifact(
         raise WorkspaceArtifactError("workspace version must be a positive integer")
     if _git(root, "rev-parse", "HEAD") != resolved_head:
         raise WorkspaceArtifactError("workspace head changed before snapshot creation")
-    if _git(root, "status", "--porcelain", "--untracked-files=all"):
-        raise WorkspaceArtifactError("workspace worktree is dirty")
+    inspect_workspace(root).require_clean()
     return WorkspaceArtifact(
         name=name,
         version=version,
@@ -266,7 +323,7 @@ def verify_workspace_artifact(
         actual_head = _git(root, "rev-parse", "HEAD")
         if actual_head != head:
             reasons.append("workspace head is stale")
-        if _git(root, "status", "--porcelain", "--untracked-files=all"):
+        if not inspect_workspace(root).clean:
             reasons.append("workspace worktree is dirty")
         if tuple(current.changed_files) != _changed_files(root, base, head):
             reasons.append("workspace changed-file set does not match Git comparison")
