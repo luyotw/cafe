@@ -69,3 +69,42 @@ def test_i7_undeclared_step_keeps_dirty_workspace_behavior(journey):
     assert len(j.manager.calls) == 1 and j.manager.deliveries == 1
     assert j.effects == ["prepare", "after"]
     assert "custom_snapshot" not in j.runtime.blackboard.artifacts
+
+
+@pytest.mark.xfail(reason="Completion callback implemented by PLAN-006", strict=True)
+def test_i2_three_opportunities_exhaust_without_publication(journey):
+    def dirty(repo, iteration, call):
+        (repo / "owned.txt").write_text("dirty")
+        if call > 1:
+            metadata = json.loads((iteration / "iteration.json").read_text())
+            assert metadata["workspace_completion"]["consumed"] == call - 1
+    j = journey([CORRECTED], workspace=True, workspace_action=dirty)
+    result = j.runtime.run(start_step="inspect_custom")
+    assert len(j.manager.calls) == 4 and not result.completed
+    assert j.effects == ["prepare"] and j.manager.deliveries == 0
+    assert "custom_snapshot" not in j.runtime.blackboard.artifacts
+    assert json.loads((j.iteration / "iteration.json").read_text())["workspace_completion"]["consumed"] == 3
+    assert len(HumanTaskRecordStore(j.issue).tasks()) == 1
+
+
+@pytest.mark.xfail(reason="Completion callback implemented by PLAN-006", strict=True)
+@pytest.mark.parametrize("failure", ["missing", "drift", "provider", "metadata"])
+def test_i3_exact_session_failure_never_substitutes_provider(journey, failure):
+    def mutation(iteration, call):
+        if call == 1 and failure == "missing":
+            j.manager.get_last_session_id = lambda: None
+        if call == 2 and failure == "drift":
+            j.manager.get_last_session_id = lambda: "replacement-session"
+        if call == 2 and failure == "metadata":
+            path = iteration / "iteration.json"
+            data = json.loads(path.read_text())
+            data["allowed_tools"] = ["expanded"]
+            path.write_text(json.dumps(data))
+    from cafe.agents.executor import AgentExecutionError
+    submissions = [CORRECTED, AgentExecutionError("provider unavailable", error_type="rate_limit")] if failure == "provider" else [CORRECTED]
+    j = journey(submissions, workspace=True, workspace_action=lambda repo, iteration, call: (repo / "owned.txt").write_text("dirty"), provider_mutation=mutation)
+    j.runtime.run(start_step="inspect_custom")
+    assert len(j.manager.calls) == (1 if failure == "missing" else 2)
+    assert j.manager.deliveries == 0 and j.effects == ["prepare"]
+    assert "custom_snapshot" not in j.runtime.blackboard.artifacts
+    assert len(HumanTaskRecordStore(j.issue).tasks()) == 1

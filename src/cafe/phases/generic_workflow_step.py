@@ -1254,6 +1254,111 @@ class GenericWorkflowStepExecutor(Phase):
         context_file.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
         return True
 
+    def _load_workspace_completion(self, iteration_dir: Path) -> dict[str, Any]:
+        """Missing legacy diagnostics mean zero; malformed authority never does."""
+        path = self._resolve_iteration_context_file(iteration_dir)
+        metadata = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        if not isinstance(metadata, dict):
+            raise ValueError("Invalid iteration metadata for workspace completion")
+        if "workspace_completion" not in metadata:
+            return {"consumed": 0, "rejections": [], "context": None}
+        value = metadata["workspace_completion"]
+        if (not isinstance(value, dict) or type(value.get("consumed")) is not int
+                or not 0 <= value["consumed"] <= 3
+                or not isinstance(value.get("rejections"), list)
+                or len(value["rejections"]) > 8
+                or any(not isinstance(item, str) for item in value["rejections"])
+                or not isinstance(value.get("context"), (dict, type(None)))):
+            raise ValueError("Invalid durable workspace completion diagnostics")
+        if value["consumed"] and not value["rejections"]:
+            raise ValueError("Workspace correction count has no diagnostic authority")
+        return value
+
+    def _save_workspace_completion(self, iteration_dir: Path, budget: dict[str, Any]) -> None:
+        path = self._resolve_iteration_context_file(iteration_dir)
+        metadata = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        metadata["workspace_completion"] = budget
+        self._persist_plan_artifact_record(path, metadata)
+
+    def _reserve_workspace_correction(
+        self, iteration_dir: Path, budget: dict[str, Any], reason: str,
+    ) -> None:
+        budget["rejections"] = [*budget["rejections"], reason][-8:]
+        if budget["consumed"] >= 3:
+            self._save_workspace_completion(iteration_dir, budget)
+            raise RuntimeError(f"Workspace correction exhausted after 3 opportunities: {reason}")
+        budget["consumed"] += 1
+        self._save_workspace_completion(iteration_dir, budget)
+
+    def _dispatch_workspace_correction(
+        self, *, iteration_dir: Path, budget: dict[str, Any], reason: str,
+        agent_name: str, step_name: str, step_def: dict[str, Any],
+        blackboard_state: BlackboardState,
+    ) -> str:
+        """Reserve before exact dispatch, retaining host-owned authority on every exit."""
+        path = self._resolve_iteration_context_file(iteration_dir)
+        metadata = json.loads(path.read_text(encoding="utf-8"))
+        keys = (
+            "effective_checklist", "iteration", "step_name", "skill_name", "playbook_id",
+            "cli", "session_id", "model", "allowed_tools", "denied_tools",
+            "session_continuation", "cli_environment", "execution_chain",
+        )
+        observed = {key: metadata.get(key) for key in keys}
+        directories = self._get_allowed_directories()
+        pinned = budget.get("context")
+        if pinned is None:
+            pinned = {"metadata": observed, "directories": directories, "agent": agent_name}
+            budget["context"] = pinned
+            self._save_workspace_completion(iteration_dir, budget)
+        if (pinned.get("metadata") != observed or pinned.get("directories") != directories
+                or pinned.get("agent") != agent_name):
+            raise RuntimeError(f"Workspace correction changed the pinned execution context: {reason}")
+        continuation = exact_continuation_from_context(observed)
+        if continuation is None or not self._call_accepts_keyword(self.agent_manager.execute, "continuation"):
+            budget["rejections"] = [*budget["rejections"], reason][-8:]
+            self._save_workspace_completion(iteration_dir, budget)
+            raise RuntimeError(f"Workspace correction requires the exact producing session; consumed {budget['consumed']}: {reason}")
+        self._reserve_workspace_correction(iteration_dir, budget, reason)
+        prompt = (
+            f"Workspace completion rejected: {reason}\n"
+            f"Correction opportunities consumed: {budget['consumed']}; remaining: {3 - budget['consumed']}.\n"
+            "Verify the origin of affected changes and preserve pre-existing work. "
+            "Act only within the original scope and authorization. Dirty files grant no "
+            "authorization to stage, commit, stash, restore or delete. If disposition needs "
+            "a human decision, use the existing clarification or permission handoff. "
+            "Keep the same phase, iteration, CLI, model, session, tools and permissions. "
+            "Revalidate current report, checklist and projected evidence; resubmit the ordinary handoff."
+        )
+        try:
+            self._refresh_and_validate_workspace_inputs(step_def=step_def, blackboard_state=blackboard_state)
+            response, usage, _, _, streaming_log, model = self.agent_manager.execute(
+                agent_name, prompt, continuation=continuation, phase_name=step_name,
+                allowed_tools=observed["allowed_tools"], denied_tools=observed["denied_tools"],
+                allowed_directories=directories,
+                streaming_output_file=str(iteration_dir / "streaming.jsonl"),
+            )
+            self._merge_iteration_token_usage(usage)
+            current = json.loads(path.read_text(encoding="utf-8"))
+            if any(current.get(key) != value for key, value in observed.items()):
+                raise RuntimeError("Workspace correction changed pinned metadata")
+            actual_cli = getattr(self.agent_manager, "get_last_cli", lambda: None)()
+            actual_session = getattr(self.agent_manager, "get_last_session_id", lambda: None)()
+            actual_model = model or getattr(self.agent_manager.get_agent(agent_name).config, "model", None)
+            if (actual_cli != continuation.cli or actual_session != continuation.session_id
+                    or actual_model != observed["model"]):
+                raise RuntimeError("Workspace correction did not preserve CLI/model/producing session")
+            self._refresh_and_validate_workspace_inputs(step_def=step_def, blackboard_state=blackboard_state)
+            current["response"] = response
+            current.setdefault("streaming_log", []).extend(streaming_log or [])
+            self._persist_plan_artifact_record(path, current)
+            return response
+        except Exception as error:
+            budget["rejections"] = [*budget["rejections"], f"{reason}; {error}"][-8:]
+            raise
+        finally:
+            # A provider cannot replenish the count, including on interruption.
+            self._save_workspace_completion(iteration_dir, budget)
+
     def _load_artifact_correction(self, iteration_dir: Path) -> ArtifactCorrectionBudget:
         context_file = self._resolve_iteration_context_file(iteration_dir)
         metadata = json.loads(context_file.read_text(encoding="utf-8")) if context_file.exists() else {}
