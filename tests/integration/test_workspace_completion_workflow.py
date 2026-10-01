@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -673,3 +674,59 @@ def test_u4_i4_stopped_hook_human_status_never_publishes_completion(journey, sta
     assert "evidence_bundle" not in j.runtime.blackboard.artifacts
     assert not (j.iteration / "artifact.json").exists()
     assert j.effects.count("permission") == 1 and len(j.manager.calls) == 1
+
+
+@pytest.mark.parametrize("changed", ["human", "output"])
+def test_i6_last_use_guard_refuses_changed_decision_before_effect(journey, monkeypatch, changed):
+    from cafe.phases.generic_phase import HookResult
+    from tests.integration.test_workflow_artifact_correction import REJECTED
+
+    invocations = []
+
+    class Consumer:
+        def run(self, **kwargs):
+            # The external consumer deliberately trusts the producer's gate.
+            invocations.append(Path(kwargs["output_file"]).read_text())
+            return HookResult()
+
+    j = journey([CORRECTED], workspace=True, human="need_permission")
+    j.executor.generic_phase.hook_registry["Consumer"] = Consumer
+    step = j.playbook["steps"]["inspect_custom"]
+    step["hooks"]["after_execute"] = ["Consumer"]
+    save = j.executor._save_workspace_publication
+    replaced = False
+
+    def replace_after_started(iteration_dir, progress):
+        nonlocal replaced
+        save(iteration_dir, progress)
+        if not replaced:
+            replaced = True
+            if changed == "human":
+                (j.issue / "next_step.txt").write_text(
+                    json.dumps(
+                        {
+                            "version": 1,
+                            "to_owner": "user",
+                            "to_step": "user",
+                            "intent": "need_permission",
+                        }
+                    )
+                )
+            else:
+                (j.iteration / "output.md").write_text(REJECTED)
+
+    monkeypatch.setattr(j.executor, "_save_workspace_publication", replace_after_started)
+    j.runtime.run(start_step="inspect_custom")
+    assert invocations == []
+    assert j.effects == ["prepare"] and j.manager.deliveries == 0
+    assert "custom_snapshot" not in j.runtime.blackboard.artifacts
+    assert "evidence_bundle" not in j.runtime.blackboard.artifacts
+    assert j.runtime.blackboard.handoff_contract.to_owner.value == "user"
+    if changed == "human":
+        assert j.runtime.blackboard.handoff_contract.intent.value == "need_permission"
+    monkeypatch.setattr(j.executor, "_get_next_iteration_number", lambda *args: 1)
+    (j.issue / "next_step.txt").write_text(json.dumps({"version": 1, "intent": "await_agent"}))
+    (j.iteration / "output.md").write_text(CORRECTED)
+    with pytest.raises(RuntimeError):
+        j.executor.execute_step("inspect_custom", step, j.runtime.blackboard)
+    assert invocations == [] and len(j.manager.calls) == 1

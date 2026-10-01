@@ -441,7 +441,7 @@ class GenericPhase:
         hook_context: Optional[Dict[str, Any]] = None,
         prepare_agent_context: Optional[Callable[[Dict[str, str]], Dict[str, str]]] = None,
         execution_guard: Optional[Callable[[], None]] = None,
-        validate_output: Optional[Callable[[], None]] = None,
+        validate_output: Optional[Callable[[], bool | None]] = None,
         completion_validator: Optional[CompletionValidator] = None,
         execution_lease: Optional[Callable[[], Any]] = None,
         max_retries: int = 3,
@@ -499,7 +499,7 @@ class GenericPhase:
         hook_context: Optional[Dict[str, Any]] = None,
         prepare_agent_context: Optional[Callable[[Dict[str, str]], Dict[str, str]]] = None,
         execution_guard: Optional[Callable[[], None]] = None,
-        validate_output: Optional[Callable[[], None]] = None,
+        validate_output: Optional[Callable[[], bool | None]] = None,
         completion_validator: Optional[CompletionValidator] = None,
         max_retries: int = 3,
     ) -> GenericPhaseExecution:
@@ -734,8 +734,10 @@ class GenericPhase:
                 before_use_guard()
             if stage == "publish_output" or (stage == "after_execute" and kwargs.get("_completion_guarded")):
                 publication_guard = kwargs.get("_publication_guard")
-                if callable(publication_guard):
-                    publication_guard()
+                if callable(publication_guard) and publication_guard() is False:
+                    aggregate.continue_pipeline = False
+                    aggregate.artifact_ready = False
+                    break
             def invoke_hook() -> HookResult:
                 if hook_entry is self._CONFIRMED_ARTIFACT_SYNC_HOOK:
                     result = self._run_confirmed_artifact_sync_hook(

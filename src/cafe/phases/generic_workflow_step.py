@@ -1147,14 +1147,17 @@ class GenericWorkflowStepExecutor(Phase):
                 index=index,
                 identity=identity,
                 invoke=invoke,
+                guard=lambda: validate_publication(allow_human=True),
             )
 
-        def validate_publication() -> None:
+        def validate_publication(*, allow_human=False) -> bool | None:
             if workspace_eligible:
                 _, _, ready = validate_completion_now(
                     completion_state["response"], completion_state["status"], repair=False
                 )
                 if not ready:
+                    if allow_human:
+                        return False
                     raise RuntimeError("Human handoff cannot publish a completed workspace")
                 progress = self._load_workspace_publication(iteration_dir)
                 if progress is not None and progress["delivery"] != delivery_identity():
@@ -1173,7 +1176,7 @@ class GenericWorkflowStepExecutor(Phase):
             skill_name=skill_name,
             step_def=step_def,
             agent_executor=run_agent,
-            validate_output=validate_publication,
+            validate_output=lambda: validate_publication(allow_human=True),
             **({"completion_validator": validate_completion_now} if workspace_eligible else {}),
             skill_invocation=skill_invocation,
             shared_skill_invocations=shared_skill_invocations,
@@ -1645,7 +1648,7 @@ class GenericWorkflowStepExecutor(Phase):
         ).hexdigest()
 
     def _run_workspace_publication_hook(
-        self, *, iteration_dir, delivery, response, stage, index, identity, invoke
+        self, *, iteration_dir, delivery, response, stage, index, identity, invoke, guard=None
     ):
         progress = self._load_workspace_publication(iteration_dir)
         if progress is None:
@@ -1667,6 +1670,10 @@ class GenericWorkflowStepExecutor(Phase):
             return HookResult(**result)
         progress["hooks"][key] = {"state": "started"}
         self._save_workspace_publication(iteration_dir, progress)
+        # The durable intent write is an I/O boundary. Revalidate after it,
+        # immediately before consumption; never dispatch on a replaced decision.
+        if guard is not None and guard() is False:
+            return HookResult(continue_pipeline=False, artifact_ready=False)
         result = invoke()
         serialized = asdict(result)
         # Bound diagnostic amplification; an unrecordable result remains ambiguous.
