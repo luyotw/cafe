@@ -211,7 +211,7 @@ def _request_command(args: argparse.Namespace) -> int:
                 "owner": "references/kickoff.md#complete-runtime-and-catalog-preflight",
             })
         if args.command in {"draft", "assemble"}:
-            draft_request = kickoff_inputs.preparation_template(request, assembled.get("formatter_draft") or {})
+            draft_request = kickoff_inputs.preparation_template(request, assembled.get("formatter_draft") or {}, assembled.get("generated_inputs"))
             if args.draft_output is not None:
                 if args.command != "draft" and args.draft_output.resolve() == args.request_file.resolve():
                     raise ValueError("draft output must differ from the input request")
@@ -233,6 +233,7 @@ def _request_command(args: argparse.Namespace) -> int:
                     "missing_decisions": assembled.get("missing_decisions", []),
                     "assembly_diagnostics": assembled.get("diagnostics", []),
                     "prefilled": assembled.get("prefilled", {}),
+                    "preferences": assembled.get("preferences", {}),
                     "formatter_inputs": assembled.get("formatter_inputs"),
                     "formatter_draft": assembled.get("formatter_draft") if assembled.get("status") != "ready" else None,
                 })

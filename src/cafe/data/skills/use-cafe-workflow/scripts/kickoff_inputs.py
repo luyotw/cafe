@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -147,6 +148,7 @@ def request_schema() -> dict[str, Any]:
         },
         "issue_id": "An explicit positive numeric issue ID supplies issue<id> when issue_name is absent. It is never inferred from an issue-like name.",
         "manager_cli": "Current calling Manager CLI; context, not a model choice. Codex sessions are also recognized by CODEX_THREAD_ID.",
+        "generated_inputs": "Helper-owned provenance map retained in editable requests: field -> origin, dependency and value_fingerprint. Unchanged source-backed values are revalidated at render. Preserve this map when filling gaps; deliberate current_explicit_inputs or an edited field supersede its generated value. It grants no authority.",
         "decision_examples": {
             "phase_chain": ["develop=codex:<exact-model>"],
             "capability_choice": ["pr.auto_create=true"],
@@ -535,12 +537,15 @@ def discover_kickoff(
         "delivery": delivery, "models": models, "diagnostics": list(catalog.get("diagnostics", [])),
     }
 
-def preparation_template(request: dict[str, Any], draft: dict[str, Any]) -> dict[str, Any]:
+def preparation_template(request: dict[str, Any], draft: dict[str, Any],
+                         generated: dict[str, Any] | None = None) -> dict[str, Any]:
     """Return an editable request; placeholders never become resolved assembly inputs."""
     template = request_schema()["input_template"]
     template.update(draft)
     result = json.loads(json.dumps(request))
     result["formatter_inputs"] = template
+    if generated:
+        result["generated_inputs"] = {**result.get("generated_inputs", {}), **generated}
     # Explicit values already have an editable home. Do not duplicate a typo
     # (or a valid override) and force the caller to correct two copies.
     for field in result.get("current_explicit_inputs", {}):
@@ -582,6 +587,133 @@ def _preflight_file_report(reference: str, kind: str, metadata: Any = None) -> d
     return {**report, **metadata}
 
 
+def _input_fingerprint(value: Any) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _delivery_dependency(discovery: dict[str, Any] | None, values: dict[str, Any], request: dict[str, Any]) -> str | None:
+    delivery = (discovery or {}).get("delivery", {})
+    if delivery.get("status") != "hit":
+        return None
+    return _input_fingerprint({
+        "sources": delivery.get("sources"), "template": delivery.get("delivery_template"),
+        "observations": delivery.get("current_observations"),
+        "repository": delivery.get("manifest", {}).get("repository"),
+        "context": {key: values.get(key) for key in ("project_root", "issue_name", "worktree", "current_checkout")},
+        "issue_id": request.get("issue_id"),
+    })
+
+
+def _prefill_checkout(values: dict[str, Any], *, project_root: Path, sources: dict[str, str]) -> None:
+    from cafe.utils.git_utils import get_repo_root
+
+    if "worktree" not in values and "current_checkout" not in values:
+        name = values.get("issue_name")
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name):
+            raise ValueError("a safe issue_name is required for the default worktree")
+        try:
+            root = get_repo_root(project_root)
+        except ValueError:
+            values["current_checkout"] = True
+            sources["current_checkout"] = "first task in a non-Git folder"
+        else:
+            values["worktree"] = str(root / ".cafe" / "worktrees" / name)
+            sources["worktree"] = "issue worktree convention"
+
+
+def _prefill_saved_inputs(values: dict[str, Any], *, store: Any, request: dict[str, Any],
+                         report: dict[str, Any], missing: list[dict[str, str]], sources: dict[str, str]) -> None:
+    """Apply scoped proposal conventions using the existing formatter owners."""
+    root = Path(request.get("project_root", Path.cwd())).resolve()
+    owner = _load_local_module("format_kickoff_contract")
+    model = owner.PlaybookLoader(project_root=root).load_model(values["playbook_id"]).model if values.get("playbook_id") else None
+    phases = {name: step for name, step in model.steps.items() if step.assignee_type in {"agent", "hybrid"}} if model else {}
+
+    def apply(key, needed, callback):
+        if not needed:
+            return
+        resolved = store.effective(key)
+        report[key] = {"value": resolved.value, "scope": resolved.scope, "origin": resolved.origin}
+        if resolved.value is None:
+            return
+        try:
+            updates = callback(resolved.value)
+            values.update(updates)
+            sources.update({field: "explicit reusable preference: " + key for field in updates})
+        except (ValueError, TypeError, KeyError) as exc:
+            report[key]["diagnostic"] = str(exc)
+            missing.append({"owner": "manager_decision", "requirement": f"resolve preference {key}: {exc}"})
+
+    delivery = _load_local_module("kickoff_delivery")
+    def context():
+        return {"issue_name": values["issue_name"], "issue_id": request.get("issue_id", ""),
+                "project_root": str(root), "worktree": values.get("worktree") or (str(root) if values.get("current_checkout") is True else "")}
+
+    def checkout(value):
+        if value == {"current_checkout": True}:
+            return value
+        rendered = delivery.render_delivery_template({"deliver": [["path", value]], "deliver_description": ["Checkout"]}, context())
+        return {"worktree": rendered["deliver"][0][1]}
+    apply("worktree.convention", "worktree" not in values and "current_checkout" not in values, checkout)
+
+    def chains(value):
+        if model is None:
+            raise ValueError("select a graph before applying step/role chains")
+        if not isinstance(value, dict) or not value or set(value) - {"steps", "roles"}:
+            raise ValueError("expected steps/roles mappings of ordered CLI:MODEL chains")
+        steps, roles = value.get("steps", {}), value.get("roles", {})
+        if not isinstance(steps, dict) or not isinstance(roles, dict) or set(steps) - set(phases) or set(roles) - {s.role for s in phases.values()}:
+            raise ValueError("saved selectors do not match the selected graph")
+        current = values.get("phase_chain", [])
+        if not _is_string_list(current):
+            raise ValueError("current phase_chain must remain explicitly correctable")
+        overrides = owner._parse_phase_chains(current, step_names=set(model.steps))
+        result = list(current)
+        for name, step in phases.items():
+            candidate = steps.get(name, roles.get(step.role))
+            if name in overrides or candidate is None:
+                continue
+            if not _is_string_list(candidate) or not candidate:
+                raise ValueError("saved chain must be a nonempty string array")
+            entry = name + "=" + ",".join(candidate)
+            owner._parse_phase_chains([entry], step_names=set(model.steps))
+            result.append(entry)
+        return {"phase_chain": result}
+    explicit_chain = values.get("phase_chain")
+    covered = {item.split("=", 1)[0] for item in explicit_chain} if _is_string_list(explicit_chain) else set()
+    apply("phase.chains", not phases or not set(phases) <= covered, chains)
+
+    def assignments(value):
+        if model is None or not isinstance(value, dict) or set(value) != {"user_required", "manager_confirmable"}:
+            raise ValueError("expected user_required and manager_confirmable arrays for assignable gates only")
+        if not all(_is_string_list(v) for v in value.values()):
+            raise ValueError("confirmation assignments must be string arrays")
+        user, manager = owner._resolve_partition(candidates=owner.confirmation_gate_steps(model),
+            user_values=value["user_required"], manager_values=value["manager_confirmable"])
+        return {"user_required": user, "manager_confirmable": manager}
+    apply("confirmation.assignments", "user_required" not in values and "manager_confirmable" not in values, assignments)
+
+    def reviews(value):
+        if model is None or not isinstance(value, dict):
+            raise ValueError("select a graph and supply phase-to-decision mappings")
+        rows = owner._proactive_review_decisions([f"{k}={v}" for k, v in value.items()], agent_phases=list(phases),
+            eligible_phases=set(owner.confirmation_gate_steps(model)) | set(owner.mandatory_confirmation_gate_steps(model)))
+        return {"proactive_review_decision": [f"{r['phase']}={r['decision']}" for r in rows]}
+    apply("review.decisions", "proactive_review_decision" not in values, reviews)
+
+    _prefill_checkout(values, project_root=root, sources=sources)
+
+    def convention(stage, value):
+        if not isinstance(value, dict) or set(value) != {stage, stage + "_description"}:
+            raise ValueError("expected only action template and matching descriptions")
+        rendered = delivery.render_delivery_template({"deliver": value[stage], "deliver_description": value[stage + "_description"]}, context())
+        updates = {stage: rendered["deliver"], stage + "_description": rendered["deliver_description"]}
+        return {key: value for key, value in updates.items() if key not in values}
+    for stage in ("deliver", "cleanup"):
+        apply(stage.replace("deliver", "delivery") + ".convention", stage not in values,
+              lambda value, stage=stage: convention(stage, value))
+
+
 def _prefill_configured_inputs(values: dict[str, Any], *, project_root: Path, sources: dict[str, str],
                               request: dict[str, Any], discovery: dict[str, Any] | None) -> None:
     """Materialize defaults and reusable routes in a proposal without execution."""
@@ -599,18 +731,9 @@ def _prefill_configured_inputs(values: dict[str, Any], *, project_root: Path, so
         return (key in {"deliver", "cleanup"} and values.get(key) is None
                 and key not in request.get("current_explicit_inputs", {}))
 
-    from cafe.utils.git_utils import get_repo_root, get_github_repo_name
+    from cafe.utils.git_utils import get_github_repo_name
 
-    if "worktree" not in values and "current_checkout" not in values:
-        name = values.get("issue_name")
-        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name):
-            raise ValueError("a safe issue_name is required for the default worktree")
-        try:
-            root = get_repo_root(project_root)
-        except ValueError:
-            fill("current_checkout", True, "first task in a non-Git folder")
-        else:
-            fill("worktree", str(root / ".cafe" / "worktrees" / name), "issue worktree convention")
+    _prefill_checkout(values, project_root=project_root, sources=sources)
     if values.get("manager_mode") == "event-driven" and "event_manager" not in values:
         cli = request.get("manager_cli") or ("codex" if os.environ.get("CODEX_THREAD_ID") else None)
         if cli:
@@ -740,6 +863,12 @@ def assemble_kickoff(
                     "missing_decisions": missing, "formatter_inputs": None}
     preference_report: dict[str, Any] = {}
     prefilled: dict[str, str] = {}
+    root = Path(request.get("project_root", Path.cwd())).resolve()
+    existing_locale = (root / ".cafe" / "issues" / str(request.get("issue_name")) / "blackboard.json").exists()
+    if existing_locale:
+        snapshot = _load_local_module("format_kickoff_contract").contract_locale_snapshot(
+            root / ".cafe" / "issues" / request["issue_name"], playbook_id=selected)
+        raw_inputs.update(effective_locale=snapshot["value"], locale_source=snapshot["source"])
     if preference_store is not None and isinstance(raw_inputs, dict):
         preference_mapping = {
             "manager.mode": "manager_mode",
@@ -748,9 +877,10 @@ def assemble_kickoff(
         explicit = request.get("current_explicit_inputs", {})
         explicit = explicit if isinstance(explicit, dict) else {}
         for preference_key, input_key in preference_mapping.items():
-            if input_key in raw_inputs:
+            inferred_locale = input_key == "effective_locale" and raw_inputs.get("locale_source") == "inferred"
+            if input_key in raw_inputs and not inferred_locale or input_key == "effective_locale" and existing_locale:
                 continue
-            resolved = preference_store.effective(preference_key, explicit=explicit.get(input_key))
+            resolved = preference_store.effective(preference_key, explicit=None if inferred_locale else explicit.get(input_key))
             preference_report[preference_key] = {
                 "value": resolved.value,
                 "scope": resolved.scope,
@@ -759,7 +889,7 @@ def assemble_kickoff(
             if resolved.value is not None:
                 raw_inputs[input_key] = resolved.value
                 if input_key == "effective_locale":
-                    raw_inputs.setdefault("locale_source", resolved.origin)
+                    raw_inputs["locale_source"] = resolved.origin
     if "manager_mode" not in raw_inputs:
         raw_inputs["manager_mode"] = "event-driven"
         prefilled["manager_mode"] = "default Manager mode"
@@ -775,10 +905,30 @@ def assemble_kickoff(
             if resolved.value is not None:
                 raw_inputs[dependent[1]] = resolved.value
     try:
+        if preference_store is not None:
+            _prefill_saved_inputs(raw_inputs, store=preference_store, request=request,
+                                  report=preference_report, missing=missing, sources=prefilled)
         _prefill_configured_inputs(raw_inputs, project_root=Path(request.get("project_root", Path.cwd())).resolve(),
                                   sources=prefilled, request=request, discovery=discovery)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         missing.append({"owner": "manager_research", "requirement": f"resolve configured inputs: {exc}"})
+    generated = {}
+    bindings = request.get("generated_inputs", {})
+    if not isinstance(bindings, dict):
+        missing.append({"owner": "manager_research", "requirement": "invalid generated input provenance"})
+        bindings = {}
+    dependency = _delivery_dependency(discovery, raw_inputs, request)
+    for field in ("deliver", "deliver_description"):
+        binding = bindings.get(field)
+        if binding is not None and field not in explicit:
+            if not isinstance(binding, dict):
+                missing.append({"owner": "manager_research", "requirement": f"invalid provenance for {field}"})
+            elif binding.get("value_fingerprint") == _input_fingerprint(raw_inputs.get(field)):
+                if dependency is None or binding.get("dependency") != dependency:
+                    missing.append({"owner": "manager_decision", "requirement": f"reassess source-backed {field}; evidence or target changed"})
+        if prefilled.get(field) == "validated repository delivery template":
+            generated[field] = {"origin": "delivery_evidence", "dependency": dependency,
+                                "value_fingerprint": _input_fingerprint(raw_inputs[field])}
     preflight_files = request.get("preflight_files", {})
     if isinstance(preflight_files, dict) and isinstance(raw_inputs, dict):
         for file_key, input_key in (("update", "update_preflight"), ("catalog", "catalog_preflight")):
@@ -824,6 +974,7 @@ def assemble_kickoff(
         "selected_candidate": None if discovery is None else discovery.get("selected_candidate"),
         "preferences": preference_report,
         "prefilled": prefilled,
+        "generated_inputs": generated,
         "diagnostics": [] if normalized is None else normalized.get("diagnostics", []),
         "missing_decisions": missing,
         "formatter_inputs": normalized["values"] if complete else None,

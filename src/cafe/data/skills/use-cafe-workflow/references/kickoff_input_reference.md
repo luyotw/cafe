@@ -213,3 +213,44 @@ inventory, remain inside that repository after path resolution, and match the
 supplied fingerprint. Refresh and assessment track those explicit dependencies;
 editing one invalidates the record while editing an unrelated implementation file
 does not. This adds no action permission or issue-specific decision to stable facts.
+
+## Supported proposal preferences
+
+The normal `draft`/`assemble` consumer applies these reusable keys. Missing keys
+fall through to existing policy/configuration defaults; malformed or graph-
+incompatible values produce a missing decision with a diagnostic. Current
+values (including empty lists and `false`) take precedence. Repository values
+precede user values; clearing a repository key exposes the user value.
+
+| Key | Supported value |
+| --- | --- |
+| `conversation.locale` | Locale string. Saved explicit language precedes a current `inferred` locale; a current explicit locale wins. Existing workflow locale snapshots remain authoritative. |
+| `manager.mode` | Existing formatter mode: `event-driven`, `attached`, or `unattended`. |
+| `manager.event_manager` | Ordered CLI string array, applicable to `event-driven`. |
+| `manager.poll_interval_seconds` | Positive integer, applicable to `attached`. |
+| `worktree.convention` | Path template using the existing delivery-template placeholders, or `{"current_checkout":true}`. No worktree is created. |
+| `phase.chains` | `{"steps":{"develop":["codex:MODEL"]},"roles":{"developer":["codex:MODEL","claude:FALLBACK"]}}`. Selectors must match the selected graph; a step entry precedes its role entry. Current phase entries precede both. Ordered fallback candidates remain subject to current suitability and availability decisions. |
+| `confirmation.assignments` | `{"user_required":["STEP"],"manager_confirmable":["STEP"]}` using the existing assignable-gate partition. Mandatory task gates cannot be overridden here. |
+| `review.decisions` | Step-to-decision mapping using existing formatter choices (`required`, `not_required`), subject to the selected graph's review eligibility. |
+| `delivery.convention` | `{"deliver":[["git","-C","{worktree}","commit","-m","{issue_name}"]],"deliver_description":["Commit {issue_name}."]}`. |
+| `cleanup.convention` | Same action-template shape with `cleanup` and `cleanup_description`; explicit empty arrays propose no cleanup. |
+
+Action templates use the existing literal-argv renderer and its allowed
+placeholders. They use the resolved checkout and issue context, execute nothing,
+and confer no authority. These preferences supply proposal inputs; Manager still
+judges strategy, suitability, exact targets, source freshness and action permission.
+A saved value never confirms or activates a contract.
+
+Generated delivery values carry `generated_inputs` provenance in the editable
+request. Preserve that metadata when editing gaps. Unchanged generated values
+must still have valid matching evidence and target context at render time. If
+these change, reassess the action and supply the deliberate current value in
+`current_explicit_inputs` (remove any conflicting draft value), or deliberately
+edit the affected draft field. Legacy requests without generated metadata retain
+their explicit-input semantics. This metadata is freshness evidence, not authority.
+
+Report capture publishes the raw report and request atomically per file. When
+replacing a report already referenced by the draft, it uses a content-addressed
+sibling so a failed request publication preserves the previous request and its
+report. An interruption can leave an unreferenced report; retry safely retains
+the decisions and publishes the new reference.
