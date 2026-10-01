@@ -635,6 +635,11 @@ class GenericPhase:
             guard_stable_boundary()
             if after.override_status_code is not None:
                 status_code = after.override_status_code
+            if completion_validator is not None:
+                response, status_code, ready = completion_validator(response, status_code, repair=False)
+                artifact_ready = artifact_ready and ready
+                if after.retry_requested:
+                    raise RuntimeError("Cannot replay result-consuming hooks for completion correction")
             if not after.continue_pipeline:
                 return GenericPhaseExecution(
                     response=response,
@@ -647,11 +652,6 @@ class GenericPhase:
                     agent_invoked=agent_invoked,
                 )
 
-            if completion_validator is not None:
-                response, status_code, ready = completion_validator(response, status_code, repair=False)
-                artifact_ready = artifact_ready and ready
-                if after.retry_requested:
-                    raise RuntimeError("Cannot replay result-consuming hooks for completion correction")
             if not after.retry_requested:
                 break
             attempt += 1
@@ -676,6 +676,8 @@ class GenericPhase:
             runtime_context.update(publish.context_updates)
             events.extend(publish.events)
             published = publish.continue_pipeline
+            if completion_validator is not None:
+                artifact_ready = artifact_ready and publish.artifact_ready
             guard_stable_boundary()
             if publish.override_status_code is not None:
                 status_code = publish.override_status_code

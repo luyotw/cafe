@@ -638,3 +638,38 @@ def test_i8_aggregate_hook_results_cannot_break_human_recovery(journey, monkeypa
     with pytest.raises(RuntimeError):
         j.executor.execute_step("inspect_custom", step, j.runtime.blackboard)
     assert len(calls) == before
+
+
+@pytest.mark.parametrize("stage", ["after_execute", "publish_output"])
+def test_u4_i4_stopped_hook_human_status_never_publishes_completion(journey, stage):
+    from cafe.core.status_codes import PhaseStatusCode
+    from cafe.phases.generic_phase import HookResult
+
+    def status_only(repo, iteration, call):
+        (iteration.parents[1] / "next_step.txt").unlink(missing_ok=True)
+
+    class PermissionEffect:
+        def run(self, **kwargs):
+            j.effects.append("permission")
+            return HookResult(
+                continue_pipeline=False, override_status_code=PhaseStatusCode.NEED_PERMISSION
+            )
+
+    j = journey(
+        [CORRECTED],
+        workspace=True,
+        mode="legacy",
+        human="need_permission",
+        post_submission=status_only,
+    )
+    j.executor.generic_phase.hook_registry["PermissionEffect"] = PermissionEffect
+    step = j.playbook["steps"]["inspect_custom"]
+    step["hooks"][stage] = ["PermissionEffect"]
+    j.runtime.run(start_step="inspect_custom")
+    assert j.manager.deliveries == 0
+    assert j.runtime.blackboard.handoff_contract.to_owner.value == "user"
+    assert j.runtime.blackboard.handoff_contract.intent.value == "need_permission"
+    assert "custom_snapshot" not in j.runtime.blackboard.artifacts
+    assert "evidence_bundle" not in j.runtime.blackboard.artifacts
+    assert not (j.iteration / "artifact.json").exists()
+    assert j.effects.count("permission") == 1 and len(j.manager.calls) == 1

@@ -1216,6 +1216,11 @@ class GenericWorkflowStepExecutor(Phase):
             if status_code is None:
                 status_code = StatusCodeParser.extract(response, valid_intents)
 
+        if workspace_eligible:
+            # Classify the actual hook-updated result even when a hook stopped
+            # the pipeline before its ordinary completion callback.
+            response, status_code, ready = validate_completion_now(response, status_code, repair=False)
+            execution.artifact_ready = execution.artifact_ready and ready
         agent_was_invoked = execution.agent_invoked
         self._persist_agent_invocation_marker(
             iteration_dir=iteration_dir,
