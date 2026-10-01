@@ -3291,6 +3291,19 @@ class GenericWorkflowStepExecutor(Phase):
         human_task_identities: tuple[str, ...] | None = None
         selected_route: dict[str, str] | None = None
         if from_step is not None:
+            # Ordinary confirmations also emit human_task_completed. Only a task
+            # declaring feedback delivery requires correction-source provenance.
+            # Keep incomplete declarations here so route validation fails closed.
+            feedback_task_ids = (
+                {
+                    binding.get("task_id")
+                    for binding in (producer.get("human_tasks", ()) or ())
+                    if isinstance(binding, Mapping)
+                    and binding.get("feedback_delivery") is not None
+                }
+                if isinstance(producer, Mapping)
+                else set()
+            )
             human_task_event = next(
                 (
                     candidate
@@ -3300,6 +3313,7 @@ class GenericWorkflowStepExecutor(Phase):
                     and (transition is None or candidate.timestamp >= transition.timestamp)
                     and candidate.data.get("to_step") == state.current_step
                     and isinstance(candidate.data.get("task_id"), str)
+                    and candidate.data["task_id"] in feedback_task_ids
                 ),
                 None,
             )
@@ -3402,7 +3416,10 @@ class GenericWorkflowStepExecutor(Phase):
         )
         if isinstance(producer_config, Mapping):
             for binding in producer_config.get("human_tasks", ()) or ():
-                if isinstance(binding, Mapping):
+                if (
+                    isinstance(binding, Mapping)
+                    and binding.get("feedback_delivery") is not None
+                ):
                     backward_targets.update(
                         target
                         for target in [

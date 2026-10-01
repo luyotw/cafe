@@ -8376,7 +8376,11 @@ def test_causal_todo_direct_transition_ignores_unrelated_pending_feedback(tmp_pa
     assert resolved["causal_todo"] is direct
 
 
-def test_causal_todo_normal_plan_entry_ignores_feedback_history(tmp_path: Path) -> None:
+@pytest.mark.parametrize("producer", ["plan", "design"])
+@pytest.mark.parametrize("human_confirmation", [False, True])
+def test_causal_todo_normal_plan_entry_ignores_feedback_history(
+    tmp_path: Path, producer: str, human_confirmation: bool
+) -> None:
     ledger = WorkflowFeedbackLedger(tmp_path / "issue")
     ledger.record(
         source_identity="github-pr:10:99",
@@ -8388,12 +8392,35 @@ def test_causal_todo_normal_plan_entry_ignores_feedback_history(tmp_path: Path) 
     state.events.append(
         EventEntry(
             timestamp="2026-01-01T00:00:00Z",
-            step="plan",
+            step=producer,
             event_type="transition",
             message="",
-            data={"from": "plan", "to": "develop"},
+            data={"from": producer, "to": "develop"},
         )
     )
+    playbook = _causal_todo_playbook()
+    playbook["steps"][producer] = playbook["steps"].pop("plan")
+    playbook["steps"][producer]["human_tasks"] = [
+        {"task_id": "output-review", "outcomes": {"confirm": "develop", "revise": producer}}
+    ]
+    if human_confirmation:
+        state.events.append(
+            EventEntry(
+                timestamp="2026-01-01T00:00:01Z",
+                step=producer,
+                event_type="human_task_completed",
+                message="",
+                data={"task_id": "output-review", "to_step": "develop"},
+            )
+        )
+        state.handoff_contract = HandoffContract(
+            version=1,
+            to_owner=HandoffOwner.AGENT,
+            to_step="develop",
+            intent=HandoffIntent.AWAIT_AGENT,
+            from_step=producer,
+            source="human_task.command",
+        )
     workflow = ArtifactEntry(
         name="workflow_feedback",
         kind=ArtifactKind.DOCUMENT,
@@ -8412,19 +8439,21 @@ def test_causal_todo_normal_plan_entry_ignores_feedback_history(tmp_path: Path) 
         name="plan",
         kind=ArtifactKind.DOCUMENT,
         version=1,
-        updated_by="plan",
+        updated_by=producer,
         path=str(plan),
     )
     resolved = GenericWorkflowStepExecutor._add_causal_todo_artifact(
         {"workflow_feedback": workflow, "plan": plan_entry},
         state,
-        playbook=_causal_todo_playbook(),
+        playbook=playbook,
     )
     assert "causal_todo" not in resolved
+    assert resolved["plan"] is plan_entry
 
 
+@pytest.mark.parametrize("defect", [None, "missing_artifact", "incomplete", "duplicate"])
 def test_causal_todo_local_review_human_task_precedes_direct_pr_fallback(
-    tmp_path: Path,
+    tmp_path: Path, defect: str | None
 ) -> None:
     issue_dir = tmp_path / "issue"
     ledger = WorkflowFeedbackLedger(issue_dir)
@@ -8467,25 +8496,38 @@ def test_causal_todo_local_review_human_task_precedes_direct_pr_fallback(
         from_step="pr",
         source="human_task.command",
     )
+    artifacts = {
+        "pr_result": ArtifactEntry(
+            name="pr_result",
+            kind=ArtifactKind.DOCUMENT,
+            version=1,
+            updated_by="pr",
+            path=str(pr_result),
+        ),
+        "workflow_feedback": ArtifactEntry(
+            name="workflow_feedback",
+            kind=ArtifactKind.DOCUMENT,
+            version=1,
+            updated_by="human_task",
+            path=str(ledger.path),
+        ),
+    }
+    playbook = _causal_todo_playbook()
+    bindings = playbook["steps"]["pr"]["human_tasks"]
+    if defect == "missing_artifact":
+        del artifacts["workflow_feedback"]
+    elif defect == "incomplete":
+        del bindings[0]["feedback_delivery"]["todo_id_prefix"]
+    elif defect == "duplicate":
+        bindings.append(dict(bindings[0]))
+    if defect is not None:
+        with pytest.raises(ValueError, match="Correction Todo feedback (artifact|route)"):
+            GenericWorkflowStepExecutor._add_causal_todo_artifact(
+                artifacts, state, playbook=playbook
+            )
+        return
     resolved = GenericWorkflowStepExecutor._add_causal_todo_artifact(
-        {
-            "pr_result": ArtifactEntry(
-                name="pr_result",
-                kind=ArtifactKind.DOCUMENT,
-                version=1,
-                updated_by="pr",
-                path=str(pr_result),
-            ),
-            "workflow_feedback": ArtifactEntry(
-                name="workflow_feedback",
-                kind=ArtifactKind.DOCUMENT,
-                version=1,
-                updated_by="human_task",
-                path=str(ledger.path),
-            ),
-        },
-        state,
-        playbook=_causal_todo_playbook(),
+        artifacts, state, playbook=playbook
     )["causal_todo"]
     assert [item.work for item in resolved.items] == ["fix the user's selected PR concern"]
 
