@@ -398,8 +398,13 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         ) + (list(incoming_turns) if isinstance(incoming_turns, list) else [])
         return merged
 
-    def _merge_iteration_token_usage(self, token_usage: TokenUsage) -> None:
-        """Persist telemetry from an auxiliary retry immediately."""
+    def _merge_iteration_token_usage(
+        self,
+        token_usage: TokenUsage,
+        *,
+        persist_metadata: Optional[Callable[[Path, Dict[str, Any]], None]] = None,
+    ) -> None:
+        """Persist retry telemetry through the caller's admission rule when supplied."""
         iteration_dir = self._get_iteration_dir(self.iteration)
         context_file = self._resolve_iteration_context_file(iteration_dir)
         if not context_file.exists():
@@ -414,10 +419,13 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
             context_data.get("stats"),
             token_usage,
         )
-        (iteration_dir / "iteration.json").write_text(
-            json.dumps(context_data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        if persist_metadata is not None:
+            persist_metadata(context_file, context_data)
+        else:
+            (iteration_dir / "iteration.json").write_text(
+                json.dumps(context_data, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
 
     def _configured_primary_cli_value(self, agent_name: str) -> Optional[str]:
         """Crew-configured primary CLI for this agent as a plain string, if resolvable."""

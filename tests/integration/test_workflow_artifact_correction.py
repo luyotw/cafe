@@ -47,7 +47,7 @@ def _assert_correction_context_preserved(manager):
 @pytest.fixture
 def journey(tmp_path, monkeypatch):
     def build(submissions, *, mode="baton", completed_checklist=False, human=None,
-              reverse=False, unchecked=False, mutate=None, provider_mutation=None, capability=None, publication_mutation=False, workspace=None, workspace_action=None, effect_action=None, extra_publication=False, projected=False, post_submission=None, declared_input=False):
+              reverse=False, unchecked=False, mutate=None, provider_mutation=None, capability=None, publication_mutation=False, workspace=None, workspace_action=None, effect_action=None, extra_publication=False, projected=False, post_submission=None, declared_input=False, provider_usage=None):
         repo = tmp_path / "repo"
         repo.mkdir()
         subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
@@ -232,7 +232,8 @@ def journey(tmp_path, monkeypatch):
                 (issue / "next_step.txt").write_text(json.dumps(baton))
                 if post_submission:
                     post_submission(repo, iteration, len(self.calls))
-                return "" if mode == "baton" else intent, TokenUsage(), [], [], [], None
+                usage = provider_usage(len(self.calls)) if provider_usage else TokenUsage()
+                return "" if mode == "baton" else intent, usage, [], [], [], None
 
         if workspace is not None:
             (repo / ".gitignore").write_text(".cafe/\n")

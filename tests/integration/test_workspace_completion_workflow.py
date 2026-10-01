@@ -730,3 +730,120 @@ def test_i6_last_use_guard_refuses_changed_decision_before_effect(journey, monke
     with pytest.raises(RuntimeError):
         j.executor.execute_step("inspect_custom", step, j.runtime.blackboard)
     assert invocations == [] and len(j.manager.calls) == 1
+
+
+def parsed_turn_usage(count):
+    """Use the actual CLI parser and supported typed provider usage contract."""
+    from cafe.agents.cli.codex import CodexCLI
+    from cafe.core.types import TokenUsage
+
+    event = json.dumps({"type": "turn.completed", "usage": {"input_tokens": 3, "output_tokens": 2}})
+    return TokenUsage(
+        input_tokens=3 * count,
+        output_tokens=2 * count,
+        turn_usages=CodexCLI.extract_turn_usages([event] * count),
+    )
+
+
+@pytest.mark.parametrize("turns", [0, 1, 20, 6000])
+def test_u3_i1_i2_correction_telemetry_preserves_usable_recovery(journey, turns):
+    def authorized_work(repo, iteration, call):
+        if call <= 2:
+            change_then_commit(repo, iteration, call)
+        else:
+            assert j.executor._load_workspace_completion(iteration)["consumed"] == 2
+
+    j = journey(
+        [CORRECTED],
+        workspace=True,
+        workspace_action=authorized_work,
+        provider_usage=lambda call: parsed_turn_usage(turns if call == 2 else 0),
+    )
+    result = j.runtime.run(start_step="inspect_custom")
+    assert len(j.manager.calls) == 2
+    assert j.executor._load_workspace_completion(j.iteration)["consumed"] == 1
+    assert (j.iteration / "iteration.json").stat().st_size <= 1_048_576
+    metadata = json.loads((j.iteration / "iteration.json").read_text())
+    if turns < 6000:
+        assert result.completed and j.manager.deliveries == 1
+        assert len(metadata["stats"]["turn_usages"]) == turns
+        assert metadata["stats"]["input_tokens"] == 3 * turns
+        assert j.effects == ["prepare", "after"]
+    else:
+        assert not result.completed and j.manager.deliveries == 0
+        assert j.runtime.blackboard.current_step == "user"
+        assert len(HumanTaskRecordStore(j.issue).tasks()) == 1
+        assert j.runtime.blackboard.handoff_contract.to_owner.value == "user"
+        assert j.effects == ["prepare"]
+        assert "custom_snapshot" not in j.runtime.blackboard.artifacts
+        assert "evidence_bundle" not in j.runtime.blackboard.artifacts
+        assert metadata["stats"]["turn_usages"] == []
+        assert any(
+            "capacity" in reason
+            for reason in j.executor._load_workspace_completion(j.iteration)["rejections"]
+        )
+        from cafe.core.blackboard import BlackboardStore
+        from cafe.ui.human_tasks import apply_human_task_payload
+
+        task = HumanTaskRecordStore(j.issue).tasks()[0]
+        apply_human_task_payload(
+            issue_dir=j.issue,
+            playbook_data=j.playbook,
+            blackboard=BlackboardStore(j.issue).load_or_create("inspect_custom"),
+            from_step="inspect_custom",
+            trigger=task.trigger,
+            raw_payload={"task": task.policy_id, "decision": "retry", "human_task_id": task.id},
+            source="test",
+        )
+        resumed = j.reconstruct()
+        assert resumed.run().completed
+        assert j.executor._load_workspace_completion(j.iteration)["consumed"] == 2
+        assert len(j.manager.calls) == 3 and j.manager.deliveries == 1
+        assert j.manager.calls[-1][2].is_exact
+        assert j.effects.count("after") == 1
+        assert not (j.issue / "inspect_custom" / "iteration_002").exists()
+
+
+@pytest.mark.parametrize("candidate_bytes", [983039, 983040, 983041, 1048576, 1048577])
+def test_u3_i2_telemetry_admission_and_reader_boundaries(journey, candidate_bytes):
+    from cafe.core.phase import Phase
+
+    snapshots = []
+    usage = parsed_turn_usage(350)
+
+    def seed_admitted_record(repo, iteration, call):
+        change_then_commit(repo, iteration, call)
+        if call == 2:
+            path = iteration / "iteration.json"
+            metadata = json.loads(path.read_text())
+            candidate = dict(metadata)
+            candidate["stats"] = Phase._merge_token_usage_stats(metadata.get("stats"), usage)
+            overhead = len((json.dumps(candidate, ensure_ascii=False, indent=2) + "\n").encode())
+            metadata["prompt"] += "p" * (candidate_bytes - overhead)
+            j.executor._persist_workspace_metadata(path, metadata)
+            snapshots.append(metadata)
+
+    j = journey(
+        [CORRECTED],
+        workspace=True,
+        workspace_action=seed_admitted_record,
+        provider_usage=lambda call: usage if call == 2 else parsed_turn_usage(0),
+    )
+    result = j.runtime.run(start_step="inspect_custom")
+    assert not result.completed and j.manager.deliveries == 0
+    assert j.runtime.blackboard.current_step == "user"
+    assert len(HumanTaskRecordStore(j.issue).tasks()) == 1
+    assert j.effects == ["prepare"]
+    assert j.executor._load_workspace_completion(j.iteration)["consumed"] == 1
+    path = j.iteration / "iteration.json"
+    assert path.stat().st_size <= 1_048_576
+    actual = json.loads(path.read_text())
+    assert actual["prompt"] == snapshots[0]["prompt"]
+    if candidate_bytes > 983040:
+        assert actual["stats"] == snapshots[0]["stats"]
+    else:
+        assert len(actual["stats"]["turn_usages"]) == 350
+    # The actual reader can mark this record again without destroying its budget.
+    j.runtime._mark_latest_iteration_completion_untrusted("inspect_custom")
+    assert path.stat().st_size <= 1_048_576
+    assert j.executor._load_workspace_completion(j.iteration)["consumed"] == 1

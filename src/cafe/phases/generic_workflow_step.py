@@ -1828,7 +1828,9 @@ class GenericWorkflowStepExecutor(Phase):
                 allowed_directories=directories,
                 streaming_output_file=str(iteration_dir / "streaming.jsonl"),
             )
-            self._merge_iteration_token_usage(usage)
+            self._merge_iteration_token_usage(
+                usage, persist_metadata=self._persist_workspace_metadata
+            )
             current = json.loads(path.read_text(encoding="utf-8"))
             if any(current.get(key) != value for key, value in observed.items()) or current.get(
                 "workspace_publication"
