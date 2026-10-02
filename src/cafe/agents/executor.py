@@ -404,6 +404,7 @@ class AgentExecutor:
         expected_session_id: str | None = None,
         event_id: str | None = None,
         on_acceptance: Callable[[], None] | None = None,
+        environment_overrides: Optional[dict[str, str]] = None,
         allowed_tools: Optional[List[str]] = None,
         allowed_directories: Optional[List[str]] = None,
         execution_control: AgentExecutionControl | None = None,
@@ -439,6 +440,9 @@ class AgentExecutor:
             event_driver=True,
         )
 
+        environment = strategy.build_environment()
+        if environment_overrides:
+            environment.update({str(key): str(value) for key, value in environment_overrides.items()})
         records: list[dict[str, Any]] = []
         structured_record_limit = _structured_record_limit(execution_control)
         acceptance_observed = False
@@ -464,7 +468,7 @@ class AgentExecutor:
                 cli_name=self.config.cli.value.capitalize(),
                 parse_stream_json=True,
                 json_content_extractor=lambda _record: None,
-                env=strategy.build_environment(),
+                env=environment,
                 process_cwd=process_cwd,
                 execution_control=execution_control,
                 structured_records=records,
@@ -512,6 +516,7 @@ class AgentExecutor:
         expected_session_id: str | None = None,
         event_id: str | None = None,
         on_acceptance: Callable[[], None] | None = None,
+        environment_overrides: Optional[dict[str, str]] = None,
         allowed_tools: Optional[List[str]] = None,
         allowed_directories: Optional[List[str]] = None,
         execution_control: AgentExecutionControl | None = None,
@@ -522,6 +527,7 @@ class AgentExecutor:
             expected_session_id=expected_session_id,
             event_id=event_id,
             on_acceptance=on_acceptance,
+            environment_overrides=environment_overrides,
             allowed_tools=allowed_tools,
             allowed_directories=allowed_directories,
             execution_control=execution_control,
@@ -677,6 +683,17 @@ class AgentExecutor:
         """
         return self._total_token_usage
 
+    def with_session_recovery(self, invoke_attempt: Callable[[], AgentResponse]) -> AgentResponse:
+        """Caller-admitted use of the existing same-provider recovery policy."""
+        if not self.config.session_id:
+            return invoke_attempt()
+        return self._execute_with_session_recovery(
+            cmd=[], cli_name=self.config.cli.value.capitalize(),
+            create_new_session_fn=self._get_cli_strategy().create_session,
+            update_cmd_with_session_fn=lambda command, _identity: command,
+            invoke_attempt=invoke_attempt,
+        )
+
     def _execute_with_session_recovery(
         self,
         cmd: List[str],
@@ -686,6 +703,7 @@ class AgentExecutor:
         max_retries: int = 3,
         _retry_count: int = 0,
         allow_session_recovery: bool = True,
+        invoke_attempt: Callable[[], AgentResponse] | None = None,
         **streaming_kwargs,
     ) -> AgentResponse:
         """Generic session recovery wrapper for all CLIs with session support.
@@ -709,6 +727,8 @@ class AgentExecutor:
             AgentExecutionError: If execution fails with non-session error or max retries exceeded
         """
         try:
+            if invoke_attempt is not None:
+                return invoke_attempt()
             return self._execute_with_streaming(cmd=cmd, cli_name=cli_name, **streaming_kwargs)
         except AgentExecutionError as e:
             # Check if it's a session not found error or prompt too long error
@@ -786,6 +806,7 @@ class AgentExecutor:
                     max_retries=max_retries,
                     _retry_count=_retry_count + 1,
                     allow_session_recovery=allow_session_recovery,
+                    invoke_attempt=invoke_attempt,
                     **streaming_kwargs,
                 )
             else:
@@ -1243,6 +1264,7 @@ class AgentExecutor:
         returncode = None
         stderr_output = ""
         observer_failed = False
+        observation_records = []
         session_id = None
         model: Optional[str] = None
         permission_denials: List[PermissionDenial] = []
@@ -1318,6 +1340,13 @@ class AgentExecutor:
                                            usage_available=bool(result[1].model_fields_set))
             if parsed.usage_available:
                 self._accumulate_usage(parsed.token_usage)
+            evidence = self._get_cli_strategy().conversation_evidence(tuple(observation_records))
+            parsed.transport_result = replace(
+                evidence,
+                usage=self._compact_usage(parsed.token_usage) if parsed.usage_available else None,
+                completed=True if received_terminal_stream_event else None,
+                returncode=returncode,
+            )
             parsed.usage_accounted = True
             return parsed
 
@@ -1325,11 +1354,8 @@ class AgentExecutor:
             """Replace any streamed error payload with one safe durable record."""
             nonlocal streaming_file_handle
             parsed = collect_usage()
-            error.transport_result = TransportResult(
-                usage=self._compact_usage(parsed.token_usage) if parsed.usage_available else None,
-                completed=True if received_terminal_stream_event else None,
-                returncode=returncode, failure_code=error.error_type or "execution_failed",
-            )
+            error.transport_result = replace(parsed.transport_result,
+                failure_code=parsed.transport_result.failure_code or error.error_type or "execution_failed")
             if streaming_file_handle is None:
                 return
             try:
@@ -1428,6 +1454,8 @@ class AgentExecutor:
                             if not isinstance(data, dict):
                                 continue
                             output_lines.append(line)
+                            if len(observation_records) < structured_record_limit:
+                                observation_records.append(data)
                             if data.get("type") in terminal_stream_event_types:
                                 received_terminal_stream_event = True
                             if isinstance(data, dict) and structured_records is not None:
@@ -1869,6 +1897,12 @@ class AgentExecutor:
             token_usage=token_usage,
             usage_available=usage_available,
             usage_accounted=True,
+            transport_result=replace(
+                self._get_cli_strategy().conversation_evidence(tuple(observation_records)),
+                reported_model=model,
+                usage=self._compact_usage(token_usage) if usage_available else None,
+                completed=True if received_terminal_stream_event else None, returncode=returncode,
+            ),
             permission_denials=permission_denials,
             streaming_log=final_streaming_log,
             model=model,

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from cafe.agents.executor import AgentExecutionError
+from cafe.agents.transport import ConversationTransport
 from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.playbook import resolve_playbook_skills
@@ -543,7 +544,7 @@ def launch_chat_session(
     """Launch an inline chat session with the agent for the given role.
 
     Resolves agent config from ConfigManager, loads the existing session,
-    builds the CLI command, and invokes it via subprocess.run(). Returns
+    opens its provider conversation through the shared transport. Returns
     when the user exits the chat. Errors are printed as warnings so the
     caller's prompt loop can continue.
 
@@ -648,7 +649,7 @@ def launch_chat_session(
     if phase_routing:
         # Phase-routed chat must not inherit a generic session from another step.
         executor.config.session_id = selected_session_id
-    cli_strategy = executor._get_cli_strategy()
+    transport = ConversationTransport(executor)
 
     _current_step, _valid_steps, _playbook_id = _prepare_chat_handoff_state(issue_dir)
     _prepare_chat_environment(
@@ -678,17 +679,19 @@ def launch_chat_session(
     if prompt is not None:
         executor.stream_output = True
         try:
-            response = executor.execute(prompt, environment_overrides=chat_env)
+            responses = []
+
+            def attempt():
+                transport.run_one_shot(prompt, environment_overrides=chat_env,
+                                       on_response=responses.append, on_usage=usage_sink)
+                return responses[-1]
+
+            response = executor.with_session_recovery(attempt)
         except AgentExecutionError as exc:
-            evidence = getattr(exc, "transport_result", None)
-            if usage_sink is not None and evidence is not None and evidence.usage is not None:
-                usage_sink(evidence.usage)
             detail = exc.display_message or str(exc)
             print(f"\n⚠️  Chat CLI failed: {detail}\n")
             return 1
 
-        if usage_sink is not None and response.usage_available:
-            usage_sink(response.token_usage)
         if response.session_id:
             if phase_routing:
                 agent_manager.session_manager.save_session(
@@ -716,9 +719,6 @@ def launch_chat_session(
 
     session_id: Optional[str] = executor.config.session_id
     codex_history_start_ts = int(time.time())
-    cli_command = cli_strategy.build_interactive_command(initial_prompt=initial_prompt)
-    env = cli_strategy.build_environment()
-    env.update(chat_env)
     print(f"\nOpening chat with {role} ({agent_name})...")
     if session_id:
         print(f"Resuming session: {session_id}")
@@ -726,8 +726,12 @@ def launch_chat_session(
 
     # Execute interactive CLI (blocks until user exits)
     try:
-        result = subprocess.run(cli_command, env=env)
-    except FileNotFoundError:
+        result = transport.open_interactive_session(initial_prompt, environment_overrides=chat_env)
+    except AgentExecutionError as error:
+        if error.error_type != "cli_not_found":
+            print(f"\n⚠️  Failed to execute CLI: {error.display_message or str(error)}\n")
+            return 1
+
         print(f"\n⚠️  CLI tool '{agent_cli_str}' not found. Please install it first.\n")
         return 1
     except Exception as e:
@@ -755,7 +759,8 @@ def launch_chat_session(
                 )
 
     if result.returncode != 0:
-        return _handle_chat_launch_failure(agent_cli, result)
+        return _handle_chat_launch_failure(agent_cli, subprocess.CompletedProcess(
+            args=[], returncode=result.returncode, stderr=result.error_excerpt))
 
     _warn_if_chat_handoff_missing(issue_dir, _current_step, _valid_steps)
 

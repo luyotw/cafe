@@ -1,5 +1,6 @@
 """Provider-neutral, single-attempt conversation operations."""
 
+import subprocess
 from dataclasses import replace
 from typing import Callable
 
@@ -84,8 +85,52 @@ class ConversationTransport:
     def open_interactive_session(self, initial_prompt=None, *, required_evidence=frozenset(),
                                  environment_overrides=None) -> TransportResult:
         self._admit("open_interactive_session", required_evidence)
-        raise NotImplementedError
+        strategy = self.executor._get_cli_strategy()
+        environment = strategy.build_environment()
+        if environment_overrides:
+            environment.update({str(key): str(value) for key, value in environment_overrides.items()})
+        try:
+            process = subprocess.run(strategy.build_interactive_command(initial_prompt), env=environment)
+        except OSError as cause:
+            result = TransportResult(failure_code="cli_not_found" if isinstance(cause, FileNotFoundError)
+                                     else "launch_failed", accepted=False,
+                                     error_excerpt=sanitize_error_excerpt(cause))
+            self._fail(result)
+        failure = None if process.returncode == 0 else "execution_failed"
+        diagnostic = getattr(process, "stderr", None) or getattr(process, "stdout", None)
+        return TransportResult(returncode=process.returncode, failure_code=failure,
+                               error_excerpt=sanitize_error_excerpt(Exception(diagnostic))
+                               if isinstance(diagnostic, str) and diagnostic else None)
 
-    def run_one_shot(self, prompt: str, *, required_evidence=frozenset(), **kwargs) -> TransportResult:
+    def run_one_shot(self, prompt: str, *, required_evidence=frozenset(), on_response=None,
+                     on_usage=None, **kwargs) -> TransportResult:
         self._admit("run_one_shot", required_evidence)
-        raise NotImplementedError
+        selected_session = self.executor.config.session_id
+        try:
+            response = self.executor.execute(prompt, exact_session=True, **kwargs)
+        except AgentExecutionError as error:
+            self.executor.config.session_id = selected_session
+            result = getattr(error, "transport_result", None) or TransportResult(
+                failure_code=error.error_type or "execution_failed",
+                error_excerpt=sanitize_error_excerpt(error))
+            if on_usage is not None and result.usage is not None:
+                on_usage(result.usage)
+            error.transport_result = result
+            raise
+        result = response.transport_result
+        if not isinstance(result, TransportResult):
+            result = TransportResult()
+        if selected_session and result.observed_session_id and result.observed_session_id != selected_session:
+            result = replace(result, failure_code="session_mismatch")
+        if on_usage is not None and result.usage is not None:
+            on_usage(result.usage)
+        missing = any(getattr(result, {
+            "session": "observed_session_id", "model": "reported_model",
+            "usage": "usage", "acceptance": "accepted",
+        }[name]) is None for name in required_evidence)
+        if result.failure_code or missing:
+            self.executor.config.session_id = selected_session
+            self._fail(replace(result, failure_code=result.failure_code or "missing_evidence"))
+        if on_response is not None:
+            on_response(response)
+        return result

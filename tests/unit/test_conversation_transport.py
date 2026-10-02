@@ -17,7 +17,10 @@ def provider_process(monkeypatch):
     """Replace only the external process and terminal polling boundary."""
     monkeypatch.setattr("sys.platform", "win32")
     launch = MagicMock()
-    monkeypatch.setattr("subprocess.Popen", launch)
+    import subprocess
+    actual_popen = subprocess.Popen
+    monkeypatch.setattr("subprocess.Popen", lambda command, **kwargs:
+        launch(command, **kwargs) if command[0] != "git" else actual_popen(command, **kwargs))
 
     def supply(records, returncode=0, stderr=""):
         process = MagicMock()
@@ -230,3 +233,46 @@ def test_usage_sink_failure_is_caller_error_without_replay(provider_process):
         transport().acquire_session("bootstrap", on_usage=fail)
     assert caught.value is error
     assert launch.call_count == 1
+
+
+def test_interactive_inherits_terminal_environment_and_reports_no_invented_evidence(monkeypatch):
+    monkeypatch.setenv("TRANSPORT_INHERITED", "kept")
+    launch = MagicMock(return_value=MagicMock(returncode=0))
+    monkeypatch.setattr("subprocess.run", launch)
+    selected = transport(model="selected", session_id="s")
+    result = selected.open_interactive_session("hello", environment_overrides={"CONVERSATION": "yes"})
+    command = launch.call_args.args[0]
+    assert "s" in command and "selected" in command
+    assert launch.call_args.kwargs["env"]["TRANSPORT_INHERITED"] == "kept"
+    assert launch.call_args.kwargs["env"]["CONVERSATION"] == "yes"
+    assert "stdin" not in launch.call_args.kwargs and "stdout" not in launch.call_args.kwargs
+    assert result.observed_session_id is None and result.accepted is None
+    assert result.returncode == 0
+
+
+def test_one_shot_is_one_attempt_and_output_is_separate_from_evidence(provider_process):
+    launch = provider_process([init(), dict(type="result", usage=dict(input_tokens=2), content="final")])
+    responses = []
+    result = transport(session_id="s").run_one_shot("hello", on_response=responses.append)
+    assert result.observed_session_id == "s"
+    assert result.usage.input_tokens == 2
+    assert responses[0].response == "final"
+    assert launch.call_count == 1
+
+
+def test_one_shot_never_recovers_stale_session(provider_process):
+    launch = provider_process([], returncode=1, stderr="session not found")
+    selected = transport(session_id="stale")
+    with pytest.raises(AgentExecutionError):
+        selected.run_one_shot("hello")
+    assert launch.call_count == 1
+    assert selected.executor.config.session_id == "stale"
+
+
+def test_one_shot_exposes_conflicting_resume_without_replacing_it(provider_process):
+    provider_process([init("other"), dict(type="result")])
+    selected = transport(session_id="s")
+    with pytest.raises(AgentExecutionError) as caught:
+        selected.run_one_shot("hello")
+    assert caught.value.transport_result.failure_code == "session_mismatch"
+    assert selected.executor.config.session_id == "s"
