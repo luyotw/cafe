@@ -2072,6 +2072,15 @@ def _deliver_v3_callback(
     session_id = session["id"]
     acceptance_persisted = False
     acceptance_write_failed = False
+    usage_write_error = None
+
+    def persist_usage(usage) -> None:
+        nonlocal usage_write_error
+        try:
+            on_usage(usage)
+        except Exception as exc:
+            usage_write_error = exc
+            raise
 
     def persist_acceptance() -> None:
         nonlocal state, acceptance_persisted, acceptance_write_failed
@@ -2120,7 +2129,7 @@ def _deliver_v3_callback(
                 _callback_prompt(event, repository_root=repository_root),
                 session_id=session_id,
                 delivery_id=event_id,
-                on_usage=on_usage,
+                on_usage=persist_usage if on_usage is not None else None,
                 on_acceptance=persist_acceptance,
                 allowed_tools=["Read", "Grep", "Glob", "Bash"],
                 allowed_directories=[str(repository_root)],
@@ -2133,7 +2142,7 @@ def _deliver_v3_callback(
             accepted = result.accepted is True
             reported_session_id = result.observed_session_id
     except Exception as exc:
-        if acceptance_write_failed:
+        if acceptance_write_failed or exc is usage_write_error:
             raise
         if acceptance_persisted:
             return state, "accepted"

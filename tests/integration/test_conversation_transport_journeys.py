@@ -370,3 +370,54 @@ def test_one_shot_chat_reports_metadata_admission_failure_before_provider_launch
     assert chat.launch_chat_session("developer", "x", phase_name="implementation", prompt="hello") == 1
     assert capsys.readouterr().out
     assert launch.call_count == 0
+
+
+@pytest.mark.parametrize("failed_output", [False, True])
+@pytest.mark.parametrize("entrypoint", ["caller", "cli"])
+def test_callback_usage_write_failure_after_acceptance_is_observable_without_replay(
+    tmp_path, monkeypatch, provider_process, failed_output, entrypoint
+):
+    import cafe.core.usage as usage_module
+
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    monkeypatch.chdir(tmp_path)
+    callback = _callback_module()
+    directory, _state, event = _contract_event_context(callback, tmp_path, [("claude", "exact")])
+    target = directory.parent / "develop/iteration_007/iteration.json"
+    target.parent.mkdir(parents=True)
+    target.write_text(json.dumps(dict(iteration=7, timestamp="2020-01-01T00:00:00+00:00", other="kept")))
+    launch, _delivery = _callback_processes(provider_process, event, failed_output=failed_output)
+    exchange = usage_module._exchange_usage_file
+    writes = 0
+    failure = OSError("usage publication failed")
+
+    def fail_delivery_publication(*args, **kwargs):
+        nonlocal writes
+        writes += 1
+        if writes == 2:
+            raise failure
+        return exchange(*args, **kwargs)
+
+    monkeypatch.setattr(usage_module, "_exchange_usage_file", fail_delivery_publication)
+    notification = MagicMock()
+    monkeypatch.setattr(callback, "_notify_callback_failure", notification)
+    with pytest.raises(OSError) as caught:
+        if entrypoint == "cli":
+            callback.main(["--workflow-event", json.dumps(event)])
+        else:
+            callback.run_callback(event, repository_root=tmp_path)
+    assert caught.value is failure
+    if entrypoint == "cli":
+        assert notification.call_count == 1
+        assert notification.call_args.kwargs["error"] is failure
+    persisted = json.loads((directory / "dispatch_state.json").read_text())
+    assert persisted["events"][event["event_id"]]["status"] == "accepted"
+    assert persisted["entries"][0]["session"]["id"] == "bound"
+    assert persisted["active_index"] == 0
+    metadata = json.loads(target.read_text())
+    assert metadata["stats"]["input_tokens"] == 2 and metadata["other"] == "kept"
+    assert not list(target.parent.glob(".usage-*"))
+    callback.run_callback(event, repository_root=tmp_path)
+    assert launch.call_count == 2
+    assert writes == 2
+    assert json.loads(target.read_text()) == metadata
