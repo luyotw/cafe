@@ -894,7 +894,7 @@ class AgentManager:
     ) -> int | None:
         """Return the delay before retrying a transient failure on the same CLI."""
         error_type = getattr(error, "error_type", None)
-        retryable = error_type in {"rate_limit", "provider_overloaded"} or (
+        retryable = error_type in {"rate_limit", "provider_overloaded", "incomplete_stream"} or (
             is_transient_same_cli_error(error)
         )
         if (

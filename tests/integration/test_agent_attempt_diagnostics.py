@@ -290,25 +290,32 @@ def test_real_stream_socket_close_retries_primary_before_fallback(tmp_path: Path
 
 
 def test_missing_terminal_event_persists_a_safe_incomplete_stream_error(tmp_path: Path) -> None:
-    """A zero-exit partial stream never leaves a workflow iteration looking active."""
+    """Exhausted partial streams persist bounded attempts without claiming completion."""
     manager = AgentManager()
     manager.register_agent(AgentConfig(name="David", cli=AgentCLI.CODEX))
     executor = _build_executor(tmp_path, manager)
-    process = MagicMock()
-    process.stdout.readline.side_effect = [
-        '{"type":"thread.started","thread_id":"abc"}\n',
-        '{"type":"item.completed","item":{"type":"agent_message",'
-        '"text":"partial response; token=raw-stream-secret"}}\n',
-        "",
-    ]
-    process.stderr.read.return_value = ""
-    process.wait.return_value = 0
+    def incomplete_process(*args, **kwargs):
+        process = MagicMock()
+        process.stdout.readline.side_effect = [
+            '{"type":"thread.started","thread_id":"abc"}\n',
+            '{"type":"item.completed","item":{"type":"agent_message",'
+            '"text":"partial response; token=raw-stream-secret"}}\n',
+            "",
+        ]
+        process.stderr.read.return_value = ""
+        process.wait.return_value = 0
+        return process
 
-    with patch("subprocess.Popen", return_value=process), patch("sys.platform", "win32"), pytest.raises(
-        AgentExecutionError
-    ) as exc_info:
+    with (
+        patch("subprocess.Popen", side_effect=incomplete_process) as popen,
+        patch("cafe.agents.manager.time.sleep") as sleep,
+        patch("sys.platform", "win32"),
+        pytest.raises(AgentExecutionError) as exc_info,
+    ):
         _run_iteration(executor)
 
+    assert popen.call_count == 3
+    assert [call.args[0] for call in sleep.call_args_list] == [30, 120]
     assert exc_info.value.error_type == "incomplete_stream"
     iteration_dir = executor.phase_dir / "iteration_001"
     iteration_record = json.loads((iteration_dir / "iteration.json").read_text(encoding="utf-8"))
@@ -319,6 +326,11 @@ def test_missing_terminal_event_persists_a_safe_incomplete_stream_error(tmp_path
     assert iteration_record["status_code"] is None
     assert iteration_record["error_type"] == "incomplete_stream"
     assert error_record["error_type"] == "incomplete_stream"
+    assert [item["attempt"] for item in error_record["failed_attempts"]] == [1, 2, 3]
+    assert all(
+        item["error_type"] == "incomplete_stream"
+        for item in error_record["failed_attempts"]
+    )
     assert stream_record["type"] == "error"
     assert stream_record["error_type"] == "incomplete_stream"
     persisted_text = "".join(

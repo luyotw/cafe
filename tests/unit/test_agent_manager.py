@@ -215,6 +215,85 @@ class TestAgentExecution:
 
             assert response == "Current agent response"
 
+    @pytest.mark.parametrize("chain_role", ["primary", "fallback"])
+    @pytest.mark.parametrize("failures", [1, 2, 3])
+    def test_incomplete_stream_retries_same_session_with_bounded_attempts(
+        self, tmp_path, monkeypatch, chain_role, failures
+    ) -> None:
+        """Incomplete output retries in place, then succeeds or exposes the final error."""
+        from cafe.core.session_continuation import SessionContinuation
+        from cafe.core.types import AgentResponse, CliEntry, TokenUsage
+
+        monkeypatch.chdir(tmp_path)
+        manager = AgentManager(issue_name="retry-stream")
+        codex = CliEntry(cli=AgentCLI.CODEX, model="codex-model")
+        other = CliEntry(cli=AgentCLI.CLAUDE, model="claude-model")
+        chain = [codex, other] if chain_role == "primary" else [other, codex]
+        manager.register_agent(AgentConfig(name="David", cli=chain[0].cli, clis=chain))
+        manager.session_manager.save_session(
+            "David", AgentCLI.CODEX, "existing-codex", "retry-stream", "develop"
+        )
+        continuation = (
+            SessionContinuation.resume_exact(AgentCLI.CODEX, "existing-codex")
+            if chain_role == "primary"
+            else SessionContinuation.auto()
+        )
+        error = AgentExecutionError(
+            "Codex ended before reporting completion", error_type="incomplete_stream"
+        )
+        attempts = []
+        other_attempts = []
+        allowed_tools = ["Read"]
+        allowed_directories = [str(tmp_path)]
+        stream_path = str(tmp_path / "stream.jsonl")
+
+        def execute(executor, prompt, tools, directories, stream, **kwargs):
+            assert (prompt, tools, directories, stream) == (
+                "continue saved work", allowed_tools, allowed_directories, stream_path
+            )
+            if executor.config.cli != AgentCLI.CODEX:
+                assert chain_role == "fallback"
+                other_attempts.append(executor.config.cli)
+                raise AgentExecutionError("CLI missing", error_type="cli_not_found")
+            assert executor.config.session_id == "existing-codex"
+            assert executor.config.model == "codex-model"
+            assert kwargs.get("exact_session", False) == (chain_role == "primary")
+            attempts.append(executor)
+            if len(attempts) <= failures:
+                raise error
+            return AgentResponse(response="completed", token_usage=TokenUsage())
+
+        with (
+            patch.object(AgentExecutor, "execute", new=execute),
+            patch("cafe.agents.manager.time.sleep") as sleep,
+        ):
+            if failures == 3:
+                with pytest.raises(AgentExecutionError) as raised:
+                    manager.execute(
+                        "David", "continue saved work", allowed_tools, allowed_directories,
+                        stream_path, phase_name="develop", continuation=continuation,
+                    )
+                assert raised.value is error
+            else:
+                result = manager.execute(
+                    "David", "continue saved work", allowed_tools, allowed_directories,
+                    stream_path, phase_name="develop", continuation=continuation,
+                )
+                assert result[0] == "completed"
+
+        assert len(attempts) == min(failures + 1, 3)
+        assert all(executor is attempts[0] for executor in attempts)
+        assert other_attempts == ([AgentCLI.CLAUDE] if chain_role == "fallback" else [])
+        assert [call.args[0] for call in sleep.call_args_list] == [30, 120][:failures]
+        recorded = manager.get_failed_attempts()
+        if chain_role == "fallback":
+            assert recorded.pop(0)["error_type"] == "cli_not_found"
+        assert [(item["cli"], item["chain_role"], item["attempt"], item["error_type"])
+                for item in recorded] == [
+            ("codex", chain_role, attempt, "incomplete_stream")
+            for attempt in range(1, failures + 1)
+        ]
+
     def test_execute_current_when_no_current_raises_error(self) -> None:
         """Test that executing with no current agent raises an error."""
         manager = AgentManager()
