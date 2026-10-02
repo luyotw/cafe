@@ -5,7 +5,7 @@ from typing import Any, Mapping
 from cafe.catalogs.resolver import global_catalog_lock
 from cafe.core.human_task_notifications import NotificationPresentation
 from cafe.core.playbook import resolve_playbook_skills
-from cafe.core.runtime_locales import render_text
+from cafe.core.runtime_locales import owner_catalog_renderer
 from cafe.skills.loader import SkillLoader
 from cafe.skills.selectors import resolve_skill_selector
 from cafe.skills.workflow_composition import resolve_step_workflow_composition
@@ -43,22 +43,23 @@ def resolve_step_notification_presentation(
             ),
         )
         step_label = action_label = None
-        task_owner_found = False
-        for contributor in composition.contributors:
-            declaration = contributor.declaration
-            copy = declaration.notification
+        renderers = {}
+
+        def render(contributor, reference):
             root = contributor.source.skill_root.resolve() / "locales"
-            if contributor.primary and copy and copy.step_label:
-                step_label = render_text(
-                    copy.step_label.message_key, locale=locale, catalog_root=root
-                )
-            # Composition keeps the first identical task declaration; use that
-            # same producer, including when it deliberately has no action label.
-            if not task_owner_found and any(task.id == task_id for task in declaration.human_tasks):
-                task_owner_found = True
-                reference = copy.task_labels.get(task_id) if copy else None
-                if reference:
-                    action_label = render_text(
-                        reference.message_key, locale=locale, catalog_root=root
-                    )
+            if root not in renderers:
+                renderers[root] = owner_catalog_renderer(root)
+            return renderers[root](reference.message_key, locale=locale)
+
+        primary = composition.contributors[0]
+        copy = primary.declaration.notification
+        if copy and copy.step_label:
+            step_label = render(primary, copy.step_label)
+        # Ownership and identical-task precedence come exclusively from the
+        # composition that selected the effective policy, including no label.
+        producer = composition.human_task_producers.get(task_id)
+        copy = producer.declaration.notification if producer else None
+        reference = copy.task_labels.get(task_id) if copy else None
+        if reference:
+            action_label = render(producer, reference)
         return NotificationPresentation(step_label=step_label, action_label=action_label)

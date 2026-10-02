@@ -15,10 +15,24 @@ from cafe.catalogs.resolver import (
     CatalogResolver,
     global_catalog_lock,
 )
+from cafe.core.runtime_locales import owner_catalog_renderer
 from cafe.skills.contracts import SkillWorkflowDeclaration
 from cafe.skills.exceptions import SkillDiscoveryError
 
 _logger = logging.getLogger(__name__)
+
+
+def workflow_locale_context(
+    skill_root: Path, *, resolve_presentation: bool
+) -> dict[str, object]:
+    """Give one declaration operation its own lazy owner-local renderer."""
+    root = skill_root.resolve() / "locales"
+    return {
+        "locale_catalog_root": root,
+        "resolve_presentation": resolve_presentation,
+        "render_locale_text": owner_catalog_renderer(root),
+    }
+
 
 # Deprecated skill names that resolve to a newer skill. Issued for backward
 # compatibility with user playbooks / presets that still reference the old
@@ -270,10 +284,9 @@ class SkillLoader:
         try:
             return SkillWorkflowDeclaration.model_validate(
                 raw_declaration,
-                context={
-                    "locale_catalog_root": entry.directory.resolve() / "locales",
-                    "resolve_presentation": self.resolve_presentation,
-                },
+                context=workflow_locale_context(
+                    entry.directory, resolve_presentation=self.resolve_presentation
+                ),
             )
         except Exception as exc:
             raise ValueError(

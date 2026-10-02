@@ -128,3 +128,33 @@ def test_unknown_keys_and_incorrect_arguments_have_message_diagnostics(catalogs,
     with pytest.raises(runtime_locales.LocaleCatalogError) as rejected:
         runtime_locales.render_text(key, **values)
     assert key in str(rejected.value)
+
+
+def test_operation_renderer_preserves_all_allowed_arguments_and_owner_isolation(tmp_path):
+    roots = [tmp_path / name for name in ("first", "second")]
+    for root in roots:
+        root.mkdir()
+        for locale in ("en-US", "zh-TW"):
+            (root / f"{locale}.yaml").write_text(
+                f'sample.message: "{root.name} {{{{literal}}}} {{catalogs}} {{values}}"\n'
+            )
+    first, second = [runtime_locales.owner_catalog_renderer(root) for root in roots]
+    assert (
+        first("sample.message", locale="zh-HK", catalogs="{literal}", values=3)
+        == "first {literal} {literal} 3"
+    )
+    assert second("sample.message", catalogs="other", values=4) == "second {literal} other 4"
+    for arguments in (
+        {"values": 1},
+        {"catalogs": [], "values": 1},
+        {"catalogs": 1, "values": 2, "extra": 3},
+    ):
+        with pytest.raises(runtime_locales.LocaleCatalogError) as rejected:
+            first("sample.message", **arguments)
+        assert str(roots[0]) in str(rejected.value)
+    assert (
+        runtime_locales.render_text(
+            "sample.message", catalog_root=roots[0], catalogs="plain", values=5
+        )
+        == "first {literal} plain 5"
+    )

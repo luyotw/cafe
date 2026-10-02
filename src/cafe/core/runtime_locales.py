@@ -8,7 +8,7 @@ from importlib.resources import files
 from pathlib import Path
 from string import Formatter
 from types import MappingProxyType
-from typing import Mapping
+from typing import Callable, Mapping
 
 import yaml
 
@@ -121,8 +121,39 @@ def render_text(
     Callers bound untrusted diagnostic values before rendering. Inserted braces
     remain literal; templates allow only named fields and escaped literal braces.
     """
+    return _render_catalog_text(
+        key, load_catalogs(catalog_root), locale, catalog_root, values
+    )
+
+
+def owner_catalog_renderer(catalog_root: Path) -> Callable[..., str]:
+    """Reuse one immutable pair within one owner operation under its catalog lock.
+
+    Create a fresh renderer for each parse/resolution. Callers discard it before
+    leaving the operation; it is never stored on a loader, model or composition.
+    Lazy loading preserves inline-only and structural readers without copy I/O.
+    """
+    catalogs: Mapping[str, Mapping[str, str]] | None = None
+
+    def render(key: str, *, locale: str | None = None, **values: str | int) -> str:
+        nonlocal catalogs
+        if catalogs is None:
+            catalogs = load_catalogs(catalog_root)
+        return _render_catalog_text(key, catalogs, locale, catalog_root, values)
+
+    return render
+
+
+def _render_catalog_text(
+    key: str,
+    catalogs: Mapping[str, Mapping[str, str]],
+    locale: str | None,
+    catalog_root: Path | None,
+    values: Mapping[str, str | int],
+) -> str:
+    """Keep the same selection, diagnostics and interpolation for every reader."""
     selected = select_text_locale(locale)
-    catalog = load_catalogs(catalog_root)[selected]
+    catalog = catalogs[selected]
     root = "data/locales" if catalog_root is None else str(catalog_root)
     context = f"{root}/{selected}.yaml: {key}"
     if key not in catalog:

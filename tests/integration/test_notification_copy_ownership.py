@@ -146,6 +146,103 @@ def test_actual_materialization_and_callback_use_selected_primary_and_shared_own
     assert BlackboardStore(issue).load_or_create("renamed").conversation_locale == "zh-Hant"
 
 
+@pytest.mark.parametrize("first_has_label", [True, False])
+def test_identical_task_uses_composition_chosen_producer(notification_owner, first_has_label):
+    project, primary, shared, issue, posts = notification_owner
+    shared_metadata = yaml.safe_load((shared / "SKILL.md").read_text().split("---", 2)[1])
+    path = primary / "SKILL.md"
+    header, body = path.read_text().split("---", 2)[1:]
+    metadata = yaml.safe_load(header)
+    metadata["workflow"]["human_tasks"].append(shared_metadata["workflow"]["human_tasks"][0])
+    if first_has_label:
+        metadata["workflow"]["notification"]["task_labels"]["custom-review"] = {
+            "message_key": "owned.action"
+        }
+    path.write_text("---\n" + yaml.safe_dump(metadata) + "---" + body)
+    for resource in primary.glob("locales/*.yaml"):
+        catalog = yaml.safe_load(resource.read_text())
+        catalog["task.prompt"] = yaml.safe_load((shared / "locales" / resource.name).read_text())[
+            "task.prompt"
+        ]
+        resource.write_text(yaml.safe_dump(catalog))
+    from cafe.core.runtime_locales import render_text
+    from cafe.skills.loader import SkillLoader
+    from cafe.skills.workflow_composition import resolve_step_workflow_composition
+
+    composition = resolve_step_workflow_composition(
+        SkillLoader(project_root=project),
+        primary_skill="cafe-spec",
+        workflow_skills=["shared-copy"],
+        step_name="renamed",
+    )
+    chosen = composition.human_task_producers["custom-review"]
+    assert chosen is composition.contributors[0]
+    with pytest.raises(TypeError):
+        composition.human_task_producers["custom-review"] = composition.contributors[1]
+    BlackboardWorkflowRuntime(
+        issue_dir=issue,
+        playbook=PlaybookLoader(project_root=project).load("owned"),
+        executor=lambda *_args: StepExecutionResult(
+            response="ready_for_review",
+            artifacts={},
+            status_code="ready_for_review",
+            auto_continue=False,
+        ),
+    ).run(start_step="renamed")
+    expected = (
+        "Selected action zh-TW"
+        if first_has_label
+        else render_text("notification.action_fallback", locale="zh-Hant")
+    )
+    assert expected in posts[0] and "Shared action" not in posts[0]
+    assert HumanTaskRecordStore(issue).tasks()[0].policy_id == "custom-review"
+
+
+def test_notification_operation_reuses_pair_then_reads_same_path_changes(
+    notification_owner, monkeypatch
+):
+    project, primary, _shared, _issue, _posts = notification_owner
+    from cafe.skills.loader import SkillLoader
+    from cafe.skills.notification_copy import resolve_step_notification_presentation
+
+    loader = SkillLoader(project_root=project, resolve_presentation=False)
+    reads = []
+    original = Path.read_text
+
+    def read(path, *args, **kwargs):
+        if path.parent == primary / "locales":
+            reads.append(path.name)
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read)
+
+    def resolve():
+        return resolve_step_notification_presentation(
+            playbook_data={"steps": {"arbitrary": {"skill": "cafe-spec"}}},
+            step_name="arbitrary",
+            task_id="output-review",
+            locale="zh-HK",
+            skill_loader=loader,
+        )
+
+    first = resolve()
+    assert reads == ["en-US.yaml", "zh-TW.yaml"]
+    add_notification(primary, step="Replaced step", task=("output-review", "Replaced action"))
+    reads.clear()
+    assert resolve().action_label == "Replaced action zh-TW"
+    assert reads == ["en-US.yaml", "zh-TW.yaml"]
+    assert first.action_label == "Selected action zh-TW"
+    resource = primary / "locales/zh-TW.yaml"
+    resource.write_text("owned.step: [")
+    with pytest.raises(ValueError) as rejected:
+        resolve()
+    assert str(resource) in str(rejected.value)
+    resource.unlink()
+    with pytest.raises(ValueError) as rejected:
+        resolve()
+    assert str(resource) in str(rejected.value)
+
+
 @pytest.mark.parametrize("mutation", ["missing", "malformed", "unknown-key", "placeholder"])
 def test_notification_declaration_rejects_invalid_selected_owner(notification_owner, mutation):
     project, primary, _shared, _issue, posts = notification_owner

@@ -212,10 +212,14 @@ For owner resources, pass the resolved locale directory to
 `load_catalogs(catalog_root)` or
 `render_text(key, locale=locale, catalog_root=catalog_root, **values)`.
 The generic loader validates each pair separately and returns immutable mappings.
-Only the immutable packaged runtime pair is cached. Selected skill resources are
-read afresh under the catalog read lock; a same-path publication or missing
-current file cannot be hidden by a prior owner read. Each owner read loads its
-two fixed locale files, without retaining owner cache entries. A supplied root is authoritative: it does not search other
+Only the immutable packaged runtime pair is cached across operations. Within one
+owner-specific declaration parse or notification resolution, a lazy renderer
+reuses the validated immutable pair under the existing catalog read lock. The
+renderer is discarded at that operation's boundary; it is never stored on a
+loader, model or composition. Each subsequent operation reads both owner files
+afresh, so same-path publication, replacement, removal or invalid data cannot be
+hidden by a prior read. Inline-only and structural readers retain their existing
+behavior without copy I/O. A supplied root is authoritative: it does not search other
 owners or fall back to the central catalogs. Keys do not select a resource owner.
 Packaged resources work independently of the current working directory in a
 source checkout or installed distribution.
@@ -278,8 +282,11 @@ workflow:
 
 `task_labels` can name only HumanTasks declared by that contributor. Shared
 contributors may supply their own task labels; the step label belongs to the
-primary skill. Composition retains the first identical task producer and its
-presentation together. The selected entry supplies the resource path, including
+primary skill. Composition exposes its chosen task producers through an immutable
+mapping; notification resolution uses that same provenance instead of rescanning
+contributors. The first identical producer remains authoritative even when it
+has no action label and deliberately uses generic fallback. The selected entry
+supplies the resource path, including
 project/global shadows and iteration-based selectors. Renaming a step or using a
 custom skill does not change that relationship. No phase-name or task-ID registry
 infers an owner. Missing presentation uses the existing generic fallback.

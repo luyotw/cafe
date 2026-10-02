@@ -410,7 +410,11 @@ class NotificationMessageReference(BaseModel):
             raise ValueError("notification copy requires its declaration owner")
         if context.get("resolve_presentation", True):
             for locale in ("en-US", "zh-TW"):
-                render_text(self.message_key, locale=locale, catalog_root=root)
+                render = context.get("render_locale_text")
+                if render is not None:
+                    render(self.message_key, locale=locale)
+                else:
+                    render_text(self.message_key, locale=locale, catalog_root=root)
         return self
 
 

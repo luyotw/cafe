@@ -160,6 +160,58 @@ def test_phase_copy_is_absent_from_central_catalogs():
         assert not (set(catalog.values()) & phase_copy[locale])
 
 
+@pytest.mark.parametrize("shared", [False, True])
+def test_owner_parse_reads_each_locale_once_and_reloads_next_operation(
+    tmp_path, monkeypatch, shared
+):
+    selected = write_owner(tmp_path / ".cafe/skills", "selected", "approve", "Original")
+    write_owner(tmp_path / ".cafe/skills", "anchor", "anchor", "Anchor")
+    loader = SkillLoader(project_root=tmp_path, global_root=tmp_path / "global")
+    reads = []
+    original = Path.read_text
+    def read(path, *args, **kwargs):
+        if path.parent == selected / "locales":
+            reads.append(path.name)
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "read_text", read)
+    def parse():
+        return resolve_step_workflow_composition(
+            loader, primary_skill="anchor" if shared else "selected",
+            workflow_skills=["selected"] if shared else [], step_name="arbitrary",
+        ).human_tasks[-1]
+    first = parse()
+    assert reads == ["en-US.yaml", "zh-TW.yaml"]
+    for locale in ("en-US", "zh-TW"):
+        (selected / "locales" / f"{locale}.yaml").write_text(
+            yaml.safe_dump({"task.prompt": f"Updated {locale}"})
+        )
+    reads.clear()
+    assert parse().prompt == "Updated en-US"
+    assert reads == ["en-US.yaml", "zh-TW.yaml"]
+    assert first.prompt == "Original en-US"
+    (selected / "locales/zh-TW.yaml").unlink()
+    with pytest.raises(ValueError) as rejected:
+        parse()
+    assert "zh-TW.yaml" in str(rejected.value)
+
+
+def test_pr_declaration_reuses_one_pair_for_all_nested_references(tmp_path, monkeypatch):
+    loader = SkillLoader(project_root=tmp_path, global_root=tmp_path / "global")
+    entry, _raw = loader.get_workflow_declaration_data("cafe-pr")
+    reads = []
+    original = Path.read_text
+    def read(path, *args, **kwargs):
+        if path.parent == entry.directory / "locales":
+            reads.append(path.name)
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "read_text", read)
+    first = loader.get_workflow_declaration("cafe-pr")
+    assert reads == ["en-US.yaml", "zh-TW.yaml"]
+    second = loader.get_workflow_declaration("cafe-pr")
+    assert second == first
+    assert reads == ["en-US.yaml", "zh-TW.yaml"] * 2
+
+
 @pytest.mark.parametrize(
     "document",
     [
@@ -214,16 +266,17 @@ def test_published_owner_replacement_reaches_fresh_public_composition(tmp_path, 
     result = service.sync(comparison.token, ["phase:selected"])
     assert result.updated == ("phase:selected",)
     fresh = SkillLoader(project_root=consumer, global_root=global_root)
-    composition = resolve_step_workflow_composition(
-        fresh,
-        primary_skill="anchor" if shared else "selected",
-        workflow_skills=["selected"] if shared else [],
-        step_name="inspect",
-    )
-    policy = composition.contributors[-1].declaration.human_tasks[0]
-    assert policy.id == "approve-new"
-    assert policy.prompt == "Updated en-US"
-    assert policy.for_locale("zh-TW").prompt == "Updated zh-TW"
+    for current in (loader, fresh):
+        composition = resolve_step_workflow_composition(
+            current,
+            primary_skill="anchor" if shared else "selected",
+            workflow_skills=["selected"] if shared else [],
+            step_name="inspect",
+        )
+        policy = composition.contributors[-1].declaration.human_tasks[0]
+        assert policy.id == "approve-new"
+        assert policy.prompt == "Updated en-US"
+        assert policy.for_locale("zh-TW").prompt == "Updated zh-TW"
 
 
 @pytest.mark.parametrize("mutation", ["remove", "invalid"])
@@ -236,11 +289,11 @@ def test_warm_owner_rejects_current_missing_or_invalid_resources(tmp_path, mutat
         resource.unlink()
     else:
         resource.write_text('task.prompt: "{unexpected}"\n')
-    with pytest.raises(ValueError) as rejected:
-        SkillLoader(
-            project_root=tmp_path, global_root=tmp_path / "global"
-        ).get_workflow_declaration("custom")
-    assert str(resource) in str(rejected.value)
+    fresh = SkillLoader(project_root=tmp_path, global_root=tmp_path / "global")
+    for current in (loader, fresh):
+        with pytest.raises(ValueError) as rejected:
+            current.get_workflow_declaration("custom")
+        assert str(resource) in str(rejected.value)
 
 
 def test_structural_composition_preserves_primary_and_shared_machine_contracts(tmp_path):

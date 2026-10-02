@@ -93,6 +93,9 @@ def _resolve_copy_reference(
             # Structural readers validate identity and reference shape. Saved
             # tasks own their presentation; fresh materialization resolves copy.
             return value["message_key"]
+        render = (info.context or {}).get("render_locale_text")
+        if render is not None:
+            return render(value["message_key"], locale=locale)
         return render_text(value["message_key"], locale=locale, catalog_root=catalog_root)
     return value
 
