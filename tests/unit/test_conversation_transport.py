@@ -634,3 +634,99 @@ def test_copilot_plain_model_validation_is_identical_on_success_and_error(
     assert selected.executor.config.model == requested
     assert selected.executor.config.session_id == "bound"
     assert launch.call_count == 1
+
+
+@pytest.mark.parametrize("substitution", ["root", "ancestor", "target", "target-symlink"])
+@pytest.mark.parametrize("boundary", ["read", "temporary", "publish"])
+def test_usage_persistence_remains_bound_through_final_filesystem_substitution(
+    tmp_path, monkeypatch, provider_process, substitution, boundary
+):
+    import os
+    import cafe.core.usage as usage_module
+
+    workspace = tmp_path / "workspace"
+    target = workspace / ".cafe/issues/x/develop/iteration_001/iteration.json"
+    target.parent.mkdir(parents=True)
+    original = dict(iteration=1, timestamp="pinned", stats=dict(input_tokens=1), other="kept")
+    target.write_text(json.dumps(original))
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    unrelated = dict(iteration=99, timestamp="other", other="unrelated")
+    external = outside / (target.relative_to(workspace) if substitution == "root" else "iteration.json")
+    external.parent.mkdir(parents=True, exist_ok=True)
+    external.write_text(json.dumps(unrelated))
+    sink = usage_module.iteration_usage_sink(workspace, target)
+    moved = target.parent.with_name("original")
+    changed = False
+
+    def substitute():
+        nonlocal changed
+        if changed:
+            return
+        changed = True
+        if substitution == "root":
+            workspace.rename(tmp_path / "original-root")
+            workspace.symlink_to(outside, target_is_directory=True)
+        elif substitution == "ancestor":
+            target.parent.rename(moved)
+            target.parent.symlink_to(outside, target_is_directory=True)
+        else:
+            target.rename(target.with_suffix(".original"))
+            if substitution == "target-symlink":
+                target.symlink_to(external)
+            else:
+                target.write_text(json.dumps(unrelated))
+
+    original_open, original_replace = os.open, os.replace
+    original_read = __import__('pathlib').Path.read_text
+    # Cover the old path-based implementation and descriptor-bound implementation
+    # at their actual filesystem boundaries, without replacing transport or sink.
+    def open_boundary(path, flags, *args, **kwargs):
+        if boundary == "read" and str(path).endswith("iteration.json"):
+            substitute()
+        elif boundary == "temporary" and flags & os.O_CREAT and ".usage-" in str(path):
+            substitute()
+        return original_open(path, flags, *args, **kwargs)
+
+    def read_boundary(path, *args, **kwargs):
+        if boundary == "read" and path == target:
+            substitute()
+        return original_read(path, *args, **kwargs)
+
+    def replace_boundary(source, destination, *args, **kwargs):
+        if boundary == "publish" and ".usage-" in str(source):
+            substitute()
+        return original_replace(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", open_boundary)
+    monkeypatch.setattr(__import__('pathlib').Path, "read_text", read_boundary)
+    monkeypatch.setattr(os, "replace", replace_boundary)
+    if hasattr(usage_module, "_exchange_usage_file"):
+        exchange = usage_module._exchange_usage_file
+
+        def exchange_boundary(*args, **kwargs):
+            if boundary == "publish":
+                substitute()
+            return exchange(*args, **kwargs)
+
+        monkeypatch.setattr(usage_module, "_exchange_usage_file", exchange_boundary)
+
+    launch = provider_process([init(), dict(type="result", usage=dict(input_tokens=2))])
+    selected = transport()
+    try:
+        selected.run_one_shot("hello", on_usage=sink)
+    except (OSError, ValueError):
+        pass  # Target changes must be explicit caller errors, never provider retries.
+    assert changed
+    assert json.loads(original_read(external)) == unrelated
+    if substitution in {"root", "ancestor"}:
+        retained_path = (tmp_path / "original-root" / target.relative_to(workspace)
+                         if substitution == "root" else moved / "iteration.json")
+        retained = json.loads(original_read(retained_path))
+        assert retained["iteration"] == 1 and retained["other"] == "kept"
+        assert retained["stats"]["input_tokens"] in {1, 3}
+    else:
+        assert json.loads(original_read(target)) == unrelated
+        assert json.loads(original_read(target.with_suffix(".original"))) == original
+    assert selected.executor.get_total_token_usage().input_tokens == 2
+    assert launch.call_count == 1

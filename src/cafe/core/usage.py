@@ -1,8 +1,12 @@
 """Reuse existing iteration telemetry without resolving caller authority."""
 
+import ctypes
+import errno
 import json
 import os
-import tempfile
+import secrets
+import stat
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict
 
@@ -46,37 +50,100 @@ def merge_token_usage_stats(existing: Any, incoming: TokenUsage) -> Dict[str, An
     return merged
 
 
+def _inode(info):
+    return info.st_dev, info.st_ino
+
+
+@contextmanager
+def _usage_parent(target: Path):
+    """Reuse no-follow descriptor traversal across the complete absolute path."""
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    descriptor = os.open(os.sep, flags)
+    identities = [_inode(os.fstat(descriptor))]
+    try:
+        for part in target.parent.parts[1:]:
+            next_descriptor = os.open(part, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = next_descriptor
+            identities.append(_inode(os.fstat(descriptor)))
+        yield descriptor, tuple(identities)
+    finally:
+        os.close(descriptor)
+
+
+def _read_usage_file(parent_fd, name):
+    descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
+    with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError("usage target must be a regular file")
+        return json.load(handle), _inode(info)
+
+
+def _exchange_usage_file(parent_fd, source, destination):
+    """Atomically publish while retaining the displaced inode for validation.
+
+    Ordinary replace cannot conditionally protect a destination substituted at
+    the syscall boundary. Exchange keeps that object intact for verification and
+    rollback, including symlinks, without following it or publishing partial JSON.
+    Unsupported platforms/filesystems fail before modifying either file.
+    """
+    library = ctypes.CDLL(None, use_errno=True)
+    if hasattr(library, "renameat2"):
+        operation, flag = library.renameat2, 2  # Linux RENAME_EXCHANGE
+    elif hasattr(library, "renameatx_np"):
+        operation, flag = library.renameatx_np, 2  # Darwin RENAME_SWAP
+    else:
+        raise OSError(errno.ENOTSUP, "atomic usage exchange is unavailable")
+    operation.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p,
+                          ctypes.c_uint]
+    operation.restype = ctypes.c_int
+    if operation(parent_fd, os.fsencode(source), parent_fd, os.fsencode(destination), flag):
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+
+
 def iteration_usage_sink(repository_root: Path, context_file: Path):
     """Pin an existing caller-admitted metadata target; never create an iteration."""
     root = Path(repository_root).resolve()
-    target = Path(context_file).absolute()
+    target = Path(os.path.abspath(context_file))
     if target.resolve() != target or not target.is_relative_to(root):
         raise ValueError("usage target must remain within its admitted workspace")
-    if not target.is_file():
+    try:
+        with _usage_parent(target) as (parent_fd, parents):
+            original, admitted_inode = _read_usage_file(parent_fd, target.name)
+    except FileNotFoundError:
         return None
-    original = json.loads(target.read_text(encoding="utf-8"))
     if not isinstance(original, dict) or not isinstance(original.get("iteration"), int):
         return None
     identity = (original.get("iteration"), original.get("timestamp"))
 
     def persist(usage: TokenUsage):
-        with workspace_execution_lock(root):
-            if target.resolve() != target:
-                raise ValueError("usage target changed")
-            current = json.loads(target.read_text(encoding="utf-8"))
-            if (
-                not isinstance(current, dict)
-                or (current.get("iteration"), current.get("timestamp")) != identity
-            ):
+        nonlocal admitted_inode
+        with workspace_execution_lock(root), _usage_parent(target) as (parent_fd, current_parents):
+            if current_parents != parents:
+                raise ValueError("usage target parent changed")
+            current, current_inode = _read_usage_file(parent_fd, target.name)
+            if (current_inode != admitted_inode or not isinstance(current, dict)
+                    or (current.get("iteration"), current.get("timestamp")) != identity):
                 raise ValueError("admitted iteration identity changed")
             current["stats"] = merge_token_usage_stats(current.get("stats"), usage)
-            descriptor, temporary = tempfile.mkstemp(prefix=".usage-", dir=target.parent)
+            temporary = ".usage-" + secrets.token_hex(16)
+            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                                 0o600, dir_fd=parent_fd)
             try:
                 with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                    published_inode = _inode(os.fstat(handle.fileno()))
                     json.dump(current, handle, ensure_ascii=False, indent=2)
-                os.replace(temporary, target)
+                _exchange_usage_file(parent_fd, temporary, target.name)
+                displaced = os.stat(temporary, dir_fd=parent_fd, follow_symlinks=False)
+                if _inode(displaced) != current_inode:
+                    # Restore the substituted object, rather than overwrite or
+                    # delete it. The proposed JSON remains private and is removed.
+                    _exchange_usage_file(parent_fd, temporary, target.name)
+                    raise ValueError("usage target changed during publication")
+                admitted_inode = published_inode
             finally:
-                if os.path.exists(temporary):
-                    os.unlink(temporary)
+                os.unlink(temporary, dir_fd=parent_fd)
 
     return persist

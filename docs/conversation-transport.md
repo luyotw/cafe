@@ -129,6 +129,12 @@ acceptance. Forwarding does not accumulate usage a second time.
 Phase retains its compatibility delegate. The caller admits and pins an existing
 iteration metadata path before invocation. `iteration_usage_sink` merges under
 the workspace write lock, preserving other metadata and concurrent statistics.
+Reads and publication use no-follow directory descriptors and admitted inode
+identities. Atomic exchange retains a substituted destination for validation and
+restoration; it never follows that destination into another file. Linux
+`renameat2(RENAME_EXCHANGE)` and macOS `renameatx_np(RENAME_SWAP)` provide this
+operation. Unsupported platforms/filesystems return an observable persistence
+error without an unsafe replacement. Descriptors are closed after every merge.
 It never creates an iteration or resolves workflow authority. Chat selects its
 configured phase's existing iteration. Callback selection uses the event step
 and event-time metadata, not callback `attempt`, and excludes newer iterations.
