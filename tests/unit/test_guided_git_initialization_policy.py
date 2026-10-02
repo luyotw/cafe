@@ -13,10 +13,11 @@ KICKOFF_REFERENCE = (
     / "references"
     / "kickoff.md"
 )
+KICKOFF_EXECUTION_REFERENCE = KICKOFF_REFERENCE.with_name("kickoff_execution.md")
 
 
 def test_driver_kickoff_requires_approval_before_guided_git_initialization() -> None:
-    content = KICKOFF_REFERENCE.read_text(encoding="utf-8")
+    content = KICKOFF_REFERENCE.read_text(encoding="utf-8") + KICKOFF_EXECUTION_REFERENCE.read_text(encoding="utf-8")
     normalized = " ".join(content.split())
 
     assert "does not create GitHub resources or upload files" in normalized

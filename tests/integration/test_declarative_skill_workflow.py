@@ -467,6 +467,7 @@ def test_packaged_workflow_uses_full_then_packet_then_legacy_fallback(
     # keep it on the bounded legacy consumer path.
     playbook["steps"]["review"].pop("workspace_input_artifact", None)
     playbook["steps"]["pr"].pop("workspace_input_artifact", None)
+    playbook["steps"]["develop"].pop("workspace_artifact", None)
     issue_dir = tmp_path / ".cafe" / "issues" / "packaged-packet-journey"
     spec = issue_dir / "spec" / "iteration_001" / "output.md"
     plan = issue_dir / "plan" / "iteration_001" / "output.md"

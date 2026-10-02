@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 UNIT_ROOT = PROJECT_ROOT / "tests/unit"
@@ -48,6 +49,23 @@ def _formatter_inputs(issue_name: str) -> dict:
         "worktree": args.worktree,
         "proactive_review_decision": args.proactive_review_decision,
     }
+
+
+def _phase_config(path: Path) -> Path:
+    """Provide the repository phase defaults explicitly for isolated fixtures."""
+    defaults = _formatter_inputs("phase-config-fixture")["phase_chain"]
+    config = {}
+    for item in defaults:
+        step, chain = item.split("=", 1)
+        config[step] = {
+            "name": step,
+            "clis": [
+                {"cli": cli, "model": model}
+                for cli, model in (candidate.split(":", 1) for candidate in chain.split(","))
+            ],
+        }
+    path.write_text(yaml.safe_dump(config), encoding="utf-8")
+    return path
 
 
 def test_compact_cli_reports_preserve_selected_facts_and_full_render(
@@ -131,6 +149,8 @@ def test_compact_cli_reports_preserve_selected_facts_and_full_render(
     formatter_inputs.update(
         {"issue_name": issue_name, "playbook_id": "standard-qa", "project_root": str(PROJECT_ROOT)}
     )
+    formatter_inputs["phase_chain"].append("qa=gemini:qa-main,copilot:qa-fallback")
+    formatter_inputs["proactive_review_decision"].insert(-1, "qa=not_required")
     request = {
         "schema_version": 1,
         "project_root": str(PROJECT_ROOT),
@@ -234,7 +254,7 @@ def test_compact_cli_reports_preserve_selected_facts_and_full_render(
 
     inputs = load_kickoff_module("kickoff_inputs")
     compact_render = inputs.render_kickoff(compact_assembly["formatter_inputs"])
-    assert compact_render["status"] == "rendered"
+    assert compact_render["status"] == "rendered", compact_render
     assert compact_render["proposal"]
     assert cli.main(compact_assembly["render_command"][2:]) == 0
     continued = json.loads(capsys.readouterr().out)
@@ -280,6 +300,7 @@ def test_public_draft_prefills_owner_defaults_and_renders_the_same_contract(tmp_
     cli = load_kickoff_module("prepare_kickoff")
     inputs = load_kickoff_module("kickoff_inputs")
     values = _formatter_inputs("issue573-prefill-journey")
+    values["phase_config"] = str(_phase_config(tmp_path / "phases.yaml"))
     for key in ("phase_chain", "effective_locale", "locale_source", "user_required", "manager_confirmable",
                 "proactive_review_decision"):
         values.pop(key, None)
@@ -382,9 +403,7 @@ def test_resume_keeps_confirmed_locale_and_workflow_state_unchanged(tmp_path: Pa
     )
     phase_dir = project / ".cafe"
     phase_dir.mkdir(parents=True, exist_ok=True)
-    (phase_dir / "phases.yaml").write_text(
-        (PROJECT_ROOT / ".cafe/phases.yaml").read_text(encoding="utf-8"), encoding="utf-8"
-    )
+    _phase_config(phase_dir / "phases.yaml")
     blackboard = issue_dir / "blackboard.json"
     before = blackboard.read_bytes()
     formatter_inputs = _formatter_inputs(issue_name)

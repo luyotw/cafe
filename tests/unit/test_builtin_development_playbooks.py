@@ -147,14 +147,13 @@ def test_cafe_pr_routes_completed_artifacts_to_local_review() -> None:
     assert "catalog declares a `workflow_complete` default to `done`" in skill
     assert "select an undeclared route" in skill
     assert "workflow_feedback_file" in skill
-    assert "current corrective cycle" in skill
+    assert "current corrective batch" in skill
     assert "Canonical Todo fields for this batch" in skill
     assert "do not derive or substitute a generic PR-comment prefix or source" in skill
     assert "`manual_handoff`" in skill
     assert "Follow-up Proposals" in skill
     assert "does not create a GitHub issue automatically" in skill
-    assert "decision applies to every open FUP" in skill
-    assert "per-proposal mixed disposition is not supported" in skill
+    assert "one PR HumanTask choice applies to all open" in skill
 
     policy = next(
         task

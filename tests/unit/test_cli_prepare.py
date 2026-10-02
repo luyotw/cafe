@@ -37,19 +37,19 @@ def _load_kickoff_formatter():
     return module
 
 
-def _confirmed_driver_proposal() -> dict[str, object]:
+def _confirmed_manager_proposal() -> dict[str, object]:
     policy: dict[str, object] = {
         "delivery_contract": delivery_contract(),
         "locales": {"conversation": {"value": "en", "source": "user"}},
         "confirmation_contract": {
             "user_required": [],
-            "driver_confirmable": [],
+            "manager_confirmable": [],
             "mandatory_human_stops": [],
         },
         "reactive_user_handoffs": {
             "need_clarification": "user_required",
             "need_permission": "user_required",
-            "alignment_checkpoint": "driver_resolvable_when_clear",
+            "alignment_checkpoint": "manager_resolvable_when_clear",
         },
         "phases": [
             {
@@ -65,8 +65,9 @@ def _confirmed_driver_proposal() -> dict[str, object]:
                 }
             ]
         },
-        "driver": {"mode": "unattended"},
+        "manager": {"mode": "unattended"},
         "checkout": {"kind": "current_checkout"},
+        "task_contract": {"user_required": [], "manager_confirmable": []},
     }
     return policy
 
@@ -731,7 +732,7 @@ class TestPrepareCommand:
         assert repeated.exit_code == 1
         assert "active workflow state exists" in repeated.stdout
 
-    def test_prepare_identity_can_activate_driver_contract_before_first_phase(
+    def test_prepare_identity_can_activate_manager_contract_before_first_phase(
         self, temp_repo_dir, mock_git_ops
     ):
         result = runner.invoke(
@@ -754,11 +755,11 @@ class TestPrepareCommand:
                 project_root=temp_repo_dir,
                 issue_name="driver-ready",
             ),
-            proposal=_confirmed_driver_proposal(),
+            proposal=_confirmed_manager_proposal(),
         )
 
         contract = json.loads(
-            (issue_dir / "driver" / "contract.json").read_text(encoding="utf-8")
+            (issue_dir / "manager" / "contract.json").read_text(encoding="utf-8")
         )
         assert contract["identity"] == {
             "issue_name": "driver-ready",

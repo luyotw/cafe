@@ -1,5 +1,6 @@
 """Production journeys for independently selected checklist overlays."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -560,7 +561,7 @@ class JourneyAgent:
         self.calls = 0
         self.prompts = []
         self.agent = SimpleNamespace(
-            config=SimpleNamespace(cli=AgentCLI.CODEX, session_id=None, model=None)
+            config=SimpleNamespace(cli=AgentCLI.CODEX, session_id="journey-session", model=None)
         )
 
     def get_agent(self, name):
@@ -573,7 +574,7 @@ class JourneyAgent:
         action = self.actions[min(self.calls, len(self.actions) - 1)]
         self.calls += 1
         response = action(self.executor._get_iteration_dir(self.executor.iteration))
-        return response, TokenUsage(), [], [], [], None
+        return response, TokenUsage(), [], [], [], "journey-session"
 
 
 def lifecycle_fixture(tmp_path, monkeypatch, *, real_develop=False):
@@ -702,6 +703,9 @@ def test_direct_subagent_review_user_agreement_reenters_the_composed_gate_once(
 
     def no_change(directory):
         (directory / "output.md").write_text("No implementation changes are necessary.\n")
+        (executor.issue_dir / "next_step.txt").write_text(
+            json.dumps({"version": 1, "to_owner": "user", "to_step": "user", "intent": "no_changes_needed"})
+        )
         return "no_changes_needed"
 
     executor.step_user_inputs["develop"] = "Confirm whether this already-complete change needs work."
@@ -733,6 +737,9 @@ def test_direct_subagent_review_user_agreement_reenters_the_composed_gate_once(
         assert "Dual-subagent review gate" in content
         checklist.write_text(content.replace("[ ]", "[x]"))
         (directory / "output.md").write_text("No changes; composed review gate completed.\n")
+        (executor.issue_dir / "next_step.txt").write_text(
+            json.dumps({"version": 1, "to_owner": "agent", "to_step": "pr", "intent": "await_agent"})
+        )
         return "confirmed"
 
     executor.agent_manager = JourneyAgent(executor, [finish_after_review])
