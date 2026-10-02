@@ -764,3 +764,173 @@ def test_usage_rollback_failure_retains_displaced_metadata_and_is_observable(
     assert json.loads(retained[0].read_text()) == unrelated
     assert json.loads((tmp_path / "original.json").read_text())["iteration"] == 1
     assert launch.call_count == 1
+
+
+@pytest.mark.parametrize("cleanup", ["normal", "failed-publication"])
+def test_usage_cleanup_substitution_preserves_unrelated_object_without_replay(
+    tmp_path, monkeypatch, provider_process, cleanup
+):
+    import os
+    import cafe.core.usage as usage_module
+
+    target = tmp_path / "iteration.json"
+    target.write_text(json.dumps(dict(iteration=1, timestamp="pinned", stats=dict(input_tokens=1))))
+    unrelated = tmp_path / "unrelated.json"
+    unrelated_data = dict(iteration=99, timestamp="other", secret="retained")
+    unrelated.write_text(json.dumps(unrelated_data))
+    sink = usage_module.iteration_usage_sink(tmp_path, target)
+    original_unlink, original_truncate = os.unlink, os.ftruncate
+    substituted = False
+
+    def substitute(parent_fd, name):
+        nonlocal substituted
+        if not substituted:
+            substituted = True
+            os.replace(unrelated, name, dst_dir_fd=parent_fd)
+
+    def unlink_boundary(name, *args, **kwargs):
+        if str(name).startswith('.usage-'):
+            substitute(kwargs['dir_fd'], name)
+        return original_unlink(name, *args, **kwargs)
+
+    def truncate_boundary(fd, length):
+        candidates = list(tmp_path.glob('.usage-*'))
+        if candidates and not substituted:
+            directory_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                substitute(directory_fd, candidates[0].name)
+            finally:
+                os.close(directory_fd)
+        return original_truncate(fd, length)
+
+    monkeypatch.setattr(os, 'unlink', unlink_boundary)
+    monkeypatch.setattr(os, 'ftruncate', truncate_boundary)
+    if cleanup == 'failed-publication':
+        def fail_exchange(*args):
+            raise OSError('publication failed')
+        monkeypatch.setattr(usage_module, '_exchange_usage_file', fail_exchange)
+    launch = provider_process([init(), dict(type='result', usage=dict(input_tokens=2))])
+    try:
+        transport().run_one_shot('hello', on_usage=sink)
+    except (OSError, ValueError):
+        pass
+    assert substituted
+    assert any(json.loads(p.read_text()) == unrelated_data
+               for p in tmp_path.glob('.usage-*') if p.stat().st_size)
+    metadata = json.loads(target.read_text())
+    assert metadata['iteration'] == 1
+    assert metadata['stats']['input_tokens'] == (3 if cleanup == 'normal' else 1)
+    assert launch.call_count == 1
+
+
+@pytest.mark.parametrize('object_type', ['nonempty', 'symlink', 'hardlink', 'directory'])
+def test_publication_slot_cannot_consume_or_mutate_an_unrelated_recovery_object(
+    tmp_path, monkeypatch, provider_process, object_type
+):
+    import cafe.core.usage as usage_module
+
+    target = tmp_path / 'iteration.json'
+    target.write_text(json.dumps(dict(iteration=1, timestamp='pinned')))
+    original = target.read_bytes()
+    sink = usage_module.iteration_usage_sink(tmp_path, target)
+    unrelated = tmp_path / 'unrelated.json'
+    data = json.dumps(dict(iteration=99, other='retained'))
+    unrelated.write_text(data)
+    slot = tmp_path / '.usage-iteration.json'
+    if object_type == 'nonempty':
+        slot.write_text(data)
+    elif object_type == 'symlink':
+        slot.symlink_to(unrelated)
+    elif object_type == 'hardlink':
+        import os
+        os.link(unrelated, slot)
+    else:
+        slot.mkdir()
+    launch = provider_process([init(), dict(type='result', usage=dict(input_tokens=2))])
+    selected = transport()
+    with pytest.raises((OSError, ValueError)):
+        selected.run_one_shot('hello', on_usage=sink)
+    assert unrelated.read_text() == data
+    assert target.read_bytes() == original
+    if object_type != 'directory':
+        assert slot.read_text() == data
+    else:
+        assert slot.is_dir()
+    assert launch.call_count == 1
+    assert selected.executor.get_total_token_usage().input_tokens == 2
+
+
+def test_substituted_publication_source_is_restored_without_consuming_unrelated_data(
+    tmp_path, monkeypatch, provider_process
+):
+    import cafe.core.usage as usage_module
+
+    target = tmp_path / 'iteration.json'
+    target.write_text(json.dumps(dict(iteration=1, timestamp='pinned', other='kept')))
+    original = target.read_bytes()
+    unrelated = tmp_path / 'unrelated.json'
+    unrelated_data = json.dumps(dict(iteration=99, other='retained'))
+    unrelated.write_text(unrelated_data)
+    sink = usage_module.iteration_usage_sink(tmp_path, target)
+    exchange = usage_module._exchange_usage_file
+    substituted = False
+
+    def substitute_source(parent_fd, source, destination):
+        nonlocal substituted
+        if not substituted:
+            substituted = True
+            import os
+            os.replace(unrelated, source, dst_dir_fd=parent_fd)
+        return exchange(parent_fd, source, destination)
+
+    monkeypatch.setattr(usage_module, '_exchange_usage_file', substitute_source)
+    launch = provider_process([init(), dict(type='result', usage=dict(input_tokens=2))])
+    with pytest.raises(ValueError):
+        transport().run_one_shot('hello', on_usage=sink)
+    assert target.read_bytes() == original
+    assert (tmp_path / '.usage-iteration.json').read_text() == unrelated_data
+    assert launch.call_count == 1
+
+
+def test_descriptor_cleanup_failure_retains_recovery_data_and_original_caller_error(
+    tmp_path, monkeypatch, provider_process
+):
+    import os
+    import cafe.core.usage as usage_module
+
+    target = tmp_path / 'iteration.json'
+    target.write_text(json.dumps(dict(iteration=1, timestamp='pinned', other='kept')))
+    sink = usage_module.iteration_usage_sink(tmp_path, target)
+    failure = OSError('cleanup failed')
+
+    def fail_cleanup(*args):
+        raise failure
+
+    monkeypatch.setattr(os, 'ftruncate', fail_cleanup)
+    launch = provider_process([init(), dict(type='result', usage=dict(input_tokens=2))])
+    with pytest.raises(OSError) as caught:
+        transport().run_one_shot('hello', on_usage=sink)
+    assert caught.value is failure
+    assert json.loads(target.read_text())['stats']['input_tokens'] == 2
+    retained = json.loads((tmp_path / '.usage-iteration.json').read_text())
+    assert retained == dict(iteration=1, timestamp='pinned', other='kept')
+    assert launch.call_count == 1
+
+
+def test_usage_cleanup_does_not_truncate_an_aliased_metadata_inode(
+    tmp_path, provider_process
+):
+    import os
+    from cafe.core.usage import iteration_usage_sink
+
+    target = tmp_path / 'iteration.json'
+    target.write_text(json.dumps(dict(iteration=1, timestamp='pinned', other='retained')))
+    alias = tmp_path / 'unrelated-alias.json'
+    os.link(target, alias)
+    original = alias.read_bytes()
+    sink = iteration_usage_sink(tmp_path, target)
+    launch = provider_process([init(), dict(type='result', usage=dict(input_tokens=2))])
+    with pytest.raises(ValueError):
+        transport().run_one_shot('hello', on_usage=sink)
+    assert target.read_bytes() == alias.read_bytes() == original
+    assert launch.call_count == 1

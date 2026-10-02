@@ -416,8 +416,38 @@ def test_callback_usage_write_failure_after_acceptance_is_observable_without_rep
     assert persisted["active_index"] == 0
     metadata = json.loads(target.read_text())
     assert metadata["stats"]["input_tokens"] == 2 and metadata["other"] == "kept"
-    assert not list(target.parent.glob(".usage-*"))
+    publication_slots = list(target.parent.glob(".usage-*"))
+    assert len(publication_slots) == 1 and publication_slots[0].stat().st_size == 0
     callback.run_callback(event, repository_root=tmp_path)
     assert launch.call_count == 2
     assert writes == 2
     assert json.loads(target.read_text()) == metadata
+
+
+def test_independent_overlapping_chat_calls_merge_all_verified_usage(
+    phase_chat, monkeypatch, provider_process
+):
+    _issue, metadata = phase_chat
+    launch = provider_process([init('a', model='selected'), dict(type='result', usage=dict(input_tokens=2))])
+    process_a = launch.return_value
+    provider_process([init('b', model='selected'), dict(type='result', usage=dict(input_tokens=3))])
+    process_b = launch.return_value
+    launch.side_effect = [process_a, process_b]
+    reads = iter(process_a.stdout.readline.side_effect)
+    statuses = []
+    nested = False
+
+    def read_outer():
+        nonlocal nested
+        if not nested:
+            nested = True
+            statuses.append(chat.launch_chat_session('developer', 'x', phase_name='implementation', prompt='b'))
+        return next(reads)
+
+    process_a.stdout.readline.side_effect = read_outer
+    statuses.append(chat.launch_chat_session('developer', 'x', phase_name='implementation', prompt='a'))
+    assert statuses == [0, 0]
+    current = json.loads(metadata.read_text())
+    assert current['stats']['input_tokens'] == 5
+    assert current['iteration'] == 4 and current['timestamp'] == 'pinned' and current['other'] == 'kept'
+    assert launch.call_count == 2

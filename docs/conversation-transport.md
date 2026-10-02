@@ -129,14 +129,23 @@ acceptance. Forwarding does not accumulate usage a second time.
 Phase retains its compatibility delegate. The caller admits and pins an existing
 iteration metadata path before invocation. `iteration_usage_sink` merges under
 the workspace write lock, preserving other metadata and concurrent statistics.
-Reads and publication use no-follow directory descriptors and admitted inode
-identities. Atomic exchange retains a substituted destination for validation and
+Reads and publication use no-follow directory descriptors and the admitted
+iteration/timestamp identity. Independent calls read the latest legitimate
+metadata under the same lock, then pin that read's inode through publication.
+Atomic exchange retains a substituted destination for validation and
 restoration; it never follows that destination into another file. Linux
 `renameat2(RENAME_EXCHANGE)` and macOS `renameatx_np(RENAME_SWAP)` provide this
 operation. Unsupported platforms/filesystems return an observable persistence
 error without an unsafe replacement. If restoration itself fails, the displaced
 metadata is retained at the temporary name and the error reaches the caller for
-recovery; it never authorizes provider replay. Descriptors close after every merge.
+recovery; it never authorizes provider replay. Cleanup truncates the authorized
+open descriptor rather than deleting a later resolution of its name. Aliased
+metadata inodes are rejected before mutation. Each
+metadata file reuses one empty publication slot (`.usage-<metadata filename>`),
+which contains no statistics after normal success or pre-publication failure.
+The slot is never read as usage evidence or used as iteration authority; a
+nonempty recovery object blocks reuse without being consumed or deleted.
+Descriptors close after every merge.
 It never creates an iteration or resolves workflow authority. Chat selects its
 configured phase's existing iteration. Callback selection uses the event step
 and event-time metadata, not callback `attempt`, and excludes newer iterations.

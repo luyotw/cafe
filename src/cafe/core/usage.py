@@ -4,7 +4,6 @@ import ctypes
 import errno
 import json
 import os
-import secrets
 import stat
 from contextlib import contextmanager
 from pathlib import Path
@@ -71,13 +70,17 @@ def _usage_parent(target: Path):
         os.close(descriptor)
 
 
-def _read_usage_file(parent_fd, name):
-    descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
+def _read_usage_file(parent_fd, name, *, retain_descriptor=False):
+    mode = os.O_RDWR if retain_descriptor else os.O_RDONLY
+    descriptor = os.open(name, mode | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
     with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
         info = os.fstat(handle.fileno())
-        if not stat.S_ISREG(info.st_mode):
-            raise ValueError("usage target must be a regular file")
-        return json.load(handle), _inode(info)
+        if not stat.S_ISREG(info.st_mode) or (retain_descriptor and info.st_nlink != 1):
+            raise ValueError("usage target must be an unaliased regular file")
+        data = json.load(handle)
+        if retain_descriptor:
+            return data, _inode(info), os.dup(handle.fileno())
+        return data, _inode(info)
 
 
 def _exchange_usage_file(parent_fd, source, destination):
@@ -111,7 +114,7 @@ def iteration_usage_sink(repository_root: Path, context_file: Path):
         raise ValueError("usage target must remain within its admitted workspace")
     try:
         with _usage_parent(target) as (parent_fd, parents):
-            original, admitted_inode = _read_usage_file(parent_fd, target.name)
+            original, _ = _read_usage_file(parent_fd, target.name)
     except FileNotFoundError:
         return None
     if not isinstance(original, dict) or not isinstance(original.get("iteration"), int):
@@ -119,41 +122,59 @@ def iteration_usage_sink(repository_root: Path, context_file: Path):
     identity = (original.get("iteration"), original.get("timestamp"))
 
     def persist(usage: TokenUsage):
-        nonlocal admitted_inode
         with workspace_execution_lock(root), _usage_parent(target) as (parent_fd, current_parents):
             if current_parents != parents:
                 raise ValueError("usage target parent changed")
-            current, current_inode = _read_usage_file(parent_fd, target.name)
-            if (current_inode != admitted_inode or not isinstance(current, dict)
-                    or (current.get("iteration"), current.get("timestamp")) != identity):
-                raise ValueError("admitted iteration identity changed")
-            current["stats"] = merge_token_usage_stats(current.get("stats"), usage)
-            temporary = ".usage-" + secrets.token_hex(16)
-            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                                 0o600, dir_fd=parent_fd)
-            cleanup_inode = _inode(os.fstat(descriptor))
+            # A cooperating writer can atomically replace this same iteration.
+            # Read its latest counts under the shared lock; pin this read's inode
+            # only through publication, not across independent provider calls.
+            current, current_inode, current_fd = _read_usage_file(
+                parent_fd, target.name, retain_descriptor=True
+            )
+            staging_fd = None
+            cleanup_fd = None
+            temporary = ".usage-" + target.name
             try:
-                with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                    published_inode = cleanup_inode
+                if (not isinstance(current, dict)
+                        or (current.get("iteration"), current.get("timestamp")) != identity):
+                    raise ValueError("admitted iteration identity changed")
+                current["stats"] = merge_token_usage_stats(current.get("stats"), usage)
+                # Reuse one empty publication slot per metadata file. It is never
+                # a stats source. Recovery objects are retained, never consumed.
+                staging_fd = os.open(temporary, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                     0o600, dir_fd=parent_fd)
+                staged = os.fstat(staging_fd)
+                if (not stat.S_ISREG(staged.st_mode) or staged.st_nlink != 1
+                        or staged.st_size != 0):
+                    raise ValueError("usage publication slot needs recovery")
+                cleanup_fd = staging_fd
+                published_inode = _inode(staged)
+                with os.fdopen(os.dup(staging_fd), "w", encoding="utf-8") as handle:
                     json.dump(current, handle, ensure_ascii=False, indent=2)
                 _exchange_usage_file(parent_fd, temporary, target.name)
+                cleanup_fd = None
                 displaced = os.stat(temporary, dir_fd=parent_fd, follow_symlinks=False)
-                if _inode(displaced) != current_inode:
-                    # Restore the substituted object, rather than overwrite or
-                    # delete it. The proposed JSON remains private and is removed.
+                published = os.stat(target.name, dir_fd=parent_fd, follow_symlinks=False)
+                if _inode(displaced) != current_inode or _inode(published) != published_inode:
                     _exchange_usage_file(parent_fd, temporary, target.name)
+                    restored = os.stat(temporary, dir_fd=parent_fd, follow_symlinks=False)
+                    if _inode(restored) == published_inode:
+                        cleanup_fd = staging_fd
                     raise ValueError("usage target changed during publication")
-                admitted_inode = published_inode
-                cleanup_inode = current_inode
+                cleanup_fd = current_fd
             finally:
-                # A failed rollback leaves a substituted object at the private
-                # name. Retain it for caller recovery instead of deleting data.
                 try:
-                    remaining = os.stat(temporary, dir_fd=parent_fd, follow_symlinks=False)
-                except FileNotFoundError:
-                    pass
-                else:
-                    if _inode(remaining) == cleanup_inode:
-                        os.unlink(temporary, dir_fd=parent_fd)
+                    if cleanup_fd is not None:
+                        # Truncate the authorized open object, not a later name
+                        # resolution. A substituted entry is preserved even if
+                        # it arrives at the final cleanup syscall boundary.
+                        os.ftruncate(cleanup_fd, 0)
+                        remaining = os.stat(temporary, dir_fd=parent_fd, follow_symlinks=False)
+                        if _inode(remaining) != _inode(os.fstat(cleanup_fd)):
+                            raise ValueError("usage publication slot changed during cleanup")
+                finally:
+                    if staging_fd is not None:
+                        os.close(staging_fd)
+                    os.close(current_fd)
 
     return persist
