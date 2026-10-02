@@ -292,7 +292,9 @@ def write_config(
     prepared = issue_dir / "blackboard.json"
     if prepared.is_file() and not prepared.is_symlink():
         api = _contract_api(issue_dir)
-        missing_error = getattr(api, "ManagerContractMissingError", None) or api.DriverContractMissingError
+        missing_error = (
+            getattr(api, "ManagerContractMissingError", None) or api.DriverContractMissingError
+        )
 
         try:
             api.event_callback_projection(
@@ -1147,7 +1149,9 @@ def read_status(issue_dir: Path) -> dict[str, Any]:
         )
     except ValueError as exc:
         api = _contract_api(issue_dir)
-        missing_error = getattr(api, "ManagerContractMissingError", None) or api.DriverContractMissingError
+        missing_error = (
+            getattr(api, "ManagerContractMissingError", None) or api.DriverContractMissingError
+        )
 
         if not isinstance(exc, missing_error) and (
             "requires a prepared workflow" not in str(exc)
@@ -1668,7 +1672,8 @@ def _callback_prompt(event: dict[str, Any], *, repository_root: Path) -> str:
             "a user-facing manager turn may relay an explicit user-owned answer.",
             "You may complete a manager_confirmable task authorized by its explicit declaration "
             "or the confirmed overall need_clarification policy, only after verifying its "
-            "confirmed contract and evidence. Explicit task ownership overrides the overall policy. "
+            "confirmed contract and evidence. "
+            "Explicit task ownership overrides the overall policy. "
             "Use complete_manager_task.py with the same assessment and inspected digests "
             "so authority is rechecked at durable completion. "
             "A clarification answer must stay within confirmed scope, constraints and authority "

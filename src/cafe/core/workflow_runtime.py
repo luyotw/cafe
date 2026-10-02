@@ -1672,7 +1672,9 @@ class BlackboardWorkflowRuntime:
             )
         if "to_owner" not in payload and "to_step" not in payload:
             outcome = OutcomeOnlyHandoff.from_dict(payload)
-            target = self._mapped_target_for_intent(current_step=current_step, intent=outcome.intent)
+            target = self._mapped_target_for_intent(
+                current_step=current_step, intent=outcome.intent
+            )
             if target not in {*self.steps, "user", "done", "_done"}:
                 raise BatonRejected(
                     field="intent", invalid_value=outcome.intent.value,
@@ -2621,9 +2623,8 @@ class BlackboardWorkflowRuntime:
             # executor failure so the workflow records a clean interrupted
             # state instead of crashing.
             from cafe.agents.executor import AgentExecutionError
-            from cafe.core.types import CriticalPhaseError
-
             from cafe.core.artifact_validation import ArtifactCorrectionExhausted
+            from cafe.core.types import CriticalPhaseError
 
             reason = "agent_error"
             detail = str(exc)
