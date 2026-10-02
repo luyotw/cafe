@@ -9,8 +9,9 @@ set -euo pipefail
 PROJECT_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$PROJECT_ROOT"
 
-echo "Running coverage gate..."
-./scripts/test-coverage.sh
+echo "Running release coverage gate (representative kickoff journeys)..."
+# The full kickoff regression suite remains available via ./scripts/test-coverage.sh.
+CAFE_RELEASE_FAST_TESTS=1 ./scripts/test-coverage.sh
 
 # Release verification must not mutate the caller's globally installed skills.
 export CAFE_SKIP_GLOBAL_SKILL_SYNC=1

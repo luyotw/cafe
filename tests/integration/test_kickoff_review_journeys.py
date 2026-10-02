@@ -14,6 +14,8 @@ from test_kickoff_prefill import _project as _base_project
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_kickoff_preparation import _formatter_inputs
 
+pytestmark = pytest.mark.release_extended
+
 
 def _project(root):
     request = _base_project(root)
@@ -39,6 +41,7 @@ def _save_preference(cli, capsys, root, project, key, value, scope='repository')
     assert code == 0, result
 
 
+@pytest.mark.release_smoke
 def test_source_backed_draft_requires_reassessment_before_render_after_change(tmp_path, capsys):
     cli = load_kickoff_module('prepare_kickoff')
     project = tmp_path / 'project'

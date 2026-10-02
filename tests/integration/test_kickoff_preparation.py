@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import importlib.util
+import copy
 import hashlib
 import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -16,6 +18,45 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 UNIT_ROOT = PROJECT_ROOT / "tests/unit"
 sys.path.insert(0, str(UNIT_ROOT))
 from _kickoff_test_support import load_kickoff_module
+import kickoff_inputs
+
+pytestmark = pytest.mark.release_extended
+
+
+@pytest.fixture(scope="module")
+def repository_catalog(tmp_path_factory):
+    """Resolve the unchanged repository catalog once for input-focused CLI journeys."""
+    from cafe.catalogs.resolver import CatalogResolver
+
+    resolver = CatalogResolver(project_root=PROJECT_ROOT)
+    return load_kickoff_module("kickoff_catalog").discover_index(
+        project_root=PROJECT_ROOT,
+        global_root=resolver.global_root,
+        builtin_root=resolver.builtin_root,
+        cache_file=tmp_path_factory.mktemp("kickoff-catalog") / "catalog.json",
+    )
+
+
+@pytest.fixture(autouse=True)
+def reuse_repository_catalog(monkeypatch, request, repository_catalog):
+    # The compact-report case checks cold/warm catalog reuse through the public CLI.
+    if request.node.originalname == "test_compact_cli_reports_preserve_selected_facts_and_full_render":
+        return
+    load = kickoff_inputs._load_local_module
+
+    def load_with_catalog(name):
+        module = load(name)
+        if name != "kickoff_catalog":
+            return module
+
+        def discover_index(**kwargs):
+            if Path(kwargs["project_root"]).resolve() == PROJECT_ROOT:
+                return copy.deepcopy(repository_catalog)
+            return module.discover_index(**kwargs)
+
+        return SimpleNamespace(discover_index=discover_index)
+
+    monkeypatch.setattr(kickoff_inputs, "_load_local_module", load_with_catalog)
 
 
 def _formatter_inputs(issue_name: str) -> dict:
@@ -68,6 +109,7 @@ def _phase_config(path: Path) -> Path:
     return path
 
 
+@pytest.mark.release_smoke
 def test_compact_cli_reports_preserve_selected_facts_and_full_render(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1116,6 +1158,7 @@ def test_summary_reports_changed_evidence_without_assigning_models(
     assert after["selected_graph"]["mandatory_confirmation_gates"] == before["selected_graph"]["mandatory_confirmation_gates"]
 
 
+@pytest.mark.release_smoke
 def test_summary_preserves_evidence_and_routes_missing_reports_to_same_draft(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
