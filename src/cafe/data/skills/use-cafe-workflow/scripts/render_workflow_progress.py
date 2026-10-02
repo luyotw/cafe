@@ -334,9 +334,8 @@ def _runtime_progress(
         event_type = event["event_type"]
         data = event["data"]
         step = str(data.get("step", event.get("step", "")))
-        event_iteration = _iteration_number(data.get("iteration")) or _iteration_number(
-            data.get("attempt")
-        )
+        # Execution/callback attempts can outnumber artifact iterations after retries.
+        event_iteration = _iteration_number(data.get("iteration"))
         if step in statuses:
             if event_iteration is not None:
                 iterations[step] = max(iterations.get(step, 0), event_iteration)

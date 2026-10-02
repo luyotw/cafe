@@ -859,6 +859,59 @@ def test_completed_confirmation_renders_only_a_declared_non_correction_outcome(
     assert "✓ publish-draft: user confirmation (manager may not act) · Completed" in rendered
 
 
+@pytest.mark.parametrize("iteration_evidence", ["directory", "event"])
+def test_retry_attempt_does_not_invalidate_confirmed_iteration(
+    tmp_path: Path, iteration_evidence: str
+) -> None:
+    issue_dir = tmp_path / "issue"
+    _write_runtime(issue_dir)
+    records_path = issue_dir / "human_tasks.json"
+    records = json.loads(records_path.read_text(encoding="utf-8"))
+    records["tasks"][0]["iteration"] = 5
+    records["results"][0]["payload"] = {"decision": "confirm", "continuation": "_done"}
+    records_path.write_text(json.dumps(records), encoding="utf-8")
+    event_data = {"step": "publish-draft", "attempt": 6}
+    if iteration_evidence == "directory":
+        iteration = issue_dir / "publish-draft" / "iteration_005"
+        iteration.mkdir(parents=True)
+        (iteration / "iteration.json").write_text('{"iteration": 5}', encoding="utf-8")
+    else:
+        event_data["iteration"] = {"number": 5}
+    _append_runtime_event(
+        issue_dir,
+        {"event_type": "step_completed", "step": "publish-draft", "data": event_data},
+    )
+    # Callback attempt counters are not artifact revision numbers either.
+    _append_runtime_event(
+        issue_dir,
+        {
+            "event_type": "workflow_event_callback_enqueued",
+            "step": "publish-draft",
+            "data": {"step": "publish-draft", "attempt": 7},
+        },
+    )
+
+    def render() -> str:
+        return _module().render_progress(
+            playbook=_custom_playbook(),
+            contract=_contract(),
+            locale="en",
+            issue_dir=issue_dir,
+            driver_state=_unknown_closeout_state(),
+        )
+
+    rendered = render()
+    assert "✓ publish-draft · iteration 5 · Completed" in rendered
+    assert "✓ publish-draft: user confirmation (manager may not act) · Completed" in rendered
+
+    new_iteration = issue_dir / "publish-draft" / "iteration_006"
+    new_iteration.mkdir(parents=True)
+    (new_iteration / "iteration.json").write_text('{"iteration": 6}', encoding="utf-8")
+    rendered = render()
+    assert "publish-draft · iteration 6" in rendered
+    assert "○ publish-draft: user confirmation (manager may not act) · Pending" in rendered
+
+
 def test_forward_skip_review_manual_handoff_is_not_a_return(tmp_path: Path) -> None:
     issue_dir = tmp_path / "issue"
     issue_dir.mkdir()
@@ -1164,7 +1217,7 @@ def test_delivered_pr_feedback_baton_is_a_formal_return(tmp_path: Path) -> None:
                 {
                     "event_type": "step_started",
                     "step": "pr",
-                    "data": {"step": "pr", "attempt": 2},
+                    "data": {"step": "pr", "iteration": 2},
                 },
                 {
                     "event_type": "workflow_feedback_delivered",
@@ -1258,7 +1311,7 @@ def test_repeated_returns_project_only_latest_phase_states(tmp_path: Path) -> No
                 {
                     "event_type": "step_started",
                     "step": "develop",
-                    "data": {"step": "develop", "attempt": target_iteration},
+                    "data": {"step": "develop", "iteration": target_iteration},
                 },
             ]
         )
@@ -1327,22 +1380,22 @@ def test_default_projection_suppresses_superseded_returns_and_shows_active_check
                 {
                     "event_type": "step_started",
                     "step": "develop",
-                    "data": {"step": "develop", "attempt": 6},
+                    "data": {"step": "develop", "iteration": 6},
                 },
                 {
                     "event_type": "step_completed",
                     "step": "develop",
-                    "data": {"step": "develop", "attempt": 6},
+                    "data": {"step": "develop", "iteration": 6},
                 },
                 {
                     "event_type": "step_started",
                     "step": "pr",
-                    "data": {"step": "pr", "attempt": 14},
+                    "data": {"step": "pr", "iteration": 14},
                 },
                 {
                     "event_type": "step_completed",
                     "step": "pr",
-                    "data": {"step": "pr", "attempt": 14},
+                    "data": {"step": "pr", "iteration": 14},
                 },
             ],
         },
@@ -1412,7 +1465,7 @@ def test_latest_return_is_phase_state_without_a_historical_arrow(tmp_path: Path)
                 {
                     "event_type": "step_started",
                     "step": "pr",
-                    "data": {"step": "pr", "attempt": 14},
+                    "data": {"step": "pr", "iteration": 14},
                 },
                 {
                     "event_type": "workflow_feedback_delivered",
@@ -1516,7 +1569,7 @@ def test_cross_target_returns_project_only_each_phase_latest_state(tmp_path: Pat
                 {
                     "event_type": "step_started",
                     "step": "C",
-                    "data": {"step": "C", "attempt": 1},
+                    "data": {"step": "C", "iteration": 1},
                 },
                 {
                     "event_type": "transition",
@@ -1531,12 +1584,12 @@ def test_cross_target_returns_project_only_each_phase_latest_state(tmp_path: Pat
                 {
                     "event_type": "step_started",
                     "step": "B",
-                    "data": {"step": "B", "attempt": 2},
+                    "data": {"step": "B", "iteration": 2},
                 },
                 {
                     "event_type": "step_started",
                     "step": "C",
-                    "data": {"step": "C", "attempt": 2},
+                    "data": {"step": "C", "iteration": 2},
                 },
                 {
                     "event_type": "transition",
@@ -1551,7 +1604,7 @@ def test_cross_target_returns_project_only_each_phase_latest_state(tmp_path: Pat
                 {
                     "event_type": "step_started",
                     "step": "A",
-                    "data": {"step": "A", "attempt": 2},
+                    "data": {"step": "A", "iteration": 2},
                 },
             ],
         },
@@ -1616,7 +1669,7 @@ def test_runtime_and_task_return_history_is_suppressed(tmp_path: Path) -> None:
                 {
                     "event_type": "step_started",
                     "step": "develop",
-                    "data": {"step": "develop", "attempt": target_iteration},
+                    "data": {"step": "develop", "iteration": target_iteration},
                 },
             ]
         )
