@@ -589,3 +589,48 @@ def test_one_shot_error_preserves_copilot_reported_model_and_partial_usage(provi
     assert result.usage.input_tokens == 2
     assert selected.executor.get_total_token_usage().input_tokens == 2
     assert launch.call_count == 1
+
+
+@pytest.mark.parametrize("returncode", [0, 1])
+@pytest.mark.parametrize(
+    "reported,requested,failure",
+    [
+        ("selected", "selected", None),
+        (None, "selected", None),
+        ("other", "selected", "model_mismatch"),
+        ("x" * 512, "x" * 512, None),
+        ("x" * 513, "x" * 513, "invalid_evidence"),
+        ("x" * 513, "selected", "invalid_evidence"),
+    ],
+    ids=["matching", "absent", "mismatch", "limit", "over-limit-matching", "over-limit-conflicting"],
+)
+def test_copilot_plain_model_validation_is_identical_on_success_and_error(
+    provider_process, returncode, reported, requested, failure
+):
+    summary = (
+        f"Breakdown by AI model:\n  {reported} 2 in, 1 out, 0 cached\n"
+        if reported is not None else "Total usage: 2 input tokens, 1 output tokens\n"
+    )
+    launch = provider_process([], returncode=returncode, stderr=summary)
+    launch.return_value.stdout.readline.side_effect = ["reply\n", ""]
+    selected = transport(AgentCLI.COPILOT, model=requested, session_id="bound")
+    responses, usages = [], []
+    if failure or returncode:
+        with pytest.raises(AgentExecutionError) as caught:
+            selected.run_one_shot("hello", on_response=responses.append, on_usage=usages.append)
+        result = caught.value.transport_result
+        if failure:
+            assert result.failure_code == failure
+        assert responses == []
+    else:
+        result = selected.run_one_shot("hello", on_response=responses.append, on_usage=usages.append)
+        assert result.failure_code is None
+        assert len(responses) == 1
+    assert result.reported_model == (reported if reported is None or len(reported) <= 512 else None)
+    if reported is not None:
+        assert result.usage.input_tokens == 2
+        assert selected.executor.get_total_token_usage().input_tokens == 2
+        assert len(usages) == 1
+    assert selected.executor.config.model == requested
+    assert selected.executor.config.session_id == "bound"
+    assert launch.call_count == 1

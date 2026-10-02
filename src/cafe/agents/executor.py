@@ -1352,9 +1352,14 @@ class AgentExecutor:
                     if parse_stream_json:
                         parsed = self._parse_using_strategy(strategy, output_lines)
                     else:
-                        result = strategy.parse_response(output_lines, stderr_output=stderr_output)
+                        from cafe.agents.cli.copilot import CopilotCLI
+
+                        result = CopilotCLI(self.config).parse_response(
+                            output_lines, stderr_output=stderr_output
+                        )
                         parsed = AgentResponse(response=result[0], token_usage=result[1],
                                                model=result[3] if len(result) > 3 else None,
+                                               permission_denials=result[2],
                                                usage_available=bool(result[1].model_fields_set))
                 for name in ("duration_ms", "duration_api_ms"):
                     value = getattr(token_usage, name)
@@ -1935,39 +1940,24 @@ class AgentExecutor:
             # streaming_log contains extracted text content for context.json
             final_streaming_log = streaming_log if streaming_log else []
         else:
-            # Non-stream-json style (Copilot): parse response to extract token usage
-            # Get CLI strategy instance to parse the response
-            from cafe.agents.cli.copilot import CopilotCLI
-
-            cli_strategy = CopilotCLI(self.config)
-            # Parse response to extract token usage and clean response
-            # Pass stderr_output separately as usage summary may be in stderr
-            parse_result = cli_strategy.parse_response(output_lines, stderr_output=stderr_output)
-
-            # Check if parser returns model (4-tuple) or not (3-tuple)
-            if len(parse_result) == 4:
-                final_response, token_usage, parsed_denials, parsed_model = parse_result
-                # Use parsed model if available
-                if parsed_model:
-                    model = parsed_model
-            else:
-                # Old 3-tuple format (backward compatibility)
-                final_response, token_usage, parsed_denials = parse_result
-
-            # Merge any permission denials from parsing with those already collected
-            permission_denials.extend(parsed_denials)
+            # Reuse the same evidence validation/accounting as partial-error exits.
+            parsed_response = collect_usage()
+            final_response = parsed_response.response
+            token_usage = parsed_response.token_usage
+            model = parsed_response.model
+            permission_denials.extend(parsed_response.permission_denials)
             final_streaming_log = output_lines
 
         # Model is already tracked separately, duration stays in token_usage
         usage_available = bool(token_usage.model_fields_set)
-        if usage_available:
+        if usage_available and parse_stream_json:
             self._accumulate_usage(token_usage)
         return AgentResponse(
             response=final_response,
             token_usage=token_usage,
             usage_available=usage_available,
             usage_accounted=True,
-            transport_result=replace(
+            transport_result=parsed_response.transport_result if not parse_stream_json else replace(
                 observation_evidence,
                 reported_model=model,
                 usage=self._compact_usage(token_usage) if usage_available else None,
