@@ -1344,24 +1344,42 @@ class AgentExecutor:
             nonlocal parsed_for_call
             if parsed_for_call is not None:
                 return parsed_for_call
-            if response_parser:
-                parsed = response_parser(output_lines)
-            else:
-                strategy = self._get_cli_strategy()
-                if parse_stream_json:
-                    parsed = self._parse_using_strategy(strategy, output_lines)
+            try:
+                if response_parser:
+                    parsed = response_parser(output_lines)
                 else:
-                    result = strategy.parse_response(output_lines, stderr_output=stderr_output)
-                    parsed = AgentResponse(response=result[0], token_usage=result[1],
-                                           usage_available=bool(result[1].model_fields_set))
-            for name in ("duration_ms", "duration_api_ms"):
-                value = getattr(token_usage, name)
-                if value is not None:
-                    setattr(parsed.token_usage, name, value)
-                    parsed.usage_available = True
-            if parsed.usage_available:
-                self._accumulate_usage(parsed.token_usage)
+                    strategy = self._get_cli_strategy()
+                    if parse_stream_json:
+                        parsed = self._parse_using_strategy(strategy, output_lines)
+                    else:
+                        result = strategy.parse_response(output_lines, stderr_output=stderr_output)
+                        parsed = AgentResponse(response=result[0], token_usage=result[1],
+                                               model=result[3] if len(result) > 3 else None,
+                                               usage_available=bool(result[1].model_fields_set))
+                for name in ("duration_ms", "duration_api_ms"):
+                    value = getattr(token_usage, name)
+                    if value is not None:
+                        setattr(parsed.token_usage, name, value)
+                        parsed.usage_available = True
+                parsed.token_usage = TokenUsage(**parsed.token_usage.model_dump(exclude_unset=True))
+                if parsed.usage_available:
+                    self._accumulate_usage(parsed.token_usage)
+            except (ValueError, TypeError, AttributeError) as cause:
+                error = AgentExecutionError("Malformed provider statistics", error_type="invalid_evidence")
+                error.transport_result = replace(
+                    observation_evidence, failure_code="invalid_evidence", returncode=returncode,
+                    completed=True if received_terminal_stream_event else None,
+                    error_excerpt=sanitize_error_excerpt(error),
+                )
+                raise error from cause
             evidence = observation_evidence
+            if parsed.model is not None:
+                if not isinstance(parsed.model, str) or not parsed.model.strip() or len(parsed.model) > 512:
+                    evidence = replace(evidence, failure_code="invalid_evidence")
+                else:
+                    mismatch = (self.config.model is not None and parsed.model != self.config.model)
+                    evidence = replace(evidence, reported_model=parsed.model,
+                                       failure_code=evidence.failure_code or ("model_mismatch" if mismatch else None))
             parsed.transport_result = replace(
                 evidence,
                 usage=self._compact_usage(parsed.token_usage) if parsed.usage_available else None,
@@ -1377,7 +1395,8 @@ class AgentExecutor:
             nonlocal streaming_file_handle
             parsed = collect_usage()
             error.transport_result = replace(parsed.transport_result,
-                failure_code=parsed.transport_result.failure_code or error.error_type or "execution_failed")
+                failure_code=parsed.transport_result.failure_code or error.error_type or "execution_failed",
+                error_excerpt=sanitize_error_excerpt(error))
             if streaming_file_handle is None:
                 return
             try:
@@ -1674,6 +1693,14 @@ class AgentExecutor:
                             if self.stream_output:
                                 print(line, end="")
                             output_lines.append(line)
+                        except (ValueError, TypeError, AttributeError) as cause:
+                            if observer_failed:
+                                raise
+                            if output_lines and output_lines[-1] == line:
+                                output_lines.pop()
+                            error = AgentExecutionError("Malformed provider evidence", error_type="invalid_evidence")
+                            persist_safe_stream_error(error)
+                            raise error from cause
                     else:
                         # Simple line-by-line streaming (Copilot style)
                         if self.stream_output:

@@ -479,8 +479,9 @@ def test_late_one_shot_identity_conflict_is_not_hidden_by_record_budget(provider
     assert launch.call_count == 1
 
 
-def test_malformed_usage_has_normalized_compact_failure(provider_process):
-    provider_process([init(), dict(type="result", usage="malformed")])
+@pytest.mark.parametrize("usage", ["malformed", dict(input_tokens="invalid")])
+def test_malformed_usage_has_normalized_compact_failure(provider_process, usage):
+    provider_process([init(), dict(type="result", usage=usage)])
     with pytest.raises(AgentExecutionError) as caught:
         transport().acquire_session("bootstrap")
     assert caught.value.transport_result.failure_code == "invalid_evidence"
@@ -570,4 +571,21 @@ def test_supported_but_absent_required_evidence_fails_after_one_attempt(provider
         )
     assert caught.value.transport_result.reported_model is None
     assert caught.value.transport_result.failure_code == "missing_evidence"
+    assert launch.call_count == 1
+
+
+def test_one_shot_error_preserves_copilot_reported_model_and_partial_usage(provider_process):
+    launch = provider_process(
+        [],
+        returncode=1,
+        stderr="provider failed\nBreakdown by AI model:\n  selected 2 in, 1 out, 0 cached\n",
+    )
+    launch.return_value.stdout.readline.side_effect = ["partial reply\n", ""]
+    selected = transport(AgentCLI.COPILOT, model="selected")
+    with pytest.raises(AgentExecutionError) as caught:
+        selected.run_one_shot("hello")
+    result = caught.value.transport_result
+    assert result.reported_model == "selected"
+    assert result.usage.input_tokens == 2
+    assert selected.executor.get_total_token_usage().input_tokens == 2
     assert launch.call_count == 1
