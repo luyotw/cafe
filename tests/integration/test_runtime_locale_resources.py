@@ -18,16 +18,21 @@ def test_distribution_runtime_copy_loads_without_checkout_or_working_directory(t
         capture_output=True,
         text=True,
     )
+    resources = [
+        str(path.relative_to(repo / "src"))
+        for path in (repo / "src/cafe/data").glob("**/locales/*.yaml")
+    ]
+    owners = [
+        path.parent.parent.name
+        for path in (repo / "src/cafe/data/skills").glob("*/locales/en-US.yaml")
+    ]
+    assert owners
     wheel = next(dist.glob("*.whl"))
     with zipfile.ZipFile(wheel) as archive:
-        for locale in ("en-US", "zh-TW"):
-            assert f"cafe/data/locales/{locale}.yaml" in archive.namelist()
+        assert set(resources) <= set(archive.namelist())
     with tarfile.open(next(dist.glob("*.tar.gz"))) as archive:
-        for locale in ("en-US", "zh-TW"):
-            assert any(
-                name.endswith(f"/src/cafe/data/locales/{locale}.yaml")
-                for name in archive.getnames()
-            )
+        for resource in resources:
+            assert any(name.endswith(f"/src/{resource}") for name in archive.getnames())
     installed = tmp_path / "installed"
     subprocess.run(
         [
@@ -49,7 +54,8 @@ def test_distribution_runtime_copy_loads_without_checkout_or_working_directory(t
 import sys
 sys.path.insert(0, sys.argv[1])
 import cafe
-from cafe.core.runtime_locales import load_catalogs
+from cafe.core.runtime_locales import load_catalogs, render_text
+from cafe.core.human_tasks import HumanTaskPolicy
 from cafe.core.workspace_artifact import workspace_correction_prompt
 from cafe.core.human_task_notifications import (
     HumanTaskSlackMessage, WorkflowCallbackFailureSlackMessage,
@@ -74,8 +80,19 @@ for locale in ("en-US", "zh-TW"):
     )
     assert "issue" in failure.to_slack_payload()["text"]
 loader = SkillLoader(project_root=Path.cwd(), global_root=Path.cwd() / "empty-global")
-policy = loader.get_workflow_declaration("cafe-spec").human_tasks[0]
-assert isinstance(policy.for_locale("zh-TW").prompt, str)
+assert not any(key.startswith("human_task.") for key in load_catalogs()["en-US"])
+for owner in sys.argv[2:]:
+    entry, declaration = loader.get_workflow_declaration_entry(owner)
+    root = entry.directory / "locales"
+    catalogs = load_catalogs(root)
+    assert set(catalogs["en-US"]) == set(catalogs["zh-TW"])
+    for locale in ("en-US", "zh-TW"):
+        for key in catalogs[locale]:
+            assert render_text(key, locale=locale, catalog_root=root) == catalogs[locale][key]
+        for policy in declaration.human_tasks:
+            snapshot = policy.for_locale(locale).model_dump(mode="json")
+            assert isinstance(snapshot["prompt"], str)
+            assert HumanTaskPolicy.model_validate(snapshot).model_dump(mode="json") == snapshot
 script_root = Path(cafe.__file__).parent / "data/skills/use-cafe-workflow/scripts"
 sys.path.insert(0, str(script_root))
 for name in ("render_workflow_progress", "format_kickoff_contract"):
@@ -93,7 +110,7 @@ for name in ("render_workflow_progress", "format_kickoff_contract"):
     environment = dict(os.environ)
     environment.pop("PYTHONPATH", None)
     result = subprocess.run(
-        [sys.executable, "-I", "-c", script, str(installed)],
+        [sys.executable, "-I", "-c", script, str(installed), *owners],
         cwd=tmp_path,
         env=environment,
         capture_output=True,

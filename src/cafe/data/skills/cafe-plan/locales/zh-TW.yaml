@@ -1,0 +1,5 @@
+human_task.cafe_plan.clarification_answers.prompt: 檢視提出的方向，確認該方向或說明需要調整之處。
+human_task.cafe_plan.development_guide.prompt: 請輸入開發指引（可留空）
+human_task.cafe_plan.output_review.decisions.confirm.label: 確認並繼續
+human_task.cafe_plan.output_review.decisions.revise.label: 要求修訂
+human_task.cafe_plan.output_review.prompt: 檢視實作計畫，並選擇如何繼續。

@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from functools import lru_cache
 from importlib.resources import files
+from pathlib import Path
 from string import Formatter
 from types import MappingProxyType
 from typing import Mapping
@@ -52,21 +53,23 @@ def _placeholders(template: str, context: str) -> frozenset[str]:
     return frozenset(names)
 
 
-@lru_cache(maxsize=1)
-def load_catalogs() -> Mapping[str, Mapping[str, str]]:
-    """Read immutable packaged catalogs and validate matching keys/placeholders.
+@lru_cache(maxsize=64)
+def load_catalogs(catalog_root: Path | None = None) -> Mapping[str, Mapping[str, str]]:
+    """Read immutable catalogs and validate matching keys/placeholders.
 
-    Resource paths are package-relative, independent of the working directory.
+    The default resources are package-relative. A declaration owner supplies its
+    resolved locale directory explicitly; keys never select or guess an owner.
     Invalid authored data is an error; unsupported locale input still silently
     selects English through the existing locale resolver.
     """
+    root = files("cafe").joinpath("data/locales") if catalog_root is None else catalog_root
     catalogs = {}
     contracts = {}
     for locale in SUPPORTED_TEXT_LOCALES:
-        resource = f"data/locales/{locale}.yaml"
+        resource = root.joinpath(f"{locale}.yaml")
         try:
             document = yaml.load(
-                files("cafe").joinpath(resource).read_text(encoding="utf-8"),
+                resource.read_text(encoding="utf-8"),
                 Loader=_CatalogLoader,
             )
         except (OSError, UnicodeError, yaml.YAMLError, LocaleCatalogError) as exc:
@@ -94,15 +97,22 @@ def load_catalogs() -> Mapping[str, Mapping[str, str]]:
     return MappingProxyType(catalogs)
 
 
-def render_text(key: str, *, locale: str | None = None, **values: str | int) -> str:
+def render_text(
+    key: str,
+    *,
+    locale: str | None = None,
+    catalog_root: Path | None = None,
+    **values: str | int,
+) -> str:
     """Select copy and interpolate exactly once without altering workflow state.
 
     Callers bound untrusted diagnostic values before rendering. Inserted braces
     remain literal; templates allow only named fields and escaped literal braces.
     """
     selected = select_text_locale(locale)
-    catalog = load_catalogs()[selected]
-    context = f"data/locales/{selected}.yaml: {key}"
+    catalog = load_catalogs(catalog_root)[selected]
+    root = "data/locales" if catalog_root is None else str(catalog_root)
+    context = f"{root}/{selected}.yaml: {key}"
     if key not in catalog:
         raise LocaleCatalogError(f"{context}: unknown message key")
     template = catalog[key]

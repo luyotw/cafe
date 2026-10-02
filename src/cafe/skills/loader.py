@@ -267,7 +267,10 @@ class SkillLoader:
     ) -> SkillWorkflowDeclaration:
         """Preserve the compatibility error used by direct and primary loading."""
         try:
-            return SkillWorkflowDeclaration.model_validate(raw_declaration)
+            return SkillWorkflowDeclaration.model_validate(
+                raw_declaration,
+                context={"locale_catalog_root": entry.directory.resolve() / "locales"},
+            )
         except Exception as exc:
             raise ValueError(
                 f"Invalid workflow declaration for skill {entry.directory.name}: {exc}"

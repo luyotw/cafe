@@ -1,0 +1,4 @@
+human_task.cafe_pr.local_review.decisions.continue_without_issue.label: 核可／不建立 issue 直接繼續
+human_task.cafe_pr.local_review.decisions.create_follow_up.label: 為所有提議記錄 issue
+human_task.cafe_pr.local_review.decisions.fix_now.label: 現在修正所有提議項目
+human_task.cafe_pr.local_review.prompt: 檢視已備妥的本機變更，以及 PR 描述中的 Follow-up Proposals 段落。你的決定會套用到所有未處理的 FUP，不支援逐項混合處置。請選擇現在修正全部提議、記錄全部提議另開 issue，或核可並在不開 issue 的情況下繼續。

@@ -113,6 +113,22 @@ def test_every_builtin_localized_declaration_uses_keys_and_materializes_plain_co
         tasks = metadata.get("workflow", {}).get("human_tasks", [])
         if not tasks:
             continue
+        catalogs = runtime_locales.load_catalogs(path.parent / "locales")
+        references = set()
+
+        def collect_references(value):
+            if isinstance(value, dict):
+                if set(value) == {"message_key"}:
+                    references.add(value["message_key"])
+                else:
+                    for child in value.values():
+                        collect_references(child)
+            elif isinstance(value, list):
+                for child in value:
+                    collect_references(child)
+
+        collect_references(tasks)
+        assert set(catalogs["en-US"]) == set(catalogs["zh-TW"]) == references
         declared = loader.get_workflow_declaration(path.parent.name)
         for raw, policy in zip(tasks, declared.human_tasks, strict=True):
             assert isinstance(raw["prompt"], dict)
@@ -120,7 +136,7 @@ def test_every_builtin_localized_declaration_uses_keys_and_materializes_plain_co
             for tag, reference in raw.get("prompt_locales", {}).items():
                 assert reference == raw["prompt"]
                 assert policy.for_locale(tag).prompt == runtime_locales.render_text(
-                    reference["message_key"], locale=tag
+                    reference["message_key"], locale=tag, catalog_root=path.parent / "locales"
                 )
             for decision in raw.get("decisions", []):
                 assert decision["label"].keys() == {"message_key"}
@@ -137,8 +153,14 @@ def test_every_builtin_localized_declaration_uses_keys_and_materializes_plain_co
     assert found > 0
 
 
-def test_catalog_reference_resolves_once_before_human_task_snapshot(authored_copy):
+def test_catalog_reference_resolves_once_before_human_task_snapshot(tmp_path):
+    root = tmp_path / "locales"
+    root.mkdir()
     key = "human_task.cafe_spec.output_review.prompt"
+    for locale in ("en-US", "zh-TW"):
+        (root / f"{locale}.yaml").write_text(
+            yaml.safe_dump({key: f"Authored {locale}"}), encoding="utf-8"
+        )
     policy = HumanTaskPolicy.model_validate(
         {
             "id": "feedback",
@@ -148,10 +170,13 @@ def test_catalog_reference_resolves_once_before_human_task_snapshot(authored_cop
             "prompt_locales": {"zh-TW": {"message_key": key}},
             "correction_guidance": {"message_key": key},
             "correction_guidance_locales": {"zh-TW": {"message_key": key}},
-        }
+        },
+        context={"locale_catalog_root": root},
     )
     snapshot = policy.for_locale("zh-TW").model_dump(mode="json")
-    authored_copy(key)
+    for resource in root.glob("*.yaml"):
+        resource.unlink()
+    runtime_locales.load_catalogs.cache_clear()
     assert HumanTaskPolicy.model_validate(snapshot).model_dump(mode="json") == snapshot
     assert "CATALOG " not in snapshot["prompt"]
 
@@ -188,7 +213,8 @@ def test_invalid_or_parameterized_declaration_references_are_rejected(reference)
                 "pattern": "revision_feedback",
                 "input_schema": "feedback",
                 "prompt": reference,
-            }
+            },
+            context={"locale_catalog_root": BUILTINS / "cafe-spec/locales"},
         )
 
 
@@ -204,10 +230,15 @@ def test_question_reference_translates_prompt_and_preserves_answer_identity():
             "prompt_locales": {"zh-TW": reference},
             "options": ["reader", "editor"],
             "multiple": True,
-        }
+        },
+        context={"locale_catalog_root": BUILTINS / "cafe-brief_first/locales"},
     )
     localized = question.for_locale("zh-TW")
-    assert localized.prompt == runtime_locales.render_text(reference["message_key"], locale="zh-TW")
+    assert localized.prompt == runtime_locales.render_text(
+        reference["message_key"],
+        locale="zh-TW",
+        catalog_root=BUILTINS / "cafe-brief_first/locales",
+    )
     assert (localized.id, localized.options, localized.multiple) == (
         "audience",
         ("reader", "editor"),

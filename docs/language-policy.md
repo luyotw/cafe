@@ -166,17 +166,24 @@ language rather than silently approximated.
 
 ## Developer-authored runtime copy
 
-New localized runtime messages belong in `src/cafe/data/locales/en-US.yaml` and
-`src/cafe/data/locales/zh-TW.yaml`. These packaged resources are separate from
-message selection and runtime behavior. Existing localized runtime copy now uses
-stable keys here: workspace correction, HumanTask/failed-callback Slack messages,
-Manager progress and kickoff presentation, and the packaged HumanTask declarations.
-This directory does not imply general CLI translation or additional languages.
+Place localized copy with its owner, separate from selection and runtime behavior:
+
+- Core runtime and Manager presentation use `src/cafe/data/locales/en-US.yaml`
+  and `src/cafe/data/locales/zh-TW.yaml`.
+- Phase-owned HumanTask copy uses
+  `src/cafe/data/skills/<skill>/locales/en-US.yaml` and
+  `src/cafe/data/skills/<skill>/locales/zh-TW.yaml`, alongside its `SKILL.md`.
+  Project and global skill owners use the same structure in their selected skill
+  directory.
+
+Each owner has its own catalog pair. Add new phase copy to that phase's resources;
+keep it out of the central runtime catalogs. This organization does not imply
+general CLI translation or additional languages.
 
 Each catalog is a flat YAML mapping from stable, untranslated message keys to
 non-empty strings. Use lowercase names separated by dots, with underscores or
 digits within a name, for example `workspace.correction`. Add every new key to
-both catalogs, with the same named placeholders in each language. Duplicate
+both of the owner's catalogs, with the same named placeholders in each language. Duplicate
 keys, invalid YAML, missing keys, incompatible placeholders, and non-string
 messages raise `LocaleCatalogError` with resource and message context rather
 than silently accepting incomplete authored data.
@@ -200,9 +207,15 @@ correction consumer retains `bounded_workspace_reason` and its UTF-8 limits.
 Interpolation happens once, so braces inside inserted paths or diagnostics stay
 literal. Keep ownership, permissions, budgets, and execution behavior in Python.
 
-`load_catalogs()` reads and validates both resources through
-`importlib.resources`, caches immutable mappings, and works independently of the
-current working directory in a source checkout or installed distribution.
+`load_catalogs()` reads the central resources through `importlib.resources`.
+For owner resources, pass the resolved locale directory to
+`load_catalogs(catalog_root)` or
+`render_text(key, locale=locale, catalog_root=catalog_root, **values)`.
+The generic loader validates each pair separately and caches immutable mappings
+in a bounded cache. A supplied root is authoritative: it does not search other
+owners or fall back to the central catalogs. Keys do not select a resource owner.
+Packaged resources work independently of the current working directory in a
+source checkout or installed distribution.
 `render_text` delegates selection to the existing `select_text_locale` resolver.
 Traditional Chinese aliases and silent English fallback remain unchanged;
 rendering never updates the workflow's stored locale or imports Manager policy.
@@ -221,7 +234,12 @@ prompt_locales:
 
 References are supported in policy/question prompts, decision labels, correction
 guidance, and their existing locale-variant maps. They must contain only a string
-`message_key` naming a message without interpolation arguments. They expand at
+`message_key` naming a message without interpolation arguments in the owning
+skill's catalog pair. `SkillLoader` and workflow composition bind the directory
+from the resolved skill catalog entry, including primary and shared contributors.
+They pass the transient `locale_catalog_root` validation context before any
+nested presentation fields are validated. The step name and message key never
+guess this path. A reference without an owner is invalid. References expand at
 declaration validation to the same plain strings used by inline declarations.
 Custom inline copy and locale maps continue to work unchanged. `for_locale`
 retains exact canonical-tag variant matching and declared-text fallback: a
@@ -235,22 +253,24 @@ resolves a catalog reference again. IDs, input schemas, options as answer identi
 flags, routes, permissions, and ownership remain in their declarations. Do not
 replace these with translated keys or retranslate agent-generated questions.
 
-### Migrated source and consumer inventory
+### Locale owner, key, and consumer inventory
 
-| Original source | Catalog keys | Runtime consumer |
+| Copy owner / catalog directory | Catalog keys | Runtime consumer |
 | --- | --- | --- |
-| `core/workspace_artifact.py` | `workspace.correction` | Bounded workspace correction prompt |
-| `core/human_task_notifications.py` | `notification.*` | HumanTask and failed-callback Slack payloads, including labels, fallback text, separators and closings |
-| `use-cafe-workflow/scripts/render_workflow_progress.py` | `manager.progress.*` | Missing state, iteration/status/review/confirmation/closeout presentation and localized punctuation |
-| `use-cafe-workflow/scripts/format_kickoff_contract.py` | `manager.kickoff.*` | Localized table headers, checks, confirmation, empty closeout, command authorization and optional catalog-sync reminder |
-| Packaged `cafe-*` skill frontmatter | `human_task.<skill>.<task>.*` | HumanTask policy validation, then existing task materialization and snapshots |
+| Runtime: `data/locales/` | `workspace.correction` | Bounded workspace correction prompt |
+| Runtime: `data/locales/` | `notification.*` | HumanTask and failed-callback Slack payloads, including labels, fallback text, separators and closings |
+| Manager: `data/locales/` | `manager.progress.*` | Missing state, iteration/status/review/confirmation/closeout presentation and localized punctuation |
+| Manager: `data/locales/` | `manager.kickoff.*` | Localized table headers, checks, confirmation, empty closeout, command authorization and optional catalog-sync reminder |
+| Owning phase: `data/skills/<skill>/locales/` | `human_task.<skill>.<task>.*` | HumanTask policy validation, then existing task materialization and snapshots |
 
-The frontmatter migration covers `cafe-brief_first`, `cafe-brief_revise`,
+The phase catalog inventory covers `cafe-brief_first`, `cafe-brief_revise`,
 `cafe-develop`, `cafe-draft`, `cafe-incident_detect`, `cafe-incident_mitigate`,
 `cafe-incident_postmortem`, `cafe-incident_triage`, `cafe-plan`, `cafe-pr`,
 `cafe-qa`, `cafe-research_collect`, `cafe-research_question`,
 `cafe-research_report`, `cafe-research_synthesize`, `cafe-review`, and `cafe-spec`.
-It includes every declared localized prompt and decision label, output/no-change
+These 17 owners contain 43 keys for 26 policies; the runtime pair contains 60
+keys (1 workspace, 32 notification, 19 progress, 8 kickoff), with no duplicated
+phase copy. The phase inventory includes every declared localized prompt and decision label, output/no-change
 confirmations, and both editorial question prompts. No packaged question options
 or correction-guidance variants had localized copy to move. Their identity and
 custom authored variants remain supported. Monolingual CLI/help and unlocalized

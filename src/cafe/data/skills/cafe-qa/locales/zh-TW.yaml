@@ -1,0 +1,3 @@
+human_task.cafe_qa.clarification_feedback.prompt: 提供完成受阻驗收檢查所需的資訊或權限。
+human_task.cafe_qa.iteration_limit.decisions.resume.label: 調高迭代上限後恢復
+human_task.cafe_qa.iteration_limit.prompt: 工作流程已達設定的迭代上限。若已授權再做一次驗收檢查，請調高此工作項目的上限後再恢復此階段。

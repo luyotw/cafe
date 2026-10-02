@@ -1,0 +1,3 @@
+human_task.cafe_qa.clarification_feedback.prompt: Provide the information or permission needed to complete the blocked acceptance check.
+human_task.cafe_qa.iteration_limit.decisions.resume.label: Resume after increasing the iteration limit
+human_task.cafe_qa.iteration_limit.prompt: The workflow reached its configured iteration limit. Increase the issue's limit if another acceptance check is authorized, then resume this phase.

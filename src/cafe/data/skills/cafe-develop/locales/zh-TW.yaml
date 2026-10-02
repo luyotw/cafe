@@ -1,0 +1,5 @@
+human_task.cafe_develop.clarification_feedback.prompt: 提供繼續所需的釐清說明或實作回饋。
+human_task.cafe_develop.no_change_decision.decisions.agree.label: 同意不需要再進行變更
+human_task.cafe_develop.no_change_decision.decisions.disagree.label: 要求進一步變更
+human_task.cafe_develop.no_change_decision.prompt: 檢視實作判斷的理由，並選擇如何繼續。
+human_task.cafe_develop.permission_answers.prompt: 提供繼續開發所需的權限決定或存取資訊。
