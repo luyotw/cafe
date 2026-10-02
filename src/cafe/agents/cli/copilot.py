@@ -273,6 +273,14 @@ class CopilotCLI(AbstractCLI):
 
     conversation_session_field = "sessionId"
 
+    conversation_operations = frozenset({
+        "acquire_session", "deliver_to_exact_session", "open_interactive_session", "run_one_shot",
+    })
+    conversation_session_operations = frozenset({"acquire_session", "deliver_to_exact_session"})
+    conversation_model_operations = conversation_operations - {"open_interactive_session"}
+    conversation_usage_operations = frozenset({"run_one_shot"})
+    conversation_acceptance_operations = frozenset({"deliver_to_exact_session"})
+
     def conversation_identity_record(self, record):
         return record.get("type") == "result"
 

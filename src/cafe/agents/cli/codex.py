@@ -45,15 +45,15 @@ class CodexCLI(AbstractCLI):
             except json.JSONDecodeError:
                 continue
 
-            if data.get("type") != "turn.completed":
-                continue
-
-            if not isinstance(data, dict):
+            if not isinstance(data, dict) or data.get("type") != "turn.completed":
                 continue
             usage_data = data.get("usage", {})
             if not isinstance(usage_data, dict):
                 usage_data = {}
-            if not usage_data:
+            if not any(key in usage_data for key in (
+                "input_tokens", "output_tokens", "cached_input_tokens",
+                "cache_creation_input_tokens", "cache_write_input_tokens", "reasoning_output_tokens",
+            )):
                 continue
 
             turn_usages.append(
@@ -139,7 +139,8 @@ class CodexCLI(AbstractCLI):
                     for key, value in usage_data.items()
                     if key in TokenUsage.model_fields or key == "cached_input_tokens"
                 })
-                token_usage.turn_usages = turn_usages
+                if turn_usages:
+                    token_usage.turn_usages = turn_usages
 
         if reported_cost_usd is not None:
             token_usage.total_cost_usd = reported_cost_usd
@@ -201,6 +202,14 @@ class CodexCLI(AbstractCLI):
         return True
 
     conversation_session_field = "thread_id"
+
+    conversation_operations = frozenset({
+        "acquire_session", "deliver_to_exact_session", "open_interactive_session", "run_one_shot",
+    })
+    conversation_session_operations = conversation_operations - {"open_interactive_session"}
+    conversation_model_operations = conversation_operations - {"open_interactive_session"}
+    conversation_usage_operations = conversation_operations - {"open_interactive_session"}
+    conversation_acceptance_operations = frozenset({"deliver_to_exact_session"})
 
     def conversation_identity_record(self, record):
         return record.get("type") == "thread.started"

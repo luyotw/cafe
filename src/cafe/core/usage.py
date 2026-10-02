@@ -40,9 +40,9 @@ def merge_token_usage_stats(existing: Any, incoming: TokenUsage) -> Dict[str, An
 
     prior_turns = merged.get("turn_usages")
     incoming_turns = incoming_data.get("turn_usages")
-    merged["turn_usages"] = (
-        list(prior_turns) if isinstance(prior_turns, list) else []
-    ) + (list(incoming_turns) if isinstance(incoming_turns, list) else [])
+    merged["turn_usages"] = (list(prior_turns) if isinstance(prior_turns, list) else []) + (
+        list(incoming_turns) if isinstance(incoming_turns, list) else []
+    )
     return merged
 
 
@@ -64,7 +64,10 @@ def iteration_usage_sink(repository_root: Path, context_file: Path):
             if target.resolve() != target:
                 raise ValueError("usage target changed")
             current = json.loads(target.read_text(encoding="utf-8"))
-            if not isinstance(current, dict) or (current.get("iteration"), current.get("timestamp")) != identity:
+            if (
+                not isinstance(current, dict)
+                or (current.get("iteration"), current.get("timestamp")) != identity
+            ):
                 raise ValueError("admitted iteration identity changed")
             current["stats"] = merge_token_usage_stats(current.get("stats"), usage)
             descriptor, temporary = tempfile.mkstemp(prefix=".usage-", dir=target.parent)
@@ -75,4 +78,5 @@ def iteration_usage_sink(repository_root: Path, context_file: Path):
             finally:
                 if os.path.exists(temporary):
                     os.unlink(temporary)
+
     return persist

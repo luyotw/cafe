@@ -5,7 +5,9 @@ from typing import Literal
 
 from cafe.core.types import TokenUsage
 
-Operation = Literal["acquire_session", "deliver_to_exact_session", "open_interactive_session", "run_one_shot"]
+Operation = Literal[
+    "acquire_session", "deliver_to_exact_session", "open_interactive_session", "run_one_shot"
+]
 Evidence = Literal["session", "model", "usage", "acceptance"]
 
 

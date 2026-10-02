@@ -228,24 +228,24 @@ class AbstractCLI(ABC):
             session_ids.add(session_id.strip())
         return next(iter(session_ids)) if len(session_ids) == 1 else None
 
+    conversation_operations = frozenset()
+    conversation_session_operations = frozenset()
+    conversation_model_operations = frozenset()
+    conversation_usage_operations = frozenset()
+    conversation_acceptance_operations = frozenset()
+
     def conversation_capabilities(self, operation):
-        """Separate invocation support from verified evidence support."""
+        """Adapters explicitly admit operations and evidence formats separately."""
         from cafe.agents.transport_types import TransportCapabilities
 
-        if operation == "open_interactive_session":
-            return TransportCapabilities(supported=self.event_driver_conforming)
-        if operation in {"acquire_session", "deliver_to_exact_session", "run_one_shot"}:
-            return TransportCapabilities(
-                supported=self.event_driver_conforming,
-                session=self.event_driver_conforming and (
-                    operation != "run_one_shot" or self.config.cli.value != "copilot"),
-                acceptance=self.event_driver_conforming and operation == "deliver_to_exact_session",
-                model=self.event_driver_conforming and (
-                    operation != "run_one_shot" or self.config.cli.value == "copilot"),
-                usage=self.event_driver_conforming and (
-                    operation == "run_one_shot" or self.config.cli.value != "copilot"),
-            )
-        return TransportCapabilities()
+        supported = operation in self.conversation_operations
+        return TransportCapabilities(
+            supported=supported,
+            session=supported and operation in self.conversation_session_operations,
+            model=supported and operation in self.conversation_model_operations,
+            usage=supported and operation in self.conversation_usage_operations,
+            acceptance=supported and operation in self.conversation_acceptance_operations,
+        )
 
     def conversation_evidence(self, records):
         """Summarize authoritative provider identity records without retaining them."""

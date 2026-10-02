@@ -10,10 +10,18 @@ from cafe.core.usage import iteration_usage_sink, merge_token_usage_stats
 
 
 def test_merge_preserves_supported_statistics_and_unrelated_fields():
-    usage = TokenUsage(input_tokens=2, output_tokens=3, cache_creation_input_tokens=4,
-        cache_write_input_tokens=5, cache_read_input_tokens=6, reasoning_output_tokens=7,
-        total_cost_usd=.25, duration_ms=10, duration_api_ms=8,
-        turn_usages=[dict(turn=1, input_tokens=2)])
+    usage = TokenUsage(
+        input_tokens=2,
+        output_tokens=3,
+        cache_creation_input_tokens=4,
+        cache_write_input_tokens=5,
+        cache_read_input_tokens=6,
+        reasoning_output_tokens=7,
+        total_cost_usd=0.25,
+        duration_ms=10,
+        duration_api_ms=8,
+        turn_usages=[dict(turn=1, input_tokens=2)],
+    )
     merged = merge_token_usage_stats(dict(input_tokens=1, other="retained"), usage)
     assert merged["other"] == "retained"
     assert merged["input_tokens"] == 3
@@ -25,7 +33,11 @@ def test_merge_preserves_supported_statistics_and_unrelated_fields():
 def test_existing_iteration_sink_preserves_concurrent_metadata(tmp_path):
     target = tmp_path / ".cafe/issues/x/custom/iteration_004/iteration.json"
     target.parent.mkdir(parents=True)
-    target.write_text(json.dumps(dict(iteration=4, timestamp="original", session_id="s", stats=dict(input_tokens=1))))
+    target.write_text(
+        json.dumps(
+            dict(iteration=4, timestamp="original", session_id="s", stats=dict(input_tokens=1))
+        )
+    )
     sink = iteration_usage_sink(tmp_path, target)
     metadata = json.loads(target.read_text())
     metadata["unrelated"] = "new"

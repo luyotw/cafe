@@ -93,14 +93,15 @@ class GeminiCLI(AbstractCLI):
                 # Extract token usage from result
                 if data.get("type") == "result":
                     stats = data.get("stats", {})
-                    if stats:
-                        token_usage.input_tokens = stats.get("input_tokens", 0)
-                        token_usage.output_tokens = stats.get("output_tokens", 0)
-                        # Gemini uses "cached" field for cache read tokens
-                        token_usage.cache_read_input_tokens = stats.get("cached", 0)
-                        token_usage.duration_ms = stats.get("duration_ms")
-                        # Note: Gemini doesn't separate API duration, use total duration
-                        token_usage.duration_api_ms = stats.get("duration_ms")
+                    if isinstance(stats, dict):
+                        for source, target in (
+                            ("input_tokens", "input_tokens"), ("output_tokens", "output_tokens"),
+                            ("cached", "cache_read_input_tokens"), ("duration_ms", "duration_ms"),
+                        ):
+                            if source in stats and stats[source] is not None:
+                                setattr(token_usage, target, stats[source])
+                        if stats.get("duration_ms") is not None:
+                            token_usage.duration_api_ms = stats["duration_ms"]
 
                 # Track tool_use for use on tool_result error
                 if data.get("type") == "tool_use":
@@ -219,6 +220,14 @@ class GeminiCLI(AbstractCLI):
         return True
 
     conversation_session_field = "session_id"
+
+    conversation_operations = frozenset({
+        "acquire_session", "deliver_to_exact_session", "open_interactive_session", "run_one_shot",
+    })
+    conversation_session_operations = conversation_operations - {"open_interactive_session"}
+    conversation_model_operations = conversation_operations - {"open_interactive_session"}
+    conversation_usage_operations = conversation_operations - {"open_interactive_session"}
+    conversation_acceptance_operations = frozenset({"deliver_to_exact_session"})
 
     def conversation_identity_record(self, record):
         return record.get("type") == "init"

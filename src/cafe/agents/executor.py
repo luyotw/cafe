@@ -458,9 +458,9 @@ class AgentExecutor:
                     event_id=event_id,
                 )
             ):
+                acceptance_observed = True
                 if on_acceptance is not None:
                     on_acceptance()
-                acceptance_observed = True
 
         try:
             response = self._execute_with_streaming(
@@ -474,7 +474,7 @@ class AgentExecutor:
                 structured_records=records,
                 structured_record_observer=observe_record,
                 require_terminal_stream_event=True,
-            response_parser=lambda lines: self._parse_using_strategy(strategy, lines),
+                response_parser=lambda lines: self._parse_using_strategy(strategy, lines),
             )
         except AgentExecutionError as error:
             evidence = strategy.conversation_evidence(tuple(records))
@@ -483,6 +483,15 @@ class AgentExecutor:
                 evidence, accepted=acceptance_observed if expected_session_id else False,
                 completed=partial.completed, usage=partial.usage, returncode=partial.returncode,
                 failure_code=evidence.failure_code or error.error_type or "execution_failed",
+                error_excerpt=sanitize_error_excerpt(error),
+            )
+            raise
+        except BaseException as error:
+            partial = getattr(error, "transport_result", TransportResult())
+            evidence = strategy.conversation_evidence(tuple(records))
+            error.transport_result = replace(
+                evidence, accepted=acceptance_observed if expected_session_id else False,
+                usage=partial.usage, completed=partial.completed, returncode=partial.returncode,
                 error_excerpt=sanitize_error_excerpt(error),
             )
             raise
@@ -503,7 +512,7 @@ class AgentExecutor:
             event_id=event_id,
             records=bounded_records,
             transport_result=replace(
-                strategy.conversation_evidence(bounded_records),
+                response.transport_result or strategy.conversation_evidence(bounded_records),
                 observed_session_id=session_id if expected_session_id is None
                                     else strategy.conversation_evidence(bounded_records).observed_session_id,
                 accepted=accepted, completed=True, returncode=0,
@@ -1266,7 +1275,9 @@ class AgentExecutor:
         returncode = None
         stderr_output = ""
         observer_failed = False
-        observation_records = []
+        observation_evidence = TransportResult()
+        observation_strategy = self._get_cli_strategy()
+        parsed_for_call = None
         session_id = None
         model: Optional[str] = None
         permission_denials: List[PermissionDenial] = []
@@ -1330,6 +1341,9 @@ class AgentExecutor:
                 print(f"⚠️  Failed to open streaming output file: {e}")
 
         def collect_usage():
+            nonlocal parsed_for_call
+            if parsed_for_call is not None:
+                return parsed_for_call
             if response_parser:
                 parsed = response_parser(output_lines)
             else:
@@ -1340,9 +1354,14 @@ class AgentExecutor:
                     result = strategy.parse_response(output_lines, stderr_output=stderr_output)
                     parsed = AgentResponse(response=result[0], token_usage=result[1],
                                            usage_available=bool(result[1].model_fields_set))
+            for name in ("duration_ms", "duration_api_ms"):
+                value = getattr(token_usage, name)
+                if value is not None:
+                    setattr(parsed.token_usage, name, value)
+                    parsed.usage_available = True
             if parsed.usage_available:
                 self._accumulate_usage(parsed.token_usage)
-            evidence = self._get_cli_strategy().conversation_evidence(tuple(observation_records))
+            evidence = observation_evidence
             parsed.transport_result = replace(
                 evidence,
                 usage=self._compact_usage(parsed.token_usage) if parsed.usage_available else None,
@@ -1350,6 +1369,7 @@ class AgentExecutor:
                 returncode=returncode,
             )
             parsed.usage_accounted = True
+            parsed_for_call = parsed
             return parsed
 
         def persist_safe_stream_error(error: AgentExecutionError) -> None:
@@ -1456,8 +1476,20 @@ class AgentExecutor:
                             if not isinstance(data, dict):
                                 continue
                             output_lines.append(line)
-                            if len(observation_records) < structured_record_limit:
-                                observation_records.append(data)
+                            observed = observation_strategy.conversation_evidence((data,))
+                            failure = observation_evidence.failure_code or observed.failure_code
+                            if (observation_evidence.observed_session_id and observed.observed_session_id
+                                    and observation_evidence.observed_session_id != observed.observed_session_id):
+                                failure = "conflicting_session_evidence"
+                            if (observation_evidence.reported_model and observed.reported_model
+                                    and observation_evidence.reported_model != observed.reported_model):
+                                failure = failure or "model_mismatch"
+                            observation_evidence = replace(
+                                observation_evidence,
+                                observed_session_id=observation_evidence.observed_session_id or observed.observed_session_id,
+                                reported_model=observation_evidence.reported_model or observed.reported_model,
+                                failure_code=failure,
+                            )
                             if data.get("type") in terminal_stream_event_types:
                                 received_terminal_stream_event = True
                             if isinstance(data, dict) and structured_records is not None:
@@ -1471,6 +1503,12 @@ class AgentExecutor:
                                             raise
 
 
+                            if any(key in data and not isinstance(data[key], dict)
+                                   for key in ("usage", "stats")):
+                                output_lines.pop()
+                                error = AgentExecutionError("Malformed provider statistics", error_type="invalid_evidence")
+                                persist_safe_stream_error(error)
+                                raise error
                             json_error_text = self._extract_stream_json_error_text(data)
                             if json_error_text:
                                 error_type, display_message = self._classify_execution_error(
@@ -1661,7 +1699,7 @@ class AgentExecutor:
             if streaming_file_handle:
                 streaming_file_handle.close()
             raise
-        except BaseException:
+        except BaseException as error:
             if execution_timer is not None:
                 execution_timer.cancel()
             if process.poll() is None:
@@ -1671,6 +1709,9 @@ class AgentExecutor:
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait(timeout=2)
+            if observer_failed:
+                parsed = collect_usage()
+                error.transport_result = parsed.transport_result
             raise
 
         if execution_timer is not None:
@@ -1900,7 +1941,7 @@ class AgentExecutor:
             usage_available=usage_available,
             usage_accounted=True,
             transport_result=replace(
-                self._get_cli_strategy().conversation_evidence(tuple(observation_records)),
+                observation_evidence,
                 reported_model=model,
                 usage=self._compact_usage(token_usage) if usage_available else None,
                 completed=True if received_terminal_stream_event else None, returncode=returncode,

@@ -18,9 +18,14 @@ def provider_process(monkeypatch):
     monkeypatch.setattr("sys.platform", "win32")
     launch = MagicMock()
     import subprocess
+
     actual_popen = subprocess.Popen
-    monkeypatch.setattr("subprocess.Popen", lambda command, **kwargs:
-        launch(command, **kwargs) if command[0] != "git" else actual_popen(command, **kwargs))
+    monkeypatch.setattr(
+        "subprocess.Popen",
+        lambda command, **kwargs: (
+            launch(command, **kwargs) if command[0] != "git" else actual_popen(command, **kwargs)
+        ),
+    )
 
     def supply(records, returncode=0, stderr=""):
         process = MagicMock()
@@ -35,10 +40,12 @@ def provider_process(monkeypatch):
 
 
 def transport(cli=AgentCLI.CLAUDE, model=None, session_id=None):
-    return ConversationTransport(AgentExecutor(
-        AgentConfig(name="conversation", cli=cli, model=model, session_id=session_id),
-        stream_output=False,
-    ))
+    return ConversationTransport(
+        AgentExecutor(
+            AgentConfig(name="conversation", cli=cli, model=model, session_id=session_id),
+            stream_output=False,
+        )
+    )
 
 
 def init(session="s", **kwargs):
@@ -54,13 +61,16 @@ def test_unsupported_guarantee_never_launches(provider_process):
     launch.assert_not_called()
 
 
-@pytest.mark.parametrize("cli,identity", [
-    (AgentCLI.CLAUDE, init()),
-    (AgentCLI.CODEX, dict(type="thread.started", thread_id="s")),
-    (AgentCLI.GEMINI, dict(type="init", session_id="s")),
-    (AgentCLI.CURSOR, init()),
-    (AgentCLI.COPILOT, dict(type="result", sessionId="s")),
-])
+@pytest.mark.parametrize(
+    "cli,identity",
+    [
+        (AgentCLI.CLAUDE, init()),
+        (AgentCLI.CODEX, dict(type="thread.started", thread_id="s")),
+        (AgentCLI.GEMINI, dict(type="init", session_id="s")),
+        (AgentCLI.CURSOR, init()),
+        (AgentCLI.COPILOT, dict(type="result", sessionId="s")),
+    ],
+)
 def test_acquisition_uses_only_verified_provider_identity(provider_process, cli, identity):
     records = [identity]
     if cli != AgentCLI.COPILOT:
@@ -75,12 +85,15 @@ def test_acquisition_uses_only_verified_provider_identity(provider_process, cli,
     assert launch.call_count == 1
 
 
-@pytest.mark.parametrize("records", [
-    [dict(type="assistant", session_id="s"), dict(type="result")],
-    [init("a"), init("b"), dict(type="result")],
-    [init("s" * 513), dict(type="result")],
-    [init()],
-])
+@pytest.mark.parametrize(
+    "records",
+    [
+        [dict(type="assistant", session_id="s"), dict(type="result")],
+        [init("a"), init("b"), dict(type="result")],
+        [init("s" * 513), dict(type="result")],
+        [init()],
+    ],
+)
 def test_invalid_or_incomplete_acquisition_cannot_succeed(provider_process, records):
     launch = provider_process(records)
     with pytest.raises(AgentExecutionError) as caught:
@@ -92,7 +105,9 @@ def test_invalid_or_incomplete_acquisition_cannot_succeed(provider_process, reco
 
 @pytest.mark.parametrize("identity", [init("other"), init(model="other-model")])
 def test_exact_mismatch_has_no_acceptance_or_replacement(provider_process, identity):
-    launch = provider_process([identity, dict(type="stream_event", event=dict(type="message_start")), dict(type="result")])
+    launch = provider_process(
+        [identity, dict(type="stream_event", event=dict(type="message_start")), dict(type="result")]
+    )
     selected = transport(model="selected", session_id="s")
     with pytest.raises(AgentExecutionError) as caught:
         selected.deliver_to_exact_session("event-1", "s", "event-1")
@@ -109,21 +124,38 @@ def test_results_are_compact_and_diagnostics_bounded(provider_process):
     result = caught.value.transport_result
     assert len(result.error_excerpt) <= 400
     assert {f.name for f in fields(TransportResult)} == {
-        "observed_session_id", "reported_model", "accepted", "completed", "usage",
-        "failure_code", "error_excerpt", "returncode",
+        "observed_session_id",
+        "reported_model",
+        "accepted",
+        "completed",
+        "usage",
+        "failure_code",
+        "error_excerpt",
+        "returncode",
     }
 
 
 def test_acceptance_precedes_output_failure_and_keeps_partial_usage(provider_process):
-    provider_process([init(), dict(type="stream_event", event=dict(type="message_start")),
-                      dict(type="result", usage=dict(input_tokens=7, output_tokens=0))],
-                     returncode=1, stderr="output failed")
+    provider_process(
+        [
+            init(),
+            dict(type="stream_event", event=dict(type="message_start")),
+            dict(type="result", usage=dict(input_tokens=7, output_tokens=0)),
+        ],
+        returncode=1,
+        stderr="output failed",
+    )
     accepted = []
     usages = []
     selected = transport(session_id="s")
     with pytest.raises(AgentExecutionError) as caught:
-        selected.deliver_to_exact_session("event-1", "s", "event-1",
-            on_acceptance=lambda: accepted.append(True), on_usage=usages.append)
+        selected.deliver_to_exact_session(
+            "event-1",
+            "s",
+            "event-1",
+            on_acceptance=lambda: accepted.append(True),
+            on_usage=usages.append,
+        )
     result = caught.value.transport_result
     assert accepted == [True]
     assert result.accepted is True
@@ -137,40 +169,80 @@ def test_acceptance_precedes_output_failure_and_keeps_partial_usage(provider_pro
 def test_acceptance_observer_error_is_not_provider_rejection(provider_process):
     launch = provider_process([init(), dict(type="stream_event", event=dict(type="message_start"))])
     problem = OSError("caller persistence failed")
+
     def reject():
         raise problem
+
     with pytest.raises(OSError) as caught:
-        transport(session_id="s").deliver_to_exact_session("event-1", "s", "event-1", on_acceptance=reject)
+        transport(session_id="s").deliver_to_exact_session(
+            "event-1", "s", "event-1", on_acceptance=reject
+        )
     assert caught.value is problem
     assert launch.call_count == 1
     launch.return_value.terminate.assert_called_once()
 
 
-@pytest.mark.parametrize("cli,records", [
-    (AgentCLI.CLAUDE, [init(), dict(type="stream_event", event=dict(type="message_start"), event_id="other")]),
-    (AgentCLI.CODEX, [dict(type="thread.started", thread_id="s"), dict(type="turn.started", event_id="other")]),
-    (AgentCLI.GEMINI, [dict(type="init", session_id="s"), dict(type="message", role="user", content="other")]),
-    (AgentCLI.CURSOR, [init(), dict(type="user", message="other")]),
-    (AgentCLI.COPILOT, [dict(type="user.message", data="other"), dict(type="result", sessionId="s")]),
-])
+@pytest.mark.parametrize(
+    "cli,records",
+    [
+        (
+            AgentCLI.CLAUDE,
+            [init(), dict(type="stream_event", event=dict(type="message_start"), event_id="other")],
+        ),
+        (
+            AgentCLI.CODEX,
+            [
+                dict(type="thread.started", thread_id="s"),
+                dict(type="turn.started", event_id="other"),
+            ],
+        ),
+        (
+            AgentCLI.GEMINI,
+            [dict(type="init", session_id="s"), dict(type="message", role="user", content="other")],
+        ),
+        (AgentCLI.CURSOR, [init(), dict(type="user", message="other")]),
+        (
+            AgentCLI.COPILOT,
+            [dict(type="user.message", data="other"), dict(type="result", sessionId="s")],
+        ),
+    ],
+)
 def test_unrelated_acknowledgements_cannot_accept_delivery(provider_process, cli, records):
     if cli != AgentCLI.COPILOT:
         records += [dict(type="turn.completed" if cli == AgentCLI.CODEX else "result")]
     provider_process(records)
     observed = []
     result = transport(cli, session_id="s").deliver_to_exact_session(
-        "event-1", "s", "event-1", on_acceptance=lambda: observed.append(True))
+        "event-1", "s", "event-1", on_acceptance=lambda: observed.append(True)
+    )
     assert result.accepted is False
     assert observed == []
 
 
-@pytest.mark.parametrize("cli,identity,terminal,usage_field,usage", [
-    (AgentCLI.CLAUDE, init(), "result", "usage", dict(input_tokens=0, output_tokens=0)),
-    (AgentCLI.CODEX, dict(type="thread.started", thread_id="s"), "turn.completed", "usage", dict(input_tokens=0, output_tokens=0)),
-    (AgentCLI.GEMINI, dict(type="init", session_id="s"), "result", "stats", dict(input_tokens=0, output_tokens=0)),
-    (AgentCLI.CURSOR, init(), "result", "duration_ms", 0),
-])
-def test_reported_zero_is_distinct_from_missing_usage(provider_process, cli, identity, terminal, usage_field, usage):
+@pytest.mark.parametrize(
+    "cli,identity,terminal,usage_field,usage",
+    [
+        (AgentCLI.CLAUDE, init(), "result", "usage", dict(input_tokens=0, output_tokens=0)),
+        (
+            AgentCLI.CODEX,
+            dict(type="thread.started", thread_id="s"),
+            "turn.completed",
+            "usage",
+            dict(input_tokens=0, output_tokens=0),
+        ),
+        (
+            AgentCLI.GEMINI,
+            dict(type="init", session_id="s"),
+            "result",
+            "stats",
+            dict(input_tokens=0, output_tokens=0),
+        ),
+        (AgentCLI.CURSOR, init(), "result", "duration_ms", 0),
+    ],
+)
+def test_reported_zero_is_distinct_from_missing_usage(
+    provider_process, cli, identity, terminal, usage_field, usage
+):
     provider_process([identity, dict(type=terminal, **{usage_field: usage})])
     selected = transport(cli)
     result = selected.acquire_session("bootstrap")
@@ -185,36 +257,55 @@ def test_prefix_conflict_prevents_acceptance_and_later_conflict_retains_it(provi
         provider_process([init(), *middle, dict(type="result")])
         observed = []
         with pytest.raises(AgentExecutionError) as caught:
-            transport(session_id="s").deliver_to_exact_session("event-1", "s", "event-1",
-                on_acceptance=lambda: observed.append(True))
+            transport(session_id="s").deliver_to_exact_session(
+                "event-1", "s", "event-1", on_acceptance=lambda: observed.append(True)
+            )
         assert observed == ([True] if later else [])
         assert caught.value.transport_result.accepted is later
 
 
 def test_model_conflict_in_acknowledgement_prevents_acceptance(provider_process):
-    provider_process([init(model="selected"), dict(type="stream_event", event=dict(
-        type="message_start", message=dict(model="other"))), dict(type="result")])
+    provider_process(
+        [
+            init(model="selected"),
+            dict(
+                type="stream_event", event=dict(type="message_start", message=dict(model="other"))
+            ),
+            dict(type="result"),
+        ]
+    )
     observed = []
     with pytest.raises(AgentExecutionError) as caught:
         transport(model="selected", session_id="s").deliver_to_exact_session(
-            "event-1", "s", "event-1", on_acceptance=lambda: observed.append(True))
+            "event-1", "s", "event-1", on_acceptance=lambda: observed.append(True)
+        )
     assert observed == []
     assert caught.value.transport_result.failure_code == "model_mismatch"
 
 
 def test_each_actual_call_merges_usage_once_into_admitted_metadata(provider_process, tmp_path):
     from cafe.core.usage import iteration_usage_sink
+
     target = tmp_path / "iteration.json"
-    target.write_text(json.dumps(dict(iteration=1, timestamp="pinned", stats=dict(input_tokens=3), other="kept")))
+    target.write_text(
+        json.dumps(dict(iteration=1, timestamp="pinned", stats=dict(input_tokens=3), other="kept"))
+    )
     sink = iteration_usage_sink(tmp_path, target)
     selected = transport()
     provider_process([init(), dict(type="result", usage=dict(input_tokens=2, output_tokens=1))])
     selected.acquire_session("bootstrap", on_usage=sink)
-    provider_process([init(), dict(type="stream_event", event=dict(type="message_start")),
-                      dict(type="result", usage=dict(input_tokens=4, output_tokens=2))], returncode=1)
+    provider_process(
+        [
+            init(),
+            dict(type="stream_event", event=dict(type="message_start")),
+            dict(type="result", usage=dict(input_tokens=4, output_tokens=2)),
+        ],
+        returncode=1,
+    )
     with pytest.raises(AgentExecutionError):
-        selected.deliver_to_exact_session("event-1", "s", "event-1", on_usage=sink,
-            on_acceptance=lambda: None)
+        selected.deliver_to_exact_session(
+            "event-1", "s", "event-1", on_usage=sink, on_acceptance=lambda: None
+        )
     provider_process([init(), dict(type="result")])
     selected.acquire_session("bootstrap", on_usage=sink)
     merged = json.loads(target.read_text())
@@ -227,8 +318,10 @@ def test_each_actual_call_merges_usage_once_into_admitted_metadata(provider_proc
 def test_usage_sink_failure_is_caller_error_without_replay(provider_process):
     launch = provider_process([init(), dict(type="result", usage=dict(input_tokens=1))])
     error = OSError("metadata write failed")
+
     def fail(_usage):
         raise error
+
     with pytest.raises(OSError) as caught:
         transport().acquire_session("bootstrap", on_usage=fail)
     assert caught.value is error
@@ -240,7 +333,9 @@ def test_interactive_inherits_terminal_environment_and_reports_no_invented_evide
     launch = MagicMock(return_value=MagicMock(returncode=0))
     monkeypatch.setattr("subprocess.run", launch)
     selected = transport(model="selected", session_id="s")
-    result = selected.open_interactive_session("hello", environment_overrides={"CONVERSATION": "yes"})
+    result = selected.open_interactive_session(
+        "hello", environment_overrides={"CONVERSATION": "yes"}
+    )
     command = launch.call_args.args[0]
     assert "s" in command and "selected" in command
     assert launch.call_args.kwargs["env"]["TRANSPORT_INHERITED"] == "kept"
@@ -251,7 +346,9 @@ def test_interactive_inherits_terminal_environment_and_reports_no_invented_evide
 
 
 def test_one_shot_is_one_attempt_and_output_is_separate_from_evidence(provider_process):
-    launch = provider_process([init(), dict(type="result", usage=dict(input_tokens=2), content="final")])
+    launch = provider_process(
+        [init(), dict(type="result", usage=dict(input_tokens=2), content="final")]
+    )
     responses = []
     result = transport(session_id="s").run_one_shot("hello", on_response=responses.append)
     assert result.observed_session_id == "s"
@@ -282,17 +379,195 @@ def test_transport_sources_have_no_caller_policy_dependencies():
     """U10: imports and authority interpretation stay out of the facade."""
     import ast
     from pathlib import Path
+
     root = Path(__file__).parents[2] / "src/cafe/agents"
-    permitted = {"cafe.agents.diagnostics", "cafe.agents.executor",
-                 "cafe.agents.transport_types", "cafe.core.types"}
+    permitted = {
+        "cafe.agents.diagnostics",
+        "cafe.agents.executor",
+        "cafe.agents.transport_types",
+        "cafe.core.types",
+    }
     for filename in ("transport.py", "transport_types.py"):
         source = (root / filename).read_text()
         for node in ast.walk(ast.parse(source)):
             if isinstance(node, ast.ImportFrom) and node.module.startswith("cafe."):
                 assert node.module in permitted
-        for forbidden in ("HumanTask", "Blackboard", "SessionStore", "baton", "playbook",
-                          "cafe.manager", "cafe.driver", "fallback", "with_session_recovery"):
+        for forbidden in (
+            "HumanTask",
+            "Blackboard",
+            "SessionStore",
+            "baton",
+            "playbook",
+            "cafe.manager",
+            "cafe.driver",
+            "fallback",
+            "with_session_recovery",
+        ):
             assert forbidden not in source
     source = (root.parent / "ui/chat.py").read_text()
     assert "build_interactive_command" not in source
     assert "subprocess.run(" not in source
+
+
+def test_conformance_flag_alone_cannot_advertise_operations(provider_process, monkeypatch):
+    from cafe.agents.cli import ClaudeCLI
+
+    class NoOperations(ClaudeCLI):
+        conversation_operations = frozenset()
+
+    selected = transport()
+    monkeypatch.setattr(
+        selected.executor, "_get_cli_strategy", lambda: NoOperations(selected.executor.config)
+    )
+    launch = provider_process([])
+    with pytest.raises(AgentExecutionError) as caught:
+        selected.acquire_session("bootstrap")
+    assert caught.value.transport_result.failure_code == "unsupported"
+    launch.assert_not_called()
+
+
+def test_usage_before_observer_failure_is_accounted_once_and_error_stays_caller_owned(
+    provider_process,
+):
+    launch = provider_process(
+        [
+            init(),
+            dict(type="message", usage=dict(input_tokens=3)),
+            dict(type="stream_event", event=dict(type="message_start")),
+        ]
+    )
+    selected = transport(session_id="s")
+    observed = []
+    problem = OSError("caller write failed")
+
+    def fail():
+        raise problem
+
+    with pytest.raises(OSError) as caught:
+        selected.deliver_to_exact_session(
+            "event-1", "s", "event-1", on_acceptance=fail, on_usage=observed.append
+        )
+    assert caught.value is problem
+    assert selected.executor.get_total_token_usage().input_tokens == 3
+    assert len(observed) == 1 and observed[0].input_tokens == 3
+    assert launch.call_count == 1
+
+
+def test_duration_and_partial_usage_are_preserved_in_accounting(provider_process):
+    provider_process(
+        [init(), dict(type="result", usage=dict(input_tokens=1), duration_ms=7, duration_api_ms=4)]
+    )
+    selected = transport()
+    result = selected.acquire_session("bootstrap")
+    assert result.usage.duration_ms == 7
+    assert selected.executor.get_total_token_usage().duration_ms == 7
+    assert selected.executor.get_total_token_usage().duration_api_ms == 4
+
+
+def test_late_one_shot_identity_conflict_is_not_hidden_by_record_budget(provider_process):
+    launch = provider_process(
+        [
+            init(),
+            *[dict(type="tool", payload="x") for _ in range(65)],
+            init("other"),
+            dict(type="result"),
+        ]
+    )
+    with pytest.raises(AgentExecutionError) as caught:
+        transport(session_id="s").run_one_shot("hello")
+    assert caught.value.transport_result.failure_code == "conflicting_session_evidence"
+    assert launch.call_count == 1
+
+
+def test_malformed_usage_has_normalized_compact_failure(provider_process):
+    provider_process([init(), dict(type="result", usage="malformed")])
+    with pytest.raises(AgentExecutionError) as caught:
+        transport().acquire_session("bootstrap")
+    assert caught.value.transport_result.failure_code == "invalid_evidence"
+
+
+@pytest.mark.parametrize(
+    "cli,identity,terminal",
+    [
+        (AgentCLI.CLAUDE, init(), dict(type="result", usage=dict(unrecognized=3))),
+        (
+            AgentCLI.CODEX,
+            dict(type="thread.started", thread_id="s"),
+            dict(type="turn.completed", usage=dict(unrecognized=3)),
+        ),
+        (
+            AgentCLI.GEMINI,
+            dict(type="init", session_id="s"),
+            dict(type="result", stats=dict(unrecognized=3)),
+        ),
+    ],
+)
+def test_unrecognized_statistics_do_not_manufacture_zero_usage(
+    provider_process, cli, identity, terminal
+):
+    provider_process([identity, terminal])
+    assert transport(cli).acquire_session("bootstrap").usage is None
+
+
+def test_turn_projection_is_bounded_without_truncating_existing_accounting():
+    from cafe.core.types import TokenUsage
+
+    selected = transport(AgentCLI.CODEX)
+    usage = TokenUsage(
+        input_tokens=80,
+        turn_usages=[
+            dict(turn=index, input_tokens=1, raw_payload="provider snapshot") for index in range(80)
+        ],
+    )
+    selected.executor._accumulate_usage(usage)
+    result = selected.executor._compact_usage(usage)
+    assert len(result.turn_usages) == 64
+    assert len(selected.executor.get_total_token_usage().turn_usages) == 80
+    assert selected.executor.get_total_token_usage().input_tokens == 80
+    assert all(
+        isinstance(value, (int, float)) for turn in result.turn_usages for value in turn.values()
+    )
+
+
+@pytest.mark.parametrize(
+    "cli,identity,terminal",
+    [
+        (AgentCLI.CLAUDE, init(model="selected"), dict(type="result", usage=dict(input_tokens=2))),
+        (
+            AgentCLI.CODEX,
+            dict(type="thread.started", thread_id="s", model="selected"),
+            dict(type="turn.completed", usage=dict(input_tokens=2)),
+        ),
+        (
+            AgentCLI.GEMINI,
+            dict(type="init", session_id="s", model="selected"),
+            dict(type="result", stats=dict(input_tokens=2)),
+        ),
+        (AgentCLI.CURSOR, init(model="selected"), dict(type="result", duration_ms=2)),
+        (AgentCLI.COPILOT, None, dict(type="result", sessionId="s", model="selected")),
+    ],
+)
+def test_advertised_model_and_usage_formats_have_verified_fixtures(
+    provider_process, cli, identity, terminal
+):
+    provider_process([identity, terminal] if identity else [terminal])
+    selected = transport(cli, model="selected")
+    required = frozenset({"model", "usage"}) if cli != AgentCLI.COPILOT else frozenset({"model"})
+    result = selected.acquire_session("bootstrap", required_evidence=required)
+    assert result.reported_model == "selected"
+    if cli == AgentCLI.COPILOT:
+        assert result.usage is None
+        assert selected.capabilities("acquire_session").usage is False
+    else:
+        assert result.usage is not None
+
+
+def test_supported_but_absent_required_evidence_fails_after_one_attempt(provider_process):
+    launch = provider_process([init(), dict(type="result")])
+    with pytest.raises(AgentExecutionError) as caught:
+        transport(model="selected").acquire_session(
+            "bootstrap", required_evidence=frozenset({"model"})
+        )
+    assert caught.value.transport_result.reported_model is None
+    assert caught.value.transport_result.failure_code == "missing_evidence"
+    assert launch.call_count == 1
