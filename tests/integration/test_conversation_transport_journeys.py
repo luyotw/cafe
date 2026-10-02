@@ -311,3 +311,62 @@ def test_public_callback_uses_confirmed_transport_and_accounts_existing_iteratio
     callback.run_callback(event, repository_root=tmp_path)
     assert launch.call_count == 2
     assert json.loads(target.read_text())["stats"]["input_tokens"] == 5
+
+
+@pytest.mark.parametrize("metadata_state", ["absent", "valid", "malformed", "inaccessible"])
+@pytest.mark.parametrize("terminal", ["success", "nonzero", "missing"])
+def test_interactive_chat_launch_is_independent_of_unsupported_telemetry(
+    phase_chat, monkeypatch, metadata_state, terminal
+):
+    import os
+
+    _issue, metadata = phase_chat
+    if metadata_state == "absent":
+        metadata.unlink()
+    elif metadata_state == "malformed":
+        metadata.write_text("{broken")
+    elif metadata_state == "inaccessible":
+        original_open = os.open
+
+        def deny_metadata(path, *args, **kwargs):
+            if str(path).endswith(metadata.name):
+                raise PermissionError("unreadable metadata")
+            return original_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(os, "open", deny_metadata)
+    launch = MagicMock(return_value=MagicMock(returncode=0 if terminal == "success" else 7))
+    if terminal == "missing":
+        launch.side_effect = FileNotFoundError("claude")
+    import subprocess
+    actual_run = subprocess.run
+    monkeypatch.setattr(subprocess, "run", lambda command, **kwargs: (
+        actual_run(command, **kwargs) if command[0] == "git" else launch(command, **kwargs)
+    ))
+    status = chat.launch_chat_session("developer", "x", phase_name="implementation")
+    assert status == (0 if terminal == "success" else 1 if terminal == "missing" else 7)
+    assert launch.call_count == 1
+    assert "selected" in launch.call_args.args[0]
+
+
+@pytest.mark.parametrize("metadata_state", ["malformed", "inaccessible"])
+def test_one_shot_chat_reports_metadata_admission_failure_before_provider_launch(
+    phase_chat, provider_process, monkeypatch, metadata_state, capsys
+):
+    import os
+
+    _issue, metadata = phase_chat
+    if metadata_state == "malformed":
+        metadata.write_text("{broken")
+    else:
+        original_open = os.open
+
+        def deny_metadata(path, *args, **kwargs):
+            if str(path).endswith(metadata.name):
+                raise PermissionError("unreadable metadata")
+            return original_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(os, "open", deny_metadata)
+    launch = provider_process([])
+    assert chat.launch_chat_session("developer", "x", phase_name="implementation", prompt="hello") == 1
+    assert capsys.readouterr().out
+    assert launch.call_count == 0

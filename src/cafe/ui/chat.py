@@ -674,11 +674,10 @@ def launch_chat_session(
         for key, value in extra_env.items():
             chat_env[str(key)] = str(value)
 
-    usage_sink = _chat_usage_sink(issue_dir, execution_step)
-
     if prompt is not None:
         executor.stream_output = True
         try:
+            usage_sink = _chat_usage_sink(issue_dir, execution_step)
             responses = []
 
             def attempt():
@@ -687,8 +686,8 @@ def launch_chat_session(
                 return responses[-1]
 
             response = executor.with_session_recovery(attempt)
-        except AgentExecutionError as exc:
-            detail = exc.display_message or str(exc)
+        except (AgentExecutionError, OSError, ValueError) as exc:
+            detail = getattr(exc, "display_message", None) or str(exc)
             print(f"\n⚠️  Chat CLI failed: {detail}\n")
             return 1
 
