@@ -33,11 +33,11 @@ def authored_copy(monkeypatch, tmp_path):
             (directory / f"{locale}.yaml").write_text(
                 yaml.safe_dump(document, allow_unicode=True), encoding="utf-8"
             )
-        runtime_locales.load_catalogs.cache_clear()
+        runtime_locales._packaged_catalogs.cache_clear()
 
     monkeypatch.setattr(runtime_locales, "files", lambda package: root)
     yield replace
-    runtime_locales.load_catalogs.cache_clear()
+    runtime_locales._packaged_catalogs.cache_clear()
 
 
 @pytest.mark.parametrize("locale", ["en-US", "zh-TW", "zh-Hant", "zh-CN", "zh//TW", None])
@@ -176,7 +176,7 @@ def test_catalog_reference_resolves_once_before_human_task_snapshot(tmp_path):
     snapshot = policy.for_locale("zh-TW").model_dump(mode="json")
     for resource in root.glob("*.yaml"):
         resource.unlink()
-    runtime_locales.load_catalogs.cache_clear()
+    runtime_locales._packaged_catalogs.cache_clear()
     assert HumanTaskPolicy.model_validate(snapshot).model_dump(mode="json") == snapshot
     assert "CATALOG " not in snapshot["prompt"]
 

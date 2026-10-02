@@ -211,8 +211,11 @@ literal. Keep ownership, permissions, budgets, and execution behavior in Python.
 For owner resources, pass the resolved locale directory to
 `load_catalogs(catalog_root)` or
 `render_text(key, locale=locale, catalog_root=catalog_root, **values)`.
-The generic loader validates each pair separately and caches immutable mappings
-in a bounded cache. A supplied root is authoritative: it does not search other
+The generic loader validates each pair separately and returns immutable mappings.
+Only the immutable packaged runtime pair is cached. Selected skill resources are
+read afresh under the catalog read lock; a same-path publication or missing
+current file cannot be hidden by a prior owner read. Each owner read loads its
+two fixed locale files, without retaining owner cache entries. A supplied root is authoritative: it does not search other
 owners or fall back to the central catalogs. Keys do not select a resource owner.
 Packaged resources work independently of the current working directory in a
 source checkout or installed distribution.

@@ -53,16 +53,28 @@ def _placeholders(template: str, context: str) -> frozenset[str]:
     return frozenset(names)
 
 
-@lru_cache(maxsize=64)
 def load_catalogs(catalog_root: Path | None = None) -> Mapping[str, Mapping[str, str]]:
     """Read immutable catalogs and validate matching keys/placeholders.
 
     The default resources are package-relative. A declaration owner supplies its
     resolved locale directory explicitly; keys never select or guess an owner.
+    Owner resources are read afresh under the caller's catalog read lock, so
+    same-path publication cannot combine current declarations with prior copy.
     Invalid authored data is an error; unsupported locale input still silently
     selects English through the existing locale resolver.
     """
-    root = files("cafe").joinpath("data/locales") if catalog_root is None else catalog_root
+    if catalog_root is None:
+        return _packaged_catalogs()
+    return _read_catalogs(catalog_root)
+
+
+@lru_cache(maxsize=1)
+def _packaged_catalogs() -> Mapping[str, Mapping[str, str]]:
+    """Cache the immutable installed runtime resources, never mutable owners."""
+    return _read_catalogs(files("cafe").joinpath("data/locales"))
+
+
+def _read_catalogs(root) -> Mapping[str, Mapping[str, str]]:
     catalogs = {}
     contracts = {}
     for locale in SUPPORTED_TEXT_LOCALES:

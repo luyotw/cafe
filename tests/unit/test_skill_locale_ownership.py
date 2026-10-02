@@ -5,6 +5,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from cafe.catalogs.resolver import CatalogResolver
+from cafe.catalogs.sync import CatalogSyncService
 from cafe.core import runtime_locales
 from cafe.core.human_tasks import HumanTaskPolicy
 from cafe.skills.loader import SkillLoader
@@ -64,7 +66,7 @@ def test_public_composition_binds_primary_and_shared_copy_to_selected_owner(tmp_
         # Plain snapshots remain usable after the authoring resources disappear.
         for resource in contributor.source.skill_root.glob("locales/*.yaml"):
             resource.unlink()
-        runtime_locales.load_catalogs.cache_clear()
+        runtime_locales._packaged_catalogs.cache_clear()
         assert HumanTaskPolicy.model_validate(snapshot).model_dump(mode="json") == snapshot
 
 
@@ -159,3 +161,54 @@ def test_owner_catalog_validation_reports_owning_resource(tmp_path, document):
     with pytest.raises(runtime_locales.LocaleCatalogError) as rejected:
         runtime_locales.load_catalogs(root)
     assert str(root / "zh-TW.yaml") in str(rejected.value)
+
+
+@pytest.mark.parametrize("shared", [False, True])
+def test_published_owner_replacement_reaches_fresh_public_composition(tmp_path, shared):
+    project = tmp_path / "publisher"
+    global_root = tmp_path / "global"
+    consumer = tmp_path / "consumer"
+    write_owner(global_root / "skills", "selected", "approve-old", "Original")
+    write_owner(global_root / "skills", "anchor", "anchor", "Anchor")
+    loader = SkillLoader(project_root=consumer, global_root=global_root)
+    assert loader.get_workflow_declaration("selected").human_tasks[0].prompt == "Original en-US"
+    write_owner(project / ".cafe/skills", "selected", "approve-new", "Updated")
+    service = CatalogSyncService(
+        CatalogResolver(
+            project_root=project,
+            canonical_root=project,
+            global_root=global_root,
+            builtin_root=tmp_path / "builtin",
+        )
+    )
+    comparison = service.compare()
+    result = service.sync(comparison.token, ["phase:selected"])
+    assert result.updated == ("phase:selected",)
+    fresh = SkillLoader(project_root=consumer, global_root=global_root)
+    composition = resolve_step_workflow_composition(
+        fresh,
+        primary_skill="anchor" if shared else "selected",
+        workflow_skills=["selected"] if shared else [],
+        step_name="inspect",
+    )
+    policy = composition.contributors[-1].declaration.human_tasks[0]
+    assert policy.id == "approve-new"
+    assert policy.prompt == "Updated en-US"
+    assert policy.for_locale("zh-TW").prompt == "Updated zh-TW"
+
+
+@pytest.mark.parametrize("mutation", ["remove", "invalid"])
+def test_warm_owner_rejects_current_missing_or_invalid_resources(tmp_path, mutation):
+    owner = write_owner(tmp_path / ".cafe/skills", "custom", "approve", "Original")
+    loader = SkillLoader(project_root=tmp_path, global_root=tmp_path / "global")
+    assert loader.get_workflow_declaration("custom").human_tasks
+    resource = owner / "locales/zh-TW.yaml"
+    if mutation == "remove":
+        resource.unlink()
+    else:
+        resource.write_text('task.prompt: "{unexpected}"\n')
+    with pytest.raises(ValueError) as rejected:
+        SkillLoader(
+            project_root=tmp_path, global_root=tmp_path / "global"
+        ).get_workflow_declaration("custom")
+    assert str(resource) in str(rejected.value)

@@ -15,9 +15,9 @@ def catalogs(monkeypatch, tmp_path):
     for locale in ("en-US", "zh-TW"):
         (root / f"{locale}.yaml").write_text('sample.message: "{{literal}} {value}"\n')
     monkeypatch.setattr(runtime_locales, "files", lambda package: tmp_path)
-    runtime_locales.load_catalogs.cache_clear()
+    runtime_locales._packaged_catalogs.cache_clear()
     yield root
-    runtime_locales.load_catalogs.cache_clear()
+    runtime_locales._packaged_catalogs.cache_clear()
 
 
 def test_packaged_catalogs_share_keys_and_are_read_only(monkeypatch, tmp_path):
