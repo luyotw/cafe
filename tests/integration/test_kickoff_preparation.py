@@ -43,6 +43,7 @@ def reuse_repository_catalog(monkeypatch, request, repository_catalog):
     if request.node.originalname == "test_compact_cli_reports_preserve_selected_facts_and_full_render":
         return
     load = kickoff_inputs._load_local_module
+    catalogs = {}
 
     def load_with_catalog(name):
         module = load(name)
@@ -50,9 +51,14 @@ def reuse_repository_catalog(monkeypatch, request, repository_catalog):
             return module
 
         def discover_index(**kwargs):
-            if Path(kwargs["project_root"]).resolve() == PROJECT_ROOT:
+            root = Path(kwargs["project_root"]).resolve()
+            overlays = (root / ".cafe" / name for name in ("playbooks", "skills", "capabilities"))
+            if root == PROJECT_ROOT or not any(path.exists() for path in overlays):
                 return copy.deepcopy(repository_catalog)
-            return module.discover_index(**kwargs)
+            key = tuple(Path(kwargs[name]).resolve() for name in ("project_root", "global_root", "builtin_root"))
+            if key not in catalogs:
+                catalogs[key] = module.discover_index(**kwargs)
+            return copy.deepcopy(catalogs[key])
 
         return SimpleNamespace(discover_index=discover_index)
 

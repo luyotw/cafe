@@ -1,10 +1,12 @@
 """U01-U03/U10/U14-U16, I01/I02/I05/I06: corrected public preparation seams."""
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,8 +15,58 @@ from _kickoff_test_support import load_kickoff_module
 from test_kickoff_prefill import _project as _base_project
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_kickoff_preparation import _formatter_inputs
+import kickoff_inputs
 
 pytestmark = pytest.mark.release_extended
+
+
+@pytest.fixture(scope="module")
+def review_catalog(tmp_path_factory):
+    """The review journeys create the same playbook in separate project roots."""
+    from cafe.catalogs.resolver import CatalogResolver
+
+    root = tmp_path_factory.mktemp("review-catalog-project")
+    _project(root)
+    resolver = CatalogResolver(project_root=root)
+    catalog = load_kickoff_module("kickoff_catalog").discover_index(
+        project_root=root,
+        global_root=resolver.global_root,
+        builtin_root=resolver.builtin_root,
+        cache_file=tmp_path_factory.mktemp("review-catalog-cache") / "catalog.json",
+    )
+    playbook = (root / ".cafe/playbooks/example.yaml").read_bytes()
+    return playbook, catalog
+
+
+@pytest.fixture(autouse=True)
+def reuse_unchanged_catalog_within_journey(monkeypatch, review_catalog):
+    """Preference and evidence changes do not alter the playbook catalog."""
+    load = kickoff_inputs._load_local_module
+    catalogs = {}
+    template_playbook, template_catalog = review_catalog
+
+    def load_with_catalog(name):
+        module = load(name)
+        if name != "kickoff_catalog":
+            return module
+
+        def discover_index(**kwargs):
+            key = tuple(Path(kwargs[field]).resolve() for field in ("project_root", "global_root", "builtin_root"))
+            project = key[0]
+            playbook = project / ".cafe/playbooks/example.yaml"
+            if playbook.exists() and playbook.read_bytes() == template_playbook:
+                catalog = copy.deepcopy(template_catalog)
+                for candidate in catalog["candidates"]:
+                    if candidate["source"] == "project":
+                        candidate["path"] = str(project / ".cafe/playbooks" / Path(candidate["path"]).name)
+                return catalog
+            if key not in catalogs:
+                catalogs[key] = module.discover_index(**kwargs)
+            return copy.deepcopy(catalogs[key])
+
+        return SimpleNamespace(discover_index=discover_index)
+
+    monkeypatch.setattr(kickoff_inputs, "_load_local_module", load_with_catalog)
 
 
 def _project(root):
