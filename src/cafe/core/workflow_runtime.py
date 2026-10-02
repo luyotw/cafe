@@ -574,8 +574,7 @@ class BlackboardWorkflowRuntime:
             return HandoffIntent.NEED_PERMISSION
         return HandoffIntent.MANUAL_HANDOFF
 
-    @staticmethod
-    def _baton_rejected_prompt(br: BatonRejected) -> str:
+    def _baton_rejected_prompt(self, br: BatonRejected) -> str:
         if br.invalid_value:
             value_msg = f"invalid value '{br.invalid_value}'"
         else:
@@ -583,7 +582,8 @@ class BlackboardWorkflowRuntime:
         message = (
             f"[BATON ERROR] Your baton was rejected because field '{br.field}' has {value_msg}. "
             f"Valid values are: {br.valid_values}. "
-            "Please rewrite next_step.txt with a correct structured baton. "
+            f"Please rewrite {(self.issue_dir / 'next_step.txt').resolve()} "
+            "with a correct structured baton. "
             "Retry in baton-only mode: do not rewrite output.md, checklist.md, or "
             "questions.xml unless strictly required. "
             "If you are asking the user a question, use to_owner='user', "
@@ -599,6 +599,26 @@ class BlackboardWorkflowRuntime:
         if br.detail:
             message += f" {br.detail}."
         return message
+
+    def _retry_rejected_baton(
+        self, *, current_step: str, rejection: BatonRejected, retry_num: int, runtime: str,
+    ) -> str:
+        """Use the same bounded retry for executor and post-execution handoffs."""
+        self._mark_latest_iteration_completion_untrusted(current_step)
+        self.blackboard_store.record_event(
+            self.blackboard, "baton_rejected",
+            {
+                "step": current_step, "field": rejection.field,
+                "invalid_value": rejection.invalid_value,
+                "valid_values": rejection.valid_values, "detail": rejection.detail,
+                "retry": retry_num, "runtime": runtime,
+            },
+        )
+        if retry_num >= 3:
+            raise RuntimeError(
+                f"Step '{current_step}' wrote invalid baton 3 times; last error: {rejection}"
+            ) from rejection
+        return self._baton_rejected_prompt(rejection)
 
     @staticmethod
     def _missing_completion_prompt(*, current_step: str) -> str:
@@ -2582,6 +2602,9 @@ class BlackboardWorkflowRuntime:
                 },
             )
             raise StepInterrupted(step=current_step, hop=hop_count, reason="interrupted")
+        except BatonRejected:
+            # Recoverable handoff errors belong to the original-session baton loop.
+            raise
         except BaseException as exc:
             # Catch AgentExecutionError (rate_limit, cli_not_found),
             # CriticalPhaseError (the same critical error_types re-raised by
@@ -3390,17 +3413,6 @@ class BlackboardWorkflowRuntime:
             return int(iteration_dir.name.removeprefix("iteration_"))
         except ValueError:
             return 1
-
-    def _preserve_artifact_correction_iteration(self, current_step: str) -> None:
-        """A rejected baton must not grant a repaired report a new iteration budget."""
-        iteration_dir = self._latest_iteration_dir(current_step)
-        if iteration_dir is None:
-            return
-        context_file = iteration_dir / "iteration.json"
-        if context_file.is_file():
-            context = json.loads(context_file.read_text(encoding="utf-8"))
-            if context.get("artifact_correction"):
-                self._mark_latest_iteration_completion_untrusted(current_step)
 
     def _mark_latest_iteration_completion_untrusted(self, current_step: str) -> None:
         """Keep a clean provider exit retryable when workflow completion was unusable."""
@@ -4519,6 +4531,12 @@ class BlackboardWorkflowRuntime:
                         extra_prompt=_baton_retry_extra_prompt,
                         same_invocation_retry=_baton_attempt > 0,
                     )
+                except BatonRejected as br:
+                    _baton_retry_extra_prompt = self._retry_rejected_baton(
+                        current_step=current_step, rejection=br,
+                        retry_num=_baton_attempt + 1, runtime=runtime_label,
+                    )
+                    continue
                 except StepInterrupted as si:
                     if self._is_agent_execution_interruption(si.reason):
                         self._rollback_step_attempt(
@@ -4638,27 +4656,10 @@ class BlackboardWorkflowRuntime:
                         return checklist_rejection
                     break
                 except BatonRejected as br:
-                    self._preserve_artifact_correction_iteration(current_step)
-                    retry_num = _baton_attempt + 1
-                    self.blackboard_store.record_event(
-                        self.blackboard,
-                        "baton_rejected",
-                        {
-                            "step": current_step,
-                            "field": br.field,
-                            "invalid_value": br.invalid_value,
-                            "valid_values": br.valid_values,
-                            "retry": retry_num,
-                            "runtime": runtime_label,
-                        },
+                    _baton_retry_extra_prompt = self._retry_rejected_baton(
+                        current_step=current_step, rejection=br,
+                        retry_num=_baton_attempt + 1, runtime=runtime_label,
                     )
-                    if retry_num >= 3:
-                        raise RuntimeError(
-                            f"Step '{current_step}' wrote invalid baton 3 times; "
-                            f"last error: field '{br.field}' got '{br.invalid_value}', "
-                            f"valid values are {br.valid_values}"
-                        ) from br
-                    _baton_retry_extra_prompt = self._baton_rejected_prompt(br)
             else:
                 raise RuntimeError(f"Step '{current_step}' did not produce a valid baton")
             self._store_artifacts(frame.artifacts, frame.artifact_metadata)
@@ -4919,6 +4920,12 @@ class BlackboardWorkflowRuntime:
                         extra_prompt=_baton_retry_extra_prompt,
                         same_invocation_retry=_baton_attempt > 0,
                     )
+                except BatonRejected as br:
+                    _baton_retry_extra_prompt = self._retry_rejected_baton(
+                        current_step=current_step, rejection=br,
+                        retry_num=_baton_attempt + 1, runtime=runtime_label,
+                    )
+                    continue
                 except StepInterrupted as si:
                     if self._is_agent_execution_interruption(si.reason):
                         self._rollback_step_attempt(
@@ -5034,27 +5041,10 @@ class BlackboardWorkflowRuntime:
                             continue
                     break
                 except BatonRejected as br:
-                    self._preserve_artifact_correction_iteration(current_step)
-                    retry_num = _baton_attempt + 1
-                    self.blackboard_store.record_event(
-                        self.blackboard,
-                        "baton_rejected",
-                        {
-                            "step": current_step,
-                            "field": br.field,
-                            "invalid_value": br.invalid_value,
-                            "valid_values": br.valid_values,
-                            "retry": retry_num,
-                            "runtime": runtime_label,
-                        },
+                    _baton_retry_extra_prompt = self._retry_rejected_baton(
+                        current_step=current_step, rejection=br,
+                        retry_num=_baton_attempt + 1, runtime=runtime_label,
                     )
-                    if retry_num >= 3:
-                        raise RuntimeError(
-                            f"Step '{current_step}' wrote invalid baton 3 times; "
-                            f"last error: field '{br.field}' got '{br.invalid_value}', "
-                            f"valid values are {br.valid_values}"
-                        ) from br
-                    _baton_retry_extra_prompt = self._baton_rejected_prompt(br)
             else:
                 post_contract = None
             if post_contract is not None and (

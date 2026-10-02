@@ -973,3 +973,136 @@ def test_u4_i5_auxiliary_limit_cannot_authorize_invalid_human_baton(journey, def
     assert j.executor._load_workspace_completion(j.iteration)["consumed"] == 1
     assert (j.iteration / "iteration.json").stat().st_size <= 1_048_576
     assert "custom_snapshot" not in j.runtime.blackboard.artifacts
+
+
+@pytest.mark.parametrize("mode", ["baton", "legacy"])
+@pytest.mark.parametrize("defect", ["wrong-directory", "missing", "malformed", "undeclared-intent", "wrong-producer"])
+def test_early_handoff_rejection_retries_original_session_before_publication(journey, mode, defect):
+    def damage(repo, iteration, call):
+        if call != 1:
+            return
+        path = iteration.parents[1] / "next_step.txt"
+        if defect == "wrong-directory":
+            # The agent writes ../next_step.txt from iteration_001, leaving the
+            # previous phase's valid but inappropriate baton at the real path.
+            (iteration.parent / "next_step.txt").write_bytes(path.read_bytes())
+            path.write_text(json.dumps({"version": 1, "intent": "manual_handoff",
+                                        "to_owner": "agent", "to_step": "inspect_custom"}))
+        elif defect == "missing":
+            path.unlink()
+        elif defect == "malformed":
+            path.write_text("{broken")
+        elif defect == "undeclared-intent":
+            path.write_text(json.dumps({"version": 1, "intent": "manual_handoff"}))
+        else:
+            path.write_text(json.dumps({"version": 1, "intent": "await_agent",
+                                        "from_step": "deliver_custom", "to_owner": "agent",
+                                        "to_step": "deliver_custom"}))
+
+    j = journey([CORRECTED], mode=mode, workspace=True, extra_publication=True,
+                post_submission=damage)
+    if mode == "legacy" and defect == "missing":
+        original_execute = j.manager.execute
+
+        def without_status(*args, **kwargs):
+            response = original_execute(*args, **kwargs)
+            if len(j.manager.calls) == 1:
+                return ("", *response[1:])
+            return response
+
+        j.manager.execute = without_status
+    result = j.runtime.run(start_step="inspect_custom")
+    assert result.completed
+    assert len(j.manager.calls) == 2
+    first, correction = j.manager.calls
+    assert correction[2].is_exact and correction[2].session_id == "exact-report-session"
+    # Existing baton-only retries deliberately narrow write access.
+    writes = [tool for tool in correction[3]["allowed_tools"] if tool.startswith(("edit", "write"))]
+    assert writes and all(tool.endswith("/next_step.txt)") for tool in writes)
+    assert correction[3]["allowed_directories"] == first[3]["allowed_directories"]
+    assert str((j.issue / "next_step.txt").resolve()) in correction[1]
+    assert "BATON ERROR" in correction[1]
+    assert j.effects.count("after") == 1 and j.effects.count("publish") == 2
+    assert j.manager.deliveries == 1
+    assert not HumanTaskRecordStore(j.issue).tasks()
+    assert not (j.issue / "inspect_custom" / "iteration_002").exists()
+    events = j.runtime.blackboard.events
+    assert any(e.event_type == "baton_rejected" for e in events)
+    assert not any(e.event_type == "step_interrupted" for e in events)
+
+
+@pytest.mark.parametrize("mode", ["baton", "legacy"])
+@pytest.mark.parametrize("intent", ["confirm_output", "need_permission", "need_clarification"])
+def test_handoff_retry_preserves_agent_request_for_human(journey, mode, intent):
+    def damage(repo, iteration, call):
+        if call == 1:
+            (iteration.parents[1] / "next_step.txt").write_text("{broken")
+
+    j = journey([CORRECTED, (CORRECTED, intent)], mode=mode, human=intent,
+                workspace=True, extra_publication=True, post_submission=damage)
+    result = j.runtime.run(start_step="inspect_custom")
+    assert not result.completed
+    assert len(j.manager.calls) == 2
+    assert j.manager.calls[1][2].is_exact
+    assert j.manager.deliveries == 0
+    assert "publish" not in j.effects
+    assert j.runtime.blackboard.handoff_contract.to_owner.value == "user"
+    assert j.runtime.blackboard.handoff_contract.intent.value == intent
+    tasks = HumanTaskRecordStore(j.issue).tasks()
+    assert not any(task.trigger == "agent_execution_interrupted" for task in tasks)
+
+
+@pytest.mark.parametrize("mode", ["baton", "legacy"])
+def test_early_handoff_rejection_exhausts_existing_bounded_retry(journey, mode):
+    def damage(repo, iteration, call):
+        (iteration.parents[1] / "next_step.txt").write_text("{broken")
+
+    j = journey([CORRECTED], mode=mode, workspace=True, extra_publication=True,
+                post_submission=damage)
+    with pytest.raises(RuntimeError, match="invalid baton 3 times"):
+        j.runtime.run(start_step="inspect_custom")
+    assert len(j.manager.calls) == 3
+    assert all(call[2].is_exact for call in j.manager.calls[1:])
+    assert j.effects.count("after") == 0 and j.effects.count("publish") == 0
+    assert j.manager.deliveries == 0
+    assert not HumanTaskRecordStore(j.issue).tasks()
+    rejected = [e for e in j.runtime.blackboard.events if e.event_type == "baton_rejected"]
+    assert [e.data["retry"] for e in rejected if e.data["retry"]] == [1, 2, 3]
+
+
+@pytest.mark.parametrize("mode", ["baton", "legacy"])
+def test_handoff_rejected_after_publication_does_not_repeat_effects(journey, mode):
+    def damage(stage, repo, count):
+        if stage == "publish":
+            (repo / ".cafe/issues/correction/next_step.txt").write_text("{broken")
+
+    j = journey([CORRECTED], mode=mode, workspace=True, extra_publication=True,
+                effect_action=damage)
+    with pytest.raises(RuntimeError, match="invalid baton 3 times"):
+        j.runtime.run(start_step="inspect_custom")
+    assert len(j.manager.calls) == 1
+    assert j.effects.count("after") == 1 and j.effects.count("publish") == 1
+    assert j.manager.deliveries == 0
+    assert "custom_snapshot" not in j.runtime.blackboard.artifacts
+
+
+@pytest.mark.parametrize("mode", ["baton", "legacy"])
+def test_handoff_retry_never_substitutes_a_missing_original_session(journey, mode):
+    def lose_session(iteration, call):
+        if call == 1:
+            j.manager.get_last_session_id = lambda: None
+
+    def damage(repo, iteration, call):
+        (iteration.parents[1] / "next_step.txt").write_text("{broken")
+
+    j = journey([CORRECTED], mode=mode, workspace=True, extra_publication=True,
+                provider_mutation=lose_session, post_submission=damage)
+    result = j.runtime.run(start_step="inspect_custom")
+    assert not result.completed
+    assert len(j.manager.calls) == 1
+    assert j.effects.count("after") == 0 and j.effects.count("publish") == 0
+    assert j.manager.deliveries == 0
+    assert any(
+        "exact producing session" in e.data.get("detail", "")
+        for e in j.runtime.blackboard.events if e.event_type == "step_interrupted"
+    )

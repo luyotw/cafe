@@ -696,6 +696,12 @@ class GenericWorkflowStepExecutor(Phase):
             same_invocation_retry=same_invocation_retry,
             workflow_id=blackboard_state.workflow_id,
         )
+        if (
+            same_invocation_retry
+            and self._is_baton_retry_user_input(extra_prompt or "")
+            and not self._session_continuation.is_exact
+        ):
+            raise RuntimeError("Baton correction requires the exact producing session")
         self._apply_step_agent_model(step_name=step_name, step_def=step_def, agent_name=agent_name)
         effective_agent_config = self._resolve_execution_config_for_iteration(
             agent_name=agent_name,
@@ -942,6 +948,17 @@ class GenericWorkflowStepExecutor(Phase):
         completion_state = {"response": "", "status": None}
 
         def classify_completion(response, status):
+            try:
+                return classify_handoff(response, status)
+            except (ValueError, FileNotFoundError) as error:
+                raise BatonRejected(
+                    field="payload",
+                    invalid_value=str(error),
+                    valid_values=["current producer JSON handoff"],
+                    detail=f"Write the handoff to {(portion_baton_path or baton_path).resolve()}",
+                ) from error
+
+        def classify_handoff(response, status):
             if require_status_code and status is None:
                 status = StatusCodeParser.extract(response, valid_intents)
             decision_path = portion_baton_path or baton_path
@@ -963,12 +980,20 @@ class GenericWorkflowStepExecutor(Phase):
                     )
                     current_handoff.validate(allowed_steps=list(self.playbook["steps"]))
                     if current_handoff.from_step != step_name:
-                        raise ValueError("Current handoff belongs to a different producer")
+                        raise BatonRejected(
+                            field="from_step", invalid_value=current_handoff.from_step,
+                            valid_values=[step_name],
+                            detail="Current handoff belongs to a different producer",
+                        )
                     intent = current_handoff.intent
                 else:
                     intent = OutcomeOnlyHandoff.from_dict(payload).intent
                 if intent.value not in effective_step_handoff_intents(step_def):
-                    raise ValueError("Current handoff intent is not declared")
+                    raise BatonRejected(
+                        field="intent", invalid_value=intent.value,
+                        valid_values=effective_step_handoff_intents(step_def),
+                        detail="Current handoff intent is not declared",
+                    )
                 human = payload.get("to_owner") == "user" or intent in (
                     HandoffIntent.NEED_CLARIFICATION,
                     HandoffIntent.NEED_PERMISSION,
@@ -997,7 +1022,11 @@ class GenericWorkflowStepExecutor(Phase):
                     default_required=True,
                 )
             else:
-                raise ValueError("Current producer handoff is missing")
+                raise BatonRejected(
+                    field="payload", invalid_value="",
+                    valid_values=["current producer JSON handoff"],
+                    detail="Current producer handoff is missing",
+                )
             return status, human, required
 
         def validate_completion_now(response, status, *, repair):
@@ -1874,7 +1903,13 @@ class GenericWorkflowStepExecutor(Phase):
                 # Auxiliary telemetry must not replace a valid current human request.
                 # Use the same producer classifier as the completion gate, after
                 # enforcing the original execution identity and input authority.
-                if is_human_handoff is None or not is_human_handoff(response):
+                try:
+                    human_handoff = is_human_handoff is not None and is_human_handoff(response)
+                except BatonRejected as rejection:
+                    # A malformed handoff cannot turn an independent capacity
+                    # failure into a recoverable baton-only retry.
+                    raise error from rejection
+                if not human_handoff:
                     raise
                 prior_rejections = budget["rejections"]
                 budget["rejections"] = [
