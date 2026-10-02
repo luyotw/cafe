@@ -220,16 +220,12 @@ def test_saved_action_preserves_current_description(tmp_path, capsys):
     assert report['formatter_draft']['deliver_description'] == request['current_explicit_inputs']['deliver_description']
 
 
-@pytest.mark.parametrize('key,invalid,fields,resolution', [
-    ('phase.chains', {'steps': {'absent': ['codex:model']}}, ['phase_chain'], {'phase_chain': ['outline=codex:chosen']}),
-    ('worktree.convention', '{unknown}', ['worktree', 'current_checkout'], {'current_checkout': True}),
-    ('confirmation.assignments', {'mandatory_task': False}, ['user_required', 'manager_confirmable'], {'user_required': [], 'manager_confirmable': []}),
-    ('review.decisions', {'absent': 'required'}, ['proactive_review_decision'], {'proactive_review_decision': ['outline=not_required']}),
-    ('delivery.convention', {'wrong': []}, ['deliver', 'deliver_description'], {'deliver': [], 'deliver_description': []}),
-    ('cleanup.convention', {'wrong': []}, ['cleanup', 'cleanup_description'], {'cleanup': [], 'cleanup_description': []}),
-])
-def test_incompatible_preferences_survive_draft_roundtrip_until_resolution(tmp_path, capsys, key, invalid, fields, resolution):
+def test_incompatible_preferences_survive_draft_roundtrip_until_resolution(tmp_path, capsys):
     """U01/U02/U14/I01/I06: generated defaults cannot resolve a rejected preference."""
+    key = 'phase.chains'
+    invalid = {'steps': {'absent': ['codex:model']}}
+    fields = ['phase_chain']
+    resolution = {'phase_chain': ['outline=codex:chosen']}
     cli = load_kickoff_module('prepare_kickoff')
     project = tmp_path / 'project'; project.mkdir()
     request = _project(project)

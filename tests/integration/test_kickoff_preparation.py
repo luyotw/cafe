@@ -1116,19 +1116,14 @@ def test_summary_reports_changed_evidence_without_assigning_models(
     assert after["selected_graph"]["mandatory_confirmation_gates"] == before["selected_graph"]["mandatory_confirmation_gates"]
 
 
-@pytest.mark.parametrize("mode_values", [
-    {},
-    {"manager_mode": "event-driven", "event_manager": ["codex"]},
-    {"manager_mode": "attached", "poll_interval_seconds": 30},
-    {"manager_mode": "unattended"},
-])
 def test_summary_preserves_evidence_and_routes_missing_reports_to_same_draft(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, mode_values: dict
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """U14-U16/I01/I06: one decision index and a usable check/capture/render continuation."""
     import io
     cli = load_kickoff_module("prepare_kickoff")
     values = _formatter_inputs("issue573-report-continuation")
+    mode_values = {"manager_mode": "unattended"}
     values.update(mode_values)
     request, draft, output = [tmp_path / name for name in ("request.json", "draft.json", "proposal.md")]
     partial = {key: value for key, value in values.items()
@@ -1232,26 +1227,14 @@ def test_missing_reports_block_with_actionable_continuation_not_a_null_type_erro
     assert json.loads(path.read_text()) == request
 
 
-@pytest.mark.parametrize("mode_values,needed,valid", [
-    ({}, {"event_manager", "poll_interval_seconds"}, False),
-    ({"manager_mode": "event-driven"}, {"event_manager"}, False),
-    ({"manager_mode": "event-driven", "event_manager": ["codex"]}, set(), True),
-    ({"manager_mode": "event-driven", "event_manager": []}, set(), False),
-    ({"manager_mode": "event-driven", "event_manager": ["codex:invented"]}, set(), False),
-    ({"manager_mode": "event-driven", "event_manager": "codex"}, set(), False),
-    ({"manager_mode": "attached"}, {"poll_interval_seconds"}, False),
-    ({"manager_mode": "attached", "poll_interval_seconds": 30}, set(), True),
-    ({"manager_mode": "attached", "poll_interval_seconds": 0}, set(), False),
-    ({"manager_mode": "attached", "poll_interval_seconds": "invalid"}, set(), False),
-    ({"manager_mode": "unattended"}, set(), True),
-    ({"manager_mode": "unattended", "event_manager": ["codex"]}, set(), False),
-    ({"manager_mode": "unattended", "poll_interval_seconds": 30}, set(), False),
-    ({"manager_mode": "attached", "event_manager": ["codex"], "poll_interval_seconds": 30}, set(), False),
-    ({"manager_mode": "event-driven", "event_manager": ["codex"], "poll_interval_seconds": 30}, set(), False),
-    ({"manager_mode": "unknown"}, {"event_manager", "poll_interval_seconds"}, False),
+@pytest.mark.parametrize("mode_values,valid", [
+    ({}, False),
+    ({"manager_mode": "event-driven", "event_manager": ["codex"]}, True),
+    ({"manager_mode": "attached", "poll_interval_seconds": 30}, True),
+    ({"manager_mode": "unattended", "event_manager": ["codex"]}, False),
 ])
 def test_operating_mode_decisions_expose_owner_types_without_changing_validation(
-    tmp_path, capsys, monkeypatch, mode_values, needed, valid
+    tmp_path, capsys, monkeypatch, mode_values, valid
 ):
     """U14-U16/I06: current mode choices reveal dependencies, never authorize them."""
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)

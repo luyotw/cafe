@@ -124,18 +124,14 @@ def test_capture_failure_preserves_draft_and_previously_referenced_report(tmp_pa
     assert captured['report_file'] == result['preflight_files']['update']
 
 
-@pytest.mark.parametrize('bad_field,bad_value', [
-    ('sources', None), ('sources', {}), ('sources', [None]), ('sources', [{'url': []}]),
-    ('invalidated_sources', None), ('invalidated_sources', {}), ('invalidated_sources', [None]),
-])
-def test_refresh_isolates_malformed_siblings_without_losing_invalidation(tmp_path, capsys, bad_field, bad_value):
+def test_refresh_isolates_malformed_siblings_without_losing_invalidation(tmp_path, capsys):
     """U04/U12/I05/I07: bad siblings miss, valid maintenance and sharing still work."""
     cli = load_kickoff_module('prepare_kickoff')
     for name in ('one', 'dependent'):
         assert cli.main(_refresh(cli, tmp_path, name)) == 0
     assert cli.main(_refresh(cli, tmp_path, 'unrelated', url='https://provider.test/unrelated')) == 0
     store = cli.VersionedJsonStore(tmp_path / 'cache/models-v1.json', schema_version=1, collection='evidence')
-    corrupt = {**_model('corrupt'), bad_field: bad_value}
+    corrupt = {**_model('corrupt'), 'sources': None}
     store.update(lambda rows: {**rows, 'corrupt': corrupt})
     assert cli.main(_refresh(cli, tmp_path, 'one', fingerprint='v2')) == 0
     assert store.read()['corrupt'] == corrupt
@@ -150,3 +146,19 @@ def test_refresh_isolates_malformed_siblings_without_losing_invalidation(tmp_pat
     for name in ('corrupt', 'dependent'):
         assert models[name]['status'] == 'miss' and models[name]['diagnostics']
         assert models[name]['assessment'] is None
+
+
+@pytest.mark.parametrize('bad_field,bad_value', [
+    ('sources', None), ('sources', {}), ('sources', [None]), ('sources', [{'url': []}]),
+    ('invalidated_sources', None), ('invalidated_sources', {}), ('invalidated_sources', [None]),
+])
+def test_malformed_model_evidence_is_rejected_without_catalog_discovery(bad_field, bad_value):
+    model = load_kickoff_module('kickoff_models')
+    now = datetime.now(timezone.utc)
+    corrupt = {**_model('corrupt'), bad_field: bad_value}
+
+    result = model.assess_model_evidence(corrupt, now=now)
+
+    assert result['status'] == 'miss'
+    assert result['assessment'] is None
+    assert result['diagnostics']
