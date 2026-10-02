@@ -164,6 +164,11 @@ class AbstractCLI(ABC):
         """Verify a provider turn acknowledgement after exact-session evidence."""
         if not event_id.strip():
             return False
+        if self.conversation_evidence(records).failure_code:
+            return False
+        if any(record.get("event_id") not in (None, event_id)
+               or record.get("delivery_id") not in (None, event_id) for record in records):
+            return False
         observed = self._verified_event_driver_session(
             records,
             matches=session_matches,
@@ -250,6 +255,11 @@ class AbstractCLI(ABC):
         models = set()
         invalid = False
         for record in records:
+            for model in self.conversation_reported_models(record):
+                if not isinstance(model, str) or not model.strip() or len(model) > 512:
+                    invalid = True
+                else:
+                    models.add(model)
             if not self.conversation_identity_record(record):
                 continue
             identity = record.get(self.conversation_session_field)
@@ -275,6 +285,11 @@ class AbstractCLI(ABC):
             reported_model=next(iter(models)) if len(models) == 1 else None,
             failure_code=failure,
         )
+
+    def conversation_reported_models(self, record):
+        if self.conversation_identity_record(record) and record.get("model") is not None:
+            return [record["model"]]
+        return []
 
     conversation_session_field = "session_id"
 

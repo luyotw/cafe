@@ -98,12 +98,11 @@ class ClaudeCLI(AbstractCLI):
                 # Extract token usage
                 if "usage" in data:
                     usage_data = data["usage"]
-                    token_usage = TokenUsage(
-                        input_tokens=usage_data.get("input_tokens", 0),
-                        output_tokens=usage_data.get("output_tokens", 0),
-                        cache_creation_input_tokens=usage_data.get("cache_creation_input_tokens", 0),
-                        cache_read_input_tokens=usage_data.get("cache_read_input_tokens", 0),
-                    )
+                    if isinstance(usage_data, dict):
+                        token_usage = TokenUsage(**{
+                            key: value for key, value in usage_data.items()
+                            if key in TokenUsage.model_fields and key != "turn_usages"
+                        })
 
                 if "total_cost_usd" in data:
                     token_usage.total_cost_usd = data["total_cost_usd"]
@@ -264,6 +263,16 @@ class ClaudeCLI(AbstractCLI):
         )
         command.append("--include-partial-messages")
         return command
+
+    def conversation_reported_models(self, record):
+        models = super().conversation_reported_models(record)
+        if record.get("type") == "stream_event":
+            event = record.get("event")
+            if isinstance(event, dict) and event.get("type") == "message_start":
+                message = event.get("message")
+                if isinstance(message, dict) and message.get("model") is not None:
+                    models.append(message["model"])
+        return models
 
     conversation_session_field = "session_id"
 

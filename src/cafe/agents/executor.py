@@ -377,30 +377,25 @@ class AgentExecutor:
             agent_response.cli = self.config.cli
             agent_response.session_id = self.config.session_id
 
-            # Accumulate token usage
-            self._total_token_usage.input_tokens += agent_response.token_usage.input_tokens
-            self._total_token_usage.output_tokens += agent_response.token_usage.output_tokens
-            self._total_token_usage.cache_creation_input_tokens += (
-                agent_response.token_usage.cache_creation_input_tokens
-            )
-            self._total_token_usage.cache_write_input_tokens += (
-                agent_response.token_usage.cache_write_input_tokens
-            )
-            self._total_token_usage.cache_read_input_tokens += (
-                agent_response.token_usage.cache_read_input_tokens
-            )
-            self._total_token_usage.reasoning_output_tokens += (
-                agent_response.token_usage.reasoning_output_tokens
-            )
-            self._total_token_usage.total_cost_usd += agent_response.token_usage.total_cost_usd
-            if agent_response.token_usage.turn_usages:
-                self._total_token_usage.turn_usages.extend(agent_response.token_usage.turn_usages)
+            if not agent_response.usage_accounted:
+                self._accumulate_usage(agent_response.token_usage)
+                agent_response.usage_accounted = True
 
             return agent_response
         except AgentExecutionError:
             raise
         except Exception as e:
             raise AgentExecutionError(f"Agent execution failed: {e}") from e
+
+    def _accumulate_usage(self, usage: TokenUsage) -> None:
+        """One accounting primitive for ordinary and callback subprocesses."""
+        for name in TokenUsage.model_fields:
+            value = getattr(usage, name)
+            if name == "turn_usages":
+                self._total_token_usage.turn_usages.extend(value)
+            elif value is not None:
+                prior = getattr(self._total_token_usage, name)
+                setattr(self._total_token_usage, name, (prior or 0) + value)
 
     def execute_event_driver(
         self,
@@ -479,9 +474,11 @@ class AgentExecutor:
             )
         except AgentExecutionError as error:
             evidence = strategy.conversation_evidence(tuple(records))
+            partial = getattr(error, "transport_result", TransportResult())
             error.transport_result = replace(
                 evidence, accepted=acceptance_observed if expected_session_id else False,
-                failure_code=error.error_type or "execution_failed",
+                completed=partial.completed, usage=partial.usage, returncode=partial.returncode,
+                failure_code=evidence.failure_code or error.error_type or "execution_failed",
                 error_excerpt=sanitize_error_excerpt(error),
             )
             raise
@@ -504,6 +501,7 @@ class AgentExecutor:
             transport_result=replace(
                 strategy.conversation_evidence(bounded_records),
                 accepted=accepted, completed=True, returncode=0,
+                usage=self._compact_usage(response.token_usage) if response.usage_available else None,
             ),
         )
 
@@ -657,7 +655,19 @@ class AgentExecutor:
             permission_denials=permission_denials,
             cli=self.config.cli,
             session_id=self.config.session_id,
+            model=parsed[3] if len(parsed) > 3 else None,
+            usage_available=bool(token_usage.model_fields_set),
         )
+
+    @staticmethod
+    def _compact_usage(usage):
+        numeric_fields = {name for name in TokenUsage.model_fields if name != "turn_usages"}
+        turns = [
+            {key: value for key, value in turn.items()
+             if key in numeric_fields | {"turn", "turn_index"} and isinstance(value, (int, float))}
+            for turn in usage.turn_usages[:64] if isinstance(turn, dict)
+        ]
+        return usage.model_copy(update={"turn_usages": turns})
 
     def get_total_token_usage(self) -> TokenUsage:
         """Get total accumulated token usage across all execute() calls.
@@ -1230,6 +1240,9 @@ class AgentExecutor:
         response_text = ""
         streaming_log: List[str] = []  # Record all streaming fragments
         token_usage = TokenUsage()
+        returncode = None
+        stderr_output = ""
+        observer_failed = False
         session_id = None
         model: Optional[str] = None
         permission_denials: List[PermissionDenial] = []
@@ -1292,9 +1305,31 @@ class AgentExecutor:
             except Exception as e:
                 print(f"⚠️  Failed to open streaming output file: {e}")
 
+        def collect_usage():
+            if response_parser:
+                parsed = response_parser(output_lines)
+            else:
+                strategy = self._get_cli_strategy()
+                if parse_stream_json:
+                    parsed = self._parse_using_strategy(strategy, output_lines)
+                else:
+                    result = strategy.parse_response(output_lines, stderr_output=stderr_output)
+                    parsed = AgentResponse(response=result[0], token_usage=result[1],
+                                           usage_available=bool(result[1].model_fields_set))
+            if parsed.usage_available:
+                self._accumulate_usage(parsed.token_usage)
+            parsed.usage_accounted = True
+            return parsed
+
         def persist_safe_stream_error(error: AgentExecutionError) -> None:
             """Replace any streamed error payload with one safe durable record."""
             nonlocal streaming_file_handle
+            parsed = collect_usage()
+            error.transport_result = TransportResult(
+                usage=self._compact_usage(parsed.token_usage) if parsed.usage_available else None,
+                completed=True if received_terminal_stream_event else None,
+                returncode=returncode, failure_code=error.error_type or "execution_failed",
+            )
             if streaming_file_handle is None:
                 return
             try:
@@ -1390,14 +1425,21 @@ class AgentExecutor:
                         try:
                             data = json.loads(line.strip())
 
+                            if not isinstance(data, dict):
+                                continue
+                            output_lines.append(line)
+                            if data.get("type") in terminal_stream_event_types:
+                                received_terminal_stream_event = True
                             if isinstance(data, dict) and structured_records is not None:
                                 if len(structured_records) < structured_record_limit:
                                     structured_records.append(dict(data))
                                     if structured_record_observer is not None:
-                                        structured_record_observer(dict(data))
+                                        try:
+                                            structured_record_observer(dict(data))
+                                        except BaseException:
+                                            observer_failed = True
+                                            raise
 
-                            # Always collect the line for response_parser (e.g., Gemini needs last line)
-                            output_lines.append(line)
 
                             json_error_text = self._extract_stream_json_error_text(data)
                             if json_error_text:
@@ -1544,6 +1586,8 @@ class AgentExecutor:
                                     )
 
                         except json.JSONDecodeError:
+                            if observer_failed:
+                                raise
                             error_type, display_message = self._classify_execution_error(
                                 cli_name, line
                             )
@@ -1761,7 +1805,7 @@ class AgentExecutor:
 
         # Use custom response parser if provided
         if response_parser:
-            parsed_response = response_parser(output_lines)
+            parsed_response = collect_usage()
             if codex_permission_denials:
                 existing_pairs = {
                     (denial.tool_name, json.dumps(denial.tool_input, sort_keys=True))
@@ -1817,9 +1861,14 @@ class AgentExecutor:
             final_streaming_log = output_lines
 
         # Model is already tracked separately, duration stays in token_usage
+        usage_available = bool(token_usage.model_fields_set)
+        if usage_available:
+            self._accumulate_usage(token_usage)
         return AgentResponse(
             response=final_response,
             token_usage=token_usage,
+            usage_available=usage_available,
+            usage_accounted=True,
             permission_denials=permission_denials,
             streaming_log=final_streaming_log,
             model=model,

@@ -24,6 +24,7 @@ def provider_process(monkeypatch):
         process.stdout.readline.side_effect = [json.dumps(r) + "\n" for r in records] + [""]
         process.stderr.read.return_value = stderr
         process.wait.return_value = returncode
+        process.poll.return_value = None
         launch.return_value = process
         return launch
 
@@ -108,3 +109,91 @@ def test_results_are_compact_and_diagnostics_bounded(provider_process):
         "observed_session_id", "reported_model", "accepted", "completed", "usage",
         "failure_code", "error_excerpt", "returncode",
     }
+
+
+def test_acceptance_precedes_output_failure_and_keeps_partial_usage(provider_process):
+    provider_process([init(), dict(type="stream_event", event=dict(type="message_start")),
+                      dict(type="result", usage=dict(input_tokens=7, output_tokens=0))],
+                     returncode=1, stderr="output failed")
+    accepted = []
+    usages = []
+    selected = transport(session_id="s")
+    with pytest.raises(AgentExecutionError) as caught:
+        selected.deliver_to_exact_session("event-1", "s", "event-1",
+            on_acceptance=lambda: accepted.append(True), on_usage=usages.append)
+    result = caught.value.transport_result
+    assert accepted == [True]
+    assert result.accepted is True
+    assert result.completed is True
+    assert result.returncode == 1
+    assert result.usage.input_tokens == 7
+    assert len(usages) == 1
+    assert selected.executor.get_total_token_usage().input_tokens == 7
+
+
+def test_acceptance_observer_error_is_not_provider_rejection(provider_process):
+    launch = provider_process([init(), dict(type="stream_event", event=dict(type="message_start"))])
+    problem = OSError("caller persistence failed")
+    def reject():
+        raise problem
+    with pytest.raises(OSError) as caught:
+        transport(session_id="s").deliver_to_exact_session("event-1", "s", "event-1", on_acceptance=reject)
+    assert caught.value is problem
+    assert launch.call_count == 1
+    launch.return_value.terminate.assert_called_once()
+
+
+@pytest.mark.parametrize("cli,records", [
+    (AgentCLI.CLAUDE, [init(), dict(type="stream_event", event=dict(type="message_start"), event_id="other")]),
+    (AgentCLI.CODEX, [dict(type="thread.started", thread_id="s"), dict(type="turn.started", event_id="other")]),
+    (AgentCLI.GEMINI, [dict(type="init", session_id="s"), dict(type="message", role="user", content="other")]),
+    (AgentCLI.CURSOR, [init(), dict(type="user", message="other")]),
+    (AgentCLI.COPILOT, [dict(type="user.message", data="other"), dict(type="result", sessionId="s")]),
+])
+def test_unrelated_acknowledgements_cannot_accept_delivery(provider_process, cli, records):
+    if cli != AgentCLI.COPILOT:
+        records += [dict(type="turn.completed" if cli == AgentCLI.CODEX else "result")]
+    provider_process(records)
+    observed = []
+    result = transport(cli, session_id="s").deliver_to_exact_session(
+        "event-1", "s", "event-1", on_acceptance=lambda: observed.append(True))
+    assert result.accepted is False
+    assert observed == []
+
+
+@pytest.mark.parametrize("cli,identity,terminal,usage_field,usage", [
+    (AgentCLI.CLAUDE, init(), "result", "usage", dict(input_tokens=0, output_tokens=0)),
+    (AgentCLI.CODEX, dict(type="thread.started", thread_id="s"), "turn.completed", "usage", dict(input_tokens=0, output_tokens=0)),
+    (AgentCLI.GEMINI, dict(type="init", session_id="s"), "result", "stats", dict(input_tokens=0, output_tokens=0)),
+    (AgentCLI.CURSOR, init(), "result", "duration_ms", 0),
+])
+def test_reported_zero_is_distinct_from_missing_usage(provider_process, cli, identity, terminal, usage_field, usage):
+    provider_process([identity, dict(type=terminal, **{usage_field: usage})])
+    selected = transport(cli)
+    result = selected.acquire_session("bootstrap")
+    assert result.usage is not None
+    assert result.usage.input_tokens == 0
+
+
+def test_prefix_conflict_prevents_acceptance_and_later_conflict_retains_it(provider_process):
+    for later in (False, True):
+        acknowledgement = dict(type="stream_event", event=dict(type="message_start"))
+        middle = [acknowledgement, init("other")] if later else [init("other"), acknowledgement]
+        provider_process([init(), *middle, dict(type="result")])
+        observed = []
+        with pytest.raises(AgentExecutionError) as caught:
+            transport(session_id="s").deliver_to_exact_session("event-1", "s", "event-1",
+                on_acceptance=lambda: observed.append(True))
+        assert observed == ([True] if later else [])
+        assert caught.value.transport_result.accepted is later
+
+
+def test_model_conflict_in_acknowledgement_prevents_acceptance(provider_process):
+    provider_process([init(model="selected"), dict(type="stream_event", event=dict(
+        type="message_start", message=dict(model="other"))), dict(type="result")])
+    observed = []
+    with pytest.raises(AgentExecutionError) as caught:
+        transport(model="selected", session_id="s").deliver_to_exact_session(
+            "event-1", "s", "event-1", on_acceptance=lambda: observed.append(True))
+    assert observed == []
+    assert caught.value.transport_result.failure_code == "model_mismatch"

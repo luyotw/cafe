@@ -284,6 +284,9 @@ class CopilotCLI(AbstractCLI):
     ) -> bool:
         if (
             not event_id.strip()
+            or self.conversation_evidence(records).failure_code
+            or any(record.get("event_id") not in (None, event_id)
+                   or record.get("delivery_id") not in (None, event_id) for record in records)
             or self._event_driver_terminal_session(records) != session_id
         ):
             return False
