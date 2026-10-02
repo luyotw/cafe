@@ -19,8 +19,29 @@ import pytest
 import yaml
 
 from cafe.core.packet_io import canonical_json
+from cafe.agents.executor import AgentExecutor, EventDriverExecutionResult
+from cafe.agents.transport_types import TransportResult
 from cafe.core.types import AgentCLI, AgentResponse, TokenUsage
 from tests.fixtures.delivery_contract import delivery_contract, legacy_driver_contract
+
+
+def _executor_result(*, session_id=None, accepted=False, records=()):
+    """Compact evidence supplied by the executor boundary in caller-policy tests.
+
+    Real provider parsing is covered by the transport composition journeys.
+    Keep conflicting fixture evidence explicit rather than discarding it.
+    """
+    observed = {record[field] for record in records
+                for field in ("session_id", "sessionId", "thread_id")
+                if isinstance(record.get(field), str)}
+    conflicting = len(observed) > 1 or (session_id and observed and observed != {session_id})
+    return EventDriverExecutionResult(
+        session_id=session_id, accepted=accepted, event_id=None, records=tuple(records),
+        transport_result=TransportResult(
+            observed_session_id=session_id, accepted=accepted, completed=True, returncode=0,
+            failure_code="conflicting_session_evidence" if conflicting else None,
+        ),
+    )
 
 
 def _callback_module():
@@ -407,14 +428,15 @@ def test_version_three_state_rejects_inconsistent_event_transitions(
             "acquired_at": "2026-09-04T00:00:00+00:00",
         }
 
-    class FakeExecutor:
+    class FakeExecutor(AgentExecutor):
         def __init__(self, config, **_kwargs):
+            super().__init__(config, stream_output=False)
             self.config = config
 
         def execute_event_driver(self, _prompt, **_kwargs):
             if self.config.cli is AgentCLI.CODEX:
                 raise callback.AgentExecutionError("rejected", error_type="transport_rejected")
-            return SimpleNamespace(session_id="claude-session", accepted=True, records=())
+            return _executor_result(session_id="claude-session", accepted=True, records=())
 
     accepted = callback._run_v3_callback(
         driver_dir,
@@ -662,13 +684,14 @@ def test_unknown_legacy_sessions_are_rebuilt_without_misrouting_host(tmp_path: P
     )
     loaded = callback._ensure_dispatch_event(driver_dir, loaded, later_event)
 
-    class FakeExecutor:
+    class FakeExecutor(AgentExecutor):
         def __init__(self, config, **_kwargs):
+            super().__init__(config, stream_output=False)
             assert config.cli == AgentCLI.CLAUDE
 
         def execute_event_driver(self, _prompt, **kwargs):
             session_id = kwargs.get("expected_session_id")
-            return SimpleNamespace(
+            return _executor_result(
                 session_id=session_id or "new-claude-session",
                 accepted=session_id is not None,
                 records=(),
@@ -907,13 +930,14 @@ def test_every_unbound_entry_bootstraps_without_event_authority(
     driver_dir, state, event = _v3_event_context(callback, tmp_path, [(cli.value, "exact")])
     calls = []
 
-    class FakeExecutor:
+    class FakeExecutor(AgentExecutor):
         def __init__(self, config, **_kwargs):
+            super().__init__(config, stream_output=False)
             self.config = config
 
         def execute_event_driver(self, prompt, **kwargs):
             calls.append((self.config, prompt, kwargs))
-            return SimpleNamespace(
+            return _executor_result(
                 session_id=f"{self.config.cli.value}-provider-session",
                 records=(),
             )
@@ -1015,7 +1039,7 @@ def test_provider_failure_classification_is_fail_closed(error_type, expected) ->
             True,
         ),
         (
-            lambda _callback: SimpleNamespace(
+            lambda _callback: _executor_result(
                 session_id=None,
                 records=({"type": "result", "status": "success"},),
             ),
@@ -1023,7 +1047,7 @@ def test_provider_failure_classification_is_fail_closed(error_type, expected) ->
             False,
         ),
         (
-            lambda _callback: SimpleNamespace(
+            lambda _callback: _executor_result(
                 session_id=None,
                 records=(
                     {"type": "init", "session_id": "one"},
@@ -1042,8 +1066,9 @@ def test_bootstrap_outcomes_never_create_event_delivery(
     driver_dir, state, event = _v3_event_context(callback, tmp_path, [("gemini", "exact")])
     outcome_value = result_or_error(callback)
 
-    class FakeExecutor:
+    class FakeExecutor(AgentExecutor):
         def __init__(self, *_args, **_kwargs):
+            super().__init__(_args[0], stream_output=False)
             pass
 
         def execute_event_driver(self, *_args, **_kwargs):
@@ -1073,8 +1098,9 @@ def test_bootstrap_intent_write_failure_prevents_provider_launch(tmp_path: Path)
     driver_dir, state, event = _v3_event_context(callback, tmp_path, [("cursor-agent", "exact")])
     launched = False
 
-    class FakeExecutor:
+    class FakeExecutor(AgentExecutor):
         def __init__(self, *_args, **_kwargs):
+            super().__init__(_args[0], stream_output=False)
             nonlocal launched
             launched = True
 
@@ -1099,13 +1125,14 @@ def test_session_persistence_failure_never_launches_actual_callback(
     driver_dir, state, event = _v3_event_context(callback, tmp_path, [("claude", "exact")])
     calls = []
 
-    class FakeExecutor:
+    class FakeExecutor(AgentExecutor):
         def __init__(self, config, **_kwargs):
+            super().__init__(config, stream_output=False)
             self.config = config
 
         def execute_event_driver(self, prompt, **_kwargs):
             calls.append(prompt)
-            return SimpleNamespace(session_id="provider-session", records=())
+            return _executor_result(session_id="provider-session", records=())
 
     original_atomic_write = callback._atomic_write
     writes = 0
@@ -1154,19 +1181,20 @@ def test_actual_callback_starts_only_after_session_is_durable(tmp_path: Path) ->
     driver_dir, state, event = _v3_event_context(callback, tmp_path, [("claude", "exact")])
     calls = []
 
-    class FakeExecutor:
+    class FakeExecutor(AgentExecutor):
         def __init__(self, config, **_kwargs):
+            super().__init__(config, stream_output=False)
             self.config = config
 
         def execute_event_driver(self, prompt, **kwargs):
             calls.append((prompt, kwargs))
             if kwargs.get("expected_session_id") is None:
-                return SimpleNamespace(session_id="provider-session", accepted=False, records=())
+                return _executor_result(session_id="provider-session", accepted=False, records=())
             persisted = json.loads((driver_dir / "dispatch_state.json").read_text())
             assert persisted["entries"][0]["session"]["id"] == "provider-session"
             assert kwargs["expected_session_id"] == "provider-session"
             assert event["event_id"] in prompt
-            return SimpleNamespace(
+            return _executor_result(
                 session_id="provider-session",
                 accepted=True,
                 records=({"type": "system", "subtype": "init", "session_id": "provider-session"},),
@@ -1204,8 +1232,9 @@ def test_actual_acceptance_is_durable_before_downstream_output_finishes(
     }
     (driver_dir / "dispatch_state.json").write_text(json.dumps(state), encoding="utf-8")
 
-    class FakeExecutor:
+    class FakeExecutor(AgentExecutor):
         def __init__(self, _config, **_kwargs):
+            super().__init__(_config, stream_output=False)
             pass
 
         def execute_event_driver(self, _prompt, **kwargs):
@@ -1323,15 +1352,16 @@ def test_multi_hop_delivery_is_serial_forward_only_and_sticky(tmp_path: Path) ->
     driver_dir, state, event = _v3_event_context(callback, tmp_path, chain)
     calls = []
 
-    class FakeExecutor:
+    class FakeExecutor(AgentExecutor):
         def __init__(self, config, **_kwargs):
+            super().__init__(config, stream_output=False)
             self.config = config
 
         def execute_event_driver(self, prompt, **kwargs):
             stage = "delivery" if kwargs.get("expected_session_id") else "bootstrap"
             calls.append((self.config.cli.value, stage, kwargs.get("event_id")))
             session_id = f"{self.config.cli.value}-session"
-            return SimpleNamespace(
+            return _executor_result(
                 session_id=session_id,
                 accepted=stage == "delivery" and self.config.cli is AgentCLI.GEMINI,
                 records=(),
@@ -1405,14 +1435,15 @@ def test_ambiguous_actual_delivery_stops_before_later_entry(tmp_path: Path) -> N
     )
     calls = []
 
-    class FakeExecutor:
+    class FakeExecutor(AgentExecutor):
         def __init__(self, config, **_kwargs):
+            super().__init__(config, stream_output=False)
             self.config = config
 
         def execute_event_driver(self, prompt, **kwargs):
             calls.append((self.config.cli.value, prompt))
             if kwargs.get("expected_session_id") is None:
-                return SimpleNamespace(session_id="codex-session", accepted=False, records=())
+                return _executor_result(session_id="codex-session", accepted=False, records=())
             raise callback.AgentExecutionError("truncated", error_type="incomplete_stream")
 
     updated = callback._run_v3_callback(
@@ -1437,13 +1468,14 @@ def test_exhausted_suffix_retains_event_and_active_index(tmp_path: Path) -> None
     )
     calls = []
 
-    class FakeExecutor:
+    class FakeExecutor(AgentExecutor):
         def __init__(self, config, **_kwargs):
+            super().__init__(config, stream_output=False)
             self.config = config
 
         def execute_event_driver(self, _prompt, **kwargs):
             calls.append((self.config.cli.value, bool(kwargs.get("expected_session_id"))))
-            return SimpleNamespace(
+            return _executor_result(
                 session_id=f"{self.config.cli.value}-session",
                 accepted=False,
                 records=(),
@@ -1473,13 +1505,14 @@ def test_acceptance_write_failure_reloads_as_pending_and_never_falls_forward(
     )
     calls = []
 
-    class FakeExecutor:
+    class FakeExecutor(AgentExecutor):
         def __init__(self, config, **_kwargs):
+            super().__init__(config, stream_output=False)
             self.config = config
 
         def execute_event_driver(self, _prompt, **kwargs):
             calls.append(self.config.cli.value)
-            return SimpleNamespace(
+            return _executor_result(
                 session_id="cursor-session",
                 accepted=kwargs.get("expected_session_id") is not None,
                 records=(),
@@ -1690,8 +1723,9 @@ def test_conclusive_bootstrap_failure_moves_to_next_entry(tmp_path: Path) -> Non
     )
     calls = []
 
-    class FakeExecutor:
+    class FakeExecutor(AgentExecutor):
         def __init__(self, config, **_kwargs):
+            super().__init__(config, stream_output=False)
             self.config = config
 
         def execute_event_driver(self, _prompt, **kwargs):
@@ -1701,7 +1735,7 @@ def test_conclusive_bootstrap_failure_moves_to_next_entry(tmp_path: Path) -> Non
                 raise callback.AgentExecutionError(
                     "exact model unavailable", error_type="model_not_found"
                 )
-            return SimpleNamespace(
+            return _executor_result(
                 session_id="claude-session",
                 accepted=stage == "delivery",
                 records=(),
@@ -1738,14 +1772,15 @@ def test_public_callback_path_executes_version_three_lifecycle(tmp_path: Path, m
 
     monkeypatch.setattr(callback, "_with_current_task_authority", traced_authority)
 
-    class FakeExecutor:
+    class FakeExecutor(AgentExecutor):
         def __init__(self, config, **_kwargs):
+            super().__init__(config, stream_output=False)
             self.config = config
             models.append(config.model)
 
         def execute_event_driver(self, _prompt, **kwargs):
             calls.append(kwargs.get("expected_session_id"))
-            return SimpleNamespace(
+            return _executor_result(
                 session_id="gemini-session",
                 accepted=kwargs.get("expected_session_id") is not None,
                 records=(),
@@ -1787,6 +1822,7 @@ def test_public_callback_path_rejects_eventless_provider_init(tmp_path: Path, mo
         }
         kwargs["structured_records"].append(init)
         kwargs["structured_record_observer"](init)
+        return AgentResponse(response="", token_usage=TokenUsage())
 
     monkeypatch.setattr(callback.AgentExecutor, "_execute_with_streaming", emit_init_only)
     callback.run_callback(event, repository_root=tmp_path)
@@ -2175,14 +2211,15 @@ def test_callback_acquires_and_delivers_a_contract_bound_session(
     assert all(path.read_bytes() == content for path, content in before_status.items())
     calls = []
 
-    class FakeExecutor:
+    class FakeExecutor(AgentExecutor):
         def __init__(self, _config, **_kwargs):
+            super().__init__(_config, stream_output=False)
             pass
 
         def execute_event_driver(self, _prompt, **kwargs):
             expected_session_id = kwargs.get("expected_session_id")
             calls.append(expected_session_id)
-            return SimpleNamespace(
+            return _executor_result(
                 session_id="session-1",
                 accepted=expected_session_id == "session-1",
                 records=(),
@@ -2643,12 +2680,13 @@ def test_callback_identity_mismatch_keeps_existing_session(tmp_path: Path, monke
     }
     callback._write_dispatch_state(driver_dir, state)
 
-    class FakeExecutor:
+    class FakeExecutor(AgentExecutor):
         def __init__(self, _config, **_kwargs):
+            super().__init__(_config, stream_output=False)
             pass
 
         def execute_event_driver(self, _prompt, **_kwargs):
-            return SimpleNamespace(session_id="different", accepted=True, records=())
+            return _executor_result(session_id="different", accepted=True, records=())
 
     monkeypatch.setattr(callback, "AgentExecutor", FakeExecutor)
     callback.run_callback(event, repository_root=tmp_path)
@@ -2670,8 +2708,9 @@ def test_callback_session_conflict_keeps_existing_session(tmp_path: Path, monkey
     }
     callback._write_dispatch_state(driver_dir, state)
 
-    class FakeExecutor:
+    class FakeExecutor(AgentExecutor):
         def __init__(self, _config, **_kwargs):
+            super().__init__(_config, stream_output=False)
             pass
 
         def execute_event_driver(self, _prompt, **_kwargs):

@@ -24,7 +24,7 @@ from typing import Any, Callable, Iterator, Mapping, Optional, Sequence
 import yaml
 
 from cafe.agents.executor import AgentExecutionControl, AgentExecutionError, AgentExecutor
-from cafe.agents.manager import AgentManager
+from cafe.agents.transport import ConversationTransport
 from cafe.core.conversation_locale import DEFAULT_CONVERSATION_LOCALE
 from cafe.core.human_task_notifications import (
     build_workflow_callback_failure_message,
@@ -33,7 +33,6 @@ from cafe.core.human_task_notifications import (
     post_slack_notification,
 )
 from cafe.core.session import SessionStore
-from cafe.core.session_continuation import SessionContinuation
 from cafe.core.task_inbox import TaskInboxError, TaskInboxService
 from cafe.core.types import AgentCLI, AgentConfig, SessionData
 from cafe.core.workflow_runtime import resolve_human_task_notification_repository_root
@@ -980,7 +979,9 @@ def _entry_is_conforming(entry: dict[str, str]) -> bool:
         ),
         stream_output=False,
     )
-    return executor.supports_event_manager()
+    transport = ConversationTransport(executor)
+    return all(transport.capabilities(operation).supported
+               for operation in ("acquire_session", "deliver_to_exact_session"))
 
 
 def _read_legacy_session(
@@ -1445,35 +1446,6 @@ def _callback_usage_sink(manager_dir: Path, event: dict[str, Any], repository_ro
         return None
 
 
-def _execute_callback_usage(execute_callback, *args, on_usage=None, **kwargs):
-    """Forward exactly one call's verified usage, independent of acceptance."""
-    try:
-        result = execute_callback(*args, **kwargs)
-    except AgentExecutionError as error:
-        evidence = getattr(error, "transport_result", None)
-        if on_usage is not None and evidence is not None and evidence.usage is not None:
-            on_usage(evidence.usage)
-        raise
-    evidence = getattr(result, "transport_result", None)
-    if on_usage is not None and evidence is not None and evidence.usage is not None:
-        on_usage(evidence.usage)
-    return result
-
-
-def _observed_session_ids(records: Any) -> set[str]:
-    result: set[str] = set()
-    if not isinstance(records, (list, tuple)):
-        return result
-    for record in records:
-        if not isinstance(record, dict):
-            continue
-        for field in ("thread_id", "session_id", "sessionId"):
-            value = record.get(field)
-            if isinstance(value, str) and value.strip():
-                result.add(value.strip())
-    return result
-
-
 def _acquire_v3_session(
     manager_dir: Path,
     state: dict[str, Any],
@@ -1516,14 +1488,9 @@ def _acquire_v3_session(
     )
     try:
         with tempfile.TemporaryDirectory(prefix="cafe-event-bootstrap-") as temporary:
-            execute_callback = (
-                executor.execute_event_manager
-                if manager_dir.name == "manager"
-                else executor.execute_event_driver
-            )
-            result = _execute_callback_usage(execute_callback,
-                on_usage=on_usage,
+            result = ConversationTransport(executor).acquire_session(
                 'say "HI"',
+                on_usage=on_usage,
                 allowed_tools=[],
                 allowed_directories=[],
                 execution_control=AgentExecutionControl(
@@ -1535,6 +1502,9 @@ def _acquire_v3_session(
             )
     except Exception as exc:
         classification = _classify_provider_failure(exc)
+        # A completed bootstrap with no identity never attempted event delivery.
+        if getattr(exc, "error_type", None) == "missing_evidence":
+            classification = "conclusive_nonacceptance"
         state = _finish_pending_attempt(
             manager_dir,
             state,
@@ -1546,22 +1516,7 @@ def _acquire_v3_session(
         )
         return state, classification
 
-    session_id = getattr(result, "session_id", None)
-    records = getattr(result, "records", ())
-    if not isinstance(session_id, str) or not session_id.strip():
-        observed_ids = _observed_session_ids(records)
-        classification = "ambiguous" if len(observed_ids) > 1 else "conclusive_nonacceptance"
-        state = _finish_pending_attempt(
-            manager_dir,
-            state,
-            event_id=event_id,
-            status="failed" if classification == "conclusive_nonacceptance" else "ambiguous",
-            outcome=classification,
-            reason="invalid_session_result",
-            recovery_pending=classification == "ambiguous",
-        )
-        return state, classification
-
+    session_id = result.observed_session_id
     updated = copy.deepcopy(state)
     now = _now()
     updated["entries"][index]["session"] = {
@@ -2148,7 +2103,6 @@ def _deliver_v3_callback(
                 repository_root=repository_root,
             )
             accepted = True
-            records: Any = ()
             reported_session_id = session_id
         else:
             executor = executor_factory(
@@ -2162,16 +2116,11 @@ def _deliver_v3_callback(
                 ),
                 stream_output=False,
             )
-            execute_callback = (
-                executor.execute_event_manager
-                if manager_dir.name == "manager"
-                else executor.execute_event_driver
-            )
-            result = _execute_callback_usage(execute_callback,
-                on_usage=on_usage,
+            result = ConversationTransport(executor).deliver_to_exact_session(
                 _callback_prompt(event, repository_root=repository_root),
-                expected_session_id=session_id,
-                event_id=event_id,
+                session_id=session_id,
+                delivery_id=event_id,
+                on_usage=on_usage,
                 on_acceptance=persist_acceptance,
                 allowed_tools=["Read", "Grep", "Glob", "Bash"],
                 allowed_directories=[str(repository_root)],
@@ -2181,9 +2130,8 @@ def _deliver_v3_callback(
                     max_output_lines=128,
                 ),
             )
-            accepted = bool(getattr(result, "accepted", False))
-            records = getattr(result, "records", ())
-            reported_session_id = getattr(result, "session_id", None)
+            accepted = result.accepted is True
+            reported_session_id = result.observed_session_id
     except Exception as exc:
         if acceptance_write_failed:
             raise
@@ -2216,8 +2164,7 @@ def _deliver_v3_callback(
             "accepted",
         )
 
-    observed_ids = _observed_session_ids(records)
-    conflicting = bool(observed_ids and observed_ids != {session_id})
+    conflicting = reported_session_id is not None and reported_session_id != session_id
     classification = "ambiguous" if accepted or conflicting else "conclusive_nonacceptance"
     state = _finish_pending_attempt(
         manager_dir,
@@ -2389,36 +2336,32 @@ def run_callback(event: dict[str, Any], *, repository_root: Path) -> None:
                 store.save_session(store.agent_name, cli, host_thread_id)
             store.commit()
             return
-        continuation = (
-            SessionContinuation.resume_exact(cli, existing.session_id)
-            if existing is not None
-            else SessionContinuation.new()
+        executor = AgentExecutor(
+            AgentConfig(name=store.agent_name, cli=cli, model=config["model"],
+                        session_id=existing.session_id if existing is not None else None,
+                        clis=[], backup_clis=[]),
+            stream_output=False,
         )
-        manager = AgentManager(session_manager=store, issue_name=None, stream_agent_output=False)
-        manager.register_agent(
-            AgentConfig(
-                name=store.agent_name, cli=cli, model=config["model"], clis=[], backup_clis=[]
-            )
+        responses = []
+        ConversationTransport(executor).run_one_shot(
+            _callback_prompt(event, repository_root=repository_root),
+            allowed_tools=["Read", "Grep", "Glob", "Bash"],
+            allowed_directories=[str(repository_root)],
+            on_response=responses.append,
+            on_usage=_callback_usage_sink(manager_dir, event, repository_root),
         )
-        try:
-            manager.execute(
-                store.agent_name,
-                _callback_prompt(event, repository_root=repository_root),
-                allowed_tools=["Read", "Grep", "Glob", "Bash"],
-                allowed_directories=[str(repository_root)],
-                continuation=continuation,
-            )
-        except Exception:
-            raise
-        reported_model = manager._last_reported_model
+        response = responses[-1]
+        # Legacy caller persistence remains compatible with ordinary CLI session discovery.
+        # It is not promoted into verified exact-delivery evidence.
         if (
-            manager._last_cli != cli
-            or (reported_model is not None and reported_model != config["model"])
-            or not manager._last_session_id
-            or (existing is not None and manager._last_session_id != existing.session_id)
-            or (host_thread_id is not None and manager._last_session_id != host_thread_id)
+            response.cli != cli
+            or (response.model is not None and response.model != config["model"])
+            or not response.session_id
+            or (existing is not None and response.session_id != existing.session_id)
         ):
             raise ValueError("event-driven manager identity mismatch")
+        store.save_session(store.agent_name, cli, response.session_id)
+
         store.commit()
 
 

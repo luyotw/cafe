@@ -504,6 +504,8 @@ class AgentExecutor:
             records=bounded_records,
             transport_result=replace(
                 strategy.conversation_evidence(bounded_records),
+                observed_session_id=session_id if expected_session_id is None
+                                    else strategy.conversation_evidence(bounded_records).observed_session_id,
                 accepted=accepted, completed=True, returncode=0,
                 usage=self._compact_usage(response.token_usage) if response.usage_available else None,
             ),
