@@ -1419,6 +1419,47 @@ def _finish_pending_attempt(
     return _write_dispatch_state(manager_dir, updated)
 
 
+def _callback_usage_sink(manager_dir: Path, event: dict[str, Any], repository_root: Path):
+    """Pin the existing event-time iteration; callback attempt is not an iteration."""
+    from cafe.core.usage import iteration_usage_sink
+
+    step = event.get("step")
+    occurred_at = event.get("occurred_at")
+    if not isinstance(step, str) or Path(step).name != step or not isinstance(occurred_at, str):
+        return None
+    try:
+        cutoff = datetime.fromisoformat(occurred_at)
+        candidates = []
+        for directory in sorted((manager_dir.parent / step).glob("iteration_[0-9]*")):
+            target = directory / "iteration.json"
+            if not target.exists():
+                target = directory / "context.json"
+            if not target.is_file():
+                continue
+            data = json.loads(target.read_text(encoding="utf-8"))
+            started = datetime.fromisoformat(data["timestamp"])
+            if started <= cutoff and data.get("iteration") == int(directory.name.removeprefix("iteration_")):
+                candidates.append(target)
+        return iteration_usage_sink(repository_root, candidates[-1]) if candidates else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _execute_callback_usage(execute_callback, *args, on_usage=None, **kwargs):
+    """Forward exactly one call's verified usage, independent of acceptance."""
+    try:
+        result = execute_callback(*args, **kwargs)
+    except AgentExecutionError as error:
+        evidence = getattr(error, "transport_result", None)
+        if on_usage is not None and evidence is not None and evidence.usage is not None:
+            on_usage(evidence.usage)
+        raise
+    evidence = getattr(result, "transport_result", None)
+    if on_usage is not None and evidence is not None and evidence.usage is not None:
+        on_usage(evidence.usage)
+    return result
+
+
 def _observed_session_ids(records: Any) -> set[str]:
     result: set[str] = set()
     if not isinstance(records, (list, tuple)):
@@ -1441,6 +1482,7 @@ def _acquire_v3_session(
     index: int,
     repository_root: Path,
     executor_factory=None,
+    on_usage=None,
 ) -> tuple[dict[str, Any], str]:
     """Acquire and atomically persist one provider-owned session."""
     if executor_factory is None:
@@ -1479,7 +1521,8 @@ def _acquire_v3_session(
                 if manager_dir.name == "manager"
                 else executor.execute_event_driver
             )
-            result = execute_callback(
+            result = _execute_callback_usage(execute_callback,
+                on_usage=on_usage,
                 'say "HI"',
                 allowed_tools=[],
                 allowed_directories=[],
@@ -2051,6 +2094,7 @@ def _deliver_v3_callback(
     index: int,
     repository_root: Path,
     executor_factory=None,
+    on_usage=None,
 ) -> tuple[dict[str, Any], str]:
     if executor_factory is None:
         executor_factory = AgentExecutor
@@ -2123,7 +2167,8 @@ def _deliver_v3_callback(
                 if manager_dir.name == "manager"
                 else executor.execute_event_driver
             )
-            result = execute_callback(
+            result = _execute_callback_usage(execute_callback,
+                on_usage=on_usage,
                 _callback_prompt(event, repository_root=repository_root),
                 expected_session_id=session_id,
                 event_id=event_id,
@@ -2211,6 +2256,7 @@ def _run_v3_callback(
     """Run serial acquisition/delivery attempts until first acceptance or recovery."""
     if executor_factory is None:
         executor_factory = AgentExecutor
+    on_usage = _callback_usage_sink(manager_dir, event, repository_root)
     event_id = event["event_id"]
     event_state = state["events"][event_id]
     if event_state["status"] in {"accepted", "exhausted", "recovery_pending"}:
@@ -2250,6 +2296,7 @@ def _run_v3_callback(
             index=index,
             repository_root=repository_root,
             executor_factory=executor_factory,
+            on_usage=on_usage,
         )
         if acquisition == "ambiguous":
             return state
@@ -2264,6 +2311,7 @@ def _run_v3_callback(
             index=index,
             repository_root=repository_root,
             executor_factory=executor_factory,
+            on_usage=on_usage,
         )
         if delivery in {"accepted", "ambiguous"}:
             return state

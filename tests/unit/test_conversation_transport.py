@@ -197,3 +197,36 @@ def test_model_conflict_in_acknowledgement_prevents_acceptance(provider_process)
             "event-1", "s", "event-1", on_acceptance=lambda: observed.append(True))
     assert observed == []
     assert caught.value.transport_result.failure_code == "model_mismatch"
+
+
+def test_each_actual_call_merges_usage_once_into_admitted_metadata(provider_process, tmp_path):
+    from cafe.core.usage import iteration_usage_sink
+    target = tmp_path / "iteration.json"
+    target.write_text(json.dumps(dict(iteration=1, timestamp="pinned", stats=dict(input_tokens=3), other="kept")))
+    sink = iteration_usage_sink(tmp_path, target)
+    selected = transport()
+    provider_process([init(), dict(type="result", usage=dict(input_tokens=2, output_tokens=1))])
+    selected.acquire_session("bootstrap", on_usage=sink)
+    provider_process([init(), dict(type="stream_event", event=dict(type="message_start")),
+                      dict(type="result", usage=dict(input_tokens=4, output_tokens=2))], returncode=1)
+    with pytest.raises(AgentExecutionError):
+        selected.deliver_to_exact_session("event-1", "s", "event-1", on_usage=sink,
+            on_acceptance=lambda: None)
+    provider_process([init(), dict(type="result")])
+    selected.acquire_session("bootstrap", on_usage=sink)
+    merged = json.loads(target.read_text())
+    assert merged["stats"]["input_tokens"] == 9
+    assert merged["stats"]["output_tokens"] == 3
+    assert merged["other"] == "kept"
+    assert selected.executor.get_total_token_usage().input_tokens == 6
+
+
+def test_usage_sink_failure_is_caller_error_without_replay(provider_process):
+    launch = provider_process([init(), dict(type="result", usage=dict(input_tokens=1))])
+    error = OSError("metadata write failed")
+    def fail(_usage):
+        raise error
+    with pytest.raises(OSError) as caught:
+        transport().acquire_session("bootstrap", on_usage=fail)
+    assert caught.value is error
+    assert launch.call_count == 1

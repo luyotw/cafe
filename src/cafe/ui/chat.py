@@ -516,6 +516,20 @@ def _warn_if_chat_handoff_missing(
         )
 
 
+def _chat_usage_sink(issue_dir: Path, step_name: str):
+    """Admit the existing selected phase iteration before opening the conversation."""
+    from cafe.core.usage import iteration_usage_sink
+
+    directories = sorted((issue_dir / step_name).glob("iteration_[0-9]*"))
+    if not directories:
+        return None
+    directory = directories[-1]
+    target = directory / "iteration.json"
+    if not target.exists():
+        target = directory / "context.json"
+    return iteration_usage_sink(Path.cwd(), target)
+
+
 def launch_chat_session(
     role: str,
     issue_name: str,
@@ -659,15 +673,22 @@ def launch_chat_session(
         for key, value in extra_env.items():
             chat_env[str(key)] = str(value)
 
+    usage_sink = _chat_usage_sink(issue_dir, execution_step)
+
     if prompt is not None:
         executor.stream_output = True
         try:
             response = executor.execute(prompt, environment_overrides=chat_env)
         except AgentExecutionError as exc:
+            evidence = getattr(exc, "transport_result", None)
+            if usage_sink is not None and evidence is not None and evidence.usage is not None:
+                usage_sink(evidence.usage)
             detail = exc.display_message or str(exc)
             print(f"\n⚠️  Chat CLI failed: {detail}\n")
             return 1
 
+        if usage_sink is not None and response.usage_available:
+            usage_sink(response.token_usage)
         if response.session_id:
             if phase_routing:
                 agent_manager.session_manager.save_session(
