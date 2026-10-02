@@ -111,6 +111,7 @@ class SkillLoader:
         project_root: Optional[Path] = None,
         global_root: Optional[Path] = None,
         builtin_root: Optional[Path] = None,
+        resolve_presentation: bool = True,
     ) -> None:
         self.resolver = CatalogResolver(
             project_root=project_root,
@@ -120,6 +121,7 @@ class SkillLoader:
         self.project_root = self.resolver.project_root
         self.global_root = self.resolver.global_root
         self.builtin_root = self.resolver.builtin_root
+        self.resolve_presentation = resolve_presentation
         self._catalog: Dict[str, SkillCatalogEntry] = {}
 
     @staticmethod
@@ -261,15 +263,17 @@ class SkillLoader:
             metadata = self._read_skill_frontmatter(entry.directory / "SKILL.md")
             return entry, metadata.get("workflow", {})
 
-    @staticmethod
     def parse_workflow_declaration(
-        entry: SkillCatalogEntry, raw_declaration: object
+        self, entry: SkillCatalogEntry, raw_declaration: object
     ) -> SkillWorkflowDeclaration:
         """Preserve the compatibility error used by direct and primary loading."""
         try:
             return SkillWorkflowDeclaration.model_validate(
                 raw_declaration,
-                context={"locale_catalog_root": entry.directory.resolve() / "locales"},
+                context={
+                    "locale_catalog_root": entry.directory.resolve() / "locales",
+                    "resolve_presentation": self.resolve_presentation,
+                },
             )
         except Exception as exc:
             raise ValueError(

@@ -31,7 +31,9 @@ from cafe.ui.human_tasks import (
 
 def load_task_playbook(preflight: CompletionPreflight, *, project_root: Path) -> dict[str, Any]:
     """Load the effective playbook used by every structured task completion."""
-    playbook_data = PlaybookLoader(project_root=project_root).load(preflight.playbook_id)
+    playbook_data = PlaybookLoader(project_root=project_root, resolve_presentation=False).load(
+        preflight.playbook_id
+    )
     return apply_issue_playbook_overrides(playbook_data, preflight.issue_dir / "issue.yaml")
 
 

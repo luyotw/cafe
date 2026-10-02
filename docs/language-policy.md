@@ -252,7 +252,13 @@ rendering; notification and correction selection use the canonical text resolver
 
 Materialized HumanTasks persist plain prompts, decisions, and correction guidance
 with the existing snapshot schema. Reading or answering an outstanding task never
-resolves a catalog reference again. IDs, input schemas, options as answer identity,
+resolves a catalog reference again. Completion still validates the selected live
+machine declaration and routes: its structural reader validates reference shape
+without loading current presentation resources. It then validates the submitted
+answer against the saved policy. Fresh declarations/materialization keep strict
+catalog validation. Dynamic XML questions retain their existing question-file
+contract without re-resolving the saved policy's copy.
+IDs, input schemas, options as answer identity,
 flags, routes, permissions, and ownership remain in their declarations. Do not
 replace these with translated keys or retranslate agent-generated questions.
 

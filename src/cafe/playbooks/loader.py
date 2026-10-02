@@ -94,7 +94,9 @@ class PlaybookLoader:
         project_root: Optional[Path] = None,
         global_root: Optional[Path] = None,
         builtin_root: Optional[Path] = None,
+        resolve_presentation: bool = True,
     ) -> None:
+        self.resolve_presentation = resolve_presentation
         self.resolver = CatalogResolver(
             project_root=project_root,
             global_root=global_root,
@@ -136,6 +138,7 @@ class PlaybookLoader:
                 project_root=self.project_root,
                 global_root=self.global_root,
                 builtin_root=self.builtin_root,
+                resolve_presentation=self.resolve_presentation,
             )
             skill_loader.discover(strict=strict)
             return load_playbook_file(

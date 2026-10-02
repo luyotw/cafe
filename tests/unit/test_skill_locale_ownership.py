@@ -212,3 +212,27 @@ def test_warm_owner_rejects_current_missing_or_invalid_resources(tmp_path, mutat
             project_root=tmp_path, global_root=tmp_path / "global"
         ).get_workflow_declaration("custom")
     assert str(resource) in str(rejected.value)
+
+
+def test_structural_composition_preserves_primary_and_shared_machine_contracts(tmp_path):
+    root = tmp_path / ".cafe/skills"
+    for name in ("primary", "shared"):
+        owner = write_owner(root, name, name, "Owned")
+        for resource in owner.glob("locales/*.yaml"):
+            resource.unlink()
+    composition = resolve_step_workflow_composition(
+        SkillLoader(
+            project_root=tmp_path, global_root=tmp_path / "global", resolve_presentation=False
+        ),
+        primary_skill="primary",
+        workflow_skills=["shared"],
+        step_name="inspect",
+    )
+    assert [policy.id for policy in composition.human_tasks] == ["primary", "shared"]
+    for policy in composition.human_tasks:
+        assert policy.input_schema == "decision"
+        assert [decision.id for decision in policy.decisions] == ["accept"]
+    with pytest.raises(ValueError):
+        SkillLoader(
+            project_root=tmp_path, global_root=tmp_path / "global"
+        ).get_workflow_declaration("primary")

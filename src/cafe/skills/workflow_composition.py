@@ -186,7 +186,10 @@ def _resolve_step_workflow_composition_locked(
             try:
                 declaration = SkillWorkflowDeclaration.model_validate(
                     raw_declaration,
-                    context={"locale_catalog_root": entry.directory.resolve() / "locales"},
+                    context={
+                        "locale_catalog_root": entry.directory.resolve() / "locales",
+                        "resolve_presentation": skill_loader.resolve_presentation,
+                    },
                 )
             except Exception as exc:
                 declaration_file = entry.directory / "SKILL.md"

@@ -89,6 +89,10 @@ def _resolve_copy_reference(
         catalog_root = (info.context or {}).get("locale_catalog_root")
         if catalog_root is None:
             raise ValueError("runtime copy reference requires a declaration owner locale directory")
+        if (info.context or {}).get("resolve_presentation") is False:
+            # Structural readers validate identity and reference shape. Saved
+            # tasks own their presentation; fresh materialization resolves copy.
+            return value["message_key"]
         return render_text(value["message_key"], locale=locale, catalog_root=catalog_root)
     return value
 
