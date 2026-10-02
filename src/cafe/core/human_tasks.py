@@ -12,9 +12,10 @@ import re
 from dataclasses import dataclass
 from typing import Any, Literal, Mapping, Optional, Sequence
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 from cafe.core.conversation_locale import normalize_locale_tag
+from cafe.core.runtime_locales import render_text
 
 HumanTaskPattern = Literal[
     "confirm_output",
@@ -73,6 +74,38 @@ def _authored_variant(variants: Mapping[str, str], locale: Optional[str], fallba
     return variants.get(canonical, fallback)
 
 
+def _resolve_copy_reference(
+    value: Any, info: ValidationInfo, locale: Optional[str] = None
+) -> Any:
+    """Expand owner-copy references before validation or task snapshotting.
+
+    Inline custom declarations pass through unchanged. Only presentation fields
+    accept references; identifiers, options, routes and persisted snapshots do not
+    acquire a catalog dependency.
+    """
+    if isinstance(value, Mapping):
+        if set(value) != {"message_key"} or not isinstance(value["message_key"], str):
+            raise ValueError("runtime copy reference must contain only a string message_key")
+        catalog_root = (info.context or {}).get("locale_catalog_root")
+        if catalog_root is None:
+            raise ValueError("runtime copy reference requires a declaration owner locale directory")
+        if (info.context or {}).get("resolve_presentation") is False:
+            # Structural readers validate identity and reference shape. Saved
+            # tasks own their presentation; fresh materialization resolves copy.
+            return value["message_key"]
+        render = (info.context or {}).get("render_locale_text")
+        if render is not None:
+            return render(value["message_key"], locale=locale)
+        return render_text(value["message_key"], locale=locale, catalog_root=catalog_root)
+    return value
+
+
+def _resolve_copy_variants(value: Any, info: ValidationInfo) -> Any:
+    if isinstance(value, Mapping) and all(isinstance(tag, str) for tag in value):
+        return {tag: _resolve_copy_reference(text, info, tag) for tag, text in value.items()}
+    return value
+
+
 class HumanTaskDecision(BaseModel):
     """One declared choice for a decision-based task."""
 
@@ -84,6 +117,16 @@ class HumanTaskDecision(BaseModel):
     requires_feedback: bool = False
     requires_target: bool = False
     correction: bool = False
+
+    @field_validator("label", mode="before")
+    @classmethod
+    def _resolve_label(cls, value: Any, info: ValidationInfo) -> Any:
+        return _resolve_copy_reference(value, info)
+
+    @field_validator("label_locales", mode="before")
+    @classmethod
+    def _resolve_label_locales(cls, value: Any, info: ValidationInfo) -> Any:
+        return _resolve_copy_variants(value, info)
 
     @field_validator("id", "label")
     @classmethod
@@ -115,6 +158,16 @@ class HumanTaskQuestion(BaseModel):
     prompt_locales: dict[str, str] = Field(default_factory=dict)
     options: tuple[str, ...] = ()
     multiple: bool = False
+
+    @field_validator("prompt", mode="before")
+    @classmethod
+    def _resolve_prompt(cls, value: Any, info: ValidationInfo) -> Any:
+        return _resolve_copy_reference(value, info)
+
+    @field_validator("prompt_locales", mode="before")
+    @classmethod
+    def _resolve_prompt_locales(cls, value: Any, info: ValidationInfo) -> Any:
+        return _resolve_copy_variants(value, info)
 
     @field_validator("id", "prompt")
     @classmethod
@@ -165,6 +218,16 @@ class HumanTaskPolicy(BaseModel):
     questions: tuple[HumanTaskQuestion, ...] = ()
     questions_from_xml: bool = False
     allowed_targets: tuple[str, ...] = ()
+
+    @field_validator("prompt", "correction_guidance", mode="before")
+    @classmethod
+    def _resolve_copy(cls, value: Any, info: ValidationInfo) -> Any:
+        return _resolve_copy_reference(value, info)
+
+    @field_validator("prompt_locales", "correction_guidance_locales", mode="before")
+    @classmethod
+    def _resolve_locales(cls, value: Any, info: ValidationInfo) -> Any:
+        return _resolve_copy_variants(value, info)
 
     @field_validator("id", "prompt", "correction_guidance")
     @classmethod

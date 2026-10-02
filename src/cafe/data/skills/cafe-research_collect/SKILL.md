@@ -3,6 +3,10 @@ name: cafe-research_collect
 description: Collect, organize, and record research sources
 version: 1.2.0
 workflow:
+  notification:
+    task_labels:
+      clarification-feedback:
+        message_key: notification.action_labels.clarification_feedback
   execution_profile:
     workload: research
     reasoning: standard
@@ -11,9 +15,9 @@ workflow:
   human_tasks:
     - id: clarification-feedback
       pattern: revision_feedback
-      prompt: Provide the clarification needed to continue evidence collection.
+      prompt: {message_key: human_task.cafe_research_collect.clarification_feedback.prompt}
       prompt_locales:
-        zh-TW: "提供繼續蒐集證據所需的釐清說明。"
+        zh-TW: {message_key: human_task.cafe_research_collect.clarification_feedback.prompt}
       input_schema: feedback
   prompt_inputs:
     - artifacts: [research_synthesis, causal_todo]

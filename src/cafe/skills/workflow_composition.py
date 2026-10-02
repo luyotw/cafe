@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable
+from types import MappingProxyType
+from typing import Iterable, Mapping
 
 from cafe.catalogs.resolver import global_catalog_lock
 from cafe.core.human_tasks import HumanTaskPolicy
@@ -13,7 +14,7 @@ from cafe.skills.contracts import (
     PromptInputContract,
     SkillWorkflowDeclaration,
 )
-from cafe.skills.loader import SkillLoader
+from cafe.skills.loader import SkillLoader, workflow_locale_context
 
 _REASONING_RANK = {"routine": 0, "standard": 1, "high": 2}
 _FALLBACK_RANK = {"equivalent": 0, "equivalent_or_stronger": 1}
@@ -66,6 +67,13 @@ class StepWorkflowComposition:
     human_tasks: tuple[HumanTaskPolicy, ...]
     execution_requirements: ComposedExecutionRequirements
     catalog_root: Path | None = None
+    human_task_producers: Mapping[str, SkillWorkflowContributor] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """Expose the same selected producers as an immutable copied mapping."""
+        object.__setattr__(
+            self, "human_task_producers", MappingProxyType(dict(self.human_task_producers))
+        )
 
     @property
     def skill_names(self) -> tuple[str, ...]:
@@ -184,7 +192,12 @@ def _resolve_step_workflow_composition_locked(
             declaration = skill_loader.parse_workflow_declaration(entry, raw_declaration)
         else:
             try:
-                declaration = SkillWorkflowDeclaration.model_validate(raw_declaration)
+                declaration = SkillWorkflowDeclaration.model_validate(
+                    raw_declaration,
+                    context=workflow_locale_context(
+                        entry.directory, resolve_presentation=skill_loader.resolve_presentation
+                    ),
+                )
             except Exception as exc:
                 declaration_file = entry.directory / "SKILL.md"
                 raise WorkflowCompositionError(
@@ -238,6 +251,10 @@ def _resolve_step_workflow_composition_locked(
             for field, value in (
                 ("prompt_references", declaration.prompt_references),
                 ("output_templates", declaration.output_templates),
+                (
+                    "notification.step_label",
+                    declaration.notification.step_label if declaration.notification else None,
+                ),
             ):
                 if value:
                     resource_errors = skill_loader.workflow_declaration_resource_errors(
@@ -253,7 +270,8 @@ def _resolve_step_workflow_composition_locked(
                     raise WorkflowCompositionError(
                         f"Step {step_name!r} contributor {_source_label(contributor)} declares "
                         f"primary-owned workflow field {field!r}; contributors may only supply "
-                        "required_tools, prompt_inputs, human_tasks, execution_profile, and "
+                        "required_tools, prompt_inputs, human_tasks, notification task labels, "
+                        "execution_profile, and "
                         f"local checklist references.{resource_context}"
                     )
             validate_resources(contributor)
@@ -302,5 +320,6 @@ def _resolve_step_workflow_composition_locked(
         prompt_inputs=tuple(value[0] for value in inputs.values()),
         human_tasks=tuple(value[0] for value in tasks.values()),
         execution_requirements=_execution_requirements(retained),
+        human_task_producers={task_id: value[1] for task_id, value in tasks.items()},
         catalog_root=skill_loader.global_root,
     )

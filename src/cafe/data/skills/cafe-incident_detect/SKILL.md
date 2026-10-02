@@ -3,6 +3,10 @@ name: cafe-incident_detect
 description: Detect and report incident signals for operational response
 version: 1.2.0
 workflow:
+  notification:
+    task_labels:
+      clarification-feedback:
+        message_key: notification.action_labels.clarification_feedback
   execution_profile:
     workload: operations
     reasoning: high
@@ -11,9 +15,9 @@ workflow:
   human_tasks:
     - id: clarification-feedback
       pattern: revision_feedback
-      prompt: Provide the incident details needed to continue detection.
+      prompt: {message_key: human_task.cafe_incident_detect.clarification_feedback.prompt}
       prompt_locales:
-        zh-TW: "提供繼續偵測所需的事件細節。"
+        zh-TW: {message_key: human_task.cafe_incident_detect.clarification_feedback.prompt}
       input_schema: feedback
   prompt_inputs:
     - artifacts: [incident_plan, incident_learning, causal_todo]

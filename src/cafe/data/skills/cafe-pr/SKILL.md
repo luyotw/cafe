@@ -3,6 +3,12 @@ name: cafe-pr
 description: "Prepare the local pull request title and description for publication"
 version: 1.7.0
 workflow:
+  notification:
+    step_label:
+      message_key: notification.step_labels.pr
+    task_labels:
+      local-review:
+        message_key: notification.action_labels.local_review
   execution_profile:
     workload: publication
     reasoning: routine
@@ -11,25 +17,25 @@ workflow:
   human_tasks:
     - id: local-review
       pattern: confirm_output
-      prompt: Review the prepared local changes and the Follow-up Proposals section in the PR description. Your decision applies to every open FUP; per-proposal mixed disposition is not supported. Fix all proposals now, record that all should become separate issues, or approve and continue without issues.
+      prompt: {message_key: human_task.cafe_pr.local_review.prompt}
       prompt_locales:
-        zh-TW: "檢視已備妥的本機變更，以及 PR 描述中的 Follow-up Proposals 段落。你的決定會套用到所有未處理的 FUP，不支援逐項混合處置。請選擇現在修正全部提議、記錄全部提議另開 issue，或核可並在不開 issue 的情況下繼續。"
+        zh-TW: {message_key: human_task.cafe_pr.local_review.prompt}
       input_schema: decision
       decisions:
         - id: fix_now
-          label: Fix all proposed items now
+          label: {message_key: human_task.cafe_pr.local_review.decisions.fix_now.label}
           label_locales:
-            zh-TW: "現在修正所有提議項目"
+            zh-TW: {message_key: human_task.cafe_pr.local_review.decisions.fix_now.label}
           requires_feedback: true
           correction: true
         - id: create_follow_up
-          label: Record issues for all proposals
+          label: {message_key: human_task.cafe_pr.local_review.decisions.create_follow_up.label}
           label_locales:
-            zh-TW: "為所有提議記錄 issue"
+            zh-TW: {message_key: human_task.cafe_pr.local_review.decisions.create_follow_up.label}
         - id: continue_without_issue
-          label: Approve / continue without issues
+          label: {message_key: human_task.cafe_pr.local_review.decisions.continue_without_issue.label}
           label_locales:
-            zh-TW: "核可／不建立 issue 直接繼續"
+            zh-TW: {message_key: human_task.cafe_pr.local_review.decisions.continue_without_issue.label}
   prompt_inputs:
     - artifacts: [spec]
       placeholder: spec_file

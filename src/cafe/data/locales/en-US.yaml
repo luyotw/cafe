@@ -1,0 +1,52 @@
+workspace.correction: 'Workspace completion rejected: {reason}.
+
+  Correction opportunities consumed: {consumed}; remaining: {remaining}.
+
+  Verify the origin of every affected change and preserve pre-existing work. Act only within the original task scope and authorization. Dirty files do not grant authorization to stage, commit, stash, restore or delete. If authorized disposition is unavailable, request clarification or permission through the existing human handoff. Do not infer a human answer. Keep the same phase, iteration, CLI, model, session, tools, directories and permissions. Revalidate current output, checklist and evidence, and resubmit the ordinary handoff.'
+notification.action_labels.agent_execution_interrupted: Decide how to continue
+notification.repository_fallback: this project
+notification.issue_fallback: an unnamed work item
+notification.step_fallback: Workflow
+notification.action_fallback: Handle a CAFE work item
+notification.unknown_step: Unknown step
+notification.field_separator: ': '
+notification.task_headline: CAFE needs your input
+notification.repository_field: Project
+notification.issue_field: Conversation
+notification.step_field: Current step
+notification.action_field: What you need to do
+notification.task_closing: Return to the "{issue}" work item in CAFE to continue.
+notification.callback_headline: A CAFE automatic notification did not complete
+notification.status_field: Situation
+notification.reason_state: CAFE could not read the state or configuration the notification needs.
+notification.reason_queue: CAFE could not deliver the notification to the original conversation.
+notification.reason_generic: CAFE's automatic notification failed.
+notification.callback_impact: 'Impact: the original conversation may not have received this update; this does not mean the workflow stopped.'
+notification.callback_closing: Return to the "{issue}" conversation in CAFE and ask the Manager to check the current progress and next step.
+manager.progress.missing: Workflow has not been established.
+manager.progress.iteration: iteration {iteration}
+manager.progress.review: manager proactive review
+manager.progress.confirmation: user confirmation
+manager.progress.delegable: manager may act
+manager.progress.not_delegable: manager may not act
+manager.progress.closeout: closeout
+manager.progress.status.pending: Pending
+manager.progress.status.in_progress: In progress
+manager.progress.status.awaiting_input: Awaiting response
+manager.progress.status.completed: Completed
+manager.progress.status.returned: Returned
+manager.progress.status.awaiting_confirmation: Awaiting confirmation
+manager.progress.status.skipped: Skipped
+manager.progress.status.blocked: Blocked
+manager.progress.status.unknown: Unknown
+manager.progress.review_line: '{step}: {review}'
+manager.progress.confirmation_line: '{step}: {confirmation} ({proxy})'
+manager.progress.closeout_line: '{item} ({closeout})'
+manager.kickoff.header_field: Field
+manager.kickoff.header_value: Value
+manager.kickoff.confirmation: Please confirm the complete contract above before the Manager prepares and starts the workflow.
+manager.kickoff.checks: '### Checks'
+manager.kickoff.global_sync_heading: '### Optional Global catalog sync'
+manager.kickoff.global_sync_reminder: 'These existing Global entries differ from the project content: {entries}. Kickoff confirmation does not approve publication; request synchronization separately if desired.'
+manager.kickoff.commands_confirmation: Confirmation authorizes these commands in order; changes to commands, order, targets or effects require reconfirmation.
+manager.kickoff.no_commands: No commands ([]).

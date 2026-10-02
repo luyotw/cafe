@@ -3,6 +3,10 @@ name: cafe-draft
 description: Draft an article from an approved editorial brief
 version: 1.2.0
 workflow:
+  notification:
+    task_labels:
+      clarification-feedback:
+        message_key: notification.action_labels.clarification_feedback
   execution_profile:
     workload: content
     reasoning: standard
@@ -11,9 +15,9 @@ workflow:
   human_tasks:
     - id: clarification-feedback
       pattern: revision_feedback
-      prompt: Provide the clarification needed to continue drafting.
+      prompt: {message_key: human_task.cafe_draft.clarification_feedback.prompt}
       prompt_locales:
-        zh-TW: "提供繼續撰稿所需的釐清說明。"
+        zh-TW: {message_key: human_task.cafe_draft.clarification_feedback.prompt}
       input_schema: feedback
   prompt_inputs:
     - artifacts: [review_feedback, causal_todo]

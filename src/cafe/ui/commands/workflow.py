@@ -18,18 +18,12 @@ from cafe.core.blackboard import (
     HandoffOwner,
     is_genuine_cold_start,
 )
-from cafe.workflow_execution.worker_launch import FixedWorkerLauncher, WorkerLaunchStore
-from cafe.workflow_execution.event_callback import (
-    ResolvedWorkflowEventCallback,
-    dispatch_workflow_event_callback,
-    resolve_builtin_workflow_event_callback,
-)
 from cafe.core.conversation_locale import ConversationLocaleError, supplied_locale_from_inputs
+from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.issue_resolution import ActiveIssueResolutionError, resolve_active_issue
 from cafe.core.phase_state_mixin import next_runnable_iteration_number
 from cafe.core.playbook import resolve_step_behavior
 from cafe.core.types import CriticalPhaseError
-from cafe.workflow_execution.workflow_hosting import WorkflowHost
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.phases.generic_phase import GenericPhase
@@ -52,6 +46,13 @@ from cafe.ui.human_tasks import (
     apply_human_task_payload,
 )
 from cafe.utils.config import ConfigError, validate_directories_exist
+from cafe.workflow_execution.event_callback import (
+    ResolvedWorkflowEventCallback,
+    dispatch_workflow_event_callback,
+    resolve_builtin_workflow_event_callback,
+)
+from cafe.workflow_execution.worker_launch import FixedWorkerLauncher, WorkerLaunchStore
+from cafe.workflow_execution.workflow_hosting import WorkflowHost
 
 
 # Lazy access to GitOperations via cli for backward-compat test patching.
@@ -746,7 +747,12 @@ def workflow(
             console.print(f"[red]Error: {e}[/red]")
             raise typer.Exit(1)
 
-        playbook_loader = PlaybookLoader()
+        # Saved tasks retain their presentation across owner resource updates.
+        # Resume still validates live machine declarations; new phase consumers
+        # resolve and validate their own current copy when materialized.
+        playbook_loader = PlaybookLoader(
+            resolve_presentation=not HumanTaskRecordStore(issue_dir).exists
+        )
         playbook_data = playbook_loader.load(selected_playbook)
         playbook_data = apply_issue_playbook_overrides(
             playbook_data,

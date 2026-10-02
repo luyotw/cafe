@@ -436,7 +436,13 @@ workflow:
         global_root=tmp_path / "global",
         builtin_root=builtin_root,
     )
-    monkeypatch.setattr("cafe.ui.human_tasks.SkillLoader", lambda: loader)
+    monkeypatch.setattr(
+        "cafe.ui.human_tasks.SkillLoader",
+        lambda **kwargs: SkillLoader(
+            project_root=loader.project_root, global_root=loader.global_root,
+            builtin_root=loader.builtin_root, **kwargs,
+        ),
+    )
     issue_dir = tmp_path / ".cafe" / "issues" / "durable-revision"
     store = BlackboardStore(issue_dir)
     blackboard = store.load_or_create("review", playbook_id="standard")

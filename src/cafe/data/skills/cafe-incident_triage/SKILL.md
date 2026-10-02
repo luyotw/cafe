@@ -3,6 +3,10 @@ name: cafe-incident_triage
 description: Classify incidents and choose response actions
 version: 1.2.0
 workflow:
+  notification:
+    task_labels:
+      clarification-feedback:
+        message_key: notification.action_labels.clarification_feedback
   execution_profile:
     workload: operations
     reasoning: high
@@ -11,9 +15,9 @@ workflow:
   human_tasks:
     - id: clarification-feedback
       pattern: revision_feedback
-      prompt: Provide the incident details needed to continue triage.
+      prompt: {message_key: human_task.cafe_incident_triage.clarification_feedback.prompt}
       prompt_locales:
-        zh-TW: "提供繼續分級所需的事件細節。"
+        zh-TW: {message_key: human_task.cafe_incident_triage.clarification_feedback.prompt}
       input_schema: feedback
   prompt_inputs:
     - artifacts: [incident_recovery, incident_learning, causal_todo]

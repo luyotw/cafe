@@ -3,6 +3,12 @@ name: cafe-review
 description: "Review code quality, behavior, and risk"
 version: 1.14.0
 workflow:
+  notification:
+    step_label:
+      message_key: notification.step_labels.review
+    task_labels:
+      clarification-feedback:
+        message_key: notification.action_labels.clarification_feedback
   execution_profile:
     workload: review
     reasoning: high
@@ -11,21 +17,21 @@ workflow:
   human_tasks:
     - id: clarification-feedback
       pattern: revision_feedback
-      prompt: Provide the clarification needed to continue the review.
+      prompt: {message_key: human_task.cafe_review.clarification_feedback.prompt}
       prompt_locales:
-        zh-TW: "提供繼續審查所需的釐清說明。"
+        zh-TW: {message_key: human_task.cafe_review.clarification_feedback.prompt}
       input_schema: feedback
     - id: iteration-limit
       pattern: confirm_output
-      prompt: The workflow reached its configured iteration limit. Increase the issue's limit if another review is authorized, then resume this phase.
+      prompt: {message_key: human_task.cafe_review.iteration_limit.prompt}
       prompt_locales:
-        zh-TW: "工作流程已達設定的迭代上限。若已授權再做一次審查，請調高此工作項目的上限後再恢復此階段。"
+        zh-TW: {message_key: human_task.cafe_review.iteration_limit.prompt}
       input_schema: decision
       decisions:
         - id: resume
-          label: Resume after increasing the iteration limit
+          label: {message_key: human_task.cafe_review.iteration_limit.decisions.resume.label}
           label_locales:
-            zh-TW: "調高迭代上限後恢復"
+            zh-TW: {message_key: human_task.cafe_review.iteration_limit.decisions.resume.label}
   prompt_inputs:
     - artifacts: [spec]
       placeholder: spec_file

@@ -163,3 +163,190 @@ boundary is:
 
 A channel that cannot render a language's script is unsupported for that
 language rather than silently approximated.
+
+## Developer-authored runtime copy
+
+Place localized copy with its owner, separate from selection and runtime behavior:
+
+- Core runtime and Manager presentation use `src/cafe/data/locales/en-US.yaml`
+  and `src/cafe/data/locales/zh-TW.yaml`.
+- Phase-owned HumanTask and notification step/action copy uses
+  `src/cafe/data/skills/<skill>/locales/en-US.yaml` and
+  `src/cafe/data/skills/<skill>/locales/zh-TW.yaml`, alongside its `SKILL.md`.
+  Project and global skill owners use the same structure in their selected skill
+  directory.
+
+Each owner has its own catalog pair. Add new phase copy to that phase's resources;
+keep it out of the central runtime catalogs. This organization does not imply
+general CLI translation or additional languages.
+
+Each catalog is a flat YAML mapping from stable, untranslated message keys to
+non-empty strings. Use lowercase names separated by dots, with underscores or
+digits within a name, for example `workspace.correction`. Add every new key to
+both of the owner's catalogs, with the same named placeholders in each language. Duplicate
+keys, invalid YAML, missing keys, incompatible placeholders, and non-string
+messages raise `LocaleCatalogError` with resource and message context rather
+than silently accepting incomplete authored data.
+
+Use simple `{name}` placeholders with ASCII identifiers. Attribute/index access,
+format specifications, conversions, and positional fields are unsupported. Write
+`{{` and `}}` for literal braces in a template. YAML literal blocks (`|-`) are
+useful for multi-line copy without an extra trailing newline. For example, add
+the same key and placeholder contract to each catalog:
+
+```yaml
+workspace.example: |-
+  Affected path: {path}
+```
+
+Call `cafe.core.runtime_locales.render_text("workspace.example", locale=locale,
+path=bounded_path)` from generic runtime code. Supply exactly the declared
+placeholder names using string or integer values. Bound untrusted values at the
+consumer's existing diagnostic boundary before rendering; the workspace
+correction consumer retains `bounded_workspace_reason` and its UTF-8 limits.
+Interpolation happens once, so braces inside inserted paths or diagnostics stay
+literal. Keep ownership, permissions, budgets, and execution behavior in Python.
+
+`load_catalogs()` reads the central resources through `importlib.resources`.
+For owner resources, pass the resolved locale directory to
+`load_catalogs(catalog_root)` or
+`render_text(key, locale=locale, catalog_root=catalog_root, **values)`.
+The generic loader validates each pair separately and returns immutable mappings.
+Only the immutable packaged runtime pair is cached across operations. Within one
+owner-specific declaration parse or notification resolution, a lazy renderer
+reuses the validated immutable pair under the existing catalog read lock. The
+renderer is discarded at that operation's boundary; it is never stored on a
+loader, model or composition. Each subsequent operation reads both owner files
+afresh, so same-path publication, replacement, removal or invalid data cannot be
+hidden by a prior read. Inline-only and structural readers retain their existing
+behavior without copy I/O. A supplied root is authoritative: it does not search other
+owners or fall back to the central catalogs. Keys do not select a resource owner.
+Packaged resources work independently of the current working directory in a
+source checkout or installed distribution.
+`render_text` delegates selection to the existing `select_text_locale` resolver.
+Traditional Chinese aliases and silent English fallback remain unchanged;
+rendering never updates the workflow's stored locale or imports Manager policy.
+
+### HumanTask declarations and snapshots
+
+A presentation field can reference a catalog message with
+`{message_key: human_task.cafe_spec.output_review.prompt}`. Use the same reference
+in the base `prompt` and its explicitly authored `prompt_locales` entries:
+
+```yaml
+prompt: {message_key: human_task.cafe_spec.output_review.prompt}
+prompt_locales:
+  zh-TW: {message_key: human_task.cafe_spec.output_review.prompt}
+```
+
+References are supported in policy/question prompts, decision labels, correction
+guidance, and their existing locale-variant maps. They must contain only a string
+`message_key` naming a message without interpolation arguments in the owning
+skill's catalog pair. `SkillLoader` and workflow composition bind the directory
+from the resolved skill catalog entry, including primary and shared contributors.
+They pass the transient `locale_catalog_root` validation context before any
+nested presentation fields are validated. The step name and message key never
+guess this path. A reference without an owner is invalid. References expand at
+declaration validation to the same plain strings used by inline declarations.
+Custom inline copy and locale maps continue to work unchanged. `for_locale`
+retains exact canonical-tag variant matching and declared-text fallback: a
+`zh-TW` variant alone does not create a `zh-Hant` or `zh-HK` declaration variant.
+Manager presentation retains its existing `zh-TW`/`zh-Hant` selection before
+rendering; notification and correction selection use the canonical text resolver.
+
+Materialized HumanTasks persist plain prompts, decisions, and correction guidance
+with the existing snapshot schema. Reading or answering an outstanding task never
+resolves a catalog reference again. Completion still validates the selected live
+machine declaration and routes: its structural reader validates reference shape
+without loading current presentation resources. It then validates the submitted
+answer against the saved policy. Fresh declarations/materialization keep strict
+catalog validation. Dynamic XML questions retain their existing question-file
+contract without re-resolving the saved policy's copy.
+IDs, input schemas, options as answer identity,
+flags, routes, permissions, and ownership remain in their declarations. Do not
+replace these with translated keys or retranslate agent-generated questions.
+
+### Notification declarations
+
+Declare a primary skill's notification name and each task producer's action name
+under `workflow.notification` in its `SKILL.md`, using argument-free references
+to that same owner's locale pair:
+
+```yaml
+workflow:
+  notification:
+    step_label: {message_key: notification.step_labels.spec}
+    task_labels:
+      output-review: {message_key: notification.action_labels.output_review}
+```
+
+`task_labels` can name only HumanTasks declared by that contributor. Shared
+contributors may supply their own task labels; the step label belongs to the
+primary skill. Composition exposes its chosen task producers through an immutable
+mapping; notification resolution uses that same provenance instead of rescanning
+contributors. The first identical producer remains authoritative even when it
+has no action label and deliberately uses generic fallback. The selected entry
+supplies the resource path, including
+project/global shadows and iteration-based selectors. Renaming a step or using a
+custom skill does not change that relationship. No phase-name or task-ID registry
+infers an owner. Missing presentation uses the existing generic fallback.
+
+Normal declarations validate references and both resources. Notification
+preparation reads only selected notification copy through structural composition;
+labels stay transient and do not enter HumanTask identity, saved policies,
+capability arguments, permissions or routes. The trusted capability adapter
+receives this presentation after the same authorization gate. Authored labels
+are bounded to 128 characters and rejected to the generic fallback if they
+contain control characters, links, Slack markup or mentions. Inserted literal
+braces remain literal. Callback failures resolve the stored playbook's selected
+primary skill and fall back to the safe step name if its configuration/copy is
+unavailable. Delivery remains best effort; saved tasks remain answerable without
+their authoring resources and deduplicated notifications do not reload them.
+
+### Locale owner, key, and consumer inventory
+
+| Copy owner / catalog directory | Catalog keys | Runtime consumer |
+| --- | --- | --- |
+| Runtime: `data/locales/` | `workspace.correction` | Bounded workspace correction prompt |
+| Runtime: `data/locales/` | `notification.*` except phase labels below | Generic notification envelope, fallback text, separators, callback reasons and closings; machine-owned interrupted-execution action |
+| Manager: `data/locales/` | `manager.progress.*` | Missing state, iteration/status/review/confirmation/closeout presentation and localized punctuation |
+| Manager: `data/locales/` | `manager.kickoff.*` | Localized table headers, checks, confirmation, empty closeout, command authorization and optional catalog-sync reminder |
+| Owning phase: `data/skills/<skill>/locales/` | `human_task.<skill>.<task>.*` | HumanTask policy validation, then existing task materialization and snapshots |
+| Primary phase: `cafe-spec`, `cafe-plan`, `cafe-develop`, `cafe-review`, `cafe-pr` | `notification.step_labels.spec/plan/develop/review/pr` respectively | Selected primary declaration -> HumanTask/callback notification preparation |
+| Declaring phase: each producer listed below | `notification.action_labels.*` | Selected primary/shared task declaration -> trusted HumanTask notification preparation |
+
+The phase catalog inventory covers `cafe-brief_first`, `cafe-brief_revise`,
+`cafe-develop`, `cafe-draft`, `cafe-incident_detect`, `cafe-incident_mitigate`,
+`cafe-incident_postmortem`, `cafe-incident_triage`, `cafe-plan`, `cafe-pr`,
+`cafe-qa`, `cafe-research_collect`, `cafe-research_question`,
+`cafe-research_report`, `cafe-research_synthesize`, `cafe-review`, and `cafe-spec`.
+These 17 owners contain 67 owner-local keys: 43 HumanTask keys for 26 policies,
+five step labels and 19 task action labels. The runtime pair contains 48 keys
+(1 workspace, 20 generic notification, 19 progress, 8 kickoff), with no phase
+copy in central resources. The phase inventory includes every declared localized prompt and decision label, output/no-change
+confirmations, and both editorial question prompts. No packaged question options
+or correction-guidance variants had localized copy to move. Their identity and
+custom authored variants remain supported. Monolingual CLI/help and unlocalized
+runtime defaults, repository instructions/documentation/examples, detector
+vocabulary, locale settings, and presentation symbols are outside this inventory.
+
+The eight former central action entries are audited against current producers:
+
+| Former action entry | Actual producer/declaration and ownership |
+| --- | --- |
+| `clarification_feedback` | `workflow_runtime` materializes `clarification-feedback` declared by `cafe-develop`, `cafe-draft`, four `cafe-incident_*` phases, four `cafe-research_*` phases, `cafe-review`, `cafe-qa`; each owns its action resource |
+| `clarification_answers` | `clarification-answers` declared by `cafe-spec` and `cafe-plan`; each owns its action resource |
+| `local_review` | `local-review` declared by `cafe-pr`; PR owns its action resource |
+| `output_review` | `output-review` declared by `cafe-spec` and `cafe-plan`; each owns its action resource |
+| `permission_answers` | `permission-answers` declared by `cafe-develop`; Develop owns its action resource |
+| `no_changes_needed` | The actual phase task is Develop's `no-change-decision` with trigger `no_changes_needed`; its existing authored action now belongs to Develop and binds to that declared task |
+| `alignment_decision` | No current HumanTask notification producer or policy uses `alignment-decision`; alignment chat consumes its separate checkpoint contract. Remove the unused notification entry without inventing a producer or compatibility mapping |
+| `agent_execution_interrupted` | `agent_execution_interrupted_human_task` is a machine-owned runtime policy for any agent step; keep the action centrally and select it at that actual runtime producer |
+
+Editorial tasks retain their existing generic notification fallback. Other
+phases without an authored notification step name also retain that fallback.
+The two old notification IDs `alignment-decision` and `no-changes-needed` have no
+current task producer; they are not aliases or migration inputs. All retained
+and moved authored strings/placeholders are unchanged. The inventory is tested
+with an exhaustive generic key set and comparison against owner copy, so moving
+phase strings under another central namespace cannot satisfy the ownership check.

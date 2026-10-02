@@ -791,22 +791,33 @@ def _apply_human_task_payload(
     store = BlackboardStore(issue_dir)
     try:
         iteration = latest_step_iteration(issue_dir=issue_dir, step_name=from_step)
-        questions = _load_dynamic_questions(
-            issue_dir=issue_dir,
-            step_name=from_step,
-            playbook_data=playbook_data,
-            trigger=trigger,
-            iteration=iteration,
-        )
-        policy, binding, completion = validate_step_human_task_completion(
-            playbook_data=playbook_data,
-            step_name=from_step,
-            trigger=trigger,
-            raw_payload=raw_payload,
-            questions=questions,
-            iteration=iteration,
-        )
-    except (HumanTaskPolicyError, LookupError, TypeError) as exc:
+        if record_store.exists:
+            # Validate the current machine declaration without depending on
+            # presentation resources that an already-saved task does not own.
+            policy, binding = resolve_step_human_task(
+                playbook_data=playbook_data,
+                step_name=from_step,
+                trigger=trigger,
+                iteration=iteration,
+                skill_loader=SkillLoader(resolve_presentation=False),
+            )
+        else:
+            questions = _load_dynamic_questions(
+                issue_dir=issue_dir,
+                step_name=from_step,
+                playbook_data=playbook_data,
+                trigger=trigger,
+                iteration=iteration,
+            )
+            policy, binding, completion = validate_step_human_task_completion(
+                playbook_data=playbook_data,
+                step_name=from_step,
+                trigger=trigger,
+                raw_payload=raw_payload,
+                questions=questions,
+                iteration=iteration,
+            )
+    except (HumanTaskPolicyError, LookupError, TypeError, ValueError) as exc:
         rejection = HumanTaskRejection(
             message=str(exc),
             correction_guidance=(
@@ -848,6 +859,34 @@ def _apply_human_task_payload(
             },
         )
         return HumanTaskApplication(target=None, policy=policy, rejection=durable_rejection)
+    if durable_task is not None:
+        try:
+            snapshot = HumanTaskPolicy.model_validate(durable_task.expected_result)
+            if _task_machine_contract(snapshot) != _task_machine_contract(policy):
+                raise ValueError("Saved task policy does not match the current declaration")
+        except (TypeError, ValueError) as exc:
+            return _durable_task_routing_rejection(
+                issue_dir=issue_dir,
+                blackboard=blackboard,
+                task_id=durable_task.id,
+                message=f"The saved human task has an invalid response contract: {exc}",
+            )
+        policy = snapshot
+        questions = policy.questions
+        if policy.questions_from_xml and not questions:
+            questions = _load_dynamic_questions(
+                issue_dir=issue_dir,
+                step_name=from_step,
+                playbook_data=playbook_data,
+                trigger=trigger,
+                iteration=iteration,
+                policy=policy,
+            )
+        completion = validate_human_task_completion(
+            policy,
+            raw_payload,
+            questions=questions,
+        )
     result_was_recovered = durable_result is not None
 
     recovered_agent_input = ""
@@ -1198,7 +1237,7 @@ def _apply_human_task_payload(
 
                 step_definition = playbook_data["steps"][from_step]
                 composition = resolve_step_workflow_composition(
-                    SkillLoader(),
+                    SkillLoader(resolve_presentation=False),
                     primary_skill=resolve_skill_selector(
                         step_definition["skill"], durable_task.iteration
                     ),
@@ -1292,6 +1331,20 @@ def _apply_human_task_payload(
         },
     )
     return HumanTaskApplication(target="done" if is_done else continuation, policy=policy)
+
+
+def _task_machine_contract(policy: HumanTaskPolicy) -> dict[str, Any]:
+    """Compare the live and saved answer contract without presentation fields."""
+    return policy.model_dump(
+        exclude={
+            "prompt": True,
+            "prompt_locales": True,
+            "correction_guidance": True,
+            "correction_guidance_locales": True,
+            "decisions": {"__all__": {"label", "label_locales"}},
+            "questions": {"__all__": {"prompt", "prompt_locales"}},
+        }
+    )
 
 
 def _resolve_durable_task(
@@ -1656,17 +1709,19 @@ def _load_dynamic_questions(
     playbook_data: Mapping[str, Any],
     trigger: str,
     iteration: int,
+    policy: Optional[HumanTaskPolicy] = None,
 ) -> Optional[tuple[HumanTaskQuestion, ...]]:
-    """Return the current XML question contract for a dynamic answer task."""
-    try:
-        policy, _binding = resolve_step_human_task(
-            playbook_data=playbook_data,
-            step_name=step_name,
-            trigger=trigger,
-            iteration=iteration,
-        )
-    except HumanTaskPolicyError:
-        return None
+    """Read the XML answer contract without re-resolving a saved policy's copy."""
+    if policy is None:
+        try:
+            policy, _binding = resolve_step_human_task(
+                playbook_data=playbook_data,
+                step_name=step_name,
+                trigger=trigger,
+                iteration=iteration,
+            )
+        except HumanTaskPolicyError:
+            return None
     if not policy.questions_from_xml:
         return None
 
