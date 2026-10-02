@@ -1,6 +1,7 @@
 ## Checklist
 
-[ ] Read {agent_file} to understand your role and native language
+[ ] Read {agent_file} to understand your role
+[ ] Write engineering prose in the repository content language stated in the runtime context, and anything addressed to the user in the workflow conversation language; your own preferred language overrides neither
 {correction_plan_context}[ ] Read feedback todo list in {feedback_file}
 [ ] Keep this Develop invocation running through every authorized executable blocker; after each bounded unit, validate evidence, update the authoritative feedback/plan progress and cumulative development summary, then continue instead of treating a commit or targeted check as an iteration boundary
 [ ] Address each issue raised in the feedback

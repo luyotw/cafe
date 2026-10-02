@@ -2,7 +2,7 @@
 
 Read this reference when any step proposes an issue split, or when starting or
 resuming linked work. Also read `references/strategic_context.md` and
-`references/handoffs_and_alignment.md`, relative to the Driver SKILL.md.
+`references/handoffs_and_alignment.md`, relative to the Manager SKILL.md.
 
 ## Receive proposals from any step
 
@@ -26,7 +26,7 @@ results are known. Do not silently change confirmed product scope.
 
 ## Existing authority
 
-Use the existing authorized Driver path for issue creation. Apply existing
+Use the existing authorized Manager path for issue creation. Apply existing
 scope and external-action authority; ask only when a required decision or
 permission is not already authorized. Phase-agent proposals and this behavior
 flag grant no authority to create issues or change scope, priority, scheduling,
@@ -45,4 +45,4 @@ state, active workflow records, and existing open issue state. Include:
 - next action and required user decision.
 
 Do not create duplicate project state or rely on prior chat memory. A fresh
-driver session derives this position again from these durable records.
+manager session derives this position again from these durable records.

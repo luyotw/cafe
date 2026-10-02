@@ -43,9 +43,9 @@ result through the existing catalog preflight handling, including the
   Never infer publication approval from the kickoff confirmation, its catalog
   reminder, a generic `continue`, or approval of the runtime-update scope.
 
-## Driver-managed runtime-update decision
+## Manager-managed runtime-update decision
 
-Before a user-facing Driver invokes `cafe prepare --no-interactive`, run `cafe
+Before a user-facing Manager invokes `cafe prepare --no-interactive`, run `cafe
 update check --json`. The non-interactive prepare command must never prompt.
 When status is `update_available`, show the installed and latest versions and
 explicitly ask the user whether to update. Only explicit acceptance may apply
@@ -67,8 +67,8 @@ publication request exists; project-only entries do not require a decline
 decision.
 
 These check records belong to the existing issue preflight, not the confirmed
-Driver contract. Do not copy them or a second effective-policy snapshot into
-`driver/contract.json`, and do not ask the user to confirm successful diagnostics.
+Manager contract. Do not copy them or a second effective-policy snapshot into
+`manager/contract.json`, and do not ask the user to confirm successful diagnostics.
 
 A changed comparison token invalidates its cached decision, but does not by
 itself show a semantic change or require kickoff reconfirmation. Re-run the
@@ -132,7 +132,7 @@ In other words, every approved publication must re-run both read-only checks;
 the helper makes that post-change requirement inseparable from synchronization.
 
 A successful receipt still sets `semantic_review_required`: CLI-helper content
-can change Driver behavior even when playbook, phase, and agent catalog digests
+can change Manager behavior even when playbook, phase, and agent catalog digests
 remain identical. Record the bounded semantic classification separately. Digest
 or runtime-version changes trigger the semantic comparison above, not automatic
 reconfirmation. When the comparison finds a material difference, re-render and
@@ -141,8 +141,8 @@ as post-change evidence. Feature-worktree content is not published globally
 unless the user deliberately approves that separate command. Catalog approval
 does not grant helper-publication approval.
 
-For a Driver-managed issue, that confirmed contract is the one issue-scoped
-`driver/contract.json` authority. Cache files, raw source digests, labels,
+For a Manager-managed issue, that confirmed contract is the one issue-scoped
+`manager/contract.json` authority. Cache files, raw source digests, labels,
 timestamps, and comparison tokens are diagnostics: an identity change makes
 them stale and requires fresh checks, but does not by itself rewrite the
 contract or force reconfirmation. Only a proved semantic/material difference

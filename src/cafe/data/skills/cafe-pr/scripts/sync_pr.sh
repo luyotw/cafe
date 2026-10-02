@@ -136,13 +136,25 @@ for iter_dir in sorted(pr_dir.glob("iteration_*"), reverse=True):
         continue
     todo_content = output.read_text(encoding="utf-8").strip()
     if not todo_content:
-        continue
-    is_todo = any(marker in todo_content for marker in ("## Todo List", "## Todo", "- [ ]", "- [x]"))
-    if not is_todo:
-        continue
-    has_unchecked = bool(re.search(r"(?m)^- \[ \] ", todo_content))
+        print(json.dumps({"action": "skipped", "reason": "todo_empty"}))
+        raise SystemExit(0)
+    heading = re.search(r"(?m)^## Todo List[ \t]*$", todo_content)
+    if heading is None:
+        heading = re.search(r"(?m)^## Todo[ \t]*$", todo_content)
+    if heading is None:
+        print(json.dumps({"action": "skipped", "reason": "todo_not_present"}))
+        raise SystemExit(0)
+    section = todo_content[heading.end():]
+    next_heading = re.search(r"(?m)^#{1,6}[ \t]+", section)
+    if next_heading is not None:
+        section = section[:next_heading.start()]
+    has_unchecked = bool(re.search(r"(?m)^- \[ \] ", section))
     if has_unchecked:
         print(json.dumps({"action": "skipped", "reason": "todo_incomplete"}))
+        raise SystemExit(0)
+    has_checked = bool(re.search(r"(?m)^- \[[xX]\] ", section))
+    if not has_checked:
+        print(json.dumps({"action": "skipped", "reason": "todo_empty"}))
         raise SystemExit(0)
     print(json.dumps({
         "action": "ready",

@@ -35,9 +35,6 @@ REQUIRED_SKILL_REFERENCES = {
     "spec_first": [
         "execution_steps_iteration_1.md",
         "important_notes_iteration_4_plus.md",
-        "dod_instruction.md",
-        "dod_instruction_composed.md",
-        "dod_instruction_after_notes_composed.md",
         "important_notes_iteration_4_plus_composed.md",
         "xml_questions_instruction.md",
     ],
@@ -139,6 +136,83 @@ def test_declared_todo_projection_preserves_one_authoritative_row(tmp_path: Path
         artifacts={"plan": todo_file},
     )
     assert "`PLAN-001` — add parser" in output.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("composer", ["declared", "effective"])
+@pytest.mark.parametrize("matching_context", [False, True])
+@pytest.mark.parametrize("invalid_template", [False, True])
+def test_projected_todo_braces_are_literal_but_templates_are_validated(
+    tmp_path, monkeypatch, composer, matching_context, invalid_template
+):
+    from cafe.skills.checklist_composer import compose_effective_checklist
+    from cafe.skills.workflow_composition import resolve_step_workflow_composition
+    from tests.integration.test_checklist_overlay_workflow import write_skill
+
+    todo_file = tmp_path / "plan.md"
+    original = (
+        "## Todo List\n"
+        "- [ ] `PLAN-001` — Source: `plan` — Work: use `{parent_oid}-dept-{slug}` "
+        "and `{agent_file}` literally — Closure: IDs persist — Evidence: tests\n"
+    )
+    todo_file.write_text(original, encoding="utf-8")
+    template = "[ ] inspect {missing_template}\n" if invalid_template else "[ ] inspect {path}\n"
+    declaration = {
+        "checklist": {
+            "include_role_guidance": False,
+            "variants": [
+                {"sections": [
+                    {"reference": "check.md"},
+                    {"todo_projection": {"artifact": "plan", "source": "plan"}},
+                ]}
+            ],
+        }
+    }
+    monkeypatch.setattr(
+        "cafe.skills.checklist_composer._load_agent_guidance",
+        lambda *_: ("resolved-agent.md", ""),
+    )
+    monkeypatch.setattr(
+        "cafe.skills.checklist_composer._load_skill_checklist_reference",
+        lambda *_: template,
+    )
+    context = {"path": "verified.md"}
+    if matching_context:
+        context.update(parent_oid="incorrect-substitution", slug="incorrect-slug")
+    kwargs = dict(
+        agent_name="David",
+        role="developer",
+        checklist_file_path=tmp_path / "checklist.md",
+        iteration=1,
+        context=context,
+        artifacts={"plan": todo_file},
+    )
+    if composer == "declared":
+        compose = compose_declared_checklist
+        kwargs.update(
+            skill_name="primary", contract=SkillWorkflowDeclaration.model_validate(declaration)
+        )
+    else:
+        write_skill(tmp_path / ".cafe/skills", "primary", declaration, {"check.md": template})
+        loader = SkillLoader(
+            project_root=tmp_path, global_root=tmp_path / "global", builtin_root=tmp_path / "builtin"
+        )
+        compose = compose_effective_checklist
+        kwargs["composition"] = resolve_step_workflow_composition(
+            loader, primary_skill="primary", workflow_skills=[], step_name="assemble"
+        )
+    if invalid_template:
+        with pytest.raises(ValueError, match="missing_template"):
+            compose(**kwargs)
+        assert not kwargs["checklist_file_path"].exists()
+    else:
+        result = compose(**kwargs)
+        text = kwargs["checklist_file_path"].read_text()
+        row = parse_todo_list(original, expected_source="plan")[0].checklist_row()
+        assert row in text
+        assert "[ ] inspect verified.md" in text
+        if composer == "effective":
+            assert result.projections[0]["rows"] == [row]
+    assert todo_file.read_text() == original
 
 
 GOLDEN_RUNNERS = {
@@ -846,16 +920,6 @@ def test_spec_iteration_1_reference_mentions_images_directory() -> None:
     assert "UI/UX" in content or "visual context" in content
 
 
-def test_spec_dod_instruction_skill_reference_contract() -> None:
-    instruction = load_skill_reference("spec_first", "dod_instruction.md")
-    assert "DoD" in instruction
-    assert "functional" in instruction.lower()
-    assert "Acceptance Criteria" in instruction
-    assert "**DoD:**" in instruction
-    assert "checkbox" in instruction
-    assert "CAFE_" not in instruction
-
-
 def test_develop_correction_checklist_uses_feedback_file_path(tmp_path: Path) -> None:
     checklist_path = tmp_path / "checklist.md"
     feedback = ".cafe/issues/test/review/iteration_001/output.md"
@@ -899,19 +963,6 @@ def test_develop_normal_checklist_keeps_accepted_plan_immutable(tmp_path: Path) 
     assert "update the authoritative plan progress" not in content
     assert f"All tasks in {plan} are marked [x]" not in content
     assert "All projected Plan Todo rows" in content
-
-
-def test_spec_checklist_includes_dod_instruction(tmp_path: Path) -> None:
-    checklist_path = tmp_path / "checklist.md"
-    generate_spec_checklist(
-        iteration=1,
-        agent_name="Roger",
-        current_spec_file=".cafe/issues/test/spec/iteration_001/output.md",
-        prev_spec_file=None,
-        checklist_file_path=checklist_path,
-    )
-    content = checklist_path.read_text(encoding="utf-8")
-    assert "Definition of Done" in content
 
 
 def test_spec_and_develop_xml_question_instruction_requires_need_clarification() -> None:

@@ -54,6 +54,12 @@ Before changing package metadata:
 5. Document migrations for any changed public contract.
 6. Run `./scripts/release-check.sh` from the final release commit.
 
+The release gate runs coverage with representative kickoff CLI journeys, then
+runs the remaining kickoff journeys without coverage instrumentation. It also
+validates contracts, builds distributions, and checks a clean wheel install.
+Run `./scripts/test-coverage.sh` when changing kickoff discovery or catalog
+behavior to instrument the complete regression suite with coverage.
+
 ## Publishing
 
 After the release gate passes, merge the release pull request and publish a

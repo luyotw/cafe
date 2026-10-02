@@ -36,6 +36,7 @@ try:
     import yaml  # type: ignore[import-untyped]
 
     from cafe.core.audit_events import AuditEventStore
+    from cafe.core.runtime_locales import render_text
     from cafe.playbooks.loader import PlaybookLoader, apply_issue_playbook_overrides
 except ModuleNotFoundError:
     _reexec_with_cafe_python()
@@ -64,48 +65,6 @@ _TEXT_STATUS_SYMBOLS = {
     "skipped": "−",
     "blocked": "!",
     "unknown": "？",
-}
-_TEXT = {
-    "zh": {
-        "missing": "流程尚未建立",
-        "iteration": "第 {iteration} 輪",
-        "review": "driver 主動審查",
-        "confirmation": "使用者確認",
-        "delegable": "driver 可代理",
-        "not_delegable": "driver 不可代理",
-        "closeout": "收尾",
-        "status": {
-            "pending": "待執行",
-            "in_progress": "進行中",
-            "awaiting_input": "等待回覆",
-            "completed": "已完成",
-            "returned": "已退回",
-            "awaiting_confirmation": "等待確認",
-            "skipped": "已略過",
-            "blocked": "受阻",
-            "unknown": "狀態未知",
-        },
-    },
-    "en": {
-        "missing": "Workflow has not been established.",
-        "iteration": "iteration {iteration}",
-        "review": "driver proactive review",
-        "confirmation": "user confirmation",
-        "delegable": "driver may act",
-        "not_delegable": "driver may not act",
-        "closeout": "closeout",
-        "status": {
-            "pending": "Pending",
-            "in_progress": "In progress",
-            "awaiting_input": "Awaiting response",
-            "completed": "Completed",
-            "returned": "Returned",
-            "awaiting_confirmation": "Awaiting confirmation",
-            "skipped": "Skipped",
-            "blocked": "Blocked",
-            "unknown": "Unknown",
-        },
-    },
 }
 
 
@@ -158,11 +117,37 @@ def _read_json(path: Path) -> dict[str, Any] | None:
 
 
 def _load_contract(issue_dir: Path) -> dict[str, Any] | None:
-    raw = _read_json(issue_dir / "driver" / "contract.json")
+    manager_path = issue_dir / "manager" / "contract.json"
+    driver_path = issue_dir / "driver" / "contract.json"
+    if manager_path.is_file() and driver_path.is_file():
+        from cafe.manager._store import select_authority_directory
+
+        authority = select_authority_directory(issue_dir)
+    elif driver_path.is_file():
+        authority = driver_path.parent
+    else:
+        authority = manager_path.parent
+    if authority.name == "driver":
+        raw = _read_json(authority / "contract.json")
+        if raw is None:
+            return None
+        nested = raw.get("policy")
+        if isinstance(nested, Mapping):
+            raw = dict(nested)
+        if "driver" in raw:
+            raw["manager"] = raw.pop("driver")
+        for field in ("confirmation_contract", "task_contract"):
+            owner = raw.get(field)
+            if isinstance(owner, dict) and "driver_confirmable" in owner:
+                owner["manager_confirmable"] = owner.pop("driver_confirmable")
+        if raw.get("reactive_user_handoffs", {}).get("alignment_checkpoint") == "driver_resolvable_when_clear":
+            raw["reactive_user_handoffs"]["alignment_checkpoint"] = "manager_resolvable_when_clear"
+    else:
+        raw = _read_json(authority / "contract.json")
     if raw is None:
         return None
     policy = raw.get("policy", raw)
-    return _mapping(policy, "driver contract policy")
+    return _mapping(policy, "manager contract policy")
 
 
 def _status(value: Any, label: str) -> str:
@@ -197,24 +182,26 @@ def _confirmation_contract(contract: Mapping[str, Any]) -> tuple[set[str], set[s
         value = raw.get(name, [])
         return {str(item) for item in value} if isinstance(value, list) else set()
 
-    return values("user_required"), values("driver_confirmable"), values("mandatory_human_stops")
+    if "manager_confirmable" not in raw and "driver_confirmable" in raw:
+        raw = {**raw, "manager_confirmable": raw["driver_confirmable"]}
+    return values("user_required"), values("manager_confirmable"), values("mandatory_human_stops")
 
 
-def _driver_progress(
-    driver_state: Mapping[str, Any] | None,
+def _manager_progress(
+    manager_state: Mapping[str, Any] | None,
     *,
     required_reviews: set[str],
 ) -> tuple[dict[str, str], dict[str, str]]:
-    if driver_state is None:
-        raise ValueError("driver state must provide required closeout items: deliver, cleanup")
-    state = _mapping(driver_state, "driver state")
+    if manager_state is None:
+        raise ValueError("manager state must provide required closeout items: deliver, cleanup")
+    state = _mapping(manager_state, "manager state")
     unexpected = set(state) - {"proactive_review", *_CLOSEOUT_ITEMS}
     if unexpected:
         field = sorted(unexpected)[0]
-        raise ValueError(f"driver state cannot override runtime phase '{field}'")
+        raise ValueError(f"manager state cannot override runtime phase '{field}'")
     missing = [item for item in _CLOSEOUT_ITEMS if item not in state]
     if missing:
-        raise ValueError(f"driver state missing required closeout item: {missing[0]}")
+        raise ValueError(f"manager state missing required closeout item: {missing[0]}")
     review_raw = state.get("proactive_review", {})
     reviews = _mapping(review_raw, "proactive_review")
     unknown = set(reviews) - required_reviews
@@ -306,9 +293,8 @@ def _runtime_progress(
         event_type = event["event_type"]
         data = event["data"]
         step = str(data.get("step", event.get("step", "")))
-        event_iteration = _iteration_number(data.get("iteration")) or _iteration_number(
-            data.get("attempt")
-        )
+        # Execution/callback attempts can outnumber artifact iterations after retries.
+        event_iteration = _iteration_number(data.get("iteration"))
         if step in statuses:
             if event_iteration is not None:
                 iterations[step] = max(iterations.get(step, 0), event_iteration)
@@ -404,6 +390,42 @@ def _runtime_progress(
     return statuses, iterations
 
 
+def _post_confirmation_handoff_iteration(
+    issue_dir: Path,
+    workflow_id: str,
+    step: str,
+    task_iteration: int,
+    completed_at: str,
+) -> int | None:
+    """Return the re-entry iteration that durably handed off after self-confirmation."""
+    candidates: list[tuple[int, str]] = []
+    for candidate in (issue_dir / step).glob("iteration_*"):
+        number = candidate.name.removeprefix("iteration_")
+        if not number.isdigit() or int(number) <= task_iteration:
+            continue
+        metadata = _read_json(candidate / "iteration.json")
+        timestamp = metadata.get("timestamp") if metadata is not None else None
+        if isinstance(timestamp, str) and timestamp >= completed_at:
+            candidates.append((int(number), timestamp))
+    candidates.sort()
+    events = list(AuditEventStore(issue_dir).iter_records(workflow_id))
+    for index, (iteration, started_at) in enumerate(candidates):
+        next_started_at = candidates[index + 1][1] if index + 1 < len(candidates) else None
+        for event in events:
+            timestamp = str(event.get("timestamp", ""))
+            if timestamp < started_at or (next_started_at is not None and timestamp >= next_started_at):
+                continue
+            data = event["data"]
+            if (
+                event["event_type"] == "transition"
+                and str(data.get("from", "")) == step
+                and str(data.get("to", "")) != step
+                and data.get("transition_intent") == "await_agent"
+            ):
+                return iteration
+    return None
+
+
 def _confirmation_statuses(
     issue_dir: Path | None,
     gate_steps: set[str],
@@ -439,6 +461,7 @@ def _confirmation_statuses(
     for step, task in latest.items():
         task_status = str(task.get("status", ""))
         task_iteration = task.get("iteration", 0)
+        preserve_completed_confirmation = False
         if task_status == "pending":
             statuses[step] = "awaiting_confirmation"
         elif task_status == "configuration_error":
@@ -489,8 +512,28 @@ def _confirmation_statuses(
                 statuses[step] = "returned"
             else:
                 statuses[step] = "completed"
+                completed_at = task.get("completed_at")
+                if (
+                    declared_target == step
+                    and isinstance(task_iteration, int)
+                    and isinstance(completed_at, str)
+                ):
+                    reentry_iteration = _post_confirmation_handoff_iteration(
+                        issue_dir,
+                        str(records.get("workflow_id", "")),
+                        step,
+                        task_iteration,
+                        completed_at,
+                    )
+                    # A self-loop confirmation may create one bookkeeping
+                    # iteration before handing off. A later iteration is a
+                    # distinct candidate and must obtain its own confirmation.
+                    preserve_completed_confirmation = (
+                        reentry_iteration == phase_iterations.get(step, 0)
+                    )
         if isinstance(task_iteration, int) and phase_iterations.get(step, 0) > task_iteration:
-            statuses[step] = "pending"
+            if not preserve_completed_confirmation:
+                statuses[step] = "pending"
     return statuses
 
 
@@ -512,7 +555,12 @@ def _active_task_authority(issue_dir: Path | None) -> dict[str, Any] | None:
     if len(pending) != 1 or not isinstance(pending[0].get("id"), str):
         return None
     from cafe.core.task_inbox import TaskInboxError
-    from cafe.driver.task_inspection import inspect_task_authority
+    from cafe.manager._store import select_authority_directory
+
+    if select_authority_directory(issue_dir).name == "driver":
+        from cafe.driver.task_inspection import inspect_task_authority
+    else:
+        from cafe.manager.task_inspection import inspect_task_authority
 
     try:
         return inspect_task_authority(issue_dir, pending[0]["id"])
@@ -526,21 +574,34 @@ def render_progress(
     contract: Mapping[str, Any] | None = None,
     locale: str = "en",
     issue_dir: Path | None = None,
+    manager_state: Mapping[str, Any] | None = None,
     driver_state: Mapping[str, Any] | None = None,
 ) -> str:
     """Render progress without creating, resuming, or mutating workflow state."""
     language = _language(locale)
-    text = _TEXT[language]
+    copy_locale = "zh-TW" if language == "zh" else "en-US"
+    text: dict[str, Any] = {
+        name: render_text(f"manager.progress.{name}", locale=copy_locale)
+        for name in ("missing", "review", "confirmation", "delegable", "not_delegable", "closeout")
+    }
+    text["status"] = {
+        status: render_text(f"manager.progress.status.{status}", locale=copy_locale)
+        for status in _STATUSES
+    }
     if playbook is None:
         return str(text["missing"])
+    if manager_state is not None and driver_state is not None:
+        raise ValueError("provide only one Manager state value")
+    if manager_state is None:
+        manager_state = driver_state
     model = _playbook_mapping(playbook)
     steps = list(model["steps"])
     policy = _mapping(contract or {}, "contract")
     required_reviews = _required_reviews(policy, set(steps))
-    reviews, closeout = _driver_progress(driver_state, required_reviews=required_reviews)
+    reviews, closeout = _manager_progress(manager_state, required_reviews=required_reviews)
     phase_statuses, iterations = _runtime_progress(issue_dir, model)
-    user_required, driver_confirmable, mandatory = _confirmation_contract(policy)
-    gate_steps = (user_required | driver_confirmable | mandatory) & set(steps)
+    user_required, manager_confirmable, mandatory = _confirmation_contract(policy)
+    gate_steps = (user_required | manager_confirmable | mandatory) & set(steps)
     confirmation_statuses = _confirmation_statuses(issue_dir, gate_steps, iterations)
     task_authority = _active_task_authority(issue_dir)
     status_text = text["status"]
@@ -549,7 +610,9 @@ def render_progress(
     for step in _phase_order(model):
         label = step
         if iterations.get(step, 0) > 1:
-            label += " · " + str(text["iteration"]).format(iteration=iterations[step])
+            label += " · " + render_text(
+                "manager.progress.iteration", locale=copy_locale, iteration=iterations[step]
+            )
         block = [_line(phase_statuses[step], label, status_text)]
         if step in required_reviews:
             review_status = reviews.get(
@@ -560,8 +623,8 @@ def render_progress(
                     else "unknown"
                 ),
             )
-            review_label = (
-                f"{step}：{text['review']}" if language == "zh" else f"{step}: {text['review']}"
+            review_label = render_text(
+                "manager.progress.review_line", locale=copy_locale, step=step, review=text["review"]
             )
             block.append(_line(review_status, review_label, status_text))
         if step in gate_steps:
@@ -572,17 +635,19 @@ def render_progress(
             )
             proxy = (
                 text["delegable"]
-                if task_owner == "driver_confirmable"
+                if task_owner == "manager_confirmable"
                 else (
                     text["not_delegable"]
                     if task_owner == "user_required"
-                    else text["delegable"] if step in driver_confirmable else text["not_delegable"]
+                    else text["delegable"] if step in manager_confirmable else text["not_delegable"]
                 )
             )
-            confirmation_label = (
-                f"{step}：{text['confirmation']}（{proxy}）"
-                if language == "zh"
-                else f"{step}: {text['confirmation']} ({proxy})"
+            confirmation_label = render_text(
+                "manager.progress.confirmation_line",
+                locale=copy_locale,
+                step=step,
+                confirmation=text["confirmation"],
+                proxy=proxy,
             )
             block.append(
                 _line(
@@ -604,10 +669,11 @@ def render_progress(
     for item in _CLOSEOUT_ITEMS:
         closeout_line = _line(
             closeout.get(item, "unknown"),
-            (
-                f"{item}（{text['closeout']}）"
-                if language == "zh"
-                else f"{item} ({text['closeout']})"
+            render_text(
+                "manager.progress.closeout_line",
+                locale=copy_locale,
+                item=item,
+                closeout=text["closeout"],
             ),
             status_text,
         )
@@ -617,7 +683,7 @@ def render_progress(
 
 def _json_argument(value: str) -> dict[str, Any]:
     try:
-        return _mapping(json.loads(value), "driver state")
+        return _mapping(json.loads(value), "manager state")
     except json.JSONDecodeError as exc:
         raise argparse.ArgumentTypeError(f"must be valid JSON: {exc.msg}") from exc
 
@@ -629,11 +695,21 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--issue-dir", type=Path)
     parser.add_argument("--locale", default="en")
     parser.add_argument(
-        "--driver-state",
+        "--manager-state", dest="manager_state",
         type=_json_argument,
         help="JSON display state; must include deliver and cleanup",
     )
+    parser.add_argument("--driver-state", dest="legacy_manager_state", type=_json_argument)
     return parser
+
+
+def _resolve_manager_state(
+    manager_state: Mapping[str, Any] | None,
+    legacy_driver_state: Mapping[str, Any] | None,
+) -> Mapping[str, Any] | None:
+    if manager_state is not None and legacy_driver_state is not None and manager_state != legacy_driver_state:
+        raise ValueError("Manager and legacy Driver state inputs conflict")
+    return manager_state if manager_state is not None else legacy_driver_state
 
 
 def _issue_playbook_id(issue_dir: Path) -> str | None:
@@ -651,6 +727,7 @@ def _issue_playbook_id(issue_dir: Path) -> str | None:
 def main() -> int:
     try:
         args = _parser().parse_args()
+        args.manager_state = _resolve_manager_state(args.manager_state, args.legacy_manager_state)
         issue_dir = args.issue_dir.resolve() if args.issue_dir is not None else None
         playbook_id = args.playbook or (
             _issue_playbook_id(issue_dir) if issue_dir is not None else None
@@ -667,15 +744,15 @@ def main() -> int:
         if issue_dir is not None and contract is None:
             print(render_progress(locale=args.locale))
             return 0
-        if args.driver_state is None:
-            raise ValueError("driver state must provide required closeout items: deliver, cleanup")
+        if args.manager_state is None:
+            raise ValueError("manager state must provide required closeout items: deliver, cleanup")
         print(
             render_progress(
                 playbook=playbook,
                 contract=contract,
                 locale=args.locale,
                 issue_dir=issue_dir,
-                driver_state=args.driver_state,
+                manager_state=args.manager_state,
             )
         )
     except (FileNotFoundError, LookupError, OSError, RuntimeError, ValueError) as exc:

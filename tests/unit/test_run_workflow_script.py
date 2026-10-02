@@ -1,4 +1,4 @@
-"""Driver launch invariants owned by the use-cafe-workflow skill."""
+"""Manager launch invariants owned by the use-cafe-workflow skill."""
 
 from __future__ import annotations
 
@@ -55,16 +55,16 @@ def _prepared(root: Path, *, step: str = "develop", playbook: str = "direct") ->
 
 
 def _contract(mode: str, root: Path) -> dict[str, object]:
-    driver: dict[str, object] = {"mode": mode}
+    manager: dict[str, object] = {"mode": mode}
     if mode == "attached":
-        driver["poll_interval_seconds"] = 90
+        manager["poll_interval_seconds"] = 90
     elif mode == "event-driven":
-        driver["clis"] = [{"cli": "codex"}, {"cli": "claude", "model": "sonnet"}]
+        manager["clis"] = [{"cli": "codex"}, {"cli": "claude", "model": "sonnet"}]
     return {
         "identity": {"issue_name": "issue498", "workflow_id": "workflow-498"},
-        "driver": driver,
+        "manager": manager,
         "checkout": {"kind": "worktree", "path": str(root)},
-        "reactive_user_handoffs": {"alignment_checkpoint": "driver_resolvable_when_clear"},
+        "reactive_user_handoffs": {"alignment_checkpoint": "manager_resolvable_when_clear"},
     }
 
 
@@ -93,7 +93,7 @@ def _args(mode: str, *extra: str) -> list[str]:
 def _install_contract_stubs(monkeypatch, module, contract):
     monkeypatch.setattr(
         module,
-        "evaluate_driver_entry",
+        "evaluate_manager_entry",
         lambda request: SimpleNamespace(
             freshness=module.Freshness.SAME_SEMANTICS,
             contract_sha256="digest",
@@ -102,16 +102,16 @@ def _install_contract_stubs(monkeypatch, module, contract):
     monkeypatch.setattr(module, "load_contract", lambda *args, **kwargs: (contract, "digest"))
     monkeypatch.setattr(
         module,
-        "resolve_builtin_workflow_event_callback",
-        lambda callback_id, **kwargs: SimpleNamespace(callback_id=callback_id),
-    )
-    monkeypatch.setattr(
-        module,
         "event_callback_projection",
         lambda request: SimpleNamespace(
             contract_sha256="digest",
             event={"clis": ({"cli": "codex"}, {"cli": "claude", "model": "sonnet"})},
         ),
+    )
+    monkeypatch.setattr(
+        module,
+        "resolve_builtin_workflow_event_callback",
+        lambda callback_id, **kwargs: SimpleNamespace(callback_id=callback_id),
     )
 
 
@@ -121,21 +121,24 @@ def _install_contract_stubs(monkeypatch, module, contract):
         (
             "attached",
             [],
-            'CAFE_DRIVER_DIRECTIVE {"schema_version":1,"mode":"attached","action":"wait",'
+            'CAFE_MANAGER_DIRECTIVE {"schema_version":1,"mode":"attached","action":"wait",'
             '"worker":"foreground","next_wake":["process_exit","user_input"],'
+            '"conversation_locale":{"value":"en-US","source":"fallback"},'
             '"poll_interval_seconds":90}',
         ),
         (
             "unattended",
             ["--background"],
-            'CAFE_DRIVER_DIRECTIVE {"schema_version":1,"mode":"unattended","action":"yield",'
-            '"worker":"background","next_wake":["user_input"]}',
+            'CAFE_MANAGER_DIRECTIVE {"schema_version":1,"mode":"unattended","action":"yield",'
+            '"worker":"background","next_wake":["user_input"],'
+            '"conversation_locale":{"value":"en-US","source":"fallback"}}',
         ),
         (
             "event-driven",
             ["--background", "--on-workflow-event", CALLBACK_ID],
-            'CAFE_DRIVER_DIRECTIVE {"schema_version":1,"mode":"event-driven","action":"yield",'
-            '"worker":"background","next_wake":["workflow_event_callback","user_input"]}',
+            'CAFE_MANAGER_DIRECTIVE {"schema_version":1,"mode":"event-driven","action":"yield",'
+            '"worker":"background","next_wake":["workflow_event_callback","user_input"],'
+            '"conversation_locale":{"value":"en-US","source":"fallback"}}',
         ),
     ],
 )
@@ -228,7 +231,7 @@ def test_runtime_source_mismatch_fails_before_worker_launch(
         )
         == 2
     )
-    assert "Driver runtime source differs" in capsys.readouterr().err
+    assert "Manager runtime source differs" in capsys.readouterr().err
 
 
 def test_global_wrapper_accepts_an_identical_runtime_copy(tmp_path: Path, monkeypatch) -> None:
@@ -354,7 +357,7 @@ def test_contract_mode_prepared_identity_and_checkout_mismatches_fail_closed(
     assert result == 2
     assert launched is False
     assert capsys.readouterr().out.splitlines()[0] == (
-        f'CAFE_DRIVER_DIRECTIVE {{"schema_version":1,"mode":"{requested_mode}",'
+        f'CAFE_MANAGER_DIRECTIVE {{"schema_version":1,"mode":"{requested_mode}",'
         '"action":"launch_failed","worker":"none","next_wake":["user_input"]}'
     )
 
@@ -398,8 +401,8 @@ def test_stale_contract_identity_and_unreadable_state_fail_closed(
     assert module.run(args, cwd=tmp_path, process_factory=lambda *a, **k: _Process()) == 2
     assert "launch_failed" in capsys.readouterr().out
 
-    (issue_dir / "driver").mkdir()
-    (issue_dir / "driver/contract.json").write_text("not json", encoding="utf-8")
+    (issue_dir / "manager").mkdir()
+    (issue_dir / "manager/contract.json").write_text("not json", encoding="utf-8")
     assert module.run(args, cwd=tmp_path, process_factory=lambda *a, **k: _Process()) == 2
     assert "launch_failed" in capsys.readouterr().out
 
@@ -449,7 +452,7 @@ def test_launch_failure_and_durable_user_boundary_have_stable_directives(
 
     assert module.run(args, cwd=tmp_path, process_factory=lambda *a, **k: _Process(7)) == 7
     assert capsys.readouterr().out.splitlines()[0] == (
-        'CAFE_DRIVER_DIRECTIVE {"schema_version":1,"mode":"unattended",'
+        'CAFE_MANAGER_DIRECTIVE {"schema_version":1,"mode":"unattended",'
         '"action":"launch_failed","worker":"background","next_wake":["user_input"],'
         '"exit_code":7}'
     )
@@ -467,8 +470,9 @@ def test_launch_failure_and_durable_user_boundary_have_stable_directives(
         == 0
     )
     assert capsys.readouterr().out.splitlines()[0] == (
-        'CAFE_DRIVER_DIRECTIVE {"schema_version":1,"mode":"unattended",'
-        '"action":"await_user","worker":"none","next_wake":["user_input"]}'
+        'CAFE_MANAGER_DIRECTIVE {"schema_version":1,"mode":"unattended",'
+        '"action":"await_user","worker":"none","next_wake":["user_input"],'
+        '"conversation_locale":{"value":"en-US","source":"fallback"}}'
     )
 
 
@@ -483,7 +487,7 @@ def test_attached_directive_is_flushed_before_wait(tmp_path: Path, monkeypatch) 
 
     class WaitingProcess(_Process):
         def wait(self) -> int:
-            assert printed[0][0][0].startswith("CAFE_DRIVER_DIRECTIVE ")
+            assert printed[0][0][0].startswith("CAFE_MANAGER_DIRECTIVE ")
             assert printed[0][1].get("flush") is True
             return 0
 
@@ -561,6 +565,268 @@ def test_explicit_alignment_input_requires_durable_driver_authority(
     )
 
 
+def test_explicit_user_handoff_launches_only_from_a_user_owned_boundary(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = _module()
+    issue_dir = _prepared(tmp_path, step="user")
+    state_path = issue_dir / "blackboard.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["handoff_contract"] = {
+        "version": 1,
+        "from_step": "develop",
+        "to_owner": "user",
+        "to_step": "user",
+        "intent": "need_clarification",
+    }
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    _install_contract_stubs(monkeypatch, module, _contract("event-driven", tmp_path))
+    payload = json.dumps(
+        {
+            "type": "user_handoff",
+            "workflow_id": "workflow-498",
+            "human_task_id": "task-498",
+            "target": "develop",
+            "input": "Apply the confirmed correction.",
+            "request_id": "test-user-handoff-498",
+        }
+    )
+    launched: list[list[str]] = []
+
+    assert (
+        module.run(
+            _args("event-driven", "--user-handoff", payload),
+            cwd=tmp_path,
+            process_factory=lambda argv, **kwargs: launched.append(argv) or _Process(),
+        )
+        == 0
+    )
+    assert launched[0][-4:] == ["--on-workflow-event", CALLBACK_ID, "--user-input", json.dumps(json.loads(payload), separators=(",", ":"))]
+    assert "--start-step" not in launched[0]
+
+    state["current_step"] = "develop"
+    state["handoff_contract"] = {"to_owner": "agent", "to_step": "develop", "intent": "await_agent"}
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    assert (
+        module.run(
+            _args("event-driven", "--user-handoff", payload),
+            cwd=tmp_path,
+            process_factory=lambda *args, **kwargs: pytest.fail("worker must not launch"),
+        )
+        == 2
+    )
+
+
+def test_explicit_user_handoff_controller_failure_is_not_reported_as_yield(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    module = _module()
+    issue_dir = _prepared(tmp_path, step="user")
+    state_path = issue_dir / "blackboard.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["handoff_contract"] = {
+        "version": 1,
+        "from_step": "develop",
+        "to_owner": "user",
+        "to_step": "user",
+        "intent": "need_clarification",
+    }
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    _install_contract_stubs(monkeypatch, module, _contract("event-driven", tmp_path))
+    payload = json.dumps(
+        {
+            "type": "user_handoff",
+            "workflow_id": "workflow-498",
+            "human_task_id": "task-498",
+            "target": "develop",
+            "input": "Rejected by the authoritative CLI.",
+            "request_id": "test-user-handoff-failure",
+        }
+    )
+
+    assert (
+        module.run(
+            _args("event-driven", "--user-handoff", payload),
+            cwd=tmp_path,
+            process_factory=lambda *args, **kwargs: _Process(1),
+        )
+        == 1
+    )
+    directive = capsys.readouterr().out.splitlines()[0]
+    assert '"action":"launch_failed"' in directive
+    assert '"action":"yield"' not in directive
+
+
+def test_explicit_user_input_launches_only_from_a_user_owned_boundary(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = _module()
+    issue_dir = _prepared(tmp_path, step="user")
+    state_path = issue_dir / "blackboard.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["handoff_contract"] = {
+        "version": 1,
+        "from_step": "closeout",
+        "to_owner": "user",
+        "to_step": "user",
+        "intent": "need_clarification",
+    }
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    _install_contract_stubs(monkeypatch, module, _contract("event-driven", tmp_path))
+    launched: list[list[str]] = []
+
+    assert (
+        module.run(
+            _args("event-driven", "--user-input", "1"),
+            cwd=tmp_path,
+            process_factory=lambda argv, **kwargs: launched.append(argv) or _Process(),
+        )
+        == 0
+    )
+    assert launched[0][-4:] == ["--on-workflow-event", CALLBACK_ID, "--user-input", "1"]
+    assert "--start-step" not in launched[0]
+
+    state["current_step"] = "closeout"
+    state["handoff_contract"] = {
+        "to_owner": "agent",
+        "to_step": "closeout",
+        "intent": "await_agent",
+    }
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    assert (
+        module.run(
+            _args("event-driven", "--user-input", "1"),
+            cwd=tmp_path,
+            process_factory=lambda *args, **kwargs: pytest.fail("worker must not launch"),
+        )
+        == 2
+    )
+
+
+def test_explicit_user_input_rejects_empty_or_combined_continuations(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = _module()
+    _prepared(tmp_path, step="user")
+    _install_contract_stubs(monkeypatch, module, _contract("unattended", tmp_path))
+
+    assert (
+        module.run(
+            _args("unattended", "--user-input", "   "),
+            cwd=tmp_path,
+            process_factory=lambda *args, **kwargs: pytest.fail("worker must not launch"),
+        )
+        == 2
+    )
+    assert (
+        module.run(
+            _args(
+                "unattended",
+                "--user-input",
+                "continue",
+                "--user-handoff",
+                '{"type":"user_handoff"}',
+            ),
+            cwd=tmp_path,
+            process_factory=lambda *args, **kwargs: pytest.fail("worker must not launch"),
+        )
+        == 2
+    )
+
+
+def test_legacy_driver_alignment_decision_resumes_the_confirmed_workflow(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from cafe import driver
+    from cafe.core.packet_io import canonical_json
+    from cafe.driver._schema import build_initial_contract
+    from tests.fixtures.delivery_contract import delivery_contract
+
+    module = _module()
+    issue_dir = _prepared(tmp_path, step="user")
+    state_path = issue_dir / "blackboard.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["handoff_contract"] = {
+        "version": 1,
+        "from_step": "develop",
+        "to_owner": "user",
+        "to_step": "user",
+        "intent": "alignment_checkpoint",
+    }
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    request_dir = issue_dir / "develop/iteration_001"
+    request_dir.mkdir(parents=True)
+    (request_dir / "alignment_request.json").write_text(
+        json.dumps({"allowed_decisions": ["approve"]}), encoding="utf-8"
+    )
+    driver_dir = issue_dir / "driver"
+    driver_dir.mkdir()
+    legacy_proposal = {
+        "delivery_contract": delivery_contract(),
+        "locales": {"conversation": {"value": "en", "source": "playbook"}},
+        "confirmation_contract": {
+            "user_required": [],
+            "driver_confirmable": [],
+            "mandatory_human_stops": [],
+        },
+        "reactive_user_handoffs": {
+            "need_clarification": "user_required",
+            "need_permission": "user_required",
+            "alignment_checkpoint": "driver_resolvable_when_clear",
+        },
+        "phases": [{"name": "develop", "chain": [{"cli": "codex", "model": "exact"}]}],
+        "proactive_review": {"phase_decisions": [{"phase": "develop", "decision": "not_required"}]},
+        "driver": {"mode": "unattended"},
+        "checkout": {"kind": "worktree", "path": str(tmp_path)},
+    }
+    legacy_contract = build_initial_contract(
+        proposal=legacy_proposal,
+        issue_name="issue498",
+        workflow_id="workflow-498",
+        confirmed_by="user",
+        confirmed_at="2026-09-28T00:00:00+00:00",
+    )
+    contract_path = driver_dir / "contract.json"
+    contract_path.write_bytes(canonical_json(legacy_contract))
+    persisted_before = contract_path.read_bytes()
+    loaded_contract, digest = driver._store.load_contract(
+        issue_dir, issue_name="issue498", workflow_id="workflow-498"
+    )
+    assert loaded_contract == legacy_contract
+    monkeypatch.setattr(
+        driver,
+        "evaluate_driver_entry",
+        lambda _request: SimpleNamespace(
+            freshness=module.Freshness.SAME_SEMANTICS, contract_sha256=digest
+        ),
+    )
+    payload = '{"decision":"approve","reason":"Within confirmed mandate."}'
+    launched: list[list[str]] = []
+
+    assert (
+        module.run(
+            _args("unattended", "--alignment-input", payload),
+            cwd=tmp_path,
+            process_factory=lambda argv, **kwargs: launched.append(argv) or _Process(),
+        )
+        == 0
+    )
+    assert launched and launched[0][-2:] == ["--user-input", payload]
+    assert contract_path.read_bytes() == persisted_before
+    assert not (issue_dir / "manager" / "contract.json").exists()
+
+    legacy_contract["reactive_user_handoffs"]["alignment_checkpoint"] = "unknown_policy"
+    monkeypatch.setattr(driver._store, "load_contract", lambda *args, **kwargs: (legacy_contract, digest))
+    assert (
+        module.run(
+            _args("unattended", "--alignment-input", payload),
+            cwd=tmp_path,
+            process_factory=lambda *args, **kwargs: pytest.fail("invalid legacy policy must not launch"),
+        )
+        == 2
+    )
+
+
 def test_rebuilt_fresh_facts_are_required_before_launch(tmp_path: Path) -> None:
     module = _module()
 
@@ -595,7 +861,7 @@ def test_freshness_mismatch_fails_before_worker_creation(
             contract_sha256="digest",
         )
 
-    monkeypatch.setattr(module, "evaluate_driver_entry", evaluate)
+    monkeypatch.setattr(module, "evaluate_manager_entry", evaluate)
 
     result = module.run(
         _args(mode),
@@ -606,3 +872,71 @@ def test_freshness_mismatch_fails_before_worker_creation(
     assert result == 2
     assert seen_facts == [FRESH_FACTS]
     assert '"action":"launch_failed"' in capsys.readouterr().out
+
+
+def test_the_directive_reports_the_stored_workflow_language_on_resume(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """Resuming reads the stored value; it never re-resolves the language."""
+    module = _module()
+    issue_dir = _prepared(tmp_path)
+    state = json.loads((issue_dir / "blackboard.json").read_text(encoding="utf-8"))
+    state["conversation_locale"] = "zh-TW"
+    state["conversation_locale_source"] = "inferred"
+    (issue_dir / "blackboard.json").write_text(json.dumps(state), encoding="utf-8")
+    _install_contract_stubs(monkeypatch, module, _contract("unattended", tmp_path))
+
+    assert (
+        module.run(
+            _args("unattended"),
+            cwd=tmp_path,
+            process_factory=lambda *a, **k: _Process(0),
+        )
+        == 0
+    )
+
+    directive = json.loads(
+        capsys.readouterr().out.splitlines()[0].removeprefix("CAFE_MANAGER_DIRECTIVE ")
+    )
+    assert directive["conversation_locale"] == {"value": "zh-TW", "source": "inferred"}
+    unchanged = json.loads((issue_dir / "blackboard.json").read_text(encoding="utf-8"))
+    assert unchanged["conversation_locale"] == "zh-TW"
+    assert unchanged["conversation_locale_source"] == "inferred"
+
+
+def test_the_directive_matches_a_legacy_contract_snapshot_on_resume(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """An old workflow keeps the same English fallback in both Manager consumers."""
+    module = _module()
+    issue_dir = _prepared(tmp_path)
+    from conversation_locale_adapter import contract_locale_snapshot
+
+    contract = _contract("unattended", tmp_path)
+    contract["locales"] = {
+        "conversation": contract_locale_snapshot(
+            issue_dir,
+            playbook_id="direct",
+            playbook_locale="ja-JP",
+            declared_value="zh-TW",
+            declared_source="inferred",
+        )
+    }
+    _install_contract_stubs(monkeypatch, module, contract)
+    before = (issue_dir / "blackboard.json").read_bytes()
+
+    assert (
+        module.run(
+            _args("unattended"),
+            cwd=tmp_path,
+            process_factory=lambda *a, **k: _Process(0),
+        )
+        == 0
+    )
+
+    directive = json.loads(
+        capsys.readouterr().out.splitlines()[0].removeprefix("CAFE_MANAGER_DIRECTIVE ")
+    )
+    assert directive["conversation_locale"] == contract["locales"]["conversation"]
+    assert directive["conversation_locale"] == {"value": "en-US", "source": "fallback"}
+    assert (issue_dir / "blackboard.json").read_bytes() == before

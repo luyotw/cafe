@@ -3882,7 +3882,16 @@ def test_runtime_notifies_human_owned_creation_for_builtin_and_project_playbooks
         decisions=(HumanTaskDecision(id="accept", label="Accept"),),
     )
     binding = HumanTaskBinding(trigger="initial", task_id="approval", outcomes={"accept": "done"})
-    monkeypatch.setattr(runtime_mod, "resolve_step_human_task", lambda **_kwargs: (policy, binding))
+    owner = tmp_path / ".cafe" / "skills" / "phase"
+    owner.mkdir(parents=True)
+    metadata = {
+        "name": "phase", "description": "Human approval producer",
+        "workflow": {"human_tasks": [policy.model_dump(mode="json")]},
+    }
+    (owner / "SKILL.md").write_text(
+        "---\n" + yaml.safe_dump(metadata) + "---\n# Human approval\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(runtime_mod, "load_capability_registry", lambda _dirs: {"registered": True})
     monkeypatch.setattr(runtime_mod, "default_capability_definition_dirs", lambda _root: [])
     calls: list[dict[str, object]] = []

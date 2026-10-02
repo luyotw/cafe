@@ -123,7 +123,7 @@ For work that does not start from GitHub:
 Use CAFE to add CSV export to this project. Preserve the existing public API.
 ```
 
-The `use-cafe-workflow` driver will inspect the repository and propose a
+The `use-cafe-workflow` manager will inspect the repository and propose a
 kickoff contract before it mutates the project or starts the first phase. The
 proposal includes:
 
@@ -134,7 +134,7 @@ proposal includes:
 - the primary and fallback CLI/model chain for each agent phase;
 - whether the issue should use a worktree.
 
-Confirm or revise that contract once. The driver then prepares the issue and
+Confirm or revise that contract once. The manager then prepares the issue and
 executes one phase at a time. After every completed phase it inspects the
 result and follows the persisted handoff. It changes a future phase model only
 when you explicitly request it. It stops when a decision still belongs to you.
@@ -232,7 +232,7 @@ planned confirmation gates, simulate every route, and fix any unexplained
 warning before we use it.
 ```
 
-You can then ask the driver to use that playbook by name:
+You can then ask the manager to use that playbook by name:
 
 ```text
 Use CAFE with the research-publication playbook for this brief.
@@ -360,7 +360,7 @@ and a completed workflow is explicitly labeled. Missing or conflicting records
 are reported as unknown rather than guessed. Status inspection does not resume
 work, complete tasks, or repair records.
 
-Ask the driver for the information or recovery outcome you need:
+Ask the manager for the information or recovery outcome you need:
 
 ```text
 Show the current workflow timeline, owner, latest phase output, and anything
@@ -382,7 +382,7 @@ in user-facing terms.
 ```
 
 Resetting workflow iterations does not revert Git changes. Restoring archived
-issues and deleting workflow state are also explicit operations; the driver
+issues and deleting workflow state are also explicit operations; the manager
 should show the exact scope before acting.
 
 Do not manually edit the blackboard or handoff files during ordinary recovery.
@@ -427,7 +427,7 @@ Versioning policy, while roadmap stages describe product direction independently
 - [Roadmap](docs/roadmap.md)
 - [Versioning policy](docs/versioning.md)
 - [Changelog](CHANGELOG.md)
-- [Latest release notes](docs/releases/v0.5.1.md)
+- [Latest release notes](docs/releases/v0.6.0.md)
 - [Strategic positioning](docs/positioning.md)
 
 ## Contributing

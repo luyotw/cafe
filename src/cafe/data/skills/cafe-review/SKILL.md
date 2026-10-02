@@ -1,8 +1,14 @@
 ---
 name: cafe-review
 description: "Review code quality, behavior, and risk"
-version: 1.13.0
+version: 1.14.0
 workflow:
+  notification:
+    step_label:
+      message_key: notification.step_labels.review
+    task_labels:
+      clarification-feedback:
+        message_key: notification.action_labels.clarification_feedback
   execution_profile:
     workload: review
     reasoning: high
@@ -11,15 +17,21 @@ workflow:
   human_tasks:
     - id: clarification-feedback
       pattern: revision_feedback
-      prompt: Provide the clarification needed to continue the review.
+      prompt: {message_key: human_task.cafe_review.clarification_feedback.prompt}
+      prompt_locales:
+        zh-TW: {message_key: human_task.cafe_review.clarification_feedback.prompt}
       input_schema: feedback
     - id: iteration-limit
       pattern: confirm_output
-      prompt: The workflow reached its configured iteration limit. Increase the issue's limit if another review is authorized, then resume this phase.
+      prompt: {message_key: human_task.cafe_review.iteration_limit.prompt}
+      prompt_locales:
+        zh-TW: {message_key: human_task.cafe_review.iteration_limit.prompt}
       input_schema: decision
       decisions:
         - id: resume
-          label: Resume after increasing the iteration limit
+          label: {message_key: human_task.cafe_review.iteration_limit.decisions.resume.label}
+          label_locales:
+            zh-TW: {message_key: human_task.cafe_review.iteration_limit.decisions.resume.label}
   prompt_inputs:
     - artifacts: [spec]
       placeholder: spec_file

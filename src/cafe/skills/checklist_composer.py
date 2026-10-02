@@ -163,6 +163,7 @@ def compose_declared_checklist(
         feedback=feedback,
     )
     parts: list[str] = []
+    literal_parts: set[int] = set()
     for section in variant.sections:
         if section.reference:
             parts.append(_load_skill_checklist_reference(skill_name, section.reference))
@@ -191,7 +192,9 @@ def compose_declared_checklist(
                 )
             except (OSError, TodoContractError) as exc:
                 raise ValueError(f"Cannot project authoritative Todo List: {exc}") from exc
-            parts.extend(item.checklist_row() for item in items)
+            # Authoritative artifact text is data, not a skill template.
+            literal_parts.add(len(parts))
+            parts.append("\n".join(item.checklist_row() for item in items))
 
     role_dirs = {
         "pm": "pm",
@@ -227,9 +230,13 @@ def compose_declared_checklist(
             f"{skill_name}: {', '.join(sorted(overlap))}"
         )
     placeholders.update(reference_context)
+    unresolved_names: set[str] = set()
+    for index, part in enumerate(parts):
+        if index not in literal_parts:
+            parts[index] = resolve_checklist_placeholders(part, placeholders)
+            unresolved_names.update(_PLACEHOLDER_PATTERN.findall(parts[index]))
     content = "\n".join(part for part in parts if part)
-    content = resolve_checklist_placeholders(content, placeholders)
-    unresolved = sorted(set(_PLACEHOLDER_PATTERN.findall(content)))
+    unresolved = sorted(unresolved_names)
     if unresolved:
         raise ValueError(
             f"Unresolved checklist placeholders for {skill_name}: {', '.join(unresolved)}"
@@ -313,7 +320,7 @@ def generate_spec_checklist(
     if iteration >= 4:
         iteration_note = _load_skill_checklist_reference(
             "spec",
-            "important_notes_iteration_4_plus.md",
+            "important_notes_iteration_4_plus_composed.md",
         )
 
     template_instruction = ""
@@ -339,14 +346,20 @@ def generate_spec_checklist(
                 "[ ] Follow template structure when writing analysis results\n"
             )
 
-    dod_instruction = _load_skill_checklist_reference("spec", "dod_instruction.md")
     basic_principles_checklist = ""
     if basic_principles:
         basic_principles_checklist = convert_to_checklist(basic_principles, "Basic Principles")
 
-    checklist_content = (
-        f"{execution_steps}\n{template_instruction}{basic_principles_checklist}\n"
-        f"{iteration_note}{dod_instruction}\n{agent_guidelines}"
+    checklist_content = "\n".join(
+        part
+        for part in (
+            execution_steps,
+            template_instruction,
+            basic_principles_checklist,
+            iteration_note,
+            agent_guidelines,
+        )
+        if part
     )
 
     placeholders = {
@@ -775,6 +788,21 @@ def compose_effective_checklist(
         parts = []
         gates = []
         projections = []
+        # Only phases with no checklist source may author their own items.
+        # Empty declared/legacy templates and inactive overlays are still policy.
+        legacy_references = ["execution_steps_normal.md"]
+        if feedback:
+            legacy_references.append("execution_steps_correction.md")
+        agent_owned = (
+            primary_contract.checklist is None
+            and not any(
+                item.declaration.checklist_overlay is not None for item in composition.contributors
+            )
+            and not any(
+                (primary.source.skill_root / "references" / name).exists()
+                for name in legacy_references
+            )
+        )
 
         def append(content, source, identity):
             if not content:
@@ -910,14 +938,17 @@ def compose_effective_checklist(
                         }
                     )
                     identity = [identity, projections[-1]]
-                content = resolve_checklist_placeholders(content, local)
-                unresolved = sorted(set(_PLACEHOLDER_PATTERN.findall(content)))
-                if unresolved:
-                    raise ValueError(
-                        f"Step {composition.step_name!r}, skill {source!r}"
-                        f", {location}.sections[{section_index}]: unresolved placeholders "
-                        f"{unresolved}"
-                    )
+                if section.todo_projection is None:
+                    # Projected Todo rows must retain their original text and
+                    # fingerprint, even when braces match a context variable.
+                    content = resolve_checklist_placeholders(content, local)
+                    unresolved = sorted(set(_PLACEHOLDER_PATTERN.findall(content)))
+                    if unresolved:
+                        raise ValueError(
+                            f"Step {composition.step_name!r}, skill {source!r}"
+                            f", {location}.sections[{section_index}]: unresolved placeholders "
+                            f"{unresolved}"
+                        )
                 append(content, source, identity)
         if include_guidance and guidance:
             compact = (
@@ -936,21 +967,15 @@ def compose_effective_checklist(
                 [str(primary.source.skill_root), "role_guidance", agent_file],
             )
         content = "\n".join(part for part in parts if part)
-        if not content and primary_contract.checklist is None and not has_overlays:
+        if agent_owned:
             from cafe.utils.checklist_utils import _read_existing_regular_file
 
+            # Retain working notes across retries without promoting their item
+            # count to an immutable, runtime-declared checklist contract.
             content = _read_existing_regular_file(checklist_file_path) or ""
-            for occurrence, (_, block, _) in enumerate(_checklist_item_blocks(content)):
-                gates.append(
-                    ChecklistGate(
-                        checklist_digest(
-                            [str(primary.source.skill_root), "legacy", occurrence, block]
-                        ),
-                        primary.source.skill_identity,
-                        block,
-                    )
-                )
-        result = ChecklistMaterialization(content, tuple(gates), tuple(projections), has_overlays)
+        result = ChecklistMaterialization(
+            content, tuple(gates), tuple(projections), has_overlays, agent_owned
+        )
         result.to_dict()  # Enforce persistence bounds before publishing either file.
         from cafe.utils.checklist_utils import publish_materialized_checklist
 

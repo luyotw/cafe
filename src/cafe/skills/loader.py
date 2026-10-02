@@ -15,10 +15,24 @@ from cafe.catalogs.resolver import (
     CatalogResolver,
     global_catalog_lock,
 )
+from cafe.core.runtime_locales import owner_catalog_renderer
 from cafe.skills.contracts import SkillWorkflowDeclaration
 from cafe.skills.exceptions import SkillDiscoveryError
 
 _logger = logging.getLogger(__name__)
+
+
+def workflow_locale_context(
+    skill_root: Path, *, resolve_presentation: bool
+) -> dict[str, object]:
+    """Give one declaration operation its own lazy owner-local renderer."""
+    root = skill_root.resolve() / "locales"
+    return {
+        "locale_catalog_root": root,
+        "resolve_presentation": resolve_presentation,
+        "render_locale_text": owner_catalog_renderer(root),
+    }
+
 
 # Deprecated skill names that resolve to a newer skill. Issued for backward
 # compatibility with user playbooks / presets that still reference the old
@@ -111,6 +125,7 @@ class SkillLoader:
         project_root: Optional[Path] = None,
         global_root: Optional[Path] = None,
         builtin_root: Optional[Path] = None,
+        resolve_presentation: bool = True,
     ) -> None:
         self.resolver = CatalogResolver(
             project_root=project_root,
@@ -120,6 +135,7 @@ class SkillLoader:
         self.project_root = self.resolver.project_root
         self.global_root = self.resolver.global_root
         self.builtin_root = self.resolver.builtin_root
+        self.resolve_presentation = resolve_presentation
         self._catalog: Dict[str, SkillCatalogEntry] = {}
 
     @staticmethod
@@ -261,13 +277,17 @@ class SkillLoader:
             metadata = self._read_skill_frontmatter(entry.directory / "SKILL.md")
             return entry, metadata.get("workflow", {})
 
-    @staticmethod
     def parse_workflow_declaration(
-        entry: SkillCatalogEntry, raw_declaration: object
+        self, entry: SkillCatalogEntry, raw_declaration: object
     ) -> SkillWorkflowDeclaration:
         """Preserve the compatibility error used by direct and primary loading."""
         try:
-            return SkillWorkflowDeclaration.model_validate(raw_declaration)
+            return SkillWorkflowDeclaration.model_validate(
+                raw_declaration,
+                context=workflow_locale_context(
+                    entry.directory, resolve_presentation=self.resolve_presentation
+                ),
+            )
         except Exception as exc:
             raise ValueError(
                 f"Invalid workflow declaration for skill {entry.directory.name}: {exc}"

@@ -1,8 +1,12 @@
 ---
 name: cafe-incident_mitigate
 description: Mitigate and recover from an operational incident
-version: 1.1.0
+version: 1.2.0
 workflow:
+  notification:
+    task_labels:
+      clarification-feedback:
+        message_key: notification.action_labels.clarification_feedback
   execution_profile:
     workload: operations
     reasoning: high
@@ -11,7 +15,9 @@ workflow:
   human_tasks:
     - id: clarification-feedback
       pattern: revision_feedback
-      prompt: Provide the incident details needed to continue mitigation.
+      prompt: {message_key: human_task.cafe_incident_mitigate.clarification_feedback.prompt}
+      prompt_locales:
+        zh-TW: {message_key: human_task.cafe_incident_mitigate.clarification_feedback.prompt}
       input_schema: feedback
   prompt_inputs:
     - artifacts: [incident_recovery, causal_todo]

@@ -1,0 +1,5 @@
+human_task.cafe_brief_first.editorial_clarification.prompt: 回覆編輯相關的釐清問題。
+human_task.cafe_brief_first.editorial_clarification.questions.audience.prompt: 目標讀者是誰？
+human_task.cafe_brief_first.editorial_output_review.decisions.approve.label: 核可綱要
+human_task.cafe_brief_first.editorial_output_review.decisions.revise.label: 要求修訂綱要
+human_task.cafe_brief_first.editorial_output_review.prompt: 核可編輯綱要，或要求修訂。

@@ -29,6 +29,7 @@ from pydantic import (
 )
 
 from cafe.core.execution_boundary import redact
+from cafe.core.human_task_notifications import NotificationPresentation
 from cafe.utils.github import GitHubOps
 
 CAPABILITY_PR_PUBLISH_ID = "cafe.pr.publish"
@@ -117,7 +118,7 @@ class CapabilitySetupChoice(StrictCapabilityModel):
 
 
 class CapabilitySetupQuestion(StrictCapabilityModel):
-    """Presentation metadata, not an execution approval or Driver policy."""
+    """Presentation metadata, not an execution approval or role-specific policy."""
 
     setting: str = Field(pattern=r"^[a-z][a-z0-9_-]*\.[a-z][a-z0-9_-]*$")
     prompt: str = Field(min_length=1)
@@ -1177,8 +1178,10 @@ def _notify_slack_human_task_adapter(
     manifest: CapabilityManifest,
     output_file: Path,
     timeout_sec: float,
+    notification_presentation: NotificationPresentation | None = None,
 ) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
     """Deliver one package-owned HumanTask notification without exposing credentials."""
+    from cafe.core.conversation_locale import DEFAULT_CONVERSATION_LOCALE
     from cafe.core.human_task_notifications import (
         SlackNotificationError,
         build_human_task_message,
@@ -1194,6 +1197,8 @@ def _notify_slack_human_task_adapter(
         task_id=str(request.args["task_id"]),
         step=str(request.args["step"]),
         task_type=str(request.args["task_type"]),
+        locale=str(request.args.get("conversation_locale") or DEFAULT_CONVERSATION_LOCALE),
+        presentation=notification_presentation,
     )
     try:
         webhook_url = load_slack_webhook_url(repository_root=repo_root)
@@ -1223,6 +1228,7 @@ def run_capability_request(
     output_file: Path,
     timeout_sec: float = 600.0,
     trusted_human_task_notification: bool = False,
+    notification_presentation: NotificationPresentation | None = None,
 ) -> PrPublishRun:
     """Evaluate and dispatch one request through the host-owned adapter allow-list.
 
@@ -1306,6 +1312,9 @@ def run_capability_request(
         output_file=output_file,
         timeout_sec=timeout_sec,
         correlation_id=correlation_id,
+        notification_presentation=(
+            notification_presentation if cap_id == CAPABILITY_SLACK_HUMAN_TASK_ID else None
+        ),
     )
 
 
@@ -1316,6 +1325,7 @@ def dispatch_revalidated_capability_request(
     output_file: Path,
     timeout_sec: float = 600.0,
     correlation_id: Optional[str] = None,
+    notification_presentation: NotificationPresentation | None = None,
 ) -> PrPublishRun:
     """Dispatch one exact evaluation after its caller has established authorization."""
     correlation_id = correlation_id or uuid.uuid4().hex[:20]
@@ -1347,12 +1357,17 @@ def dispatch_revalidated_capability_request(
         )
 
     try:
+        presentation_args = (
+            {"notification_presentation": notification_presentation}
+            if manifest.implementation == "notify_slack_human_task" else {}
+        )
         outputs, event = adapter(
             repo_root=repo_root,
             request=request,
             manifest=manifest,
             output_file=output_file,
             timeout_sec=timeout_sec,
+            **presentation_args,
         )
     except CapabilityExecutionError as exc:
         receipt = _audited_receipt(

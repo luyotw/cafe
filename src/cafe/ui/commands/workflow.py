@@ -18,17 +18,12 @@ from cafe.core.blackboard import (
     HandoffOwner,
     is_genuine_cold_start,
 )
-from cafe.workflow_execution.worker_launch import FixedWorkerLauncher, WorkerLaunchStore
-from cafe.workflow_execution.event_callback import (
-    ResolvedWorkflowEventCallback,
-    dispatch_workflow_event_callback,
-    resolve_builtin_workflow_event_callback,
-)
+from cafe.core.conversation_locale import ConversationLocaleError, supplied_locale_from_inputs
+from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.issue_resolution import ActiveIssueResolutionError, resolve_active_issue
 from cafe.core.phase_state_mixin import next_runnable_iteration_number
 from cafe.core.playbook import resolve_step_behavior
 from cafe.core.types import CriticalPhaseError
-from cafe.workflow_execution.workflow_hosting import WorkflowHost
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.phases.generic_phase import GenericPhase
@@ -47,9 +42,17 @@ from cafe.ui.cli_shared import (
 )
 from cafe.ui.human_tasks import (
     apply_durable_human_task_payload_if_present,
+    apply_explicit_user_handoff_if_present,
     apply_human_task_payload,
 )
 from cafe.utils.config import ConfigError, validate_directories_exist
+from cafe.workflow_execution.event_callback import (
+    ResolvedWorkflowEventCallback,
+    dispatch_workflow_event_callback,
+    resolve_builtin_workflow_event_callback,
+)
+from cafe.workflow_execution.worker_launch import FixedWorkerLauncher, WorkerLaunchStore
+from cafe.workflow_execution.workflow_hosting import WorkflowHost
 
 
 # Lazy access to GitOperations via cli for backward-compat test patching.
@@ -185,6 +188,19 @@ def _resolve_initial_step_user_inputs(
     if user_input and resume_current_step in {"user", "done"}:
         return None, user_input
     return _build_initial_step_user_inputs(playbook_data, user_input), None
+
+
+def _declares_human_task_for_trigger(step_def: Any, trigger: str) -> bool:
+    """Return whether a user handoff must be resolved through a declared task."""
+    if not isinstance(step_def, dict):
+        return False
+    bindings = step_def.get("human_tasks")
+    if not isinstance(bindings, (list, tuple)):
+        return False
+    return any(
+        isinstance(binding, dict) and binding.get("trigger") == trigger
+        for binding in bindings
+    )
 
 
 def _persist_background_step_user_inputs(
@@ -629,9 +645,55 @@ def workflow(
         "--add-dir",
         help="Additional allowed directories (can be specified multiple times)",
     ),
+    conversation_locale: Optional[str] = typer.Option(
+        None,
+        "--conversation-locale",
+        help=(
+            "Conversation language for a workflow being created; "
+            "requires --conversation-locale-source"
+        ),
+    ),
+    conversation_locale_source: Optional[str] = typer.Option(
+        None,
+        "--conversation-locale-source",
+        help="Tier that supplied the conversation language: explicit or inferred",
+    ),
+    set_conversation_locale: Optional[str] = typer.Option(
+        None,
+        "--set-conversation-locale",
+        help=(
+            "Deliberately change an existing workflow's conversation language; "
+            "requires --conversation-locale-source"
+        ),
+    ),
 ) -> None:
     """Run playbook workflow using the new generic runner."""
     user_input = _normalize_cli_user_input(user_input)
+    # Validation happens before any state is touched so a rejected locale input
+    # leaves no partial workflow behind.
+    start_locale_value = _normalize_cli_user_input(conversation_locale)
+    change_locale_value = _normalize_cli_user_input(set_conversation_locale)
+    locale_source_value = _normalize_cli_user_input(conversation_locale_source)
+    supplied_locale = None
+    requested_locale_change = None
+    if start_locale_value is not None and change_locale_value is not None:
+        console.print(
+            "[red]Error: --conversation-locale and --set-conversation-locale "
+            "cannot be combined[/red]"
+        )
+        raise typer.Exit(1)
+    try:
+        if change_locale_value is not None:
+            requested_locale_change = supplied_locale_from_inputs(
+                value=change_locale_value, source=locale_source_value
+            )
+        else:
+            supplied_locale = supplied_locale_from_inputs(
+                value=start_locale_value, source=locale_source_value
+            )
+    except ConversationLocaleError as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(1)
     single_step = single_step if isinstance(single_step, bool) else False
     background = background if isinstance(background, bool) else False
     mute_agent_output = mute_agent_output if isinstance(mute_agent_output, bool) else False
@@ -685,7 +747,12 @@ def workflow(
             console.print(f"[red]Error: {e}[/red]")
             raise typer.Exit(1)
 
-        playbook_loader = PlaybookLoader()
+        # Saved tasks retain their presentation across owner resource updates.
+        # Resume still validates live machine declarations; new phase consumers
+        # resolve and validate their own current copy when materialized.
+        playbook_loader = PlaybookLoader(
+            resolve_presentation=not HumanTaskRecordStore(issue_dir).exists
+        )
         playbook_data = playbook_loader.load(selected_playbook)
         playbook_data = apply_issue_playbook_overrides(
             playbook_data,
@@ -762,10 +829,17 @@ def workflow(
         entry_point = str(
             playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))
         )
-        resume_blackboard = BlackboardStore(issue_dir).load_or_create(
+        resume_store = BlackboardStore(issue_dir)
+        resume_blackboard = resume_store.load_or_create(
             entry_point,
             playbook_id=str(playbook_data["playbook"]["id"]),
+            supplied_locale=supplied_locale,
+            playbook_conversation_locale=playbook_data["playbook"].get("conversation_locale"),
         )
+        if requested_locale_change is not None:
+            # A deliberate language change is its own operation on the owning
+            # state; it is never a side effect of resuming.
+            resume_store.set_conversation_locale(resume_blackboard, requested_locale_change)
         if (
             background
             and user_input is not None
@@ -892,9 +966,12 @@ def workflow(
             ):
                 raise ValueError(f"Unknown playbook step '{pending_start_step}'")
 
-            blackboard = BlackboardStore(issue_dir).load_or_create(
+            blackboard_store = BlackboardStore(issue_dir)
+            blackboard = blackboard_store.load_or_create(
                 str(playbook_data.get("entry_point") or next(iter(playbook_data["steps"].keys()))),
                 playbook_id=str(playbook_data["playbook"]["id"]),
+                supplied_locale=supplied_locale,
+                playbook_conversation_locale=playbook_data["playbook"].get("conversation_locale"),
             )
 
             active_step = pending_start_step or blackboard.current_step
@@ -980,7 +1057,7 @@ def workflow(
                 # below so the durable terminal callback follows the same path
                 # as every other workflow completion. Terminal observations are
                 # intentionally at-least-once: each authorized worker gets a new
-                # durable event identity, and the Driver must re-read state.
+                # durable event identity; the callback must re-read state.
                 if not interactive:
                     if user_input and user_input.strip():
                         step_keys = list(playbook_data.get("steps", {}).keys())
@@ -989,6 +1066,27 @@ def workflow(
                             allowed_steps=step_keys,
                         )
                         from_step = getattr(contract, "from_step", None) or blackboard.current_step
+                        explicit_handoff = apply_explicit_user_handoff_if_present(
+                            issue_dir=issue_dir,
+                            playbook_data=playbook_data,
+                            blackboard=blackboard,
+                            raw_payload=user_input,
+                            source="command",
+                        )
+                        if explicit_handoff is not None:
+                            if explicit_handoff.rejection is not None:
+                                console.print(
+                                    f"[yellow]{explicit_handoff.rejection.message}[/yellow]"
+                                )
+                                console.print(
+                                    f"[dim]{explicit_handoff.rejection.correction_guidance}[/dim]"
+                                )
+                                if background:
+                                    raise typer.Exit(1)
+                                return
+                            user_input = None
+                            pending_start_step = explicit_handoff.target
+                            continue
                         durable_result = apply_durable_human_task_payload_if_present(
                             issue_dir=issue_dir,
                             playbook_data=playbook_data,
@@ -1042,21 +1140,24 @@ def workflow(
                                     portion = cursor.get("portion")
                                     if isinstance(portion, str):
                                         owner_trigger = portion
-                        if (
+                        human_task_trigger = owner_trigger or contract.intent.value
+                        if owner_trigger is not None or (
                             contract.intent
                             in {
                                 HandoffIntent.CONFIRM_OUTPUT,
                                 HandoffIntent.NEED_CLARIFICATION,
                                 HandoffIntent.NO_CHANGES_NEEDED,
                             }
-                            or owner_trigger is not None
+                            and _declares_human_task_for_trigger(
+                                source_step_def, human_task_trigger
+                            )
                         ):
                             result = apply_human_task_payload(
                                 issue_dir=issue_dir,
                                 playbook_data=playbook_data,
                                 blackboard=blackboard,
                                 from_step=from_step,
-                                trigger=owner_trigger or contract.intent.value,
+                                trigger=human_task_trigger,
                                 raw_payload=user_input,
                                 source="command",
                             )

@@ -1,8 +1,16 @@
 ---
 name: cafe-spec
 description: "收集、整理或修訂需求規格（依 iteration 切換行為）"
-version: 1.5.0
+version: 1.7.0
 workflow:
+  notification:
+    step_label:
+      message_key: notification.step_labels.spec
+    task_labels:
+      output-review:
+        message_key: notification.action_labels.output_review
+      clarification-answers:
+        message_key: notification.action_labels.clarification_answers
   execution_profile:
     workload: requirements
     reasoning: high
@@ -11,18 +19,26 @@ workflow:
   human_tasks:
     - id: output-review
       pattern: confirm_output
-      prompt: Review the requirements specification and choose how to continue.
+      prompt: {message_key: human_task.cafe_spec.output_review.prompt}
+      prompt_locales:
+        zh-TW: {message_key: human_task.cafe_spec.output_review.prompt}
       input_schema: decision
       decisions:
         - id: confirm
-          label: Confirm and continue
+          label: {message_key: human_task.cafe_spec.output_review.decisions.confirm.label}
+          label_locales:
+            zh-TW: {message_key: human_task.cafe_spec.output_review.decisions.confirm.label}
         - id: revise
-          label: Request revision
+          label: {message_key: human_task.cafe_spec.output_review.decisions.revise.label}
+          label_locales:
+            zh-TW: {message_key: human_task.cafe_spec.output_review.decisions.revise.label}
           requires_feedback: true
           correction: true
     - id: clarification-answers
       pattern: answer_questions
-      prompt: Answer the requested clarification questions.
+      prompt: {message_key: human_task.cafe_spec.clarification_answers.prompt}
+      prompt_locales:
+        zh-TW: {message_key: human_task.cafe_spec.clarification_answers.prompt}
       input_schema: answers
       questions_from_xml: true
   checklist:
@@ -34,18 +50,15 @@ workflow:
           - reference: execution_steps_iteration_1.md
           - template_catalog: true
           - optional_checklist: basic_principles.md
-          - reference: dod_instruction_composed.md
       - when: {min_iteration: 2, max_iteration: 3}
         sections:
           - reference: execution_steps_iteration_n.md
           - optional_checklist: basic_principles.md
-          - reference: dod_instruction_composed.md
       - when: {min_iteration: 4}
         sections:
           - reference: execution_steps_iteration_n.md
           - optional_checklist: basic_principles.md
           - reference: important_notes_iteration_4_plus_composed.md
-          - reference: dod_instruction_after_notes_composed.md
     include_role_guidance: true
     compact_agent_guidance: true
   output_templates:

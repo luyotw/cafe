@@ -1,0 +1,7 @@
+human_task.cafe_spec.clarification_answers.prompt: Answer the requested clarification questions.
+human_task.cafe_spec.output_review.decisions.confirm.label: Confirm and continue
+human_task.cafe_spec.output_review.decisions.revise.label: Request revision
+human_task.cafe_spec.output_review.prompt: Review the requirements specification and choose how to continue.
+notification.step_labels.spec: Requirements
+notification.action_labels.output_review: Confirm the result
+notification.action_labels.clarification_answers: Answer the clarification questions

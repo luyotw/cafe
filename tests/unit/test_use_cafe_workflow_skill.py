@@ -8,6 +8,7 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from markdown_it import MarkdownIt
@@ -113,17 +114,17 @@ def _read_skill_resource(path: str) -> str:
     return (SKILL_ROOT / path).read_text(encoding="utf-8")
 
 
-def test_driver_defers_release_check_until_workflow_completion() -> None:
+def test_manager_defers_release_check_until_workflow_completion() -> None:
     skill = _read_skill_resource("SKILL.md")
     running = _read_skill_resource("references/running_workflow.md")
     normalized_running = " ".join(running.split())
 
     assert "references/running_workflow.md" in skill
-    assert "Driver must never execute `release-check` while a workflow is active" in running
+    assert "Manager must never execute `release-check` while a workflow is active" in running
     assert "Defer an in-workflow request until the workflow is complete" in normalized_running
 
 
-def test_driver_projects_missing_confirmed_user_context_through_declared_inputs() -> None:
+def test_manager_projects_missing_confirmed_user_context_through_declared_inputs() -> None:
     skill = _read_skill_resource("SKILL.md")
     running = _read_skill_resource("references/running_workflow.md")
     handoffs = _read_skill_resource("references/handoffs_and_alignment.md")
@@ -135,6 +136,7 @@ def test_driver_projects_missing_confirmed_user_context_through_declared_inputs(
     assert "declared schema **and semantic purpose**" in running
     assert "workflow `--user-input`" in running
     assert "current command and target step support it" in normalized
+    assert "--user-handoff" in running
     assert "Never replace a task-required answer" in normalized
     assert "use `--start-step` just to carry context" in normalized
     assert "not delivery to another iteration or step" in normalized
@@ -150,7 +152,7 @@ def _kickoff_formatter_command(
     playbook_id: str = "standard",
     pr_auto_create: bool | str | None = False,
     phase_chains: dict[str, str] | None = None,
-    driver_confirmable: tuple[str, ...] = ("spec", "plan"),
+    manager_confirmable: tuple[str, ...] = ("spec", "plan"),
     include_proactive_review_args: bool = True,
 ) -> list[str]:
     pr_args = (
@@ -167,7 +169,7 @@ def _kickoff_formatter_command(
         playbook_id,
         "--issue-name",
         "issue346",
-        "--driver-mode",
+        "--manager-mode",
         "unattended",
         *extra_args,
         *pr_args,
@@ -180,8 +182,8 @@ def _kickoff_formatter_command(
         "--repository-content-locale",
         "zh-TW",
         "--user-required",
-        "--driver-confirmable",
-        *driver_confirmable,
+        "--manager-confirmable",
+        *manager_confirmable,
         "--worktree",
         ".cafe/worktrees/issue346",
         *proactive_args,
@@ -281,11 +283,11 @@ def test_use_cafe_workflow_uses_progressive_disclosure() -> None:
         assert (SKILL_ROOT / "references" / name).is_file()
 
     assert "## Conversation Locale" not in skill
-    assert "## Driver-Owned Alignment" not in skill
+    assert "## Manager-Owned Alignment" not in skill
     assert "## Bounded Self-Diagnosis And Declarative Repair" not in skill
 
 
-def test_driver_requires_script_rendered_progress_on_every_visible_reply() -> None:
+def test_manager_requires_script_rendered_progress_on_every_visible_reply() -> None:
     skill = _read_skill_resource("SKILL.md")
     progress = _read_skill_resource("references/workflow_progress.md")
     kickoff = _read_skill_resource("references/kickoff.md")
@@ -363,7 +365,7 @@ def test_use_cafe_workflow_preflights_runtime_and_all_catalogs_before_execution(
     assert "reminder script runs only while rendering" in normalized_running
 
 
-def test_driver_update_preflight_requires_a_user_decision_before_prepare() -> None:
+def test_manager_update_preflight_requires_a_user_decision_before_prepare() -> None:
     skill = _read_skill_resource("SKILL.md")
     reference = _read_skill_resource("references/project_global_skill_sync.md")
     kickoff = _read_skill_resource("references/kickoff.md")
@@ -373,9 +375,9 @@ def test_driver_update_preflight_requires_a_user_decision_before_prepare() -> No
     normalized_running = " ".join(running.split())
 
     assert "references/project_global_skill_sync.md" in skill
-    assert "## Driver-managed runtime-update decision" in reference
+    assert "## Manager-managed runtime-update decision" in reference
     assert (
-        "Before a user-facing Driver invokes `cafe prepare --no-interactive`"
+        "Before a user-facing Manager invokes `cafe prepare --no-interactive`"
         in normalized_reference
     )
     assert "show the installed and latest versions" in normalized_reference
@@ -386,7 +388,7 @@ def test_driver_update_preflight_requires_a_user_decision_before_prepare() -> No
     assert "Detached and event callbacks must not answer" in normalized_reference
     assert "before `cafe prepare --no-interactive`" in normalized_kickoff.lower()
     assert "must never prompt" in normalized_kickoff
-    assert "Driver-managed preparation" in normalized_running
+    assert "Manager-managed preparation" in normalized_running
 
 
 def test_skill_local_catalog_sync_path_has_no_write_authority() -> None:
@@ -829,13 +831,13 @@ def test_helper_rejects_more_affected_entries_than_compared() -> None:
         module._validate_catalog(_helper_command(payload, exit_code=1))
 
 
-def test_use_cafe_workflow_skill_makes_driver_own_alignment_decisions() -> None:
+def test_use_cafe_workflow_skill_makes_manager_own_alignment_decisions() -> None:
     skill = _read_skill_resource("SKILL.md")
     reference = _read_skill_resource("references/handoffs_and_alignment.md")
     normalized = " ".join(reference.split())
 
     assert "references/handoffs_and_alignment.md" in skill
-    assert "## Driver-owned alignment" in reference
+    assert "## Manager-owned alignment" in reference
     assert "Bundled playbooks omit `alignment:` configuration" in normalized
     assert "`proposal_delta`" in reference
     assert "`strategic_ground`" in reference
@@ -855,7 +857,7 @@ def test_use_cafe_workflow_uses_structured_human_task_resume_payloads() -> None:
     normalized = " ".join(reference.split())
     normalized_running = " ".join(running.split())
 
-    assert "complete_driver_task.py" in reference
+    assert "complete_manager_task.py" in reference
     assert "--task-id <active-human-task-id>" in reference
     assert "For `answers`, account for every required field" in normalized
     assert "Use the active task's declared decision ID" in normalized
@@ -869,9 +871,12 @@ def test_use_cafe_workflow_uses_structured_human_task_resume_payloads() -> None:
 
 def test_use_cafe_workflow_skill_requires_playbook_derived_kickoff_contract() -> None:
     skill = _read_skill_resource("SKILL.md")
-    reference = _read_skill_resource("references/kickoff.md")
+    reference = (_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md"))
+    kickoff_inputs = (_read_skill_resource("references/kickoff_inputs.md") + "\n" + _read_skill_resource("references/kickoff_input_reference.md"))
     selection = _read_skill_resource("references/playbook_selection.md")
+    model_selection = _read_skill_resource("references/model_selection.md")
     normalized = " ".join(reference.split())
+    normalized_inputs = " ".join(kickoff_inputs.split())
 
     assert "references/kickoff.md" in skill
     assert "## Kickoff contract: first blocking gate" in reference
@@ -883,13 +888,13 @@ def test_use_cafe_workflow_skill_requires_playbook_derived_kickoff_contract() ->
     assert '`steps.<step>."on".confirm_output`' in reference
     assert "Do not reuse another issue's contract" in normalized
     assert "union to equal the candidates" in normalized
-    assert "driver_confirmable" in reference
+    assert "manager_confirmable" in reference
     assert "Mandatory HumanTask" in reference
     assert "never enter the kickoff partition" in normalized
     assert "reactive interruptions, not scheduled candidates" in normalized
-    assert "Alignment is a proactive driver decision" in normalized
+    assert "Alignment is a proactive manager decision" in normalized
     assert "alignment_policy:" not in reference
-    assert "Driver-owned policy" in reference
+    assert "Manager-owned policy" in reference
     assert "`repository_content_locale`" in reference
     assert "explicitly ask the user to confirm `repository_content_locale`" in normalized
     assert "do not treat inference or a playbook locale as confirmation" in normalized
@@ -901,14 +906,29 @@ def test_use_cafe_workflow_skill_requires_playbook_derived_kickoff_contract() ->
     assert "self-contained initial confirmation request" in normalized
     assert "Do not substitute a shorter hand-written recap" in normalized
     assert "Do not require rationale, assessment or preflight records" in normalized
-    assert "cafe playbook list" in selection
+    assert "references/kickoff_inputs.md" in skill
+    assert "Reuse kickoff preferences and evidence" in reference
+    assert "Have `draft` create the request and prefill it" in normalized
+    assert "through `assemble`" in normalized
+    assert "use `render` to produce the complete contract" in normalized
+    assert "draft --issue-id 123 --playbook-id standard-qa --output draft.json" in normalized_inputs
+    assert "no handwritten request JSON is needed" in normalized_inputs
+    assert "assemble --request-file draft.json --summary --draft-output updated-draft.json" in normalized_inputs
+    assert "The program writes known values into `draft.json`" in normalized_inputs
+    assert "Model suitability still requires assessment" in normalized_inputs
+    assert "an operational probe does not establish model capability" in normalized_inputs
+    assert "cafe playbook list" not in selection
+    assert "prepare_kickoff.py discover" in selection
+    assert "do not repeat list/show/read" in " ".join(selection.split())
     assert "cafe playbook show <id>" in selection
+    assert "inspect the model evidence returned by `prepare_kickoff.py discover`" in model_selection
+    assert "Manager's responsibility" in model_selection
     assert "repository instructions require an independent QA" in selection
     assert "Compare the closest alternatives internally" in " ".join(selection.split())
     assert "do not infer behavior from a playbook name" in " ".join(selection.split())
     assert "every phase, scheduled gate" in normalized
     assert "one primary and zero or more explicitly confirmed fallbacks" in normalized
-    assert "Driver cannot change a phase" in normalized
+    assert "Manager cannot change a phase" in normalized
     assert "--risk-factor" not in reference
     assert "--assessment-rationale" not in reference
 
@@ -917,7 +937,7 @@ def test_use_cafe_workflow_keeps_playbook_selection_issue_owned() -> None:
     skill = _read_skill_resource("SKILL.md")
     selection = _read_skill_resource("references/playbook_selection.md")
     strategic = _read_skill_resource("references/strategic_context.md")
-    kickoff = _read_skill_resource("references/kickoff.md")
+    kickoff = (_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md"))
     normalized_skill = " ".join(skill.split())
     normalized_selection = " ".join(selection.split())
     normalized_strategic = " ".join(strategic.split())
@@ -934,11 +954,11 @@ def test_use_cafe_workflow_keeps_playbook_selection_issue_owned() -> None:
         in normalized_selection
     )
     assert (
-        "separate Driver-owned subset is persisted in `driver/contract.json`"
+        "separate Manager-owned subset is persisted in `manager/contract.json`"
         in normalized_selection
     )
     assert (
-        "separate Driver-owned subset is persisted in `driver/contract.json`"
+        "separate Manager-owned subset is persisted in `manager/contract.json`"
         in normalized_selection
     )
     assert "Strategic context is not playbook configuration" in normalized_strategic
@@ -951,7 +971,7 @@ def test_use_cafe_workflow_keeps_playbook_selection_issue_owned() -> None:
     assert "Verify that `cafe prepare` persisted the active `playbook_id`" in normalized_kickoff
 
 
-def test_driver_selection_is_evidence_based_across_every_effective_candidate() -> None:
+def test_manager_selection_is_evidence_based_across_every_effective_candidate() -> None:
     """U9 — recommendation uses confirmed scope, graph sufficiency, and applicability."""
     skill = _read_skill_resource("SKILL.md")
     selection = _read_skill_resource("references/playbook_selection.md")
@@ -1024,19 +1044,20 @@ mandate:
     confirmation_index = result.stdout.index("請確認上述完整契約")
     progress_index = result.stdout.index("### Workflow progress")
     assert confirmation_index < progress_index
+    assert "流程管理員" in result.stdout[confirmation_index:progress_index]
     progress_block = result.stdout[progress_index:]
     assert progress_block.startswith("### Workflow progress\n\n```text\n")
     assert progress_block.rstrip().endswith("```")
     assert "\n### " not in progress_block
     assert "○ spec · 待執行" in result.stdout
-    assert "○ spec：driver 主動審查 · 待執行" in result.stdout
-    assert "○ spec：使用者確認（driver 可代理） · 待執行" in result.stdout
-    assert "○ plan：driver 主動審查 · 待執行" in result.stdout
-    assert "○ plan：使用者確認（driver 可代理） · 待執行" in result.stdout
+    assert "○ spec：流程管理員主動審查 · 待執行" in result.stdout
+    assert "○ spec：使用者確認（流程管理員可代理） · 待執行" in result.stdout
+    assert "○ plan：流程管理員主動審查 · 待執行" in result.stdout
+    assert "○ plan：使用者確認（流程管理員可代理） · 待執行" in result.stdout
     assert "○ develop · 待執行" in result.stdout
     assert "○ review · 待執行" in result.stdout
-    assert "○ pr：driver 主動審查 · 待執行" in result.stdout
-    assert "○ pr：使用者確認（driver 不可代理） · 待執行" in result.stdout
+    assert "○ pr：流程管理員主動審查 · 待執行" in result.stdout
+    assert "○ pr：使用者確認（流程管理員不可代理） · 待執行" in result.stdout
     assert "○ deliver（收尾） · 待執行" in result.stdout
     assert "○ cleanup（收尾） · 待執行" in result.stdout
     assert "狀態未知" not in progress_block
@@ -1045,7 +1066,7 @@ mandate:
     assert "| effective_locale | zh-TW (user thread override) |" in result.stdout
     assert "| repository_content_locale | zh-TW |" in result.stdout
     assert "model_adjustment" not in result.stdout
-    assert "| driver.mode | unattended |" in result.stdout
+    assert "| manager.mode | unattended |" in result.stdout
     assert "| CAFE |" not in result.stdout
     assert "| Catalog |" not in result.stdout
     assert "### Phase model chains" in result.stdout
@@ -1056,8 +1077,8 @@ mandate:
     assert "| review | gemini:review-main | copilot:review-fallback |" in result.stdout
     assert "| pr | cursor-agent:publication-main | gemini:publication-fallback |" in result.stdout
     assert "### Phase execution requirements" not in result.stdout
-    assert "| need_clarification | driver_confirmable |" not in result.stdout
-    assert "### Declared HumanTask ownership" in result.stdout
+    assert "| need_clarification | manager_confirmable |" in result.stdout
+    assert "### Declared HumanTask ownership" not in result.stdout
     assert "### Mandate" not in result.stdout
     assert result.stdout.count("| playbook_id |") == 1
 
@@ -1319,6 +1340,43 @@ def test_kickoff_formatter_falls_back_to_english_for_unsupported_chinese_locales
     assert "請確認上述完整契約" not in result.stdout
 
 
+def test_kickoff_formatter_mirrors_a_legacy_workflow_instead_of_new_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    issue_dir = tmp_path / "legacy"
+    issue_dir.mkdir()
+    state_path = issue_dir / "blackboard.json"
+    state_path.write_text(
+        json.dumps({"schema_version": 4, "current_step": "spec", "playbook_id": "standard"}),
+        encoding="utf-8",
+    )
+    before = state_path.read_bytes()
+    command = _kickoff_formatter_command(
+        tmp_path / "strategic_context.yaml", "--issue-dir", str(issue_dir)
+    )
+    module = _load_script_module(
+        SKILL_ROOT / "scripts/format_kickoff_contract.py", "legacy_kickoff"
+    )
+    loaded = PlaybookLoader(project_root=PROJECT_ROOT).load_model("standard")
+    model = loaded.model.model_copy(
+        update={
+            "playbook": loaded.model.playbook.model_copy(update={"conversation_locale": "ja-JP"})
+        }
+    )
+    monkeypatch.setattr(
+        module.PlaybookLoader,
+        "load_model",
+        lambda self, playbook_id: SimpleNamespace(model=model),
+    )
+    args = module._parser().parse_args(command[2:])
+    args.locale_source = "inferred"
+
+    proposal = module.build_confirmed_proposal(args)
+
+    assert proposal["locales"]["conversation"] == {"value": "en-US", "source": "fallback"}
+    assert state_path.read_bytes() == before
+
+
 def _write_fake_cafe(
     path: Path,
     *,
@@ -1431,7 +1489,7 @@ def test_kickoff_formatter_contains_no_fixed_language_catalog_reminder() -> None
     assert "Catalog synchronization reminder" not in source
 
 
-def test_confirmed_kickoff_activates_one_issue_scoped_driver_contract(tmp_path: Path) -> None:
+def test_confirmed_kickoff_activates_one_issue_scoped_manager_contract(tmp_path: Path) -> None:
     """Test List integration 1: the confirmed rendered policy becomes durable before use."""
     strategic_context = tmp_path / "strategic_context.yaml"
     strategic_context.write_text(
@@ -1441,7 +1499,14 @@ def test_confirmed_kickoff_activates_one_issue_scoped_driver_contract(tmp_path: 
     issue_dir = tmp_path / "issues" / "issue346"
     issue_dir.mkdir(parents=True)
     (issue_dir / "blackboard.json").write_text(
-        json.dumps({"workflow_id": "prepared-346"}), encoding="utf-8"
+        json.dumps(
+            {
+                "workflow_id": "prepared-346",
+                "conversation_locale": "zh-TW",
+                "conversation_locale_source": "explicit",
+            }
+        ),
+        encoding="utf-8",
     )
     result = subprocess.run(
         _kickoff_formatter_command(
@@ -1473,18 +1538,18 @@ def test_confirmed_kickoff_activates_one_issue_scoped_driver_contract(tmp_path: 
     )
 
     assert result.returncode == 0, result.stderr
-    contract = json.loads((issue_dir / "driver" / "contract.json").read_text(encoding="utf-8"))
+    contract = json.loads((issue_dir / "manager" / "contract.json").read_text(encoding="utf-8"))
     assert contract["identity"] == {"issue_name": "issue346", "workflow_id": "prepared-346"}
     assert "pr" not in contract
     assert "playbook" not in contract
     assert contract["locales"] == {
-        "conversation": {"value": "zh-TW", "source": "user thread override"}
+        "conversation": {"value": "zh-TW", "source": "explicit"}
     }
     assert contract["delivery_contract"]["schema_version"] == 3
     closeout_plan = contract["delivery_contract"]["closeout_plan"]
     assert closeout_plan["deliver"] == [{"argv": ["git", "push", "origin", "feature/issue346"]}]
     assert closeout_plan["cleanup"] == [{"argv": ["git", "worktree", "remove", "/tmp/issue346"]}]
-    assert "proactive_review.yaml" not in {path.name for path in (issue_dir / "driver").iterdir()}
+    assert "proactive_review.yaml" not in {path.name for path in (issue_dir / "manager").iterdir()}
     develop_review = next(
         decision
         for decision in contract["proactive_review"]["phase_decisions"]
@@ -1494,9 +1559,9 @@ def test_confirmed_kickoff_activates_one_issue_scoped_driver_contract(tmp_path: 
         "phase": "develop",
         "decision": "not_required",
     }
-    assert contract["schema_version"] == 6
+    assert contract["schema_version"] == 8
     assert "task_contract" in contract
-    assert "need_clarification" not in contract["reactive_user_handoffs"]
+    assert contract["reactive_user_handoffs"]["need_clarification"] == "manager_confirmable"
     assert (
         not {"preflight", "semantic_facts", "material_assumptions", "mandate", "issue_assessment"}
         & contract.keys()
@@ -1505,7 +1570,7 @@ def test_confirmed_kickoff_activates_one_issue_scoped_driver_contract(tmp_path: 
     entry = subprocess.run(
         [
             sys.executable,
-            str(SKILL_ROOT / "scripts" / "validate_driver_entry.py"),
+            str(SKILL_ROOT / "scripts" / "validate_manager_entry.py"),
             "--issue-dir",
             str(issue_dir),
             "--issue-name",
@@ -1552,7 +1617,7 @@ def test_confirmed_event_driven_kickoff_binds_the_visible_codex_thread(
         "--issue-dir",
         str(issue_dir),
     )
-    mode_index = command.index("--driver-mode") + 1
+    mode_index = command.index("--manager-mode") + 1
     command[mode_index] = "event-driven"
     command[mode_index + 1 : mode_index + 1] = [
         "--event-driver",
@@ -1571,7 +1636,7 @@ def test_confirmed_event_driven_kickoff_binds_the_visible_codex_thread(
     )
 
     assert result.returncode == 0, result.stderr
-    state = json.loads((issue_dir / "driver" / "dispatch_state.json").read_text(encoding="utf-8"))
+    state = json.loads((issue_dir / "manager" / "dispatch_state.json").read_text(encoding="utf-8"))
     assert state["entries"][0]["session"]["id"] == "visible-thread"
     assert state["entries"][0]["session"]["source"] == "host_session"
 
@@ -1645,7 +1710,7 @@ def test_kickoff_formatter_shows_only_task_decisions_without_mutating_the_projec
         "reactive_user_handoffs",
         "phases",
         "proactive_review",
-        "driver",
+        "manager",
         "checkout",
     }
     assert all(set(phase) == {"name", "chain"} for phase in proposal["phases"])
@@ -1742,9 +1807,18 @@ def test_kickoff_formatter_keeps_the_rendered_policy_stable_until_activation(
     issue_dir = tmp_path / "issues" / "issue346"
     issue_dir.mkdir(parents=True)
     (issue_dir / "blackboard.json").write_text(
-        json.dumps({"workflow_id": "prepared-346"}), encoding="utf-8"
+        json.dumps(
+            {
+                "workflow_id": "prepared-346",
+                "conversation_locale": "zh-TW",
+                "conversation_locale_source": "explicit",
+            }
+        ),
+        encoding="utf-8",
     )
-    normal_command = _kickoff_formatter_command(strategic_context)
+    normal_command = _kickoff_formatter_command(
+        strategic_context, "--issue-dir", str(issue_dir)
+    )
     normal = subprocess.run(
         normal_command,
         cwd=PROJECT_ROOT,
@@ -1776,7 +1850,7 @@ def test_kickoff_formatter_keeps_the_rendered_policy_stable_until_activation(
 
     assert normal.stdout == activated.stdout
     proposal = _kickoff_proposal(normal_command)
-    contract = json.loads((issue_dir / "driver" / "contract.json").read_text(encoding="utf-8"))
+    contract = json.loads((issue_dir / "manager" / "contract.json").read_text(encoding="utf-8"))
     for key, expected in proposal.items():
         assert contract[key] == expected, key
     assert set(contract) == set(proposal) | {"schema_version", "identity", "revision", "provenance"}
@@ -1881,7 +1955,7 @@ def test_non_pr_playbook_omits_choice_and_rejects_supplied_false(
             playbook_id="editorial",
             pr_auto_create=False,
             phase_chains=chains,
-            driver_confirmable=("brief",),
+            manager_confirmable=("brief",),
         )
     )
     omitted = run_kickoff_formatter(
@@ -1890,7 +1964,7 @@ def test_non_pr_playbook_omits_choice_and_rejects_supplied_false(
             playbook_id="editorial",
             pr_auto_create=None,
             phase_chains=chains,
-            driver_confirmable=("brief",),
+            manager_confirmable=("brief",),
         )
     )
 
@@ -1939,7 +2013,7 @@ def test_minimal_non_software_kickoff_renders_only_its_two_declared_steps(
         playbook_id="minimal",
         pr_auto_create=None,
         phase_chains=chains,
-        driver_confirmable=(),
+        manager_confirmable=(),
     )
     (tmp_path / "strategic_context.yaml").write_text("mandate: {preset: technical-led}\n")
     args = module._parser().parse_args(command[2:])
@@ -1948,7 +2022,7 @@ def test_minimal_non_software_kickoff_renders_only_its_two_declared_steps(
     assert [phase["name"] for phase in proposal["phases"]] == ["brief", "draft"]
     assert proposal["confirmation_contract"] == {
         "user_required": [],
-        "driver_confirmable": [],
+        "manager_confirmable": [],
         "mandatory_human_stops": [],
     }
     assert "PR" not in rendered
@@ -1956,8 +2030,8 @@ def test_minimal_non_software_kickoff_renders_only_its_two_declared_steps(
     assert "Prepare arguments" not in rendered
 
 
-def test_kickoff_contract_keeps_issue_preflight_separate_from_driver_policy() -> None:
-    kickoff = _read_skill_resource("references/kickoff.md")
+def test_kickoff_contract_keeps_issue_preflight_separate_from_manager_policy() -> None:
+    kickoff = (_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md"))
     normalized = " ".join(kickoff.split())
 
     assert "preflight:" in kickoff
@@ -1986,7 +2060,7 @@ def test_kickoff_defaults_verified_github_issues_to_pr_publication() -> None:
     assert "never authorizes merge or issue closure" in normalized
 
 
-def test_need_clarification_requires_task_declaration_and_bounded_evidence() -> None:
+def test_need_clarification_has_overall_default_optional_overrides_and_bounded_evidence() -> None:
     skill = _read_skill_resource("SKILL.md")
     kickoff = _read_skill_resource("references/kickoff.md")
     running = _read_skill_resource("references/running_workflow.md")
@@ -1994,6 +2068,8 @@ def test_need_clarification_requires_task_declaration_and_bounded_evidence() -> 
     normalized = " ".join((skill + kickoff + running + handoffs).split()).lower()
 
     assert "declare ownership by exact phase and task id" in normalized
+    assert "default new proposals to `need_clarification: manager_confirmable`" in normalized
+    assert "explicit task ownership takes precedence" in normalized
     assert "scope, explicit constraints and existing authority" in normalized
     assert "triggers no deviation" in normalized
     assert "reserved product or strategy decisions" in normalized
@@ -2022,7 +2098,7 @@ mandate:
     result = run_kickoff_formatter(
         _kickoff_formatter_command(
             strategic_context,
-            "--driver-mode",
+            "--manager-mode",
             "event-driven",
             "--event-driver",
             "codex",
@@ -2034,9 +2110,9 @@ mandate:
     )
 
     assert result.returncode == 0, result.stderr
-    assert "| driver.mode | event-driven |" in result.stdout
+    assert "| manager.mode | event-driven |" in result.stdout
     positions = [
-        result.stdout.index("| driver.clis[0] | codex |"),
+        result.stdout.index("| manager.clis[0] | codex |"),
         result.stdout.index("claude:claude-opus-exact"),
         result.stdout.index("gemini:gemini-pro-exact"),
     ]
@@ -2044,7 +2120,7 @@ mandate:
     assert "| 通知 |" not in result.stdout
     assert "| Notifications |" not in result.stdout
     policy = _kickoff_proposal(result.args)
-    assert policy["driver"] == {
+    assert policy["manager"] == {
         "mode": "event-driven",
         "clis": [
             {"cli": "codex"},
@@ -2057,11 +2133,11 @@ mandate:
 @pytest.mark.parametrize(
     "extra_args",
     [
-        ("--driver-mode", "event-driven"),
-        ("--driver-mode", "event-driven", "--event-driver", "codex:"),
-        ("--driver-mode", "event-driven", "--event-driver", "codex:one"),
+        ("--manager-mode", "event-driven"),
+        ("--manager-mode", "event-driven", "--event-driver", "codex:"),
+        ("--manager-mode", "event-driven", "--event-driver", "codex:one"),
         (
-            "--driver-mode",
+            "--manager-mode",
             "event-driven",
             "--event-driver",
             "codex",
@@ -2069,19 +2145,19 @@ mandate:
             "codex:two",
         ),
         (
-            "--driver-mode",
+            "--manager-mode",
             "event-driven",
             "--event-driver",
             "codex",
             "--event-driver",
             "claude",
         ),
-        ("--driver-mode", "attached", "--event-driver", "codex"),
-        ("--driver-mode", "unattended", "--event-driver", "codex"),
-        ("--driver-mode", "event-driven", "--event-driver", "unsupported"),
+        ("--manager-mode", "attached", "--event-driver", "codex"),
+        ("--manager-mode", "unattended", "--event-driver", "codex"),
+        ("--manager-mode", "event-driven", "--event-driver", "unsupported"),
     ],
 )
-def test_kickoff_contract_rejects_nonconforming_event_driver_chains(
+def test_kickoff_contract_rejects_nonconforming_event_manager_chains(
     tmp_path: Path,
     extra_args: tuple[str, ...],
     run_kickoff_formatter,
@@ -2094,7 +2170,7 @@ def test_kickoff_contract_rejects_nonconforming_event_driver_chains(
     assert result.returncode == 2
 
 
-def test_kickoff_contract_accepts_one_event_driver_entry(
+def test_kickoff_contract_accepts_one_event_manager_entry(
     tmp_path: Path, run_kickoff_formatter
 ) -> None:
     strategic_context = tmp_path / "strategic_context.yaml"
@@ -2106,7 +2182,7 @@ def test_kickoff_contract_accepts_one_event_driver_entry(
     result = run_kickoff_formatter(
         _kickoff_formatter_command(
             strategic_context,
-            "--driver-mode",
+            "--manager-mode",
             "event-driven",
             "--event-driver",
             "copilot",
@@ -2114,13 +2190,13 @@ def test_kickoff_contract_accepts_one_event_driver_entry(
     )
 
     assert result.returncode == 0, result.stderr
-    assert "| driver.clis[0] | copilot |" in result.stdout
+    assert "| manager.clis[0] | copilot |" in result.stdout
 
 
 @pytest.mark.parametrize(
     ("extra_args", "expected_error"),
     [
-        (("--driver-mode", "invalid"), "invalid choice"),
+        (("--manager-mode", "invalid"), "invalid choice"),
         (("--poll-interval-seconds", "0"), "must be greater than zero"),
         (("--poll-interval-seconds", "-1"), "must be greater than zero"),
         (
@@ -2146,12 +2222,24 @@ def test_kickoff_contract_formatter_rejects_invalid_operating_mode(
 
 def test_kickoff_formatter_documents_structural_validation_boundary() -> None:
     script = (SKILL_ROOT / "scripts" / "format_kickoff_contract.py").read_text(encoding="utf-8")
-    kickoff = (SKILL_ROOT / "references" / "kickoff.md").read_text(encoding="utf-8")
+    kickoff = (_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md"))
 
     assert "structurally validated" in script
     assert "validates chain structure only; it does not validate model suitability" in kickoff
-    assert "Model suitability remains Driver-assessed" in kickoff
+    assert "Model suitability remains Manager-assessed" in kickoff
     assert "--phase-rationale" not in script
+
+
+def test_kickoff_reference_distinguishes_new_and_legacy_manager_contract_versions() -> None:
+    kickoff = " ".join((_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md")).split())
+
+    assert (
+        "Existing v7 Driver contracts remain valid through the legacy Driver authority"
+        in kickoff
+    )
+    assert "New v8 Manager contracts record both the overall choice and task overrides" in kickoff
+    assert "single schema-version-8 durable Manager contract" in kickoff
+    assert "activate exactly one schema-version-8 contract at" in kickoff
 
 
 def test_kickoff_contract_formatter_accepts_primary_only_chains(
@@ -2170,7 +2258,7 @@ def test_kickoff_contract_formatter_accepts_primary_only_chains(
             "standard",
             "--issue-name",
             "issue-primary-only",
-            "--driver-mode",
+            "--manager-mode",
             "unattended",
             "--capability-choice",
             "pr.auto_create=false",
@@ -2548,7 +2636,7 @@ def test_kickoff_contract_formatter_rejects_incomplete_gate_partition(
             "standard",
             "--issue-name",
             "issue346",
-            "--driver-mode",
+            "--manager-mode",
             "unattended",
             "--capability-choice",
             "pr.auto_create=false",
@@ -2577,8 +2665,8 @@ def test_kickoff_contract_formatter_rejects_mandatory_gate_assignment(
     )
 
     command = _kickoff_formatter_command(strategic_context)
-    driver_index = command.index("--driver-confirmable")
-    command[driver_index + 1 : driver_index + 3] = ["spec", "plan", "pr"]
+    manager_index = command.index("--manager-confirmable")
+    command[manager_index + 1 : manager_index + 3] = ["spec", "plan", "pr"]
     result = run_kickoff_formatter(command)
 
     assert result.returncode == 2
@@ -2612,7 +2700,7 @@ def test_kickoff_contract_formatter_uses_cafe_python_when_site_packages_are_miss
             "standard",
             "--issue-name",
             "issue346",
-            "--driver-mode",
+            "--manager-mode",
             "unattended",
             "--capability-choice",
             "pr.auto_create=false",
@@ -2640,7 +2728,7 @@ def test_kickoff_contract_formatter_uses_cafe_python_when_site_packages_are_miss
         "### Workflow progress"
     )
     assert "\n### " not in result.stdout[result.stdout.index("### Workflow progress") :]
-    assert "○ spec: user confirmation (driver may not act) · Pending" in result.stdout
+    assert "○ spec: user confirmation (manager may not act) · Pending" in result.stdout
 
 
 @pytest.mark.parametrize("profile_damage", [None, "missing", "invalid"])
@@ -2716,7 +2804,7 @@ entry_point: audit
             str(tmp_path),
             "--issue-name",
             "audit-1",
-            "--driver-mode",
+            "--manager-mode",
             "unattended",
             *_preflight_args(),
             "--phase-chain",
@@ -2756,7 +2844,7 @@ def test_kickoff_formatter_rejects_unresolved_phase_models(
             str(tmp_path),
             "--issue-name",
             "issue-no-models",
-            "--driver-mode",
+            "--manager-mode",
             "unattended",
             "--capability-choice",
             "pr.auto_create=false",
@@ -2915,7 +3003,7 @@ def test_use_cafe_workflow_bootstraps_strategy_with_conventional_paths() -> None
     assert "path: CONTRIBUTING.md" not in reference
     assert engineering_candidates == [Path("docs/engineering-guidelines.md")]
     policy = engineering_policy.read_text(encoding="utf-8")
-    assert "## Driver dependency boundary" in policy
+    assert "## Manager dependency boundary" in policy
     assert "## Keep generic runtime independent of workflow topology" in policy
     assert "Todo identity presentation" in policy
 
@@ -2929,7 +3017,7 @@ def test_use_cafe_workflow_bounds_diagnosis_and_repairs_only_declarative_layers(
     assert "# Bounded Diagnosis And Repair" in reference
     assert "Playbook declarative defect" in reference
     assert "Phase declarative defect" in reference
-    assert "Driver or CAFE core defect" in reference
+    assert "Manager or CAFE core defect" in reference
     assert "activate `write-cafe-playbook`" in normalized
     assert "activate `write-cafe-phase`" in normalized
     assert "Do not invent a `write-cafe-driver` skill" in normalized
@@ -2963,7 +3051,7 @@ def test_inside_non_intervention_envelope_requires_passive_supervision() -> None
     assert "Supervise active work" in skill
     assert "`references/supervision_and_recovery.md`" in skill
     assert (
-        "Driver remains passive while every applicable condition is demonstrably true" in normalized
+        "Manager remains passive while every applicable condition is demonstrably true" in normalized
     )
     for forbidden in (
         "invoke `cafe chat` to watch progress",
@@ -3017,25 +3105,40 @@ def test_recovery_inspection_and_callback_policy_are_mode_neutral() -> None:
 def test_use_cafe_workflow_prefers_user_conversation_locale() -> None:
     skill = _read_skill_resource("SKILL.md")
     reference = _read_skill_resource("references/kickoff.md")
+    policy = (PROJECT_ROOT / "docs" / "language-policy.md").read_text()
     normalized = " ".join(reference.split())
+    normalized_policy = " ".join(policy.split())
 
     assert "references/kickoff.md" in skill
     assert "## Conversation locale checklist" in reference
     assert "playbook.conversation_locale" in reference
     assert "cafe playbook confirmation-gates <playbook-id>" in reference
     assert "`Conversation locale:` line" in normalized
-    assert "a locale the user directly requested for this thread" in normalized
-    assert "a locale reliably inferred from the user's own natural-language messages" in normalized
-    assert "Do not infer from quoted text, pasted artifacts, code, commands" in normalized
-    assert "If the evidence is mixed or ambiguous, use the playbook locale" in normalized
-    assert "For `auto`, infer from the user's messages using the same rules above" in normalized
-    assert "explicit BCP 47 value as the fallback" in normalized
+    assert "docs/language-policy.md" in normalized
+    assert "single source of truth" in normalized
+    assert "Supply, do not decide" in normalized
+    assert "--conversation-locale-source explicit|inferred" in normalized
+    assert "Never claim `explicit` for an inferred preference" in normalized
+    assert "Do not infer from quoted text, pasted artifacts, code, stack traces" in normalized
+    assert "supply nothing and let the playbook default apply" in normalized
+    assert "read the effective generic value and source from the workflow's own state" in normalized
+    assert "Do not re-resolve it" in normalized
+    assert "it is not a competing resolver" in normalized
+    assert "third precedence tier, not an override of a supplied user preference" in normalized
     assert "conversation_locale: zh-TW (inferred user preference from current thread)" in normalized
     assert "conversation_locale: en-US (from playbook: standard)" in normalized
     assert "required kickoff field, not a confirmation gate" in normalized
-    assert "asking why a language was used is not an override" in normalized
+    assert "just this once" in normalized
+    assert "--set-conversation-locale" in normalized
+    assert "never rewrites an already-pending task" in normalized
+    assert "asking why a language was used is neither" in normalized
     assert "Never claim this skill lacks a locale rule" in normalized
     assert "Do not copy the locale into `issue.yaml`" in normalized
+    assert "the stored value stands until the explicit change operation replaces it" in normalized
+    assert "current explicit instruction for this workflow" in normalized_policy
+    assert "applicable explicit repository-scoped saved preference" in normalized_policy
+    assert "explicit user-scoped saved preference" in normalized_policy
+    assert "A saved preference is reused only after an explicit request to save it" in normalized_policy
     assert "commands, paths, playbook and step names, intents, artifact keys" in normalized
     assert "Translate all presentation text into the effective conversation language" in normalized
     assert "capability prompts and outcomes" in normalized
@@ -3046,7 +3149,7 @@ def test_use_cafe_workflow_prefers_user_conversation_locale() -> None:
     assert "same validated proposal, not a translated copy of the saved policy" in normalized
 
 
-def test_use_cafe_workflow_defines_phase_scoped_proactive_driver_review() -> None:
+def test_use_cafe_workflow_defines_phase_scoped_proactive_manager_review() -> None:
     skill = _read_skill_resource("SKILL.md")
     kickoff = _read_skill_resource("references/kickoff.md")
     running = _read_skill_resource("references/running_workflow.md")
@@ -3057,36 +3160,38 @@ def test_use_cafe_workflow_defines_phase_scoped_proactive_driver_review() -> Non
     assert "Normalize ineligible phases internally to `not_required`" in normalized
     assert "`proactive_review.phase_decisions` projection" in running
     assert "existing scheduled confirmation pause" in normalized
-    assert "current Driver performs the review directly" in normalized
+    assert "current Manager performs the review directly" in normalized
     assert "missing necessary scope and excessive or unnecessary scope" in normalized
     assert "code and non-code phase output" in normalized
     assert "must not launch a separate reviewer" in normalized
 
 
-def test_kickoff_defaults_assignable_gates_to_driver_confirmation() -> None:
+def test_kickoff_defaults_assignable_gates_to_manager_confirmation() -> None:
     module = _load_script_module(
         SKILL_ROOT / "scripts" / "format_kickoff_contract.py",
         "kickoff_default_confirmation_partition",
     )
 
-    user_required, driver_confirmable = module._resolve_partition(
+    user_required, manager_confirmable = module._resolve_partition(
         candidates=("spec", "plan"),
         user_values=None,
-        driver_values=None,
+        manager_values=None,
     )
 
     assert user_required == []
-    assert driver_confirmable == ["spec", "plan"]
+    assert manager_confirmable == ["spec", "plan"]
 
 
-def test_kickoff_cli_forwards_custom_task_ownership_without_route_authority(tmp_path: Path) -> None:
+def test_kickoff_cli_forwards_custom_task_overrides_and_overall_authority(tmp_path: Path) -> None:
     strategic_context = tmp_path / "strategic_context.yaml"
     strategic_context.write_text("version: 1\n", encoding="utf-8")
     proposal = _kickoff_proposal(
         _kickoff_formatter_command(
             strategic_context,
-            "--task-driver-confirmable", "develop:known-answer",
-            "--task-user-required", "review:choose-release",
+            "--task-manager-confirmable",
+            "develop:known-answer",
+            "--task-user-required",
+            "review:choose-release",
         )
     )
     assert proposal["task_contract"] == {
@@ -3094,23 +3199,21 @@ def test_kickoff_cli_forwards_custom_task_ownership_without_route_authority(tmp_
             {"phase": "pr", "task_id": "local-review"},
             {"phase": "review", "task_id": "choose-release"},
         ],
-        "driver_confirmable": [
+        "manager_confirmable": [
             {"phase": "spec", "task_id": "output-review"},
             {"phase": "plan", "task_id": "output-review"},
             {"phase": "develop", "task_id": "known-answer"},
         ],
     }
-    assert "need_clarification" not in proposal["reactive_user_handoffs"]
-    retired_route_flag = subprocess.run(
-        _kickoff_formatter_command(
-            strategic_context, "--need-clarification", "driver_confirmable"
-        ),
+    assert proposal["reactive_user_handoffs"]["need_clarification"] == "manager_confirmable"
+    overall_flag = subprocess.run(
+        _kickoff_formatter_command(strategic_context, "--need-clarification", "manager_confirmable"),
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
         check=False,
     )
-    assert retired_route_flag.returncode != 0
+    assert overall_flag.returncode == 0, overall_flag.stderr
 
 
 def test_proactive_review_overrides_are_sparse_ordered_and_fail_closed() -> None:
@@ -3190,7 +3293,7 @@ def test_kickoff_derives_proactive_defaults_only_at_scheduled_pauses(
     assert "| pr | required |" in section
     assert "| develop |" not in section
     assert "| review |" not in section
-    assert section.count("Driver may confirm and advance after clean review") == 2
+    assert section.count("Manager may confirm and advance after clean review") == 2
     assert section.count("user confirmation remains required") == 1
 
 
@@ -3255,7 +3358,7 @@ entry_point: define
             str(tmp_path),
             "--issue-name",
             "custom-1",
-            "--driver-mode",
+            "--manager-mode",
             "unattended",
             *_preflight_args(),
             "--phase-chain",
@@ -3273,7 +3376,7 @@ entry_point: define
     policy = _kickoff_proposal(result.args)
     assert policy["confirmation_contract"] == {
         "user_required": [],
-        "driver_confirmable": ["define"],
+        "manager_confirmable": ["define"],
         "mandatory_human_stops": ["publish"],
     }
     decisions = policy["proactive_review"]["phase_decisions"]
@@ -3284,7 +3387,7 @@ entry_point: define
     section = result.stdout.split("### Proactive review at scheduled pauses", 1)[1]
     section = section.split("### Reactive user handoffs", 1)[0]
     assert "| define | required |" in section
-    assert "Driver may confirm and advance after clean review" in section
+    assert "Manager may confirm and advance after clean review" in section
     assert "| publish | required |" in section
     assert "user confirmation remains required" in section
 
@@ -3316,7 +3419,7 @@ def test_kickoff_renders_not_required_override_without_claiming_a_review(
 
 
 def test_proactive_review_consensus_uses_formal_correction_and_user_owned_confirmation() -> None:
-    """The Driver contract keeps correction authority narrow and independently reviewed."""
+    """The Manager contract keeps correction authority narrow and independently reviewed."""
     skill = _read_skill_resource("SKILL.md")
     running = _read_skill_resource("references/running_workflow.md")
     handoffs = _read_skill_resource("references/handoffs_and_alignment.md")
@@ -3343,7 +3446,7 @@ def test_proactive_review_consensus_uses_formal_correction_and_user_owned_confir
         "verify the durable task result and correction continuation",
         "Only the resumed runtime materializes and executes the next formal iteration",
         "next observable pause or failure",
-        "complete Driver re-review",
+        "complete Manager re-review",
         "attached, unattended, and event-driven callback",
         "fail closed",
         "same unchanged artifact",
@@ -3353,13 +3456,13 @@ def test_proactive_review_consensus_uses_formal_correction_and_user_owned_confir
         assert required.lower() in contract.lower()
 
     for required in (
-        "Driver may submit only that derived outcome",
+        "Manager may submit only that derived outcome",
         "user_required and mandatory confirmation gates keep advancing `confirm` user-owned",
-        "driver_confirmable clean confirm remains driver-permitted",
+        "manager_confirmable clean confirm remains manager-permitted",
         "No user prompt occurs during an autonomous correction loop",
         "one final user confirmation for each user-owned clean advancement candidate",
         "later clean candidate must be presented again",
-        "`driver_confirmable` clarification within the confirmed contract and existing authority",
+        "`manager_confirmable` clarification within the confirmed contract and existing authority",
         "clarification that changes the contract, needs new authority, is reserved to the user, or has uncertain authority",
         "first provide these four items",
         "bare confirmation requests, artifact-link-only handoffs, and raw artifact dumps are invalid",
@@ -3411,7 +3514,7 @@ def test_delivery_contract_allows_bounded_technical_flexibility() -> None:
     for required in (
         "Recommended approach; advisory, not a binding method",
         "technical clarification within the confirmed scope and constraints",
-        "does not replace the Driver contract",
+        "does not replace the Manager contract",
         "archiving, deleting, or rebuilding callback dispatch state",
         "no adequate handoff has been given in the current conversation",
         "append the compact summary",
@@ -3439,11 +3542,11 @@ def test_proactive_review_consensus_has_one_authority_path_and_a_bounded_input()
         assert required in contract
 
 
-def test_proactive_review_execution_limits_are_driver_policy_only() -> None:
+def test_proactive_review_execution_limits_are_manager_policy_only() -> None:
     running = _read_skill_resource("references/running_workflow.md")
     normalized = " ".join(running.split()).lower()
 
-    assert "policy-only driver limits" in normalized
+    assert "policy-only manager limits" in normalized
     assert "generic `cafe chat` runtime does not enforce them" in normalized
     assert "must not claim runtime enforcement" in normalized
     assert "ordinary user-initiated chat behavior remains unchanged" in normalized
@@ -3496,9 +3599,9 @@ def test_proactive_review_authority_precedence_has_no_blanket_callback_or_route_
             and "unique active declared correction outcome is not a user answer" in task_policy
             and "zero or multiple eligible outcomes fail closed for user/playbook clarification"
             in task_policy
-            and "a mandatory, `user_required`, permission, or capability task requires a **user-facing driver turn**"
+            and "a mandatory, `user_required`, permission, or capability task requires a **user-facing manager turn**"
             in task_policy
-            and "a task whose current phase and task id are declared `driver_confirmable`"
+            and "a task authorized by an explicit `manager_confirmable` declaration or the confirmed overall clarification policy"
             in task_policy
             and "including an event-driven callback, to submit only that eligible outcome"
             in task_policy
@@ -3512,7 +3615,7 @@ def test_proactive_review_authority_precedence_has_no_blanket_callback_or_route_
     assert is_consistent(task_authority, correction_flow)
     assert not is_consistent(
         task_authority.replace(
-            "A task whose current phase and task ID are declared `driver_confirmable`",
+            "A task authorized by an explicit `manager_confirmable` declaration or the confirmed overall clarification policy",
             "A `need_clarification` task",
         ),
         correction_flow,
@@ -3524,7 +3627,7 @@ def test_proactive_review_authority_precedence_has_no_blanket_callback_or_route_
     assert not is_consistent(
         task_authority,
         correction_flow
-        + " The Driver may route correction before chat and before applying the authority matrix.",
+        + " The Manager may route correction before chat and before applying the authority matrix.",
     )
 
 
@@ -3557,22 +3660,20 @@ def test_proactive_review_initial_routing_task_flow_and_matrix_share_correction_
         "`confirm_output` from a mandatory humantask step: always stop for the real user.",
         "`confirm_output` from a `user_required` step: stop for user approval or correction.",
     )
-    prior_task_flow = " ".join(
-        """
+    prior_task_flow = " ".join("""
         2. For user-owned tasks, serialize only the user's supplied answer into that schema.
-        The driver may add the task ID required by the schema, but must not infer a decision,
+        The manager may add the task ID required by the schema, but must not infer a decision,
         approval, permission, or missing answer.
-        """.split()
-    ).lower()
+        """.split()).lower()
 
     def is_consistent(initial: str, task: str, matrix: str) -> bool:
         return (
             correction_outcome in initial
-            and "after complete driver review and one `cafe chat` consensus exchange" in initial
+            and "after complete manager review and one `cafe chat` consensus exchange" in initial
             and "mandatory or `user_required` advancing `confirm`" in initial
             and not any(rule in initial for rule in prior_initial_routing_rules)
             and correction_outcome in task
-            and "driver may serialize a correction result" in task
+            and "manager may serialize a correction result" in task
             and prior_task_flow not in task
             and correction_outcome in matrix
             and "mandatory confirmation gates keep advancing `confirm` user-owned" in matrix
@@ -3604,7 +3705,7 @@ def test_proactive_review_rechecks_a_composite_snapshot_at_each_use_boundary() -
     for required in (
         "composite review snapshot",
         "artifact identity, accepted-requirements identity, correction-history identity",
-        "active task identity, handoff/baton identity, and driver-contract identity",
+        "active task identity, handoff/baton identity, and manager-contract identity",
         "immediately before invoking chat",
         "immediately before task completion, confirmation, or reuse of a clean result",
         "any mismatch invalidates the review/chat result",
@@ -3622,7 +3723,7 @@ def test_proactive_review_snapshot_includes_the_resolved_chat_identity() -> None
         "playbook chat-skills identity, and prepared chat-environment identity",
         "unique active declared correction outcome is not a user answer",
         "zero or multiple eligible outcomes fail closed for user/playbook clarification",
-        "it may also complete a confirmed `driver_confirmable` clean advancement",
+        "it may also complete a confirmed `manager_confirmable` clean advancement",
         "may not choose an advancing mandatory or `user_required` confirmation",
     ):
         assert required in normalized
@@ -3703,7 +3804,7 @@ def test_use_cafe_workflow_requires_confirmed_repository_content_locale() -> Non
     normalized_skill = " ".join(skill.split())
     normalized = " ".join(reference.split())
 
-    assert "Render, prepare, or reconfirm a kickoff" in normalized_skill
+    assert "Prepare kickoff inputs, render, or reconfirm a kickoff" in normalized_skill
     assert "`references/kickoff.md`" in normalized_skill
     assert "## Repository content locale checklist" in reference
     assert "Before `cafe init` or any other repository mutation" in normalized
@@ -3721,7 +3822,7 @@ def test_use_cafe_workflow_requires_confirmed_repository_content_locale() -> Non
 
 def test_use_cafe_workflow_defines_event_driven_mode_and_model_authority() -> None:
     skill = _read_skill_resource("SKILL.md")
-    kickoff = _read_skill_resource("references/kickoff.md")
+    kickoff = (_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md"))
     running = _read_skill_resource("references/running_workflow.md")
     models = _read_skill_resource("references/model_selection.md")
     normalized_kickoff = " ".join(kickoff.split())
@@ -3749,15 +3850,15 @@ def test_use_cafe_workflow_defines_event_driven_mode_and_model_authority() -> No
     assert "Do not put the mode, CLI, model, session" in normalized_kickoff
     assert "model_adjustment" not in kickoff
     assert "No provider or model is built into this skill" in normalized_models
-    assert "The driver owns the capability-band classification" in normalized_models
+    assert "The manager owns the capability-band classification" in normalized_models
     assert "scripts/preflight_cache.py" in models
     assert (SKILL_ROOT / "scripts" / "preflight_cache.py").is_file()
     assert "active worktree's `.cafe/phases.yaml`" in normalized_models
 
 
-def test_event_driver_documentation_defines_the_contract_managed_lifecycle() -> None:
+def test_event_manager_documentation_defines_the_contract_managed_lifecycle() -> None:
     skill = _read_skill_resource("SKILL.md")
-    kickoff = _read_skill_resource("references/kickoff.md")
+    kickoff = (_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md"))
     running = _read_skill_resource("references/running_workflow.md")
     contract = " ".join((skill + kickoff + running).split())
 
@@ -3773,7 +3874,7 @@ def test_event_driver_documentation_defines_the_contract_managed_lifecycle() -> 
     assert "Copilot never receives a caller-selected new-session ID" in contract
     assert "`dispatch_state.json` is mutable runtime state" in contract
     assert "The stored digest does not block dispatch" in contract
-    assert "callback reads the issue-scoped `driver/contract.json`" in contract
+    assert "callback reads the issue-scoped `manager/contract.json`" in contract
     assert "provider acknowledgement is bound to the exact event identity" in contract
     assert "no session-file discovery, directory diff, sleep, polling, or watcher" in contract
     assert "ambiguous outcome stops forward routing" in contract
@@ -3782,7 +3883,7 @@ def test_event_driver_documentation_defines_the_contract_managed_lifecycle() -> 
     assert "--status --issue-dir .cafe/issues/<issue>" in contract
 
 
-def test_use_cafe_workflow_binds_driver_completion_to_inspected_authority() -> None:
+def test_use_cafe_workflow_binds_manager_completion_to_inspected_authority() -> None:
     skill = _read_skill_resource("SKILL.md")
     running = _read_skill_resource("references/running_workflow.md")
     handoffs = _read_skill_resource("references/handoffs_and_alignment.md")
@@ -3790,7 +3891,7 @@ def test_use_cafe_workflow_binds_driver_completion_to_inspected_authority() -> N
 
     assert "HumanTask" in skill
     assert "`references/handoffs_and_alignment.md`" in skill
-    assert "complete_driver_task.py --issue-dir <issue-dir> --task-id <task-id>" in running
+    assert "complete_manager_task.py --issue-dir <issue-dir> --task-id <task-id>" in running
     assert "--contract-sha256 <digest> --sources-sha256 <digest>" in normalized_running
     assert (
         "Direct `cafe task complete` users retain its normal automatic foreground-resume"
@@ -3798,8 +3899,7 @@ def test_use_cafe_workflow_binds_driver_completion_to_inspected_authority() -> N
     )
     assert "serialize only the user's supplied answer" in normalized_running
     assert (
-        "must not infer a decision, approval, permission, or missing answer"
-        in normalized_running
+        "must not infer a decision, approval, permission, or missing answer" in normalized_running
     )
     assert "--task-id <active-human-task-id>" in handoffs
     assert '"work_report"' in handoffs
@@ -3823,7 +3923,7 @@ def test_use_cafe_workflow_makes_user_handoffs_self_contained() -> None:
     assert "valid reply example" in handoffs
 
 
-def test_use_cafe_workflow_never_shows_unmuted_driver_execution() -> None:
+def test_use_cafe_workflow_never_shows_unmuted_manager_execution() -> None:
     offenders = []
     paths = [SKILL_ROOT / "SKILL.md", *sorted((SKILL_ROOT / "references").glob("*.md"))]
 
@@ -3833,10 +3933,10 @@ def test_use_cafe_workflow_never_shows_unmuted_driver_execution() -> None:
             if "cafe workflow --execute" in line and "--mute-agent-output" not in line:
                 offenders.append(f"{path.relative_to(SKILL_ROOT)}:{line_number}")
 
-    assert not offenders, f"unmuted driver execution examples: {offenders}"
+    assert not offenders, f"unmuted manager execution examples: {offenders}"
 
 
-def test_driver_keeps_completion_separate_from_external_authority() -> None:
+def test_manager_keeps_completion_separate_from_external_authority() -> None:
     skill = _read_skill_resource("SKILL.md")
     reference = _read_skill_resource("references/completion_and_authority.md")
     kickoff = _read_skill_resource("references/kickoff.md")
@@ -3850,11 +3950,11 @@ def test_driver_keeps_completion_separate_from_external_authority() -> None:
         assert "pr.auto_create" not in text
     assert "gh pr merge --merge" in kickoff
     assert "only user confirmation authorizes execution" in " ".join(kickoff.split())
-    assert "[gh, issue, close, \"123\"]" in kickoff
+    assert '[gh, issue, close, "123"]' in kickoff
     assert "[cafe, close]" in kickoff
 
 
-def test_driver_can_propose_a_user_approved_bounded_direct_closeout() -> None:
+def test_manager_can_propose_a_user_approved_bounded_direct_closeout() -> None:
     skill = _read_skill_resource("SKILL.md")
     reference = _read_skill_resource("references/completion_and_authority.md")
     running = _read_skill_resource("references/running_workflow.md")
@@ -3879,11 +3979,11 @@ def test_driver_can_propose_a_user_approved_bounded_direct_closeout() -> None:
     assert "never describe a still-nonterminal workflow as completed" in normalized
     assert "Direct-closeout approval is session-local authority" in reference
     assert "reauthorize the same remaining list or return to the workflow" in normalized
-    assert "a later Driver must not automatically resume" in normalized
+    assert "a later Manager must not automatically resume" in normalized
     assert "user-approved bounded" in running
 
 
-def test_driver_confirms_cleanup_or_terminal_archive() -> None:
+def test_manager_confirms_cleanup_or_terminal_archive() -> None:
     skill = _read_skill_resource("SKILL.md")
     reference = _read_skill_resource("references/completion_and_authority.md")
     normalized = " ".join(reference.split())
@@ -3906,7 +4006,7 @@ def test_driver_confirms_cleanup_or_terminal_archive() -> None:
     assert '"merge and close" must not be silently reduced to an issue closure' in normalized
 
 
-def test_driver_handles_git_delivery_conflicts_before_offering_repair() -> None:
+def test_manager_handles_git_delivery_conflicts_before_offering_repair() -> None:
     skill = _read_skill_resource("SKILL.md")
     reference = _read_skill_resource("references/completion_and_authority.md")
     normalized = " ".join(reference.split())
@@ -3931,7 +4031,7 @@ def test_driver_handles_git_delivery_conflicts_before_offering_repair() -> None:
 class TestPollingContract:
     def test_first_poll_waits_for_the_full_confirmed_interval(self) -> None:
         skill = " ".join(_read_skill_resource("SKILL.md").split())
-        kickoff = " ".join(_read_skill_resource("references/kickoff.md").split())
+        kickoff = " ".join((_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md")).split())
         running = " ".join(_read_skill_resource("references/running_workflow.md").split())
 
         assert "references/running_workflow.md" in skill
@@ -3942,7 +4042,7 @@ class TestPollingContract:
         assert "wait on the same deferred operation" in running
 
     def test_transport_yields_do_not_trigger_workflow_inspection(self) -> None:
-        kickoff = " ".join(_read_skill_resource("references/kickoff.md").split())
+        kickoff = " ".join((_read_skill_resource("references/kickoff.md") + "\n" + _read_skill_resource("references/kickoff_execution.md")).split())
         running = " ".join(_read_skill_resource("references/running_workflow.md").split())
 
         assert "is transport state rather than an event-driven signal" in kickoff
@@ -3950,7 +4050,7 @@ class TestPollingContract:
         assert "is transport state, not substantive process output" in running
         assert "It must not trigger a short `write_stdin` poll" in running
         assert "Substantive lifecycle output" in running
-        assert "still wake the driver immediately" in running
+        assert "still wake the manager immediately" in running
 
     def test_formatter_shows_confirmed_poll_interval_without_internal_poll_rules(
         self, tmp_path: Path
@@ -3972,7 +4072,7 @@ mandate:
         result = subprocess.run(
             _kickoff_formatter_command(
                 strategic_context,
-                "--driver-mode",
+                "--manager-mode",
                 "attached",
                 "--poll-interval-seconds",
                 "180",
@@ -3984,11 +4084,11 @@ mandate:
         )
 
         assert result.returncode == 0, result.stderr
-        assert "| driver.mode | attached |" in result.stdout
-        assert "| driver.poll_interval_seconds | 180 |" in result.stdout
-        assert "driver.first_poll" not in result.stdout
-        assert "driver.poll_timestamp" not in result.stdout
-        assert _kickoff_proposal(result.args)["driver"] == {
+        assert "| manager.mode | attached |" in result.stdout
+        assert "| manager.poll_interval_seconds | 180 |" in result.stdout
+        assert "manager.first_poll" not in result.stdout
+        assert "manager.poll_timestamp" not in result.stdout
+        assert _kickoff_proposal(result.args)["manager"] == {
             "mode": "attached",
             "poll_interval_seconds": 180,
         }
@@ -4010,7 +4110,7 @@ def test_kickoff_rejects_incomplete_delivery_before_activation(tmp_path, damage)
     assert not (tmp_path / ".cafe").exists()
 
 
-def test_driver_managed_start_and_resume_require_the_skill_wrapper() -> None:
+def test_manager_managed_start_and_resume_require_the_skill_wrapper() -> None:
     skill = _read_skill_resource("SKILL.md")
     running = _read_skill_resource("references/running_workflow.md")
     normalized = " ".join(running.split())
@@ -4018,10 +4118,10 @@ def test_driver_managed_start_and_resume_require_the_skill_wrapper() -> None:
     assert "scripts/run_workflow.py" in skill
     assert "scripts/run_workflow.py" in running
     assert "action: yield" in running
-    assert "terminal for the current Driver turn" in normalized
+    assert "terminal for the current Manager turn" in normalized
     assert "explicit manual bypass" in running
-    assert "--fresh-facts '<rebuilt-current-driver-facts-json>'" in normalized
-    assert "through `evaluate_driver_entry`" in normalized
+    assert "--fresh-facts '<rebuilt-current-manager-facts-json>'" in normalized
+    assert "through `evaluate_manager_entry`" in normalized
     assert "rejects `material_change` and `unknown` before launching" in normalized
     assert "Resume the persisted baton with `cafe workflow" not in running
     assert "cafe workflow --issue <issue> --execute --mute-agent-output" not in running
@@ -4032,3 +4132,43 @@ def test_driver_managed_start_and_resume_require_the_skill_wrapper() -> None:
         if re.search(r"cafe workflow[^\n]*--execute", text):
             hand_built.append(path.relative_to(SKILL_ROOT).as_posix())
     assert hand_built == []
+
+
+@pytest.mark.parametrize("owner", ["manager_confirmable", "user_required"])
+def test_kickoff_overall_clarification_policy_needs_no_detailed_task_list(
+    tmp_path: Path,
+    run_kickoff_formatter,
+    owner: str,
+) -> None:
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text("version: 1\n", encoding="utf-8")
+    command = _kickoff_formatter_command(
+        strategic_context,
+        "--need-clarification",
+        owner,
+    )
+    proposal = _kickoff_proposal(command)
+    result = run_kickoff_formatter(command)
+    assert result.returncode == 0, result.stderr
+    assert proposal["reactive_user_handoffs"]["need_clarification"] == owner
+    assert f"| need_clarification | {owner} |" in result.stdout
+    assert "### Declared HumanTask ownership" not in result.stdout
+    assert "clarification-answers" not in result.stdout
+
+
+def test_kickoff_displays_only_requested_task_overrides(
+    tmp_path: Path,
+    run_kickoff_formatter,
+) -> None:
+    strategic_context = tmp_path / "strategic_context.yaml"
+    strategic_context.write_text("version: 1\n", encoding="utf-8")
+    command = _kickoff_formatter_command(
+        strategic_context,
+        "--task-user-required",
+        "spec:clarification-answers",
+    )
+    result = run_kickoff_formatter(command)
+    assert result.returncode == 0, result.stderr
+    assert "| need_clarification | manager_confirmable |" in result.stdout
+    assert "| spec | clarification-answers | user_required |" in result.stdout
+    assert "| spec | output-review |" not in result.stdout

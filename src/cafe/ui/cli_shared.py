@@ -858,6 +858,18 @@ def _handle_user_phase(
     )
 
 
+def _pending_task_presentation(*, record_store, task_id: str, declared):
+    """Rebuild a pending task's presentation from its materialized snapshot."""
+    from cafe.core.human_tasks import HumanTaskPolicy
+
+    try:
+        return HumanTaskPolicy.model_validate(record_store.get_task(task_id).expected_result)
+    except Exception:
+        # A snapshot that cannot be read is not a reason to block the user; the
+        # declared policy still describes the same machine contract.
+        return declared
+
+
 def _handle_declared_human_task_handoff(
     *,
     issue_name: str,
@@ -878,6 +890,9 @@ def _handle_declared_human_task_handoff(
         resolve_step_human_task,
     )
 
+    from cafe.skills.loader import SkillLoader
+
+    record_store = HumanTaskRecordStore(issue_dir)
     if summary:
         console.print(f"[dim]{summary}[/dim]")
     try:
@@ -886,6 +901,7 @@ def _handle_declared_human_task_handoff(
             step_name=from_step,
             trigger=trigger,
             iteration=latest_step_iteration(issue_dir=issue_dir, step_name=from_step),
+            skill_loader=SkillLoader(resolve_presentation=not record_store.exists),
         )
     except HumanTaskPolicyError:
         result = apply_human_task_payload(
@@ -908,10 +924,13 @@ def _handle_declared_human_task_handoff(
     if policy.questions_from_xml:
         iteration_dirs = sorted((issue_dir / from_step).glob("iteration_*"))
         questions_file = iteration_dirs[-1] / "questions.xml" if iteration_dirs else None
-        if questions_file is not None and questions_file.exists() and validate_questions_xml(questions_file):
+        if (
+            questions_file is not None
+            and questions_file.exists()
+            and validate_questions_xml(questions_file)
+        ):
             questions = parse_questions_xml(questions_file)
     durable_task_id = None
-    record_store = HumanTaskRecordStore(issue_dir)
     durable_wait = record_store.active_wait_state(
         blackboard.workflow_id,
         step=from_step,
@@ -953,6 +972,24 @@ def _handle_declared_human_task_handoff(
                     if key in recorded_result.payload
                 }
                 recovered_payload["human_task_id"] = completed_task.id
+    if durable_task_id is not None:
+        # A pending task's presentation is the snapshot captured when it was
+        # materialized. The render path consumes that snapshot and performs no
+        # locale re-resolution, so a later workflow-language change cannot
+        # rewrite what the user is looking at.
+        policy = _pending_task_presentation(
+            record_store=record_store,
+            task_id=durable_task_id,
+            declared=policy,
+        )
+    elif recovered_payload is None and record_store.exists:
+        # No saved task matched this declaration; presentation must be fresh.
+        policy, _binding = resolve_step_human_task(
+            playbook_data=playbook_data,
+            step_name=from_step,
+            trigger=trigger,
+            iteration=latest_step_iteration(issue_dir=issue_dir, step_name=from_step),
+        )
     payload = recovered_payload
     if payload is None:
         payload = collect_human_task_payload(

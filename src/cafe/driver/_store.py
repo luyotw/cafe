@@ -64,6 +64,10 @@ def _safe_driver_directory(issue_dir: Path, *, create: bool) -> Path:
 @contextmanager
 def contract_lock(issue_dir: Path) -> Iterator[None]:
     """Serialize activation/replacement; fail closed if a process lock cannot be held."""
+    if (Path(issue_dir) / "manager" / CONTRACT_FILENAME).exists() and not (
+        Path(issue_dir) / "driver" / CONTRACT_FILENAME
+    ).exists():
+        raise ValueError("Manager contract is authoritative; use the Manager API")
     driver = _safe_driver_directory(issue_dir, create=True)
     lock_path = driver / LOCK_FILENAME
     if lock_path.exists() and lock_path.is_symlink():
@@ -160,6 +164,10 @@ def write_contract(
     expected_predecessor_sha256: str | None,
 ) -> str:
     """Atomically install one validated replacement while holding ``contract_lock``."""
+    if (Path(issue_dir) / "manager" / CONTRACT_FILENAME).exists() and not (
+        Path(issue_dir) / "driver" / CONTRACT_FILENAME
+    ).exists():
+        raise ValueError("Manager contract is authoritative; Driver cannot create a second record")
     driver = _safe_driver_directory(issue_dir, create=True)
     path = driver / CONTRACT_FILENAME
     if path.exists() and path.is_symlink():

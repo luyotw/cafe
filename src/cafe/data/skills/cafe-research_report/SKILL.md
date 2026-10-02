@@ -1,8 +1,12 @@
 ---
 name: cafe-research_report
 description: Produce a sourced research report
-version: 1.1.0
+version: 1.2.0
 workflow:
+  notification:
+    task_labels:
+      clarification-feedback:
+        message_key: notification.action_labels.clarification_feedback
   execution_profile:
     workload: content
     reasoning: standard
@@ -11,7 +15,9 @@ workflow:
   human_tasks:
     - id: clarification-feedback
       pattern: revision_feedback
-      prompt: Provide the clarification needed to complete the report.
+      prompt: {message_key: human_task.cafe_research_report.clarification_feedback.prompt}
+      prompt_locales:
+        zh-TW: {message_key: human_task.cafe_research_report.clarification_feedback.prompt}
       input_schema: feedback
   prompt_inputs:
     - artifacts: [research_report_doc, causal_todo]

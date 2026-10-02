@@ -76,6 +76,103 @@ def test_validate_checklist_empty_file(tmp_path):
     assert result.checklist_path == checklist_file
 
 
+@pytest.mark.parametrize("ownership", [None, False, True])
+def test_empty_materialization_ownership_controls_authored_items(tmp_path, ownership):
+    """Old empty records remain fixed until the runtime rebuilds their sources."""
+    import json
+
+    from cafe.core.checklist import load_materialization
+
+    record = {"version": 1, "content": "", "gates": [], "projections": [], "overlays": False}
+    if ownership is not None:
+        record["agent_owned"] = ownership
+    metadata = tmp_path / "iteration.json"
+    metadata.write_text(json.dumps({"effective_checklist": record}))
+    expected = load_materialization(metadata)
+    checklist = tmp_path / "checklist.md"
+    checklist.write_text("- [x] Observed result\n")
+    assert validate_checklist(checklist, expected=expected).is_complete is (ownership is True)
+    checklist.write_text("- [ ] Remaining check\n")
+    result = validate_checklist(checklist, expected=expected)
+    assert not result.is_complete and result.unchecked_count == 1
+
+
+@pytest.mark.parametrize("ownership", [None, 0, 1, "false", [], {}])
+def test_invalid_ownership_metadata_cannot_enable_agent_checklist(tmp_path, ownership):
+    import json
+
+    record = {
+        "version": 1,
+        "content": "",
+        "gates": [],
+        "projections": [],
+        "overlays": False,
+        "agent_owned": ownership,
+    }
+    (tmp_path / "iteration.json").write_text(json.dumps({"effective_checklist": record}))
+    checklist = tmp_path / "checklist.md"
+    checklist.write_text("- [x] Done\n")
+    assert not validate_checklist(checklist).is_complete
+
+
+def test_agent_ownership_cannot_replace_pinned_fixed_policy(tmp_path):
+    import json
+
+    from cafe.core.checklist import ChecklistMaterialization
+
+    fixed = ChecklistMaterialization("", (), (), False)
+    metadata = tmp_path / "iteration.json"
+    changed = fixed.to_dict()
+    changed["agent_owned"] = True
+    metadata.write_text(json.dumps({"effective_checklist": changed}))
+    checklist = tmp_path / "checklist.md"
+    checklist.write_text("- [x] Added item\n")
+    assert not validate_checklist(checklist, expected=fixed).is_complete
+
+
+@pytest.mark.parametrize("boundary", ["gates", "projections", "overlays"])
+def test_agent_ownership_rejects_declared_boundaries(tmp_path, boundary):
+    import json
+    from dataclasses import asdict
+
+    from cafe.core.checklist import ChecklistGate
+
+    record = {
+        "version": 1,
+        "content": "",
+        "gates": [],
+        "projections": [],
+        "overlays": False,
+        "agent_owned": True,
+    }
+    if boundary == "gates":
+        record["content"] = "[ ] Required\n"
+        record["gates"] = [asdict(ChecklistGate("a" * 64, "policy", "[ ] Required\n"))]
+    elif boundary == "projections":
+        record["projections"] = [
+            {
+                "declaration_artifact": "plan",
+                "source": "plan",
+                "causal": True,
+                "contributor": "policy",
+                "section": 0,
+                "artifact": "plan",
+                "path": "plan.md",
+                "version": 1,
+                "content_sha256": "a" * 64,
+                "handles": [],
+                "producer_ids": [],
+                "rows": [],
+            }
+        ]
+    else:
+        record["overlays"] = True
+    (tmp_path / "iteration.json").write_text(json.dumps({"effective_checklist": record}))
+    checklist = tmp_path / "checklist.md"
+    checklist.write_text("[x] Required\n")
+    assert not validate_checklist(checklist).is_complete
+
+
 def test_validate_checklist_special_formats(tmp_path):
     """Test that special formats are not counted as unchecked.
 

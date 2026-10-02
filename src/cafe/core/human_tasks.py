@@ -12,7 +12,10 @@ import re
 from dataclasses import dataclass
 from typing import Any, Literal, Mapping, Optional, Sequence
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
+
+from cafe.core.conversation_locale import normalize_locale_tag
+from cafe.core.runtime_locales import render_text
 
 HumanTaskPattern = Literal[
     "confirm_output",
@@ -50,6 +53,59 @@ def _non_empty(value: str, *, field_name: str) -> str:
     return text
 
 
+def _validate_locale_variants(value: Mapping[str, str], *, field_name: str) -> dict[str, str]:
+    """Keep authored variants keyed by a canonical tag with non-empty text."""
+    variants: dict[str, str] = {}
+    for tag, text in value.items():
+        canonical = normalize_locale_tag(tag)
+        if canonical is None:
+            raise ValueError(f"{field_name} keys must be usable language tags")
+        if canonical in variants:
+            raise ValueError(f"{field_name} keys must be unique after normalization")
+        variants[canonical] = _non_empty(text, field_name=field_name)
+    return variants
+
+
+def _authored_variant(variants: Mapping[str, str], locale: Optional[str], fallback: str) -> str:
+    """Select an authored variant, keeping the declared text when none exists."""
+    canonical = normalize_locale_tag(locale)
+    if canonical is None:
+        return fallback
+    return variants.get(canonical, fallback)
+
+
+def _resolve_copy_reference(
+    value: Any, info: ValidationInfo, locale: Optional[str] = None
+) -> Any:
+    """Expand owner-copy references before validation or task snapshotting.
+
+    Inline custom declarations pass through unchanged. Only presentation fields
+    accept references; identifiers, options, routes and persisted snapshots do not
+    acquire a catalog dependency.
+    """
+    if isinstance(value, Mapping):
+        if set(value) != {"message_key"} or not isinstance(value["message_key"], str):
+            raise ValueError("runtime copy reference must contain only a string message_key")
+        catalog_root = (info.context or {}).get("locale_catalog_root")
+        if catalog_root is None:
+            raise ValueError("runtime copy reference requires a declaration owner locale directory")
+        if (info.context or {}).get("resolve_presentation") is False:
+            # Structural readers validate identity and reference shape. Saved
+            # tasks own their presentation; fresh materialization resolves copy.
+            return value["message_key"]
+        render = (info.context or {}).get("render_locale_text")
+        if render is not None:
+            return render(value["message_key"], locale=locale)
+        return render_text(value["message_key"], locale=locale, catalog_root=catalog_root)
+    return value
+
+
+def _resolve_copy_variants(value: Any, info: ValidationInfo) -> Any:
+    if isinstance(value, Mapping) and all(isinstance(tag, str) for tag in value):
+        return {tag: _resolve_copy_reference(text, info, tag) for tag, text in value.items()}
+    return value
+
+
 class HumanTaskDecision(BaseModel):
     """One declared choice for a decision-based task."""
 
@@ -57,14 +113,39 @@ class HumanTaskDecision(BaseModel):
 
     id: str
     label: str
+    label_locales: dict[str, str] = Field(default_factory=dict)
     requires_feedback: bool = False
     requires_target: bool = False
     correction: bool = False
+
+    @field_validator("label", mode="before")
+    @classmethod
+    def _resolve_label(cls, value: Any, info: ValidationInfo) -> Any:
+        return _resolve_copy_reference(value, info)
+
+    @field_validator("label_locales", mode="before")
+    @classmethod
+    def _resolve_label_locales(cls, value: Any, info: ValidationInfo) -> Any:
+        return _resolve_copy_variants(value, info)
 
     @field_validator("id", "label")
     @classmethod
     def _validate_copy(cls, value: str, info) -> str:
         return _non_empty(value, field_name=info.field_name)
+
+    @field_validator("label_locales")
+    @classmethod
+    def _validate_label_locales(cls, value: dict[str, str]) -> dict[str, str]:
+        return _validate_locale_variants(value, field_name="decision label_locales")
+
+    def for_locale(self, locale: Optional[str]) -> "HumanTaskDecision":
+        """Return this decision presented in one locale, identity unchanged."""
+        return self.model_copy(
+            update={
+                "label": _authored_variant(self.label_locales, locale, self.label),
+                "label_locales": {},
+            }
+        )
 
 
 class HumanTaskQuestion(BaseModel):
@@ -74,13 +155,42 @@ class HumanTaskQuestion(BaseModel):
 
     id: str
     prompt: str
+    prompt_locales: dict[str, str] = Field(default_factory=dict)
     options: tuple[str, ...] = ()
     multiple: bool = False
+
+    @field_validator("prompt", mode="before")
+    @classmethod
+    def _resolve_prompt(cls, value: Any, info: ValidationInfo) -> Any:
+        return _resolve_copy_reference(value, info)
+
+    @field_validator("prompt_locales", mode="before")
+    @classmethod
+    def _resolve_prompt_locales(cls, value: Any, info: ValidationInfo) -> Any:
+        return _resolve_copy_variants(value, info)
 
     @field_validator("id", "prompt")
     @classmethod
     def _validate_copy(cls, value: str, info) -> str:
         return _non_empty(value, field_name=info.field_name)
+
+    @field_validator("prompt_locales")
+    @classmethod
+    def _validate_prompt_locales(cls, value: dict[str, str]) -> dict[str, str]:
+        return _validate_locale_variants(value, field_name="question prompt_locales")
+
+    def for_locale(self, locale: Optional[str]) -> "HumanTaskQuestion":
+        """Return this question presented in one locale.
+
+        Options are answer identity rather than presentation, so they are never
+        translated.
+        """
+        return self.model_copy(
+            update={
+                "prompt": _authored_variant(self.prompt_locales, locale, self.prompt),
+                "prompt_locales": {},
+            }
+        )
 
     @field_validator("options")
     @classmethod
@@ -99,18 +209,35 @@ class HumanTaskPolicy(BaseModel):
     id: str
     pattern: HumanTaskPattern
     prompt: str
+    prompt_locales: dict[str, str] = Field(default_factory=dict)
     input_schema: HumanTaskInputSchema
     required: bool = True
     correction_guidance: str = "Provide a complete response using the requested format."
+    correction_guidance_locales: dict[str, str] = Field(default_factory=dict)
     decisions: tuple[HumanTaskDecision, ...] = ()
     questions: tuple[HumanTaskQuestion, ...] = ()
     questions_from_xml: bool = False
     allowed_targets: tuple[str, ...] = ()
 
+    @field_validator("prompt", "correction_guidance", mode="before")
+    @classmethod
+    def _resolve_copy(cls, value: Any, info: ValidationInfo) -> Any:
+        return _resolve_copy_reference(value, info)
+
+    @field_validator("prompt_locales", "correction_guidance_locales", mode="before")
+    @classmethod
+    def _resolve_locales(cls, value: Any, info: ValidationInfo) -> Any:
+        return _resolve_copy_variants(value, info)
+
     @field_validator("id", "prompt", "correction_guidance")
     @classmethod
     def _validate_copy(cls, value: str, info) -> str:
         return _non_empty(value, field_name=info.field_name)
+
+    @field_validator("prompt_locales", "correction_guidance_locales")
+    @classmethod
+    def _validate_policy_locales(cls, value: dict[str, str], info) -> dict[str, str]:
+        return _validate_locale_variants(value, field_name=info.field_name)
 
     @field_validator("allowed_targets")
     @classmethod
@@ -146,6 +273,26 @@ class HumanTaskPolicy(BaseModel):
         if self.input_schema != "answers" and self.questions_from_xml:
             raise ValueError("only answer policies may use questions_from_xml")
         return self
+
+    def for_locale(self, locale: Optional[str]) -> "HumanTaskPolicy":
+        """Return this policy presented in one locale.
+
+        Only presentation varies. Decision ``id``s, the input schema, the
+        pattern, required and correction flags, question options and allowed
+        targets are machine identity and are carried through unchanged.
+        """
+        return self.model_copy(
+            update={
+                "prompt": _authored_variant(self.prompt_locales, locale, self.prompt),
+                "prompt_locales": {},
+                "correction_guidance": _authored_variant(
+                    self.correction_guidance_locales, locale, self.correction_guidance
+                ),
+                "correction_guidance_locales": {},
+                "decisions": tuple(item.for_locale(locale) for item in self.decisions),
+                "questions": tuple(item.for_locale(locale) for item in self.questions),
+            }
+        )
 
 
 class HumanTaskBinding(BaseModel):

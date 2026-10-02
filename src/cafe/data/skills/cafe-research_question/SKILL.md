@@ -1,8 +1,12 @@
 ---
 name: cafe-research_question
 description: Define a research question and its assumption boundaries
-version: 1.1.0
+version: 1.2.0
 workflow:
+  notification:
+    task_labels:
+      clarification-feedback:
+        message_key: notification.action_labels.clarification_feedback
   execution_profile:
     workload: research
     reasoning: standard
@@ -11,7 +15,9 @@ workflow:
   human_tasks:
     - id: clarification-feedback
       pattern: revision_feedback
-      prompt: Provide the clarification needed to refine the research question.
+      prompt: {message_key: human_task.cafe_research_question.clarification_feedback.prompt}
+      prompt_locales:
+        zh-TW: {message_key: human_task.cafe_research_question.clarification_feedback.prompt}
       input_schema: feedback
   prompt_inputs:
     - artifacts: [research_notes, causal_todo]

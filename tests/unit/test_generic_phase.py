@@ -1957,3 +1957,80 @@ def test_execute_script_hook_timeout_decodes_bytes_output(
     assert event["exit_code"] is None
     assert "partial-bytes" in event["stdout"]
     assert "timed-bytes" in event["stderr"]
+
+
+def test_build_prompt_states_both_language_policy_inputs(tmp_path: Path) -> None:
+    """Unit: the phase prompt carries the two policy languages, not an agent preference."""
+    phase = GenericPhase(_setup_loader(tmp_path))
+
+    prompt = phase.build_prompt(
+        skill_name="cafe-plan",
+        skill_invocation="/custom-drafting",
+        context={
+            "conversation_locale": "zh-TW",
+            "repository_content_locale": "en-US",
+        },
+        output_file=tmp_path / "custom_artifact.md",
+    )
+
+    conversation_line = next(
+        line for line in prompt.splitlines() if "conversation language" in line
+    )
+    content_line = next(line for line in prompt.splitlines() if "content language" in line)
+    assert "zh-TW" in conversation_line
+    assert "en-US" in content_line
+
+
+def test_build_prompt_uses_english_policy_when_no_locale_is_stored(tmp_path: Path) -> None:
+    phase = GenericPhase(_setup_loader(tmp_path))
+
+    prompt = phase.build_prompt(
+        skill_name="cafe-plan",
+        skill_invocation="/custom-drafting",
+        context={"handoff_summary": "Resume", "repository_content_locale": "en-US"},
+    )
+
+    conversation_line = next(
+        line for line in prompt.splitlines() if "conversation language" in line
+    )
+    content_line = next(line for line in prompt.splitlines() if "content language" in line)
+    assert "en-US" in conversation_line
+    assert "en-US" in content_line
+    assert "identifiers" in prompt
+
+
+@pytest.mark.parametrize("with_lease", [False, True])
+def test_publication_revalidates_output_before_each_external_consumer(tmp_path, with_lease):
+    """I5/I8: both public execution modes protect consecutive publication hooks."""
+    output = tmp_path / "report.md"
+    consumed = []
+
+    class ReplaceReport:
+        def run(self, **kwargs):
+            output.write_text("invalid")
+            return HookResult()
+
+    class ConsumeReport:
+        def run(self, **kwargs):
+            consumed.append(output.read_text())
+            return HookResult()
+
+    def produce(_prompt):
+        output.write_text("valid")
+        return "await_agent"
+
+    def validate():
+        if output.read_text() != "valid":
+            raise ValueError("invalid current output")
+
+    phase = GenericPhase(_setup_loader(tmp_path), hook_registry={
+        "ReplaceReport": ReplaceReport, "ConsumeReport": ConsumeReport,
+    })
+    with pytest.raises(ValueError):
+        phase.execute(
+            skill_name="cafe-plan", skill_invocation="/plan",
+            step_def={"hooks": {"publish_output": ["ReplaceReport", "ConsumeReport"]}},
+            agent_executor=produce, output_file=output, validate_output=validate,
+            execution_lease=(lambda: workspace_execution_lock(tmp_path)) if with_lease else None,
+        )
+    assert consumed == []

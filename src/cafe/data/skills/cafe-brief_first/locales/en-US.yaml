@@ -1,0 +1,5 @@
+human_task.cafe_brief_first.editorial_clarification.prompt: Answer the editorial clarification questions.
+human_task.cafe_brief_first.editorial_clarification.questions.audience.prompt: Who is the intended audience?
+human_task.cafe_brief_first.editorial_output_review.decisions.approve.label: Approve brief
+human_task.cafe_brief_first.editorial_output_review.decisions.revise.label: Request brief revision
+human_task.cafe_brief_first.editorial_output_review.prompt: Approve the editorial brief or request a revision.

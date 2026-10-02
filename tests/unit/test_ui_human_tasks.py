@@ -436,7 +436,13 @@ workflow:
         global_root=tmp_path / "global",
         builtin_root=builtin_root,
     )
-    monkeypatch.setattr("cafe.ui.human_tasks.SkillLoader", lambda: loader)
+    monkeypatch.setattr(
+        "cafe.ui.human_tasks.SkillLoader",
+        lambda **kwargs: SkillLoader(
+            project_root=loader.project_root, global_root=loader.global_root,
+            builtin_root=loader.builtin_root, **kwargs,
+        ),
+    )
     issue_dir = tmp_path / ".cafe" / "issues" / "durable-revision"
     store = BlackboardStore(issue_dir)
     blackboard = store.load_or_create("review", playbook_id="standard")
@@ -1175,3 +1181,64 @@ def test_dynamic_xml_questions_reject_incomplete_command_answers(tmp_path: Path)
 
     assert result.rejection is not None
     assert store.load_or_create("spec").current_step == "user"
+
+
+def test_the_render_path_presents_a_pending_task_from_its_materialized_snapshot(
+    tmp_path: Path,
+) -> None:
+    """Unit Test 8: presentation comes from the snapshot, not the current locale."""
+    from cafe.ui.cli_shared import _pending_task_presentation
+
+    declared = HumanTaskPolicy.model_validate(
+        {
+            "id": "output-review",
+            "pattern": "confirm_output",
+            "prompt": "Confirm the result",
+            "prompt_locales": {"zh-TW": "確認結果"},
+            "input_schema": "decision",
+            "decisions": [
+                {"id": "confirm", "label": "Confirm", "label_locales": {"zh-TW": "確認"}}
+            ],
+        }
+    )
+    store = HumanTaskRecordStore(tmp_path / "issue")
+    task = store.materialize(
+        workflow_id="workflow-one",
+        step="develop",
+        iteration=1,
+        trigger="confirm_output",
+        policy_id=declared.id,
+        prompt=declared.for_locale("zh-TW").prompt,
+        expected_result=declared.for_locale("zh-TW").model_dump(mode="json"),
+        continuations={"confirm": "review"},
+        assignee_type="user",
+    )
+
+    presented = _pending_task_presentation(
+        record_store=store, task_id=task.id, declared=declared
+    )
+
+    assert presented.prompt == "確認結果"
+    assert [item.label for item in presented.decisions] == ["確認"]
+    assert presented.id == declared.id
+    assert [item.id for item in presented.decisions] == [item.id for item in declared.decisions]
+
+
+def test_an_unreadable_snapshot_falls_back_to_the_declared_contract(tmp_path: Path) -> None:
+    from cafe.ui.cli_shared import _pending_task_presentation
+
+    declared = HumanTaskPolicy.model_validate(
+        {
+            "id": "output-review",
+            "pattern": "confirm_output",
+            "prompt": "Confirm the result",
+            "input_schema": "decision",
+            "decisions": [{"id": "confirm", "label": "Confirm"}],
+        }
+    )
+    store = HumanTaskRecordStore(tmp_path / "issue")
+
+    assert (
+        _pending_task_presentation(record_store=store, task_id="missing", declared=declared)
+        is declared
+    )

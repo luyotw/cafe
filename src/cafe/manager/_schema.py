@@ -1,0 +1,609 @@
+"""Strict, package-private schema and semantic projection for Manager contracts."""
+
+from __future__ import annotations
+
+import hashlib
+from copy import deepcopy
+from datetime import datetime
+from typing import Any, Mapping
+
+from cafe.core.packet_io import canonical_json
+from cafe.core.types import AgentCLI
+
+from .delivery import normalize_delivery_contract, validate_closeout_plan_policy
+
+SCHEMA_VERSION = 8
+_RUNTIME_KEYS = {
+    "session",
+    "sessions",
+    "session_id",
+    "dispatch",
+    "dispatch_state",
+    "active_cli",
+    "active_index",
+    "locks",
+    "lock",
+    "baton",
+    "history",
+    "pr_url",
+}
+_LEGACY_PROPOSAL_KEYS = {
+    "locales",
+    "delivery_contract",
+    "confirmation_contract",
+    "reactive_user_handoffs",
+    "mandate",
+    "issue_assessment",
+    "phases",
+    "proactive_review",
+    "manager",
+    "checkout",
+    "semantic_facts",
+    "material_assumptions",
+}
+_LEGACY_CONTRACT_KEYS = _LEGACY_PROPOSAL_KEYS - {"semantic_facts", "material_assumptions"} | {
+    "schema_version",
+    "identity",
+    "revision",
+    "provenance",
+    "preflight",
+}
+_LEGACY_POLICY_SEMANTIC_FIELDS = (
+    "locales",
+    "delivery_contract",
+    "confirmation_contract",
+    "reactive_user_handoffs",
+    "mandate",
+    "issue_assessment",
+    "phases",
+    "proactive_review",
+    "manager",
+    "checkout",
+)
+_PROPOSAL_KEYS = {
+    "locales",
+    "delivery_contract",
+    "confirmation_contract",
+    "reactive_user_handoffs",
+    "phases",
+    "proactive_review",
+    "manager",
+    "checkout",
+}
+_CONTRACT_KEYS = _PROPOSAL_KEYS | {
+    "schema_version",
+    "identity",
+    "revision",
+    "provenance",
+}
+_NEW_PROPOSAL_KEYS = _PROPOSAL_KEYS | {"task_contract"}
+_NEW_CONTRACT_KEYS = _NEW_PROPOSAL_KEYS | {"schema_version", "identity", "revision", "provenance"}
+_POLICY_SEMANTIC_FIELDS = (
+    "locales",
+    "delivery_contract",
+    "confirmation_contract",
+    "reactive_user_handoffs",
+    "phases",
+    "proactive_review",
+    "manager",
+    "checkout",
+)
+_NEW_POLICY_SEMANTIC_FIELDS = _POLICY_SEMANTIC_FIELDS + ("task_contract",)
+
+
+def _mapping(value: Any, label: str, *, keys: set[str] | None = None) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{label} must be a mapping")
+    result = dict(value)
+    if keys is not None and set(result) != keys:
+        raise ValueError(f"{label} has unsupported or missing fields")
+    return result
+
+
+def _string(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{label} must be a non-empty string")
+    return value.strip()
+
+
+def _bool(value: Any, label: str) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"{label} must be a Boolean")
+    return value
+
+
+def _string_list(value: Any, label: str) -> list[str]:
+    if not isinstance(value, list) or any(
+        not isinstance(item, str) or not item.strip() for item in value
+    ):
+        raise ValueError(f"{label} must be a list of non-empty strings")
+    result = [item.strip() for item in value]
+    if len(set(result)) != len(result):
+        raise ValueError(f"{label} must not contain duplicates")
+    return result
+
+
+def _json_mapping(value: Any, label: str) -> dict[str, Any]:
+    result = _mapping(value, label)
+    try:
+        canonical_json(result)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must contain canonical JSON values") from exc
+    return deepcopy(result)
+
+
+def _aware_time(value: Any, label: str) -> str:
+    text = _string(value, label)
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"{label} must be an ISO-8601 timestamp") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"{label} must include a timezone")
+    return text
+
+
+def _validate_locales(value: Any) -> dict[str, Any]:
+    result = _mapping(value, "locales", keys={"conversation"})
+    locale = _mapping(result["conversation"], "locales.conversation", keys={"value", "source"})
+    locale["value"] = _string(locale["value"], "locales.conversation.value")
+    locale["source"] = _string(locale["source"], "locales.conversation.source")
+    result["conversation"] = locale
+    return result
+
+
+def _validate_confirmation(value: Any) -> dict[str, Any]:
+    required = {"user_required", "manager_confirmable", "mandatory_human_stops"}
+    result = _mapping(value, "confirmation_contract", keys=required)
+    for name in required:
+        result[name] = _string_list(result[name], f"confirmation_contract.{name}")
+    if set(result["user_required"]) & set(result["manager_confirmable"]):
+        raise ValueError("confirmation ownership must be disjoint")
+    if set(result["mandatory_human_stops"]) & set(result["manager_confirmable"]):
+        raise ValueError("mandatory human stops cannot be manager-confirmable")
+    return result
+
+
+def _validate_task_contract(value: Any) -> dict[str, list[dict[str, str]]]:
+    result = _mapping(value, "task_contract", keys={"user_required", "manager_confirmable"})
+    seen: set[tuple[str, str]] = set()
+    normalized: dict[str, list[dict[str, str]]] = {}
+    for owner in ("user_required", "manager_confirmable"):
+        entries = result[owner]
+        if not isinstance(entries, list):
+            raise ValueError(f"task_contract.{owner} must be a list")
+        normalized[owner] = []
+        for index, entry in enumerate(entries):
+            task = _mapping(entry, f"task_contract.{owner}[{index}]", keys={"phase", "task_id"})
+            key = (
+                _string(task["phase"], "task phase"),
+                _string(task["task_id"], "task id"),
+            )
+            if key in seen:
+                raise ValueError("task ownership declarations must be distinct")
+            seen.add(key)
+            normalized[owner].append({"phase": key[0], "task_id": key[1]})
+    return normalized
+
+
+def _validate_phases(value: Any, *, legacy: bool = False) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise ValueError("phases must be a list")
+    phases: list[dict[str, Any]] = []
+    names: set[str] = set()
+    expected = {"name", "chain", "rationale"} if legacy else {"name", "chain"}
+    for index, raw in enumerate(value):
+        phase = _mapping(raw, f"phases[{index}]", keys=expected)
+        for field in (("name", "rationale") if legacy else ("name",)):
+            phase[field] = _string(phase[field], f"phases[{index}].{field}")
+        if phase["name"] in names:
+            raise ValueError("phases must have distinct names")
+        names.add(phase["name"])
+        if not isinstance(phase["chain"], list):
+            raise ValueError("phase chain must be a list")
+        chain: list[dict[str, str]] = []
+        seen_clis: set[str] = set()
+        for chain_index, raw_entry in enumerate(phase["chain"]):
+            entry = _mapping(
+                raw_entry, f"phases[{index}].chain[{chain_index}]", keys={"cli", "model"}
+            )
+            cli = _string(entry["cli"], "phase chain cli")
+            try:
+                cli = AgentCLI(cli).value
+            except ValueError as exc:
+                raise ValueError("phase chain CLI is unsupported") from exc
+            entry = {"cli": cli, "model": _string(entry["model"], "phase chain model")}
+            if entry["cli"] in seen_clis:
+                raise ValueError("phase chain CLIs must be distinct")
+            seen_clis.add(entry["cli"])
+            chain.append(entry)
+        if not chain:
+            raise ValueError("Manager phases require an ordered CLI/model chain")
+        phase["chain"] = chain
+        phases.append(phase)
+    return phases
+
+
+def _validate_proactive(
+    value: Any, phases: list[dict[str, Any]], *, legacy: bool = False
+) -> dict[str, Any]:
+    result = _mapping(value, "proactive_review", keys={"phase_decisions"})
+    raw_decisions = result["phase_decisions"]
+    if not isinstance(raw_decisions, list):
+        raise ValueError("proactive_review.phase_decisions must be a list")
+    agent_phases = [phase["name"] for phase in phases]
+    decisions: list[dict[str, str]] = []
+    for index, raw in enumerate(raw_decisions):
+        expected = {"phase", "decision", "rationale"} if legacy else {"phase", "decision"}
+        decision = _mapping(raw, f"proactive_review.phase_decisions[{index}]", keys=expected)
+        phase = _string(decision["phase"], "proactive review phase")
+        state = _string(decision["decision"], "proactive review decision")
+        if state not in {"required", "not_required"}:
+            raise ValueError("proactive review decision is invalid")
+        normalized = {"phase": phase, "decision": state}
+        if legacy:
+            normalized["rationale"] = _string(decision["rationale"], "proactive review rationale")
+        decisions.append(normalized)
+    if [item["phase"] for item in decisions] != agent_phases:
+        raise ValueError("proactive review decisions must cover Manager phases in order")
+    result["phase_decisions"] = decisions
+    return result
+
+
+def _validate_manager(value: Any) -> dict[str, Any]:
+    result = _mapping(value, "manager")
+    if _RUNTIME_KEYS & set(result):
+        raise ValueError("manager runtime state does not belong in the confirmed contract")
+    mode = _string(result.get("mode"), "manager.mode")
+    if mode == "attached":
+        if set(result) != {"mode", "poll_interval_seconds"}:
+            raise ValueError("attached manager has invalid fields")
+        seconds = result["poll_interval_seconds"]
+        if not isinstance(seconds, int) or isinstance(seconds, bool) or seconds <= 0:
+            raise ValueError("attached manager requires a positive poll interval")
+    elif mode == "unattended":
+        if set(result) != {"mode"}:
+            raise ValueError("unattended manager has invalid fields")
+    elif mode == "event-driven":
+        if (
+            set(result) != {"mode", "clis"}
+            or not isinstance(result["clis"], list)
+            or not result["clis"]
+        ):
+            raise ValueError("event-driven manager requires an ordered CLI chain")
+        clis: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for index, raw in enumerate(result["clis"]):
+            entry = _mapping(
+                raw,
+                "event-driven CLI",
+                keys={"cli"} if index == 0 else {"cli", "model"},
+            )
+            cli = _string(entry["cli"], "event-driven CLI")
+            try:
+                cli = AgentCLI(cli).value
+            except ValueError as exc:
+                raise ValueError("event-driven CLI is unsupported") from exc
+            if cli in seen:
+                raise ValueError("event-driven CLIs must be distinct")
+            seen.add(cli)
+            normalized = {"cli": cli}
+            if index > 0:
+                normalized["model"] = _string(entry["model"], "event-driven fallback model")
+            clis.append(normalized)
+        result["clis"] = clis
+    else:
+        raise ValueError("manager.mode is invalid")
+    return result
+
+
+def _validate_checkout(value: Any) -> dict[str, Any]:
+    result = _mapping(value, "checkout")
+    kind = _string(result.get("kind"), "checkout.kind")
+    if kind == "current_checkout" and set(result) == {"kind"}:
+        return result
+    if kind == "worktree" and set(result) == {"kind", "path"}:
+        result["path"] = _string(result["path"], "checkout.path")
+        return result
+    raise ValueError("checkout must be current_checkout or a named worktree")
+
+
+def _validate_policy(proposal: Mapping[str, Any]) -> dict[str, Any]:
+    raw = _mapping(proposal, "confirmed proposal", keys=set(proposal))
+    if _RUNTIME_KEYS & set(raw):
+        raise ValueError("mutable runtime state does not belong in the confirmed contract")
+    new = "task_contract" in raw
+    if set(raw) != (_NEW_PROPOSAL_KEYS if new else _PROPOSAL_KEYS):
+        raise ValueError("confirmed proposal is incomplete")
+    phases = _validate_phases(raw["phases"])
+    reactive = _mapping(raw["reactive_user_handoffs"], "reactive_user_handoffs")
+    reactive_keys = {"need_permission", "alignment_checkpoint"}
+    if not new or "need_clarification" in reactive:
+        reactive_keys.add("need_clarification")
+    result: dict[str, Any] = {
+        "locales": _validate_locales(raw["locales"]),
+        "confirmation_contract": _validate_confirmation(raw["confirmation_contract"]),
+        "reactive_user_handoffs": _mapping(
+            raw["reactive_user_handoffs"],
+            "reactive_user_handoffs",
+            keys=reactive_keys,
+        ),
+        "phases": phases,
+        "proactive_review": _validate_proactive(raw["proactive_review"], phases),
+        "manager": _validate_manager(raw["manager"]),
+        "checkout": _validate_checkout(raw["checkout"]),
+    }
+    delivery = normalize_delivery_contract(raw["delivery_contract"])
+    if delivery["schema_version"] != 3:
+        raise ValueError("Manager v8 requires Delivery Contract version 3")
+    validate_closeout_plan_policy(delivery["closeout_plan"], allow_squash=None)
+    result["delivery_contract"] = delivery
+    for field in result["reactive_user_handoffs"]:
+        result["reactive_user_handoffs"][field] = _string(
+            result["reactive_user_handoffs"][field], f"reactive_user_handoffs.{field}"
+        )
+    if new:
+        result["task_contract"] = _validate_task_contract(raw["task_contract"])
+    clarification = result["reactive_user_handoffs"].get("need_clarification")
+    if clarification is not None and clarification not in {"user_required", "manager_confirmable"}:
+        raise ValueError("need_clarification must be user_required or manager_confirmable")
+    return result
+
+
+def _validate_legacy_policy(
+    proposal: Mapping[str, Any], *, require_delivery: bool
+) -> dict[str, Any]:
+    raw = _mapping(proposal, "confirmed proposal", keys=set(proposal))
+    if _RUNTIME_KEYS & set(raw):
+        raise ValueError("mutable runtime state does not belong in the confirmed contract")
+    required = (
+        _LEGACY_PROPOSAL_KEYS if require_delivery else _LEGACY_PROPOSAL_KEYS - {"delivery_contract"}
+    )
+    if set(raw) != required:
+        raise ValueError("confirmed proposal is incomplete")
+    phases = _validate_phases(raw["phases"], legacy=True)
+    result: dict[str, Any] = {
+        "locales": _validate_locales(raw["locales"]),
+        "confirmation_contract": _validate_confirmation(raw["confirmation_contract"]),
+        "reactive_user_handoffs": _mapping(
+            raw["reactive_user_handoffs"],
+            "reactive_user_handoffs",
+            keys={"need_clarification", "need_permission", "alignment_checkpoint"},
+        ),
+        "mandate": _json_mapping(raw["mandate"], "mandate"),
+        "issue_assessment": _mapping(
+            raw["issue_assessment"],
+            "issue_assessment",
+            keys={"nature", "scale", "risks", "rationale"},
+        ),
+        "phases": phases,
+        "proactive_review": _validate_proactive(raw["proactive_review"], phases, legacy=True),
+        "manager": _validate_manager(raw["manager"]),
+        "checkout": _validate_checkout(raw["checkout"]),
+    }
+    if require_delivery:
+        delivery = normalize_delivery_contract(raw["delivery_contract"])
+        if delivery["schema_version"] not in {1, 2}:
+            raise ValueError("legacy Manager contracts require Delivery Contract version 1 or 2")
+        result["delivery_contract"] = delivery
+    for field in ("need_clarification", "need_permission", "alignment_checkpoint"):
+        result["reactive_user_handoffs"][field] = _string(
+            result["reactive_user_handoffs"][field], f"reactive_user_handoffs.{field}"
+        )
+    assessment = result["issue_assessment"]
+    assessment["nature"] = _string(assessment["nature"], "issue_assessment.nature")
+    assessment["scale"] = _string(assessment["scale"], "issue_assessment.scale")
+    assessment["risks"] = _string_list(assessment["risks"], "issue_assessment.risks")
+    assessment["rationale"] = _string(assessment["rationale"], "issue_assessment.rationale")
+    expected_semantics = {
+        "effective_policy": {
+            name: deepcopy(result[name])
+            for name in _LEGACY_POLICY_SEMANTIC_FIELDS
+            if name in result
+        }
+    }
+    supplied_semantics = _json_mapping(raw["semantic_facts"], "semantic_facts")
+    if supplied_semantics != expected_semantics:
+        raise ValueError("semantic_facts must exactly represent the complete effective policy")
+    result["preflight"] = {
+        "semantic_facts": expected_semantics,
+        "material_assumptions": _json_mapping(raw["material_assumptions"], "material_assumptions"),
+    }
+    return result
+
+
+def _semantic_projection_from_validated(contract: Mapping[str, Any]) -> dict[str, Any]:
+    """Project a policy already validated by the caller or proposal builder."""
+    version = contract.get("schema_version")
+    legacy = version in {3, 4}
+    fields = ("identity",) + (
+        _LEGACY_POLICY_SEMANTIC_FIELDS
+        if legacy
+        else _NEW_POLICY_SEMANTIC_FIELDS if version == SCHEMA_VERSION else _POLICY_SEMANTIC_FIELDS
+    )
+    projection = {name: deepcopy(contract[name]) for name in fields if name in contract}
+    if legacy:
+        projection["material_assumptions"] = deepcopy(contract["preflight"]["material_assumptions"])
+    return projection
+
+
+def freshness_semantic_facts(contract: Mapping[str, Any]) -> dict[str, Any]:
+    """Project the current policy into the caller's fresh-facts envelope."""
+    current = validate_contract(contract)
+    fields = (
+        _NEW_POLICY_SEMANTIC_FIELDS
+        if current["schema_version"] == SCHEMA_VERSION
+        else _POLICY_SEMANTIC_FIELDS
+    )
+    return {"effective_policy": {name: deepcopy(current[name]) for name in fields}}
+
+
+def semantic_projection(contract: Mapping[str, Any]) -> dict[str, Any]:
+    """Return only confirmed behavior, excluding diagnostics and revision metadata."""
+    return _semantic_projection_from_validated(validate_contract(contract))
+
+
+def proposal_digest(contract: Mapping[str, Any]) -> str:
+    return hashlib.sha256(canonical_json(_semantic_projection_from_validated(contract))).hexdigest()
+
+
+def build_manager_settings_update(
+    contract: Mapping[str, Any],
+    manager: Mapping[str, Any],
+    *,
+    previous_contract_sha256: str,
+) -> dict[str, Any]:
+    """Replace only Manager-owned settings without changing contract schema or authority."""
+    current = validate_contract(contract, allow_legacy_upgrade=True)
+    updated = deepcopy(current)
+    updated["manager"] = _validate_manager(manager)
+    if current["schema_version"] in {3, 4}:
+        updated["preflight"]["semantic_facts"]["effective_policy"]["manager"] = deepcopy(
+            updated["manager"]
+        )
+    updated["revision"] = {
+        "generation": current["revision"]["generation"] + 1,
+        "previous_contract_sha256": previous_contract_sha256,
+    }
+    updated["provenance"]["proposal_digest"] = proposal_digest(updated)
+    return validate_contract(updated, allow_legacy_upgrade=True)
+
+
+def build_initial_contract(
+    *,
+    proposal: Mapping[str, Any],
+    issue_name: str,
+    workflow_id: str,
+    confirmed_by: str,
+    confirmed_at: str,
+    revision: int = 1,
+    previous_contract_sha256: str | None = None,
+    provenance_kind: str = "initial",
+) -> dict[str, Any]:
+    """Normalize a purpose-specific proposal into a strict durable document."""
+    if not isinstance(revision, int) or isinstance(revision, bool) or revision <= 0:
+        raise ValueError("revision must be a positive integer")
+    if provenance_kind not in {"initial", "user_reconfirmation"}:
+        raise ValueError("provenance kind is invalid")
+    policy = _validate_policy(proposal)
+    document: dict[str, Any] = {
+        "schema_version": SCHEMA_VERSION,
+        "identity": {
+            "issue_name": _string(issue_name, "identity.issue_name"),
+            "workflow_id": _string(workflow_id, "identity.workflow_id"),
+        },
+        "revision": {"generation": revision, "previous_contract_sha256": previous_contract_sha256},
+        "provenance": {
+            "kind": provenance_kind,
+            "confirmed_by": _string(confirmed_by, "provenance.confirmed_by"),
+            "confirmed_at": _aware_time(confirmed_at, "provenance.confirmed_at"),
+            "proposal_digest": "",
+        },
+        **policy,
+    }
+    document["provenance"]["proposal_digest"] = proposal_digest(document)
+    return validate_contract(document)
+
+
+def validate_contract(
+    document: Mapping[str, Any],
+    *,
+    issue_name: str | None = None,
+    workflow_id: str | None = None,
+    allow_legacy_upgrade: bool = False,
+) -> dict[str, Any]:
+    raw = _mapping(document, "contract")
+    # Valid v3/v4 predecessors may be read only for explicit user
+    # reconfirmation, bounded same-schema Manager updates, or the callback's
+    # narrow event-transport projection.  They never gain v5 authority.
+    raw_version = raw.get("schema_version")
+    version_is_int = isinstance(raw_version, int) and not isinstance(raw_version, bool)
+    legacy = allow_legacy_upgrade and version_is_int and raw_version in {3, 4}
+    keys = (
+        _LEGACY_CONTRACT_KEYS - {"delivery_contract"}
+        if legacy and raw_version == 3
+        else (
+            _LEGACY_CONTRACT_KEYS
+            if legacy
+            else _NEW_CONTRACT_KEYS if version_is_int and raw_version == SCHEMA_VERSION else _CONTRACT_KEYS
+        )
+    )
+    if set(raw) != keys:
+        raise ValueError("contract has unsupported or missing fields")
+    schema_version = raw["schema_version"]
+    if (
+        not isinstance(schema_version, int)
+        or isinstance(schema_version, bool)
+        or schema_version != raw_version
+        or (legacy and schema_version not in {3, 4})
+        or (not legacy and schema_version != SCHEMA_VERSION)
+    ):
+        raise ValueError("contract schema version is unsupported")
+    identity = _mapping(raw["identity"], "identity", keys={"issue_name", "workflow_id"})
+    identity["issue_name"] = _string(identity["issue_name"], "identity.issue_name")
+    identity["workflow_id"] = _string(identity["workflow_id"], "identity.workflow_id")
+    if issue_name is not None and identity["issue_name"] != issue_name:
+        raise ValueError("contract belongs to a different issue")
+    if workflow_id is not None and identity["workflow_id"] != workflow_id:
+        raise ValueError("contract belongs to a different workflow")
+    revision = _mapping(
+        raw["revision"], "revision", keys={"generation", "previous_contract_sha256"}
+    )
+    if (
+        not isinstance(revision["generation"], int)
+        or isinstance(revision["generation"], bool)
+        or revision["generation"] <= 0
+    ):
+        raise ValueError("contract generation is invalid")
+    previous = revision["previous_contract_sha256"]
+    if previous is not None and (not isinstance(previous, str) or len(previous) != 64):
+        raise ValueError("previous contract digest is invalid")
+    provenance_keys = {"kind", "confirmed_by", "confirmed_at", "proposal_digest"}
+    provenance = _mapping(raw["provenance"], "provenance")
+    if set(provenance) != provenance_keys:
+        raise ValueError("contract provenance is invalid")
+    kind = _string(provenance["kind"], "provenance.kind")
+    if kind not in {"initial", "user_reconfirmation"}:
+        raise ValueError("contract provenance kind is invalid")
+    provenance["confirmed_by"] = _string(provenance["confirmed_by"], "provenance.confirmed_by")
+    provenance["confirmed_at"] = _aware_time(provenance["confirmed_at"], "provenance.confirmed_at")
+    digest = _string(provenance["proposal_digest"], "provenance.proposal_digest")
+    if len(digest) != 64:
+        raise ValueError("contract proposal digest is invalid")
+    proposal = {
+        key: deepcopy(value)
+        for key, value in raw.items()
+        if key not in {"schema_version", "identity", "revision", "provenance"}
+    }
+    if legacy:
+        proposal["semantic_facts"] = (
+            proposal.pop("preflight")["semantic_facts"]
+            if isinstance(proposal.get("preflight"), Mapping)
+            else None
+        )
+        proposal["material_assumptions"] = (
+            raw["preflight"].get("material_assumptions")
+            if isinstance(raw["preflight"], Mapping)
+            else None
+        )
+        policy = _validate_legacy_policy(proposal, require_delivery=schema_version == 4)
+    else:
+        policy = _validate_policy(proposal)
+        has_clarification = "need_clarification" in policy["reactive_user_handoffs"]
+        if schema_version == 6 and has_clarification:
+            raise ValueError("Manager v6 has no overall clarification policy; reconfirm as v7")
+        if schema_version == SCHEMA_VERSION and not has_clarification:
+            raise ValueError("Manager v8 requires an explicit overall need_clarification policy")
+    normalized: dict[str, Any] = {
+        "schema_version": schema_version,
+        "identity": identity,
+        "revision": revision,
+        "provenance": provenance,
+        **policy,
+    }
+    expected = hashlib.sha256(
+        canonical_json(_semantic_projection_from_validated(normalized))
+    ).hexdigest()
+    if digest != expected:
+        raise ValueError("contract proposal digest does not match its policy")
+    return normalized

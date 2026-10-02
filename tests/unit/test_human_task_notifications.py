@@ -27,6 +27,17 @@ from cafe.core.human_task_notifications import (
 VALID_WEBHOOK = "https://hooks.slack.com/services/T00000000/B00000000/secret-value"
 
 
+def _declared_presentation(step: str, task: str, locale: str):
+    from cafe.skills.notification_copy import resolve_step_notification_presentation
+
+    if step == "custom-stage":
+        return None
+    return resolve_step_notification_presentation(
+        playbook_data={"steps": {step: {"skill": f"cafe-{step}"}}},
+        step_name=step, task_id=task, locale=locale,
+    )
+
+
 def test_callback_state_error_gives_user_an_action_instead_of_internal_fields() -> None:
     message = build_workflow_callback_failure_message(
         repository="cafe",
@@ -34,11 +45,12 @@ def test_callback_state_error_gives_user_an_action_instead_of_internal_fields() 
         step="develop",
         event_type="phase_terminal",
         error_code="callback_ValueError",
+        locale="zh-TW",
     ).to_slack_payload()["text"]
 
     assert "無法讀取自動通知所需的狀態或設定" in message
     assert "這不代表工作流程已停止" in message
-    assert "原對話，請 Driver 檢查目前進度與下一步" in message
+    assert "原對話，請流程管理員檢查目前進度與下一步" in message
     assert "callback_ValueError" not in message
     assert "transport_clis" not in message
 
@@ -151,6 +163,8 @@ def test_actionable_message_names_the_cafe_issue_without_opaque_identifiers() ->
         task_id="8a010542-007e-4cd1-88fe-dc799721c522",
         step="develop",
         task_type="clarification-feedback",
+        locale="zh-TW",
+        presentation=_declared_presentation("develop", "clarification-feedback", "zh-TW"),
     )
 
     payload = message.to_slack_payload()["text"]
@@ -188,6 +202,10 @@ def test_standard_task_actions_and_unknown_fallback_are_readable(
         task_id="task-one",
         step=step,
         task_type=task_type,
+        locale="zh-TW",
+        presentation=(
+            _declared_presentation(step, task_type, "zh-TW") if step != "custom-stage" else None
+        ),
     )
 
     payload = message.to_slack_payload()["text"]
@@ -917,3 +935,81 @@ def test_capability_receipt_records_success_and_policy_denial(
     assert denied.receipt["code"] == "effect_not_allowed"
     assert denied.receipt["outcome"] == "policy_denied"
     assert "secret-value" not in json.dumps([successful.receipt, denied.receipt])
+
+
+def _task_payload(locale: str, *, step: str = "spec", task_type: str = "output-review") -> str:
+    return build_human_task_message(
+        repository="luyotw/cafe",
+        issue="issue565",
+        workflow_id="workflow-one",
+        task_id="task-one",
+        step=step,
+        task_type=task_type,
+        locale=locale,
+        presentation=_declared_presentation(step, task_type, locale),
+    ).to_slack_payload()["text"]
+
+
+def test_a_supported_locale_selects_the_text_authored_for_it() -> None:
+    """Unit Test 6: authored text follows the workflow language, not a fixed one."""
+    traditional_chinese = _task_payload("zh-TW")
+    english = _task_payload("en-US")
+
+    assert traditional_chinese != english
+    assert "確認結果" in traditional_chinese
+    assert "確認結果" not in english
+    assert english.isascii()
+
+
+def test_an_unsupported_locale_falls_back_to_english_with_no_added_notice() -> None:
+    """Unit Test 6: the fallback is silent and leaves the requested locale alone."""
+    message = build_human_task_message(
+        repository="luyotw/cafe",
+        issue="issue565",
+        workflow_id="workflow-one",
+        task_id="task-one",
+        step="spec",
+        task_type="output-review",
+        locale="ja-JP",
+        presentation=_declared_presentation("spec", "output-review", "ja-JP"),
+    )
+    payload = message.to_slack_payload()["text"]
+
+    assert payload == _task_payload("en-US")
+    assert message.locale == "ja-JP"
+    for trace in ("ja-JP", "fallback", "unsupported", "English"):
+        assert trace not in payload
+
+
+def test_simplified_chinese_is_not_treated_as_traditional_chinese() -> None:
+    assert _task_payload("zh-CN") == _task_payload("en-US")
+    assert _task_payload("zh-Hant") == _task_payload("zh-TW")
+
+
+@pytest.mark.parametrize("locale", ["en-US", "zh-TW"])
+def test_unknown_steps_and_task_types_stay_readable_in_both_languages(locale: str) -> None:
+    payload = _task_payload(locale, step="custom-stage", task_type="custom-task")
+
+    assert "custom-stage" not in payload
+    assert "custom-task" not in payload
+    assert payload.count("\n") == 5
+
+
+@pytest.mark.parametrize("locale", ["en-US", "zh-TW", "ja-JP"])
+def test_callback_failure_reasons_are_described_in_the_selected_language(locale: str) -> None:
+    payloads = {
+        error_code: build_workflow_callback_failure_message(
+            repository="cafe",
+            issue="issue565",
+            step="develop",
+            event_type="phase_terminal",
+            error_code=error_code,
+            locale=locale,
+        ).to_slack_payload()["text"]
+        for error_code in ("callback_ValueError", "codex_queue_full", "other_error")
+    }
+
+    assert len(set(payloads.values())) == 3
+    for error_code, payload in payloads.items():
+        assert error_code not in payload
+        assert payload.count("\n") == 6

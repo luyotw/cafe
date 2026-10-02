@@ -1,15 +1,15 @@
-# User Handoffs And Driver-Owned Alignment
+# User Handoffs And Manager-Owned Alignment
 
-Read this reference whenever CAFE pauses for a user, the driver considers
+Read this reference whenever CAFE pauses for a user, the manager considers
 confirming an output, or a proposed delta may affect strategic alignment. Also
 read `strategic_context.md`.
 
 Command examples below allow the runtime to follow the persisted baton. Append
 `--single-step` only as an explicit manual or diagnostic invocation control;
-it is not part of the issue's driver policy.
+it is not part of the issue's manager policy.
 
 The kickoff contract says who may approve an output or answer a reactive pause.
-The mandate says what the driver may decide. These are independent controls and
+The mandate says what the manager may decide. These are independent controls and
 CAFE runtime does not auto-approve them.
 
 ## User-pause checklist
@@ -27,7 +27,7 @@ input`:
 - [ ] Re-resolve the conversation locale.
 - [ ] Read `playbook_id` from the active `issue.yaml`; read
   `confirmation_contract`, `task_contract`, and `reactive_user_handoffs` from
-  the validated issue-scoped `driver/contract.json`.
+  the validated issue-scoped `manager/contract.json`.
 - [ ] Verify the exact confirmation-gate partition with
   `cafe playbook confirmation-gates <playbook-id>`.
 - [ ] If the contract or locale is missing, stale, invalid, or omits an
@@ -36,20 +36,21 @@ input`:
 
 Then route by intent:
 
-- The unique active declared correction outcome is the sole Driver correction
+- The unique active declared correction outcome is the sole Manager correction
   exception only when it requires feedback, is marked `correction: true`, and
   routes to a non-advancing correction continuation. Derive it from the active
   HumanTask declaration regardless of outcome, phase, or target names. After
-  complete Driver review and one `cafe chat` consensus exchange, submit only
+  complete Manager review and one `cafe chat` consensus exchange, submit only
   that outcome through the existing correction route. If zero or multiple
   outcomes qualify, fail closed for user/playbook clarification.
 - `confirm_output` from a mandatory or `user_required` advancing `confirm`
   stops for the real user. Other user-owned decisions also stop for the user.
-- `confirm_output` from a `driver_confirmable` step: verify the output and
+- `confirm_output` from a `manager_confirmable` step: verify the output and
   required input artifacts are complete, in-mandate, and consistent with
   accepted upstream artifacts before confirming. Apply the Delivery comparison below.
-- a current task whose exact phase and task ID are declared
-  `driver_confirmable`, including `need_clarification`: the Driver
+- a current task authorized by an explicit `manager_confirmable` declaration,
+  or a `need_clarification` task covered by the confirmed overall
+  `reactive_user_handoffs.need_clarification: manager_confirmable` policy: the Manager
   may answer when the complete response stays within the confirmed Delivery
   Contract's scope, constraints and existing authority, and triggers no
   deviation. Multiple authorized reversible technical choices may be resolved
@@ -62,20 +63,23 @@ Then route by intent:
   external side effects for the user.
 - legacy or custom `alignment_checkpoint`: use the classification below; the
   checkpoint is evidence, not proof the user must decide.
-- any other user-owned pause: stop. Unknown handoffs are not driver-confirmable.
+- any other user-owned pause: stop. Unknown handoffs are not manager-confirmable.
 
 After `cafe task inspect <task-id> --json`, run
 `python3 <skill-dir>/scripts/inspect_task_authority.py --issue-dir
 .cafe/issues/<issue> --task-id <task-id> --json`. Its `route_status`,
 `resolution_owner`, and `evidence_reason` are separate facts. Supply a complete
 response and a grounded assessment to the same read-only entry. For a
-`driver_confirmable` response, pass that same assessment and the returned
-`contract_sha256` and `sources_sha256` to `complete_driver_task.py`; it
+`manager_confirmable` response, pass that same assessment and the returned
+`contract_sha256` and `sources_sha256` to `complete_manager_task.py`; it
 validates current authority when invoked, then leaves workflow resumption to
-the confirmed Driver mode. Concurrent decision-source changes after validation
+the confirmed Manager mode. Concurrent decision-source changes after validation
 are not guarded through completion; the user accepted this documented limitation.
-A v5 contract's `reactive_user_handoffs.need_clarification` value alone grants no
-Driver completion authority; reconfirm task ownership when needed.
+Explicit task ownership takes precedence over overall clarification ownership.
+The overall choice grants ownership, not permission to invent an answer or
+broaden authority. A v5 contract retains its explicitly confirmed overall choice;
+a v6 contract without that field retains task-only ownership until explicit
+reconfirmation. The new kickoff default applies only to new proposals.
 
 For `answers`, account for every required field and every selected value. Use
 `basis: confirmed_exact` with a source and excerpt for each exact value. If an
@@ -95,7 +99,7 @@ Resolve the current step, iteration, task ID, intent, owner and active status
 from the authoritative task/baton; load the effective playbook and the complete
 current output plus declared inputs. For omitted input declarations, include
 all recorded inputs through the existing full-source fallback. Never replace
-an authoritative artifact with the Driver contract.
+an authoritative artifact with the Manager contract.
 
 Prepare temporary comparison input with `project_root`, `playbook_id`,
 `issue_dir`, `issue_name`, `workflow_id`, current `fresh_facts`, `boundary`
@@ -151,9 +155,9 @@ python3 <skill-dir>/scripts/compare_delivery_contract.py --context <current-cont
 The helper reloads source files, the graph and durable authority. A stale
 snapshot, incomplete coverage, missing citation, missing artifact or uncertain
 change fails closed. It checks structured evidence and authority; **semantic
-truth of the assessment remains Driver policy**, not runtime enforcement.
+truth of the assessment remains Manager policy**, not runtime enforcement.
 Do not treat passing structural checks as proof that a source means what the
-assessment claims. `accept` permits only the existing Driver-owned completion
+assessment claims. `accept` permits only the existing Manager-owned completion
 route after all other reviews; recheck the active task and artifact identity
 immediately before submission. `no_gate` adds no pause. `user_handoff` uses the
 self-contained compact decision summary below, showing the unmet requirement or
@@ -162,11 +166,11 @@ only a real user reconfirmation may replace it through the existing CAS API.
 Do not auto-complete any task from this helper or infer user responses in callbacks.
 
 For a clean eligible `confirm_output`, put the current packet's
-`snapshot_sha256` and the Driver's grounded assessment under
+`snapshot_sha256` and the Manager's grounded assessment under
 `evidence.delivery_comparison` as
 `{"snapshot_sha256": "...", "assessment": {...}}`. Keep exact excerpts bounded;
 do not embed the full packet or output in the completion assessment. Set
-`basis: confirmed_exact` and `exhaustive: true`. The Driver completion entry
+`basis: confirmed_exact` and `exhaustive: true`. The Manager completion entry
 rebuilds the packet from the current task, effective playbook/skill, contract
 and accepted sources, including required-input checks, then checks the supplied
 snapshot and assessment before submitting `decision: confirm`. An absent required
@@ -185,7 +189,7 @@ output must be reduced or routed for review before a comparison is offered.
 ## Route proactive-review findings through existing handoffs
 
 At an existing scheduled confirmation pause after a required phase, finish the
-current-Driver review before completing a `driver_confirmable` task or relaying
+current-Manager review before completing a `manager_confirmable` task or relaying
 a `user_required` answer that would resume the workflow. When the review finds
 blockers, consolidate every currently observable finding. State both missing
 necessary scope and excessive or unnecessary scope when applicable, then use
@@ -198,23 +202,23 @@ target.
 
 Use this outcome-sensitive authority matrix after due review/chat consensus:
 
-| Active outcome | Driver authority |
+| Active outcome | Manager authority |
 | --- | --- |
-| Unique active declared correction outcome requiring feedback, marked `correction: true`, and routing to a non-advancing correction continuation | Driver may submit only that derived outcome, with consolidated findings, consensus, acceptance conditions, and any relevant current user-confirmed direction missing from the target's declared inputs, to create the formal correction iteration. Zero or multiple eligible outcomes fail closed for user/playbook clarification. |
+| Unique active declared correction outcome requiring feedback, marked `correction: true`, and routing to a non-advancing correction continuation | Manager may submit only that derived outcome, with consolidated findings, consensus, acceptance conditions, and any relevant current user-confirmed direction missing from the target's declared inputs, to create the formal correction iteration. Zero or multiple eligible outcomes fail closed for user/playbook clarification. |
 | `user_required` or mandatory confirmation gate advancing `confirm` | user_required and mandatory confirmation gates keep advancing `confirm` user-owned. |
-| Clean `driver_confirmable` confirmation | driver_confirmable clean confirm remains driver-permitted after independent review. |
-| `driver_confirmable` clarification within the confirmed contract and existing authority | Driver may submit the schema-valid answer with a concise contract basis; multiple authorized technical choices may use repository precedent, smaller footprint, and reversibility. |
+| Clean `manager_confirmable` confirmation | manager_confirmable clean confirm remains manager-permitted after independent review. |
+| `manager_confirmable` clarification within the confirmed contract and existing authority | Overall policy or explicit task ownership must authorize the task. Manager may submit the schema-valid answer with a concise contract basis; multiple authorized technical choices may use repository precedent, smaller footprint, and reversibility. |
 | Clarification that changes the contract, needs new authority, is reserved to the user, or has uncertain authority; permission, capability, scope, strategic, or unknown decision | These decisions remain user-owned. |
 
-Driver-triggered correction is correction, never approval. No user prompt occurs
+Manager-triggered correction is correction, never approval. No user prompt occurs
 during an autonomous correction loop. Only user-owned clean advancement
-candidates receive a user confirmation; a clean `driver_confirmable` candidate
-is completed by the Driver after its independent review. Present one final user
+candidates receive a user confirmation; a clean `manager_confirmable` candidate
+is completed by the Manager after its independent review. Present one final user
 confirmation for each user-owned clean advancement candidate immediately before
 its transition. If the user revises or rejects that candidate, the later clean
 candidate must be presented again; an earlier confirmation is not
-lifetime approval. A no-blocking Driver review is quality evidence only, never
-user confirmation and never a substitute for `driver_confirmable` evidence.
+lifetime approval. A no-blocking Manager review is quality evidence only, never
+user confirmation and never a substitute for `manager_confirmable` evidence.
 Re-review changed durable output through the same process; keep built-in review
 and graph-declared review obligations separate.
 
@@ -264,19 +268,19 @@ If an artifact is unusually long, summarize its relevant effects and still
 render every decision option. Ask a follow-up only when the task schema itself
 requires information not available in the current handoff.
 
-On each later user-facing Driver turn, inspect current durable state before
+On each later user-facing Manager turn, inspect current durable state before
 acting. If a user-owned task remains pending and the current conversation has
 not yet received an adequate summary, answer the user's immediate question
 briefly and append the four items above. Do not repeat an adequate summary
 unless the task or its options changed or the user asks for it again.
 
-Driver-confirmable means the driver verifies and resumes; it does not let a
+Manager-confirmable means the manager verifies and resumes; it does not let a
 phase agent approve itself. If the declared outcome continues to an agent
 phase, keep its existing model chain unless the user explicitly requested a
 different one. Then submit the exact HumanTask response, for example:
 
 ```bash
-python3 <skill-dir>/scripts/complete_driver_task.py \
+python3 <skill-dir>/scripts/complete_manager_task.py \
   --issue-dir .cafe/issues/<issue> --task-id <active-human-task-id> \
   --assessment <assessment.json> --contract-sha256 <inspected-contract-sha256> \
   --sources-sha256 <inspected-sources-sha256> --json
@@ -289,16 +293,16 @@ approval would change requirements beyond authority, public positioning,
 business/legal/pricing decisions, production access, destructive operations,
 or an ambiguous strategic tradeoff.
 
-When the Driver performed relevant work before completing the task, it may add
+When the Manager performed relevant work before completing the task, it may add
 `"work_report":{"summary":"<work done>","outcome":"<observed result>","evidence":["<reference>"]}`
 to the same JSON object. This records provenance for the declared continuation;
 it does not approve the output, grant authority, or replace the required
 decision, answer, feedback, or target.
 
-## Driver-owned alignment
+## Manager-owned alignment
 
 Bundled playbooks omit `alignment:` configuration, so the globally registered
-compatibility hook is inactive. The driver makes the semantic decision:
+compatibility hook is inactive. The manager makes the semantic decision:
 
 > Does the newest proposal remain within confirmed strategic documents and the
 > user's mandate?
@@ -311,7 +315,7 @@ permission for an external side effect.
 Evaluate alignment:
 
 1. during kickoff after reading strategic context;
-2. before driver-confirming an eligible output in the effective graph;
+2. before manager-confirming an eligible output in the effective graph;
 3. when a correction changes requirements, product scope, positioning,
    principles, mandate, or trusted capability boundaries.
 
@@ -378,11 +382,11 @@ Never convert an `answers`, `decision`, or `target` task into a plain-text
 payload; runtime accepts plain text only for a declared `feedback` schema.
 
 Update a strategic document only when the user explicitly confirms the new
-strategic content. A driver-authored draft remains `draft` or `missing` unless
+strategic content. A manager-authored draft remains `draft` or `missing` unless
 it is a mechanical copy of already confirmed material.
 
-Driver takeover does not transfer conversation or provider-session authority.
-The replacement Driver reads the same validated issue contract, refreshes
+Manager takeover does not transfer conversation or provider-session authority.
+The replacement Manager reads the same validated issue contract, refreshes
 skill-owned evidence, and preserves every user confirmation, HumanTask,
 permission, mandate, phase-model, proactive-review, and declared capability
 boundary. If that proof is material, ambiguous, stale, malformed,
@@ -397,14 +401,14 @@ For an explicit `alignment_checkpoint`:
 2. Apply the same evidence tuple.
 3. For `within` + `agent`, resume through the required wrapper with explicit
    JSON; plain text must not approve the checkpoint. The wrapper verifies the
-   current alignment handoff, confirmed Driver authority, and the durable
+   current alignment handoff, confirmed Manager authority, and the durable
    request's allowed decision before forwarding the input:
 
    ```bash
    python3 <skill-dir>/scripts/run_workflow.py \
      --issue <issue> --playbook <confirmed-playbook> \
-     --driver-mode <confirmed-mode> \
-     --fresh-facts '<rebuilt-current-driver-facts-json>' \
+     --manager-mode <confirmed-mode> \
+     --fresh-facts '<rebuilt-current-manager-facts-json>' \
      --alignment-input '{"decision":"approve","reason":"Within confirmed roadmap and mandate."}'
    ```
 

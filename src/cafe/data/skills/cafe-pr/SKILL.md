@@ -1,8 +1,14 @@
 ---
 name: cafe-pr
 description: "Prepare the local pull request title and description for publication"
-version: 1.4.2
+version: 1.7.0
 workflow:
+  notification:
+    step_label:
+      message_key: notification.step_labels.pr
+    task_labels:
+      local-review:
+        message_key: notification.action_labels.local_review
   execution_profile:
     workload: publication
     reasoning: routine
@@ -11,17 +17,25 @@ workflow:
   human_tasks:
     - id: local-review
       pattern: confirm_output
-      prompt: Review the prepared local changes and the Follow-up Proposals section in the PR description. Your decision applies to every open FUP; per-proposal mixed disposition is not supported. Fix all proposals now, record that all should become separate issues, or approve and continue without issues.
+      prompt: {message_key: human_task.cafe_pr.local_review.prompt}
+      prompt_locales:
+        zh-TW: {message_key: human_task.cafe_pr.local_review.prompt}
       input_schema: decision
       decisions:
         - id: fix_now
-          label: Fix all proposed items now
+          label: {message_key: human_task.cafe_pr.local_review.decisions.fix_now.label}
+          label_locales:
+            zh-TW: {message_key: human_task.cafe_pr.local_review.decisions.fix_now.label}
           requires_feedback: true
           correction: true
         - id: create_follow_up
-          label: Record issues for all proposals
+          label: {message_key: human_task.cafe_pr.local_review.decisions.create_follow_up.label}
+          label_locales:
+            zh-TW: {message_key: human_task.cafe_pr.local_review.decisions.create_follow_up.label}
         - id: continue_without_issue
-          label: Approve / continue without issues
+          label: {message_key: human_task.cafe_pr.local_review.decisions.continue_without_issue.label}
+          label_locales:
+            zh-TW: {message_key: human_task.cafe_pr.local_review.decisions.continue_without_issue.label}
   prompt_inputs:
     - artifacts: [spec]
       placeholder: spec_file
@@ -122,12 +136,13 @@ the review task can expose a verified PR URL.
 When `workflow_feedback_file` contains feedback for this cycle, or `Current user input for this iteration` contains PR review comments, this is PR iteration 2:
 
  - When runtime provides `workflow_feedback_batch_file`, it is the only immutable source context for this cycle. Select Todo items only from that batch; later items remain for a later cycle. Use the paired ID and Source from runtime's `Canonical Todo fields for this batch` block exactly as shown for each selected batch entry; do not derive or substitute a generic PR-comment prefix or source. Otherwise, `workflow_feedback_file` and review comments are PR-agent context, not a Develop worklist. Process only unresolved corrective input declared for this step; do not import resolved, stale, duplicate, informational, ordinary PR-body, `## Test Plan`, or open follow-up proposal text.
- - Normalize each applicable source from the current corrective cycle into the output's one `## Todo List` of at most 100 rows. Preserve one-to-one source identity, and never merge distinct sources because their text matches. Use only `No actionable work.` when there is no applicable source.
- - Todo rows must use ``- [ ] `<id>` — Source: `<source>` — Work: ... — Closure: ... — Evidence: ...``. Write only the normalized list; do not include raw PR comments or HumanTask feedback.
- - After curation, write the declared `manual_handoff` using the injected discretionary route marked `carries_feedback`. Do not hardcode step names, skip the curator, or select an undeclared route.
+ - Decide which sources in the current corrective batch need implementation. Normalize each applicable source into the output's one `## Todo List` of at most 100 rows. Preserve one-to-one source identity, and never merge distinct sources because their text matches.
+ - For applicable work, Todo rows must use ``- [ ] `<id>` — Source: `<source>` — Work: ... — Closure: ... — Evidence: ...``. Write only the normalized list; do not include raw PR comments or HumanTask feedback.
+ - When this batch has applicable corrective work, write the declared `manual_handoff` using the injected discretionary route marked `carries_feedback`. Do not hardcode step names or select an undeclared route.
+ - When this batch has no applicable corrective work, prepare the complete PR title and description using the PR content steps below. Include exactly one `## Todo List` containing only `No actionable work.` so the runtime can settle this batch as excluded. Choose the declared `confirm_output` route to `user`, or the declared `workflow_complete` default to `done` when no review gate exists. Do not send an empty worklist to a correction consumer or decide the user's follow-up proposals.
 
 ### PR content mode
-Otherwise (there are no PR review comments):
+When there is no corrective feedback for this cycle, or this batch has no applicable corrective work:
 
 1. Read the requirements, implementation plan, and current branch commits supplied by the workflow.
 2. Edit `{output_file}` with a PR title and description:

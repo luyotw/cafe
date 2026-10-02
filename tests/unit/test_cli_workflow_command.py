@@ -31,7 +31,7 @@ from cafe.ui.cli_shared import (
     _resolve_issue_playbook_name,
     apply_alignment_decision_from_payload,
 )
-from cafe.ui.human_tasks import resolve_step_human_task
+from cafe.ui.human_tasks import apply_explicit_user_handoff_if_present, resolve_step_human_task
 from cafe.utils.config import ConfigManager
 from cafe.workflow_execution.worker_launch import WorkerLaunchStore
 
@@ -1551,6 +1551,330 @@ def test_workflow_command_routes_manual_handoff_payload_through_durable_task(
     )
 
 
+def test_workflow_background_redirects_explicit_user_handoff_without_completing_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-explicit-user-handoff"
+    store, task = _pause_with_iteration_limit_task(issue_dir)
+    target = next(iter(task.continuations.values()))
+    captured: dict[str, object] = {}
+
+    class CapturingWorkerLauncher:
+        def __init__(self, _issue_dir: Path) -> None:
+            pass
+
+        def launch(self, _record, *, extra_args=None):
+            state = store.load_or_create("review", playbook_id="standard")
+            captured["step"] = state.current_step
+            captured["input"] = (
+                issue_dir / target / "iteration_001" / "user_input.md"
+            ).read_text(encoding="utf-8")
+            return 4851
+
+    payload = {
+        "type": "user_handoff",
+        "workflow_id": task.workflow_id,
+        "human_task_id": task.id,
+        "target": target,
+        "input": "The current task has no valid questions; apply these confirmed findings.",
+        "request_id": "test-explicit-user-handoff-1",
+    }
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.commands.workflow.FixedWorkerLauncher", CapturingWorkerLauncher),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-explicit-user-handoff"
+        mock_git_cls.return_value = git
+        result = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "standard",
+                "--execute",
+                "--background",
+                "--user-input",
+                json.dumps(payload),
+            ],
+        )
+
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    assert captured == {"step": target, "input": payload["input"]}
+    records = HumanTaskRecordStore(issue_dir)
+    assert records.get_task(task.id).status is HumanTaskStatus.CANCELLED
+    assert not records.results()
+    state = store.load_or_create("review", playbook_id="standard")
+    assert state.handoff_contract is not None
+    assert state.handoff_contract.to_owner is HandoffOwner.AGENT
+    assert state.handoff_contract.to_step == target
+    assert any(event.event_type == "explicit_user_handoff" for event in state.events)
+
+
+def test_workflow_rejects_explicit_user_handoff_to_undeclared_task_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-explicit-user-handoff-reject"
+    _store, task = _pause_with_iteration_limit_task(issue_dir)
+
+    class UnexpectedWorkerLauncher:
+        def __init__(self, _issue_dir: Path) -> None:
+            pytest.fail("invalid explicit handoff must not launch a worker")
+
+    payload = {
+        "type": "user_handoff",
+        "workflow_id": task.workflow_id,
+        "human_task_id": task.id,
+        "target": "spec",
+        "input": "Do not apply this input.",
+        "request_id": "test-explicit-user-handoff-reject",
+    }
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.commands.workflow.FixedWorkerLauncher", UnexpectedWorkerLauncher),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-explicit-user-handoff-reject"
+        mock_git_cls.return_value = git
+        result = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--playbook",
+                "standard",
+                "--execute",
+                "--background",
+                "--user-input",
+                json.dumps(payload),
+            ],
+        )
+
+    assert result.exit_code == 1, (result.stdout, result.exception)
+    assert "does not select the pending task's declared" in result.stdout
+    assert "continuation" in result.stdout
+    assert HumanTaskRecordStore(issue_dir).get_task(task.id).status is HumanTaskStatus.PENDING
+
+
+def test_explicit_user_handoff_replay_cannot_reroute_a_later_user_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-explicit-user-handoff-replay"
+    store, task = _pause_with_iteration_limit_task(issue_dir)
+    target = next(iter(task.continuations.values()))
+    payload = {
+        "type": "user_handoff",
+        "workflow_id": task.workflow_id,
+        "human_task_id": task.id,
+        "target": target,
+        "input": "Apply the confirmed correction.",
+        "request_id": "test-explicit-user-handoff-replay",
+    }
+    playbook = PlaybookLoader().load("standard")
+    state = store.load_or_create("review", playbook_id="standard")
+    assert apply_explicit_user_handoff_if_present(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        raw_payload=payload,
+        source="test",
+    ).rejection is None
+
+    state = store.load_or_create("review", playbook_id="standard")
+    store.set_current_step(state, "user")
+    store.update_handoff_contract(
+        state,
+        from_step="review",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.NEED_CLARIFICATION,
+        source="test.later_handoff",
+    )
+    replay = apply_explicit_user_handoff_if_present(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        raw_payload=payload,
+        source="test",
+    )
+
+    assert replay is not None and replay.rejection is not None
+    assert "already applied and is not current" in replay.rejection.message
+    assert store.load_or_create("review", playbook_id="standard").current_step == "user"
+
+
+def test_explicit_user_handoff_binds_request_before_interrupted_input_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-explicit-user-handoff-interrupt"
+    store, task = _pause_with_iteration_limit_task(issue_dir)
+    target = next(iter(task.continuations.values()))
+    playbook = PlaybookLoader().load("standard")
+    payload = {
+        "type": "user_handoff",
+        "workflow_id": task.workflow_id,
+        "human_task_id": task.id,
+        "target": target,
+        "input": "Original bounded input.",
+        "request_id": "test-explicit-user-handoff-interrupt",
+    }
+    state = store.load_or_create("review", playbook_id="standard")
+    with patch(
+        "cafe.ui.human_tasks._write_next_iteration_user_input",
+        side_effect=OSError("simulated input-write interruption"),
+    ):
+        with pytest.raises(OSError, match="simulated input-write interruption"):
+            apply_explicit_user_handoff_if_present(
+                issue_dir=issue_dir,
+                playbook_data=playbook,
+                blackboard=state,
+                raw_payload=payload,
+                source="test",
+            )
+
+    changed = {**payload, "input": "Different input must not be accepted."}
+    retry = apply_explicit_user_handoff_if_present(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        raw_payload=changed,
+        source="test",
+    )
+    assert retry is not None and retry.rejection is not None
+    assert "no longer pending" in retry.rejection.message
+    assert HumanTaskRecordStore(issue_dir).get_task(task.id).status is HumanTaskStatus.CANCELLED
+
+
+def test_explicit_user_handoff_recovers_interrupted_legacy_task_redirect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-explicit-user-handoff-legacy"
+    store, task = _pause_with_iteration_limit_task(issue_dir)
+    task_path = issue_dir / "human_tasks.json"
+    records = json.loads(task_path.read_text(encoding="utf-8"))
+    records["tasks"][0]["handoff_key"] = "legacy-task-key"
+    task_path.write_text(json.dumps(records), encoding="utf-8")
+    target = next(iter(task.continuations.values()))
+    payload = {
+        "type": "user_handoff",
+        "workflow_id": task.workflow_id,
+        "human_task_id": task.id,
+        "target": target,
+        "input": "Retry the exact confirmed legacy redirect.",
+        "request_id": "test-explicit-user-handoff-legacy",
+    }
+    playbook = PlaybookLoader().load("standard")
+    state = store.load_or_create("review", playbook_id="standard")
+    with patch(
+        "cafe.ui.human_tasks._write_next_iteration_user_input",
+        side_effect=OSError("simulated legacy interruption"),
+    ):
+        with pytest.raises(OSError, match="simulated legacy interruption"):
+            apply_explicit_user_handoff_if_present(
+                issue_dir=issue_dir,
+                playbook_data=playbook,
+                blackboard=state,
+                raw_payload=payload,
+                source="test",
+            )
+
+    recovered = apply_explicit_user_handoff_if_present(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        raw_payload=payload,
+        source="test",
+    )
+    assert recovered is not None and recovered.rejection is None
+    assert store.load_or_create("review", playbook_id="standard").current_step == target
+
+
+def test_explicit_user_handoff_does_not_recover_to_a_newer_matching_legacy_baton(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-explicit-user-handoff-newer-legacy"
+    store, task = _pause_with_iteration_limit_task(issue_dir)
+    task_path = issue_dir / "human_tasks.json"
+    records = json.loads(task_path.read_text(encoding="utf-8"))
+    records["tasks"][0]["handoff_key"] = "legacy-task-key"
+    task_path.write_text(json.dumps(records), encoding="utf-8")
+    target = next(iter(task.continuations.values()))
+    payload = {
+        "type": "user_handoff",
+        "workflow_id": task.workflow_id,
+        "human_task_id": task.id,
+        "target": target,
+        "input": "Do not send this to a newer handoff.",
+        "request_id": "test-explicit-user-handoff-newer-legacy",
+    }
+    playbook = PlaybookLoader().load("standard")
+    state = store.load_or_create("review", playbook_id="standard")
+    with patch(
+        "cafe.ui.human_tasks._write_next_iteration_user_input",
+        side_effect=OSError("simulated legacy interruption"),
+    ):
+        with pytest.raises(OSError, match="simulated legacy interruption"):
+            apply_explicit_user_handoff_if_present(
+                issue_dir=issue_dir,
+                playbook_data=playbook,
+                blackboard=state,
+                raw_payload=payload,
+                source="test",
+            )
+
+    state = store.load_or_create("review", playbook_id="standard")
+    store.update_handoff_contract(
+        state,
+        from_step="review",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.MANUAL_HANDOFF,
+        source="test.newer_legacy_handoff",
+    )
+    retry = apply_explicit_user_handoff_if_present(
+        issue_dir=issue_dir,
+        playbook_data=playbook,
+        blackboard=state,
+        raw_payload=payload,
+        source="test",
+    )
+    assert retry is not None and retry.rejection is not None
+    assert store.load_or_create("review", playbook_id="standard").current_step == "user"
+
+
+def test_explicit_user_handoff_does_not_override_a_completed_task(tmp_path: Path) -> None:
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-explicit-user-handoff-completed"
+    store, task = _pause_with_iteration_limit_task(issue_dir)
+    target = next(iter(task.continuations.values()))
+    records = HumanTaskRecordStore(issue_dir)
+    records.complete(
+        workflow_id=task.workflow_id,
+        task_id=task.id,
+        payload={"task": task.policy_id},
+        source="test",
+    )
+    result = apply_explicit_user_handoff_if_present(
+        issue_dir=issue_dir,
+        playbook_data=PlaybookLoader().load("standard"),
+        blackboard=store.load_or_create("review", playbook_id="standard"),
+        raw_payload={
+            "type": "user_handoff",
+            "workflow_id": task.workflow_id,
+            "human_task_id": task.id,
+            "target": target,
+            "input": "This must not override completion.",
+            "request_id": "test-explicit-user-handoff-completed",
+        },
+        source="test",
+    )
+
+    assert result is not None and result.rejection is not None
+    assert records.get_task(task.id).status is HumanTaskStatus.COMPLETED
+    assert not (issue_dir / target / "iteration_001" / "user_input.md").exists()
+
+
 def test_workflow_command_rejects_completed_durable_task_from_later_handoff(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -2505,6 +2829,77 @@ def test_workflow_command_does_not_treat_generic_user_input_as_alignment_approva
     assert not (issue_dir / "develop" / "iteration_001" / "user_input.md").exists()
     reloaded = store.load_or_create("spec", playbook_id="standard")
     assert reloaded.current_step == "user"
+
+
+def test_workflow_command_resumes_non_task_clarification_with_user_input(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "issue-non-task-handoff"
+    issue_dir.mkdir(parents=True)
+    store = BlackboardStore(issue_dir)
+    blackboard = store.load_or_create("user", playbook_id="non-task")
+    store.set_current_step(blackboard, "user")
+    store.update_handoff_contract(
+        blackboard,
+        from_step="closeout",
+        to_owner=HandoffOwner.USER,
+        to_step="user",
+        intent=HandoffIntent.NEED_CLARIFICATION,
+        status_code="need_clarification",
+        source="test",
+    )
+    playbook_data = {
+        "playbook": {"id": "non-task"},
+        "entry_point": "closeout",
+        "steps": {
+            "closeout": {
+                "role": "developer",
+                "on": {"await_agent": "done"},
+            }
+        },
+    }
+
+    class FakeExecutor:
+        def execute_step(
+            self, step_name: str, step_def: dict, blackboard_state: object, **kwargs
+        ) -> StepExecutionResult:
+            return _result(status_code="await_agent", step_name=step_name, step_def=step_def)
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch(
+            "cafe.ui.commands.workflow.PlaybookLoader.load", return_value=playbook_data
+        ),
+        patch(
+            "cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()
+        ),
+        patch("cafe.ui.commands.workflow.apply_human_task_payload") as task_payload,
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-non-task-handoff"
+        mock_git_cls.return_value = git
+        result = runner.invoke(
+            app,
+            [
+                "workflow",
+                "--issue",
+                "issue-non-task-handoff",
+                "--playbook",
+                "standard",
+                "--execute",
+                "--single-step",
+                "--user-input",
+                "1",
+            ],
+        )
+
+    assert result.exit_code == 0, (result.stdout, result.exception)
+    assert "Resuming closeout with --user-input" in result.stdout
+    task_payload.assert_not_called()
+    assert (issue_dir / "closeout" / "iteration_001" / "user_input.md").read_text(
+        encoding="utf-8"
+    ) == "1"
 
 
 def test_workflow_command_resume_confirm_output_keeps_await_agent_intent(
@@ -4820,3 +5215,104 @@ def test_resolve_initial_step_user_inputs_cold_start_maps_entry_point() -> None:
     )
     assert inputs == {"build": "initial requirement"}
     assert remaining is None
+
+
+def _run_single_step_workflow(tmp_path: Path, extra_args: list[str]) -> object:
+    """Run one real workflow step so state creation goes through production code."""
+
+    class FakeExecutor:
+        def execute_step(self, step_name, step_def, blackboard_state, **kwargs):
+            return _result(status_code="confirmed", step_name=step_name, step_def=step_def)
+
+    with (
+        patch("cafe.ui.cli.GitOperations") as mock_git_cls,
+        patch("cafe.ui.cli._build_workflow_step_executor", return_value=FakeExecutor()),
+    ):
+        git = MagicMock()
+        git.get_current_branch.return_value = "issue-locale"
+        mock_git_cls.return_value = git
+        return runner.invoke(
+            app,
+            ["workflow", "--playbook", "standard", "--execute", "--single-step", *extra_args],
+        )
+
+
+def _stored_locale(tmp_path: Path) -> tuple[object, object]:
+    raw = json.loads(
+        (tmp_path / ".cafe" / "issues" / "issue-locale" / "blackboard.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    return raw.get("conversation_locale"), raw.get("conversation_locale_source")
+
+
+def test_workflow_start_persists_a_supplied_locale_with_its_declared_tier(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_local_only_publication_contract(tmp_path / ".cafe" / "issues" / "issue-locale")
+
+    result = _run_single_step_workflow(
+        tmp_path,
+        ["--conversation-locale", "zh-tw", "--conversation-locale-source", "inferred"],
+    )
+
+    assert result.exit_code == 0
+    assert _stored_locale(tmp_path) == ("zh-TW", "inferred")
+
+
+def test_workflow_start_without_a_supplied_locale_uses_the_playbook_default(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_local_only_publication_contract(tmp_path / ".cafe" / "issues" / "issue-locale")
+
+    result = _run_single_step_workflow(tmp_path, [])
+
+    assert result.exit_code == 0
+    assert _stored_locale(tmp_path) == ("en-US", "playbook_default")
+
+
+def test_workflow_rejects_a_locale_supplied_without_a_tier(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_local_only_publication_contract(tmp_path / ".cafe" / "issues" / "issue-locale")
+
+    result = _run_single_step_workflow(tmp_path, ["--conversation-locale", "zh-TW"])
+
+    assert result.exit_code != 0
+    assert not (tmp_path / ".cafe" / "issues" / "issue-locale" / "blackboard.json").exists()
+
+
+def test_a_resume_supplied_preference_never_overwrites_the_stored_locale(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_local_only_publication_contract(tmp_path / ".cafe" / "issues" / "issue-locale")
+    _run_single_step_workflow(
+        tmp_path,
+        ["--conversation-locale", "zh-TW", "--conversation-locale-source", "explicit"],
+    )
+
+    result = _run_single_step_workflow(
+        tmp_path,
+        ["--conversation-locale", "ja-JP", "--conversation-locale-source", "explicit"],
+    )
+
+    assert result.exit_code == 0
+    assert _stored_locale(tmp_path) == ("zh-TW", "explicit")
+
+
+def test_the_explicit_change_flag_updates_the_stored_workflow_language(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_local_only_publication_contract(tmp_path / ".cafe" / "issues" / "issue-locale")
+    _run_single_step_workflow(tmp_path, [])
+
+    result = _run_single_step_workflow(
+        tmp_path,
+        ["--set-conversation-locale", "zh-TW", "--conversation-locale-source", "explicit"],
+    )
+
+    assert result.exit_code == 0
+    assert _stored_locale(tmp_path) == ("zh-TW", "explicit")

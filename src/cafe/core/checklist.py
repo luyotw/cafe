@@ -60,8 +60,13 @@ class ChecklistMaterialization:
     gates: tuple[ChecklistGate, ...]
     projections: tuple[dict[str, Any], ...]
     overlays: bool
+    agent_owned: bool = False
 
     def to_dict(self) -> dict[str, Any]:
+        if not isinstance(self.agent_owned, bool) or (
+            self.agent_owned and (self.gates or self.projections or self.overlays)
+        ):
+            raise ValueError("Agent-owned checklists cannot contain declared gates or overlays")
         validate_projected_todo_count(sum(len(binding["handles"]) for binding in self.projections))
         record = {
             "version": 1,
@@ -70,6 +75,9 @@ class ChecklistMaterialization:
             "projections": list(self.projections),
             "overlays": self.overlays,
         }
+        # Missing ownership in older records keeps their fixed-gate semantics.
+        if self.agent_owned:
+            record["agent_owned"] = True
         if (
             len(self.content.encode()) > 2 * 1024 * 1024
             or len(self.gates) > 10000
@@ -156,8 +164,11 @@ def load_materialization(path: Path) -> ChecklistMaterialization | None:
         if not isinstance(content, str) or len(content.encode()) > 2 * 1024 * 1024:
             raise ValueError("Invalid effective checklist content")
         gates = tuple(ChecklistGate(**gate) for gate in record["gates"])
+        agent_owned = record.get("agent_owned", False)
+        if not isinstance(agent_owned, bool):
+            raise ValueError("Invalid effective checklist ownership")
         blocks = _checklist_item_blocks(content)
-        if len(gates) > 10000 or len(gates) != len(blocks):
+        if len(gates) > 10000 or (not agent_owned and len(gates) != len(blocks)):
             raise ValueError("Effective checklist gate count is inconsistent")
         if len({gate.identity for gate in gates}) != len(gates):
             raise ValueError("Effective checklist gate identities are duplicated")
@@ -196,7 +207,7 @@ def load_materialization(path: Path) -> ChecklistMaterialization | None:
             ) != len(binding["handles"]):
                 raise ValueError("Inconsistent effective checklist Todo identities")
         materialized = ChecklistMaterialization(
-            content, gates, tuple(record["projections"]), record["overlays"]
+            content, gates, tuple(record["projections"]), record["overlays"], agent_owned
         )
         materialized.to_dict()
         return materialized

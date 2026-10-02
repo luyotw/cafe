@@ -271,6 +271,10 @@ def test_owner_replacement_supersedes_only_the_prior_handoff(
 ) -> None:
     """Test List 4: direct and hybrid handoffs replace named predecessors."""
     import cafe.core.workflow_runtime as runtime_mod
+    from cafe.core.human_task_notifications import (
+        HumanTaskNotificationSettings,
+        NotificationPresentation,
+    )
 
     issue_dir = tmp_path / ".cafe" / "issues" / f"{owner}-replacement"
     trigger = (
@@ -294,6 +298,20 @@ def test_owner_replacement_supersedes_only_the_prior_handoff(
     )
     monkeypatch.setattr(runtime_mod, "load_capability_registry", lambda _dirs: {"registered": True})
     monkeypatch.setattr(runtime_mod, "default_capability_definition_dirs", lambda _root: [])
+    monkeypatch.setattr(
+        runtime_mod,
+        "load_human_task_notification_settings",
+        lambda: HumanTaskNotificationSettings(
+            enabled=True,
+            transport="slack",
+            outcome="enabled",
+            code="human_task_notification_enabled",
+        ),
+    )
+    monkeypatch.setattr(
+        "cafe.skills.notification_copy.resolve_step_notification_presentation",
+        lambda **_kwargs: NotificationPresentation(),
+    )
     notifications: list[dict[str, object]] = []
     monkeypatch.setattr(
         runtime_mod,

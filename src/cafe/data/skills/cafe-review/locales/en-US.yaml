@@ -1,0 +1,5 @@
+human_task.cafe_review.clarification_feedback.prompt: Provide the clarification needed to continue the review.
+human_task.cafe_review.iteration_limit.decisions.resume.label: Resume after increasing the iteration limit
+human_task.cafe_review.iteration_limit.prompt: The workflow reached its configured iteration limit. Increase the issue's limit if another review is authorized, then resume this phase.
+notification.step_labels.review: Review
+notification.action_labels.clarification_feedback: Answer the clarification questions

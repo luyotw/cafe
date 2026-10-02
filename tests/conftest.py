@@ -97,7 +97,11 @@ def cached_builtin_playbook_models(
     real_load_model = PlaybookLoader.load_model
 
     def load_model(loader: PlaybookLoader, name: str, *, strict: bool = False):
-        if loader.builtin_root == package_data_root and name in _BUILTIN_PLAYBOOK_CACHE:
+        if (
+            loader.resolve_presentation
+            and loader.builtin_root == package_data_root
+            and name in _BUILTIN_PLAYBOOK_CACHE
+        ):
             resolved = loader.resolver.resolve(CatalogKind.PLAYBOOK, name)
             if resolved.source == "builtin":
                 return deepcopy(_BUILTIN_PLAYBOOK_CACHE[name])

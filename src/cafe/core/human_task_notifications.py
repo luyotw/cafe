@@ -16,6 +16,9 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 import yaml
 
+from cafe.core.conversation_locale import DEFAULT_CONVERSATION_LOCALE
+from cafe.core.runtime_locales import render_text
+
 SLACK_WEBHOOK_FILENAME = ".slack-webhook"
 TEST_RUN_SLACK_WEBHOOK_FILENAME = ".cafe/test-slack-webhook"
 TEST_RUN_SLACK_ROUTING_ENV = "CAFE_TEST_RUN_SLACK_NOTIFICATIONS"
@@ -27,23 +30,10 @@ MACHINE_CONFIG_DIRECTORY = ".cafe"
 MACHINE_CONFIG_FILENAME = "config.yaml"
 MAX_NOTIFICATION_METADATA_LENGTH = 128
 SAFE_NOTIFICATION_METADATA = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}\Z")
-HUMAN_TASK_STEP_LABELS = {
-    "spec": "需求規格",
-    "plan": "規劃",
-    "develop": "開發",
-    "review": "審查",
-    "pr": "PR 準備與審閱",
-}
-HUMAN_TASK_ACTION_LABELS = {
-    "clarification-feedback": "回覆釐清問題",
-    "clarification-answers": "回覆釐清問題",
-    "local-review": "審閱變更與後續建議，決定修正或確認繼續",
-    "output-review": "確認結果",
-    "permission-answers": "回覆權限相關問題",
-    "alignment-decision": "確認方向",
-    "no-changes-needed": "確認沒有需要變更",
-    "agent-execution-interrupted": "決定如何繼續",
-}
+
+
+def _notification_text(name: str, locale: str | None, **values: str) -> str:
+    return render_text(f"notification.{name}", locale=locale, **values)
 
 
 class SlackNotificationError(RuntimeError):
@@ -205,6 +195,29 @@ def _project_webhook_route(
 
 
 @dataclass(frozen=True)
+class NotificationPresentation:
+    """Transient authored labels supplied by the actual producer, never authority."""
+
+    step_label: str | None = None
+    action_label: str | None = None
+
+
+def _safe_label(value: str | None, fallback: str) -> str:
+    """Bound project-authored labels and reject Slack links, mentions and extra lines."""
+    if (
+        not isinstance(value, str) or not value.strip()
+        or len(value) > MAX_NOTIFICATION_METADATA_LENGTH
+        or any(
+            ord(character) < 32 or ord(character) == 127 or character in "<>&@*`|~"
+            for character in value
+        )
+        or _is_url_shaped_metadata(value)
+    ):
+        return fallback
+    return value
+
+
+@dataclass(frozen=True)
 class HumanTaskSlackMessage:
     """Actionable, non-secret fields for one pending HumanTask."""
 
@@ -214,23 +227,29 @@ class HumanTaskSlackMessage:
     task_id: str
     step: str
     task_type: str
+    locale: str = DEFAULT_CONVERSATION_LOCALE
+
+    presentation: NotificationPresentation | None = None
 
     def to_slack_payload(self) -> dict[str, str]:
-        repository = _readable_metadata(self.repository, fallback="目前專案")
-        issue = _readable_metadata(self.issue, fallback="未命名工作項目")
-        step_label = HUMAN_TASK_STEP_LABELS.get(self.step, "工作流程")
-        action_label = HUMAN_TASK_ACTION_LABELS.get(self.task_type, "處理 CAFE 工作項目")
-        text = "\n".join(
-            (
-                "CAFE 需要你的處理",
-                f"專案：{repository}",
-                f"對話：{issue}",
-                f"目前階段：{step_label}",
-                f"需要你做的事：{action_label}",
-                f"請回到 CAFE 的「{issue}」工作項目處理。",
-            )
+        def text(name: str, **values: str) -> str:
+            return _notification_text(name, self.locale, **values)
+
+        repository = _readable_metadata(self.repository, fallback=text("repository_fallback"))
+        issue = _readable_metadata(self.issue, fallback=text("issue_fallback"))
+        presentation = self.presentation or NotificationPresentation()
+        step_label = _safe_label(presentation.step_label, text("step_fallback"))
+        action_label = _safe_label(presentation.action_label, text("action_fallback"))
+        separator = text("field_separator")
+        lines = (
+            text("task_headline"),
+            f"{text('repository_field')}{separator}{repository}",
+            f"{text('issue_field')}{separator}{issue}",
+            f"{text('step_field')}{separator}{step_label}",
+            f"{text('action_field')}{separator}{action_label}",
+            text("task_closing", issue=issue),
         )
-        return {"text": text}
+        return {"text": "\n".join(lines)}
 
 
 @dataclass(frozen=True)
@@ -242,29 +261,38 @@ class WorkflowCallbackFailureSlackMessage:
     step: str
     event_type: str
     error_code: str
+    locale: str = DEFAULT_CONVERSATION_LOCALE
+
+    presentation: NotificationPresentation | None = None
 
     def to_slack_payload(self) -> dict[str, str]:
-        repository = _readable_metadata(self.repository, fallback="目前專案")
-        issue = _readable_metadata(self.issue, fallback="未命名工作項目")
-        step = HUMAN_TASK_STEP_LABELS.get(self.step, self.step or "未知階段")
-        if self.error_code == "callback_ValueError":
-            reason = "CAFE 無法讀取自動通知所需的狀態或設定。"
-        elif self.error_code.startswith("codex_queue_"):
-            reason = "CAFE 無法將通知送達原對話。"
-        else:
-            reason = "CAFE 的自動通知發生錯誤。"
-        text = "\n".join(
-            (
-                "CAFE 自動通知未完成",
-                f"專案：{repository}",
-                f"對話：{issue}",
-                f"目前階段：{step}",
-                f"狀況：{reason}",
-                "影響：原對話可能收不到這次更新；這不代表工作流程已停止。",
-                f"請回到 CAFE 的「{issue}」原對話，請 Driver 檢查目前進度與下一步。",
-            )
+        def text(name: str, **values: str) -> str:
+            return _notification_text(name, self.locale, **values)
+
+        repository = _readable_metadata(self.repository, fallback=text("repository_fallback"))
+        issue = _readable_metadata(self.issue, fallback=text("issue_fallback"))
+        presentation = self.presentation or NotificationPresentation()
+        step = _safe_label(
+            presentation.step_label,
+            _safe_label(self.step, text("unknown_step")),
         )
-        return {"text": text}
+        if self.error_code == "callback_ValueError":
+            reason = text("reason_state")
+        elif self.error_code.startswith("codex_queue_"):
+            reason = text("reason_queue")
+        else:
+            reason = text("reason_generic")
+        separator = text("field_separator")
+        lines = (
+            text("callback_headline"),
+            f"{text('repository_field')}{separator}{repository}",
+            f"{text('issue_field')}{separator}{issue}",
+            f"{text('step_field')}{separator}{step}",
+            f"{text('status_field')}{separator}{reason}",
+            text("callback_impact"),
+            text("callback_closing", issue=issue),
+        )
+        return {"text": "\n".join(lines)}
 
 
 class SlackPayloadMessage(Protocol):
@@ -281,6 +309,8 @@ def build_human_task_message(
     step: str,
     task_type: str,
     issue: str = "",
+    locale: str = DEFAULT_CONVERSATION_LOCALE,
+    presentation: NotificationPresentation | None = None,
 ) -> HumanTaskSlackMessage:
     """Build one readable, bounded HumanTask notification."""
     repository = sanitize_human_task_metadata(repository)
@@ -296,11 +326,20 @@ def build_human_task_message(
         task_id=task_id,
         step=step,
         task_type=task_type,
+        locale=locale,
+        presentation=presentation,
     )
 
 
 def build_workflow_callback_failure_message(
-    *, repository: str, issue: str, step: str, event_type: str, error_code: str
+    *,
+    repository: str,
+    issue: str,
+    step: str,
+    event_type: str,
+    error_code: str,
+    locale: str = DEFAULT_CONVERSATION_LOCALE,
+    presentation: NotificationPresentation | None = None,
 ) -> WorkflowCallbackFailureSlackMessage:
     """Build a bounded callback-failure notification without raw exception text."""
     return WorkflowCallbackFailureSlackMessage(
@@ -309,6 +348,8 @@ def build_workflow_callback_failure_message(
         step=sanitize_human_task_metadata(step),
         event_type=sanitize_human_task_metadata(event_type),
         error_code=sanitize_human_task_metadata(error_code),
+        locale=locale,
+        presentation=presentation,
     )
 
 

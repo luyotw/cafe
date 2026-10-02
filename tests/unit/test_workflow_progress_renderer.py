@@ -105,6 +105,25 @@ def _write_runtime_state(issue_dir: Path, state: dict) -> None:
         )
 
 
+def _append_runtime_event(issue_dir: Path, event: dict) -> None:
+    workflow_id = "workflow-1"
+    audit = AuditEventStore(issue_dir)
+    sequence = audit.reserve(workflow_id)
+    audit.commit(
+        workflow_id,
+        {
+            "timestamp": "2026-09-20T01:00:00+00:00",
+            "step": "",
+            "message": "",
+            "data": {},
+            **event,
+            "workflow_id": workflow_id,
+            "sequence": sequence,
+            "event_id": f"event-{sequence}",
+        },
+    )
+
+
 def _write_runtime(issue_dir: Path) -> None:
     issue_dir.mkdir(parents=True)
     _write_runtime_state(
@@ -208,8 +227,8 @@ def test_renderer_preserves_custom_phase_names_and_localizes_only_annotations() 
     assert "○ publish-draft · 待執行" in rendered
     assert (
         "○ publish-draft · 待執行\n│\n"
-        "▶\ufe0e publish-draft：driver 主動審查 · 進行中\n│\n"
-        "○ publish-draft：使用者確認（driver 不可代理） · 待執行"
+        "▶\ufe0e publish-draft：流程管理員主動審查 · 進行中\n│\n"
+        "○ publish-draft：使用者確認（流程管理員不可代理） · 待執行"
     ) in rendered
     assert "？ deliver（收尾） · 狀態未知" in rendered
     assert "？ cleanup（收尾） · 狀態未知" in rendered
@@ -264,11 +283,11 @@ def test_omitted_review_is_pending_until_its_phase_finishes(tmp_path: Path) -> N
         driver_state={"deliver": "pending", "cleanup": "pending"},
     )
 
-    assert "？ completed：driver 主動審查 · 狀態未知" in rendered
-    assert "○ active：driver 主動審查 · 待執行" in rendered
-    assert "○ future：driver 主動審查 · 待執行" in rendered
-    assert "？ active：driver 主動審查" not in rendered
-    assert "？ future：driver 主動審查" not in rendered
+    assert "？ completed：流程管理員主動審查 · 狀態未知" in rendered
+    assert "○ active：流程管理員主動審查 · 待執行" in rendered
+    assert "○ future：流程管理員主動審查 · 待執行" in rendered
+    assert "？ active：流程管理員主動審查" not in rendered
+    assert "？ future：流程管理員主動審查" not in rendered
 
 
 def test_renderer_uses_current_iteration_and_revise_outcome_as_checkpoint_state(
@@ -294,8 +313,8 @@ def test_renderer_uses_current_iteration_and_revise_outcome_as_checkpoint_state(
     )
 
     assert "▶\ufe0e 資料盤點 · 第 2 輪 · 進行中" in rendered
-    assert "↩\ufe0e publish-draft：使用者確認（driver 不可代理） · 已退回" in rendered
-    assert "✓ publish-draft：使用者確認（driver 不可代理） · 已完成" not in rendered
+    assert "↩\ufe0e publish-draft：使用者確認（流程管理員不可代理） · 已退回" in rendered
+    assert "✓ publish-draft：使用者確認（流程管理員不可代理） · 已完成" not in rendered
     assert "→" not in rendered
     assert before == {path: path.read_bytes() for path in before}
 
@@ -420,7 +439,7 @@ def test_pending_confirmation_blocked_and_skipped_use_durable_evidence(tmp_path:
     assert "! 資料盤點 · iteration 2 · Blocked" in rendered
     assert "− publish-draft · Skipped" in rendered
     assert (
-        "⏸\ufe0e publish-draft: user confirmation (driver may not act) · Awaiting confirmation"
+        "⏸\ufe0e publish-draft: user confirmation (manager may not act) · Awaiting confirmation"
         in rendered
     )
 
@@ -526,6 +545,11 @@ def test_cli_requires_both_fixed_closeout_states() -> None:
 def test_previous_revision_does_not_approve_the_new_iteration(tmp_path: Path) -> None:
     issue_dir = tmp_path / "issue"
     _write_runtime(issue_dir)
+    records_path = issue_dir / "human_tasks.json"
+    records = json.loads(records_path.read_text(encoding="utf-8"))
+    records["tasks"][0]["completed_at"] = "2026-09-20T01:03:00+00:00"
+    records["results"][0]["payload"] = {"decision": "confirm", "continuation": "_done"}
+    records_path.write_text(json.dumps(records), encoding="utf-8")
     new_iteration = issue_dir / "publish-draft" / "iteration_002"
     new_iteration.mkdir(parents=True)
     (new_iteration / "iteration.json").write_text('{"iteration": 2}', encoding="utf-8")
@@ -538,9 +562,117 @@ def test_previous_revision_does_not_approve_the_new_iteration(tmp_path: Path) ->
         driver_state=_unknown_closeout_state(),
     )
 
-    assert "○ publish-draft: user confirmation (driver may not act) · Pending" in rendered
-    assert "✓ publish-draft: user confirmation (driver may not act) · Completed" not in rendered
+    assert "○ publish-draft: user confirmation (manager may not act) · Pending" in rendered
+    assert "✓ publish-draft: user confirmation (manager may not act) · Completed" not in rendered
     assert "→" not in rendered
+
+
+def test_post_confirmation_reentry_does_not_reopen_completed_confirmation(
+    tmp_path: Path,
+) -> None:
+    issue_dir = tmp_path / "issue"
+    _write_runtime(issue_dir)
+    records_path = issue_dir / "human_tasks.json"
+    records = json.loads(records_path.read_text(encoding="utf-8"))
+    records["tasks"][0]["continuations"]["confirm"] = "publish-draft"
+    records["tasks"][0]["completed_at"] = "2026-09-20T01:04:00+00:00"
+    records["results"][0]["payload"] = {
+        "decision": "confirm",
+        "continuation": "publish-draft",
+    }
+    records_path.write_text(json.dumps(records), encoding="utf-8")
+    reentry = issue_dir / "publish-draft" / "iteration_005"
+    reentry.mkdir(parents=True)
+    (reentry / "iteration.json").write_text(
+        '{"iteration": 5, "timestamp": "2026-09-20T01:04:02+00:00", "end_time": "2026-09-20T01:04:00+00:00"}',
+        encoding="utf-8",
+    )
+    _append_runtime_event(
+        issue_dir,
+        {
+            "timestamp": "2026-09-20T01:04:01+00:00",
+            "step": "publish-draft",
+            "event_type": "human_task_completed",
+            "data": {
+                "step": "publish-draft",
+                "trigger": "confirm_output",
+                "to_step": "publish-draft",
+            },
+        },
+    )
+    _append_runtime_event(
+        issue_dir,
+        {
+            "timestamp": "2026-09-20T01:04:02+00:00",
+            "step": "publish-draft",
+            "event_type": "step_started",
+            "data": {"step": "publish-draft", "attempt": 1},
+        },
+    )
+    _append_runtime_event(
+        issue_dir,
+        {
+            "timestamp": "2026-09-20T01:04:03+00:00",
+            "step": "資料盤點",
+            "event_type": "transition",
+            "data": {
+                "from": "publish-draft",
+                "to": "資料盤點",
+                "source_artifact": {"version": 3},
+                "transition_intent": "manual_handoff",
+            },
+        },
+    )
+
+    rendered = _module().render_progress(
+        playbook=_custom_playbook(),
+        contract=_contract(),
+        locale="en",
+        issue_dir=issue_dir,
+        driver_state=_unknown_closeout_state(),
+    )
+
+    assert "○ publish-draft: user confirmation (manager may not act) · Pending" in rendered
+
+    _append_runtime_event(
+        issue_dir,
+        {
+            "timestamp": "2026-09-20T01:04:04+00:00",
+            "step": "資料盤點",
+            "event_type": "transition",
+            "data": {
+                "from": "publish-draft",
+                "to": "資料盤點",
+                "source_artifact": {"version": 3},
+                "transition_intent": "await_agent",
+            },
+        },
+    )
+    rendered = _module().render_progress(
+        playbook=_custom_playbook(),
+        contract=_contract(),
+        locale="en",
+        issue_dir=issue_dir,
+        driver_state=_unknown_closeout_state(),
+    )
+
+    assert "✓ publish-draft: user confirmation (manager may not act) · Completed" in rendered
+
+    later_revision = issue_dir / "publish-draft" / "iteration_006"
+    later_revision.mkdir(parents=True)
+    (later_revision / "iteration.json").write_text(
+        '{"iteration": 6, "timestamp": "2026-09-20T01:05:00+00:00"}',
+        encoding="utf-8",
+    )
+    rendered = _module().render_progress(
+        playbook=_custom_playbook(),
+        contract=_contract(),
+        locale="en",
+        issue_dir=issue_dir,
+        driver_state=_unknown_closeout_state(),
+    )
+
+    assert "○ publish-draft: user confirmation (manager may not act) · Pending" in rendered
 
 
 def test_cli_without_confirmed_contract_reports_unestablished_workflow(tmp_path: Path) -> None:
@@ -702,8 +834,8 @@ def test_completed_confirmation_requires_a_recognized_outcome(
         driver_state=_unknown_closeout_state(),
     )
 
-    assert "？ publish-draft: user confirmation (driver may not act) · Unknown" in rendered
-    assert "✓ publish-draft: user confirmation (driver may not act) · Completed" not in rendered
+    assert "？ publish-draft: user confirmation (manager may not act) · Unknown" in rendered
+    assert "✓ publish-draft: user confirmation (manager may not act) · Completed" not in rendered
 
 
 def test_completed_confirmation_renders_only_a_declared_non_correction_outcome(
@@ -724,7 +856,60 @@ def test_completed_confirmation_renders_only_a_declared_non_correction_outcome(
         driver_state=_unknown_closeout_state(),
     )
 
-    assert "✓ publish-draft: user confirmation (driver may not act) · Completed" in rendered
+    assert "✓ publish-draft: user confirmation (manager may not act) · Completed" in rendered
+
+
+@pytest.mark.parametrize("iteration_evidence", ["directory", "event"])
+def test_retry_attempt_does_not_invalidate_confirmed_iteration(
+    tmp_path: Path, iteration_evidence: str
+) -> None:
+    issue_dir = tmp_path / "issue"
+    _write_runtime(issue_dir)
+    records_path = issue_dir / "human_tasks.json"
+    records = json.loads(records_path.read_text(encoding="utf-8"))
+    records["tasks"][0]["iteration"] = 5
+    records["results"][0]["payload"] = {"decision": "confirm", "continuation": "_done"}
+    records_path.write_text(json.dumps(records), encoding="utf-8")
+    event_data = {"step": "publish-draft", "attempt": 6}
+    if iteration_evidence == "directory":
+        iteration = issue_dir / "publish-draft" / "iteration_005"
+        iteration.mkdir(parents=True)
+        (iteration / "iteration.json").write_text('{"iteration": 5}', encoding="utf-8")
+    else:
+        event_data["iteration"] = {"number": 5}
+    _append_runtime_event(
+        issue_dir,
+        {"event_type": "step_completed", "step": "publish-draft", "data": event_data},
+    )
+    # Callback attempt counters are not artifact revision numbers either.
+    _append_runtime_event(
+        issue_dir,
+        {
+            "event_type": "workflow_event_callback_enqueued",
+            "step": "publish-draft",
+            "data": {"step": "publish-draft", "attempt": 7},
+        },
+    )
+
+    def render() -> str:
+        return _module().render_progress(
+            playbook=_custom_playbook(),
+            contract=_contract(),
+            locale="en",
+            issue_dir=issue_dir,
+            driver_state=_unknown_closeout_state(),
+        )
+
+    rendered = render()
+    assert "✓ publish-draft · iteration 5 · Completed" in rendered
+    assert "✓ publish-draft: user confirmation (manager may not act) · Completed" in rendered
+
+    new_iteration = issue_dir / "publish-draft" / "iteration_006"
+    new_iteration.mkdir(parents=True)
+    (new_iteration / "iteration.json").write_text('{"iteration": 6}', encoding="utf-8")
+    rendered = render()
+    assert "publish-draft · iteration 6" in rendered
+    assert "○ publish-draft: user confirmation (manager may not act) · Pending" in rendered
 
 
 def test_forward_skip_review_manual_handoff_is_not_a_return(tmp_path: Path) -> None:
@@ -1032,7 +1217,7 @@ def test_delivered_pr_feedback_baton_is_a_formal_return(tmp_path: Path) -> None:
                 {
                     "event_type": "step_started",
                     "step": "pr",
-                    "data": {"step": "pr", "attempt": 2},
+                    "data": {"step": "pr", "iteration": 2},
                 },
                 {
                     "event_type": "workflow_feedback_delivered",
@@ -1126,7 +1311,7 @@ def test_repeated_returns_project_only_latest_phase_states(tmp_path: Path) -> No
                 {
                     "event_type": "step_started",
                     "step": "develop",
-                    "data": {"step": "develop", "attempt": target_iteration},
+                    "data": {"step": "develop", "iteration": target_iteration},
                 },
             ]
         )
@@ -1195,22 +1380,22 @@ def test_default_projection_suppresses_superseded_returns_and_shows_active_check
                 {
                     "event_type": "step_started",
                     "step": "develop",
-                    "data": {"step": "develop", "attempt": 6},
+                    "data": {"step": "develop", "iteration": 6},
                 },
                 {
                     "event_type": "step_completed",
                     "step": "develop",
-                    "data": {"step": "develop", "attempt": 6},
+                    "data": {"step": "develop", "iteration": 6},
                 },
                 {
                     "event_type": "step_started",
                     "step": "pr",
-                    "data": {"step": "pr", "attempt": 14},
+                    "data": {"step": "pr", "iteration": 14},
                 },
                 {
                     "event_type": "step_completed",
                     "step": "pr",
-                    "data": {"step": "pr", "attempt": 14},
+                    "data": {"step": "pr", "iteration": 14},
                 },
             ],
         },
@@ -1261,8 +1446,8 @@ def test_default_projection_suppresses_superseded_returns_and_shows_active_check
     assert rendered == (
         "✓ develop · 第 6 輪 · 已完成\n│\n"
         "✓ pr · 第 14 輪 · 已完成\n│\n"
-        "✓ pr：driver 主動審查 · 已完成\n│\n"
-        "⏸\ufe0e pr：使用者確認（driver 不可代理） · 等待確認\n│\n"
+        "✓ pr：流程管理員主動審查 · 已完成\n│\n"
+        "⏸\ufe0e pr：使用者確認（流程管理員不可代理） · 等待確認\n│\n"
         "？ deliver（收尾） · 狀態未知\n│\n"
         "？ cleanup（收尾） · 狀態未知"
     )
@@ -1280,7 +1465,7 @@ def test_latest_return_is_phase_state_without_a_historical_arrow(tmp_path: Path)
                 {
                     "event_type": "step_started",
                     "step": "pr",
-                    "data": {"step": "pr", "attempt": 14},
+                    "data": {"step": "pr", "iteration": 14},
                 },
                 {
                     "event_type": "workflow_feedback_delivered",
@@ -1369,7 +1554,7 @@ def test_same_phase_task_return_projects_latest_confirmation_state(tmp_path: Pat
         driver_state=_unknown_closeout_state(),
     )
 
-    assert "↩\ufe0e pr: user confirmation (driver may not act) · Returned" in rendered
+    assert "↩\ufe0e pr: user confirmation (manager may not act) · Returned" in rendered
     assert "→" not in rendered
 
 
@@ -1384,7 +1569,7 @@ def test_cross_target_returns_project_only_each_phase_latest_state(tmp_path: Pat
                 {
                     "event_type": "step_started",
                     "step": "C",
-                    "data": {"step": "C", "attempt": 1},
+                    "data": {"step": "C", "iteration": 1},
                 },
                 {
                     "event_type": "transition",
@@ -1399,12 +1584,12 @@ def test_cross_target_returns_project_only_each_phase_latest_state(tmp_path: Pat
                 {
                     "event_type": "step_started",
                     "step": "B",
-                    "data": {"step": "B", "attempt": 2},
+                    "data": {"step": "B", "iteration": 2},
                 },
                 {
                     "event_type": "step_started",
                     "step": "C",
-                    "data": {"step": "C", "attempt": 2},
+                    "data": {"step": "C", "iteration": 2},
                 },
                 {
                     "event_type": "transition",
@@ -1419,7 +1604,7 @@ def test_cross_target_returns_project_only_each_phase_latest_state(tmp_path: Pat
                 {
                     "event_type": "step_started",
                     "step": "A",
-                    "data": {"step": "A", "attempt": 2},
+                    "data": {"step": "A", "iteration": 2},
                 },
             ],
         },
@@ -1484,7 +1669,7 @@ def test_runtime_and_task_return_history_is_suppressed(tmp_path: Path) -> None:
                 {
                     "event_type": "step_started",
                     "step": "develop",
-                    "data": {"step": "develop", "attempt": target_iteration},
+                    "data": {"step": "develop", "iteration": target_iteration},
                 },
             ]
         )
@@ -1540,7 +1725,7 @@ def test_runtime_and_task_return_history_is_suppressed(tmp_path: Path) -> None:
 
     assert "▶\ufe0e develop · iteration 7 · In progress" in rendered
     assert "↩\ufe0e pr · iteration 13 · Returned" in rendered
-    assert "○ pr: user confirmation (driver may not act) · Pending" in rendered
+    assert "○ pr: user confirmation (manager may not act) · Pending" in rendered
     assert "iteration 11" not in rendered
     assert "iteration 12" not in rendered
     assert "→" not in rendered
@@ -1698,7 +1883,7 @@ def test_audit_pause_overrides_finished_draft_without_an_iteration_status_code(
     assert expected in rendered
     assert "○ publish-draft · 待執行" in rendered
     if not answered:
-        assert "○ 資料盤點：driver 主動審查 · 待執行" in rendered
+        assert "○ 資料盤點：流程管理員主動審查 · 待執行" in rendered
     assert "events" not in json.loads((issue_dir / "blackboard.json").read_text())
     assert before == {path: path.read_bytes() for path in issue_dir.rglob("*") if path.is_file()}
 

@@ -15,6 +15,7 @@ import yaml
 
 from cafe.core.blackboard import ArtifactEntry, ArtifactKind, BlackboardStore
 from cafe.core.git import GitOperations
+from cafe.core.human_task_records import HumanTaskRecordStore
 from cafe.core.playbook import resolve_step_behavior
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.core.types import AgentCLI, TokenUsage
@@ -28,6 +29,139 @@ from cafe.verification import run_verification
 
 
 DOMAIN_ROUTES = ("editorial", "research", "incident")
+
+
+@pytest.mark.parametrize("repair_succeeds", [True, False])
+def test_runtime_returns_report_format_rejection_to_same_producer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repair_succeeds: bool
+) -> None:
+    """Exercise real step execution, correction, publication and recovery routing."""
+    repo = tmp_path / "report-retry"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+    monkeypatch.chdir(repo)
+    config = repo / ".cafe"
+    config.mkdir()
+    (config / "strategic_context.yaml").write_text("version: 1\n", encoding="utf-8")
+    (config / "phases.yaml").write_text(
+        "inspect:\n  name: Inspector\n  clis:\n    - cli: codex\n      model: test-model\n",
+        encoding="utf-8",
+    )
+    skill = config / "skills" / "report"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "---\nname: report\ndescription: Inspect and report\n"
+        "---\n\nWrite your report to {output_file} and submit the ordinary baton.\n",
+        encoding="utf-8",
+    )
+    agent_file = config / "agents" / "reviewer" / "Inspector.md"
+    agent_file.parent.mkdir(parents=True)
+    agent_file.write_text(
+        "---\nname: Inspector\ndescription: Report inspection results\n---\n\nInspect.\n",
+        encoding="utf-8",
+    )
+    issue_dir = config / "issues" / "format-rejection"
+    iteration = issue_dir / "inspect" / "iteration_001"
+    playbook = {
+        "playbook": {"id": "format-rejection"},
+        "roles": {"reviewer": {"default_agent": "Inspector"}},
+        "steps": {
+            "inspect": {
+                "skill": "report",
+                "role": "reviewer",
+                "output_artifact": "report",
+                "behavior": {"completion": "baton"},
+                "allowed_tools": ["Read", "Write"],
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+
+    class ReportAgent:
+        def __init__(self):
+            self.agent = SimpleNamespace(
+                config=SimpleNamespace(
+                    cli=AgentCLI.CODEX, session_id="report-session", model="test-model"
+                )
+            )
+            self.calls = []
+            self.metadata = []
+
+        def get_agent(self, _name):
+            return self.agent
+
+        def get_last_cli(self):
+            return AgentCLI.CODEX
+
+        def get_last_session_id(self):
+            return "report-session"
+
+        def execute(self, name, prompt, *, continuation=None, **kwargs):
+            self.calls.append((name, prompt, continuation, kwargs.get("allowed_tools")))
+            assert not (iteration / "artifact.json").exists()
+            state = BlackboardStore(issue_dir).load_or_create("inspect")
+            assert state.artifacts == {}
+            assert not any(e.event_type == "transition" for e in state.events)
+            assert HumanTaskRecordStore(issue_dir).tasks() == ()
+            assert (iteration / "checklist.md").read_bytes() == b""
+            self.metadata.append(json.loads((iteration / "iteration.json").read_text()))
+            report = "# Inspection\n\n## Todo List\n\nNo actionable work.\n"
+            if len(self.calls) == 1 or not repair_succeeds:
+                report += "\n# Earlier inspection\n\n## Todo List\n\nNo actionable work.\n"
+            (iteration / "output.md").write_text(report, encoding="utf-8")
+            (issue_dir / "next_step.txt").write_text(
+                json.dumps({"version": 1, "intent": "await_agent"}), encoding="utf-8"
+            )
+            return "", TokenUsage(), [], [], [], None
+
+    manager = ReportAgent()
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="format-rejection",
+        playbook=playbook,
+        generic_phase=GenericPhase(
+            SkillLoader(project_root=repo, global_root=tmp_path / "global")
+        ),
+        agent_manager=manager,
+        git_ops=GitOperations(repo),
+        role_agent_map={"reviewer": "Inspector"},
+    )
+    runtime = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir, playbook=playbook, executor=executor.execute_step
+    )
+
+    result = runtime.run(start_step="inspect")
+
+    assert len(manager.calls) == (2 if repair_succeeds else 3)
+    for name, prompt, continuation, allowed_tools in manager.calls[1:]:
+        assert name == "Inspector"
+        assert "exactly one '## Todo List' section" in prompt
+        assert continuation.session_id == "report-session"
+        assert allowed_tools == manager.calls[0][3]
+    for metadata in manager.metadata:
+        assert metadata["effective_checklist"] == manager.metadata[0]["effective_checklist"]
+        assert metadata["effective_checklist"]["gates"] == []
+        assert metadata["model"] == "test-model"
+    assert (iteration / "checklist.md").read_bytes() == b""
+    assert not (issue_dir / "inspect" / "iteration_002").exists()
+    tasks = HumanTaskRecordStore(issue_dir).tasks()
+    persisted = BlackboardStore(issue_dir).load_or_create("inspect")
+    if repair_succeeds:
+        assert result.completed is True
+        assert tasks == ()
+        assert persisted.artifacts["report"].version == 1
+        assert (iteration / "artifact.json").exists()
+        assert any(e.event_type == "step_completed" for e in persisted.events)
+    else:
+        assert result.completed is False
+        assert persisted.artifacts == {}
+        assert not (iteration / "artifact.json").exists()
+        assert len(tasks) == 1
+        assert HumanTaskRecordStore(issue_dir).get_assignment(tasks[0].id).assignee_type == "user"
+        assert tasks[0].policy_id == "agent-execution-interrupted"
+        assert tasks[0].continuations == {
+            "retry": "inspect", "retry_fresh_session": "inspect"
+        }
 
 
 def _run_runtime_worker(repo: Path, worker: str, args: list[str]) -> dict:
@@ -373,7 +507,7 @@ def test_custom_named_step_publication_handoff_restart_and_consumer_preparation(
     assert first["completed"] is False
     assert first["final_step"] == "emit"
     assert first["calls"] == 1
-    assert second["completed"] is True
+    assert second["completed"] is True, second
     assert second["final_step"] == "consume"
     assert second["calls"] == 1
     consumer_state = BlackboardStore(issue_dir).load_or_create(

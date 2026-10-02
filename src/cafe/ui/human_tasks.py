@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -195,6 +197,325 @@ class HumanTaskApplication:
     target: Optional[str]
     policy: Optional[HumanTaskPolicy]
     rejection: Optional[HumanTaskRejection] = None
+
+
+_USER_HANDOFF_PAYLOAD_TYPE = "user_handoff"
+_USER_HANDOFF_REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+
+
+def apply_explicit_user_handoff_if_present(
+    *,
+    issue_dir: Path,
+    playbook_data: Mapping[str, Any],
+    blackboard: Any,
+    raw_payload: str | Mapping[str, Any],
+    source: str,
+) -> Optional[HumanTaskApplication]:
+    """Apply an explicitly typed user redirect without treating it as a task answer.
+
+    This is intentionally separate from normal HumanTask completion.  It is for
+    a user who needs to hand confirmed context to the phase that owns a broken
+    or stale task contract, not a fallback for an invalid task answer.
+    """
+    payload = _explicit_user_handoff_payload(raw_payload)
+    if payload is None:
+        return None
+    if isinstance(payload, HumanTaskRejection):
+        return _explicit_user_handoff_rejection(issue_dir, blackboard, payload)
+
+    workflow_id = payload["workflow_id"]
+    task_id = payload["human_task_id"]
+    target = payload["target"]
+    request_id = payload["request_id"]
+    user_input = payload["input"]
+    input_sha256 = hashlib.sha256(user_input.encode("utf-8")).hexdigest()
+    store = BlackboardStore(issue_dir)
+    records = HumanTaskRecordStore(issue_dir)
+    if not records.exists:
+        return _explicit_user_handoff_rejection(
+            issue_dir,
+            blackboard,
+            HumanTaskRejection(
+                message="The current workflow has no durable human task to redirect.",
+                correction_guidance="Inspect the current handoff before submitting an explicit redirect.",
+            ),
+        )
+    with records.transaction():
+        active_blackboard = store.load_or_create(
+            str(getattr(blackboard, "current_step", "user")),
+            playbook_id=str(getattr(blackboard, "playbook_id", "standard")),
+        )
+        existing = _matching_user_handoff_event(
+            active_blackboard,
+            workflow_id=workflow_id,
+            task_id=task_id,
+            target=target,
+            request_id=request_id,
+            input_sha256=input_sha256,
+        )
+        if existing is not None:
+            if existing is False:
+                return _explicit_user_handoff_rejection(
+                    issue_dir,
+                    active_blackboard,
+                    HumanTaskRejection(
+                        message="This user handoff request ID was already used with different input.",
+                        correction_guidance="Use a new request ID for a different explicit handoff.",
+                    ),
+                )
+            contract = getattr(active_blackboard, "handoff_contract", None)
+            if (
+                active_blackboard.current_step == target
+                and contract is not None
+                and contract.to_owner is HandoffOwner.AGENT
+                and contract.to_step == target
+            ):
+                return HumanTaskApplication(target=target, policy=None)
+            return _explicit_user_handoff_rejection(
+                issue_dir,
+                active_blackboard,
+                HumanTaskRejection(
+                    message="This explicit user handoff was already applied and is not current.",
+                    correction_guidance="Inspect the current user handoff before submitting a new request.",
+                ),
+            )
+
+        playbook_steps = playbook_data.get("steps")
+        if not isinstance(playbook_steps, Mapping) or target not in playbook_steps:
+            return _explicit_user_handoff_rejection(
+                issue_dir,
+                active_blackboard,
+                HumanTaskRejection(
+                    message="The requested handoff target is not declared by this playbook.",
+                    correction_guidance="Choose a target declared by the pending task's playbook.",
+                ),
+            )
+        if workflow_id != getattr(active_blackboard, "workflow_id", None):
+            return _explicit_user_handoff_rejection(
+                issue_dir,
+                active_blackboard,
+                HumanTaskRejection(
+                    message="This explicit user handoff belongs to a different workflow.",
+                    correction_guidance="Use the workflow and human task IDs shown by the current handoff.",
+                ),
+            )
+        active_contract = getattr(active_blackboard, "handoff_contract", None)
+        handoff_created_at = getattr(active_contract, "created_at", None)
+        if not isinstance(handoff_created_at, str) or not handoff_created_at:
+            return _explicit_user_handoff_rejection(
+                issue_dir,
+                active_blackboard,
+                HumanTaskRejection(
+                    message="The current user handoff has no durable identity.",
+                    correction_guidance="Inspect and repair the current handoff before submitting input.",
+                ),
+            )
+        request_fingerprint = hashlib.sha256(
+            json.dumps(
+                {
+                    "workflow_id": workflow_id,
+                    "task_id": task_id,
+                    "target": target,
+                    "request_id": request_id,
+                    "input_sha256": input_sha256,
+                    "handoff_created_at": handoff_created_at,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        cancellation_reason = f"explicit_user_handoff:{request_id}:{request_fingerprint}"
+        try:
+            task = records.get_task(task_id)
+        except HumanTaskCorrelationError:
+            return _explicit_user_handoff_rejection(
+                issue_dir,
+                active_blackboard,
+                HumanTaskRejection(
+                    message=f"Unknown durable human task {task_id!r}.",
+                    correction_guidance="Use the human task ID shown by the current handoff.",
+                ),
+            )
+        cancelled_for_request = task.status is HumanTaskStatus.CANCELLED and any(
+            event.event_type == "cancelled"
+            and event.task_id == task.id
+            and event.context.get("reason") == cancellation_reason
+            for event in records.lifecycle_events()
+        )
+        legacy_recovery_matches = (
+            cancelled_for_request
+            and not task.handoff_key.startswith("user-handoff:")
+            and _legacy_task_matches_current_handoff(task, active_blackboard)
+        )
+        if (
+            task.workflow_id != workflow_id
+            or task.capability_approval is not None
+            or (
+                not durable_task_matches_current_handoff(task, active_blackboard)
+                and not legacy_recovery_matches
+            )
+        ):
+            return _explicit_user_handoff_rejection(
+                issue_dir,
+                active_blackboard,
+                HumanTaskRejection(
+                    message="This explicit user handoff does not match the current user-owned task.",
+                    correction_guidance="Use the exact pending task from the current user handoff.",
+                ),
+            )
+        permitted_targets = set(task.continuations.values())
+        raw_allowed = task.expected_result.get("allowed_targets", [])
+        if isinstance(raw_allowed, list):
+            permitted_targets.update(item for item in raw_allowed if isinstance(item, str))
+        if target not in permitted_targets:
+            return _explicit_user_handoff_rejection(
+                issue_dir,
+                active_blackboard,
+                HumanTaskRejection(
+                    message="This explicit user handoff does not select the pending task's declared continuation.",
+                    correction_guidance="Choose one of the continuations declared by the current task.",
+                ),
+            )
+
+        if task.status is HumanTaskStatus.PENDING:
+            cancelled = records.cancel(
+                workflow_id=workflow_id, task_id=task.id, reason=cancellation_reason
+            )
+            if cancelled.status is not HumanTaskStatus.CANCELLED:
+                return _explicit_user_handoff_rejection(
+                    issue_dir,
+                    active_blackboard,
+                    HumanTaskRejection(
+                        message="This human task was completed while the redirect was being applied.",
+                        correction_guidance="Inspect the current workflow handoff before submitting input.",
+                    ),
+                )
+        elif task.status is not HumanTaskStatus.CANCELLED or not cancelled_for_request:
+            return _explicit_user_handoff_rejection(
+                issue_dir,
+                active_blackboard,
+                HumanTaskRejection(
+                    message="This human task is no longer pending and cannot be redirected.",
+                    correction_guidance="Inspect the current workflow handoff before submitting input.",
+                ),
+            )
+
+        # The cancellation carries the complete immutable request fingerprint.
+        # A retry after interruption can only finish this exact redirect.
+        _write_next_iteration_user_input(issue_dir=issue_dir, step_name=target, text=user_input)
+        contract = store.build_handoff_contract(
+            from_step=task.step,
+            to_owner=HandoffOwner.AGENT,
+            to_step=target,
+            intent=HandoffIntent.AWAIT_AGENT,
+            source="command.explicit_user_handoff",
+        )
+        active_blackboard.current_step = target
+        active_blackboard.handoff_contract = contract
+        active_blackboard.handoff_summary = f"Explicit user handoff to {target}"
+        store.record_event(
+            active_blackboard,
+            "explicit_user_handoff",
+            {
+                "step": target,
+                "workflow_id": workflow_id,
+                "task_id": task.id,
+                "target": target,
+                "request_id": request_id,
+                "input_sha256": input_sha256,
+                "handoff_created_at": handoff_created_at,
+                "request_fingerprint": request_fingerprint,
+                "source": source,
+            },
+            baton_contract=contract,
+        )
+        return HumanTaskApplication(target=target, policy=None)
+
+
+def _legacy_task_matches_current_handoff(task: HumanTask, blackboard: Any) -> bool:
+    """Match a cancelled pre-handoff-key task only to its unchanged user baton."""
+    contract = getattr(blackboard, "handoff_contract", None)
+    return bool(
+        getattr(blackboard, "current_step", None) == "user"
+        and contract is not None
+        and contract.to_owner is HandoffOwner.USER
+        and contract.to_step == "user"
+        and contract.from_step == task.step
+        and contract.intent.value == task.trigger
+    )
+
+
+def _explicit_user_handoff_payload(
+    raw_payload: str | Mapping[str, Any],
+) -> dict[str, str] | HumanTaskRejection | None:
+    if isinstance(raw_payload, str):
+        try:
+            raw_payload = json.loads(raw_payload)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(raw_payload, Mapping) or raw_payload.get("type") != _USER_HANDOFF_PAYLOAD_TYPE:
+        return None
+    expected = {"type", "workflow_id", "human_task_id", "target", "input", "request_id"}
+    if set(raw_payload) != expected:
+        return HumanTaskRejection(
+            message="An explicit user handoff must contain exactly its declared fields.",
+            correction_guidance="Provide type, workflow_id, human_task_id, target, input, and request_id.",
+        )
+    values = {key: raw_payload[key] for key in expected if key != "type"}
+    if any(not isinstance(value, str) or not value.strip() for value in values.values()):
+        return HumanTaskRejection(
+            message="Every explicit user handoff field must be a non-empty string.",
+            correction_guidance="Provide the exact workflow/task IDs, target, input, and request ID.",
+        )
+    if not _USER_HANDOFF_REQUEST_ID.fullmatch(values["request_id"]):
+        return HumanTaskRejection(
+            message="The explicit user handoff request ID is invalid.",
+            correction_guidance="Use a stable identifier containing only letters, digits, dot, underscore, colon, or dash.",
+        )
+    if len(values["input"].encode("utf-8")) > 65_536:
+        return HumanTaskRejection(
+            message="The explicit user handoff input exceeds the 64 KiB limit.",
+            correction_guidance="Submit a bounded handoff and reference durable artifacts for larger material.",
+        )
+    return {key: value.strip() if key != "input" else value for key, value in values.items()}
+
+
+def _matching_user_handoff_event(
+    blackboard: Any,
+    *,
+    workflow_id: str,
+    task_id: str,
+    target: str,
+    request_id: str,
+    input_sha256: str,
+) -> bool | None:
+    for event in reversed(getattr(blackboard, "events", ())):
+        if getattr(event, "event_type", None) != "explicit_user_handoff":
+            continue
+        data = getattr(event, "data", {})
+        if not isinstance(data, Mapping) or data.get("request_id") != request_id:
+            continue
+        return (
+            data.get("workflow_id") == workflow_id
+            and data.get("task_id") == task_id
+            and data.get("target") == target
+            and data.get("input_sha256") == input_sha256
+        )
+    return None
+
+
+def _explicit_user_handoff_rejection(
+    issue_dir: Path,
+    blackboard: Any,
+    rejection: HumanTaskRejection,
+) -> HumanTaskApplication:
+    BlackboardStore(issue_dir).record_event(
+        blackboard,
+        "explicit_user_handoff_rejected",
+        {"step": getattr(blackboard, "current_step", "user"), "reason": rejection.message},
+    )
+    return HumanTaskApplication(target=None, policy=None, rejection=rejection)
 
 
 def apply_capability_approval_payload(
@@ -470,22 +791,33 @@ def _apply_human_task_payload(
     store = BlackboardStore(issue_dir)
     try:
         iteration = latest_step_iteration(issue_dir=issue_dir, step_name=from_step)
-        questions = _load_dynamic_questions(
-            issue_dir=issue_dir,
-            step_name=from_step,
-            playbook_data=playbook_data,
-            trigger=trigger,
-            iteration=iteration,
-        )
-        policy, binding, completion = validate_step_human_task_completion(
-            playbook_data=playbook_data,
-            step_name=from_step,
-            trigger=trigger,
-            raw_payload=raw_payload,
-            questions=questions,
-            iteration=iteration,
-        )
-    except (HumanTaskPolicyError, LookupError, TypeError) as exc:
+        if record_store.exists:
+            # Validate the current machine declaration without depending on
+            # presentation resources that an already-saved task does not own.
+            policy, binding = resolve_step_human_task(
+                playbook_data=playbook_data,
+                step_name=from_step,
+                trigger=trigger,
+                iteration=iteration,
+                skill_loader=SkillLoader(resolve_presentation=False),
+            )
+        else:
+            questions = _load_dynamic_questions(
+                issue_dir=issue_dir,
+                step_name=from_step,
+                playbook_data=playbook_data,
+                trigger=trigger,
+                iteration=iteration,
+            )
+            policy, binding, completion = validate_step_human_task_completion(
+                playbook_data=playbook_data,
+                step_name=from_step,
+                trigger=trigger,
+                raw_payload=raw_payload,
+                questions=questions,
+                iteration=iteration,
+            )
+    except (HumanTaskPolicyError, LookupError, TypeError, ValueError) as exc:
         rejection = HumanTaskRejection(
             message=str(exc),
             correction_guidance=(
@@ -527,6 +859,34 @@ def _apply_human_task_payload(
             },
         )
         return HumanTaskApplication(target=None, policy=policy, rejection=durable_rejection)
+    if durable_task is not None:
+        try:
+            snapshot = HumanTaskPolicy.model_validate(durable_task.expected_result)
+            if _task_machine_contract(snapshot) != _task_machine_contract(policy):
+                raise ValueError("Saved task policy does not match the current declaration")
+        except (TypeError, ValueError) as exc:
+            return _durable_task_routing_rejection(
+                issue_dir=issue_dir,
+                blackboard=blackboard,
+                task_id=durable_task.id,
+                message=f"The saved human task has an invalid response contract: {exc}",
+            )
+        policy = snapshot
+        questions = policy.questions
+        if policy.questions_from_xml and not questions:
+            questions = _load_dynamic_questions(
+                issue_dir=issue_dir,
+                step_name=from_step,
+                playbook_data=playbook_data,
+                trigger=trigger,
+                iteration=iteration,
+                policy=policy,
+            )
+        completion = validate_human_task_completion(
+            policy,
+            raw_payload,
+            questions=questions,
+        )
     result_was_recovered = durable_result is not None
 
     recovered_agent_input = ""
@@ -877,7 +1237,7 @@ def _apply_human_task_payload(
 
                 step_definition = playbook_data["steps"][from_step]
                 composition = resolve_step_workflow_composition(
-                    SkillLoader(),
+                    SkillLoader(resolve_presentation=False),
                     primary_skill=resolve_skill_selector(
                         step_definition["skill"], durable_task.iteration
                     ),
@@ -971,6 +1331,20 @@ def _apply_human_task_payload(
         },
     )
     return HumanTaskApplication(target="done" if is_done else continuation, policy=policy)
+
+
+def _task_machine_contract(policy: HumanTaskPolicy) -> dict[str, Any]:
+    """Compare the live and saved answer contract without presentation fields."""
+    return policy.model_dump(
+        exclude={
+            "prompt": True,
+            "prompt_locales": True,
+            "correction_guidance": True,
+            "correction_guidance_locales": True,
+            "decisions": {"__all__": {"label", "label_locales"}},
+            "questions": {"__all__": {"prompt", "prompt_locales"}},
+        }
+    )
 
 
 def _resolve_durable_task(
@@ -1335,17 +1709,19 @@ def _load_dynamic_questions(
     playbook_data: Mapping[str, Any],
     trigger: str,
     iteration: int,
+    policy: Optional[HumanTaskPolicy] = None,
 ) -> Optional[tuple[HumanTaskQuestion, ...]]:
-    """Return the current XML question contract for a dynamic answer task."""
-    try:
-        policy, _binding = resolve_step_human_task(
-            playbook_data=playbook_data,
-            step_name=step_name,
-            trigger=trigger,
-            iteration=iteration,
-        )
-    except HumanTaskPolicyError:
-        return None
+    """Read the XML answer contract without re-resolving a saved policy's copy."""
+    if policy is None:
+        try:
+            policy, _binding = resolve_step_human_task(
+                playbook_data=playbook_data,
+                step_name=step_name,
+                trigger=trigger,
+                iteration=iteration,
+            )
+        except HumanTaskPolicyError:
+            return None
     if not policy.questions_from_xml:
         return None
 

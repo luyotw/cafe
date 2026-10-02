@@ -1,9 +1,9 @@
-# Driver Supervision And Recovery
+# Manager Supervision And Recovery
 
 Read this reference while workflow work is active or when execution pauses,
 times out, becomes interrupted, or appears stale. Supervision policy belongs to
-the Driver. Existing CAFE status, task, handoff, process, and output surfaces are
-the evidence the Driver uses; do not require or create a failure fingerprint,
+the Manager. Existing CAFE status, task, handoff, process, and output surfaces are
+the evidence the Manager uses; do not require or create a failure fingerprint,
 recurrence counter, or additional runtime evidence schema.
 
 ## Observe active work
@@ -19,7 +19,7 @@ is only one observation. None proves phase completion; follow the graph's
 handoff and terminal state. Do not read unbounded provider logs merely to watch
 execution.
 
-The Driver judges whether failures are the same in substance from their visible
+The Manager judges whether failures are the same in substance from their visible
 meaning, failed boundary, and execution context. Exact wording need not match.
 When the visible information is insufficient or conflicting, treat the state as
 ambiguous and diagnose it instead of manufacturing certainty.
@@ -32,12 +32,12 @@ only the automatic conversation notification failed or the workflow itself
 paused, based on fresh `cafe status` and task evidence. A callback failure alone
 does not prove the worker stopped. Keep raw field names in diagnostic evidence,
 not as the user's instruction; never ask the user to edit state files. If the
-workflow is still running, report that the Driver can inspect it when the user
+workflow is still running, report that the Manager can inspect it when the user
 returns. If a task is pending, present its declared choices in plain language.
 
 ## Non-intervention envelope
 
-The Driver remains passive while every applicable condition is demonstrably
+The Manager remains passive while every applicable condition is demonstrably
 true:
 
 - the visible workflow, phase, iteration, continuation/session, and worker state
@@ -71,18 +71,18 @@ Until `cafe chat` has an enforced read-only flag, use this diagnostic form:
 cafe chat <role> --phase <step> -p "Read-only diagnosis: explain the current failure and propose one bounded next action. Do not edit files, artifacts, tasks, baton, blackboard, or workflow state, and do not run commands that change state."
 ```
 
-| Priority and visible condition | One Driver action |
+| Priority and visible condition | One Manager action |
 | --- | --- |
 | 1. Worker, task, baton, continuation/session, or process state is stale, conflicting, or ambiguous | Diagnose runtime state first and fail closed. Do not chat or resume until the active work is clear. |
 | 2. Legacy terminal-operation state reports `FAILED` or `LOST` | Preserve it and pause. Use only an applicable existing owner-specific recovery contract; never relaunch the old arbitrary command. |
 | 3. A mandatory, `user_required`, permission, capability, strategy, scope, external-effect, model-chain, or other user-owned decision is pending, except a phase-agent recovery choice handled by priorities 6 and 8 | Present it to the user through its declared boundary. Do not ask the phase agent to infer or approve it. |
 | 4. A scheduled proactive-review or confirmation boundary is due | Follow the confirmed review and handoff contracts. |
-| 5. Visible behavior identifies a playbook, phase contract, Driver, or CAFE-core defect | Stop normal execution and follow `diagnosis_and_repair.md` for that layer. |
+| 5. Visible behavior identifies a playbook, phase contract, Manager, or CAFE-core defect | Stop normal execution and follow `diagnosis_and_repair.md` for that layer. |
 | 6. The same phase-agent failure keeps returning and no new observation gives a concrete reason another retry will differ | Keep the recovery task user-owned. Consult the responsible phase agent once with the read-only diagnostic prompt above, then inspect again before recommending another recovery action. |
 | 7. Visible phase progress exists but there is no valid handoff, or reported success conflicts with current state | Consult the responsible phase agent with the read-only diagnostic prompt above to identify completed work, the missing boundary, and one bounded next action. Do not reconstruct the handoff yourself. |
 | 8. A phase-agent failure has a safe idempotent retry and a concrete reason another attempt may differ | Present every declared recovery option and practical consequence, and recommend a retry under the unchanged contract. Do not submit the choice for the user. |
 
-A materially different visible failure is a new incident. If the Driver cannot
+A materially different visible failure is a new incident. If the Manager cannot
 tell whether it is materially different, classify it as ambiguous. Do not use a
 string-similarity threshold, invent a count, or persist a new comparison record.
 There is no fixed retry count for phase-agent execution recovery: recommend
@@ -93,14 +93,14 @@ reason.
 ## Recovery boundaries
 
 - `agent-execution-interrupted` remains a user-owned recovery-choice HumanTask.
-  The Driver may recommend an option but must present every declared option and
+  The Manager may recommend an option but must present every declared option and
   relay only the user's explicit answer through the task flow in
   `running_workflow.md`.
 - A user-authorized retry preserves phase, iteration scope, model chain,
   permissions, capabilities, and Delivery Contract. Recheck current visible
   state immediately before relaying the answer or resuming.
 - Existing fresh-session recovery remains user-selected. Its availability does
-  not authorize the Driver to choose it.
+  not authorize the Manager to choose it.
 - Legacy terminal-operation `FAILED` or `LOST` state remains immutable. This
   policy creates no operation executor and never reruns the old command.
 - A diagnostic `cafe chat` prompt must prohibit file and workflow-state changes.

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Optional, Tuple
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 from cafe.core.human_tasks import HumanTaskPolicy
 
@@ -392,6 +392,40 @@ class ExecutionProfile(BaseModel):
         return cleaned
 
 
+class NotificationMessageReference(BaseModel):
+    """An owner-local, argument-free notification label."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    message_key: str
+
+    @model_validator(mode="after")
+    def _validate_resource(self, info: ValidationInfo) -> "NotificationMessageReference":
+        from cafe.core.runtime_locales import render_text
+
+        if not re.fullmatch(r"[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*", self.message_key):
+            raise ValueError("notification message_key must be a stable message key")
+        context = info.context or {}
+        root = context.get("locale_catalog_root")
+        if root is None:
+            raise ValueError("notification copy requires its declaration owner")
+        if context.get("resolve_presentation", True):
+            for locale in ("en-US", "zh-TW"):
+                render = context.get("render_locale_text")
+                if render is not None:
+                    render(self.message_key, locale=locale)
+                else:
+                    render_text(self.message_key, locale=locale, catalog_root=root)
+        return self
+
+
+class SkillNotificationCopy(BaseModel):
+    """Presentation metadata; never part of task identity or its saved policy."""
+
+    model_config = ConfigDict(extra="forbid")
+    step_label: Optional[NotificationMessageReference] = None
+    task_labels: dict[str, NotificationMessageReference] = Field(default_factory=dict)
+
+
 class SkillWorkflowDeclaration(BaseModel):
     """All optional workflow metadata carried in a skill frontmatter block."""
 
@@ -404,6 +438,7 @@ class SkillWorkflowDeclaration(BaseModel):
     checklist_overlay: Optional[ChecklistOverlay] = None
     output_templates: Optional[OutputTemplatesContract] = None
     human_tasks: Tuple[HumanTaskPolicy, ...] = ()
+    notification: Optional[SkillNotificationCopy] = None
     execution_profile: Optional[ExecutionProfile] = None
 
     @field_validator("required_tools")
@@ -442,6 +477,8 @@ class SkillWorkflowDeclaration(BaseModel):
         task_ids = [task.id for task in self.human_tasks]
         if len(set(task_ids)) != len(task_ids):
             raise ValueError("human task ids must be unique")
+        if self.notification and self.notification.task_labels.keys() - set(task_ids):
+            raise ValueError("notification task_labels must name tasks declared by this owner")
         for checklist in (self.checklist, self.checklist_overlay):
             if checklist is None:
                 continue

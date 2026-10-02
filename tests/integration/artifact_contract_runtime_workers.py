@@ -71,6 +71,7 @@ class _CustomProductionAgent:
                 "Closure: consumed after restart — Evidence: production journey\n",
                 encoding="utf-8",
             )
+            baton = {"version": 1, "to_owner": "agent", "to_step": "consume", "intent": "await_agent"}
         else:
             inputs = self._workflow_inputs("custom-consumer")
             expected = {"custom_document", "custom_correction", "custom_workspace"}
@@ -89,6 +90,8 @@ class _CustomProductionAgent:
             if workspace_record.get("name") != "verified_state":
                 raise AssertionError("the consumer did not receive the verified workspace")
             output.write_text("# Consumer result\n", encoding="utf-8")
+            baton = {"version": 1, "to_owner": "done", "to_step": "done", "intent": "workflow_complete"}
+        (iteration_dir.parent.parent / "next_step.txt").write_text(json.dumps(baton), encoding="utf-8")
         run_verification(
             output_file=output,
             command=[sys.executable, "-c", "print('custom journey')"],

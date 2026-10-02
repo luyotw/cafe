@@ -30,6 +30,7 @@ from cafe.core.blackboard import (
     HandoffContract,
     HandoffIntent,
     HandoffOwner,
+    OutcomeOnlyHandoff,
 )
 from cafe.core.capabilities import (
     CAPABILITY_PR_PUBLISH_ID,
@@ -39,6 +40,7 @@ from cafe.core.capabilities import (
     run_capability_request,
     validation_rejection_receipt,
 )
+from cafe.core.conversation_locale import DEFAULT_CONVERSATION_LOCALE
 from cafe.core.human_task_notifications import (
     load_human_task_notification_settings,
     sanitize_human_task_metadata,
@@ -51,6 +53,7 @@ from cafe.core.human_task_records import (
 )
 from cafe.core.human_tasks import (
     AGENT_EXECUTION_INTERRUPTED_TRIGGER,
+    HumanTaskPolicy,
     agent_execution_interrupted_human_task,
     resolve_step_human_task,
 )
@@ -233,10 +236,12 @@ class HumanTaskNotificationDispatcher:
         issue_dir: Path,
         blackboard_store: BlackboardStore,
         blackboard: BlackboardState,
+        playbook: Mapping[str, Any] | None = None,
     ) -> None:
         self.issue_dir = issue_dir
         self.blackboard_store = blackboard_store
         self.blackboard = blackboard
+        self.playbook = playbook
 
     def _repository_root(self) -> Path:
         return resolve_human_task_notification_repository_root(self.issue_dir)
@@ -272,6 +277,12 @@ class HumanTaskNotificationDispatcher:
             "task_id": sanitize_human_task_metadata(task.id),
             "step": sanitize_human_task_metadata(task.step),
             "task_type": sanitize_human_task_metadata(task.policy_id),
+            # A record with no stored locale keeps none; presentation resolves
+            # the documented English fallback without writing anything back.
+            "conversation_locale": (
+                getattr(self.blackboard, "conversation_locale", None)
+                or DEFAULT_CONVERSATION_LOCALE
+            ),
         }
 
     def _record_notification_outcome(
@@ -349,6 +360,34 @@ class HumanTaskNotificationDispatcher:
             return
         repo_root = self._repository_root()
         notification_inputs = self._notification_inputs(task)
+        from cafe.core.human_task_notifications import NotificationPresentation
+        from cafe.core.runtime_locales import render_text
+        from cafe.skills.loader import SkillLoader
+        from cafe.skills.notification_copy import resolve_step_notification_presentation
+
+        try:
+            presentation = resolve_step_notification_presentation(
+                playbook_data=self.playbook or {}, step_name=task.step,
+                task_id=task.policy_id, iteration=task.iteration,
+                locale=notification_inputs["conversation_locale"],
+                # Match the producer's selected skill catalog. The canonical
+                # repository above controls transport routing, not phase copy.
+                skill_loader=SkillLoader(resolve_presentation=False),
+            )
+        except (LookupError, TypeError, ValueError):
+            self._record_notification_outcome(
+                task, attempt_id=attempt_id,
+                code="human_task_notification_copy_invalid", outcome="skipped",
+            )
+            return
+        if task.trigger == AGENT_EXECUTION_INTERRUPTED_TRIGGER:
+            presentation = NotificationPresentation(
+                step_label=presentation.step_label,
+                action_label=render_text(
+                    "notification.action_labels.agent_execution_interrupted",
+                    locale=notification_inputs["conversation_locale"],
+                ),
+            )
         capability_request = {
             "capability": CAPABILITY_SLACK_HUMAN_TASK_ID,
             "args": notification_inputs,
@@ -384,6 +423,7 @@ class HumanTaskNotificationDispatcher:
                 output_file=self.issue_dir / "blackboard.json",
                 timeout_sec=SLACK_HUMAN_TASK_TIMEOUT_SEC,
                 trusted_human_task_notification=True,
+                notification_presentation=presentation,
             )
             receipt = dict(run.receipt)
         except Exception:  # The durable HumanTask remains authoritative on host failure.
@@ -432,6 +472,7 @@ class BlackboardWorkflowRuntime:
             self.start_step,
             playbook_id=self.playbook_id,
             tolerate_invalid_baton=True,
+            playbook_conversation_locale=playbook_meta.get("conversation_locale"),
         )
         self._replaced_user_handoff: HandoffContract | None = None
         self._workflow_event_callback = workflow_event_callback
@@ -464,6 +505,7 @@ class BlackboardWorkflowRuntime:
             issue_dir=self.issue_dir,
             blackboard_store=self.blackboard_store,
             blackboard=self.blackboard,
+            playbook=self.playbook,
         ).notify(task)
 
     @staticmethod
@@ -564,8 +606,7 @@ class BlackboardWorkflowRuntime:
             return HandoffIntent.NEED_PERMISSION
         return HandoffIntent.MANUAL_HANDOFF
 
-    @staticmethod
-    def _baton_rejected_prompt(br: BatonRejected) -> str:
+    def _baton_rejected_prompt(self, br: BatonRejected) -> str:
         if br.invalid_value:
             value_msg = f"invalid value '{br.invalid_value}'"
         else:
@@ -573,7 +614,8 @@ class BlackboardWorkflowRuntime:
         message = (
             f"[BATON ERROR] Your baton was rejected because field '{br.field}' has {value_msg}. "
             f"Valid values are: {br.valid_values}. "
-            "Please rewrite next_step.txt with a correct structured baton. "
+            f"Please rewrite {(self.issue_dir / 'next_step.txt').resolve()} "
+            "with a correct structured baton. "
             "Retry in baton-only mode: do not rewrite output.md, checklist.md, or "
             "questions.xml unless strictly required. "
             "If you are asking the user a question, use to_owner='user', "
@@ -589,6 +631,26 @@ class BlackboardWorkflowRuntime:
         if br.detail:
             message += f" {br.detail}."
         return message
+
+    def _retry_rejected_baton(
+        self, *, current_step: str, rejection: BatonRejected, retry_num: int, runtime: str,
+    ) -> str:
+        """Use the same bounded retry for executor and post-execution handoffs."""
+        self._mark_latest_iteration_completion_untrusted(current_step)
+        self.blackboard_store.record_event(
+            self.blackboard, "baton_rejected",
+            {
+                "step": current_step, "field": rejection.field,
+                "invalid_value": rejection.invalid_value,
+                "valid_values": rejection.valid_values, "detail": rejection.detail,
+                "retry": retry_num, "runtime": runtime,
+            },
+        )
+        if retry_num >= 3:
+            raise RuntimeError(
+                f"Step '{current_step}' wrote invalid baton 3 times; last error: {rejection}"
+            ) from rejection
+        return self._baton_rejected_prompt(rejection)
 
     @staticmethod
     def _missing_completion_prompt(*, current_step: str) -> str:
@@ -1137,6 +1199,7 @@ class BlackboardWorkflowRuntime:
         records = HumanTaskRecordStore(self.issue_dir)
         iteration = self._human_task_iteration(current_step)
         policy, binding = agent_execution_interrupted_human_task(step_name=current_step)
+        policy = self._policy_for_workflow_locale(policy)
         status_code = (
             "CHECKLIST_VALIDATION_FAILED"
             if reason == "checklist_validation_failed"
@@ -1157,13 +1220,22 @@ class BlackboardWorkflowRuntime:
         contract = self.blackboard.handoff_contract
         if contract is None:
             raise RuntimeError("agent interruption did not create a handoff contract")
+        prompt = policy.prompt
+        if reason == "agent_artifact_format_exhausted":
+            rejection = next((
+                event.data.get("detail", "") for event in reversed(self.blackboard.events)
+                if event.event_type == "step_interrupted"
+                and event.data.get("step") == current_step
+                and event.data.get("reason") == reason
+            ), "")
+            prompt = f"{prompt}\n\n{rejection}"
         materialization = records.materialize_with_status(
             workflow_id=self.blackboard.workflow_id,
             step=current_step,
             iteration=iteration,
             trigger=AGENT_EXECUTION_INTERRUPTED_TRIGGER,
             policy_id=policy.id,
-            prompt=policy.prompt,
+            prompt=prompt,
             expected_result=policy.model_dump(mode="json"),
             continuations=binding.outcomes,
             assignee_type="user",
@@ -1601,6 +1673,45 @@ class BlackboardWorkflowRuntime:
             or f"BATON_{contract.intent.value.upper()}"
         )
 
+    def _validate_producer_handoff(self, *, current_step: str, path: Path) -> None:
+        """Check a correction's authored handoff without publishing or deciding it.
+
+        Final normalization, confirmation and capability gates remain at the
+        runtime boundary. This check only prevents replaying a phase to repair
+        a rejected handoff after its report has been corrected.
+        """
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError) as exc:
+            raise BatonRejected(
+                field="payload", invalid_value=str(exc), valid_values=["JSON handoff object"]
+            ) from exc
+        if not isinstance(payload, dict):
+            raise BatonRejected(
+                field="payload", invalid_value=type(payload).__name__, valid_values=["JSON object"]
+            )
+        if "to_owner" not in payload and "to_step" not in payload:
+            outcome = OutcomeOnlyHandoff.from_dict(payload)
+            target = self._mapped_target_for_intent(
+                current_step=current_step, intent=outcome.intent
+            )
+            if target not in {*self.steps, "user", "done", "_done"}:
+                raise BatonRejected(
+                    field="intent", invalid_value=outcome.intent.value,
+                    valid_values=list(self.steps[current_step].get("on", {})),
+                )
+            return
+        contract = HandoffContract.from_dict_with_current_step(payload, current_step=current_step)
+        contract.validate(allowed_steps=list(self.steps))
+        if contract.from_step != current_step:
+            raise BatonRejected(field="from_step", invalid_value=contract.from_step,
+                                valid_values=[current_step])
+        valid_intents = effective_step_handoff_intents(self.steps[current_step])
+        if contract.intent.value not in valid_intents:
+            raise BatonRejected(field="intent", invalid_value=contract.intent.value,
+                                valid_values=valid_intents)
+        self._validate_mapped_handoff_target(current_step=current_step, contract=contract)
+
     def _load_step_handoff_contract(self, *, current_step: str) -> Optional[HandoffContract]:
         contract = self._load_agent_written_handoff_contract(
             current_step=current_step,
@@ -1827,6 +1938,15 @@ class BlackboardWorkflowRuntime:
             transition_intent=raw_intent, transition_source=transition_source,
         )
 
+    def _policy_for_workflow_locale(self, policy: HumanTaskPolicy) -> HumanTaskPolicy:
+        """Present a declared policy in the workflow language at materialization.
+
+        This is the only place a locale is applied to declared task text: the
+        materialized record then carries that presentation as its snapshot, so
+        no render or answer path re-resolves it afterwards.
+        """
+        return policy.for_locale(self.blackboard.conversation_locale)
+
     def _materialize_owned_human_task(
         self,
         *,
@@ -1846,6 +1966,7 @@ class BlackboardWorkflowRuntime:
                 trigger=trigger,
                 iteration=iteration,
             )
+            policy = self._policy_for_workflow_locale(policy)
         except (LookupError, TypeError, ValueError) as exc:
             records.record_configuration_error(
                 workflow_id=self.blackboard.workflow_id,
@@ -2479,6 +2600,9 @@ class BlackboardWorkflowRuntime:
             execute_kwargs = {
                 "extra_prompt": extra_prompt,
                 "same_invocation_retry": same_invocation_retry,
+                "validate_producer_handoff": lambda path: self._validate_producer_handoff(
+                    current_step=current_step, path=path
+                ),
             }
             try:
                 execute_parameters = inspect.signature(self.executor).parameters
@@ -2512,6 +2636,9 @@ class BlackboardWorkflowRuntime:
                 },
             )
             raise StepInterrupted(step=current_step, hop=hop_count, reason="interrupted")
+        except BatonRejected:
+            # Recoverable handoff errors belong to the original-session baton loop.
+            raise
         except BaseException as exc:
             # Catch AgentExecutionError (rate_limit, cli_not_found),
             # CriticalPhaseError (the same critical error_types re-raised by
@@ -2519,11 +2646,14 @@ class BlackboardWorkflowRuntime:
             # executor failure so the workflow records a clean interrupted
             # state instead of crashing.
             from cafe.agents.executor import AgentExecutionError
+            from cafe.core.artifact_validation import ArtifactCorrectionExhausted
             from cafe.core.types import CriticalPhaseError
 
             reason = "agent_error"
             detail = str(exc)
-            if isinstance(exc, (AgentExecutionError, CriticalPhaseError)) and getattr(
+            if isinstance(exc, ArtifactCorrectionExhausted):
+                reason = "agent_artifact_format_exhausted"
+            elif isinstance(exc, (AgentExecutionError, CriticalPhaseError)) and getattr(
                 exc, "error_type", None
             ):
                 reason = f"agent_{exc.error_type}"
@@ -3214,6 +3344,7 @@ class BlackboardWorkflowRuntime:
                 trigger=trigger,
                 iteration=iteration,
             )
+            policy = self._policy_for_workflow_locale(policy)
         except (LookupError, TypeError, ValueError) as exc:
             records.record_configuration_error(
                 workflow_id=self.blackboard.workflow_id,
@@ -4433,6 +4564,12 @@ class BlackboardWorkflowRuntime:
                         extra_prompt=_baton_retry_extra_prompt,
                         same_invocation_retry=_baton_attempt > 0,
                     )
+                except BatonRejected as br:
+                    _baton_retry_extra_prompt = self._retry_rejected_baton(
+                        current_step=current_step, rejection=br,
+                        retry_num=_baton_attempt + 1, runtime=runtime_label,
+                    )
+                    continue
                 except StepInterrupted as si:
                     if self._is_agent_execution_interruption(si.reason):
                         self._rollback_step_attempt(
@@ -4552,26 +4689,10 @@ class BlackboardWorkflowRuntime:
                         return checklist_rejection
                     break
                 except BatonRejected as br:
-                    retry_num = _baton_attempt + 1
-                    self.blackboard_store.record_event(
-                        self.blackboard,
-                        "baton_rejected",
-                        {
-                            "step": current_step,
-                            "field": br.field,
-                            "invalid_value": br.invalid_value,
-                            "valid_values": br.valid_values,
-                            "retry": retry_num,
-                            "runtime": runtime_label,
-                        },
+                    _baton_retry_extra_prompt = self._retry_rejected_baton(
+                        current_step=current_step, rejection=br,
+                        retry_num=_baton_attempt + 1, runtime=runtime_label,
                     )
-                    if retry_num >= 3:
-                        raise RuntimeError(
-                            f"Step '{current_step}' wrote invalid baton 3 times; "
-                            f"last error: field '{br.field}' got '{br.invalid_value}', "
-                            f"valid values are {br.valid_values}"
-                        ) from br
-                    _baton_retry_extra_prompt = self._baton_rejected_prompt(br)
             else:
                 raise RuntimeError(f"Step '{current_step}' did not produce a valid baton")
             self._store_artifacts(frame.artifacts, frame.artifact_metadata)
@@ -4832,6 +4953,12 @@ class BlackboardWorkflowRuntime:
                         extra_prompt=_baton_retry_extra_prompt,
                         same_invocation_retry=_baton_attempt > 0,
                     )
+                except BatonRejected as br:
+                    _baton_retry_extra_prompt = self._retry_rejected_baton(
+                        current_step=current_step, rejection=br,
+                        retry_num=_baton_attempt + 1, runtime=runtime_label,
+                    )
+                    continue
                 except StepInterrupted as si:
                     if self._is_agent_execution_interruption(si.reason):
                         self._rollback_step_attempt(
@@ -4947,26 +5074,10 @@ class BlackboardWorkflowRuntime:
                             continue
                     break
                 except BatonRejected as br:
-                    retry_num = _baton_attempt + 1
-                    self.blackboard_store.record_event(
-                        self.blackboard,
-                        "baton_rejected",
-                        {
-                            "step": current_step,
-                            "field": br.field,
-                            "invalid_value": br.invalid_value,
-                            "valid_values": br.valid_values,
-                            "retry": retry_num,
-                            "runtime": runtime_label,
-                        },
+                    _baton_retry_extra_prompt = self._retry_rejected_baton(
+                        current_step=current_step, rejection=br,
+                        retry_num=_baton_attempt + 1, runtime=runtime_label,
                     )
-                    if retry_num >= 3:
-                        raise RuntimeError(
-                            f"Step '{current_step}' wrote invalid baton 3 times; "
-                            f"last error: field '{br.field}' got '{br.invalid_value}', "
-                            f"valid values are {br.valid_values}"
-                        ) from br
-                    _baton_retry_extra_prompt = self._baton_rejected_prompt(br)
             else:
                 post_contract = None
             if post_contract is not None and (

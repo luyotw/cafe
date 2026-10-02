@@ -126,6 +126,7 @@ class FakeAgentManager:
         allowed_directories=None,
         streaming_output_file=None,
         phase_name=None,
+        continuation=None,
     ):
         self.prompts.append(prompt)
         self.allowed_tools_calls.append(list(allowed_tools) if allowed_tools is not None else None)
@@ -3875,6 +3876,8 @@ def test_plan_malformed_todo_retries_before_confirming(
         ["ready_for_review", "ready_for_review"],
         on_execute=write_plan_attempt,
     )
+    manager.get_last_cli = lambda: AgentCLI.CODEX
+    manager.get_last_session_id = lambda: "session-1"
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name="issue-plan-todo-retry",
@@ -3902,7 +3905,7 @@ def test_plan_malformed_todo_retries_before_confirming(
     assert reloaded.handoff_contract.intent == HandoffIntent.CONFIRM_OUTPUT
 
 
-def test_plan_malformed_todo_exhaustion_resets_confirmation_baton(
+def test_plan_malformed_todo_exhaustion_preserves_untrusted_confirmation_baton(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -3925,6 +3928,8 @@ def test_plan_malformed_todo_exhaustion_resets_confirmation_baton(
         ["ready_for_review"] * 4,
         on_execute=write_invalid_plan,
     )
+    manager.get_last_cli = lambda: AgentCLI.CODEX
+    manager.get_last_session_id = lambda: "session-1"
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name="issue-plan-todo-invalid",
@@ -3936,26 +3941,20 @@ def test_plan_malformed_todo_exhaustion_resets_confirmation_baton(
         interactive=False,
     )
 
-    result = executor.execute_step("plan", playbook["steps"]["plan"], state)
+    from cafe.core.artifact_validation import ArtifactCorrectionExhausted
 
-    assert manager.execute_call_count == 4
-    assert result.artifact_ready is False
-    assert result.artifacts == {}
-    assert any(event["type"] == "checklist_validation_failed" for event in result.events)
+    with pytest.raises(ArtifactCorrectionExhausted) as failure:
+        executor.execute_step("plan", playbook["steps"]["plan"], state)
+
+    assert manager.execute_call_count == 3
+    assert failure.value.budget.consumed == 2
+    assert not (iteration_dir / "artifact.json").exists()
+    assert state.artifacts == {}
+    # The producer's proposed human route is not trusted publication, and
+    # report failure must not masquerade as a checklist failure.
     baton = json.loads((issue_dir / "next_step.txt").read_text(encoding="utf-8"))
-    assert baton == {
-        "version": 1,
-        "to_owner": "agent",
-        "to_step": "plan",
-        "intent": "await_agent",
-    }
-    reloaded = BlackboardStore(issue_dir).load_or_create("plan")
-    assert reloaded.handoff_contract is not None
-    assert reloaded.handoff_contract.to_owner == HandoffOwner.AGENT
-    assert reloaded.handoff_contract.to_step == "plan"
-    assert reloaded.handoff_contract.intent == HandoffIntent.AWAIT_AGENT
-    assert reloaded.handoff_contract.status_code == "CHECKLIST_VALIDATION_FAILED"
-    assert reloaded.handoff_contract.source == "workflow.completion_validation"
+    assert baton["intent"] == "confirm_output"
+    assert not any(e.event_type == "step_completed" for e in state.events)
 
 
 def test_plan_non_interactive_ready_for_review_hands_off_to_user(
@@ -8377,7 +8376,11 @@ def test_causal_todo_direct_transition_ignores_unrelated_pending_feedback(tmp_pa
     assert resolved["causal_todo"] is direct
 
 
-def test_causal_todo_normal_plan_entry_ignores_feedback_history(tmp_path: Path) -> None:
+@pytest.mark.parametrize("producer", ["plan", "design"])
+@pytest.mark.parametrize("human_confirmation", [False, True])
+def test_causal_todo_normal_plan_entry_ignores_feedback_history(
+    tmp_path: Path, producer: str, human_confirmation: bool
+) -> None:
     ledger = WorkflowFeedbackLedger(tmp_path / "issue")
     ledger.record(
         source_identity="github-pr:10:99",
@@ -8389,12 +8392,35 @@ def test_causal_todo_normal_plan_entry_ignores_feedback_history(tmp_path: Path) 
     state.events.append(
         EventEntry(
             timestamp="2026-01-01T00:00:00Z",
-            step="plan",
+            step=producer,
             event_type="transition",
             message="",
-            data={"from": "plan", "to": "develop"},
+            data={"from": producer, "to": "develop"},
         )
     )
+    playbook = _causal_todo_playbook()
+    playbook["steps"][producer] = playbook["steps"].pop("plan")
+    playbook["steps"][producer]["human_tasks"] = [
+        {"task_id": "output-review", "outcomes": {"confirm": "develop", "revise": producer}}
+    ]
+    if human_confirmation:
+        state.events.append(
+            EventEntry(
+                timestamp="2026-01-01T00:00:01Z",
+                step=producer,
+                event_type="human_task_completed",
+                message="",
+                data={"task_id": "output-review", "to_step": "develop"},
+            )
+        )
+        state.handoff_contract = HandoffContract(
+            version=1,
+            to_owner=HandoffOwner.AGENT,
+            to_step="develop",
+            intent=HandoffIntent.AWAIT_AGENT,
+            from_step=producer,
+            source="human_task.command",
+        )
     workflow = ArtifactEntry(
         name="workflow_feedback",
         kind=ArtifactKind.DOCUMENT,
@@ -8413,19 +8439,21 @@ def test_causal_todo_normal_plan_entry_ignores_feedback_history(tmp_path: Path) 
         name="plan",
         kind=ArtifactKind.DOCUMENT,
         version=1,
-        updated_by="plan",
+        updated_by=producer,
         path=str(plan),
     )
     resolved = GenericWorkflowStepExecutor._add_causal_todo_artifact(
         {"workflow_feedback": workflow, "plan": plan_entry},
         state,
-        playbook=_causal_todo_playbook(),
+        playbook=playbook,
     )
     assert "causal_todo" not in resolved
+    assert resolved["plan"] is plan_entry
 
 
+@pytest.mark.parametrize("defect", [None, "missing_artifact", "incomplete", "duplicate"])
 def test_causal_todo_local_review_human_task_precedes_direct_pr_fallback(
-    tmp_path: Path,
+    tmp_path: Path, defect: str | None
 ) -> None:
     issue_dir = tmp_path / "issue"
     ledger = WorkflowFeedbackLedger(issue_dir)
@@ -8468,25 +8496,38 @@ def test_causal_todo_local_review_human_task_precedes_direct_pr_fallback(
         from_step="pr",
         source="human_task.command",
     )
+    artifacts = {
+        "pr_result": ArtifactEntry(
+            name="pr_result",
+            kind=ArtifactKind.DOCUMENT,
+            version=1,
+            updated_by="pr",
+            path=str(pr_result),
+        ),
+        "workflow_feedback": ArtifactEntry(
+            name="workflow_feedback",
+            kind=ArtifactKind.DOCUMENT,
+            version=1,
+            updated_by="human_task",
+            path=str(ledger.path),
+        ),
+    }
+    playbook = _causal_todo_playbook()
+    bindings = playbook["steps"]["pr"]["human_tasks"]
+    if defect == "missing_artifact":
+        del artifacts["workflow_feedback"]
+    elif defect == "incomplete":
+        del bindings[0]["feedback_delivery"]["todo_id_prefix"]
+    elif defect == "duplicate":
+        bindings.append(dict(bindings[0]))
+    if defect is not None:
+        with pytest.raises(ValueError, match="Correction Todo feedback (artifact|route)"):
+            GenericWorkflowStepExecutor._add_causal_todo_artifact(
+                artifacts, state, playbook=playbook
+            )
+        return
     resolved = GenericWorkflowStepExecutor._add_causal_todo_artifact(
-        {
-            "pr_result": ArtifactEntry(
-                name="pr_result",
-                kind=ArtifactKind.DOCUMENT,
-                version=1,
-                updated_by="pr",
-                path=str(pr_result),
-            ),
-            "workflow_feedback": ArtifactEntry(
-                name="workflow_feedback",
-                kind=ArtifactKind.DOCUMENT,
-                version=1,
-                updated_by="human_task",
-                path=str(ledger.path),
-            ),
-        },
-        state,
-        playbook=_causal_todo_playbook(),
+        artifacts, state, playbook=playbook
     )["causal_todo"]
     assert [item.work for item in resolved.items] == ["fix the user's selected PR concern"]
 
@@ -8690,6 +8731,86 @@ workflow:
     ) == (True, "", False)
 
 
+@pytest.mark.parametrize("repair_succeeds", [True, False])
+def test_outcome_only_handoff_retries_invalid_produced_todo(
+    tmp_path: Path, monkeypatch, repair_succeeds: bool
+) -> None:
+    """A producer's format rejection must not escape as an execution failure."""
+    monkeypatch.chdir(tmp_path)
+    issue_dir = tmp_path / ".cafe" / "issues" / "output-format-retry"
+    playbook = {
+        "playbook": {"id": "output-format-retry"},
+        "roles": {"pm": {"default_agent": "Roger"}},
+        "steps": {
+            "spec": {
+                "skill": "cafe-spec",
+                "role": "pm",
+                "output_artifact": "report",
+                "behavior": {"completion": "baton"},
+                "allowed_tools": ["Read", "Write"],
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+    iteration_dir = issue_dir / "spec" / "iteration_001"
+    pinned_checklists = []
+    sessions = []
+
+    def write_attempt(**_kwargs):
+        assert not (iteration_dir / "artifact.json").exists()
+        assert not BlackboardStore(issue_dir).load_or_create("spec").artifacts
+        metadata = json.loads((iteration_dir / "iteration.json").read_text())
+        pinned_checklists.append(metadata["effective_checklist"])
+        sessions.append(manager.agent.config.session_id)
+        assert (iteration_dir / "checklist.md").read_bytes() == b""
+        report = "# QA report\n\n## Todo List\n\nNo actionable work.\n"
+        if manager.execute_call_count == 1 or not repair_succeeds:
+            report += "\n# Prior report\n\n## Todo List\n\nNo actionable work.\n"
+        (iteration_dir / "output.md").write_text(report, encoding="utf-8")
+        (issue_dir / "next_step.txt").write_text(
+            json.dumps({"version": 1, "intent": "await_agent"}), encoding="utf-8"
+        )
+
+    manager = FakeAgentManager([""] * 4, on_execute=write_attempt)
+    manager.get_last_cli = lambda: AgentCLI.CODEX
+    manager.get_last_session_id = lambda: "session-1"
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="output-format-retry",
+        playbook=playbook,
+        generic_phase=_build_loader(tmp_path),
+        agent_manager=manager,
+        git_ops=FakeGitOperations(),
+        role_agent_map={"pm": "Roger"},
+    )
+    state = BlackboardStore(issue_dir).load_or_create("spec")
+
+    from cafe.core.artifact_validation import ArtifactCorrectionExhausted
+
+    if repair_succeeds:
+        result = executor.execute_step("spec", playbook["steps"]["spec"], state)
+    else:
+        with pytest.raises(ArtifactCorrectionExhausted):
+            executor.execute_step("spec", playbook["steps"]["spec"], state)
+
+    assert manager.execute_call_count == (2 if repair_succeeds else 3)
+    assert all("exactly one '## Todo List' section" in p for p in manager.prompts[1:])
+    assert all(p == pinned_checklists[0] for p in pinned_checklists)
+    assert pinned_checklists[0]["gates"] == []
+    assert sessions == ["session-1"] * manager.execute_call_count
+    assert (iteration_dir / "checklist.md").read_bytes() == b""
+    assert not (issue_dir / "spec" / "iteration_002").exists()
+    assert manager.allowed_tools_calls[1:] == [manager.allowed_tools_calls[0]] * (
+        manager.execute_call_count - 1
+    )
+    assert HumanTaskRecordStore(issue_dir).tasks() == ()
+    if repair_succeeds:
+        assert parse_todo_list(Path(result.artifacts["report"]).read_text()) == ()
+        assert (iteration_dir / "artifact.json").exists()
+    else:
+        assert not (iteration_dir / "artifact.json").exists()
+
+
 def test_completion_contract_failure_retries_same_producer(tmp_path: Path) -> None:
     phase_dir = tmp_path / ".cafe" / "issues" / "producer-retry" / "review"
     iteration_dir = phase_dir / "iteration_001"
@@ -8867,6 +8988,8 @@ workflow:
 
     manager = FakeAgentManager(["needs_changes", "needs_changes"], on_execute=write_attempt)
     state = BlackboardStore(issue_dir).load_or_create("inspection")
+    manager.get_last_cli = lambda: AgentCLI.CODEX
+    manager.get_last_session_id = lambda: "session-1"
     executor = GenericWorkflowStepExecutor(
         issue_dir=issue_dir,
         issue_name="manual-todo-retry",
@@ -8880,7 +9003,8 @@ workflow:
     result = executor.execute_step("inspection", playbook["steps"]["inspection"], state)
 
     assert manager.execute_call_count == 2
-    assert "phase completion contract failed" in manager.prompts[1]
+    assert "findings" in manager.prompts[1]
+    assert "malformed item" in manager.prompts[1]
     assert result.artifact_ready is True
     assert "findings" in result.artifacts
     assert "— Work: fix wiring —" in Path(result.artifacts["findings"]).read_text(
@@ -9052,3 +9176,96 @@ workflow:
 
         ledger.path.write_text('{"version": 1, "entries": []}\n', encoding="utf-8")
         assert not executor._validate_projected_todo_completion(checklist)
+
+
+@pytest.mark.parametrize("stored_locale", ["zh-TW", None])
+def test_build_context_forwards_the_workflow_language_to_the_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stored_locale: str | None
+) -> None:
+    """The public prompt path applies the English fallback without storing it."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".cafe").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".cafe" / "strategic_context.yaml").write_text(
+        "version: 1\nrepository_language:\n  content_locale: en-US\n", encoding="utf-8"
+    )
+    skill_root = tmp_path / "builtin" / "skills" / "drafting"
+    skill_root.mkdir(parents=True)
+    (skill_root / "SKILL.md").write_text(
+        "---\nname: drafting\ndescription: Draft\n---\n\n# Skill\n", encoding="utf-8"
+    )
+    loader = SkillLoader(
+        project_root=tmp_path,
+        global_root=tmp_path / "global",
+        builtin_root=tmp_path / "builtin",
+    )
+    loader.discover()
+    phase = GenericPhase(
+        loader,
+        skill_bridge=NativeSkillBridge(loader, project_root=tmp_path, home_dir=tmp_path / "home"),
+    )
+    issue_dir = tmp_path / ".cafe" / "issues" / "locale-context"
+    playbook = {
+        "playbook": {"id": "custom-drafting"},
+        "roles": {"writer": {"default_agent": "David", "description": "Writer"}},
+        "steps": {
+            "draft": {
+                "skill": "drafting",
+                "role": "writer",
+                "output_artifact": "draft",
+                "on": {"await_agent": "_done"},
+            }
+        },
+    }
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("draft")
+    state.conversation_locale = stored_locale
+    state.conversation_locale_source = "explicit" if stored_locale else None
+    store.save(state)
+    if stored_locale is None:
+        raw = json.loads(store.file_path.read_text(encoding="utf-8"))
+        raw.pop("conversation_locale")
+        raw.pop("conversation_locale_source")
+        store.file_path.write_text(json.dumps(raw), encoding="utf-8")
+        state = store.load_or_create("draft")
+    monkeypatch.setattr(
+        AgentManager,
+        "read_agent_file",
+        staticmethod(lambda _name, _role: ("test", "---\nname: David\n---\n")),
+    )
+    executor = GenericWorkflowStepExecutor(
+        issue_dir=issue_dir,
+        issue_name="locale-context",
+        playbook=playbook,
+        generic_phase=phase,
+        agent_manager=FakeAgentManager("await_agent"),
+        git_ops=FakeGitOperations(),
+        role_agent_map={"writer": "David"},
+    )
+    executor.iteration = 1
+    output = issue_dir / "draft" / "iteration_001" / "output.md"
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    context = executor._build_context(
+        step_name="draft",
+        step_def=playbook["steps"]["draft"],
+        blackboard_state=state,
+        agent_name="David",
+        output_file=output,
+    )
+    prompt = phase.build_prompt(
+        skill_name="drafting", skill_invocation="/drafting", context=context
+    )
+
+    assert context["conversation_locale"] == (stored_locale or "")
+    assert context["repository_content_locale"] == "en-US"
+    conversation_line = next(
+        line for line in prompt.splitlines() if "conversation language" in line
+    )
+    content_line = next(line for line in prompt.splitlines() if "content language" in line)
+    assert (stored_locale or "en-US") in conversation_line
+    assert "en-US" in content_line
+    if stored_locale is None:
+        assert state.conversation_locale is None
+        assert "conversation_locale" not in json.loads(
+            store.file_path.read_text(encoding="utf-8")
+        )

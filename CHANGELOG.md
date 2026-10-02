@@ -4,6 +4,47 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.6.0] - 2026-10-02
+
+### Added
+
+- Added private, scoped kickoff preferences; a reusable effective-playbook index;
+  source-checked repository delivery and model assessment evidence; and staged
+  kickoff preparation with editable, prefilled contract drafts. Existing
+  confirmation and action authority remain required.
+- Added a shared workflow conversation-locale contract, with English and
+  Traditional Chinese presentation for supported HumanTasks and notifications.
+- Added explicit user handoffs for workflows that need user input outside a
+  declared HumanTask.
+
+### Changed
+
+- Renamed the workflow Driver role to Manager in active interfaces while
+  preserving legacy Driver workflow and authority continuation.
+- Returned correctable artifact-format and dirty-workspace completion failures
+  to the producing session for bounded correction before durable recovery.
+- Packaged phase-owned localized runtime text with its owning skills and
+  resolved notification labels from the selected task producer.
+
+### Fixed
+
+- Revalidated workspace and publication state before hooks and artifact
+  registration, retained bounded correction evidence, and prevented unintended
+  hook replay after interrupted delivery.
+- Improved progress rendering, preserved explicit human handoffs across
+  diagnostic failures, retried incomplete provider streams within a bounded
+  same-CLI path, and avoided empty PR feedback comments.
+
+### Known limitation
+
+- The kickoff preparation changes have functional verification, but the
+  end-to-end speedup originally requested in #573 remains unproven. The final
+  comparable observation was 257.255 seconds against a 240.226-second baseline;
+  this release does not claim a measured kickoff latency improvement.
+
+See [the v0.6.0 release notes](docs/releases/v0.6.0.md) for details and upgrade
+guidance.
+
 ## [0.5.1] - 2026-09-28
 
 ### Fixed

@@ -194,7 +194,7 @@ def test_iteration_limit_materializes_and_notifies_a_resumable_human_task(
     assert len(posts) == 1
     assert issue_dir.name in payload["text"]
     assert task.id not in payload["text"]
-    assert "需要你做的事：處理 CAFE 工作項目" in payload["text"]
+    assert "What you need to do: Handle a CAFE work item" in payload["text"]
 
 
 def test_project_content_cannot_redirect_or_gain_notification_authority(
@@ -489,3 +489,122 @@ def test_notification_failure_is_recoverable_through_normal_task_commands(
         )
         assert completed.exit_code == 0
         assert HumanTaskRecordStore(issue_dir).get_task(task.id).status is HumanTaskStatus.COMPLETED
+
+
+def _notify_with_workflow_locale(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    name: str,
+    locale: str | None,
+) -> str:
+    """Run the production pause-and-notify path for one stored workflow locale."""
+    import cafe.core.human_task_notifications as notification_mod
+
+    repo_root = tmp_path / name
+    repo_root.mkdir()
+    home = tmp_path / f"home-{name}"
+    home.mkdir()
+    _write_credential(home)
+    _set_home(monkeypatch, home)
+    posts: list = []
+    monkeypatch.setattr(
+        notification_mod,
+        "_open_slack_request",
+        lambda request, *, timeout: posts.append(request) or _SlackResponse(),
+    )
+    monkeypatch.chdir(repo_root)
+
+    relative_issue_dir = Path(".cafe") / "issues" / name
+    _write_local_publication_setting(relative_issue_dir)
+    store = BlackboardStore(relative_issue_dir)
+    state = store.load_or_create("spec")
+    state.conversation_locale = locale
+    state.conversation_locale_source = "explicit" if locale else None
+    store.save(state)
+
+    _pause_for_output_review(relative_issue_dir)
+
+    assert len(posts) == 1
+    return json.loads(posts[0].data)["text"]
+
+
+def test_the_stored_workflow_locale_reaches_the_delivered_notification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Integration 1/4: delivered text follows the workflow's stored language."""
+    traditional_chinese = _notify_with_workflow_locale(
+        tmp_path, monkeypatch, name="zh-workflow", locale="zh-TW"
+    )
+    english = _notify_with_workflow_locale(
+        tmp_path, monkeypatch, name="en-workflow", locale="en-US"
+    )
+
+    assert "確認結果" in traditional_chinese
+    assert "確認結果" not in english
+    assert english.isascii()
+
+
+def test_an_unsupported_or_absent_locale_delivers_english_without_a_notice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Integration 4/6: the fallback is silent and a legacy record keeps no locale."""
+    unsupported = _notify_with_workflow_locale(
+        tmp_path, monkeypatch, name="ja-workflow", locale="ja-JP"
+    )
+    legacy = _notify_with_workflow_locale(tmp_path, monkeypatch, name="legacy", locale=None)
+
+    assert unsupported.isascii()
+    assert legacy.isascii()
+    assert "ja-JP" not in unsupported
+    legacy_state = json.loads(
+        (tmp_path / "legacy" / ".cafe" / "issues" / "legacy" / "blackboard.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert legacy_state.get("conversation_locale") is None
+
+
+def test_a_background_callback_failure_notification_uses_the_stored_locale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Integration 3: the background path reads the stored value, never re-resolves."""
+    import importlib.util
+
+    import cafe.core.human_task_notifications as notification_mod
+
+    callback_path = (
+        Path(__file__).parents[2]
+        / "src/cafe/data/skills/use-cafe-workflow/scripts/workflow_event_callback.py"
+    )
+    spec = importlib.util.spec_from_file_location("workflow_event_callback_locale", callback_path)
+    workflow_event_callback = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(workflow_event_callback)
+
+    repo_root = tmp_path / "callback-repository"
+    issue_dir = repo_root / ".cafe" / "issues" / "callback"
+    issue_dir.mkdir(parents=True)
+    home = tmp_path / "home-callback"
+    home.mkdir()
+    _write_credential(home)
+    _set_home(monkeypatch, home)
+    posts: list = []
+    monkeypatch.setattr(
+        notification_mod,
+        "_open_slack_request",
+        lambda request, *, timeout: posts.append(request) or _SlackResponse(),
+    )
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("spec")
+    state.conversation_locale = "zh-TW"
+    state.conversation_locale_source = "explicit"
+    store.save(state)
+
+    workflow_event_callback._notify_callback_failure(
+        {"issue": "callback", "step": "develop", "event_type": "phase_terminal"},
+        repository_root=repo_root,
+        error=ValueError("state unreadable"),
+    )
+
+    assert len(posts) == 1
+    assert "無法讀取自動通知所需的狀態或設定" in json.loads(posts[0].data)["text"]

@@ -25,9 +25,11 @@
 ```
 
 Rules:
-- Write all questions and options in your native language (not English unless that is your native language)
+- Write all questions and options in the workflow conversation language stated in the runtime context; your own preferred language never overrides it
+- Keep question `id` attributes and any option value the workflow matches on untranslated
 - Root element must be `<questions>`
 - Each question must have a unique `id` attribute, a `<title>`, and `<options>` with at least one `<option>`
 - Provide 2-4 suggested options per question
 - Options should be concise and distinct
-- For multi-select questions (user can pick multiple options), you MUST add `type="checkbox"` attribute to the `<question>` element (e.g., `<question id="1" type="checkbox">`). This includes DoD questions.
+- For multi-select questions (user can pick multiple options), you MUST add `type="checkbox"` attribute to the `<question>` element (e.g., `<question id="1" type="checkbox">`).
+- Do NOT add "Other" or custom input options to checkbox questions -- the system automatically adds an "Other" option to every checkbox question.

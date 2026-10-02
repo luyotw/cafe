@@ -12,7 +12,7 @@ from cafe.core.types import AgentCLI
 
 from .delivery import normalize_delivery_contract, validate_closeout_plan_policy
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 _RUNTIME_KEYS = {
     "session",
     "sessions",
@@ -316,17 +316,17 @@ def _validate_policy(proposal: Mapping[str, Any]) -> dict[str, Any]:
     if set(raw) != (_NEW_PROPOSAL_KEYS if new else _PROPOSAL_KEYS):
         raise ValueError("confirmed proposal is incomplete")
     phases = _validate_phases(raw["phases"])
+    reactive = _mapping(raw["reactive_user_handoffs"], "reactive_user_handoffs")
+    reactive_keys = {"need_permission", "alignment_checkpoint"}
+    if not new or "need_clarification" in reactive:
+        reactive_keys.add("need_clarification")
     result: dict[str, Any] = {
         "locales": _validate_locales(raw["locales"]),
         "confirmation_contract": _validate_confirmation(raw["confirmation_contract"]),
         "reactive_user_handoffs": _mapping(
             raw["reactive_user_handoffs"],
             "reactive_user_handoffs",
-            keys=(
-                {"need_permission", "alignment_checkpoint"}
-                if new
-                else {"need_clarification", "need_permission", "alignment_checkpoint"}
-            ),
+            keys=reactive_keys,
         ),
         "phases": phases,
         "proactive_review": _validate_proactive(raw["proactive_review"], phases),
@@ -335,7 +335,7 @@ def _validate_policy(proposal: Mapping[str, Any]) -> dict[str, Any]:
     }
     delivery = normalize_delivery_contract(raw["delivery_contract"])
     if delivery["schema_version"] != 3:
-        raise ValueError("Driver v5/v6 requires Delivery Contract version 3")
+        raise ValueError("Driver v5/v6/v7 requires Delivery Contract version 3")
     validate_closeout_plan_policy(delivery["closeout_plan"], allow_squash=None)
     result["delivery_contract"] = delivery
     for field in result["reactive_user_handoffs"]:
@@ -344,6 +344,9 @@ def _validate_policy(proposal: Mapping[str, Any]) -> dict[str, Any]:
         )
     if new:
         result["task_contract"] = _validate_task_contract(raw["task_contract"])
+    clarification = result["reactive_user_handoffs"].get("need_clarification")
+    if clarification is not None and clarification not in {"user_required", "driver_confirmable"}:
+        raise ValueError("need_clarification must be user_required or driver_confirmable")
     return result
 
 
@@ -416,7 +419,7 @@ def _semantic_projection_from_validated(contract: Mapping[str, Any]) -> dict[str
     fields = ("identity",) + (
         _LEGACY_POLICY_SEMANTIC_FIELDS
         if legacy
-        else _NEW_POLICY_SEMANTIC_FIELDS if version == 6 else _POLICY_SEMANTIC_FIELDS
+        else _NEW_POLICY_SEMANTIC_FIELDS if version in {6, 7} else _POLICY_SEMANTIC_FIELDS
     )
     projection = {name: deepcopy(contract[name]) for name in fields if name in contract}
     if legacy:
@@ -428,7 +431,9 @@ def freshness_semantic_facts(contract: Mapping[str, Any]) -> dict[str, Any]:
     """Project the current policy into the caller's fresh-facts envelope."""
     current = validate_contract(contract)
     fields = (
-        _NEW_POLICY_SEMANTIC_FIELDS if current["schema_version"] == 6 else _POLICY_SEMANTIC_FIELDS
+        _NEW_POLICY_SEMANTIC_FIELDS
+        if current["schema_version"] in {6, 7}
+        else _POLICY_SEMANTIC_FIELDS
     )
     return {"effective_policy": {name: deepcopy(current[name]) for name in fields}}
 
@@ -482,7 +487,11 @@ def build_initial_contract(
         raise ValueError("provenance kind is invalid")
     policy = _validate_policy(proposal)
     document: dict[str, Any] = {
-        "schema_version": SCHEMA_VERSION if "task_contract" in policy else 5,
+        "schema_version": (
+            (SCHEMA_VERSION if "need_clarification" in policy["reactive_user_handoffs"] else 6)
+            if "task_contract" in policy
+            else 5
+        ),
         "identity": {
             "issue_name": _string(issue_name, "identity.issue_name"),
             "workflow_id": _string(workflow_id, "identity.workflow_id"),
@@ -520,7 +529,7 @@ def validate_contract(
         else (
             _LEGACY_CONTRACT_KEYS
             if legacy
-            else _NEW_CONTRACT_KEYS if raw_version == 6 else _CONTRACT_KEYS
+            else _NEW_CONTRACT_KEYS if version_is_int and raw_version in {6, 7} else _CONTRACT_KEYS
         )
     )
     if set(raw) != keys:
@@ -531,7 +540,7 @@ def validate_contract(
         or isinstance(schema_version, bool)
         or schema_version != raw_version
         or (legacy and schema_version not in {3, 4})
-        or (not legacy and schema_version not in {5, SCHEMA_VERSION})
+        or (not legacy and schema_version not in {5, 6, SCHEMA_VERSION})
     ):
         raise ValueError("contract schema version is unsupported")
     identity = _mapping(raw["identity"], "identity", keys={"issue_name", "workflow_id"})
@@ -584,6 +593,11 @@ def validate_contract(
         policy = _validate_legacy_policy(proposal, require_delivery=schema_version == 4)
     else:
         policy = _validate_policy(proposal)
+        has_clarification = "need_clarification" in policy["reactive_user_handoffs"]
+        if schema_version == 6 and has_clarification:
+            raise ValueError("Driver v6 has no overall clarification policy; reconfirm as v7")
+        if schema_version == 7 and not has_clarification:
+            raise ValueError("Driver v7 requires an explicit overall need_clarification policy")
     normalized: dict[str, Any] = {
         "schema_version": schema_version,
         "identity": identity,

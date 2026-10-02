@@ -1,7 +1,7 @@
 ---
 name: cafe-brief_first
 description: Create an initial editorial brief and drafting requirements
-version: 1.1.0
+version: 1.2.0
 workflow:
   execution_profile:
     workload: content
@@ -11,22 +11,32 @@ workflow:
   human_tasks:
     - id: editorial-output-review
       pattern: confirm_output
-      prompt: Approve the editorial brief or request a revision.
+      prompt: {message_key: human_task.cafe_brief_first.editorial_output_review.prompt}
+      prompt_locales:
+        zh-TW: {message_key: human_task.cafe_brief_first.editorial_output_review.prompt}
       input_schema: decision
       decisions:
         - id: approve
-          label: Approve brief
+          label: {message_key: human_task.cafe_brief_first.editorial_output_review.decisions.approve.label}
+          label_locales:
+            zh-TW: {message_key: human_task.cafe_brief_first.editorial_output_review.decisions.approve.label}
         - id: revise
-          label: Request brief revision
+          label: {message_key: human_task.cafe_brief_first.editorial_output_review.decisions.revise.label}
+          label_locales:
+            zh-TW: {message_key: human_task.cafe_brief_first.editorial_output_review.decisions.revise.label}
           requires_feedback: true
           correction: true
     - id: editorial-clarification
       pattern: answer_questions
-      prompt: Answer the editorial clarification questions.
+      prompt: {message_key: human_task.cafe_brief_first.editorial_clarification.prompt}
+      prompt_locales:
+        zh-TW: {message_key: human_task.cafe_brief_first.editorial_clarification.prompt}
       input_schema: answers
       questions:
         - id: audience
-          prompt: Who is the intended audience?
+          prompt: {message_key: human_task.cafe_brief_first.editorial_clarification.questions.audience.prompt}
+          prompt_locales:
+            zh-TW: {message_key: human_task.cafe_brief_first.editorial_clarification.questions.audience.prompt}
   prompt_inputs:
     - artifacts: [review_feedback, causal_todo]
       placeholder: correction_source
