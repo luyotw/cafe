@@ -218,10 +218,69 @@ class AbstractCLI(ABC):
             ):
                 return None
             session_id = record.get(field)
-            if not isinstance(session_id, str) or not session_id.strip():
+            if not isinstance(session_id, str) or not session_id.strip() or len(session_id) > 512:
                 return None
             session_ids.add(session_id.strip())
         return next(iter(session_ids)) if len(session_ids) == 1 else None
+
+    def conversation_capabilities(self, operation):
+        """Separate invocation support from verified evidence support."""
+        from cafe.agents.transport_types import TransportCapabilities
+
+        if operation == "open_interactive_session":
+            return TransportCapabilities(supported=self.event_driver_conforming)
+        if operation in {"acquire_session", "deliver_to_exact_session", "run_one_shot"}:
+            return TransportCapabilities(
+                supported=self.event_driver_conforming,
+                session=self.event_driver_conforming and (
+                    operation != "run_one_shot" or self.config.cli.value != "copilot"),
+                acceptance=self.event_driver_conforming and operation == "deliver_to_exact_session",
+                model=self.event_driver_conforming and (
+                    operation != "run_one_shot" or self.config.cli.value == "copilot"),
+                usage=self.event_driver_conforming and (
+                    operation == "run_one_shot" or self.config.cli.value != "copilot"),
+            )
+        return TransportCapabilities()
+
+    def conversation_evidence(self, records):
+        """Summarize authoritative provider identity records without retaining them."""
+        from cafe.agents.transport_types import TransportResult
+
+        identities = set()
+        models = set()
+        invalid = False
+        for record in records:
+            if not self.conversation_identity_record(record):
+                continue
+            identity = record.get(self.conversation_session_field)
+            if not isinstance(identity, str) or not identity.strip() or len(identity) > 512:
+                invalid = True
+            else:
+                identities.add(identity.strip())
+            model = record.get("model")
+            if model is not None:
+                if not isinstance(model, str) or not model.strip() or len(model) > 512:
+                    invalid = True
+                else:
+                    models.add(model)
+        failure = None
+        if invalid:
+            failure = "invalid_evidence"
+        elif len(identities) > 1:
+            failure = "conflicting_session_evidence"
+        elif len(models) > 1 or (models and self.config.model and models != {self.config.model}):
+            failure = "model_mismatch"
+        return TransportResult(
+            observed_session_id=next(iter(identities)) if len(identities) == 1 and not invalid else None,
+            reported_model=next(iter(models)) if len(models) == 1 else None,
+            failure_code=failure,
+        )
+
+    conversation_session_field = "session_id"
+
+    def conversation_identity_record(self, record):
+        """Adapters opt in to exact identity record shapes."""
+        return False
 
     def prepare_project_workspace(self, project_root: Path) -> None:
         """Prepare CLI-specific project workspace before execution."""

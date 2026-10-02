@@ -271,6 +271,11 @@ class CopilotCLI(AbstractCLI):
             field="sessionId",
         )
 
+    conversation_session_field = "sessionId"
+
+    def conversation_identity_record(self, record):
+        return record.get("type") == "result"
+
     def extract_event_driver_session(self, records) -> Optional[str]:
         return self._event_driver_terminal_session(records)
 

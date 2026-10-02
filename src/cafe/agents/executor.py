@@ -3,13 +3,14 @@
 import json
 import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from threading import Event, Timer
 from typing import Any, Callable, List, Optional
 
 from cafe.agents.cli import AbstractCLI, ClaudeCLI, CodexCLI, CopilotCLI, CursorCLI, GeminiCLI
 from cafe.agents.diagnostics import sanitize_error_excerpt
+from cafe.agents.transport_types import TransportResult
 from cafe.core.types import AgentCLI, AgentConfig, AgentResponse, PermissionDenial, TokenUsage
 
 
@@ -51,6 +52,7 @@ class EventDriverExecutionResult:
     accepted: bool
     event_id: str | None
     records: tuple[dict[str, Any], ...]
+    transport_result: TransportResult | None = None
 
 
 EventManagerExecutionResult = EventDriverExecutionResult
@@ -461,18 +463,28 @@ class AgentExecutor:
                     on_acceptance()
                 acceptance_observed = True
 
-        self._execute_with_streaming(
-            cmd=command,
-            cli_name=self.config.cli.value.capitalize(),
-            parse_stream_json=True,
-            json_content_extractor=lambda _record: None,
-            env=strategy.build_environment(),
-            process_cwd=process_cwd,
-            execution_control=execution_control,
-            structured_records=records,
-            structured_record_observer=observe_record,
-            require_terminal_stream_event=True,
-        )
+        try:
+            response = self._execute_with_streaming(
+                cmd=command,
+                cli_name=self.config.cli.value.capitalize(),
+                parse_stream_json=True,
+                json_content_extractor=lambda _record: None,
+                env=strategy.build_environment(),
+                process_cwd=process_cwd,
+                execution_control=execution_control,
+                structured_records=records,
+                structured_record_observer=observe_record,
+                require_terminal_stream_event=True,
+            response_parser=lambda lines: self._parse_using_strategy(strategy, lines),
+            )
+        except AgentExecutionError as error:
+            evidence = strategy.conversation_evidence(tuple(records))
+            error.transport_result = replace(
+                evidence, accepted=acceptance_observed if expected_session_id else False,
+                failure_code=error.error_type or "execution_failed",
+                error_excerpt=sanitize_error_excerpt(error),
+            )
+            raise
         bounded_records = tuple(records[:structured_record_limit])
         if expected_session_id is None:
             session_id = strategy.extract_event_driver_session(bounded_records)
@@ -489,6 +501,10 @@ class AgentExecutor:
             accepted=accepted,
             event_id=event_id,
             records=bounded_records,
+            transport_result=replace(
+                strategy.conversation_evidence(bounded_records),
+                accepted=accepted, completed=True, returncode=0,
+            ),
         )
 
     def execute_event_manager(
@@ -633,7 +649,8 @@ class AgentExecutor:
         Returns:
             AgentResponse
         """
-        response, token_usage, permission_denials = cli_strategy.parse_response(output_lines)
+        parsed = cli_strategy.parse_response(output_lines)
+        response, token_usage, permission_denials = parsed[:3]
         return AgentResponse(
             response=response,
             token_usage=token_usage,

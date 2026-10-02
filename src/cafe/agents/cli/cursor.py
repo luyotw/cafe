@@ -170,6 +170,11 @@ class CursorCLI(AbstractCLI):
     def event_driver_conforming(self) -> bool:
         return True
 
+    conversation_session_field = "session_id"
+
+    def conversation_identity_record(self, record):
+        return record.get("type") == "system" and record.get("subtype") == "init"
+
     def extract_event_driver_session(self, records) -> Optional[str]:
         return self._verified_event_driver_session(
             records,
