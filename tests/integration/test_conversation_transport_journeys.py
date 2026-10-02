@@ -417,7 +417,7 @@ def test_callback_usage_write_failure_after_acceptance_is_observable_without_rep
     metadata = json.loads(target.read_text())
     assert metadata["stats"]["input_tokens"] == 2 and metadata["other"] == "kept"
     publication_slots = list(target.parent.glob(".usage-*"))
-    assert len(publication_slots) == 1 and publication_slots[0].stat().st_size == 0
+    assert publication_slots == []
     callback.run_callback(event, repository_root=tmp_path)
     assert launch.call_count == 2
     assert writes == 2
@@ -451,3 +451,55 @@ def test_independent_overlapping_chat_calls_merge_all_verified_usage(
     assert current['stats']['input_tokens'] == 5
     assert current['iteration'] == 4 and current['timestamp'] == 'pinned' and current['other'] == 'kept'
     assert launch.call_count == 2
+
+
+@pytest.mark.parametrize('consumer', ['phase', 'chat'])
+def test_already_open_metadata_reader_keeps_complete_json_during_usage_publication(
+    phase_chat, monkeypatch, provider_process, consumer
+):
+    import builtins
+    from pathlib import Path
+    from cafe.agents.executor import AgentExecutor
+    from cafe.core.types import AgentConfig
+    from cafe.core.usage import iteration_usage_sink
+    from tests.unit.test_phase_iteration_structure import ConcretePhase
+
+    issue, target = phase_chat
+    original = dict(iteration=4, timestamp='pinned', cli='claude', model='selected',
+                    other='kept', stats=dict(input_tokens=1))
+    target.write_text(json.dumps(original))
+    sink = iteration_usage_sink(issue.parents[2], target)
+    launch = provider_process([init(model='selected'), dict(type='result', usage=dict(input_tokens=2))])
+    executor = AgentExecutor(AgentConfig(name='test', cli=AgentCLI.CLAUDE, model='selected'), stream_output=False)
+    original_open, path_open = builtins.open, Path.open
+    published = False
+
+    def publish_after_open(handle):
+        nonlocal published
+        if not published:
+            published = True
+            ConversationTransport(executor).run_one_shot('hello', on_usage=sink)
+        return handle
+
+    def overlap_open(path, *args, **kwargs):
+        handle = original_open(path, *args, **kwargs)
+        return publish_after_open(handle) if Path(path) == target else handle
+
+    def overlap_path_open(path, *args, **kwargs):
+        handle = path_open(path, *args, **kwargs)
+        return publish_after_open(handle) if path == target else handle
+
+    if consumer == 'phase':
+        phase = ConcretePhase(phase_dir=target.parent.parent)
+        phase.iteration = 4
+        monkeypatch.setattr(builtins, 'open', overlap_open)
+        assert phase._load_current_iteration_data() == original
+    else:
+        monkeypatch.setattr(Path, 'open', overlap_path_open)
+        selected = chat._load_latest_role_iteration_cli(
+            issue, role='developer', role_config={'clis': [{'cli': 'claude', 'model': 'selected'}]}
+        )
+        assert selected == ('claude', 'selected')
+    assert published
+    assert json.loads(target.read_text())['stats']['input_tokens'] == 3
+    assert launch.call_count == 1

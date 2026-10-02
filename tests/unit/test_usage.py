@@ -61,7 +61,7 @@ def test_sink_does_not_create_missing_or_replaced_iteration(tmp_path):
     assert "stats" not in json.loads(target.read_text())
 
 
-def test_independently_admitted_writers_merge_latest_counts_with_bounded_empty_slot(tmp_path):
+def test_independently_admitted_writers_merge_latest_counts_without_retained_staging(tmp_path):
     target = tmp_path / "iteration.json"
     target.write_text(json.dumps(dict(iteration=1, timestamp="pinned", other="kept", stats=dict(input_tokens=1))))
     sinks = [iteration_usage_sink(tmp_path, target) for _ in range(8)]
@@ -72,10 +72,10 @@ def test_independently_admitted_writers_merge_latest_counts_with_bounded_empty_s
     assert current['stats']['input_tokens'] == 73
     assert current['timestamp'] == 'pinned' and current['other'] == 'kept'
     slots = list(tmp_path.glob('.usage-*'))
-    assert len(slots) == 1 and slots[0].stat().st_size == 0
+    assert slots == []
 
 
-def test_unsupported_exchange_preserves_metadata_and_clears_only_its_publication_slot(tmp_path, monkeypatch):
+def test_unsupported_exchange_preserves_metadata_and_reclaims_its_private_staging(tmp_path, monkeypatch):
     import errno
     import cafe.core.usage as usage_module
 
@@ -89,4 +89,68 @@ def test_unsupported_exchange_preserves_metadata_and_clears_only_its_publication
     assert caught.value.errno == errno.ENOTSUP
     assert target.read_bytes() == original
     slots = list(tmp_path.glob('.usage-*'))
-    assert len(slots) == 1 and slots[0].stat().st_size == 0
+    assert slots == []
+
+
+@pytest.mark.parametrize("failed_publication", [False, True])
+def test_private_staging_cleanup_preserves_a_replaced_directory_binding(
+    tmp_path, monkeypatch, failed_publication
+):
+    import os
+    import cafe.core.usage as usage_module
+
+    target = tmp_path / "iteration.json"
+    target.write_text(json.dumps(dict(iteration=1, timestamp="pinned", stats=dict(input_tokens=1))))
+    sink = iteration_usage_sink(tmp_path, target)
+    unrelated = tmp_path / "unrelated-directory"
+    unrelated.mkdir()
+    evidence = unrelated / "evidence.json"
+    evidence.write_text(json.dumps(dict(other="retained")))
+    original = evidence.read_bytes()
+    stat_call = os.stat
+    substituted = False
+
+    def substitute_directory(name, *args, **kwargs):
+        nonlocal substituted
+        if name == ".usage-iteration.json" and kwargs.get("dir_fd") is not None:
+            substituted = True
+            (tmp_path / name).rename(tmp_path / "owned-directory")
+            unrelated.rename(tmp_path / name)
+        return stat_call(name, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", substitute_directory)
+    if failed_publication:
+        def fail_exchange(*args):
+            raise OSError("publication failed")
+        monkeypatch.setattr(usage_module, "_exchange_usage_file", fail_exchange)
+    with pytest.raises(ValueError):
+        sink(TokenUsage(input_tokens=2))
+    assert substituted
+    assert (tmp_path / ".usage-iteration.json/evidence.json").read_bytes() == original
+    assert list((tmp_path / "owned-directory").iterdir()) == []
+    assert json.loads(target.read_text())["stats"]["input_tokens"] == (1 if failed_publication else 3)
+
+
+def test_usage_staging_is_private_and_normally_reclaimed(tmp_path, monkeypatch):
+    import os
+    import stat
+    import cafe.core.usage as usage_module
+
+    target = tmp_path / "iteration.json"
+    target.write_text(json.dumps(dict(iteration=1, timestamp="pinned")))
+    sink = iteration_usage_sink(tmp_path, target)
+    exchange = usage_module._exchange_usage_file
+    checked = False
+
+    def check_permissions(source_fd, source, destination, destination_fd):
+        nonlocal checked
+        checked = True
+        assert stat.S_IMODE(os.fstat(source_fd).st_mode) & 0o077 == 0
+        assert stat.S_IMODE(os.stat(source, dir_fd=source_fd).st_mode) & 0o077 == 0
+        return exchange(source_fd, source, destination, destination_fd)
+
+    monkeypatch.setattr(usage_module, "_exchange_usage_file", check_permissions)
+    sink(TokenUsage(input_tokens=2))
+    assert checked
+    assert json.loads(target.read_text())["stats"]["input_tokens"] == 2
+    assert list(tmp_path.glob(".usage-*")) == []

@@ -70,20 +70,17 @@ def _usage_parent(target: Path):
         os.close(descriptor)
 
 
-def _read_usage_file(parent_fd, name, *, retain_descriptor=False):
-    mode = os.O_RDWR if retain_descriptor else os.O_RDONLY
-    descriptor = os.open(name, mode | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
+def _read_usage_file(parent_fd, name):
+    descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
     with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
         info = os.fstat(handle.fileno())
-        if not stat.S_ISREG(info.st_mode) or (retain_descriptor and info.st_nlink != 1):
-            raise ValueError("usage target must be an unaliased regular file")
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError("usage target must be a regular file")
         data = json.load(handle)
-        if retain_descriptor:
-            return data, _inode(info), os.dup(handle.fileno())
         return data, _inode(info)
 
 
-def _exchange_usage_file(parent_fd, source, destination):
+def _exchange_usage_file(parent_fd, source, destination, destination_parent_fd):
     """Atomically publish while retaining the displaced inode for validation.
 
     Ordinary replace cannot conditionally protect a destination substituted at
@@ -101,7 +98,8 @@ def _exchange_usage_file(parent_fd, source, destination):
     operation.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p,
                           ctypes.c_uint]
     operation.restype = ctypes.c_int
-    if operation(parent_fd, os.fsencode(source), parent_fd, os.fsencode(destination), flag):
+    if operation(parent_fd, os.fsencode(source), destination_parent_fd,
+                 os.fsencode(destination), flag):
         error = ctypes.get_errno()
         raise OSError(error, os.strerror(error))
 
@@ -128,53 +126,60 @@ def iteration_usage_sink(repository_root: Path, context_file: Path):
             # A cooperating writer can atomically replace this same iteration.
             # Read its latest counts under the shared lock; pin this read's inode
             # only through publication, not across independent provider calls.
-            current, current_inode, current_fd = _read_usage_file(
-                parent_fd, target.name, retain_descriptor=True
-            )
-            staging_fd = None
-            cleanup_fd = None
+            current, current_inode = _read_usage_file(parent_fd, target.name)
+            if (not isinstance(current, dict)
+                    or (current.get("iteration"), current.get("timestamp")) != identity):
+                raise ValueError("admitted iteration identity changed")
+            current["stats"] = merge_token_usage_stats(current.get("stats"), usage)
+            # Exclusive creation prevents consuming an abandoned recovery object.
+            # Cooperating writers hold the workspace lock throughout publication
+            # and reclamation. Same-account hostile namespace mutation requires
+            # an isolation boundary beyond this private staging directory.
             temporary = ".usage-" + target.name
+            os.mkdir(temporary, 0o700, dir_fd=parent_fd)
+            private_fd = None
+            staging_fd = None
+            cleanup_inode = None
+            source = ".usage-publish.json"
             try:
-                if (not isinstance(current, dict)
-                        or (current.get("iteration"), current.get("timestamp")) != identity):
-                    raise ValueError("admitted iteration identity changed")
-                current["stats"] = merge_token_usage_stats(current.get("stats"), usage)
-                # Reuse one empty publication slot per metadata file. It is never
-                # a stats source. Recovery objects are retained, never consumed.
-                staging_fd = os.open(temporary, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
-                                     0o600, dir_fd=parent_fd)
+                private_fd = os.open(temporary, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                     dir_fd=parent_fd)
+                staging_fd = os.open(source, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                                     0o600, dir_fd=private_fd)
                 staged = os.fstat(staging_fd)
-                if (not stat.S_ISREG(staged.st_mode) or staged.st_nlink != 1
-                        or staged.st_size != 0):
-                    raise ValueError("usage publication slot needs recovery")
-                cleanup_fd = staging_fd
                 published_inode = _inode(staged)
+                cleanup_inode = published_inode
                 with os.fdopen(os.dup(staging_fd), "w", encoding="utf-8") as handle:
                     json.dump(current, handle, ensure_ascii=False, indent=2)
-                _exchange_usage_file(parent_fd, temporary, target.name)
-                cleanup_fd = None
-                displaced = os.stat(temporary, dir_fd=parent_fd, follow_symlinks=False)
+                _exchange_usage_file(private_fd, source, target.name, parent_fd)
+                cleanup_inode = None
+                displaced = os.stat(source, dir_fd=private_fd, follow_symlinks=False)
                 published = os.stat(target.name, dir_fd=parent_fd, follow_symlinks=False)
                 if _inode(displaced) != current_inode or _inode(published) != published_inode:
-                    _exchange_usage_file(parent_fd, temporary, target.name)
-                    restored = os.stat(temporary, dir_fd=parent_fd, follow_symlinks=False)
+                    _exchange_usage_file(private_fd, source, target.name, parent_fd)
+                    restored = os.stat(source, dir_fd=private_fd, follow_symlinks=False)
                     if _inode(restored) == published_inode:
-                        cleanup_fd = staging_fd
+                        cleanup_inode = published_inode
                     raise ValueError("usage target changed during publication")
-                cleanup_fd = current_fd
+                cleanup_inode = current_inode
             finally:
                 try:
-                    if cleanup_fd is not None:
-                        # Truncate the authorized open object, not a later name
-                        # resolution. A substituted entry is preserved even if
-                        # it arrives at the final cleanup syscall boundary.
-                        os.ftruncate(cleanup_fd, 0)
-                        remaining = os.stat(temporary, dir_fd=parent_fd, follow_symlinks=False)
-                        if _inode(remaining) != _inode(os.fstat(cleanup_fd)):
-                            raise ValueError("usage publication slot changed during cleanup")
+                    if cleanup_inode is not None:
+                        remaining = os.stat(source, dir_fd=private_fd, follow_symlinks=False)
+                        if _inode(remaining) != cleanup_inode:
+                            raise ValueError("usage staging entry changed during cleanup")
+                        # Remove our link only; published bytes remain intact for
+                        # already-open readers and hardlinks, including late ones.
+                        os.unlink(source, dir_fd=private_fd)
+                    if private_fd is not None and not os.listdir(private_fd):
+                        directory = os.stat(temporary, dir_fd=parent_fd, follow_symlinks=False)
+                        if _inode(directory) != _inode(os.fstat(private_fd)):
+                            raise ValueError("usage staging directory changed during cleanup")
+                        os.rmdir(temporary, dir_fd=parent_fd)
                 finally:
                     if staging_fd is not None:
                         os.close(staging_fd)
-                    os.close(current_fd)
+                    if private_fd is not None:
+                        os.close(private_fd)
 
     return persist

@@ -759,7 +759,7 @@ def test_usage_rollback_failure_retains_displaced_metadata_and_is_observable(
     with pytest.raises(OSError) as caught:
         transport().run_one_shot("hello", on_usage=sink)
     assert caught.value is failure
-    retained = list(tmp_path.glob(".usage-*"))
+    retained = list(tmp_path.glob(".usage-*/*"))
     assert len(retained) == 1
     assert json.loads(retained[0].read_text()) == unrelated
     assert json.loads((tmp_path / "original.json").read_text())["iteration"] == 1
@@ -779,32 +779,24 @@ def test_usage_cleanup_substitution_preserves_unrelated_object_without_replay(
     unrelated_data = dict(iteration=99, timestamp="other", secret="retained")
     unrelated.write_text(json.dumps(unrelated_data))
     sink = usage_module.iteration_usage_sink(tmp_path, target)
-    original_unlink, original_truncate = os.unlink, os.ftruncate
+    original_stat = os.stat
     substituted = False
+    source_checks = 0
 
-    def substitute(parent_fd, name):
-        nonlocal substituted
-        if not substituted:
-            substituted = True
-            os.replace(unrelated, name, dst_dir_fd=parent_fd)
+    # Detect an unexpected entry before reclamation. Arbitrary same-account
+    # mutation at the final syscall inside the private namespace is a separately
+    # scoped isolation investigation, not the cooperative writer boundary.
+    def stat_boundary(name, *args, **kwargs):
+        nonlocal substituted, source_checks
+        if name == '.usage-publish.json' and kwargs.get('dir_fd') is not None:
+            source_checks += 1
+            cleanup_check = 2 if cleanup == 'normal' else 1
+            if not substituted and source_checks == cleanup_check:
+                substituted = True
+                os.replace(unrelated, name, dst_dir_fd=kwargs['dir_fd'])
+        return original_stat(name, *args, **kwargs)
 
-    def unlink_boundary(name, *args, **kwargs):
-        if str(name).startswith('.usage-'):
-            substitute(kwargs['dir_fd'], name)
-        return original_unlink(name, *args, **kwargs)
-
-    def truncate_boundary(fd, length):
-        candidates = list(tmp_path.glob('.usage-*'))
-        if candidates and not substituted:
-            directory_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
-            try:
-                substitute(directory_fd, candidates[0].name)
-            finally:
-                os.close(directory_fd)
-        return original_truncate(fd, length)
-
-    monkeypatch.setattr(os, 'unlink', unlink_boundary)
-    monkeypatch.setattr(os, 'ftruncate', truncate_boundary)
+    monkeypatch.setattr(os, 'stat', stat_boundary)
     if cleanup == 'failed-publication':
         def fail_exchange(*args):
             raise OSError('publication failed')
@@ -816,7 +808,7 @@ def test_usage_cleanup_substitution_preserves_unrelated_object_without_replay(
         pass
     assert substituted
     assert any(json.loads(p.read_text()) == unrelated_data
-               for p in tmp_path.glob('.usage-*') if p.stat().st_size)
+               for p in tmp_path.glob('.usage-*/*') if p.stat().st_size)
     metadata = json.loads(target.read_text())
     assert metadata['iteration'] == 1
     assert metadata['stats']['input_tokens'] == (3 if cleanup == 'normal' else 1)
@@ -875,20 +867,20 @@ def test_substituted_publication_source_is_restored_without_consuming_unrelated_
     exchange = usage_module._exchange_usage_file
     substituted = False
 
-    def substitute_source(parent_fd, source, destination):
+    def substitute_source(parent_fd, source, destination, destination_parent_fd):
         nonlocal substituted
         if not substituted:
             substituted = True
             import os
             os.replace(unrelated, source, dst_dir_fd=parent_fd)
-        return exchange(parent_fd, source, destination)
+        return exchange(parent_fd, source, destination, destination_parent_fd)
 
     monkeypatch.setattr(usage_module, '_exchange_usage_file', substitute_source)
     launch = provider_process([init(), dict(type='result', usage=dict(input_tokens=2))])
     with pytest.raises(ValueError):
         transport().run_one_shot('hello', on_usage=sink)
     assert target.read_bytes() == original
-    assert (tmp_path / '.usage-iteration.json').read_text() == unrelated_data
+    assert next(tmp_path.glob('.usage-*/*')).read_text() == unrelated_data
     assert launch.call_count == 1
 
 
@@ -903,18 +895,25 @@ def test_descriptor_cleanup_failure_retains_recovery_data_and_original_caller_er
     sink = usage_module.iteration_usage_sink(tmp_path, target)
     failure = OSError('cleanup failed')
 
-    def fail_cleanup(*args):
+    def fail_cleanup(*args, **kwargs):
         raise failure
 
-    monkeypatch.setattr(os, 'ftruncate', fail_cleanup)
+    monkeypatch.setattr(os, 'unlink', fail_cleanup)
     launch = provider_process([init(), dict(type='result', usage=dict(input_tokens=2))])
     with pytest.raises(OSError) as caught:
         transport().run_one_shot('hello', on_usage=sink)
     assert caught.value is failure
     assert json.loads(target.read_text())['stats']['input_tokens'] == 2
-    retained = json.loads((tmp_path / '.usage-iteration.json').read_text())
+    retained = json.loads(next(tmp_path.glob('.usage-*/*')).read_text())
     assert retained == dict(iteration=1, timestamp='pinned', other='kept')
     assert launch.call_count == 1
+    from cafe.core.types import TokenUsage
+
+    # An abandoned recovery namespace cannot be reused as accounting evidence.
+    with pytest.raises(FileExistsError):
+        sink(TokenUsage(input_tokens=5))
+    assert json.loads(target.read_text())['stats']['input_tokens'] == 2
+    assert json.loads(next(tmp_path.glob('.usage-*/*')).read_text()) == retained
 
 
 def test_usage_cleanup_does_not_truncate_an_aliased_metadata_inode(
@@ -930,7 +929,42 @@ def test_usage_cleanup_does_not_truncate_an_aliased_metadata_inode(
     original = alias.read_bytes()
     sink = iteration_usage_sink(tmp_path, target)
     launch = provider_process([init(), dict(type='result', usage=dict(input_tokens=2))])
-    with pytest.raises(ValueError):
-        transport().run_one_shot('hello', on_usage=sink)
-    assert target.read_bytes() == alias.read_bytes() == original
+    transport().run_one_shot('hello', on_usage=sink)
+    assert alias.read_bytes() == original
+    assert json.loads(target.read_text())['stats']['input_tokens'] == 2
+    assert launch.call_count == 1
+
+
+def test_late_metadata_alias_preserves_complete_bytes_through_usage_cleanup(
+    tmp_path, monkeypatch, provider_process
+):
+    import os
+    from cafe.core.usage import iteration_usage_sink
+
+    target = tmp_path / 'iteration.json'
+    target.write_text(json.dumps(dict(iteration=1, timestamp='pinned', other='kept', stats=dict(input_tokens=1))))
+    original = target.read_bytes()
+    sink = iteration_usage_sink(tmp_path, target)
+    backup = tmp_path / 'unrelated-backup.json'
+    unlink = os.unlink
+    truncate = os.ftruncate
+
+    def alias_at_cleanup(name, *args, **kwargs):
+        if not backup.exists():
+            os.link(name, backup, src_dir_fd=kwargs['dir_fd'])
+        return unlink(name, *args, **kwargs)
+
+    # Also exercise the old implementation's destructive boundary so this
+    # regression remains red before the correction is applied.
+    def alias_before_truncate(fd, length):
+        if not backup.exists():
+            os.link(next(tmp_path.glob('.usage-*')), backup)
+        return truncate(fd, length)
+
+    monkeypatch.setattr(os, 'unlink', alias_at_cleanup)
+    monkeypatch.setattr(os, 'ftruncate', alias_before_truncate)
+    launch = provider_process([init(), dict(type='result', usage=dict(input_tokens=2))])
+    transport().run_one_shot('hello', on_usage=sink)
+    assert backup.read_bytes() == original
+    assert json.loads(target.read_text())['stats']['input_tokens'] == 3
     assert launch.call_count == 1
