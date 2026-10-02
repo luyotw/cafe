@@ -236,10 +236,12 @@ class HumanTaskNotificationDispatcher:
         issue_dir: Path,
         blackboard_store: BlackboardStore,
         blackboard: BlackboardState,
+        playbook: Mapping[str, Any] | None = None,
     ) -> None:
         self.issue_dir = issue_dir
         self.blackboard_store = blackboard_store
         self.blackboard = blackboard
+        self.playbook = playbook
 
     def _repository_root(self) -> Path:
         return resolve_human_task_notification_repository_root(self.issue_dir)
@@ -358,6 +360,34 @@ class HumanTaskNotificationDispatcher:
             return
         repo_root = self._repository_root()
         notification_inputs = self._notification_inputs(task)
+        from cafe.core.human_task_notifications import NotificationPresentation
+        from cafe.core.runtime_locales import render_text
+        from cafe.skills.loader import SkillLoader
+        from cafe.skills.notification_copy import resolve_step_notification_presentation
+
+        try:
+            presentation = resolve_step_notification_presentation(
+                playbook_data=self.playbook or {}, step_name=task.step,
+                task_id=task.policy_id, iteration=task.iteration,
+                locale=notification_inputs["conversation_locale"],
+                # Match the producer's selected skill catalog. The canonical
+                # repository above controls transport routing, not phase copy.
+                skill_loader=SkillLoader(resolve_presentation=False),
+            )
+        except (LookupError, TypeError, ValueError):
+            self._record_notification_outcome(
+                task, attempt_id=attempt_id,
+                code="human_task_notification_copy_invalid", outcome="skipped",
+            )
+            return
+        if task.trigger == AGENT_EXECUTION_INTERRUPTED_TRIGGER:
+            presentation = NotificationPresentation(
+                step_label=presentation.step_label,
+                action_label=render_text(
+                    "notification.action_labels.agent_execution_interrupted",
+                    locale=notification_inputs["conversation_locale"],
+                ),
+            )
         capability_request = {
             "capability": CAPABILITY_SLACK_HUMAN_TASK_ID,
             "args": notification_inputs,
@@ -393,6 +423,7 @@ class HumanTaskNotificationDispatcher:
                 output_file=self.issue_dir / "blackboard.json",
                 timeout_sec=SLACK_HUMAN_TASK_TIMEOUT_SEC,
                 trusted_human_task_notification=True,
+                notification_presentation=presentation,
             )
             receipt = dict(run.receipt)
         except Exception:  # The durable HumanTask remains authoritative on host failure.
@@ -474,6 +505,7 @@ class BlackboardWorkflowRuntime:
             issue_dir=self.issue_dir,
             blackboard_store=self.blackboard_store,
             blackboard=self.blackboard,
+            playbook=self.playbook,
         ).notify(task)
 
     @staticmethod

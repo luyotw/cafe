@@ -9,7 +9,7 @@ import re
 import stat
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import Literal, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -30,20 +30,6 @@ MACHINE_CONFIG_DIRECTORY = ".cafe"
 MACHINE_CONFIG_FILENAME = "config.yaml"
 MAX_NOTIFICATION_METADATA_LENGTH = 128
 SAFE_NOTIFICATION_METADATA = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}\Z")
-# Stable presentation IDs; unknown IDs keep the existing readable fallback.
-_NOTIFICATION_STEPS = frozenset({"spec", "plan", "develop", "review", "pr"})
-_NOTIFICATION_ACTIONS = frozenset(
-    {
-        "clarification-feedback",
-        "clarification-answers",
-        "local-review",
-        "output-review",
-        "permission-answers",
-        "alignment-decision",
-        "no-changes-needed",
-        "agent-execution-interrupted",
-    }
-)
 
 
 def _notification_text(name: str, locale: str | None, **values: str) -> str:
@@ -209,6 +195,29 @@ def _project_webhook_route(
 
 
 @dataclass(frozen=True)
+class NotificationPresentation:
+    """Transient authored labels supplied by the actual producer, never authority."""
+
+    step_label: str | None = None
+    action_label: str | None = None
+
+
+def _safe_label(value: str | None, fallback: str) -> str:
+    """Bound project-authored labels and reject Slack links, mentions and extra lines."""
+    if (
+        not isinstance(value, str) or not value.strip()
+        or len(value) > MAX_NOTIFICATION_METADATA_LENGTH
+        or any(
+            ord(character) < 32 or ord(character) == 127 or character in "<>&@*`|~"
+            for character in value
+        )
+        or _is_url_shaped_metadata(value)
+    ):
+        return fallback
+    return value
+
+
+@dataclass(frozen=True)
 class HumanTaskSlackMessage:
     """Actionable, non-secret fields for one pending HumanTask."""
 
@@ -220,22 +229,17 @@ class HumanTaskSlackMessage:
     task_type: str
     locale: str = DEFAULT_CONVERSATION_LOCALE
 
+    presentation: NotificationPresentation | None = None
+
     def to_slack_payload(self) -> dict[str, str]:
         def text(name: str, **values: str) -> str:
             return _notification_text(name, self.locale, **values)
 
         repository = _readable_metadata(self.repository, fallback=text("repository_fallback"))
         issue = _readable_metadata(self.issue, fallback=text("issue_fallback"))
-        step_label = (
-            text(f"step_labels.{self.step}")
-            if self.step in _NOTIFICATION_STEPS
-            else text("step_fallback")
-        )
-        action_label = (
-            text(f"action_labels.{self.task_type.replace('-', '_')}")
-            if self.task_type in _NOTIFICATION_ACTIONS
-            else text("action_fallback")
-        )
+        presentation = self.presentation or NotificationPresentation()
+        step_label = _safe_label(presentation.step_label, text("step_fallback"))
+        action_label = _safe_label(presentation.action_label, text("action_fallback"))
         separator = text("field_separator")
         lines = (
             text("task_headline"),
@@ -259,16 +263,18 @@ class WorkflowCallbackFailureSlackMessage:
     error_code: str
     locale: str = DEFAULT_CONVERSATION_LOCALE
 
+    presentation: NotificationPresentation | None = None
+
     def to_slack_payload(self) -> dict[str, str]:
         def text(name: str, **values: str) -> str:
             return _notification_text(name, self.locale, **values)
 
         repository = _readable_metadata(self.repository, fallback=text("repository_fallback"))
         issue = _readable_metadata(self.issue, fallback=text("issue_fallback"))
-        step = (
-            text(f"step_labels.{self.step}")
-            if self.step in _NOTIFICATION_STEPS
-            else self.step or text("unknown_step")
+        presentation = self.presentation or NotificationPresentation()
+        step = _safe_label(
+            presentation.step_label,
+            _safe_label(self.step, text("unknown_step")),
         )
         if self.error_code == "callback_ValueError":
             reason = text("reason_state")
@@ -304,6 +310,7 @@ def build_human_task_message(
     task_type: str,
     issue: str = "",
     locale: str = DEFAULT_CONVERSATION_LOCALE,
+    presentation: NotificationPresentation | None = None,
 ) -> HumanTaskSlackMessage:
     """Build one readable, bounded HumanTask notification."""
     repository = sanitize_human_task_metadata(repository)
@@ -320,6 +327,7 @@ def build_human_task_message(
         step=step,
         task_type=task_type,
         locale=locale,
+        presentation=presentation,
     )
 
 
@@ -331,6 +339,7 @@ def build_workflow_callback_failure_message(
     event_type: str,
     error_code: str,
     locale: str = DEFAULT_CONVERSATION_LOCALE,
+    presentation: NotificationPresentation | None = None,
 ) -> WorkflowCallbackFailureSlackMessage:
     """Build a bounded callback-failure notification without raw exception text."""
     return WorkflowCallbackFailureSlackMessage(
@@ -340,6 +349,7 @@ def build_workflow_callback_failure_message(
         event_type=sanitize_human_task_metadata(event_type),
         error_code=sanitize_human_task_metadata(error_code),
         locale=locale,
+        presentation=presentation,
     )
 
 

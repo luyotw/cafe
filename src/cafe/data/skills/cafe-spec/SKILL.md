@@ -3,6 +3,14 @@ name: cafe-spec
 description: "收集、整理或修訂需求規格（依 iteration 切換行為）"
 version: 1.7.0
 workflow:
+  notification:
+    step_label:
+      message_key: notification.step_labels.spec
+    task_labels:
+      output-review:
+        message_key: notification.action_labels.output_review
+      clarification-answers:
+        message_key: notification.action_labels.clarification_answers
   execution_profile:
     workload: requirements
     reasoning: high

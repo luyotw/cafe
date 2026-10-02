@@ -3,6 +3,10 @@ name: cafe-research_report
 description: Produce a sourced research report
 version: 1.2.0
 workflow:
+  notification:
+    task_labels:
+      clarification-feedback:
+        message_key: notification.action_labels.clarification_feedback
   execution_profile:
     workload: content
     reasoning: standard

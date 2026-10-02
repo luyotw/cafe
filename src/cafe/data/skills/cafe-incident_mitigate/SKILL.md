@@ -3,6 +3,10 @@ name: cafe-incident_mitigate
 description: Mitigate and recover from an operational incident
 version: 1.2.0
 workflow:
+  notification:
+    task_labels:
+      clarification-feedback:
+        message_key: notification.action_labels.clarification_feedback
   execution_profile:
     workload: operations
     reasoning: high

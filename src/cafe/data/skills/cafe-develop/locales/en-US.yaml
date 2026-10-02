@@ -3,3 +3,7 @@ human_task.cafe_develop.no_change_decision.decisions.agree.label: Agree that no 
 human_task.cafe_develop.no_change_decision.decisions.disagree.label: Request further changes
 human_task.cafe_develop.no_change_decision.prompt: Review the implementation reasoning and choose how to continue.
 human_task.cafe_develop.permission_answers.prompt: Provide the permission decision or access details needed to continue development.
+notification.step_labels.develop: Development
+notification.action_labels.no_changes_needed: Confirm that no change is needed
+notification.action_labels.clarification_feedback: Answer the clarification questions
+notification.action_labels.permission_answers: Answer the permission questions

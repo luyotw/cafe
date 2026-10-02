@@ -3,18 +3,6 @@ workspace.correction: 'Workspace completion rejected: {reason}.
   Correction opportunities consumed: {consumed}; remaining: {remaining}.
 
   Verify the origin of every affected change and preserve pre-existing work. Act only within the original task scope and authorization. Dirty files do not grant authorization to stage, commit, stash, restore or delete. If authorized disposition is unavailable, request clarification or permission through the existing human handoff. Do not infer a human answer. Keep the same phase, iteration, CLI, model, session, tools, directories and permissions. Revalidate current output, checklist and evidence, and resubmit the ordinary handoff.'
-notification.step_labels.spec: Requirements
-notification.step_labels.plan: Planning
-notification.step_labels.develop: Development
-notification.step_labels.review: Review
-notification.step_labels.pr: PR preparation and review
-notification.action_labels.clarification_feedback: Answer the clarification questions
-notification.action_labels.clarification_answers: Answer the clarification questions
-notification.action_labels.local_review: Review the changes and decide to fix or continue
-notification.action_labels.output_review: Confirm the result
-notification.action_labels.permission_answers: Answer the permission questions
-notification.action_labels.alignment_decision: Confirm the direction
-notification.action_labels.no_changes_needed: Confirm that no change is needed
 notification.action_labels.agent_execution_interrupted: Decide how to continue
 notification.repository_fallback: this project
 notification.issue_fallback: an unnamed work item

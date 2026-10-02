@@ -3,6 +3,10 @@ name: cafe-incident_triage
 description: Classify incidents and choose response actions
 version: 1.2.0
 workflow:
+  notification:
+    task_labels:
+      clarification-feedback:
+        message_key: notification.action_labels.clarification_feedback
   execution_profile:
     workload: operations
     reasoning: high

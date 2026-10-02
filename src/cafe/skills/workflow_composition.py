@@ -244,6 +244,10 @@ def _resolve_step_workflow_composition_locked(
             for field, value in (
                 ("prompt_references", declaration.prompt_references),
                 ("output_templates", declaration.output_templates),
+                (
+                    "notification.step_label",
+                    declaration.notification.step_label if declaration.notification else None,
+                ),
             ):
                 if value:
                     resource_errors = skill_loader.workflow_declaration_resource_errors(
@@ -259,7 +263,8 @@ def _resolve_step_workflow_composition_locked(
                     raise WorkflowCompositionError(
                         f"Step {step_name!r} contributor {_source_label(contributor)} declares "
                         f"primary-owned workflow field {field!r}; contributors may only supply "
-                        "required_tools, prompt_inputs, human_tasks, execution_profile, and "
+                        "required_tools, prompt_inputs, human_tasks, notification task labels, "
+                        "execution_profile, and "
                         f"local checklist references.{resource_context}"
                     )
             validate_resources(contributor)

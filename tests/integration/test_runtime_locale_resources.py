@@ -61,6 +61,7 @@ from cafe.core.human_task_notifications import (
     HumanTaskSlackMessage, WorkflowCallbackFailureSlackMessage,
 )
 from cafe.skills.loader import SkillLoader
+from cafe.skills.notification_copy import resolve_step_notification_presentation
 from pathlib import Path
 import importlib.util
 assert cafe.__file__.startswith(sys.argv[1])
@@ -73,10 +74,15 @@ for locale in ("en-US", "zh-TW"):
     assert "1" in prompt and "2" in prompt
     message = HumanTaskSlackMessage(
         "repo", "issue", "flow", "task", "spec", "output-review", locale,
+        resolve_step_notification_presentation(
+            playbook_data={"steps": {"spec": {"skill": "cafe-spec"}}},
+            step_name="spec", task_id="output-review", locale=locale,
+        ),
     )
     assert "issue" in message.to_slack_payload()["text"]
     failure = WorkflowCallbackFailureSlackMessage(
         "repo", "issue", "spec", "event", "callback_ValueError", locale,
+        message.presentation,
     )
     assert "issue" in failure.to_slack_payload()["text"]
 loader = SkillLoader(project_root=Path.cwd(), global_root=Path.cwd() / "empty-global")
@@ -93,6 +99,22 @@ for owner in sys.argv[2:]:
             snapshot = policy.for_locale(locale).model_dump(mode="json")
             assert isinstance(snapshot["prompt"], str)
             assert HumanTaskPolicy.model_validate(snapshot).model_dump(mode="json") == snapshot
+            presentation = resolve_step_notification_presentation(
+                playbook_data={"steps": {"renamed": {"skill": owner}}},
+                step_name="renamed", task_id=policy.id, locale=locale, skill_loader=loader,
+            )
+            message = HumanTaskSlackMessage(
+                "repo", "issue", "flow", "task", "renamed", policy.id, locale, presentation,
+            )
+            failure = WorkflowCallbackFailureSlackMessage(
+                "repo", "issue", "renamed", "event", "callback_ValueError", locale, presentation,
+            )
+            for payload in (message.to_slack_payload(), failure.to_slack_payload()):
+                assert "issue" in payload["text"]
+                if presentation.step_label:
+                    assert presentation.step_label in payload["text"]
+            if presentation.action_label:
+                assert presentation.action_label in message.to_slack_payload()["text"]
 script_root = Path(cafe.__file__).parent / "data/skills/use-cafe-workflow/scripts"
 sys.path.insert(0, str(script_root))
 for name in ("render_workflow_progress", "format_kickoff_contract"):

@@ -3,6 +3,12 @@ name: cafe-pr
 description: "Prepare the local pull request title and description for publication"
 version: 1.7.0
 workflow:
+  notification:
+    step_label:
+      message_key: notification.step_labels.pr
+    task_labels:
+      local-review:
+        message_key: notification.action_labels.local_review
   execution_profile:
     workload: publication
     reasoning: routine

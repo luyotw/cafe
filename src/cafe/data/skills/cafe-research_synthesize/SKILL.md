@@ -3,6 +3,10 @@ name: cafe-research_synthesize
 description: Synthesize findings and cross-check evidence
 version: 1.2.0
 workflow:
+  notification:
+    task_labels:
+      clarification-feedback:
+        message_key: notification.action_labels.clarification_feedback
   execution_profile:
     workload: research
     reasoning: high

@@ -127,8 +127,37 @@ def test_explicit_catalog_roots_are_isolated_and_single_pass(tmp_path, monkeypat
 
 
 def test_phase_copy_is_absent_from_central_catalogs():
-    for catalog in runtime_locales.load_catalogs().values():
-        assert not any(key.startswith("human_task.") for key in catalog)
+    root = Path(__file__).resolve().parents[2] / "src/cafe/data/skills"
+    phase_copy = {locale: set() for locale in ("en-US", "zh-TW")}
+    for resource in root.glob("*/locales/*.yaml"):
+        phase_copy[resource.stem].update(yaml.safe_load(resource.read_text()).values())
+    allowed = {
+        "workspace.correction",
+        "notification.action_labels.agent_execution_interrupted",
+        *[f"notification.{name}" for name in (
+            "repository_fallback", "issue_fallback", "step_fallback", "action_fallback",
+            "unknown_step", "field_separator", "task_headline", "repository_field",
+            "issue_field", "step_field", "action_field", "task_closing", "callback_headline",
+            "status_field", "reason_state", "reason_queue", "reason_generic", "callback_impact",
+            "callback_closing",
+        )],
+        *[f"manager.progress.{name}" for name in (
+            "missing", "iteration", "review", "confirmation", "delegable", "not_delegable",
+            "closeout", "review_line", "confirmation_line", "closeout_line",
+            "status.pending", "status.in_progress", "status.awaiting_input", "status.completed",
+            "status.returned", "status.awaiting_confirmation", "status.skipped", "status.blocked",
+            "status.unknown",
+        )],
+        *[f"manager.kickoff.{name}" for name in (
+            "header_field", "header_value", "confirmation", "checks", "global_sync_heading",
+            "global_sync_reminder", "commands_confirmation", "no_commands",
+        )],
+    }
+    for locale, catalog in runtime_locales.load_catalogs().items():
+        # An exhaustive generic inventory and text comparison also catch phase
+        # copy hidden under another namespace or an existing generic key.
+        assert set(catalog) == allowed
+        assert not (set(catalog.values()) & phase_copy[locale])
 
 
 @pytest.mark.parametrize(

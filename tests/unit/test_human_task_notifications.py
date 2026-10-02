@@ -27,6 +27,17 @@ from cafe.core.human_task_notifications import (
 VALID_WEBHOOK = "https://hooks.slack.com/services/T00000000/B00000000/secret-value"
 
 
+def _declared_presentation(step: str, task: str, locale: str):
+    from cafe.skills.notification_copy import resolve_step_notification_presentation
+
+    if step == "custom-stage":
+        return None
+    return resolve_step_notification_presentation(
+        playbook_data={"steps": {step: {"skill": f"cafe-{step}"}}},
+        step_name=step, task_id=task, locale=locale,
+    )
+
+
 def test_callback_state_error_gives_user_an_action_instead_of_internal_fields() -> None:
     message = build_workflow_callback_failure_message(
         repository="cafe",
@@ -153,6 +164,7 @@ def test_actionable_message_names_the_cafe_issue_without_opaque_identifiers() ->
         step="develop",
         task_type="clarification-feedback",
         locale="zh-TW",
+        presentation=_declared_presentation("develop", "clarification-feedback", "zh-TW"),
     )
 
     payload = message.to_slack_payload()["text"]
@@ -191,6 +203,9 @@ def test_standard_task_actions_and_unknown_fallback_are_readable(
         step=step,
         task_type=task_type,
         locale="zh-TW",
+        presentation=(
+            _declared_presentation(step, task_type, "zh-TW") if step != "custom-stage" else None
+        ),
     )
 
     payload = message.to_slack_payload()["text"]
@@ -922,7 +937,7 @@ def test_capability_receipt_records_success_and_policy_denial(
     assert "secret-value" not in json.dumps([successful.receipt, denied.receipt])
 
 
-def _task_payload(locale: str, *, step: str = "develop", task_type: str = "output-review") -> str:
+def _task_payload(locale: str, *, step: str = "spec", task_type: str = "output-review") -> str:
     return build_human_task_message(
         repository="luyotw/cafe",
         issue="issue565",
@@ -931,6 +946,7 @@ def _task_payload(locale: str, *, step: str = "develop", task_type: str = "outpu
         step=step,
         task_type=task_type,
         locale=locale,
+        presentation=_declared_presentation(step, task_type, locale),
     ).to_slack_payload()["text"]
 
 
@@ -952,9 +968,10 @@ def test_an_unsupported_locale_falls_back_to_english_with_no_added_notice() -> N
         issue="issue565",
         workflow_id="workflow-one",
         task_id="task-one",
-        step="develop",
+        step="spec",
         task_type="output-review",
         locale="ja-JP",
+        presentation=_declared_presentation("spec", "output-review", "ja-JP"),
     )
     payload = message.to_slack_payload()["text"]
 

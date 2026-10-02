@@ -3,6 +3,16 @@ name: cafe-develop
 description: "依計畫進行程式開發與測試"
 version: 1.12.0
 workflow:
+  notification:
+    step_label:
+      message_key: notification.step_labels.develop
+    task_labels:
+      no-change-decision:
+        message_key: notification.action_labels.no_changes_needed
+      clarification-feedback:
+        message_key: notification.action_labels.clarification_feedback
+      permission-answers:
+        message_key: notification.action_labels.permission_answers
   execution_profile:
     workload: implementation
     reasoning: standard

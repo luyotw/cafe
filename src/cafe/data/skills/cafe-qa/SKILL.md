@@ -3,6 +3,10 @@ name: cafe-qa
 description: Use this skill when a workflow needs independent black-box acceptance before PR publication.
 version: 1.3.0
 workflow:
+  notification:
+    task_labels:
+      clarification-feedback:
+        message_key: notification.action_labels.clarification_feedback
   execution_profile:
     workload: review
     reasoning: high

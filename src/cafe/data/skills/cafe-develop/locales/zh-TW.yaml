@@ -3,3 +3,7 @@ human_task.cafe_develop.no_change_decision.decisions.agree.label: 同意不需�
 human_task.cafe_develop.no_change_decision.decisions.disagree.label: 要求進一步變更
 human_task.cafe_develop.no_change_decision.prompt: 檢視實作判斷的理由，並選擇如何繼續。
 human_task.cafe_develop.permission_answers.prompt: 提供繼續開發所需的權限決定或存取資訊。
+notification.step_labels.develop: 開發
+notification.action_labels.no_changes_needed: 確認沒有需要變更
+notification.action_labels.clarification_feedback: 回覆釐清問題
+notification.action_labels.permission_answers: 回覆權限相關問題

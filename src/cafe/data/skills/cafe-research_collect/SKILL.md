@@ -3,6 +3,10 @@ name: cafe-research_collect
 description: Collect, organize, and record research sources
 version: 1.2.0
 workflow:
+  notification:
+    task_labels:
+      clarification-feedback:
+        message_key: notification.action_labels.clarification_feedback
   execution_profile:
     workload: research
     reasoning: standard

@@ -3,6 +3,10 @@ name: cafe-incident_detect
 description: Detect and report incident signals for operational response
 version: 1.2.0
 workflow:
+  notification:
+    task_labels:
+      clarification-feedback:
+        message_key: notification.action_labels.clarification_feedback
   execution_profile:
     workload: operations
     reasoning: high

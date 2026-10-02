@@ -3,3 +3,6 @@ human_task.cafe_plan.development_guide.prompt: Please enter development guide (c
 human_task.cafe_plan.output_review.decisions.confirm.label: Confirm and continue
 human_task.cafe_plan.output_review.decisions.revise.label: Request revision
 human_task.cafe_plan.output_review.prompt: Review the implementation plan and choose how to continue.
+notification.step_labels.plan: Planning
+notification.action_labels.output_review: Confirm the result
+notification.action_labels.clarification_answers: Answer the clarification questions

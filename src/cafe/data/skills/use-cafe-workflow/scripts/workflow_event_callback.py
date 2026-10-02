@@ -2424,13 +2424,49 @@ def _notify_callback_failure(
             }
             _write_callback_failure_notifications(manager_dir, records)
             return
+        locale = _stored_conversation_locale(issue_dir)
+        presentation = None
+        try:
+            from cafe.playbooks.loader import PlaybookLoader
+            from cafe.skills.loader import SkillLoader
+            from cafe.skills.notification_copy import resolve_step_notification_presentation
+
+            state = json.loads(
+                _read_bounded_text(issue_dir / "blackboard.json", label="blackboard.json")
+            )
+            playbook_id = state.get("playbook_id") if isinstance(state, dict) else None
+            if isinstance(playbook_id, str) and playbook_id:
+                playbook = PlaybookLoader(
+                    project_root=repository_root, resolve_presentation=False
+                ).load(playbook_id)
+                iteration = 1
+                if isinstance(step, str) and step in playbook["steps"] and Path(step).name == step:
+                    directories = sorted(
+                        path for path in (issue_dir / step).glob("iteration_*") if path.is_dir()
+                    )
+                    if directories:
+                        iteration = int(directories[-1].name.removeprefix("iteration_"))
+                presentation = resolve_step_notification_presentation(
+                    playbook_data=playbook,
+                    step_name=step if isinstance(step, str) else "",
+                    locale=locale,
+                    iteration=iteration,
+                    skill_loader=SkillLoader(
+                        project_root=repository_root, resolve_presentation=False
+                    ),
+                )
+        except (OSError, TypeError, ValueError, LookupError):
+            # A failure notice must remain available when the original declaration
+            # or its presentation files caused the callback failure.
+            presentation = None
         message = build_workflow_callback_failure_message(
             repository=notification_root.name,
             issue=issue,
             step=step if isinstance(step, str) else "",
             event_type=event_type if isinstance(event_type, str) else "",
             error_code=error_code,
-            locale=_stored_conversation_locale(issue_dir),
+            locale=locale,
+            presentation=presentation,
         )
         try:
             webhook_url = load_slack_webhook_url(repository_root=notification_root)

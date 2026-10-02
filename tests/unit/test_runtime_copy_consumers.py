@@ -127,7 +127,7 @@ def test_every_builtin_localized_declaration_uses_keys_and_materializes_plain_co
                 for child in value:
                     collect_references(child)
 
-        collect_references(tasks)
+        collect_references(metadata["workflow"])
         assert set(catalogs["en-US"]) == set(catalogs["zh-TW"]) == references
         declared = loader.get_workflow_declaration(path.parent.name)
         for raw, policy in zip(tasks, declared.human_tasks, strict=True):

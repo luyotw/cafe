@@ -3,6 +3,12 @@ name: cafe-review
 description: "Review code quality, behavior, and risk"
 version: 1.14.0
 workflow:
+  notification:
+    step_label:
+      message_key: notification.step_labels.review
+    task_labels:
+      clarification-feedback:
+        message_key: notification.action_labels.clarification_feedback
   execution_profile:
     workload: review
     reasoning: high

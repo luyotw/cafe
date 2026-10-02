@@ -2,3 +2,6 @@ human_task.cafe_spec.clarification_answers.prompt: 回覆所要求的釐清問�
 human_task.cafe_spec.output_review.decisions.confirm.label: 確認並繼續
 human_task.cafe_spec.output_review.decisions.revise.label: 要求修訂
 human_task.cafe_spec.output_review.prompt: 檢視需求規格，並選擇如何繼續。
+notification.step_labels.spec: 需求規格
+notification.action_labels.output_review: 確認結果
+notification.action_labels.clarification_answers: 回覆釐清問題

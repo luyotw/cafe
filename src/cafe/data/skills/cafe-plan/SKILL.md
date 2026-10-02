@@ -3,6 +3,14 @@ name: cafe-plan
 description: "產出可執行的開發計畫"
 version: 1.11.0
 workflow:
+  notification:
+    step_label:
+      message_key: notification.step_labels.plan
+    task_labels:
+      output-review:
+        message_key: notification.action_labels.output_review
+      clarification-answers:
+        message_key: notification.action_labels.clarification_answers
   execution_profile:
     workload: planning
     reasoning: high
