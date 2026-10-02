@@ -276,3 +276,23 @@ def test_one_shot_exposes_conflicting_resume_without_replacing_it(provider_proce
         selected.run_one_shot("hello")
     assert caught.value.transport_result.failure_code == "session_mismatch"
     assert selected.executor.config.session_id == "s"
+
+
+def test_transport_sources_have_no_caller_policy_dependencies():
+    """U10: imports and authority interpretation stay out of the facade."""
+    import ast
+    from pathlib import Path
+    root = Path(__file__).parents[2] / "src/cafe/agents"
+    permitted = {"cafe.agents.diagnostics", "cafe.agents.executor",
+                 "cafe.agents.transport_types", "cafe.core.types"}
+    for filename in ("transport.py", "transport_types.py"):
+        source = (root / filename).read_text()
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, ast.ImportFrom) and node.module.startswith("cafe."):
+                assert node.module in permitted
+        for forbidden in ("HumanTask", "Blackboard", "SessionStore", "baton", "playbook",
+                          "cafe.manager", "cafe.driver", "fallback", "with_session_recovery"):
+            assert forbidden not in source
+    source = (root.parent / "ui/chat.py").read_text()
+    assert "build_interactive_command" not in source
+    assert "subprocess.run(" not in source
