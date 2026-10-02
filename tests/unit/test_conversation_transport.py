@@ -730,3 +730,37 @@ def test_usage_persistence_remains_bound_through_final_filesystem_substitution(
         assert json.loads(original_read(target.with_suffix(".original"))) == original
     assert selected.executor.get_total_token_usage().input_tokens == 2
     assert launch.call_count == 1
+
+
+def test_usage_rollback_failure_retains_displaced_metadata_and_is_observable(
+    tmp_path, monkeypatch, provider_process
+):
+    import cafe.core.usage as usage_module
+
+    target = tmp_path / "iteration.json"
+    target.write_text(json.dumps(dict(iteration=1, timestamp="pinned")))
+    sink = usage_module.iteration_usage_sink(tmp_path, target)
+    unrelated = dict(iteration=99, timestamp="replacement", other="retained")
+    exchange = usage_module._exchange_usage_file
+    failure = OSError("rollback failed")
+    calls = 0
+
+    def fail_rollback(*args):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            target.rename(tmp_path / "original.json")
+            target.write_text(json.dumps(unrelated))
+            return exchange(*args)
+        raise failure
+
+    monkeypatch.setattr(usage_module, "_exchange_usage_file", fail_rollback)
+    launch = provider_process([init(), dict(type="result", usage=dict(input_tokens=2))])
+    with pytest.raises(OSError) as caught:
+        transport().run_one_shot("hello", on_usage=sink)
+    assert caught.value is failure
+    retained = list(tmp_path.glob(".usage-*"))
+    assert len(retained) == 1
+    assert json.loads(retained[0].read_text()) == unrelated
+    assert json.loads((tmp_path / "original.json").read_text())["iteration"] == 1
+    assert launch.call_count == 1

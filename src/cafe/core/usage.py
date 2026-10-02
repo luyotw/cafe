@@ -131,9 +131,10 @@ def iteration_usage_sink(repository_root: Path, context_file: Path):
             temporary = ".usage-" + secrets.token_hex(16)
             descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                                  0o600, dir_fd=parent_fd)
+            cleanup_inode = _inode(os.fstat(descriptor))
             try:
                 with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                    published_inode = _inode(os.fstat(handle.fileno()))
+                    published_inode = cleanup_inode
                     json.dump(current, handle, ensure_ascii=False, indent=2)
                 _exchange_usage_file(parent_fd, temporary, target.name)
                 displaced = os.stat(temporary, dir_fd=parent_fd, follow_symlinks=False)
@@ -143,7 +144,16 @@ def iteration_usage_sink(repository_root: Path, context_file: Path):
                     _exchange_usage_file(parent_fd, temporary, target.name)
                     raise ValueError("usage target changed during publication")
                 admitted_inode = published_inode
+                cleanup_inode = current_inode
             finally:
-                os.unlink(temporary, dir_fd=parent_fd)
+                # A failed rollback leaves a substituted object at the private
+                # name. Retain it for caller recovery instead of deleting data.
+                try:
+                    remaining = os.stat(temporary, dir_fd=parent_fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    pass
+                else:
+                    if _inode(remaining) == cleanup_inode:
+                        os.unlink(temporary, dir_fd=parent_fd)
 
     return persist

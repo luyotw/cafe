@@ -134,7 +134,9 @@ identities. Atomic exchange retains a substituted destination for validation and
 restoration; it never follows that destination into another file. Linux
 `renameat2(RENAME_EXCHANGE)` and macOS `renameatx_np(RENAME_SWAP)` provide this
 operation. Unsupported platforms/filesystems return an observable persistence
-error without an unsafe replacement. Descriptors are closed after every merge.
+error without an unsafe replacement. If restoration itself fails, the displaced
+metadata is retained at the temporary name and the error reaches the caller for
+recovery; it never authorizes provider replay. Descriptors close after every merge.
 It never creates an iteration or resolves workflow authority. Chat selects its
 configured phase's existing iteration. Callback selection uses the event step
 and event-time metadata, not callback `attempt`, and excludes newer iterations.
