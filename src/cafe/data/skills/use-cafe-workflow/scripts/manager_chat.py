@@ -165,6 +165,14 @@ def turn_prompt(target: ChatTarget, text: str, correlation_id: str) -> str:
 
     directory = target.issue_dir
     raw_board = _read_json(directory / 'blackboard.json')
+    path = directory / 'human_tasks.json'
+    raw_tasks = _read_json(path) if path.exists() or path.is_symlink() else None
+    contract = _contract(target)
+    # A second bounded observation detects worker transitions without taking worker locks.
+    current_board = _read_json(directory / 'blackboard.json')
+    current_tasks = _read_json(path) if path.exists() or path.is_symlink() else None
+    if raw_board != current_board or raw_tasks != current_tasks:
+        raise ChatError('identity_conflict', locale=target.locale)
     if raw_board.get('workflow_id') != target.workflow_id:
         raise ChatError('identity_conflict', locale=target.locale)
     step = raw_board.get('current_step')
@@ -178,11 +186,9 @@ def turn_prompt(target: ChatTarget, text: str, correlation_id: str) -> str:
         raise ValueError('invalid current artifacts')
     # This parser validates current fields only. No audit reconstruction occurs.
     board = BlackboardState.from_dict({**raw_board, 'events': []}, initial_step=step)
-    contract = _contract(target)
     tasks = []
-    path = directory / 'human_tasks.json'
-    if path.exists():
-        envelope = _Envelope.from_dict(_read_json(path))
+    if raw_tasks is not None:
+        envelope = _Envelope.from_dict(raw_tasks)
         if envelope.workflow_id != target.workflow_id:
             raise ValueError('task workflow mismatch')
         for task in envelope.tasks.values():

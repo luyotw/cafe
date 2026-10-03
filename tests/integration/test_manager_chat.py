@@ -319,3 +319,63 @@ def test_optional_current_authority_stays_valid(tmp_path, monkeypatch, provider_
     assert 'verified reply' in result.output
     assert launch.call_count == 1
     assert snapshot(repo) == before
+
+
+@pytest.mark.parametrize('transition', ['board', 'task_created', 'task_changed'])
+def test_worker_transition_during_grounding_never_submits_mixed_facts(
+    tmp_path, monkeypatch, provider_process, transition,
+):
+    """Plan U6/I2/I4: real durable transitions are detected at the read boundary."""
+    from cafe.manager.cli import app
+    from cafe.manager.cli import _builtin_chat
+    from cafe.core.blackboard import BlackboardStore
+    from cafe.core.human_task_records import HumanTaskRecordStore
+    repo = repository(tmp_path / 'repo')
+    directory = issue(repo)
+    store = BlackboardStore(directory)
+    board = store.load_or_create('build_custom')
+    task_store = HumanTaskRecordStore(directory)
+    def materialize(step):
+        return task_store.materialize(
+            workflow_id=board.workflow_id, step=step, iteration=1, trigger='confirm_output',
+            policy_id='boundary', prompt='Explicit user response required',
+            expected_result={'type': 'feedback'}, continuations={'continue': step}, assignee_type='user',
+        )
+    if transition == 'task_changed':
+        materialize('build_custom')
+    monkeypatch.chdir(repo)
+    launch = provider_process(codex_reply('topic-codex'))
+    chat = _builtin_chat()
+    original_read = chat.callback._read_bounded_text
+    board_reads = 0
+    after_transition = None
+    def read(path, **kwargs):
+        nonlocal board_reads, after_transition
+        content = original_read(path, **kwargs)
+        if Path(path) == directory / 'blackboard.json':
+            board_reads += 1
+            # Initial selection and revalidation precede the prompt's first read.
+            if board_reads == 3:
+                if transition == 'board':
+                    board.current_step = 'inspect_custom'
+                    store.save(board)
+                    materialize('inspect_custom')
+                elif transition == 'task_created':
+                    # Wait for the first tasks observation to test creation after absence.
+                    pass
+                if transition == 'board':
+                    after_transition = snapshot(repo)
+        if transition == 'task_changed' and Path(path) == directory / 'human_tasks.json' and after_transition is None:
+            materialize('inspect_custom')
+            after_transition = snapshot(repo)
+        if transition == 'task_created' and board_reads == 4 and after_transition is None:
+            materialize('inspect_custom')
+            after_transition = snapshot(repo)
+        return content
+    monkeypatch.setattr(chat.callback, '_read_bounded_text', read)
+    result = CliRunner().invoke(app, ['manager', 'chat', '--issue', 'topic'], input='status?\n/quit\n')
+    assert after_transition is not None
+    assert result.exit_code != 0
+    assert 'verified reply' not in result.output
+    launch.assert_not_called()
+    assert snapshot(repo) == after_transition
