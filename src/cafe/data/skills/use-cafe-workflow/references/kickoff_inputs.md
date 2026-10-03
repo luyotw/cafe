@@ -18,7 +18,9 @@ the caller cannot be identified from its session, and repeated `--phase-chain
 phase=cli:model` only for explicit model overrides. Configured values need no
 manual transcription. The command refuses to overwrite an existing draft.
 
-Read `draft.json` and fill the unresolved fields in place. Keep the computed
+Read `draft.json` and fill unresolved fields in `formatter_inputs` in place.
+Make intentional overrides in those same fields, without creating a second input
+map. Keep the computed
 worktree, mode, actions and configured values unless the current request calls
 for an exception. Product fields, `phase_chain` and `capability_choice` use their
 actual names and types in the generated draft; do not reconstruct this schema.
@@ -29,6 +31,9 @@ reassemble to populate that playbook's defaults:
 ```sh
 python scripts/prepare_kickoff.py assemble --request-file draft.json --summary --draft-output updated-draft.json
 ```
+
+Continue all edits, report captures and rendering with `updated-draft.json`;
+it replaces `draft.json` as the working request in the commands below.
 
 Use inherited preference/evidence directories throughout preparation. Temporary
 proposal files do not require empty stores. Explicit `--config-dir` and
@@ -83,9 +88,14 @@ subsequent commands. There is no separate decision view, source-reference index
 or generated policy reading plan. Read applicable policy from its owner:
 `kickoff.md`, `model_selection.md` and `strategic_context.md`.
 
-Put current named choices in `current_explicit_inputs` and assessed decisions
-in `formatter_inputs`; conflicting duplicates are rejected. Supplied false and
-empty values are preserved. Product fields use the existing `DeliveryContractV3`
+Use the existing named fields in `formatter_inputs` for both current choices and
+assessed decisions. For conversation language, set `effective_locale` and
+`locale_source` together: `explicit` for a user choice, `inferred` for an inference.
+Do not retain a generated playbook source when changing the language. Preserve
+`generated_inputs` provenance and `preflight_files` references; removing them
+does not repair stale evidence. Supplied false and empty values are preserved.
+An empty `phase_chain` requests no per-phase overrides; assembly fills configured
+chains for the selected graph. Product fields use the existing `DeliveryContractV3`
 schema. `implementation_direction` is a string; list fields are arrays.
 `closeout_plan` is built by the formatter. An unresolved delivery route remains
 null, not an automatic empty array. A null draft action slot may receive a
@@ -104,56 +114,51 @@ apply only to new proposals. An existing workflow keeps its confirmed contract.
 
 ## Offer to remember preferences
 
-During new kickoff preparation, use the supported proposal preference keys in
-`kickoff_input_reference.md` and their applicability to the selected graph and
-Manager mode. These prompts and saved choices are project-specific: use
-`--scope repository --project-root <current-project-root>` with the same config
-directory for inspection and storage. Reuse reported repository preference
-records; inspect that scope when a key's storage status is not shown. A prefilled
-configuration, policy default or inherited user preference does not count as a
-saved project preference. A malformed or incompatible repository record needs
-correction, not treatment as an absent value.
+The formatter owns the optional project-preference section and the single
+confirmation prompt. Preserve both in the final user-visible contract; an
+intermediate asynchronous question is not a substitute. Do not append a second
+confirmation question. The section lists applicable missing or changed entries,
+groups identical model chains without losing fallback order, and shows saved
+values beside current values. Identical project preferences are omitted. User
+preferences may supply proposal values but do not count as saved project choices.
 
-For preferences with independently configurable entries, check coverage per
-applicable entry, not just whether the top-level key exists. In `phase.chains`,
-a saved step selector covers that step; otherwise its saved role selector may
-cover it. In `review.decisions`, inspect each applicable step. Use the existing
-consumer's applicability and precedence rules; a partially saved map does not
-make its uncovered entries saved preferences.
+The final replies have separate meanings:
 
-- For applicable keys or entries with no saved repository preference, ask whether the
-  user wants to remember the proposed values for future kickoffs in this project.
-  Group these into one concise question alongside contract confirmation, listing the values
-  and the project they apply to. Do not offer or write user-wide preferences
-  in this flow. For unresolved values, combine the reuse
-  question with the existing request for that decision; do not invent a value
-  just to save it.
-- When a user explicitly chooses a value different from what would otherwise
-  apply (saved preference, repository configuration or policy default), show the
-  old value/source and the current choice, then add: "This applies to this
-  kickoff. Tell me if you want it saved for future kickoffs in this project."
-  This also applies when a saved preference already exists. If the same key is in the unset
-  preference question, combine the reminder there instead of asking twice.
-- Ask once per proposed key/value/scope during this preparation. An explicit
-  request to remember it already answers the question. A decline or unanswered
-  save question leaves storage unchanged; ordinary contract confirmation is
-  not consent to save. Keep using the current proposal without adding a
-  separate workflow gate for optional preference storage.
-- Before saving a partial map change, inspect the current repository record and
-  preserve its other entries: `preferences set` replaces the whole value for a
-  key. Merge only the agreed entries into that record, without copying inherited
-  user preferences into project storage. Validate the resulting shape using the
-  existing consumer rules. Do not merge coupled arrays such as action/description
-  lists or gate partitions independently; show and obtain consent for their
-  complete replacement value when a change affects both.
-- After explicit reuse consent, run `preferences set --reuse --origin explicit
-  --scope repository --project-root <current-project-root>` for only the agreed
-  keys and values, then inspect repository scope to verify the stored result and
-  report what was remembered. Follow `kickoff_input_reference.md` for commands
-  and reusable value shapes. Issue-specific targets, permissions, capability
-  grants, evidence and model suitability judgments are not preference choices.
-  Inferred values require explicit user adoption before saving; action/worktree
-  conventions use reusable templates, not this issue's literal targets.
+- "Confirm" / "確認": approve this kickoff only; do not save preferences.
+- "Confirm and remember" / "確認並記住": approve kickoff and save only the entries
+  displayed in that final contract for this project.
+- A scoped reply such as "確認，只記住模型" saves only the selected displayed
+  entries. Resolve an ambiguous save selection without blocking an otherwise
+  explicit kickoff approval. Never interpret silence as permission to save.
+
+`render --output` returns `preference_offer_file` and a pinned `remember_command`.
+Retain that offer: it is the exact displayed collection, separate from the
+workflow contract. After explicit reuse consent, run the command with repeated
+`--select <entry-id>` for the agreed entries, or `--select '*'` only for all
+displayed entries. `--reuse` records the user's reuse decision; the Manager may
+not infer it from ordinary confirmation. Without `--output`, the same snapshot
+is in `render.preference_offer`; save those exact bytes as JSON before applying.
+Do not rebuild the offer after the answer and silently save a different set.
+Re-rendered changes must be shown before treating them as approved for storage.
+
+The remember operation always uses repository scope, preserves unrelated
+entries, and rejects a selected preference changed since display. A model chain
+is one ordered value; action/description pairs and confirmation partitions are
+whole values. Inspect the stored repository result and report what was saved.
+If the user already explicitly requested reuse, apply the agreed entries without
+asking again. Failure to save does not create a workflow gate: report that the
+approved workflow can start but the named preferences were not saved.
+
+Only supported reusable settings are offered, never issue targets, capabilities,
+permissions or suitability judgments. Worktree and action conventions must use
+verified reusable templates. For a route not covered by a saved/validated cache
+template or a built-in convention, provide `preference_templates` using the
+shapes in `kickoff_input_reference.md`; expansion must match the proposal and
+issue-specific names, IDs and paths must use placeholders. Unavailable or invalid
+optional preferences are reported in the final output, not silently saved or
+turned into an extra kickoff gate. Actual missing/invalid contract inputs still
+follow their existing validation. Inferred values need explicit adoption before
+being saved. Saving a preference never changes an existing confirmed workflow.
 
 ## Complete checks and render
 

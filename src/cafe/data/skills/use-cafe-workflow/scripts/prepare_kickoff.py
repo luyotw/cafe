@@ -17,6 +17,7 @@ if str(_SCRIPT_DIR) not in sys.path:
 from _kickoff_store import atomic_write_text, VersionedJsonStore, repository_identity, _lock
 import kickoff_inputs
 import kickoff_preferences
+import kickoff_preference_offer
 
 
 def _read_json(path: Path) -> Any:
@@ -94,6 +95,14 @@ def _parser() -> argparse.ArgumentParser:
     clear.add_argument("--key", required=True)
     clear.add_argument("--project-root", type=Path)
     clear.add_argument("--config-dir", type=Path, default=_default_config_dir())
+    remember = preferences.add_parser("remember", allow_abbrev=False)
+    remember.add_argument("--offer-file", type=Path, required=True)
+    remember.add_argument("--project-root", type=Path, required=True)
+    remember.add_argument("--config-dir", type=Path, default=_default_config_dir())
+    remember.add_argument("--select", action="append", required=True,
+                          help="Displayed entry ID; repeat for a subset or use '*' for all displayed entries.")
+    remember.add_argument("--reuse", action="store_true",
+                          help="Manager supplies only after explicit user consent to remember the selected entries.")
     evidence = commands.add_parser("evidence", allow_abbrev=False).add_subparsers(
         dest="operation", required=True
     )
@@ -249,11 +258,38 @@ def _request_command(args: argparse.Namespace) -> int:
             _json({"stage": "render", **blocked} if args.output is not None else
                   {"stage": "render", "assembly": assembled, "render": blocked})
             return 3
-        rendered = kickoff_inputs.render_kickoff(assembled.get("formatter_inputs"))
+        templates = request.get("preference_templates") or {}
+        if isinstance(templates, dict):
+            templates = dict(templates)
+        delivery = discovery.get("delivery", {})
+        if isinstance(templates, dict) and delivery.get("status") == "hit" and delivery.get("delivery_template") is not None:
+            # Only forward an unchanged validated template; current overrides may differ.
+            template = delivery["delivery_template"]
+            fields = assembled["formatter_inputs"]
+            context = {"issue_name": fields["issue_name"], "issue_id": request.get("issue_id", ""),
+                       "project_root": fields["project_root"], "worktree": fields.get("worktree") or fields["project_root"]}
+            try:
+                expanded = kickoff_inputs._load_local_module("kickoff_delivery").render_delivery_template(template, context)
+            except (ValueError, TypeError, KeyError):
+                expanded = None  # An inapplicable cache candidate must not block explicit current actions.
+            if expanded is not None and all(expanded[k] == fields[k] for k in ("deliver", "deliver_description")):
+                templates.setdefault("delivery.convention", template)
+        rendered = kickoff_inputs.render_kickoff(
+            assembled.get("formatter_inputs"),
+            preference_store=kickoff_preferences.PreferenceStore(args.config_dir, repository_root=Path(request["project_root"])),
+            preference_templates=templates, issue_id=request.get("issue_id", ""),
+        )
         if args.output is not None:
             if rendered.get("status") == "rendered":
-                args.output.write_text(rendered["output"], encoding="utf-8")
-                _json({"stage": "render", "status": "rendered", "output_file": str(args.output.resolve())})
+                offer = rendered["preference_offer"]
+                offer_file = args.output.resolve().with_name(args.output.name + f".preferences-{offer['offer_id']}.json")
+                atomic_write_text(offer_file, json.dumps(offer, ensure_ascii=False, indent=2) + "\n")
+                atomic_write_text(args.output, rendered["output"])
+                _json({"stage": "render", "status": "rendered", "output_file": str(args.output.resolve()),
+                       "preference_offer_file": str(offer_file),
+                       "remember_command": [sys.executable, str(Path(__file__).resolve()), "preferences", "remember",
+                                            "--offer-file", str(offer_file), "--project-root", str(Path(request["project_root"]).resolve()),
+                                            "--config-dir", storage["config_dir"], "--select", "<agreed-entry-id>", "--reuse"]})
                 return 0
             _json({
                 "stage": "render", **rendered,
@@ -323,7 +359,11 @@ def _preference_command(args: argparse.Namespace) -> int:
             args.config_dir,
             repository_root=getattr(args, "project_root", None),
         )
-        if args.operation == "inspect":
+        if args.operation == "remember":
+            result = kickoff_preference_offer.remember_offer(
+                store, _read_json(args.offer_file), selections=args.select, reuse=args.reuse)
+            _json(result)
+        elif args.operation == "inspect":
             _json({"scope": args.scope, "preferences": store.inspect(scope=args.scope)})
         elif args.operation == "set":
             value = json.loads(args.value_json)
@@ -334,8 +374,8 @@ def _preference_command(args: argparse.Namespace) -> int:
         else:
             _json({"cleared": store.clear(args.key, scope=args.scope), "key": args.key, "scope": args.scope})
         return 0
-    except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
-        _json({"status": "invalid", "diagnostics": [type(exc).__name__]})
+    except (OSError, json.JSONDecodeError, ValueError, TypeError, KeyError) as exc:
+        _json({"status": "invalid", "diagnostics": [type(exc).__name__], "message": str(exc)})
         return 2
 
 

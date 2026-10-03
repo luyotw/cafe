@@ -65,6 +65,18 @@ def reuse_repository_catalog(monkeypatch, request, repository_catalog):
     monkeypatch.setattr(kickoff_inputs, "_load_local_module", load_with_catalog)
 
 
+@pytest.fixture
+def phase_config(tmp_path: Path) -> Path:
+    """Own test configuration instead of relying on an untracked checkout file."""
+    path = tmp_path / "phases.yaml"
+    path.write_text(json.dumps({
+        step: {"name": step, "role": role, "clis": [{"cli": "codex", "model": "fixture-model"}]}
+        for step, role in (("spec", "pm"), ("plan", "developer"), ("develop", "developer"),
+                           ("review", "reviewer"), ("qa", "qa"), ("pr", "developer"))
+    }))
+    return path
+
+
 def _formatter_inputs(issue_name: str) -> dict:
     helper_path = UNIT_ROOT / "test_use_cafe_workflow_skill.py"
     spec = importlib.util.spec_from_file_location("kickoff_preparation_formatter_fixture", helper_path)
@@ -117,7 +129,7 @@ def _phase_config(path: Path) -> Path:
 
 @pytest.mark.release_smoke
 def test_compact_cli_reports_preserve_selected_facts_and_full_render(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], phase_config: Path
 ) -> None:
     cli = load_kickoff_module("prepare_kickoff")
     issue_name = "issue573-compact-report-test"
@@ -195,7 +207,8 @@ def test_compact_cli_reports_preserve_selected_facts_and_full_render(
 
     formatter_inputs = _formatter_inputs(issue_name)
     formatter_inputs.update(
-        {"issue_name": issue_name, "playbook_id": "standard-qa", "project_root": str(PROJECT_ROOT)}
+        {"issue_name": issue_name, "playbook_id": "standard-qa", "project_root": str(PROJECT_ROOT),
+         "phase_config": str(phase_config)}
     )
     formatter_inputs["phase_chain"].append("qa=gemini:qa-main,copilot:qa-fallback")
     formatter_inputs["proactive_review_decision"].insert(-1, "qa=not_required")
@@ -344,11 +357,11 @@ def test_returning_user_renders_same_complete_proposal_with_warm_preferences(tmp
     assert first["output"]
 
 
-def test_public_draft_prefills_owner_defaults_and_renders_the_same_contract(tmp_path, capsys):
+def test_public_draft_prefills_owner_defaults_and_renders_the_same_contract(tmp_path, capsys, phase_config):
     cli = load_kickoff_module("prepare_kickoff")
     inputs = load_kickoff_module("kickoff_inputs")
     values = _formatter_inputs("issue573-prefill-journey")
-    values["phase_config"] = str(_phase_config(tmp_path / "phases.yaml"))
+    values["phase_config"] = str(phase_config)
     for key in ("phase_chain", "effective_locale", "locale_source", "user_required", "manager_confirmable",
                 "proactive_review_decision"):
         values.pop(key, None)
@@ -369,6 +382,64 @@ def test_public_draft_prefills_owner_defaults_and_renders_the_same_contract(tmp_
     capsys.readouterr()
     assert output.read_text() == expected["output"]
     assert not (PROJECT_ROOT / ".cafe/issues" / values["issue_name"]).exists()
+
+
+def test_public_draft_selection_and_in_place_overrides_render_without_duplicate_inputs(tmp_path, capsys):
+    from test_kickoff_prefill import _project
+
+    project = tmp_path / "project"
+    _project(project)
+    playbook = project / ".cafe/playbooks/example.yaml"
+    playbook.write_text(playbook.read_text().replace(
+        "conversation_locale: ja-JP",
+        "conversation_locale: ja-JP, applicability: {summary: Writing, use_when: [outline], avoid_when: [deployment]}"
+    ).replace("await_agent: _done", "await_agent: compose") +
+        "  compose: {role: writer, assignee_type: agent, skill: custom-step, on: {await_agent: _done}}\n")
+    config = project / ".cafe/phases.yaml"
+    config.write_text(config.read_text() +
+        "compose: {name: Writer, role: writer, clis: [{cli: codex, model: second-model}]}\n")
+    cli = load_kickoff_module("prepare_kickoff")
+    stores = ["--config-dir", str(tmp_path / "config"), "--cache-dir", str(tmp_path / "cache")]
+    initial, updated, output = [tmp_path / name for name in ("draft.json", "updated.json", "proposal.md")]
+    assert cli.main(["draft", "--project-root", str(project), "--issue-name", "new",
+                     "--manager-cli", "codex", "--output", str(initial), *stores]) == 3
+    capsys.readouterr()
+    request = json.loads(initial.read_text())
+    assert request["formatter_inputs"]["phase_chain"] == []
+    request["playbook_id"] = "example"
+    initial.write_text(json.dumps(request))
+    assert cli.main(["assemble", "--request-file", str(initial), "--summary",
+                     "--draft-output", str(updated), *stores]) == 3
+    capsys.readouterr()
+    request = json.loads(updated.read_text())
+    assert "current_explicit_inputs" not in request
+    fields = request["formatter_inputs"]
+    assert fields["phase_chain"] == ["outline=codex:configured-model", "compose=codex:second-model"]
+    assert fields["locale_source"] == "playbook:example"
+    original = json.loads(json.dumps(fields))
+    fields["phase_chain"][0] = "outline=claude:chosen-model"
+    fields.update(effective_locale="fr-FR", locale_source="explicit")
+    values = _formatter_inputs("new")
+    fields["delivery_contract"] = values["delivery_contract"]
+    fields.update(deliver=[], deliver_description=[])
+    for kind in ("update", "catalog"):
+        report_file = tmp_path / f"{kind}.json"
+        report_file.write_text(json.dumps(values[f"{kind}_preflight"]))
+        request.setdefault("preflight_files", {})[kind] = str(report_file)
+    updated.write_text(json.dumps(request))
+    expected = load_kickoff_module("kickoff_inputs").render_kickoff({
+        **fields, **{f"{kind}_preflight": values[f"{kind}_preflight"] for kind in ("update", "catalog")}
+    })
+    assert expected["status"] == "rendered", expected
+    assert cli.main(["render", "--request-file", str(updated), "--output", str(output), *stores]) == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["status"] == "rendered"
+    assert output.read_text() == expected["output"]
+    assert fields["phase_chain"][1] == original["phase_chain"][1]
+    for key in ("cleanup", "cleanup_description", "manager_mode", "event_manager", "current_checkout"):
+        assert fields[key] == original[key]
+    assert json.loads(updated.read_text()) == request
+    assert not (project / ".cafe/issues").exists()
 
 
 def test_cached_delivery_and_issue_defaults_reach_the_complete_formatter(tmp_path, capsys, monkeypatch):
@@ -438,7 +509,7 @@ def test_complete_format_render_does_not_create_contract_or_run_delivery(tmp_pat
     assert "activate" not in rendered["proposal"]
 
 
-def test_resume_keeps_confirmed_locale_and_workflow_state_unchanged(tmp_path: Path) -> None:
+def test_resume_keeps_confirmed_locale_and_workflow_state_unchanged(tmp_path: Path, phase_config: Path) -> None:
     inputs = load_kickoff_module("kickoff_inputs")
     project = tmp_path / "project"
     issue_name = "issue573-resume-test"
@@ -449,16 +520,13 @@ def test_resume_keeps_confirmed_locale_and_workflow_state_unchanged(tmp_path: Pa
         '"workflow_id":"existing-workflow","pending_human_tasks":["confirm"]}',
         encoding="utf-8",
     )
-    phase_dir = project / ".cafe"
-    phase_dir.mkdir(parents=True, exist_ok=True)
-    _phase_config(phase_dir / "phases.yaml")
     blackboard = issue_dir / "blackboard.json"
     before = blackboard.read_bytes()
     formatter_inputs = _formatter_inputs(issue_name)
     formatter_inputs.update(
         {
             "project_root": str(project),
-            "phase_config": str(phase_dir / "phases.yaml"),
+            "phase_config": str(phase_config),
             "effective_locale": "zh-TW",
             "locale_source": "new user preference",
         }

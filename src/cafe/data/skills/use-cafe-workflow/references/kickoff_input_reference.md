@@ -10,8 +10,10 @@ new schema, authority or freshness owner.
 The normal entry point is `prepare_kickoff.py draft --issue-id <id> --output
 <draft.json>`, with optional `--project-root`, `--playbook-id`, `--manager-cli`
 and repeated `--phase-chain`. Use `--issue-name` instead for a nonnumeric local
-identity. The program creates and prefills this request; edit only its gaps or
-intentional overrides. Existing output files are not overwritten. The schema
+identity. The program creates and prefills this request; edit gaps or intentional
+overrides in its existing `formatter_inputs` fields. After `assemble --draft-output`,
+use the updated draft for subsequent edits, report captures and rendering.
+Existing output files are not overwritten. The schema
 below is for inspecting or integrating requests, not a requirement to author
 a starter JSON object by hand.
 
@@ -56,6 +58,20 @@ template or default rules; otherwise it remains missing. An explicitly empty
 distinct values. The helper accepts only the declared formatter fields, encodes
 each value as a JSON or argv element, and rejects activation metadata, shell
 commands, and unknown fields.
+
+### Legacy and advanced explicit inputs
+
+Normal generated drafts use `formatter_inputs` for current choices and assessed
+decisions alike. Set `effective_locale` with its accurate `locale_source`
+(`explicit` for a user choice, `inferred` for an inference). Preserve
+`generated_inputs` and preflight references when editing.
+
+`current_explicit_inputs` remains an adapter for legacy callers and deliberate
+same-value reassessment of invalidated generated values. It is not a second map
+to populate during ordinary draft completion. Conflicting duplicate fields in
+the two maps are rejected; remove the affected `formatter_inputs` entry when
+supplying it through this adapter. Explicit null in this map remains an unresolved
+current decision rather than permission to use a generated default.
 
 ## Staged commands
 
@@ -109,6 +125,41 @@ relevant detail.
 Preflight reports may be passed as JSON objects in `formatter_inputs`, or by path in `preflight_files.update` and `preflight_files.catalog`. The helper reads those files as data; it does not execute their contents.
 
 ## Preferences
+
+Normal `render` includes project-only save choices in the final contract and
+returns the exact `preference_offer`. With `--output`, it also writes a
+content-addressed offer JSON alongside the proposal and returns its path as
+`preference_offer_file`. This artifact is not part of the confirmed workflow
+contract and rendering never writes preferences.
+
+After the user explicitly chooses to remember the displayed entries:
+
+```sh
+python scripts/prepare_kickoff.py preferences remember \
+  --offer-file <displayed-offer.json> --project-root /work/project \
+  --config-dir <same-config-dir> --select phase.chains/develop --reuse
+```
+
+Repeat `--select` for a subset, or use `--select '*'` for all displayed entries
+only. The offer pins the repository identity, config directory, selected values
+and their prior values. Saving uses an atomic repository update, preserves other
+map entries, and refuses conflicting changes made since display. It does not
+interpret chat replies or grant workflow/action authority. Plain confirmation,
+a missing `--reuse`, or a failed save does not authorize saving anything else.
+
+Direct formatter callers can use `--preference-config-dir` and
+`--preference-offer-output` to retain the same displayed offer. Keep the offer
+paired with the presented output; do not overwrite it before answering that
+confirmation. Staged preparation is preferred because it pins these paths.
+
+Optional request-level `preference_templates` accepts only `worktree.convention`,
+`delivery.convention` and `cleanup.convention`, using the reusable shapes below.
+The formatter checks their expansion against the current complete proposal;
+literal current issue targets, mismatches or malformed templates are excluded
+from saving with a visible diagnostic. A valid cached delivery template may
+be supplied automatically when it still matches the proposal. Arbitrary commands
+and custom paths are not reverse-engineered into templates. These values only
+propose future defaults; they never execute actions or replace their authority.
 
 Preferences are versioned local records kept apart from disposable evidence:
 
@@ -249,9 +300,11 @@ A saved value never confirms or activates a contract.
 Generated delivery values carry `generated_inputs` provenance in the editable
 request. Preserve that metadata when editing gaps. Unchanged generated values
 must still have valid matching evidence and target context at render time. If
-these change, reassess the action and supply the deliberate current value in
-`current_explicit_inputs` (remove any conflicting draft value), or deliberately
-edit the affected draft field. Legacy requests without generated metadata retain
+these change, reassess the action and edit the affected `formatter_inputs` field.
+If reassessment deliberately retains the same value, use the advanced
+`current_explicit_inputs` adapter and remove that field from `formatter_inputs`;
+an unchanged value alone does not record reassessment. Never remove provenance
+to bypass invalidation. Legacy requests without generated metadata retain
 their explicit-input semantics. This metadata is freshness evidence, not authority.
 
 Report capture publishes the raw report and request atomically per file. When

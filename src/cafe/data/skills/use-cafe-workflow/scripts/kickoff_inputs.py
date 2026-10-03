@@ -142,20 +142,19 @@ def request_schema() -> dict[str, Any]:
         "request_example": {
             "schema_version": 1, "project_root": "/work/project", "issue_name": "new-issue",
             "playbook_id": "<current selection>",
-            "current_explicit_inputs": {"effective_locale": "zh-TW", "locale_source": "explicit", "repository_content_locale": "en-US"},
             "preflight_files": {"update": "/tmp/update.json", "catalog": "/tmp/catalog.json"},
-            "formatter_inputs": {},
+            "formatter_inputs": {"effective_locale": "zh-TW", "locale_source": "explicit", "repository_content_locale": "en-US"},
         },
         "issue_id": "An explicit positive numeric issue ID supplies issue<id> when issue_name is absent. It is never inferred from an issue-like name.",
         "manager_cli": "Current calling Manager CLI; context, not a model choice. Codex sessions are also recognized by CODEX_THREAD_ID.",
-        "generated_inputs": "Helper-owned provenance map retained in editable requests: field -> origin, dependency and value_fingerprint. Unchanged source-backed values are revalidated at render. Preserve this map when filling gaps; deliberate current_explicit_inputs or an edited field supersede its generated value. It grants no authority.",
+        "generated_inputs": "Helper-owned provenance map retained in editable requests: field -> origin, dependency and value_fingerprint. Preserve it when editing formatter_inputs; unchanged source-backed values are revalidated at render. For deliberate same-value reassessment after invalidation, see kickoff_input_reference.md. It grants no authority.",
         "decision_examples": {
             "phase_chain": ["develop=codex:<exact-model>"],
             "capability_choice": ["pr.auto_create=true"],
             "deliver": [["<executable>", "<literal argument>"]],
             "cleanup": [],
         },
-        "guidance": "kickoff_inputs.md documents staged requests; kickoff.md owns the delivery contract and authority rules. Examples are placeholders, never approved decisions.",
+        "guidance": "Start with draft and edit existing formatter_inputs fields in place, without duplicating them in another input map. After assemble --draft-output, continue with that updated draft. Set effective_locale and its accurate locale_source together (explicit or inferred). Preserve generated_inputs and preflight references. kickoff_inputs.md documents preparation; kickoff.md owns delivery and authority rules. Examples are placeholders, never approved decisions.",
         "render_output": "Default JSON: render.output; --output PATH writes the complete text and returns status/output_file only.",
     }
 
@@ -705,7 +704,9 @@ def _prefill_saved_inputs(values: dict[str, Any], *, store: Any, request: dict[s
     def reviews(value):
         if model is None or not isinstance(value, dict):
             raise ValueError("select a graph and supply phase-to-decision mappings")
-        rows = owner._proactive_review_decisions([f"{k}={v}" for k, v in value.items()], agent_phases=list(phases),
+        if set(value) - set(phases):
+            raise ValueError("saved review selectors do not match the selected graph")
+        rows = owner._proactive_review_decisions([f"{k}={value[k]}" for k in phases if k in value], agent_phases=list(phases),
             eligible_phases=set(owner.confirmation_gate_steps(model)) | set(owner.mandatory_confirmation_gate_steps(model)))
         return {"proactive_review_decision": [f"{r['phase']}={r['decision']}" for r in rows]}
     apply("review.decisions", {"proactive_review_decision"}, "proactive_review_decision" not in values, reviews)
@@ -994,7 +995,8 @@ def assemble_kickoff(
     }
 
 
-def render_kickoff(values: dict[str, Any]) -> dict[str, Any]:
+def render_kickoff(values: dict[str, Any], *, preference_store=None,
+                   preference_templates=None, issue_id="") -> dict[str, Any]:
     normalized = values if isinstance(values, dict) and values.get("status") in {"ready", "incomplete", "invalid"} else normalize_formatter_inputs(values)
     if normalized.get("status") != "ready":
         return {
@@ -1012,7 +1014,10 @@ def render_kickoff(values: dict[str, Any]) -> dict[str, Any]:
     try:
         args = formatter._parser().parse_args(formatter_argv(normalized["values"]))
         proposal = formatter.build_confirmed_proposal(args)
-        output = formatter.render(args, confirmed_proposal=proposal)
+        model = formatter.PlaybookLoader(project_root=args.project_root).load_model(args.playbook_id).model
+        offer = formatter.build_offer(args, proposal, model, store=preference_store,
+                                      templates=preference_templates, issue_id=issue_id)
+        output = formatter.render(args, confirmed_proposal=proposal, preference_offer=offer)
     except (SystemExit, OSError, ValueError, KeyError, TypeError) as exc:
         return {"status": "invalid", "diagnostics": [type(exc).__name__], "validation_error": str(exc)}
-    return {"status": "rendered", "proposal": proposal, "output": output}
+    return {"status": "rendered", "proposal": proposal, "output": output, "preference_offer": offer}
