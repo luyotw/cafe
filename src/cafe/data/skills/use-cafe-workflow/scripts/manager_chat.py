@@ -170,6 +170,12 @@ def turn_prompt(target: ChatTarget, text: str, correlation_id: str) -> str:
     step = raw_board.get('current_step')
     if not isinstance(step, str) or not step:
         raise ValueError('invalid current step')
+    # The compatibility parser drops malformed collections; current authority must not.
+    handoff = raw_board.get('handoff_contract')
+    if handoff is not None and not isinstance(handoff, dict):
+        raise ValueError('invalid current handoff')
+    if not isinstance(raw_board.get('artifacts', {}), dict):
+        raise ValueError('invalid current artifacts')
     # This parser validates current fields only. No audit reconstruction occurs.
     board = BlackboardState.from_dict({**raw_board, 'events': []}, initial_step=step)
     contract = _contract(target)

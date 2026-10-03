@@ -274,3 +274,48 @@ def test_checkout_module_help_and_canonical_documentation_agree():
         text = (root / name).read_text()
         assert 'cafe manager chat' in text
         assert 'cafe task inspect' in text and 'cafe task complete' in text
+
+
+@pytest.mark.parametrize('field,value', [
+    ('handoff_contract', []), ('handoff_contract', 'invalid'),
+    ('artifacts', []), ('artifacts', 'invalid'),
+])
+def test_malformed_current_authority_never_submits_or_repairs(
+    tmp_path, monkeypatch, provider_process, field, value,
+):
+    """Plan U4/U6, I3: damaged authority fails through the public command."""
+    from cafe.manager.cli import app
+    repo = repository(tmp_path / 'repo')
+    directory = issue(repo)
+    mutate(directory / 'blackboard.json', lambda board: board.update({field: value}))
+    monkeypatch.chdir(repo)
+    before = snapshot(repo)
+    launch = provider_process(codex_reply('topic-codex'))
+    result = CliRunner().invoke(app, ['manager', 'chat', '--issue', 'topic'], input='status?\n/quit\n')
+    assert result.exit_code != 0
+    assert 'verified reply' not in result.output
+    launch.assert_not_called()
+    assert snapshot(repo) == before
+
+
+@pytest.mark.parametrize('absent', [True, False])
+def test_optional_current_authority_stays_valid(tmp_path, monkeypatch, provider_process, absent):
+    """Plan U6/I2: missing and explicit empty current facts remain legitimate."""
+    from cafe.manager.cli import app
+    repo = repository(tmp_path / 'repo')
+    directory = issue(repo)
+    def empty(board):
+        if absent:
+            board.pop('handoff_contract', None)
+            board.pop('artifacts', None)
+        else:
+            board.update(handoff_contract=None, artifacts={})
+    mutate(directory / 'blackboard.json', empty)
+    monkeypatch.chdir(repo)
+    before = snapshot(repo)
+    launch = provider_process(codex_reply('topic-codex'))
+    result = CliRunner().invoke(app, ['manager', 'chat', '--issue', 'topic'], input='status?\n/quit\n')
+    assert result.exit_code == 0, result.output
+    assert 'verified reply' in result.output
+    assert launch.call_count == 1
+    assert snapshot(repo) == before
