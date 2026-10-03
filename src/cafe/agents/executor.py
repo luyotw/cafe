@@ -10,7 +10,11 @@ from typing import Any, Callable, List, Optional
 
 from cafe.agents.cli import AbstractCLI, ClaudeCLI, CodexCLI, CopilotCLI, CursorCLI, GeminiCLI
 from cafe.agents.diagnostics import sanitize_error_excerpt
-from cafe.agents.transport_types import TransportResult
+from cafe.agents.transport_types import (
+    TransportResult,
+    _has_evidence_conflict,
+    _validated_evidence_scalar,
+)
 from cafe.core.types import AgentCLI, AgentConfig, AgentResponse, PermissionDenial, TokenUsage
 
 
@@ -1379,11 +1383,13 @@ class AgentExecutor:
                 raise error from cause
             evidence = observation_evidence
             if parsed.model is not None:
-                if not isinstance(parsed.model, str) or not parsed.model.strip() or len(parsed.model) > 512:
+                try:
+                    model = _validated_evidence_scalar(parsed.model)
+                except ValueError:
                     evidence = replace(evidence, failure_code="invalid_evidence")
                 else:
-                    mismatch = (self.config.model is not None and parsed.model != self.config.model)
-                    evidence = replace(evidence, reported_model=parsed.model,
+                    mismatch = _has_evidence_conflict((self.config.model, model))
+                    evidence = replace(evidence, reported_model=model,
                                        failure_code=evidence.failure_code or ("model_mismatch" if mismatch else None))
             parsed.transport_result = replace(
                 evidence,
@@ -1502,11 +1508,13 @@ class AgentExecutor:
                             output_lines.append(line)
                             observed = observation_strategy.conversation_evidence((data,))
                             failure = observation_evidence.failure_code or observed.failure_code
-                            if (observation_evidence.observed_session_id and observed.observed_session_id
-                                    and observation_evidence.observed_session_id != observed.observed_session_id):
+                            if _has_evidence_conflict((
+                                observation_evidence.observed_session_id, observed.observed_session_id
+                            )):
                                 failure = "conflicting_session_evidence"
-                            if (observation_evidence.reported_model and observed.reported_model
-                                    and observation_evidence.reported_model != observed.reported_model):
+                            if _has_evidence_conflict((
+                                observation_evidence.reported_model, observed.reported_model
+                            )):
                                 failure = failure or "model_mismatch"
                             observation_evidence = replace(
                                 observation_evidence,

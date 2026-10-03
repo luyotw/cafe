@@ -40,6 +40,16 @@ acceptance. Exact delivery requires nonempty destination and correlation IDs;
 the prompt must contain the correlation ID. The configured model is the exact
 requested model when present.
 
+`acquire_session` permits only these keyword-only options: `required_evidence`,
+`on_usage`, `allowed_tools`, `allowed_directories`, `execution_control`, and
+`environment_overrides`. It rejects resume/session overrides, delivery/event IDs,
+and `on_acceptance` with `TypeError` before executor invocation. A caller's existing
+configured session is restored after the attempt, while acquisition always launches
+without a resume target or delivery correlation. Exact delivery accepts the same
+keyword-only options plus `on_acceptance`, with its required `session_id` and
+`delivery_id` validated before invocation. Unsupported required acceptance evidence
+cannot turn acquisition into delivery.
+
 Noninteractive operations reuse executor tool/directory translation and accept
 `allowed_tools`, `allowed_directories`, `execution_control`, and
 `environment_overrides`. Interactive launch accepts environment overrides and
@@ -77,7 +87,14 @@ format, not a guarantee that every invocation will report those fields.
 | `returncode` | Process termination code, independent of acceptance/completion |
 
 Unknown values are `None`. Session/model values are limited to 512 characters;
-oversize values are invalid, not truncated usable identities. Returned usage
+oversize values are invalid, not truncated usable identities. Small private pure
+helpers in the existing agent values module share scalar validation and conflict
+comparison across batch evidence, streaming observation and parsed-model checks.
+Session identities are trimmed after validating their raw length; reported model
+strings retain their original spelling. Missing values remain unknown. Provider
+record recognition stays in CLI strategies, and failure precedence, sticky stream
+conflicts and early acceptance versus final result projection keep their existing
+timing and outcomes. Returned usage
 turn summaries retain at most 64 numeric entries and contain no provider payload.
 The facade adds no transcripts, raw record lists, request snapshots, evidence
 files, databases, or recovery store. Existing response output remains separate.

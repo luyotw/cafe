@@ -5,7 +5,9 @@ from dataclasses import replace
 
 from cafe.agents.diagnostics import sanitize_error_excerpt
 from cafe.agents.executor import AgentExecutionError, AgentExecutor
-from cafe.agents.transport_types import Evidence, Operation, TransportCapabilities, TransportResult
+from cafe.agents.transport_types import (
+    Evidence, Operation, TransportCapabilities, TransportResult, _validated_evidence_scalar,
+)
 
 
 class ConversationTransport:
@@ -42,7 +44,11 @@ class ConversationTransport:
         delivery_id=None,
         required_evidence: frozenset[Evidence] = frozenset(),
         on_usage=None,
-        **kwargs,
+        on_acceptance=None,
+        allowed_tools=None,
+        allowed_directories=None,
+        execution_control=None,
+        environment_overrides=None,
     ):
         operation = "deliver_to_exact_session" if session_id is not None else "acquire_session"
         inherent = {"session", "acceptance"} if session_id is not None else {"session"}
@@ -51,7 +57,10 @@ class ConversationTransport:
         self.executor.config.session_id = session_id
         try:
             executed = self.executor.execute_event_driver(
-                prompt, expected_session_id=session_id, event_id=delivery_id, **kwargs
+                prompt, expected_session_id=session_id, event_id=delivery_id,
+                on_acceptance=on_acceptance, allowed_tools=allowed_tools,
+                allowed_directories=allowed_directories, execution_control=execution_control,
+                environment_overrides=environment_overrides,
             )
             result = executed.transport_result
         except AgentExecutionError as error:
@@ -98,17 +107,46 @@ class ConversationTransport:
             self._fail(replace(result, failure_code="session_mismatch"))
         return result
 
-    def acquire_session(self, prompt: str, **kwargs) -> TransportResult:
-        return self._callback(prompt, **kwargs)
+    def acquire_session(
+        self,
+        prompt: str,
+        *,
+        required_evidence: frozenset[Evidence] = frozenset(),
+        on_usage=None,
+        allowed_tools=None,
+        allowed_directories=None,
+        execution_control=None,
+        environment_overrides=None,
+    ) -> TransportResult:
+        return self._callback(
+            prompt, session_id=None, delivery_id=None, required_evidence=required_evidence,
+            on_usage=on_usage, allowed_tools=allowed_tools, allowed_directories=allowed_directories,
+            execution_control=execution_control, environment_overrides=environment_overrides,
+        )
 
     def deliver_to_exact_session(
-        self, prompt: str, session_id: str, delivery_id: str, **kwargs
+        self,
+        prompt: str,
+        session_id: str,
+        delivery_id: str,
+        *,
+        required_evidence: frozenset[Evidence] = frozenset(),
+        on_acceptance=None,
+        on_usage=None,
+        allowed_tools=None,
+        allowed_directories=None,
+        execution_control=None,
+        environment_overrides=None,
     ) -> TransportResult:
-        if not isinstance(session_id, str) or not session_id.strip() or len(session_id) > 512:
-            raise ValueError("exact destination must be a bounded nonempty identity")
+        _validated_evidence_scalar(session_id)
         if not isinstance(delivery_id, str) or not delivery_id.strip() or delivery_id not in prompt:
             raise ValueError("delivery requires a correlation identity in its prompt")
-        return self._callback(prompt, session_id=session_id, delivery_id=delivery_id, **kwargs)
+        return self._callback(
+            prompt, session_id=session_id, delivery_id=delivery_id, required_evidence=required_evidence,
+            on_acceptance=on_acceptance, on_usage=on_usage, allowed_tools=allowed_tools,
+            allowed_directories=allowed_directories, execution_control=execution_control,
+            environment_overrides=environment_overrides,
+        )
 
     def open_interactive_session(
         self,

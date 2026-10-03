@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Callable, List, Mapping, Optional, Sequence, Tuple
 
+from cafe.agents.transport_types import _has_evidence_conflict, _validated_evidence_scalar
 from cafe.core.types import AgentConfig, PermissionDenial, TokenUsage
 
 
@@ -216,16 +217,13 @@ class AbstractCLI(ABC):
             if not isinstance(record, Mapping) or not matches(record):
                 continue
             model = record.get("model")
-            if (
-                self.config.model is not None
-                and model is not None
-                and model != self.config.model
-            ):
+            if _has_evidence_conflict((self.config.model, model)):
                 return None
-            session_id = record.get(field)
-            if not isinstance(session_id, str) or not session_id.strip() or len(session_id) > 512:
+            try:
+                session_id = _validated_evidence_scalar(record.get(field), strip=True)
+            except ValueError:
                 return None
-            session_ids.add(session_id.strip())
+            session_ids.add(session_id)
         return next(iter(session_ids)) if len(session_ids) == 1 else None
 
     conversation_operations = frozenset()
@@ -256,29 +254,34 @@ class AbstractCLI(ABC):
         invalid = False
         for record in records:
             for model in self.conversation_reported_models(record):
-                if not isinstance(model, str) or not model.strip() or len(model) > 512:
+                try:
+                    models.add(_validated_evidence_scalar(model))
+                except ValueError:
                     invalid = True
-                else:
-                    models.add(model)
             if not self.conversation_identity_record(record):
                 continue
-            identity = record.get(self.conversation_session_field)
-            if not isinstance(identity, str) or not identity.strip() or len(identity) > 512:
+            try:
+                identities.add(
+                    _validated_evidence_scalar(
+                        record.get(self.conversation_session_field), strip=True
+                    )
+                )
+            except ValueError:
                 invalid = True
-            else:
-                identities.add(identity.strip())
             model = record.get("model")
             if model is not None:
-                if not isinstance(model, str) or not model.strip() or len(model) > 512:
+                try:
+                    models.add(_validated_evidence_scalar(model))
+                except ValueError:
                     invalid = True
-                else:
-                    models.add(model)
         failure = None
         if invalid:
             failure = "invalid_evidence"
-        elif len(identities) > 1:
+        elif _has_evidence_conflict(identities):
             failure = "conflicting_session_evidence"
-        elif len(models) > 1 or (models and self.config.model and models != {self.config.model}):
+        elif _has_evidence_conflict(
+            (*models, self.config.model if models and self.config.model else None)
+        ):
             failure = "model_mismatch"
         return TransportResult(
             observed_session_id=next(iter(identities)) if len(identities) == 1 and not invalid else None,

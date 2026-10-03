@@ -968,3 +968,191 @@ def test_late_metadata_alias_preserves_complete_bytes_through_usage_cleanup(
     assert backup.read_bytes() == original
     assert json.loads(target.read_text())['stats']['input_tokens'] == 3
     assert launch.call_count == 1
+
+
+@pytest.mark.parametrize(
+    "injected",
+    [
+        dict(session_id="existing", delivery_id="absent-correlation"),
+        dict(session_id="existing", delivery_id="bootstrap"),
+        dict(session_id="existing"),
+        dict(session_id=None),
+        dict(delivery_id="absent-correlation"),
+        dict(on_acceptance=lambda: None),
+        dict(expected_session_id="existing"),
+        dict(event_id="absent-correlation"),
+    ],
+    ids=[
+        "resume-and-correlation",
+        "valid-delivery-injection",
+        "resume",
+        "null-resume",
+        "correlation",
+        "acceptance",
+        "executor-resume",
+        "executor-correlation",
+    ],
+)
+def test_acquisition_rejects_operation_overrides_before_executor_invocation(
+    provider_process, monkeypatch, injected
+):
+    selected = transport(model="selected", session_id="existing")
+    invoke = MagicMock(wraps=selected.executor.execute_event_driver)
+    monkeypatch.setattr(selected.executor, "execute_event_driver", invoke)
+    launch = provider_process([init("existing", model="selected"), dict(type="result")])
+    with pytest.raises(TypeError):
+        selected.acquire_session("bootstrap", **injected)
+    invoke.assert_not_called()
+    launch.assert_not_called()
+    assert selected.executor.config.session_id == "existing"
+    assert selected.executor.config.model == "selected"
+    assert selected.executor.get_total_token_usage().input_tokens == 0
+
+
+def test_acquisition_keeps_permitted_options_and_starts_a_new_session(provider_process, tmp_path):
+    from cafe.agents.executor import AgentExecutionControl
+
+    selected = transport(model="selected", session_id="previous-session")
+    launch = provider_process(
+        [init("created-session", model="selected"), dict(type="result", usage=dict(input_tokens=2))]
+    )
+    usages = []
+    result = selected.acquire_session(
+        "bootstrap",
+        required_evidence=frozenset({"model", "usage"}),
+        on_usage=usages.append,
+        allowed_tools=["Read"],
+        allowed_directories=[str(tmp_path)],
+        environment_overrides={"CAFE_TRANSPORT_TEST_MARKER": "present"},
+        execution_control=AgentExecutionControl(working_directory=tmp_path, max_output_lines=128),
+    )
+    command = launch.call_args.args[0]
+    assert "previous-session" not in command
+    assert "Read" in command and str(tmp_path) in command
+    assert launch.call_args.kwargs["cwd"] == str(tmp_path)
+    assert launch.call_args.kwargs["env"]["CAFE_TRANSPORT_TEST_MARKER"] == "present"
+    assert result.observed_session_id == "created-session"
+    assert result.reported_model == "selected"
+    assert result.accepted is False
+    assert selected.executor.config.session_id == "previous-session"
+    assert selected.executor.config.model == "selected"
+    assert len(usages) == 1 and usages[0].input_tokens == 2
+    assert selected.executor.get_total_token_usage().input_tokens == 2
+    assert launch.call_count == 1
+
+
+@pytest.mark.parametrize("operation", ["acquire_session", "run_one_shot"])
+@pytest.mark.parametrize(
+    "identities,requested,observed,model,failure",
+    [
+        ([init(" s ")], "selected", "s", None, None),
+        ([init(" s ", model=" selected ")], None, "s", " selected ", None),
+        ([init("s" * 512, model="m" * 512)], "m" * 512, "s" * 512, "m" * 512, None),
+        ([init(" ")], None, None, None, "invalid_evidence"),
+        ([init(17)], None, None, None, "invalid_evidence"),
+        ([init("s" * 513)], None, None, None, "invalid_evidence"),
+        ([init(model=" ")], "selected", "s", None, "invalid_evidence"),
+        ([init(model=17)], "selected", "s", None, "invalid_evidence"),
+        ([init(model="m" * 513)], "selected", "s", None, "invalid_evidence"),
+        ([init(model="other")], "selected", "s", "other", "model_mismatch"),
+        ([init("a"), init("b"), init("a")], None, "a", None, "conflicting_session_evidence"),
+        ([init(model="a"), init(model="b"), init(model="a")], None, "s", "a", "model_mismatch"),
+    ],
+    ids=[
+        "unknown-model",
+        "model-spelling",
+        "scalar-limit",
+        "blank-session",
+        "nonstring-session",
+        "overlong-session",
+        "blank-model",
+        "nonstring-model",
+        "overlong-model",
+        "requested-model-mismatch",
+        "sticky-session-conflict",
+        "sticky-model-conflict",
+    ],
+)
+def test_batch_and_stream_scalar_evidence_preserve_normalized_outcomes(
+    provider_process, operation, identities, requested, observed, model, failure
+):
+    launch = provider_process([*identities, dict(type="result", usage=dict(input_tokens=2))])
+    selected = transport(model=requested)
+    usages = []
+    if failure:
+        with pytest.raises(AgentExecutionError) as caught:
+            getattr(selected, operation)("hello", on_usage=usages.append)
+        result = caught.value.transport_result
+        assert result.failure_code == failure
+    else:
+        result = getattr(selected, operation)("hello", on_usage=usages.append)
+        assert result.observed_session_id == observed
+        assert result.reported_model == model
+        assert result.failure_code is None
+    if result.reported_model is not None:
+        assert len(result.reported_model) <= 512
+    if result.observed_session_id is not None:
+        assert len(result.observed_session_id) <= 512
+    if result.usage is not None:
+        assert result.usage.input_tokens == 2
+        assert len(usages) == 1 and usages[0].input_tokens == 2
+        assert selected.executor.get_total_token_usage().input_tokens == 2
+    else:
+        assert usages == []
+    assert selected.executor.config.model == requested
+    assert selected.executor.config.session_id is None
+    assert launch.call_count == 1
+
+
+@pytest.mark.parametrize("returncode", [0, 1])
+@pytest.mark.parametrize(
+    "later,failure",
+    [
+        (init("other", model="selected"), "conflicting_session_evidence"),
+        (init(model="other"), "model_mismatch"),
+        (init(model="m" * 513), "invalid_evidence"),
+    ],
+    ids=["session-conflict", "model-mismatch", "invalid-model"],
+)
+def test_late_evidence_failure_keeps_early_acceptance_and_usage_without_replay(
+    provider_process, later, failure, returncode
+):
+    launch = provider_process(
+        [
+            init(model="selected"),
+            dict(type="stream_event", event=dict(type="message_start")),
+            later,
+            dict(type="result", usage=dict(input_tokens=7)),
+        ],
+        returncode=returncode,
+    )
+    selected = transport(model="selected", session_id="s")
+    accepted, usages = [], []
+    with pytest.raises(AgentExecutionError) as caught:
+        selected.deliver_to_exact_session(
+            "delivery event-1",
+            "s",
+            "event-1",
+            on_acceptance=lambda: accepted.append(True),
+            on_usage=usages.append,
+        )
+    result = caught.value.transport_result
+    assert result.failure_code == failure
+    assert accepted == [True] and result.accepted is True
+    assert result.completed is True and result.returncode == returncode
+    assert len(usages) == 1 and usages[0].input_tokens == 7
+    assert selected.executor.get_total_token_usage().input_tokens == 7
+    assert selected.executor.config.session_id == "s"
+    assert selected.executor.config.model == "selected"
+    assert launch.call_count == 1
+
+
+def test_acquisition_cannot_request_delivery_acceptance(provider_process):
+    selected = transport(session_id="existing")
+    launch = provider_process([])
+    with pytest.raises(AgentExecutionError) as caught:
+        selected.acquire_session("bootstrap", required_evidence=frozenset({"acceptance"}))
+    assert caught.value.transport_result.failure_code == "unsupported"
+    assert caught.value.transport_result.accepted is False
+    assert selected.executor.config.session_id == "existing"
+    launch.assert_not_called()
