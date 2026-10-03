@@ -1156,3 +1156,62 @@ def test_acquisition_cannot_request_delivery_acceptance(provider_process):
     assert caught.value.transport_result.accepted is False
     assert selected.executor.config.session_id == "existing"
     launch.assert_not_called()
+
+
+def codex_reply(session='s', model=None, *, complete=True):
+    identity = dict(type='thread.started', thread_id=session)
+    if model is not None:
+        identity['model'] = model
+    records = [identity, dict(type='turn.started'),
+               dict(type='item.completed', item=dict(type='agent_message', text='verified reply'))]
+    if complete:
+        records.append(dict(type='turn.completed', usage=dict(input_tokens=2, output_tokens=3)))
+    return records
+
+
+@pytest.mark.parametrize('model', [None, 'confirmed-fallback'])
+def test_exact_delivery_exposes_parsed_reply_once_after_validation(provider_process, model):
+    launch = provider_process(codex_reply(model=model))
+    replies = []
+    selected = transport(AgentCLI.CODEX, model=model, session_id='s')
+    result = selected.deliver_to_exact_session(
+        'user-turn-1', 's', 'user-turn-1', on_response=replies.append,
+        required_evidence=frozenset({'model'}) if model else frozenset(),
+    )
+    assert result.accepted is True
+    assert result.completed is True
+    assert [reply.response for reply in replies] == ['verified reply']
+    assert launch.call_count == 1
+    assert selected.executor.config.session_id == 's'
+    command = launch.call_args.args[0]
+    assert ('--model' in command) == bool(model)
+
+
+@pytest.mark.parametrize('damage', ['identity', 'model', 'incomplete', 'missing_model', 'failed'])
+def test_failed_exact_delivery_publishes_no_reply_or_replacement(provider_process, damage):
+    records = codex_reply(session='wrong' if damage == 'identity' else 's',
+                          model=None if damage == 'missing_model' else 'wrong' if damage == 'model' else 'exact',
+                          complete=damage != 'incomplete')
+    launch = provider_process(records, returncode=1 if damage == 'failed' else 0)
+    replies = []
+    selected = transport(AgentCLI.CODEX, model='exact', session_id='s')
+    with pytest.raises(AgentExecutionError):
+        selected.deliver_to_exact_session('turn-1', 's', 'turn-1', on_response=replies.append,
+                                          required_evidence=frozenset({'model'}))
+    assert not replies
+    assert launch.call_count == 1
+    assert selected.executor.config.session_id == 's'
+
+
+def test_reply_observer_error_remains_a_caller_error_without_replay(provider_process):
+    launch = provider_process(codex_reply())
+    problem = RuntimeError('display failed')
+    def reject(reply):
+        assert reply.response == 'verified reply'
+        raise problem
+    with pytest.raises(RuntimeError) as caught:
+        transport(AgentCLI.CODEX, session_id='s').deliver_to_exact_session(
+            'turn-1', 's', 'turn-1', on_response=reject,
+        )
+    assert caught.value is problem
+    assert launch.call_count == 1

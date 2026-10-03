@@ -30,7 +30,7 @@ dev = [
 ]
 
 [project.scripts]
-cafe = "cafe.ui.cli:main"
+cafe = "cafe.manager.cli:main"
 
 [build-system]
 requires = ["hatchling"]

@@ -408,6 +408,7 @@ class AgentExecutor:
         expected_session_id: str | None = None,
         event_id: str | None = None,
         on_acceptance: Callable[[], None] | None = None,
+        on_response: Callable[[AgentResponse], None] | None = None,
         environment_overrides: Optional[dict[str, str]] = None,
         allowed_tools: Optional[List[str]] = None,
         allowed_directories: Optional[List[str]] = None,
@@ -510,6 +511,8 @@ class AgentExecutor:
                 session_id=expected_session_id,
                 event_id=event_id,
             )
+        if on_response is not None:
+            on_response(response)
         return EventDriverExecutionResult(
             session_id=session_id,
             accepted=accepted,
@@ -597,6 +600,8 @@ class AgentExecutor:
         if execution_control is not None and execution_control.working_directory is not None:
             process_cwd = execution_control.working_directory.expanduser().resolve()
             process_cwd.mkdir(parents=True, exist_ok=True)
+            if self.config.cli == AgentCLI.CODEX:
+                cmd[cmd.index("-C") + 1] = str(process_cwd)
 
         decision_only = allowed_tools == [] and allowed_directories == []
         if not decision_only:
