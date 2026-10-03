@@ -25,6 +25,7 @@ import yaml
 
 from cafe.agents.executor import AgentExecutionControl, AgentExecutionError, AgentExecutor
 from cafe.agents.manager import AgentManager
+from cafe.core.audit_events import AuditEventStore
 from cafe.core.conversation_locale import DEFAULT_CONVERSATION_LOCALE
 from cafe.core.human_task_notifications import (
     build_workflow_callback_failure_message,
@@ -1656,34 +1657,89 @@ class EventManagerSessionStore(SessionStore):
 EventDriverSessionStore = EventManagerSessionStore
 
 
-def _callback_prompt(event: dict[str, Any], *, repository_root: Path) -> str:
-    notice = json.dumps(event, ensure_ascii=False, sort_keys=True)
+def _callback_to_step(event: dict[str, Any], *, repository_root: Path) -> str | None:
+    """Project the event-time baton without changing callback or workflow authority."""
+    issue = event.get("issue")
+    if not isinstance(issue, str) or issue in {"", ".", ".."} or Path(issue).name != issue:
+        return None
+    audit = AuditEventStore(repository_root / ".cafe" / "issues" / issue)
+    try:
+        record = audit.read(event.get("workflow_id"), event.get("sequence"), bounded=True)
+        if (record is None or record["event_id"] != event.get("event_id")
+                or record["timestamp"] != event.get("occurred_at")
+                or record["event_type"] != "workflow_event_callback_enqueued"):
+            return None
+        for sequence in range(record["sequence"] - 1, 0, -1):
+            prior = audit.read(event["workflow_id"], sequence, bounded=True)
+            if prior is None:
+                continue
+            change = prior["patch"].get("handoff_contract")
+            if change is not None:
+                handoff = change.get("after") if isinstance(change, dict) else None
+            elif "baton" in prior:
+                handoff = prior["baton"]
+            elif prior["event_type"] == "workflow_paused":
+                return "user"
+            elif prior["event_type"] == "workflow_completed":
+                return "done"
+            elif prior["event_type"] == "transition":
+                handoff = {"to_step": prior["data"].get("to")}
+            else:
+                continue
+            target = handoff.get("to_step") if isinstance(handoff, dict) else None
+            return target if isinstance(target, str) and target else None
+    except (OSError, ValueError, TypeError):
+        pass
+    return None
+
+
+def _callback_prompt(
+    event: dict[str, Any], *, repository_root: Path, include_instructions: bool = False
+) -> str:
+    notice = json.dumps(
+        {**event, "to_step": _callback_to_step(event, repository_root=repository_root)},
+        ensure_ascii=False, sort_keys=True,
+    )
+    instructions = (
+        "You are the event-driven CAFE workflow manager.",
+        "This is an asynchronous wake notification, not a workflow advancement gate.",
+        "Read the builtin use-cafe-workflow skill and follow its current confirmed contract.",
+        "First inspect current durable state with cafe status/show before acting; "
+        "the event may be stale.",
+        "For the current task, run cafe task inspect <task-id> --json, then "
+        "inspect_task_authority.py --issue-dir <issue-dir> --task-id <task-id> --json. "
+        "Treat route_status, resolution_owner, and evidence_reason independently.",
+        "Do not answer mandatory, user-required, permission, or capability tasks; only "
+        "a user-facing manager turn may relay an explicit user-owned answer.",
+        "You may complete a manager_confirmable task authorized by its explicit declaration "
+        "or the confirmed overall need_clarification policy, only after verifying its "
+        "confirmed contract and evidence. "
+        "Explicit task ownership overrides the overall policy. "
+        "Use complete_manager_task.py with the same assessment and inspected digests "
+        "so authority is rechecked at durable completion. "
+        "A clarification answer must stay within confirmed scope, constraints and authority "
+        "and trigger no contract deviation; otherwise leave it for the user. Do not grant "
+        "permissions/capabilities or wait for this callback.",
+        "Do not assume you own a running background process. Only use an already "
+        "reliable, authorized control path.",
+    ) if include_instructions else ()
     return "\n".join(
-        (
-            "You are the event-driven CAFE workflow manager.",
-            "This is an asynchronous wake notification, not a workflow advancement gate.",
-            "Read the builtin use-cafe-workflow skill and follow its current confirmed contract.",
-            "First inspect current durable state with cafe status/show before acting; "
-            "the event may be stale.",
-            "For the current task, run cafe task inspect <task-id> --json, then "
-            "inspect_task_authority.py --issue-dir <issue-dir> --task-id <task-id> --json. "
-            "Treat route_status, resolution_owner, and evidence_reason independently.",
-            "Do not answer mandatory, user-required, permission, or capability tasks; only "
-            "a user-facing manager turn may relay an explicit user-owned answer.",
-            "You may complete a manager_confirmable task authorized by its explicit declaration "
-            "or the confirmed overall need_clarification policy, only after verifying its "
-            "confirmed contract and evidence. "
-            "Explicit task ownership overrides the overall policy. "
-            "Use complete_manager_task.py with the same assessment and inspected digests "
-            "so authority is rechecked at durable completion. "
-            "A clarification answer must stay within confirmed scope, constraints and authority "
-            "and trigger no contract deviation; otherwise leave it for the user. Do not grant "
-            "permissions/capabilities or wait for this callback.",
-            "Do not assume you own a running background process. Only use an already "
-            "reliable, authorized control path.",
-            f"Repository: {repository_root}",
-            f"Wake notice: {notice}",
-        )
+        ("CAFE callback", *instructions, f"Repository: {repository_root}", f"Wake notice: {notice}")
+    )
+
+
+def _fallback_needs_instructions(state: dict[str, Any], index: int) -> bool:
+    """Reuse verified delivery history across events and reordered routing chains."""
+    if index == 0:
+        return False
+    entry = state["entries"][index]
+    session_id = entry["session"]["id"]
+    return not any(
+        attempt.get("stage") == "delivery" and attempt.get("status") == "accepted"
+        and attempt.get("cli") == entry["cli"] and attempt.get("model") == entry.get("model")
+        and attempt.get("session_id") == session_id
+        for event_state in _project_v3_events(state)
+        for attempt in event_state["attempts"]
     )
 
 
@@ -2124,7 +2180,10 @@ def _deliver_v3_callback(
                 else executor.execute_event_driver
             )
             result = execute_callback(
-                _callback_prompt(event, repository_root=repository_root),
+                _callback_prompt(
+                    event, repository_root=repository_root,
+                    include_instructions=_fallback_needs_instructions(state, index),
+                ),
                 expected_session_id=session_id,
                 event_id=event_id,
                 on_acceptance=persist_acceptance,
