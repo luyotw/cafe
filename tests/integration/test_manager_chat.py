@@ -147,6 +147,12 @@ def test_cross_process_callback_lock_is_busy_then_idle_chat_releases_it(tmp_path
     directory = issue(repo)
     monkeypatch.chdir(repo)
     script = "import fcntl,sys; f=open(sys.argv[1], 'a+'); fcntl.flock(f,fcntl.LOCK_EX); print('ready',flush=True); sys.stdin.readline()"
+    real_popen = subprocess.Popen
+    def process_boundary(command, **kwargs):
+        if command[0] == 'codex':
+            pytest.fail('busy/idle chat must never launch a provider')
+        return real_popen(command, **kwargs)
+    monkeypatch.setattr(subprocess, 'Popen', process_boundary)
     child = subprocess.Popen([sys.executable, '-c', script, str(directory / 'manager/session.lock')],
                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
     try:
@@ -207,7 +213,7 @@ def test_custom_phase_role_manager_and_workflow_manager_have_distinct_sessions(t
     from tests.fixtures.manager_chat import git
     git(repo, 'checkout', '-b', 'topic')
     monkeypatch.chdir(repo)
-    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
+    monkeypatch.setattr(Path, 'home', lambda: tmp_path / 'home')
     playbooks = repo / '.cafe/playbooks'
     playbooks.mkdir()
     (playbooks / 'custom.yaml').write_text(yaml.safe_dump({
