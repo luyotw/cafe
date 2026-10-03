@@ -1234,6 +1234,7 @@ class AgentExecutor:
         import sys
 
         stderr_check_timeout = 0.5  # 500ms to check for immediate errors
+        stderr_output = ""
 
         if sys.platform != "win32" and process.stderr:
             # Use select on Unix-like systems to check for immediate stderr output
@@ -1242,6 +1243,9 @@ class AgentExecutor:
             if process.stderr in ready:
                 # Read first line of stderr if available (non-blocking)
                 stderr_line = process.stderr.readline()
+                # Preserve nonfatal diagnostics for normal reporting/recovery;
+                # the final stderr drain must append rather than replace them.
+                stderr_output = stderr_line
                 # Only treat as fatal error if it's NOT a tool execution error
                 # Tool errors like "Error executing tool" are recoverable and agent continues
                 is_tool_error = "error executing tool" in stderr_line.lower()
@@ -1284,7 +1288,6 @@ class AgentExecutor:
         streaming_log: List[str] = []  # Record all streaming fragments
         token_usage = TokenUsage()
         returncode = None
-        stderr_output = ""
         observer_failed = False
         observation_evidence = TransportResult()
         observation_strategy = self._get_cli_strategy()
@@ -1802,7 +1805,7 @@ class AgentExecutor:
                     returncode = -1
 
             # Read stderr after termination
-            stderr_output = process.stderr.read() if process.stderr else ""
+            stderr_output += process.stderr.read() if process.stderr else ""
 
             # Treat as success only if we can actually tell the run finished:
             # either the CLI has no structured completion signal at all (e.g.
@@ -1822,7 +1825,7 @@ class AgentExecutor:
             try:
                 returncode = process.wait(timeout=300)
                 # Only read stderr after process completes normally
-                stderr_output = process.stderr.read() if process.stderr else ""
+                stderr_output += process.stderr.read() if process.stderr else ""
             except subprocess.TimeoutExpired:
                 print(f"⚠️  {cli_name} process did not exit within timeout, terminating...")
                 process.terminate()
@@ -1834,7 +1837,7 @@ class AgentExecutor:
                     returncode = process.wait()
 
                 # Read stderr after termination
-                stderr_output = process.stderr.read() if process.stderr else ""
+                stderr_output += process.stderr.read() if process.stderr else ""
 
                 # Same reasoning as the idle-timeout branch above: only treat
                 # this as "finished but slow to exit" when we have a way to

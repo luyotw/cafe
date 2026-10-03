@@ -504,6 +504,98 @@ def test_i7_same_provider_recovery_keeps_options_without_persistence(
 
 
 @pytest.mark.integration
+@pytest.mark.skipif(sys.platform == "win32", reason="Exercises the Unix stderr pre-read")
+@pytest.mark.parametrize("provider", ["codex", "claude"])
+@pytest.mark.parametrize("scenario", ["recover", "failure"])
+def test_i6_i7_unix_stderr_only_rejection_reaches_chat(
+    diagnostic_workspace, tmp_path_factory, provider, scenario
+):
+    import os
+
+    repo, _, _ = diagnostic_workspace
+    configure_provider(repo, provider, True)
+    # Native-owned receipts are outside the measured CAFE repository/HOME.
+    native_root = tmp_path_factory.mktemp("native-stderr")
+    receipt = native_root / "attempts.jsonl"
+    binary = native_root / provider
+    binary.write_text(
+        f"#!{sys.executable}\n"
+        + """import json, os, pathlib, sys
+args = sys.argv[1:]
+provider = pathlib.Path(sys.argv[0]).name
+context = (pathlib.Path(os.environ['CAFE_ISSUE_DIR']) / 'artifacts/report.md').read_text()
+with open(os.environ['NATIVE_STDERR_RECEIPT'], 'a') as handle:
+    handle.write(json.dumps({'argv': args, 'context': context}) + '\\n')
+if os.environ['NATIVE_STDERR_SCENARIO'] == 'failure':
+    print('native option rejected', file=sys.stderr)
+    print('native rejection detail', file=sys.stderr)
+    sys.exit(1)
+if 'stored-session' in args:
+    print('No conversation found', file=sys.stderr)
+    sys.exit(1)
+message = 'fixture diagnosis: ' + context
+if provider == 'codex':
+    records = [
+        {'type': 'thread.started', 'thread_id': 'fresh-session'},
+        {'type': 'item.completed', 'item': {'type': 'agent_message', 'text': message}},
+        {'type': 'turn.completed'},
+    ]
+else:
+    records = [
+        {'type': 'system', 'subtype': 'init', 'session_id': 'fresh-session'},
+        {'type': 'assistant', 'message': {'content': [{'type': 'text', 'text': message}]}},
+        {'type': 'result', 'subtype': 'success', 'session_id': 'fresh-session', 'result': message},
+    ]
+for record in records:
+    print(json.dumps(record))
+"""
+    )
+    binary.chmod(0o755)
+    env = dict(
+        os.environ,
+        PATH=str(native_root) + os.pathsep + os.environ["PATH"],
+        PYTHONPATH=str(Path(__file__).resolve().parents[2] / "src"),
+        PYTHONDONTWRITEBYTECODE="1",
+        NATIVE_STDERR_RECEIPT=str(receipt),
+        NATIVE_STDERR_SCENARIO=scenario,
+    )
+    env.pop("CAFE_SKIP_GLOBAL_SKILL_SYNC", None)
+    before = inventory(repo.parent)
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "cafe.ui.cli", "chat", "analyst",
+            "--read-only", "--phase", "inspect", "-p", "diagnose",
+        ],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=20,
+    )
+    assert inventory(repo.parent) == before
+    attempts = [json.loads(line) for line in receipt.read_text().splitlines()]
+    for attempt in attempts:
+        assert_native_options([provider, *attempt["argv"]], provider)
+        assert attempt["argv"][attempt["argv"].index("--model") + 1] == "selected-model"
+        assert attempt["context"] == "diagnostic context"
+        if provider == "claude":
+            args = attempt["argv"]
+            assert args[args.index("--allowed-tools") + 1] == "Read,Glob,Grep"
+            assert args[args.index("--disallowed-tools") + 1] == "Bash,Edit,Write,NotebookEdit"
+    assert "stored-session" in attempts[0]["argv"]
+    if scenario == "recover":
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert len(attempts) == 2
+        assert "stored-session" not in attempts[1]["argv"]
+        assert "fixture diagnosis: diagnostic context" in result.stdout
+    else:
+        assert result.returncode != 0
+        assert len(attempts) == 1
+        assert "native option rejected" in result.stdout + result.stderr
+        assert "native rejection detail" in result.stdout + result.stderr
+
+
+@pytest.mark.integration
 @pytest.mark.parametrize("provider", ["codex", "claude"])
 def test_i7_partial_native_failure_preserves_cafe_records(
     diagnostic_workspace, native_io, provider
