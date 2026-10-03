@@ -154,7 +154,7 @@ def _safe_manager_directory(issue_dir: Path, *, create: bool) -> Path:
 
 
 @contextmanager
-def contract_lock(issue_dir: Path) -> Iterator[None]:
+def contract_lock(issue_dir: Path, *, blocking: bool = True) -> Iterator[None]:
     """Serialize activation/replacement; fail closed if a process lock cannot be held."""
     _assert_manager_write_authority(issue_dir)
     manager = _safe_manager_directory(issue_dir, create=True)
@@ -163,8 +163,10 @@ def contract_lock(issue_dir: Path) -> Iterator[None]:
         raise ValueError("contract lock must not be a symlink")
     with lock_path.open("a+", encoding="utf-8") as handle:
         try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
         except OSError as exc:
+            if not blocking and isinstance(exc, BlockingIOError):
+                raise
             raise ValueError("cannot acquire Manager contract lock") from exc
         try:
             yield

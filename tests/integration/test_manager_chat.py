@@ -423,8 +423,122 @@ def test_noncompleting_provider_turn_is_timed_out_and_releases_chat_lock(
         assert snapshot(repo) == before
         with adapter('workflow_event_callback')._session_lock(directory / 'manager', blocking=False):
             pass
+        from cafe.manager._store import contract_lock
+        with contract_lock(directory, blocking=False):
+            pass
     finally:
         terminated.set()
         for value in timers:
             value.cancel()
             value.join(timeout=1)
+
+
+@pytest.mark.parametrize('writer', ['settings', 'reconfirmation'])
+@pytest.mark.parametrize('fallback', [False, True])
+def test_public_contract_writer_cannot_replace_authority_during_submission(
+    tmp_path, monkeypatch, provider_process, writer, fallback,
+):
+    """Plan U3/U6/I2/I3: real public writers obey the chat submission boundary."""
+    from datetime import datetime, timezone
+    from threading import Event, Thread
+    from cafe.manager.cli import app
+    from cafe.manager import ReplaceConfirmedContract, replace_confirmed_contract, update_manager_settings
+    from cafe.manager._store import load_contract
+    repo = repository(tmp_path / 'repo')
+    directory = issue(repo, fallback=fallback)
+    monkeypatch.chdir(repo)
+    contract, digest = load_contract(directory)
+    target = adapter().resolve_target(repo, 'topic')
+    dispatch = directory / 'manager' / adapter('workflow_event_callback').DISPATCH_STATE_FILENAME
+    original_identity = dispatch.read_bytes()
+    started, finished = Event(), Event()
+    errors = []
+    def replace():
+        started.set()
+        try:
+            if writer == 'settings':
+                update_manager_settings(
+                    issue_dir=directory, issue_name='topic', workflow_id=target.workflow_id,
+                    manager={'mode': 'unattended'}, expected_contract_sha256=digest,
+                )
+            else:
+                proposal = {key: contract[key] for key in [
+                    'delivery_contract', 'locales', 'confirmation_contract', 'reactive_user_handoffs',
+                    'task_contract', 'phases', 'proactive_review', 'manager', 'checkout',
+                ]}
+                proposal['manager'] = {'mode': 'unattended'}
+                replace_confirmed_contract(ReplaceConfirmedContract(
+                    issue_dir=directory, issue_name='topic', workflow_id=target.workflow_id,
+                    confirmed_by='user', confirmed_at=datetime.now(timezone.utc), proposal=proposal,
+                    expected_predecessor_sha256=digest, kind='user_reconfirmation',
+                ))
+        except Exception as error:
+            errors.append(error)
+        finally:
+            finished.set()
+    thread = Thread(target=replace, daemon=True)
+    launch = provider_process(codex_reply('topic-codex', 'exact-fallback' if fallback else None))
+    process = launch.return_value
+    def deliver(command, **kwargs):
+        # Run the actual public writer after final grounding and at the Popen boundary.
+        thread.start()
+        assert started.wait(1)
+        assert not finished.wait(0.1), 'Contract replacement crossed provider submission'
+        assert load_contract(directory)[1] == digest
+        return process
+    launch.side_effect = deliver
+    result = CliRunner().invoke(app, ['manager', 'chat', '--issue', 'topic'], input='status?\n/quit\n')
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+    assert errors == []
+    assert result.exit_code == 0, result.output
+    assert 'verified reply' in result.output
+    assert launch.call_count == 1
+    assert load_contract(directory)[1] != digest
+    assert dispatch.read_bytes() == original_identity
+    again = CliRunner().invoke(app, ['manager', 'chat', '--issue', 'topic'], input='status?\n')
+    assert again.exit_code != 0
+    assert launch.call_count == 1
+    with adapter('workflow_event_callback')._session_lock(directory / 'manager', blocking=False):
+        pass
+
+
+@pytest.mark.parametrize('authority', ['manager', 'driver', 'dual'])
+def test_busy_contract_writer_rejects_chat_without_waiting_for_replacement(
+    tmp_path, monkeypatch, provider_process, authority,
+):
+    """Plan U9/I6: contention uses the existing lock and remains a bounded failure."""
+    from threading import Event, Thread
+    from cafe.manager.cli import app
+    from cafe.manager._store import contract_lock
+    repo = repository(tmp_path / 'repo')
+    directory = issue(repo)
+    monkeypatch.chdir(repo)
+    if authority != 'manager':
+        from tests.fixtures.manager_chat import legacy_chat_authority
+        legacy_chat_authority(directory, dual=authority == 'dual')
+        from cafe.driver._store import contract_lock
+    acquired, release = Event(), Event()
+    def hold():
+        with contract_lock(directory):
+            acquired.set()
+            release.wait(1)
+    holder = Thread(target=hold, daemon=True)
+    holder.start()
+    assert acquired.wait(1)
+    launch = provider_process(codex_reply('topic-codex'))
+    before = snapshot(repo)
+    try:
+        result = CliRunner().invoke(app, ['manager', 'chat', '--issue', 'topic'], input='status?\n/quit\n')
+        assert result.exit_code != 0
+        assert not release.is_set()
+        launch.assert_not_called()
+        assert snapshot(repo) == before
+    finally:
+        release.set()
+        holder.join(timeout=2)
+    assert not holder.is_alive()
+    again = CliRunner().invoke(app, ['manager', 'chat', '--issue', 'topic'], input='status?\n/quit\n')
+    assert again.exit_code == 0, again.output
+    assert launch.call_count == 1
+    assert snapshot(repo) == before

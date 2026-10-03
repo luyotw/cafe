@@ -158,6 +158,15 @@ def _contract(target: ChatTarget) -> dict:
     return contract
 
 
+def _contract_lock(target: ChatTarget):
+    """Exclude public settings/reconfirmation writers using the sole authority's lock."""
+    if callback._manager_dir(target.issue_dir).name == 'driver':
+        from cafe.driver._store import contract_lock
+    else:
+        from cafe.manager._store import contract_lock
+    return contract_lock(target.issue_dir, blocking=False)
+
+
 def turn_prompt(target: ChatTarget, text: str, correlation_id: str) -> str:
     """Project current durable facts, never historic wake/audit content or answers."""
     from cafe.core.blackboard import BlackboardState
@@ -270,7 +279,10 @@ def run_chat(cwd: Path, explicit: str | None = None) -> int:
             if not text.strip():
                 continue
             try:
-                with callback._session_lock(callback._manager_dir(target.issue_dir), blocking=False):
+                # Writers take only contract.lock. Keep the verified contract through the
+                # bounded reply, with no locks while waiting for terminal input.
+                with (callback._session_lock(callback._manager_dir(target.issue_dir), blocking=False),
+                      _contract_lock(target)):
                     current = resolve_target(target.issue_dir.parents[2], target.issue_dir.name)
                     if current != target:
                         raise ChatError('identity_conflict', locale=target.locale)

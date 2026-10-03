@@ -87,3 +87,45 @@ def mutate(path, change):
     record = json.loads(path.read_text())
     change(record)
     path.write_text(json.dumps(record), encoding='utf-8')
+
+
+def legacy_chat_authority(directory, *, dual=False):
+    """Build a valid predecessor under its sole authoritative lock and session store."""
+    import shutil
+    from cafe.core.packet_io import canonical_json
+    from cafe.driver._schema import build_initial_contract
+    from cafe.driver._store import contract_lock
+    from cafe.manager._store import load_contract
+    current, _ = load_contract(directory)
+    proposal = {key: current[key] for key in [
+        'delivery_contract', 'locales', 'confirmation_contract', 'reactive_user_handoffs',
+        'task_contract', 'phases', 'proactive_review', 'manager', 'checkout',
+    ]}
+    # Decode a copy before translating the historical names.
+    proposal = json.loads(json.dumps(proposal))
+    proposal['driver'] = proposal.pop('manager')
+    for field in ['confirmation_contract', 'task_contract']:
+        proposal[field]['driver_confirmable'] = proposal[field].pop('manager_confirmable')
+    proposal['reactive_user_handoffs']['alignment_checkpoint'] = 'driver_resolvable_when_clear'
+    legacy = build_initial_contract(
+        proposal=proposal, issue_name=directory.name, workflow_id=current['identity']['workflow_id'],
+        confirmed_by='user', confirmed_at='2026-10-03T00:00:00+00:00',
+    )
+    driver = directory / 'driver'
+    driver.mkdir()
+    (driver / 'contract.json').write_bytes(canonical_json(legacy))
+    if not dual:
+        shutil.rmtree(directory / 'manager')
+    callback = adapter('workflow_event_callback')
+    config = callback._contract_callback_config(
+        issue_dir=directory, issue_name=directory.name, workflow_id=current['identity']['workflow_id'],
+    )
+    state = callback._load_or_initialize_dispatch_state(
+        driver, workflow_id=current['identity']['workflow_id'], config=config,
+    )
+    for entry in state['entries']:
+        entry['session'] = {'id': f'{directory.name}-{entry["cli"]}', 'source': 'provider',
+                            'acquired_at': '2026-10-03T00:00:00Z'}
+    callback._write_dispatch_state(driver, state)
+    with contract_lock(directory):
+        pass
