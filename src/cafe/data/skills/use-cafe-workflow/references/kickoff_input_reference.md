@@ -110,6 +110,41 @@ Preflight reports may be passed as JSON objects in `formatter_inputs`, or by pat
 
 ## Preferences
 
+Normal `render` includes project-only save choices in the final contract and
+returns the exact `preference_offer`. With `--output`, it also writes a
+content-addressed offer JSON alongside the proposal and returns its path as
+`preference_offer_file`. This artifact is not part of the confirmed workflow
+contract and rendering never writes preferences.
+
+After the user explicitly chooses to remember the displayed entries:
+
+```sh
+python scripts/prepare_kickoff.py preferences remember \
+  --offer-file <displayed-offer.json> --project-root /work/project \
+  --config-dir <same-config-dir> --select phase.chains/develop --reuse
+```
+
+Repeat `--select` for a subset, or use `--select '*'` for all displayed entries
+only. The offer pins the repository identity, config directory, selected values
+and their prior values. Saving uses an atomic repository update, preserves other
+map entries, and refuses conflicting changes made since display. It does not
+interpret chat replies or grant workflow/action authority. Plain confirmation,
+a missing `--reuse`, or a failed save does not authorize saving anything else.
+
+Direct formatter callers can use `--preference-config-dir` and
+`--preference-offer-output` to retain the same displayed offer. Keep the offer
+paired with the presented output; do not overwrite it before answering that
+confirmation. Staged preparation is preferred because it pins these paths.
+
+Optional request-level `preference_templates` accepts only `worktree.convention`,
+`delivery.convention` and `cleanup.convention`, using the reusable shapes below.
+The formatter checks their expansion against the current complete proposal;
+literal current issue targets, mismatches or malformed templates are excluded
+from saving with a visible diagnostic. A valid cached delivery template may
+be supplied automatically when it still matches the proposal. Arbitrary commands
+and custom paths are not reverse-engineered into templates. These values only
+propose future defaults; they never execute actions or replace their authority.
+
 Preferences are versioned local records kept apart from disposable evidence:
 
 - User preferences: `${XDG_CONFIG_HOME:-~/.config}/cafe/kickoff/preferences-v1.json`

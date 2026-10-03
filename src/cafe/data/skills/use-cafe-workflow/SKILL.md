@@ -95,6 +95,9 @@ contract; new preferences never rewrite it.
   boundary. Its readable contract covers the user's decisions once; internal
   policy JSON and diagnostic metadata are not part of the response. The
   formatter owns the single confirmation prompt and final progress block;
+  retain its project-preference section and the distinct confirm-only versus
+  confirm-and-remember replies in the final message. A question sent while
+  preparing the contract never replaces that visible choice;
   do not append a second request or diagram. For every other user-visible reply,
   end with the diagram from `scripts/render_workflow_progress.py`, following
   `workflow_progress.md`. Rendering is read-only and never justifies polling,

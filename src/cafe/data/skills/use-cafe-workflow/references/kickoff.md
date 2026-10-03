@@ -36,10 +36,10 @@ those decisions and normalized formatter inputs through `assemble`, then use
 render an incomplete assembly, omit reported gaps, or start preparation or a
 workflow before the complete contract is confirmed.
 
-Read preferences by their user or repository scope. Apply the preference prompts
-in `kickoff_inputs.md`: ask whether to save applicable unset preferences, and
-remind the user how to save explicit choices that differ from the effective
-defaults. These prompts save preferences only for the current project through
+Read preferences by their user or repository scope. Preserve the formatter's
+project-preference section and its single confirmation prompt in the final reply,
+following `kickoff_inputs.md`. Do not rely on an intermediate asynchronous card.
+The displayed missing/changed choices may be saved only for the current project through
 repository scope; they never offer or write user-wide preferences. Save a value
 only when the user explicitly requests reusable preference; never turn an inferred language,
 one-off issue answer, model suitability decision, or action authorization into a
@@ -575,7 +575,9 @@ out of the conversation. Worktree and command paths remain visible because they
 identify the user's approved targets. Show check results and actionable failures
 only when they require attention. Read repository mandate as context; carry only
 applicable task-specific permissions and fixed limits into the compact contract,
-not the mandate table, preset, axes or grounds. Do not add a second
+not the mandate table, preset, axes or grounds. The formatter's optional preference
+section identifies precisely which project defaults a separate reuse choice
+will save; it is presentation, not workflow authority. Do not add a second
 confirmation prompt or repeat the reason for requesting confirmation after the
 formatter output. Ordinary follow-up discussion may be concise.
 

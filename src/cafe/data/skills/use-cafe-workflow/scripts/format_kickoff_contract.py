@@ -71,6 +71,7 @@ except ModuleNotFoundError:
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from conversation_locale_adapter import contract_locale_snapshot  # noqa: E402, I001
 from render_workflow_progress import render_progress  # noqa: E402, I001
+from kickoff_preference_offer import build_offer, render_offer  # noqa: E402, I001
 
 ModelChain = list[tuple[str, str]]
 EventManagerChain = list[tuple[str, str | None]]
@@ -460,6 +461,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("playbook_id")
     parser.add_argument("--project-root", type=Path, default=Path.cwd())
     parser.add_argument("--issue-name", required=True)
+    parser.add_argument("--preference-config-dir", type=Path,
+                        help="Presentation-only preference store; defaults to the kickoff XDG config directory.")
+    parser.add_argument("--preference-offer-output", type=Path,
+                        help="Save the displayed project-preference offer separately from workflow authority.")
     parser.add_argument(
         "--delivery-contract",
         type=_json_mapping,
@@ -797,7 +802,8 @@ def activate_confirmed_proposal(
         activate_confirmed_contract(command)
 
 
-def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | None = None) -> str:
+def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | None = None,
+           preference_offer: dict[str, Any] | None = None) -> str:
     proposal = (
         confirmed_proposal if confirmed_proposal is not None else build_confirmed_proposal(args)
     )
@@ -816,6 +822,10 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
 
     headers = [text("header_field"), text("header_value")]
     confirmation_prompt = text("confirmation")
+    offer = preference_offer if preference_offer is not None else build_offer(args, proposal, model)
+    preference_section, preference_confirmation = render_offer(offer, zh=zh, table=_table)
+    if preference_confirmation:
+        confirmation_prompt += "\n\n" + preference_confirmation
     manager = proposal["manager"]
     manager_rows: list[list[Any]] = [["manager.mode", manager["mode"]]]
     if manager["mode"] == "attached":
@@ -984,6 +994,7 @@ def render(args: argparse.Namespace, *, confirmed_proposal: dict[str, Any] | Non
             _render_closeout(closeout, _closeout_descriptions(args, closeout), zh=zh),
             text("commands_confirmation"),
             *catalog_reminder,
+            *([preference_section] if preference_section else []),
             confirmation_prompt,
             "### Workflow progress",
             "```text",
@@ -1000,7 +1011,13 @@ def main() -> int:
         if args.manager_mode is None:
             raise ValueError("--manager-mode is required")
         proposal = build_confirmed_proposal(args)
-        rendered = render(args, confirmed_proposal=proposal)
+        model = PlaybookLoader(project_root=args.project_root).load_model(args.playbook_id).model
+        offer = build_offer(args, proposal, model)
+        rendered = render(args, confirmed_proposal=proposal, preference_offer=offer)
+        if args.preference_offer_output is not None:
+            from _kickoff_store import atomic_write_text
+
+            atomic_write_text(args.preference_offer_output, json.dumps(offer, ensure_ascii=False, indent=2) + "\n")
         if args.activate_confirmed:
             activate_confirmed_proposal(args, proposal=proposal)
         print(rendered)

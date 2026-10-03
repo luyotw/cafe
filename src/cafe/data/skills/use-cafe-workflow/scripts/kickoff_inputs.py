@@ -705,7 +705,9 @@ def _prefill_saved_inputs(values: dict[str, Any], *, store: Any, request: dict[s
     def reviews(value):
         if model is None or not isinstance(value, dict):
             raise ValueError("select a graph and supply phase-to-decision mappings")
-        rows = owner._proactive_review_decisions([f"{k}={v}" for k, v in value.items()], agent_phases=list(phases),
+        if set(value) - set(phases):
+            raise ValueError("saved review selectors do not match the selected graph")
+        rows = owner._proactive_review_decisions([f"{k}={value[k]}" for k in phases if k in value], agent_phases=list(phases),
             eligible_phases=set(owner.confirmation_gate_steps(model)) | set(owner.mandatory_confirmation_gate_steps(model)))
         return {"proactive_review_decision": [f"{r['phase']}={r['decision']}" for r in rows]}
     apply("review.decisions", {"proactive_review_decision"}, "proactive_review_decision" not in values, reviews)
@@ -994,7 +996,8 @@ def assemble_kickoff(
     }
 
 
-def render_kickoff(values: dict[str, Any]) -> dict[str, Any]:
+def render_kickoff(values: dict[str, Any], *, preference_store=None,
+                   preference_templates=None, issue_id="") -> dict[str, Any]:
     normalized = values if isinstance(values, dict) and values.get("status") in {"ready", "incomplete", "invalid"} else normalize_formatter_inputs(values)
     if normalized.get("status") != "ready":
         return {
@@ -1012,7 +1015,10 @@ def render_kickoff(values: dict[str, Any]) -> dict[str, Any]:
     try:
         args = formatter._parser().parse_args(formatter_argv(normalized["values"]))
         proposal = formatter.build_confirmed_proposal(args)
-        output = formatter.render(args, confirmed_proposal=proposal)
+        model = formatter.PlaybookLoader(project_root=args.project_root).load_model(args.playbook_id).model
+        offer = formatter.build_offer(args, proposal, model, store=preference_store,
+                                      templates=preference_templates, issue_id=issue_id)
+        output = formatter.render(args, confirmed_proposal=proposal, preference_offer=offer)
     except (SystemExit, OSError, ValueError, KeyError, TypeError) as exc:
         return {"status": "invalid", "diagnostics": [type(exc).__name__], "validation_error": str(exc)}
-    return {"status": "rendered", "proposal": proposal, "output": output}
+    return {"status": "rendered", "proposal": proposal, "output": output, "preference_offer": offer}
