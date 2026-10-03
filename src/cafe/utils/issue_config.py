@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fcntl
+import os
 import stat
 import subprocess
 from contextlib import contextmanager
@@ -38,12 +39,24 @@ def read_issue_config_strict(config_path: Path) -> Dict[str, Any]:
 
 
 @contextmanager
-def issue_config_lock(config_path: Path) -> Iterator[None]:
-    """Serialize cooperating settings writers for one issue authority."""
+def issue_config_lock(config_path: Path, *, parent_fd: Optional[int] = None) -> Iterator[None]:
+    """Serialize settings writers, optionally through an admitted parent descriptor."""
     lock_path = config_path.with_name("issue-settings.lock")
-    if lock_path.is_symlink():
-        raise ValueError("issue settings lock must not be a symlink")
-    with lock_path.open("a+", encoding="utf-8") as handle:
+    if parent_fd is None:
+        if lock_path.is_symlink():
+            raise ValueError("issue settings lock must not be a symlink")
+        handle = lock_path.open("a+", encoding="utf-8")
+    else:
+        descriptor = os.open(
+            lock_path.name,
+            os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW | os.O_NONBLOCK,
+            0o666,
+            dir_fd=parent_fd,
+        )
+        handle = os.fdopen(descriptor, "a+", encoding="utf-8")
+    with handle:
+        if parent_fd is not None and not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            raise ValueError("issue settings lock must be a regular file")
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         try:
             yield

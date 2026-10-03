@@ -108,6 +108,36 @@ def test_only_applicable_explicit_preferences_prefill_mode_dependencies(tmp_path
     assert module.assemble_kickoff(request, preference_store=prefs)["formatter_draft"][field] is None
 
 
+@pytest.mark.parametrize("key,invalid,fields,resolution", [
+    ("phase.chains", {"steps": {"absent": ["codex:model"]}}, ["phase_chain"], {"phase_chain": ["outline=codex:chosen"]}),
+    ("worktree.convention", "{unknown}", ["worktree", "current_checkout"], {"current_checkout": True}),
+    ("confirmation.assignments", {"mandatory_task": False}, ["user_required", "manager_confirmable"], {"user_required": [], "manager_confirmable": []}),
+    ("review.decisions", {"absent": "required"}, ["proactive_review_decision"], {"proactive_review_decision": ["outline=not_required"]}),
+    ("delivery.convention", {"wrong": []}, ["deliver", "deliver_description"], {"deliver": [], "deliver_description": []}),
+    ("cleanup.convention", {"wrong": []}, ["cleanup", "cleanup_description"], {"cleanup": [], "cleanup_description": []}),
+])
+def test_invalid_saved_preference_requires_explicit_resolution_without_catalog_discovery(
+    tmp_path, key, invalid, fields, resolution
+):
+    module = load_kickoff_module("kickoff_inputs")
+    request = _project(tmp_path)
+    request["formatter_inputs"] = {"manager_mode": "unattended"}
+    prefs = load_kickoff_module("kickoff_preferences").PreferenceStore(
+        tmp_path / "prefs", repository_root=tmp_path
+    )
+    prefs.set(key, invalid, scope="repository", origin="explicit")
+
+    blocked = module.assemble_kickoff(request, preference_store=prefs)
+
+    assert blocked["preferences"][key]["diagnostic"]
+    assert any(key in row["requirement"] for row in blocked["missing_decisions"])
+    assert all(field not in blocked["formatter_draft"] for field in fields)
+    request["current_explicit_inputs"] = resolution
+    repaired = module.assemble_kickoff(request, preference_store=prefs)
+    assert not any(key in row["requirement"] for row in repaired["missing_decisions"])
+    assert all(repaired["formatter_draft"][field] == value for field, value in resolution.items())
+
+
 def test_changed_config_is_resolved_fresh_and_broken_config_stays_unresolved(tmp_path):
     module = load_kickoff_module("kickoff_inputs")
     request = _project(tmp_path)

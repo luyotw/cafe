@@ -8,7 +8,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from cafe.agents.cli import ClaudeCLI, CodexCLI, CopilotCLI, CursorCLI, GeminiCLI
-from cafe.agents.executor import AgentExecutionError
+from cafe.agents.executor import AgentExecutionError, AgentExecutor
+from tests.unit.test_conversation_transport import provider_process, init
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.types import AgentCLI, AgentConfig, SessionData
 from cafe.skills.loader import SkillLoader
@@ -87,6 +88,10 @@ class TestLaunchChatSession:
     def isolate_launcher_workspace(self, tmp_path, monkeypatch, mock_chat_catalog_reads):
         """Keep launcher tests local and independent from catalog traversal."""
         monkeypatch.chdir(tmp_path)
+        # A real chat belongs to existing issue metadata even before iterations.
+        issue = tmp_path / ".cafe/issues/issue123"
+        issue.mkdir(parents=True)
+        (issue / "issue.yaml").write_text("feature_branch: issue123\n")
 
     def _make_agent_config(self, cli: str, session_id=None, model=None):
         """Build a mock AgentConfig."""
@@ -100,16 +105,7 @@ class TestLaunchChatSession:
     def _make_agent_manager(self, agent_name: str, cli: str, session_id=None, model=None):
         """Build a mock AgentManager with one agent."""
         config = self._make_agent_config(cli, session_id, model)
-        executor = MagicMock()
-        executor.config = config
-        strategy_class = {
-            AgentCLI.CLAUDE: ClaudeCLI,
-            AgentCLI.CODEX: CodexCLI,
-            AgentCLI.COPILOT: CopilotCLI,
-            AgentCLI.CURSOR: CursorCLI,
-            AgentCLI.GEMINI: GeminiCLI,
-        }[config.cli]
-        executor._get_cli_strategy.return_value = strategy_class(config)
+        executor = AgentExecutor(config)
 
         agent_manager = MagicMock()
         agent_manager.agents = {agent_name: executor}
@@ -131,7 +127,7 @@ class TestLaunchChatSession:
         """Chat reuses the role's last successful fallback CLI."""
         monkeypatch.chdir(tmp_path)
         issue_dir = tmp_path / ".cafe" / "issues" / "issue123"
-        issue_dir.mkdir(parents=True)
+        issue_dir.mkdir(parents=True, exist_ok=True)
         # configured_primary still claude → codex was a legit fallback, stay sticky.
         (issue_dir / "active_clis.json").write_text(
             json.dumps(
@@ -217,6 +213,7 @@ class TestLaunchChatSession:
         mock_config_manager_cls,
         mock_run,
         capsys,
+        provider_process,
     ):
         mock_config = MagicMock()
         mock_config.get.return_value = {"name": "David", "cli": "claude"}
@@ -225,16 +222,12 @@ class TestLaunchChatSession:
         agent_manager = self._make_agent_manager("David", "claude", session_id=None)
         executor = agent_manager.get_agent.return_value
 
-        def execute_with_stream(*args, **kwargs):
-            print("One-shot progress")
-            print("One-shot response")
-            return MagicMock(
-                response="One-shot response",
-                streaming_log=["One-shot progress", "One-shot response"],
-                session_id="session-new",
-            )
-
-        executor.execute.side_effect = execute_with_stream
+        process = provider_process([
+            init("session-new"),
+            dict(type="assistant", message=dict(content=[dict(type="text", text="One-shot progress")])),
+            dict(type="assistant", message=dict(content=[dict(type="text", text="One-shot response")])),
+            dict(type="result"),
+        ])
         mock_agent_manager_cls.return_value = agent_manager
 
         result = launch_chat_session("developer", "issue123", prompt="Status?")
@@ -244,15 +237,9 @@ class TestLaunchChatSession:
         assert "One-shot progress" in output
         assert output.count("One-shot response") == 1
         assert executor.stream_output is True
-        executor.execute.assert_called_once_with(
-            "Status?",
-            environment_overrides={
-                "CAFE_ISSUE_NAME": "issue123",
-                "CAFE_ISSUE_DIR": str(Path.cwd() / ".cafe" / "issues" / "issue123"),
-                "CAFE_CHAT_CURRENT_STEP": "spec",
-                "CAFE_CHAT_PLAYBOOK_ID": "standard",
-            },
-        )
+        assert process.call_count == 1
+        assert "Status?" in process.call_args.args[0]
+        assert process.call_args.kwargs["env"]["CAFE_ISSUE_NAME"] == "issue123"
         agent_manager.session_manager.save_session.assert_called_once_with(
             "David", AgentCLI.CLAUDE, "session-new", "issue123"
         )
@@ -267,6 +254,7 @@ class TestLaunchChatSession:
         mock_config_manager_cls,
         mock_run,
         capsys,
+        provider_process,
     ):
         mock_config = MagicMock()
         mock_config.get.return_value = {"name": "David", "cli": "claude"}
@@ -274,11 +262,7 @@ class TestLaunchChatSession:
 
         agent_manager = self._make_agent_manager("David", "claude", session_id=None)
         executor = agent_manager.get_agent.return_value
-        executor.execute.return_value = MagicMock(
-            response="Result-only response",
-            streaming_log=["", "  "],
-            session_id="session-new",
-        )
+        provider_process([init("session-new"), dict(type="result", content="Result-only response")])
         mock_agent_manager_cls.return_value = agent_manager
 
         result = launch_chat_session("developer", "issue123", prompt="Status?")
@@ -295,6 +279,7 @@ class TestLaunchChatSession:
         mock_agent_manager_cls,
         mock_config_manager_cls,
         capsys,
+        provider_process,
     ):
         mock_config = MagicMock()
         mock_config.get.return_value = {"name": "David", "cli": "claude"}
@@ -302,16 +287,13 @@ class TestLaunchChatSession:
 
         agent_manager = self._make_agent_manager("David", "claude")
         executor = agent_manager.get_agent.return_value
-        executor.execute.side_effect = AgentExecutionError(
-            "provider failed",
-            display_message="Claude provider is unavailable.",
-        )
+        provider_process([], returncode=1, stderr="provider failed")
         mock_agent_manager_cls.return_value = agent_manager
 
         result = launch_chat_session("developer", "issue123", prompt="Status?")
 
         assert result == 1
-        assert "Claude provider is unavailable." in capsys.readouterr().out
+        assert "provider failed" in capsys.readouterr().out
         agent_manager.session_manager.save_session.assert_not_called()
 
     @patch("builtins.print")

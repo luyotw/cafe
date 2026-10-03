@@ -39,6 +39,8 @@ This inventory is executable documentation: the unit contract discovers every `s
 | `src/cafe/data/skills/use-cafe-workflow/scripts/catalog_version_check.py::run_catalog_check` | Internal fixed CAFE catalog inspection |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/execute_closeout.py::_common_dir` | Internal fixed Git common-directory query |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/execute_closeout.py::main` | Explicit confirmed closeout command adapter |
+| `src/cafe/data/skills/use-cafe-workflow/scripts/_kickoff_store.py::repository_identity` | Internal fixed Git common-directory query |
+| `src/cafe/data/skills/use-cafe-workflow/scripts/kickoff_delivery.py::_inventory` | Internal fixed Git tracked-file inventory query |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/sync_helper_with_preflight.py::_run_command` | Explicit CLI-native helper publication with fixed CAFE pre/post checks |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/preflight_cache.py::_cli_fingerprint` | Internal version probe |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/preflight_cache.py::candidate_probe` | User-requested model availability probe |
@@ -49,7 +51,7 @@ This inventory is executable documentation: the unit contract discovers every `s
 | `src/cafe/install/bootstrap.py::_run` | Internal installer command family |
 | `src/cafe/skills/global_installer.py::_discover_git_roots` | Internal fixed Git root discovery query |
 | `src/cafe/skills/native_bridge.py::_ensure_cli_dir_git_excluded` | Internal fixed Git command |
-| `src/cafe/ui/chat.py::launch_chat_session` | Internal agent CLI transport |
+| `src/cafe/agents/transport.py::open_interactive_session` | Internal agent CLI transport |
 | `src/cafe/updates/service.py::_run_pip` | Explicit approved package installation |
 | `src/cafe/ui/cli.py::_reexec_repo_entrypoint` | Internal fixed Python re-exec |
 | `src/cafe/ui/cli.py::agent_cat` | Explicit interactive pager |

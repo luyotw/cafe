@@ -507,7 +507,7 @@ def test_custom_named_step_publication_handoff_restart_and_consumer_preparation(
     assert first["completed"] is False
     assert first["final_step"] == "emit"
     assert first["calls"] == 1
-    assert second["completed"] is True
+    assert second["completed"] is True, second
     assert second["final_step"] == "consume"
     assert second["calls"] == 1
     consumer_state = BlackboardStore(issue_dir).load_or_create(

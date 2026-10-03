@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Callable, List, Mapping, Optional, Sequence, Tuple
 
+from cafe.agents.transport_types import _has_evidence_conflict, _validated_evidence_scalar
 from cafe.core.types import AgentConfig, PermissionDenial, TokenUsage
 
 
@@ -164,6 +165,11 @@ class AbstractCLI(ABC):
         """Verify a provider turn acknowledgement after exact-session evidence."""
         if not event_id.strip():
             return False
+        if self.conversation_evidence(records).failure_code:
+            return False
+        if any(record.get("event_id") not in (None, event_id)
+               or record.get("delivery_id") not in (None, event_id) for record in records):
+            return False
         observed = self._verified_event_driver_session(
             records,
             matches=session_matches,
@@ -211,17 +217,88 @@ class AbstractCLI(ABC):
             if not isinstance(record, Mapping) or not matches(record):
                 continue
             model = record.get("model")
-            if (
-                self.config.model is not None
-                and model is not None
-                and model != self.config.model
-            ):
+            if _has_evidence_conflict((self.config.model, model)):
                 return None
-            session_id = record.get(field)
-            if not isinstance(session_id, str) or not session_id.strip():
+            try:
+                session_id = _validated_evidence_scalar(record.get(field), strip=True)
+            except ValueError:
                 return None
-            session_ids.add(session_id.strip())
+            session_ids.add(session_id)
         return next(iter(session_ids)) if len(session_ids) == 1 else None
+
+    conversation_operations = frozenset()
+    conversation_session_operations = frozenset()
+    conversation_model_operations = frozenset()
+    conversation_usage_operations = frozenset()
+    conversation_acceptance_operations = frozenset()
+
+    def conversation_capabilities(self, operation):
+        """Adapters explicitly admit operations and evidence formats separately."""
+        from cafe.agents.transport_types import TransportCapabilities
+
+        supported = operation in self.conversation_operations
+        return TransportCapabilities(
+            supported=supported,
+            session=supported and operation in self.conversation_session_operations,
+            model=supported and operation in self.conversation_model_operations,
+            usage=supported and operation in self.conversation_usage_operations,
+            acceptance=supported and operation in self.conversation_acceptance_operations,
+        )
+
+    def conversation_evidence(self, records):
+        """Summarize authoritative provider identity records without retaining them."""
+        from cafe.agents.transport_types import TransportResult
+
+        identities = set()
+        models = set()
+        invalid = False
+        for record in records:
+            for model in self.conversation_reported_models(record):
+                try:
+                    models.add(_validated_evidence_scalar(model))
+                except ValueError:
+                    invalid = True
+            if not self.conversation_identity_record(record):
+                continue
+            try:
+                identities.add(
+                    _validated_evidence_scalar(
+                        record.get(self.conversation_session_field), strip=True
+                    )
+                )
+            except ValueError:
+                invalid = True
+            model = record.get("model")
+            if model is not None:
+                try:
+                    models.add(_validated_evidence_scalar(model))
+                except ValueError:
+                    invalid = True
+        failure = None
+        if invalid:
+            failure = "invalid_evidence"
+        elif _has_evidence_conflict(identities):
+            failure = "conflicting_session_evidence"
+        elif _has_evidence_conflict(
+            (*models, self.config.model if models and self.config.model else None)
+        ):
+            failure = "model_mismatch"
+        return TransportResult(
+            observed_session_id=next(iter(identities)) if len(identities) == 1 and not invalid else None,
+            reported_model=next(iter(models)) if len(models) == 1 else None,
+            failure_code=failure,
+        )
+
+    def conversation_reported_models(self, record):
+        if self.conversation_identity_record(record) and record.get("model") is not None:
+            return [record["model"]]
+        return []
+
+    conversation_session_field = "session_id"
+
+    def conversation_identity_record(self, record):
+        """Adapters opt in to exact identity record shapes."""
+        return False
 
     def prepare_project_workspace(self, project_root: Path) -> None:
         """Prepare CLI-specific project workspace before execution."""
@@ -257,3 +334,11 @@ class AbstractCLI(ABC):
             command.append(initial_prompt)
 
         return command
+
+    def prepare_interactive_accounting(self, command, environment):
+        """Optional native evidence reader; never capture the user's terminal.
+
+        An absent reader means unsupported accounting, not verified zero usage.
+        """
+
+        return command, None

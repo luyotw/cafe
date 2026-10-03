@@ -45,11 +45,15 @@ class CodexCLI(AbstractCLI):
             except json.JSONDecodeError:
                 continue
 
-            if data.get("type") != "turn.completed":
+            if not isinstance(data, dict) or data.get("type") != "turn.completed":
                 continue
-
             usage_data = data.get("usage", {})
-            if not usage_data:
+            if not isinstance(usage_data, dict):
+                usage_data = {}
+            if not any(key in usage_data for key in (
+                "input_tokens", "output_tokens", "cached_input_tokens",
+                "cache_creation_input_tokens", "cache_write_input_tokens", "reasoning_output_tokens",
+            )):
                 continue
 
             turn_usages.append(
@@ -108,7 +112,7 @@ class CodexCLI(AbstractCLI):
         token_usage = TokenUsage()
         permission_denials: List[PermissionDenial] = []
         turn_usages = self.extract_turn_usages(output_lines)
-        reported_cost_usd = 0.0
+        reported_cost_usd = None
 
         for line in output_lines:
             try:
@@ -129,19 +133,17 @@ class CodexCLI(AbstractCLI):
                 if item.get("type") == "agent_message":
                     response_text = item.get("text", "")
 
-            if data.get("type") == "turn.completed":
-                token_usage = TokenUsage(
-                    input_tokens=usage_data.get("input_tokens", 0),
-                    output_tokens=usage_data.get("output_tokens", 0),
-                    cache_read_input_tokens=usage_data.get("cached_input_tokens", 0),
-                    cache_creation_input_tokens=usage_data.get("cache_creation_input_tokens", 0),
-                    cache_write_input_tokens=usage_data.get("cache_write_input_tokens", 0),
-                    reasoning_output_tokens=usage_data.get("reasoning_output_tokens", 0),
-                    total_cost_usd=reported_cost_usd,
-                    turn_usages=turn_usages,
-                )
+            if data.get("type") == "turn.completed" and usage_data:
+                token_usage = TokenUsage(**{
+                    ("cache_read_input_tokens" if key == "cached_input_tokens" else key): value
+                    for key, value in usage_data.items()
+                    if key in TokenUsage.model_fields or key == "cached_input_tokens"
+                })
+                if turn_usages:
+                    token_usage.turn_usages = turn_usages
 
-        token_usage.total_cost_usd = reported_cost_usd
+        if reported_cost_usd is not None:
+            token_usage.total_cost_usd = reported_cost_usd
 
         return response_text, token_usage, permission_denials
 
@@ -198,6 +200,19 @@ class CodexCLI(AbstractCLI):
     @property
     def event_driver_conforming(self) -> bool:
         return True
+
+    conversation_session_field = "thread_id"
+
+    conversation_operations = frozenset({
+        "acquire_session", "deliver_to_exact_session", "open_interactive_session", "run_one_shot",
+    })
+    conversation_session_operations = conversation_operations - {"open_interactive_session"}
+    conversation_model_operations = conversation_operations - {"open_interactive_session"}
+    conversation_usage_operations = conversation_operations - {"open_interactive_session"}
+    conversation_acceptance_operations = frozenset({"deliver_to_exact_session"})
+
+    def conversation_identity_record(self, record):
+        return record.get("type") == "thread.started"
 
     def extract_event_driver_session(self, records) -> Optional[str]:
         return self._verified_event_driver_session(

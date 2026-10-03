@@ -24,7 +24,7 @@ from typing import Any, Callable, Iterator, Mapping, Optional, Sequence
 import yaml
 
 from cafe.agents.executor import AgentExecutionControl, AgentExecutionError, AgentExecutor
-from cafe.agents.manager import AgentManager
+from cafe.agents.transport import ConversationTransport
 from cafe.core.audit_events import AuditEventStore
 from cafe.core.conversation_locale import DEFAULT_CONVERSATION_LOCALE
 from cafe.core.human_task_notifications import (
@@ -34,7 +34,6 @@ from cafe.core.human_task_notifications import (
     post_slack_notification,
 )
 from cafe.core.session import SessionStore
-from cafe.core.session_continuation import SessionContinuation
 from cafe.core.task_inbox import TaskInboxError, TaskInboxService
 from cafe.core.types import AgentCLI, AgentConfig, SessionData
 from cafe.core.workflow_runtime import resolve_human_task_notification_repository_root
@@ -981,7 +980,9 @@ def _entry_is_conforming(entry: dict[str, str]) -> bool:
         ),
         stream_output=False,
     )
-    return executor.supports_event_manager()
+    transport = ConversationTransport(executor)
+    return all(transport.capabilities(operation).supported
+               for operation in ("acquire_session", "deliver_to_exact_session"))
 
 
 def _read_legacy_session(
@@ -1420,18 +1421,30 @@ def _finish_pending_attempt(
     return _write_dispatch_state(manager_dir, updated)
 
 
-def _observed_session_ids(records: Any) -> set[str]:
-    result: set[str] = set()
-    if not isinstance(records, (list, tuple)):
-        return result
-    for record in records:
-        if not isinstance(record, dict):
-            continue
-        for field in ("thread_id", "session_id", "sessionId"):
-            value = record.get(field)
-            if isinstance(value, str) and value.strip():
-                result.add(value.strip())
-    return result
+def _callback_usage_sink(manager_dir: Path, event: dict[str, Any], repository_root: Path):
+    """Pin the existing event-time iteration; callback attempt is not an iteration."""
+    from cafe.core.usage import iteration_usage_sink
+
+    step = event.get("step")
+    occurred_at = event.get("occurred_at")
+    if not isinstance(step, str) or Path(step).name != step or not isinstance(occurred_at, str):
+        return None
+    try:
+        cutoff = datetime.fromisoformat(occurred_at)
+        candidates = []
+        for directory in sorted((manager_dir.parent / step).glob("iteration_[0-9]*")):
+            target = directory / "iteration.json"
+            if not target.exists():
+                target = directory / "context.json"
+            if not target.is_file():
+                continue
+            data = json.loads(target.read_text(encoding="utf-8"))
+            started = datetime.fromisoformat(data["timestamp"])
+            if started <= cutoff and data.get("iteration") == int(directory.name.removeprefix("iteration_")):
+                candidates.append(target)
+        return iteration_usage_sink(repository_root, candidates[-1]) if candidates else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
 
 
 def _acquire_v3_session(
@@ -1442,6 +1455,7 @@ def _acquire_v3_session(
     index: int,
     repository_root: Path,
     executor_factory=None,
+    on_usage=None,
 ) -> tuple[dict[str, Any], str]:
     """Acquire and atomically persist one provider-owned session."""
     if executor_factory is None:
@@ -1475,13 +1489,9 @@ def _acquire_v3_session(
     )
     try:
         with tempfile.TemporaryDirectory(prefix="cafe-event-bootstrap-") as temporary:
-            execute_callback = (
-                executor.execute_event_manager
-                if manager_dir.name == "manager"
-                else executor.execute_event_driver
-            )
-            result = execute_callback(
+            result = ConversationTransport(executor).acquire_session(
                 'say "HI"',
+                on_usage=on_usage,
                 allowed_tools=[],
                 allowed_directories=[],
                 execution_control=AgentExecutionControl(
@@ -1493,6 +1503,9 @@ def _acquire_v3_session(
             )
     except Exception as exc:
         classification = _classify_provider_failure(exc)
+        # A completed bootstrap with no identity never attempted event delivery.
+        if getattr(exc, "error_type", None) == "missing_evidence":
+            classification = "conclusive_nonacceptance"
         state = _finish_pending_attempt(
             manager_dir,
             state,
@@ -1504,22 +1517,7 @@ def _acquire_v3_session(
         )
         return state, classification
 
-    session_id = getattr(result, "session_id", None)
-    records = getattr(result, "records", ())
-    if not isinstance(session_id, str) or not session_id.strip():
-        observed_ids = _observed_session_ids(records)
-        classification = "ambiguous" if len(observed_ids) > 1 else "conclusive_nonacceptance"
-        state = _finish_pending_attempt(
-            manager_dir,
-            state,
-            event_id=event_id,
-            status="failed" if classification == "conclusive_nonacceptance" else "ambiguous",
-            outcome=classification,
-            reason="invalid_session_result",
-            recovery_pending=classification == "ambiguous",
-        )
-        return state, classification
-
+    session_id = result.observed_session_id
     updated = copy.deepcopy(state)
     now = _now()
     updated["entries"][index]["session"] = {
@@ -2107,6 +2105,7 @@ def _deliver_v3_callback(
     index: int,
     repository_root: Path,
     executor_factory=None,
+    on_usage=None,
 ) -> tuple[dict[str, Any], str]:
     if executor_factory is None:
         executor_factory = AgentExecutor
@@ -2129,6 +2128,15 @@ def _deliver_v3_callback(
     session_id = session["id"]
     acceptance_persisted = False
     acceptance_write_failed = False
+    usage_write_error = None
+
+    def persist_usage(usage) -> None:
+        nonlocal usage_write_error
+        try:
+            on_usage(usage)
+        except Exception as exc:
+            usage_write_error = exc
+            raise
 
     def persist_acceptance() -> None:
         nonlocal state, acceptance_persisted, acceptance_write_failed
@@ -2160,7 +2168,6 @@ def _deliver_v3_callback(
                 repository_root=repository_root,
             )
             accepted = True
-            records: Any = ()
             reported_session_id = session_id
         else:
             executor = executor_factory(
@@ -2174,18 +2181,14 @@ def _deliver_v3_callback(
                 ),
                 stream_output=False,
             )
-            execute_callback = (
-                executor.execute_event_manager
-                if manager_dir.name == "manager"
-                else executor.execute_event_driver
-            )
-            result = execute_callback(
+            result = ConversationTransport(executor).deliver_to_exact_session(
                 _callback_prompt(
                     event, repository_root=repository_root,
                     include_instructions=_fallback_needs_instructions(state, index),
                 ),
-                expected_session_id=session_id,
-                event_id=event_id,
+                session_id=session_id,
+                delivery_id=event_id,
+                on_usage=persist_usage if on_usage is not None else None,
                 on_acceptance=persist_acceptance,
                 allowed_tools=["Read", "Grep", "Glob", "Bash"],
                 allowed_directories=[str(repository_root)],
@@ -2195,11 +2198,10 @@ def _deliver_v3_callback(
                     max_output_lines=128,
                 ),
             )
-            accepted = bool(getattr(result, "accepted", False))
-            records = getattr(result, "records", ())
-            reported_session_id = getattr(result, "session_id", None)
+            accepted = result.accepted is True
+            reported_session_id = result.observed_session_id
     except Exception as exc:
-        if acceptance_write_failed:
+        if acceptance_write_failed or exc is usage_write_error:
             raise
         if acceptance_persisted:
             return state, "accepted"
@@ -2230,8 +2232,7 @@ def _deliver_v3_callback(
             "accepted",
         )
 
-    observed_ids = _observed_session_ids(records)
-    conflicting = bool(observed_ids and observed_ids != {session_id})
+    conflicting = reported_session_id is not None and reported_session_id != session_id
     classification = "ambiguous" if accepted or conflicting else "conclusive_nonacceptance"
     state = _finish_pending_attempt(
         manager_dir,
@@ -2270,6 +2271,7 @@ def _run_v3_callback(
     """Run serial acquisition/delivery attempts until first acceptance or recovery."""
     if executor_factory is None:
         executor_factory = AgentExecutor
+    on_usage = _callback_usage_sink(manager_dir, event, repository_root)
     event_id = event["event_id"]
     event_state = state["events"][event_id]
     if event_state["status"] in {"accepted", "exhausted", "recovery_pending"}:
@@ -2309,6 +2311,7 @@ def _run_v3_callback(
             index=index,
             repository_root=repository_root,
             executor_factory=executor_factory,
+            on_usage=on_usage,
         )
         if acquisition == "ambiguous":
             return state
@@ -2323,6 +2326,7 @@ def _run_v3_callback(
             index=index,
             repository_root=repository_root,
             executor_factory=executor_factory,
+            on_usage=on_usage,
         )
         if delivery in {"accepted", "ambiguous"}:
             return state
@@ -2400,36 +2404,32 @@ def run_callback(event: dict[str, Any], *, repository_root: Path) -> None:
                 store.save_session(store.agent_name, cli, host_thread_id)
             store.commit()
             return
-        continuation = (
-            SessionContinuation.resume_exact(cli, existing.session_id)
-            if existing is not None
-            else SessionContinuation.new()
+        executor = AgentExecutor(
+            AgentConfig(name=store.agent_name, cli=cli, model=config["model"],
+                        session_id=existing.session_id if existing is not None else None,
+                        clis=[], backup_clis=[]),
+            stream_output=False,
         )
-        manager = AgentManager(session_manager=store, issue_name=None, stream_agent_output=False)
-        manager.register_agent(
-            AgentConfig(
-                name=store.agent_name, cli=cli, model=config["model"], clis=[], backup_clis=[]
-            )
+        responses = []
+        ConversationTransport(executor).run_one_shot(
+            _callback_prompt(event, repository_root=repository_root),
+            allowed_tools=["Read", "Grep", "Glob", "Bash"],
+            allowed_directories=[str(repository_root)],
+            on_response=responses.append,
+            on_usage=_callback_usage_sink(manager_dir, event, repository_root),
         )
-        try:
-            manager.execute(
-                store.agent_name,
-                _callback_prompt(event, repository_root=repository_root),
-                allowed_tools=["Read", "Grep", "Glob", "Bash"],
-                allowed_directories=[str(repository_root)],
-                continuation=continuation,
-            )
-        except Exception:
-            raise
-        reported_model = manager._last_reported_model
+        response = responses[-1]
+        # Legacy caller persistence remains compatible with ordinary CLI session discovery.
+        # It is not promoted into verified exact-delivery evidence.
         if (
-            manager._last_cli != cli
-            or (reported_model is not None and reported_model != config["model"])
-            or not manager._last_session_id
-            or (existing is not None and manager._last_session_id != existing.session_id)
-            or (host_thread_id is not None and manager._last_session_id != host_thread_id)
+            response.cli != cli
+            or (response.model is not None and response.model != config["model"])
+            or not response.session_id
+            or (existing is not None and response.session_id != existing.session_id)
         ):
             raise ValueError("event-driven manager identity mismatch")
+        store.save_session(store.agent_name, cli, response.session_id)
+
         store.commit()
 
 

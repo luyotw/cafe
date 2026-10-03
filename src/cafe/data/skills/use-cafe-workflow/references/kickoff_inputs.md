@@ -112,6 +112,54 @@ that a model suits the current issue. Inspect missing, stale or contradictory
 sources; reuse valid facts for the conventions they cover. Saved preferences
 apply only to new proposals. An existing workflow keeps its confirmed contract.
 
+## Offer to remember preferences
+
+The formatter owns the optional project-preference section and the single
+confirmation prompt. Preserve both in the final user-visible contract; an
+intermediate asynchronous question is not a substitute. Do not append a second
+confirmation question. The section lists applicable missing or changed entries,
+groups identical model chains without losing fallback order, and shows saved
+values beside current values. Identical project preferences are omitted. User
+preferences may supply proposal values but do not count as saved project choices.
+
+The final replies have separate meanings:
+
+- "Confirm" / "確認": approve this kickoff only; do not save preferences.
+- "Confirm and remember" / "確認並記住": approve kickoff and save only the entries
+  displayed in that final contract for this project.
+- A scoped reply such as "確認，只記住模型" saves only the selected displayed
+  entries. Resolve an ambiguous save selection without blocking an otherwise
+  explicit kickoff approval. Never interpret silence as permission to save.
+
+`render --output` returns `preference_offer_file` and a pinned `remember_command`.
+Retain that offer: it is the exact displayed collection, separate from the
+workflow contract. After explicit reuse consent, run the command with repeated
+`--select <entry-id>` for the agreed entries, or `--select '*'` only for all
+displayed entries. `--reuse` records the user's reuse decision; the Manager may
+not infer it from ordinary confirmation. Without `--output`, the same snapshot
+is in `render.preference_offer`; save those exact bytes as JSON before applying.
+Do not rebuild the offer after the answer and silently save a different set.
+Re-rendered changes must be shown before treating them as approved for storage.
+
+The remember operation always uses repository scope, preserves unrelated
+entries, and rejects a selected preference changed since display. A model chain
+is one ordered value; action/description pairs and confirmation partitions are
+whole values. Inspect the stored repository result and report what was saved.
+If the user already explicitly requested reuse, apply the agreed entries without
+asking again. Failure to save does not create a workflow gate: report that the
+approved workflow can start but the named preferences were not saved.
+
+Only supported reusable settings are offered, never issue targets, capabilities,
+permissions or suitability judgments. Worktree and action conventions must use
+verified reusable templates. For a route not covered by a saved/validated cache
+template or a built-in convention, provide `preference_templates` using the
+shapes in `kickoff_input_reference.md`; expansion must match the proposal and
+issue-specific names, IDs and paths must use placeholders. Unavailable or invalid
+optional preferences are reported in the final output, not silently saved or
+turned into an extra kickoff gate. Actual missing/invalid contract inputs still
+follow their existing validation. Inferred values need explicit adoption before
+being saved. Saving a preference never changes an existing confirmed workflow.
+
 ## Complete checks and render
 
 The response's `continuation` identifies missing checks and capture commands

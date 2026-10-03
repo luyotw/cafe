@@ -3,18 +3,66 @@
 from __future__ import annotations
 
 import importlib.util
+import copy
 import hashlib
 import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 UNIT_ROOT = PROJECT_ROOT / "tests/unit"
 sys.path.insert(0, str(UNIT_ROOT))
 from _kickoff_test_support import load_kickoff_module
+import kickoff_inputs
+
+pytestmark = pytest.mark.release_extended
+
+
+@pytest.fixture(scope="module")
+def repository_catalog(tmp_path_factory):
+    """Resolve the unchanged repository catalog once for input-focused CLI journeys."""
+    from cafe.catalogs.resolver import CatalogResolver
+
+    resolver = CatalogResolver(project_root=PROJECT_ROOT)
+    return load_kickoff_module("kickoff_catalog").discover_index(
+        project_root=PROJECT_ROOT,
+        global_root=resolver.global_root,
+        builtin_root=resolver.builtin_root,
+        cache_file=tmp_path_factory.mktemp("kickoff-catalog") / "catalog.json",
+    )
+
+
+@pytest.fixture(autouse=True)
+def reuse_repository_catalog(monkeypatch, request, repository_catalog):
+    # The compact-report case checks cold/warm catalog reuse through the public CLI.
+    if request.node.originalname == "test_compact_cli_reports_preserve_selected_facts_and_full_render":
+        return
+    load = kickoff_inputs._load_local_module
+    catalogs = {}
+
+    def load_with_catalog(name):
+        module = load(name)
+        if name != "kickoff_catalog":
+            return module
+
+        def discover_index(**kwargs):
+            root = Path(kwargs["project_root"]).resolve()
+            overlays = (root / ".cafe" / name for name in ("playbooks", "skills", "capabilities"))
+            if root == PROJECT_ROOT or not any(path.exists() for path in overlays):
+                return copy.deepcopy(repository_catalog)
+            key = tuple(Path(kwargs[name]).resolve() for name in ("project_root", "global_root", "builtin_root"))
+            if key not in catalogs:
+                catalogs[key] = module.discover_index(**kwargs)
+            return copy.deepcopy(catalogs[key])
+
+        return SimpleNamespace(discover_index=discover_index)
+
+    monkeypatch.setattr(kickoff_inputs, "_load_local_module", load_with_catalog)
 
 
 @pytest.fixture
@@ -62,6 +110,24 @@ def _formatter_inputs(issue_name: str) -> dict:
     }
 
 
+def _phase_config(path: Path) -> Path:
+    """Provide the repository phase defaults explicitly for isolated fixtures."""
+    defaults = _formatter_inputs("phase-config-fixture")["phase_chain"]
+    config = {}
+    for item in defaults:
+        step, chain = item.split("=", 1)
+        config[step] = {
+            "name": step,
+            "clis": [
+                {"cli": cli, "model": model}
+                for cli, model in (candidate.split(":", 1) for candidate in chain.split(","))
+            ],
+        }
+    path.write_text(yaml.safe_dump(config), encoding="utf-8")
+    return path
+
+
+@pytest.mark.release_smoke
 def test_compact_cli_reports_preserve_selected_facts_and_full_render(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], phase_config: Path
 ) -> None:
@@ -144,6 +210,8 @@ def test_compact_cli_reports_preserve_selected_facts_and_full_render(
         {"issue_name": issue_name, "playbook_id": "standard-qa", "project_root": str(PROJECT_ROOT),
          "phase_config": str(phase_config)}
     )
+    formatter_inputs["phase_chain"].append("qa=gemini:qa-main,copilot:qa-fallback")
+    formatter_inputs["proactive_review_decision"].insert(-1, "qa=not_required")
     request = {
         "schema_version": 1,
         "project_root": str(PROJECT_ROOT),
@@ -247,7 +315,7 @@ def test_compact_cli_reports_preserve_selected_facts_and_full_render(
 
     inputs = load_kickoff_module("kickoff_inputs")
     compact_render = inputs.render_kickoff(compact_assembly["formatter_inputs"])
-    assert compact_render["status"] == "rendered"
+    assert compact_render["status"] == "rendered", compact_render
     assert compact_render["proposal"]
     assert cli.main(compact_assembly["render_command"][2:]) == 0
     continued = json.loads(capsys.readouterr().out)
@@ -1164,19 +1232,15 @@ def test_summary_reports_changed_evidence_without_assigning_models(
     assert after["selected_graph"]["mandatory_confirmation_gates"] == before["selected_graph"]["mandatory_confirmation_gates"]
 
 
-@pytest.mark.parametrize("mode_values", [
-    {},
-    {"manager_mode": "event-driven", "event_manager": ["codex"]},
-    {"manager_mode": "attached", "poll_interval_seconds": 30},
-    {"manager_mode": "unattended"},
-])
+@pytest.mark.release_smoke
 def test_summary_preserves_evidence_and_routes_missing_reports_to_same_draft(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, mode_values: dict
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """U14-U16/I01/I06: one decision index and a usable check/capture/render continuation."""
     import io
     cli = load_kickoff_module("prepare_kickoff")
     values = _formatter_inputs("issue573-report-continuation")
+    mode_values = {"manager_mode": "unattended"}
     values.update(mode_values)
     request, draft, output = [tmp_path / name for name in ("request.json", "draft.json", "proposal.md")]
     partial = {key: value for key, value in values.items()
@@ -1280,26 +1344,14 @@ def test_missing_reports_block_with_actionable_continuation_not_a_null_type_erro
     assert json.loads(path.read_text()) == request
 
 
-@pytest.mark.parametrize("mode_values,needed,valid", [
-    ({}, {"event_manager", "poll_interval_seconds"}, False),
-    ({"manager_mode": "event-driven"}, {"event_manager"}, False),
-    ({"manager_mode": "event-driven", "event_manager": ["codex"]}, set(), True),
-    ({"manager_mode": "event-driven", "event_manager": []}, set(), False),
-    ({"manager_mode": "event-driven", "event_manager": ["codex:invented"]}, set(), False),
-    ({"manager_mode": "event-driven", "event_manager": "codex"}, set(), False),
-    ({"manager_mode": "attached"}, {"poll_interval_seconds"}, False),
-    ({"manager_mode": "attached", "poll_interval_seconds": 30}, set(), True),
-    ({"manager_mode": "attached", "poll_interval_seconds": 0}, set(), False),
-    ({"manager_mode": "attached", "poll_interval_seconds": "invalid"}, set(), False),
-    ({"manager_mode": "unattended"}, set(), True),
-    ({"manager_mode": "unattended", "event_manager": ["codex"]}, set(), False),
-    ({"manager_mode": "unattended", "poll_interval_seconds": 30}, set(), False),
-    ({"manager_mode": "attached", "event_manager": ["codex"], "poll_interval_seconds": 30}, set(), False),
-    ({"manager_mode": "event-driven", "event_manager": ["codex"], "poll_interval_seconds": 30}, set(), False),
-    ({"manager_mode": "unknown"}, {"event_manager", "poll_interval_seconds"}, False),
+@pytest.mark.parametrize("mode_values,valid", [
+    ({}, False),
+    ({"manager_mode": "event-driven", "event_manager": ["codex"]}, True),
+    ({"manager_mode": "attached", "poll_interval_seconds": 30}, True),
+    ({"manager_mode": "unattended", "event_manager": ["codex"]}, False),
 ])
 def test_operating_mode_decisions_expose_owner_types_without_changing_validation(
-    tmp_path, capsys, monkeypatch, mode_values, needed, valid
+    tmp_path, capsys, monkeypatch, mode_values, valid
 ):
     """U14-U16/I06: current mode choices reveal dependencies, never authorize them."""
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)

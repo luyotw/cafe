@@ -35,7 +35,7 @@ finish() {
 
 trap 'finish "$?"' EXIT
 
-if [ ! -x "$PROJECT_PYTHON" ] || ! "$PROJECT_PYTHON" -c "import pytest" >/dev/null 2>&1; then
+if [ ! -x "$PROJECT_PYTHON" ] || ! "$PROJECT_PYTHON" -c "import pytest, xdist" >/dev/null 2>&1; then
     uv sync --extra dev --frozen
 fi
 
@@ -52,7 +52,13 @@ unset GIT_INDEX_FILE
 unset GIT_OBJECT_DIRECTORY
 unset GIT_ALTERNATE_OBJECT_DIRECTORIES
 
-"$PROJECT_PYTHON" -m pytest tests/unit/ tests/integration/ -q --tb=short \
+TEST_SELECTION=()
+if [ "${CAFE_RELEASE_FAST_TESTS:-0}" = "1" ]; then
+    TEST_SELECTION=(-m 'not release_extended or release_smoke')
+fi
+
+"$PROJECT_PYTHON" -m pytest tests/unit/ tests/integration/ "${TEST_SELECTION[@]}" -q --tb=short \
+    -n 8 --dist=load \
     --cov=cafe --cov-report=term-missing --cov-fail-under=75 \
     --durations=50 --durations-min=0.5 \
     --junitxml="$JUNIT_REPORT" | tee "$TEST_LOG"

@@ -5,9 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import sys
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _kickoff_test_support import load_kickoff_module
+
+pytestmark = pytest.mark.release_extended
 
 
 def test_index_keeps_effective_candidates_and_invalid_overlay_diagnostics(tmp_path: Path) -> None:
@@ -151,6 +154,7 @@ def test_membership_changes_are_observed_and_root_errors_are_not_complete(
     assert failed["diagnostics"]
 
 
+@pytest.mark.release_smoke
 def test_installed_catalog_binds_running_dependency_files_and_refuses_unknown_identity(tmp_path, monkeypatch):
     """U08/U09: deployed skill layout must invalidate on effective code changes."""
     import importlib.util

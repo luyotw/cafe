@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from argparse import Namespace
 import sys
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _kickoff_test_support import load_kickoff_module
@@ -72,3 +75,34 @@ def test_argv_preserves_shell_metacharacters_as_one_json_encoded_argument() -> N
 
     assert "commit; echo unsafe" not in argv
     assert '[["git","commit; echo unsafe"]]' in argv
+
+
+@pytest.mark.parametrize("mode,event_manager,poll,expected", [
+    ("event-driven", None, None, "requires a primary"),
+    ("event-driven", [], None, "requires a primary"),
+    ("event-driven", ["codex"], None, [["manager.mode", "event-driven"], ["manager.clis[0]", "codex"]]),
+    ("event-driven", ["codex:invented"], None, "primary must use CLI"),
+    ("event-driven", ["codex"], 30, "rejects attached polling"),
+    ("attached", None, None, "requires --poll-interval-seconds"),
+    ("attached", None, 30, [["manager.mode", "attached"], ["manager.poll_interval_seconds", 30]]),
+    ("attached", ["codex"], 30, "rejects event-driven fields"),
+    ("unattended", None, None, [["manager.mode", "unattended"]]),
+    ("unattended", ["codex"], None, "accepts no mode-specific fields"),
+    ("unattended", None, 30, "accepts no mode-specific fields"),
+])
+def test_manager_mode_policy_without_catalog_discovery(mode, event_manager, poll, expected) -> None:
+    formatter = load_kickoff_module("format_kickoff_contract")
+    args = Namespace(manager_mode=mode, event_manager=event_manager, poll_interval_seconds=poll)
+
+    if isinstance(expected, str):
+        with pytest.raises(ValueError, match=expected):
+            formatter._manager_policy_rows(args)
+    else:
+        assert formatter._manager_policy_rows(args) == expected
+
+
+def test_manager_mode_field_types_without_catalog_discovery() -> None:
+    inputs = load_kickoff_module("kickoff_inputs")
+    for event_manager in ("codex", [None], {"cli": "codex"}):
+        result = inputs.normalize_formatter_inputs({"event_manager": event_manager})
+        assert "event_manager_must_be_a_string_array" in result["diagnostics"]

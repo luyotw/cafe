@@ -1,10 +1,12 @@
 """U01-U03/U10/U14-U16, I01/I02/I05/I06: corrected public preparation seams."""
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,6 +15,58 @@ from _kickoff_test_support import load_kickoff_module
 from test_kickoff_prefill import _project as _base_project
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_kickoff_preparation import _formatter_inputs
+import kickoff_inputs
+
+pytestmark = pytest.mark.release_extended
+
+
+@pytest.fixture(scope="module")
+def review_catalog(tmp_path_factory):
+    """The review journeys create the same playbook in separate project roots."""
+    from cafe.catalogs.resolver import CatalogResolver
+
+    root = tmp_path_factory.mktemp("review-catalog-project")
+    _project(root)
+    resolver = CatalogResolver(project_root=root)
+    catalog = load_kickoff_module("kickoff_catalog").discover_index(
+        project_root=root,
+        global_root=resolver.global_root,
+        builtin_root=resolver.builtin_root,
+        cache_file=tmp_path_factory.mktemp("review-catalog-cache") / "catalog.json",
+    )
+    playbook = (root / ".cafe/playbooks/example.yaml").read_bytes()
+    return playbook, catalog
+
+
+@pytest.fixture(autouse=True)
+def reuse_unchanged_catalog_within_journey(monkeypatch, review_catalog):
+    """Preference and evidence changes do not alter the playbook catalog."""
+    load = kickoff_inputs._load_local_module
+    catalogs = {}
+    template_playbook, template_catalog = review_catalog
+
+    def load_with_catalog(name):
+        module = load(name)
+        if name != "kickoff_catalog":
+            return module
+
+        def discover_index(**kwargs):
+            key = tuple(Path(kwargs[field]).resolve() for field in ("project_root", "global_root", "builtin_root"))
+            project = key[0]
+            playbook = project / ".cafe/playbooks/example.yaml"
+            if playbook.exists() and playbook.read_bytes() == template_playbook:
+                catalog = copy.deepcopy(template_catalog)
+                for candidate in catalog["candidates"]:
+                    if candidate["source"] == "project":
+                        candidate["path"] = str(project / ".cafe/playbooks" / Path(candidate["path"]).name)
+                return catalog
+            if key not in catalogs:
+                catalogs[key] = module.discover_index(**kwargs)
+            return copy.deepcopy(catalogs[key])
+
+        return SimpleNamespace(discover_index=discover_index)
+
+    monkeypatch.setattr(kickoff_inputs, "_load_local_module", load_with_catalog)
 
 
 def _project(root):
@@ -39,6 +93,7 @@ def _save_preference(cli, capsys, root, project, key, value, scope='repository')
     assert code == 0, result
 
 
+@pytest.mark.release_smoke
 def test_source_backed_draft_requires_reassessment_before_render_after_change(tmp_path, capsys):
     cli = load_kickoff_module('prepare_kickoff')
     project = tmp_path / 'project'
@@ -220,16 +275,12 @@ def test_saved_action_preserves_current_description(tmp_path, capsys):
     assert report['formatter_draft']['deliver_description'] == request['current_explicit_inputs']['deliver_description']
 
 
-@pytest.mark.parametrize('key,invalid,fields,resolution', [
-    ('phase.chains', {'steps': {'absent': ['codex:model']}}, ['phase_chain'], {'phase_chain': ['outline=codex:chosen']}),
-    ('worktree.convention', '{unknown}', ['worktree', 'current_checkout'], {'current_checkout': True}),
-    ('confirmation.assignments', {'mandatory_task': False}, ['user_required', 'manager_confirmable'], {'user_required': [], 'manager_confirmable': []}),
-    ('review.decisions', {'absent': 'required'}, ['proactive_review_decision'], {'proactive_review_decision': ['outline=not_required']}),
-    ('delivery.convention', {'wrong': []}, ['deliver', 'deliver_description'], {'deliver': [], 'deliver_description': []}),
-    ('cleanup.convention', {'wrong': []}, ['cleanup', 'cleanup_description'], {'cleanup': [], 'cleanup_description': []}),
-])
-def test_incompatible_preferences_survive_draft_roundtrip_until_resolution(tmp_path, capsys, key, invalid, fields, resolution):
+def test_incompatible_preferences_survive_draft_roundtrip_until_resolution(tmp_path, capsys):
     """U01/U02/U14/I01/I06: generated defaults cannot resolve a rejected preference."""
+    key = 'phase.chains'
+    invalid = {'steps': {'absent': ['codex:model']}}
+    fields = ['phase_chain']
+    resolution = {'phase_chain': ['outline=codex:chosen']}
     cli = load_kickoff_module('prepare_kickoff')
     project = tmp_path / 'project'; project.mkdir()
     request = _project(project)

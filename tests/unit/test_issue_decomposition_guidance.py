@@ -47,7 +47,7 @@ def test_driver_receives_proposals_without_stage_or_extra_gate():
     assert "any step" in driver
     assert "including workflow completion" in driver
     assert "proposal alone adds no checkpoint or validation gate" in driver
-    assert "existing authorized Driver path" in driver
+    assert "existing authorized Manager path" in driver
     assert "grant no authority to create issues" in driver
     assert "must not enter develop" not in driver
     assert "Decision:" not in driver

@@ -3,13 +3,18 @@
 import json
 import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from threading import Event, Timer
 from typing import Any, Callable, List, Optional
 
 from cafe.agents.cli import AbstractCLI, ClaudeCLI, CodexCLI, CopilotCLI, CursorCLI, GeminiCLI
 from cafe.agents.diagnostics import sanitize_error_excerpt
+from cafe.agents.transport_types import (
+    TransportResult,
+    _has_evidence_conflict,
+    _validated_evidence_scalar,
+)
 from cafe.core.types import AgentCLI, AgentConfig, AgentResponse, PermissionDenial, TokenUsage
 
 
@@ -51,6 +56,7 @@ class EventDriverExecutionResult:
     accepted: bool
     event_id: str | None
     records: tuple[dict[str, Any], ...]
+    transport_result: TransportResult | None = None
 
 
 EventManagerExecutionResult = EventDriverExecutionResult
@@ -375,30 +381,25 @@ class AgentExecutor:
             agent_response.cli = self.config.cli
             agent_response.session_id = self.config.session_id
 
-            # Accumulate token usage
-            self._total_token_usage.input_tokens += agent_response.token_usage.input_tokens
-            self._total_token_usage.output_tokens += agent_response.token_usage.output_tokens
-            self._total_token_usage.cache_creation_input_tokens += (
-                agent_response.token_usage.cache_creation_input_tokens
-            )
-            self._total_token_usage.cache_write_input_tokens += (
-                agent_response.token_usage.cache_write_input_tokens
-            )
-            self._total_token_usage.cache_read_input_tokens += (
-                agent_response.token_usage.cache_read_input_tokens
-            )
-            self._total_token_usage.reasoning_output_tokens += (
-                agent_response.token_usage.reasoning_output_tokens
-            )
-            self._total_token_usage.total_cost_usd += agent_response.token_usage.total_cost_usd
-            if agent_response.token_usage.turn_usages:
-                self._total_token_usage.turn_usages.extend(agent_response.token_usage.turn_usages)
+            if not agent_response.usage_accounted:
+                self._accumulate_usage(agent_response.token_usage)
+                agent_response.usage_accounted = True
 
             return agent_response
         except AgentExecutionError:
             raise
         except Exception as e:
             raise AgentExecutionError(f"Agent execution failed: {e}") from e
+
+    def _accumulate_usage(self, usage: TokenUsage) -> None:
+        """One accounting primitive for ordinary and callback subprocesses."""
+        for name in TokenUsage.model_fields:
+            value = getattr(usage, name)
+            if name == "turn_usages":
+                self._total_token_usage.turn_usages.extend(value)
+            elif value is not None:
+                prior = getattr(self._total_token_usage, name)
+                setattr(self._total_token_usage, name, (prior or 0) + value)
 
     def execute_event_driver(
         self,
@@ -407,6 +408,7 @@ class AgentExecutor:
         expected_session_id: str | None = None,
         event_id: str | None = None,
         on_acceptance: Callable[[], None] | None = None,
+        environment_overrides: Optional[dict[str, str]] = None,
         allowed_tools: Optional[List[str]] = None,
         allowed_directories: Optional[List[str]] = None,
         execution_control: AgentExecutionControl | None = None,
@@ -442,6 +444,9 @@ class AgentExecutor:
             event_driver=True,
         )
 
+        environment = strategy.build_environment()
+        if environment_overrides:
+            environment.update({str(key): str(value) for key, value in environment_overrides.items()})
         records: list[dict[str, Any]] = []
         structured_record_limit = _structured_record_limit(execution_control)
         acceptance_observed = False
@@ -457,22 +462,43 @@ class AgentExecutor:
                     event_id=event_id,
                 )
             ):
+                acceptance_observed = True
                 if on_acceptance is not None:
                     on_acceptance()
-                acceptance_observed = True
 
-        self._execute_with_streaming(
-            cmd=command,
-            cli_name=self.config.cli.value.capitalize(),
-            parse_stream_json=True,
-            json_content_extractor=lambda _record: None,
-            env=strategy.build_environment(),
-            process_cwd=process_cwd,
-            execution_control=execution_control,
-            structured_records=records,
-            structured_record_observer=observe_record,
-            require_terminal_stream_event=True,
-        )
+        try:
+            response = self._execute_with_streaming(
+                cmd=command,
+                cli_name=self.config.cli.value.capitalize(),
+                parse_stream_json=True,
+                json_content_extractor=lambda _record: None,
+                env=environment,
+                process_cwd=process_cwd,
+                execution_control=execution_control,
+                structured_records=records,
+                structured_record_observer=observe_record,
+                require_terminal_stream_event=True,
+                response_parser=lambda lines: self._parse_using_strategy(strategy, lines),
+            )
+        except AgentExecutionError as error:
+            evidence = strategy.conversation_evidence(tuple(records))
+            partial = getattr(error, "transport_result", TransportResult())
+            error.transport_result = replace(
+                evidence, accepted=acceptance_observed if expected_session_id else False,
+                completed=partial.completed, usage=partial.usage, returncode=partial.returncode,
+                failure_code=evidence.failure_code or error.error_type or "execution_failed",
+                error_excerpt=sanitize_error_excerpt(error),
+            )
+            raise
+        except BaseException as error:
+            partial = getattr(error, "transport_result", TransportResult())
+            evidence = strategy.conversation_evidence(tuple(records))
+            error.transport_result = replace(
+                evidence, accepted=acceptance_observed if expected_session_id else False,
+                usage=partial.usage, completed=partial.completed, returncode=partial.returncode,
+                error_excerpt=sanitize_error_excerpt(error),
+            )
+            raise
         bounded_records = tuple(records[:structured_record_limit])
         if expected_session_id is None:
             session_id = strategy.extract_event_driver_session(bounded_records)
@@ -489,6 +515,13 @@ class AgentExecutor:
             accepted=accepted,
             event_id=event_id,
             records=bounded_records,
+            transport_result=replace(
+                response.transport_result or strategy.conversation_evidence(bounded_records),
+                observed_session_id=session_id if expected_session_id is None
+                                    else strategy.conversation_evidence(bounded_records).observed_session_id,
+                accepted=accepted, completed=True, returncode=0,
+                usage=self._compact_usage(response.token_usage) if response.usage_available else None,
+            ),
         )
 
     def execute_event_manager(
@@ -498,6 +531,7 @@ class AgentExecutor:
         expected_session_id: str | None = None,
         event_id: str | None = None,
         on_acceptance: Callable[[], None] | None = None,
+        environment_overrides: Optional[dict[str, str]] = None,
         allowed_tools: Optional[List[str]] = None,
         allowed_directories: Optional[List[str]] = None,
         execution_control: AgentExecutionControl | None = None,
@@ -508,6 +542,7 @@ class AgentExecutor:
             expected_session_id=expected_session_id,
             event_id=event_id,
             on_acceptance=on_acceptance,
+            environment_overrides=environment_overrides,
             allowed_tools=allowed_tools,
             allowed_directories=allowed_directories,
             execution_control=execution_control,
@@ -633,14 +668,27 @@ class AgentExecutor:
         Returns:
             AgentResponse
         """
-        response, token_usage, permission_denials = cli_strategy.parse_response(output_lines)
+        parsed = cli_strategy.parse_response(output_lines)
+        response, token_usage, permission_denials = parsed[:3]
         return AgentResponse(
             response=response,
             token_usage=token_usage,
             permission_denials=permission_denials,
             cli=self.config.cli,
             session_id=self.config.session_id,
+            model=parsed[3] if len(parsed) > 3 else None,
+            usage_available=bool(token_usage.model_fields_set),
         )
+
+    @staticmethod
+    def _compact_usage(usage):
+        numeric_fields = {name for name in TokenUsage.model_fields if name != "turn_usages"}
+        turns = [
+            {key: value for key, value in turn.items()
+             if key in numeric_fields | {"turn", "turn_index"} and isinstance(value, (int, float))}
+            for turn in usage.turn_usages[:64] if isinstance(turn, dict)
+        ]
+        return usage.model_copy(update={"turn_usages": turns})
 
     def get_total_token_usage(self) -> TokenUsage:
         """Get total accumulated token usage across all execute() calls.
@@ -649,6 +697,17 @@ class AgentExecutor:
             Total token usage statistics
         """
         return self._total_token_usage
+
+    def with_session_recovery(self, invoke_attempt: Callable[[], AgentResponse]) -> AgentResponse:
+        """Caller-admitted use of the existing same-provider recovery policy."""
+        if not self.config.session_id:
+            return invoke_attempt()
+        return self._execute_with_session_recovery(
+            cmd=[], cli_name=self.config.cli.value.capitalize(),
+            create_new_session_fn=self._get_cli_strategy().create_session,
+            update_cmd_with_session_fn=lambda command, _identity: command,
+            invoke_attempt=invoke_attempt,
+        )
 
     def _execute_with_session_recovery(
         self,
@@ -659,6 +718,7 @@ class AgentExecutor:
         max_retries: int = 3,
         _retry_count: int = 0,
         allow_session_recovery: bool = True,
+        invoke_attempt: Callable[[], AgentResponse] | None = None,
         **streaming_kwargs,
     ) -> AgentResponse:
         """Generic session recovery wrapper for all CLIs with session support.
@@ -682,6 +742,8 @@ class AgentExecutor:
             AgentExecutionError: If execution fails with non-session error or max retries exceeded
         """
         try:
+            if invoke_attempt is not None:
+                return invoke_attempt()
             return self._execute_with_streaming(cmd=cmd, cli_name=cli_name, **streaming_kwargs)
         except AgentExecutionError as e:
             # Check if it's a session not found error or prompt too long error
@@ -759,6 +821,7 @@ class AgentExecutor:
                     max_retries=max_retries,
                     _retry_count=_retry_count + 1,
                     allow_session_recovery=allow_session_recovery,
+                    invoke_attempt=invoke_attempt,
                     **streaming_kwargs,
                 )
             else:
@@ -1213,6 +1276,12 @@ class AgentExecutor:
         response_text = ""
         streaming_log: List[str] = []  # Record all streaming fragments
         token_usage = TokenUsage()
+        returncode = None
+        stderr_output = ""
+        observer_failed = False
+        observation_evidence = TransportResult()
+        observation_strategy = self._get_cli_strategy()
+        parsed_for_call = None
         session_id = None
         model: Optional[str] = None
         permission_denials: List[PermissionDenial] = []
@@ -1275,9 +1344,70 @@ class AgentExecutor:
             except Exception as e:
                 print(f"⚠️  Failed to open streaming output file: {e}")
 
+        def collect_usage():
+            nonlocal parsed_for_call
+            if parsed_for_call is not None:
+                return parsed_for_call
+            try:
+                if response_parser:
+                    parsed = response_parser(output_lines)
+                else:
+                    strategy = self._get_cli_strategy()
+                    if parse_stream_json:
+                        parsed = self._parse_using_strategy(strategy, output_lines)
+                    else:
+                        from cafe.agents.cli.copilot import CopilotCLI
+
+                        result = CopilotCLI(self.config).parse_response(
+                            output_lines, stderr_output=stderr_output
+                        )
+                        parsed = AgentResponse(response=result[0], token_usage=result[1],
+                                               model=result[3] if len(result) > 3 else None,
+                                               permission_denials=result[2],
+                                               usage_available=bool(result[1].model_fields_set))
+                for name in ("duration_ms", "duration_api_ms"):
+                    value = getattr(token_usage, name)
+                    if value is not None:
+                        setattr(parsed.token_usage, name, value)
+                        parsed.usage_available = True
+                parsed.token_usage = TokenUsage(**parsed.token_usage.model_dump(exclude_unset=True))
+                if parsed.usage_available:
+                    self._accumulate_usage(parsed.token_usage)
+            except (ValueError, TypeError, AttributeError) as cause:
+                error = AgentExecutionError("Malformed provider statistics", error_type="invalid_evidence")
+                error.transport_result = replace(
+                    observation_evidence, failure_code="invalid_evidence", returncode=returncode,
+                    completed=True if received_terminal_stream_event else None,
+                    error_excerpt=sanitize_error_excerpt(error),
+                )
+                raise error from cause
+            evidence = observation_evidence
+            if parsed.model is not None:
+                try:
+                    model = _validated_evidence_scalar(parsed.model)
+                except ValueError:
+                    evidence = replace(evidence, failure_code="invalid_evidence")
+                else:
+                    mismatch = _has_evidence_conflict((self.config.model, model))
+                    evidence = replace(evidence, reported_model=model,
+                                       failure_code=evidence.failure_code or ("model_mismatch" if mismatch else None))
+            parsed.transport_result = replace(
+                evidence,
+                usage=self._compact_usage(parsed.token_usage) if parsed.usage_available else None,
+                completed=True if received_terminal_stream_event else None,
+                returncode=returncode,
+            )
+            parsed.usage_accounted = True
+            parsed_for_call = parsed
+            return parsed
+
         def persist_safe_stream_error(error: AgentExecutionError) -> None:
             """Replace any streamed error payload with one safe durable record."""
             nonlocal streaming_file_handle
+            parsed = collect_usage()
+            error.transport_result = replace(parsed.transport_result,
+                failure_code=parsed.transport_result.failure_code or error.error_type or "execution_failed",
+                error_excerpt=sanitize_error_excerpt(error))
             if streaming_file_handle is None:
                 return
             try:
@@ -1373,15 +1503,44 @@ class AgentExecutor:
                         try:
                             data = json.loads(line.strip())
 
+                            if not isinstance(data, dict):
+                                continue
+                            output_lines.append(line)
+                            observed = observation_strategy.conversation_evidence((data,))
+                            failure = observation_evidence.failure_code or observed.failure_code
+                            if _has_evidence_conflict((
+                                observation_evidence.observed_session_id, observed.observed_session_id
+                            )):
+                                failure = "conflicting_session_evidence"
+                            if _has_evidence_conflict((
+                                observation_evidence.reported_model, observed.reported_model
+                            )):
+                                failure = failure or "model_mismatch"
+                            observation_evidence = replace(
+                                observation_evidence,
+                                observed_session_id=observation_evidence.observed_session_id or observed.observed_session_id,
+                                reported_model=observation_evidence.reported_model or observed.reported_model,
+                                failure_code=failure,
+                            )
+                            if data.get("type") in terminal_stream_event_types:
+                                received_terminal_stream_event = True
                             if isinstance(data, dict) and structured_records is not None:
                                 if len(structured_records) < structured_record_limit:
                                     structured_records.append(dict(data))
                                     if structured_record_observer is not None:
-                                        structured_record_observer(dict(data))
+                                        try:
+                                            structured_record_observer(dict(data))
+                                        except BaseException:
+                                            observer_failed = True
+                                            raise
 
-                            # Always collect the line for response_parser (e.g., Gemini needs last line)
-                            output_lines.append(line)
 
+                            if any(key in data and not isinstance(data[key], dict)
+                                   for key in ("usage", "stats")):
+                                output_lines.pop()
+                                error = AgentExecutionError("Malformed provider statistics", error_type="invalid_evidence")
+                                persist_safe_stream_error(error)
+                                raise error
                             json_error_text = self._extract_stream_json_error_text(data)
                             if json_error_text:
                                 error_type, display_message = self._classify_execution_error(
@@ -1527,6 +1686,8 @@ class AgentExecutor:
                                     )
 
                         except json.JSONDecodeError:
+                            if observer_failed:
+                                raise
                             error_type, display_message = self._classify_execution_error(
                                 cli_name, line
                             )
@@ -1545,6 +1706,14 @@ class AgentExecutor:
                             if self.stream_output:
                                 print(line, end="")
                             output_lines.append(line)
+                        except (ValueError, TypeError, AttributeError) as cause:
+                            if observer_failed:
+                                raise
+                            if output_lines and output_lines[-1] == line:
+                                output_lines.pop()
+                            error = AgentExecutionError("Malformed provider evidence", error_type="invalid_evidence")
+                            persist_safe_stream_error(error)
+                            raise error from cause
                     else:
                         # Simple line-by-line streaming (Copilot style)
                         if self.stream_output:
@@ -1570,7 +1739,7 @@ class AgentExecutor:
             if streaming_file_handle:
                 streaming_file_handle.close()
             raise
-        except BaseException:
+        except BaseException as error:
             if execution_timer is not None:
                 execution_timer.cancel()
             if process.poll() is None:
@@ -1580,6 +1749,9 @@ class AgentExecutor:
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait(timeout=2)
+            if observer_failed:
+                parsed = collect_usage()
+                error.transport_result = parsed.transport_result
             raise
 
         if execution_timer is not None:
@@ -1744,7 +1916,7 @@ class AgentExecutor:
 
         # Use custom response parser if provided
         if response_parser:
-            parsed_response = response_parser(output_lines)
+            parsed_response = collect_usage()
             if codex_permission_denials:
                 existing_pairs = {
                     (denial.tool_name, json.dumps(denial.tool_input, sort_keys=True))
@@ -1776,33 +1948,29 @@ class AgentExecutor:
             # streaming_log contains extracted text content for context.json
             final_streaming_log = streaming_log if streaming_log else []
         else:
-            # Non-stream-json style (Copilot): parse response to extract token usage
-            # Get CLI strategy instance to parse the response
-            from cafe.agents.cli.copilot import CopilotCLI
-
-            cli_strategy = CopilotCLI(self.config)
-            # Parse response to extract token usage and clean response
-            # Pass stderr_output separately as usage summary may be in stderr
-            parse_result = cli_strategy.parse_response(output_lines, stderr_output=stderr_output)
-
-            # Check if parser returns model (4-tuple) or not (3-tuple)
-            if len(parse_result) == 4:
-                final_response, token_usage, parsed_denials, parsed_model = parse_result
-                # Use parsed model if available
-                if parsed_model:
-                    model = parsed_model
-            else:
-                # Old 3-tuple format (backward compatibility)
-                final_response, token_usage, parsed_denials = parse_result
-
-            # Merge any permission denials from parsing with those already collected
-            permission_denials.extend(parsed_denials)
+            # Reuse the same evidence validation/accounting as partial-error exits.
+            parsed_response = collect_usage()
+            final_response = parsed_response.response
+            token_usage = parsed_response.token_usage
+            model = parsed_response.model
+            permission_denials.extend(parsed_response.permission_denials)
             final_streaming_log = output_lines
 
         # Model is already tracked separately, duration stays in token_usage
+        usage_available = bool(token_usage.model_fields_set)
+        if usage_available and parse_stream_json:
+            self._accumulate_usage(token_usage)
         return AgentResponse(
             response=final_response,
             token_usage=token_usage,
+            usage_available=usage_available,
+            usage_accounted=True,
+            transport_result=parsed_response.transport_result if not parse_stream_json else replace(
+                observation_evidence,
+                reported_model=model,
+                usage=self._compact_usage(token_usage) if usage_available else None,
+                completed=True if received_terminal_stream_event else None, returncode=returncode,
+            ),
             permission_denials=permission_denials,
             streaming_log=final_streaming_log,
             model=model,

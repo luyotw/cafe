@@ -48,7 +48,10 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
-def _dependency_closure(playbook: dict[str, Any], skill_loader: SkillLoader) -> list[tuple[str, str]]:
+def _dependency_closure(
+    playbook: dict[str, Any], skill_loader: SkillLoader,
+    skill_dependencies: dict[str, list[tuple[str, str]]],
+) -> list[tuple[str, str]]:
     dependencies: list[tuple[str, str]] = []
     skills = playbook.get("skills", {})
     workflow = skills.get("workflow", {}) if isinstance(skills, dict) else {}
@@ -61,23 +64,29 @@ def _dependency_closure(playbook: dict[str, Any], skill_loader: SkillLoader) -> 
             if selector is not None:
                 names.update(skill_selector_names(selector))
     for name in sorted(names):
+        if name in skill_dependencies:
+            dependencies.extend(skill_dependencies[name])
+            continue
+        rows: list[tuple[str, str]] = []
         try:
             entry = skill_loader.resolver.resolve(CatalogKind.PHASE, name)
-            dependencies.append((f"skill:{name}:effective_digest", entry.digest))
+            rows.append((f"skill:{name}:effective_digest", entry.digest))
             paths = [entry.path] if entry.path.is_file() else sorted(entry.path.rglob("*"))
             for path in paths:
                 if not path.is_file() or path.is_symlink():
                     continue
                 relative = path.relative_to(entry.path) if entry.path.is_dir() else Path(path.name)
-                dependencies.append((f"skill:{name}/{relative.as_posix()}", hashlib.sha256(path.read_bytes()).hexdigest()))
+                rows.append((f"skill:{name}/{relative.as_posix()}", hashlib.sha256(path.read_bytes()).hexdigest()))
         except (OSError, ValueError, FileNotFoundError) as exc:
-            dependencies.append((f"skill:{name}:diagnostic", type(exc).__name__))
+            rows.append((f"skill:{name}:diagnostic", type(exc).__name__))
+        skill_dependencies[name] = rows
+        dependencies.extend(rows)
     return dependencies
 
 
 def _candidate_details(
-    candidate_id: str, path: Path, source: str, project_root: Path, global_root: Path, builtin_root: Path,
-    validated_model: Any,
+    candidate_id: str, path: Path, source: str, project_root: Path,
+    validated_model: Any, skill_loader: SkillLoader,
 ) -> dict[str, Any]:
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
@@ -86,10 +95,6 @@ def _candidate_details(
     steps = raw.get("steps", {})
     if not isinstance(playbook, dict) or not isinstance(steps, dict):
         raise ValueError("Playbook metadata and steps must be mappings")
-    skill_loader = SkillLoader(
-        project_root=project_root, global_root=global_root, builtin_root=builtin_root
-    )
-    skill_loader.discover(strict=False)
     workflow_skills = playbook and raw.get("skills", {}).get("workflow", {}).get("shared", [])
     profiles: dict[str, dict[str, Any]] = {}
     diagnostics: list[dict[str, str]] = []
@@ -183,6 +188,9 @@ def discover_index(
     skill_loader = SkillLoader(
         project_root=project_root, global_root=global_root, builtin_root=builtin_root
     )
+    skill_dependencies: dict[str, list[tuple[str, str]]] = {}
+    skill_discovered = False
+    skill_discovery_error: Exception | None = None
     cache = VersionedJsonStore(cache_file, schema_version=SCHEMA_VERSION, collection="candidates")
     previous = cache.read()
     candidates: list[dict[str, Any]] = []
@@ -220,7 +228,7 @@ def discover_index(
             entry = resolver.resolve(CatalogKind.PLAYBOOK, candidate_id)
             raw = yaml.safe_load(entry.path.read_text(encoding="utf-8"))
             raw = raw if isinstance(raw, dict) else {}
-            dependencies = _dependency_closure(raw, skill_loader)
+            dependencies = _dependency_closure(raw, skill_loader, skill_dependencies)
             fingerprint = _digest(
                 [("entry", entry.digest), ("source", entry.source), *dependencies, *dependency_code]
             )
@@ -229,10 +237,18 @@ def discover_index(
                 candidate = cached["candidate"]
                 reuse[candidate_id] = True
             else:
+                if not skill_discovered:
+                    try:
+                        skill_loader.discover(strict=False)
+                    except (OSError, ValueError, KeyError, TypeError) as exc:
+                        skill_discovery_error = exc
+                    skill_discovered = True
+                if skill_discovery_error is not None:
+                    raise skill_discovery_error
                 loaded = loader.load_model(candidate_id, strict=False)
                 candidate = _candidate_details(
-                    candidate_id, entry.path, entry.source, project_root, global_root, builtin_root,
-                    loaded.model,
+                    candidate_id, entry.path, entry.source, project_root,
+                    loaded.model, skill_loader,
                 )
                 candidate["fingerprint"] = fingerprint
                 candidate = _json_safe(candidate)
