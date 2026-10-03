@@ -174,6 +174,8 @@ def _metadata_usage_sink(
                 current["stats"] = merge_token_usage_stats(current.get("stats"), usage)
             else:
                 update(current, usage)
+            if validate is not None:
+                validate(current)
             # Exclusive creation prevents consuming an abandoned recovery object.
             # Cooperating writers hold the workspace lock throughout publication
             # and reclamation. Same-account hostile namespace mutation requires
@@ -247,6 +249,11 @@ CHAT_USAGE_FIELDS = (
 )
 
 
+def _bounded_chat_identity(value):
+    """Keep persisted identities within the existing scalar accounting limit."""
+    return isinstance(value, str) and bool(value.strip()) and len(value) <= 512
+
+
 def _validate_chat_usage(metadata):
     """Validate existing aggregates before admission and each locked update."""
     if "chat_usage" not in metadata:
@@ -263,7 +270,7 @@ def _validate_chat_usage(metadata):
             value = group[field]
             if value is None and field in {"requested_model", "reported_model"}:
                 continue
-            if not isinstance(value, str) or not value.strip() or len(value) > 512:
+            if not _bounded_chat_identity(value):
                 raise ValueError("invalid chat accounting identity")
         key = tuple(group[field] for field in identity_fields)
         if group["mode"] not in {"interactive", "one_shot"} or key in seen:
@@ -312,6 +319,11 @@ def chat_usage_sink(
     Known values are subtotals. Unknown fields remain unknown even when a later
     call reports them. Requested model is never used as evidence of actual model.
     """
+    # Configuration accepts arbitrary model strings. Preserve provider selection,
+    # but omit a requested label that cannot fit the durable scalar contract;
+    # truncating it would invent a different model identity.
+    if requested_model is not None and not _bounded_chat_identity(requested_model):
+        requested_model = None
 
     def update(current, results):
         groups = current.setdefault("chat_usage", [])

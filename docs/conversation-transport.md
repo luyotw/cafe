@@ -214,7 +214,11 @@ existing lock path and serialize against the same lock inode.
 Each group records `cli`, `phase`, `mode`, `requested_model`, `reported_model`,
 `calls`, `incomplete_calls`, `unknown_fields` and `stats`. The group key separates
 requested model from provider-reported model; a missing reported model is null,
-never filled from configuration. `stats` contains only known token/cost
+never filled from configuration. Requested labels retain at most 512 characters;
+blank or oversized configured labels are stored as null, never truncated into a
+different identity. Provider invocation still receives the original configuration,
+and its verified reported model and partial usage remain separately accounted.
+`stats` contains only known token/cost
 subtotals. Default zeros in `TokenUsage` do not certify missing counters.
 `unknown_fields` retains fields missed by any contributing call, even if a later
 call reports those fields. A known zero remains zero. No prompt, response,
@@ -232,7 +236,9 @@ one-shot launch and produces an observable error. Admission validates the
 optional aggregate list, group identities, numeric subtotals, call counts and
 coverage fields before provider use; absent optional metadata remains
 compatible. The latest mapping is revalidated under the shared locks before
-updating it, so concurrent corruption produces an explicit accounting error
+updating it, and the resulting mapping is validated before publication. Thus a
+newly emitted group cannot make subsequent admission fail its own schema;
+concurrent corruption produces an explicit accounting error
 without an unchecked schema exception or provider replay. Interactive launch reports
 that target gap while retaining its native terminal behavior.
 

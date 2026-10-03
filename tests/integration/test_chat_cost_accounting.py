@@ -741,3 +741,80 @@ def test_public_chat_settings_lock_uses_admitted_descriptor(
     current = yaml.safe_load(target.read_text())
     assert current["unrelated"] == "kept"
     assert current["chat_usage"][0]["stats"]["input_tokens"] == 2
+
+
+@pytest.mark.parametrize("requested_length", [512, 513])
+@pytest.mark.parametrize("partial_input", [None, 2])
+def test_requested_model_boundary_does_not_poison_corrected_chat(
+    accounting_target, provider_process, terminal, monkeypatch, requested_length, partial_input
+):
+    """An errored call's bounded group stays reusable (Plan U6/U8/U11/I1/I2/I6)."""
+    issue, target, load, _dump = accounting_target
+    phases = Path.cwd() / ".cafe/phases.yaml"
+    configuration = yaml.safe_load(phases.read_text())
+    requested = "m" * requested_length
+    configuration["implementation"]["clis"][0]["model"] = requested
+    phases.write_text(yaml.safe_dump(configuration))
+    records = [init("failed")]
+    if partial_input is not None:
+        records.append(dict(type="result", usage={"input_tokens": partial_input}))
+    launch = provider_process(records, returncode=7, stderr="provider rejected request")
+    assert chat.launch_chat_session(
+        "developer", "x", phase_name="implementation", prompt="hello"
+    ) == 1
+    assert launch.call_count == 1
+    assert requested in launch.call_args.args[0]
+    first = load(target.read_text())["chat_usage"]
+    assert len(first) == 1
+    assert first[0]["requested_model"] == (requested if requested_length == 512 else None)
+    assert first[0]["reported_model"] is None
+    assert first[0]["calls"] == first[0]["incomplete_calls"] == 1
+    assert first[0]["stats"] == ({} if partial_input is None else {"input_tokens": partial_input})
+    assert "total_cost_usd" in first[0]["unknown_fields"]
+
+    # Correct the actual configuration, then exercise both public launch modes.
+    configuration["implementation"]["clis"][0]["model"] = "selected"
+    phases.write_text(yaml.safe_dump(configuration))
+    launch = provider_process(
+        [init("new", model="selected"), dict(type="result", usage={"input_tokens": 3})]
+    )
+    launch.reset_mock()
+    assert chat.launch_chat_session(
+        "developer", "x", phase_name="implementation", prompt="hello"
+    ) == 0
+    assert launch.call_count == 1
+
+    session = "b3a45cc1-5221-4ee6-9fc3-5517448c7c14"
+    SessionManager().save_session("David", AgentCLI.CLAUDE, session, "x", "implementation")
+    native = Path.cwd() / "native"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(native))
+    journal = native / "projects" / re.sub(r"[^a-zA-Z0-9]", "-", str(Path.cwd())) / (session + ".jsonl")
+    journal.parent.mkdir(parents=True)
+    journal.write_text("")
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        assert set(kwargs) == {"env"}
+        assert "--resume" in command and session in command
+        with journal.open("a") as handle:
+            handle.write(json.dumps({
+                "type": "assistant", "sessionId": session,
+                "message": {"id": "current", "model": "selected", "usage": {"input_tokens": 5}},
+            }) + "\n")
+        return subprocess.CompletedProcess(command, 7)
+
+    terminal(run)
+    assert chat.launch_chat_session("developer", "x", phase_name="implementation") == 7
+    assert len(calls) == 1
+    stored = load(target.read_text())["chat_usage"]
+    assert sum(group["calls"] for group in stored) == 3
+    assert sum(group["stats"].get("input_tokens", 0) for group in stored) == 8 + (partial_input or 0)
+    assert all(
+        group[field] is None or len(group[field]) <= 512
+        for group in stored for field in ("requested_model", "reported_model")
+    )
+    assert next(group for group in stored if group["mode"] == "interactive")["incomplete_calls"] == 1
+    consumed = StatusService(issues_root=issue.parent).load_chat_usage("x", ["implementation"])
+    assert sum(group["stats"].get("input_tokens", 0) for group in consumed) == 8 + (partial_input or 0)
+    assert list(target.parent.glob(".usage-*")) == []
