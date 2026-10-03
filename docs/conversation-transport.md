@@ -205,6 +205,11 @@ chat never creates an iteration, issue authority, or separate accounting store.
 Issue metadata publication reuses the same descriptor traversal, exchange,
 rollback and private staging as iteration publication, with the existing issue
 settings lock as well as the workspace lock. Other issue settings remain intact.
+The admitted parent chain is validated before opening that settings lock.
+Accounting opens the shared lock relative to its pinned parent descriptor with
+no-follow/regular-file checks; a completed parent substitution cannot create a
+sidecar in an unselected directory. Ordinary settings writers retain their
+existing lock path and serialize against the same lock inode.
 
 Each group records `cli`, `phase`, `mode`, `requested_model`, `reported_model`,
 `calls`, `incomplete_calls`, `unknown_fields` and `stats`. The group key separates
@@ -223,7 +228,12 @@ for accounting. Provider cumulative summaries replace intermediate snapshots
 through existing parsers, rather than being summed again. Missing models,
 unsupported or absent usage, partial counters, and execution failures contribute
 explicit incomplete coverage. A missing or invalid accounting target prevents
-one-shot launch and produces an observable error. Interactive launch reports
+one-shot launch and produces an observable error. Admission validates the
+optional aggregate list, group identities, numeric subtotals, call counts and
+coverage fields before provider use; absent optional metadata remains
+compatible. The latest mapping is revalidated under the shared locks before
+updating it, so concurrent corruption produces an explicit accounting error
+without an unchecked schema exception or provider replay. Interactive launch reports
 that target gap while retaining its native terminal behavior.
 
 Interactive execution still inherits stdin/stdout/stderr directly. Its optional

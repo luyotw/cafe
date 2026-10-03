@@ -58,7 +58,7 @@ def _inode(info):
 
 
 @contextmanager
-def _usage_parent(target: Path):
+def _usage_parent(target: Path, *, expected_parents=None):
     """Reuse no-follow descriptor traversal across the complete absolute path."""
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     descriptor = os.open(os.sep, flags)
@@ -69,6 +69,8 @@ def _usage_parent(target: Path):
             os.close(descriptor)
             descriptor = next_descriptor
             identities.append(_inode(os.fstat(descriptor)))
+        if expected_parents is not None and tuple(identities) != expected_parents:
+            raise ValueError("usage target parent changed")
         yield descriptor, tuple(identities)
     finally:
         os.close(descriptor)
@@ -117,7 +119,14 @@ def iteration_usage_sink(repository_root: Path, context_file: Path):
     return _metadata_usage_sink(repository_root, context_file)
 
 
-def _metadata_usage_sink(repository_root, context_file, *, issue_metadata=False, update=None):
+def _metadata_usage_sink(
+    repository_root,
+    context_file,
+    *,
+    issue_metadata=False,
+    update=None,
+    validate=None,
+):
     """Publish an update through the same pinned metadata and staging boundary."""
     root = Path(repository_root).resolve()
     target = Path(os.path.abspath(context_file))
@@ -132,6 +141,8 @@ def _metadata_usage_sink(repository_root, context_file, *, issue_metadata=False,
         not issue_metadata and not isinstance(original.get("iteration"), int)
     ):
         return None
+    if validate is not None:
+        validate(original)
 
     def metadata_identity(data):
         if issue_metadata:
@@ -146,11 +157,9 @@ def _metadata_usage_sink(repository_root, context_file, *, issue_metadata=False,
     def persist(usage):
         with (
             workspace_execution_lock(root),
-            issue_config_lock(target) if issue_metadata else nullcontext(),
-            _usage_parent(target) as (parent_fd, current_parents),
+            _usage_parent(target, expected_parents=parents) as (parent_fd, _parents),
+            issue_config_lock(target, parent_fd=parent_fd) if issue_metadata else nullcontext(),
         ):
-            if current_parents != parents:
-                raise ValueError("usage target parent changed")
             # A cooperating writer can atomically replace this same iteration.
             # Read its latest counts under the shared lock; pin this read's inode
             # only through publication, not across independent provider calls.
@@ -159,6 +168,8 @@ def _metadata_usage_sink(repository_root, context_file, *, issue_metadata=False,
             )
             if not isinstance(current, dict) or metadata_identity(current) != identity:
                 raise ValueError("admitted metadata identity changed")
+            if validate is not None:
+                validate(current)
             if update is None:
                 current["stats"] = merge_token_usage_stats(current.get("stats"), usage)
             else:
@@ -236,6 +247,63 @@ CHAT_USAGE_FIELDS = (
 )
 
 
+def _validate_chat_usage(metadata):
+    """Validate existing aggregates before admission and each locked update."""
+    if "chat_usage" not in metadata:
+        return  # Existing metadata without the optional field remains compatible.
+    groups = metadata["chat_usage"]
+    if not isinstance(groups, list):
+        raise ValueError("invalid existing chat accounting")
+    seen = set()
+    identity_fields = ("cli", "requested_model", "reported_model", "mode", "phase")
+    for group in groups:
+        if not isinstance(group, dict) or not set(identity_fields).issubset(group):
+            raise ValueError("invalid chat accounting group")
+        for field in identity_fields:
+            value = group[field]
+            if value is None and field in {"requested_model", "reported_model"}:
+                continue
+            if not isinstance(value, str) or not value.strip() or len(value) > 512:
+                raise ValueError("invalid chat accounting identity")
+        key = tuple(group[field] for field in identity_fields)
+        if group["mode"] not in {"interactive", "one_shot"} or key in seen:
+            raise ValueError("invalid or duplicate chat accounting group")
+        seen.add(key)
+        calls, incomplete = group.get("calls"), group.get("incomplete_calls")
+        if type(calls) is not int or type(incomplete) is not int or not 0 <= incomplete <= calls:
+            raise ValueError("invalid chat accounting call counts")
+        stats, unknown = group.get("stats"), group.get("unknown_fields")
+        if (
+            not isinstance(stats, dict)
+            or not isinstance(unknown, list)
+            or any(
+                not isinstance(field, str) or field not in CHAT_USAGE_FIELDS for field in unknown
+            )
+        ):
+            raise ValueError("invalid chat accounting coverage")
+        for field, value in stats.items():
+            if (
+                field not in CHAT_USAGE_FIELDS
+                or isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or value < 0
+            ):
+                raise ValueError("invalid chat accounting statistics")
+            try:
+                finite = math.isfinite(value)
+            except OverflowError:
+                finite = False
+            if not finite or (field != "total_cost_usd" and not isinstance(value, int)):
+                raise ValueError("invalid chat accounting statistics")
+        missing = set(CHAT_USAGE_FIELDS) - stats.keys()
+        if not missing.issubset(unknown) or (
+            calls
+            and (unknown or group["reported_model"] is None or group["mode"] == "interactive")
+            and not incomplete
+        ):
+            raise ValueError("incomplete chat accounting coverage is unmarked")
+
+
 def chat_usage_sink(
     repository_root, metadata_file, *, cli, requested_model, mode, phase, issue_metadata=False
 ):
@@ -310,7 +378,8 @@ def chat_usage_sink(
             group["unknown_fields"] = sorted(missing)
 
     return _metadata_usage_sink(
-        repository_root, metadata_file, issue_metadata=issue_metadata, update=update
+        repository_root, metadata_file, issue_metadata=issue_metadata, update=update,
+        validate=_validate_chat_usage,
     )
 
 

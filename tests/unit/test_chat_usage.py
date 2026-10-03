@@ -100,3 +100,48 @@ def test_issue_metadata_identity_and_symlink_admission_are_preserved(tmp_path):
     alias.symlink_to(target)
     with pytest.raises(ValueError):
         sink(tmp_path, alias, issue_metadata=True)
+
+
+def test_descriptor_lock_serializes_with_existing_settings_writer(tmp_path, monkeypatch):
+    import fcntl
+    import os
+    from threading import Event, get_ident
+    from cafe.utils.issue_config import issue_config_lock, write_issue_config_atomic
+
+    target = tmp_path / "issue.yaml"
+    target.write_text(yaml.safe_dump({"feature_branch": "x", "unrelated": "kept"}))
+    writer = sink(tmp_path, target, issue_metadata=True)
+    attempt = Event()
+    owner = get_ident()
+    original_flock = fcntl.flock
+    lock_identity = None
+
+    def observe_lock(descriptor, operation):
+        info = os.fstat(descriptor)
+        if (
+            get_ident() != owner
+            and operation == fcntl.LOCK_EX
+            and (info.st_dev, info.st_ino) == lock_identity
+        ):
+            attempt.set()
+        return original_flock(descriptor, operation)
+
+    monkeypatch.setattr(fcntl, "flock", observe_lock)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with issue_config_lock(target):
+            info = target.with_name("issue-settings.lock").stat()
+            lock_identity = info.st_dev, info.st_ino
+            future = pool.submit(
+                writer,
+                (TransportResult(reported_model="actual", usage=TokenUsage(input_tokens=2)),),
+            )
+            assert attempt.wait(2), "chat did not acquire the existing settings lock"
+            assert not future.done()
+            current = yaml.safe_load(target.read_text())
+            current["pr"] = {"auto_create": False}
+            write_issue_config_atomic(target, current)
+        future.result(timeout=2)
+    current = yaml.safe_load(target.read_text())
+    assert current["pr"] == {"auto_create": False}
+    assert current["unrelated"] == "kept"
+    assert current["chat_usage"][0]["stats"]["input_tokens"] == 2

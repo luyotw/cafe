@@ -524,3 +524,191 @@ def test_malformed_issue_metadata_has_visible_coverage_gap(
     )
     assert "incomplete" in capsys.readouterr().out.lower()
     assert launch.call_count == 0 and config.read_text() == "broken: ["
+
+
+@pytest.fixture(params=["iteration", "issue"])
+def accounting_target(phase_chat, request):
+    """Existing JSON/YAML targets through the public caller (Plan U11/I6)."""
+    issue, iteration = phase_chat
+    if request.param == "issue":
+        iteration.unlink()
+        target = issue / "issue.yaml"
+        target.write_text(yaml.safe_dump({"feature_branch": "x", "unrelated": "kept"}))
+        load, dump = yaml.safe_load, yaml.safe_dump
+    else:
+        target = iteration
+        load, dump = json.loads, json.dumps
+    return issue, target, load, dump
+
+
+@pytest.mark.parametrize("replacement", ["symlink", "directory"])
+def test_completed_parent_replacement_prevents_all_accounting_side_effects(
+    accounting_target, provider_process, replacement
+):
+    from cafe.core.workspace_lock import workspace_execution_lock
+
+    issue, target, _load, _dump = accounting_target
+    original = target.read_bytes()
+    outside = Path.cwd() / "outside"
+    outside.mkdir()
+    (outside / "unrelated").write_bytes(b"preserved")
+    before = {p.name: p.read_bytes() for p in outside.iterdir()}
+    held = issue.with_name("held")
+    launch = provider_process(
+        [init("new", model="selected"), dict(type="result", usage={"input_tokens": 2})]
+    )
+    process = launch.return_value
+
+    def finish_replacement(command, **kwargs):
+        # Completed cooperating mutation during the provider call, before persist.
+        with workspace_execution_lock(Path.cwd()):
+            issue.rename(held)
+            if replacement == "symlink":
+                issue.symlink_to(outside, target_is_directory=True)
+            else:
+                issue.mkdir()
+                (issue / "unrelated").write_bytes(b"preserved")
+        return process
+
+    launch.side_effect = finish_replacement
+    assert (
+        chat.launch_chat_session("developer", "x", phase_name="implementation", prompt="hello") == 1
+    )
+    assert launch.call_count == 1
+    assert (held / target.relative_to(issue)).read_bytes() == original
+    assert {p.name: p.read_bytes() for p in outside.iterdir()} == before
+    if replacement == "directory":
+        assert {p.name: p.read_bytes() for p in issue.iterdir()} == {"unrelated": b"preserved"}
+
+
+def _malformed_chat_groups(case):
+    from cafe.core.usage import CHAT_USAGE_FIELDS
+
+    group = dict(
+        cli="claude",
+        requested_model="selected",
+        reported_model="selected",
+        mode="one_shot",
+        phase="implementation",
+        stats={},
+        calls=1,
+        incomplete_calls=1,
+        unknown_fields=list(CHAT_USAGE_FIELDS),
+    )
+    if case == "list":
+        return "not-a-list"
+    if case == "group":
+        return [None]
+    if case == "missing_coverage":
+        del group["unknown_fields"]
+    elif case == "coverage_string":
+        group["unknown_fields"] = "input_tokens"
+    elif case == "coverage_name":
+        group["unknown_fields"] = ["not-a-counter"]
+    elif case == "stats":
+        group["stats"] = []
+    elif case == "counter":
+        group["stats"] = {"input_tokens": "three"}
+    elif case == "cost":
+        group["stats"] = {"total_cost_usd": float("inf")}
+    elif case == "calls":
+        group["calls"] = True
+    elif case == "incomplete_calls":
+        group["incomplete_calls"] = 2
+    elif case == "model":
+        group["reported_model"] = {}
+    elif case == "duplicate":
+        return [group, dict(group)]
+    return [group]
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "list",
+        "group",
+        "missing_coverage",
+        "coverage_string",
+        "coverage_name",
+        "stats",
+        "counter",
+        "cost",
+        "calls",
+        "incomplete_calls",
+        "model",
+        "duplicate",
+    ],
+)
+def test_malformed_accounting_is_rejected_before_paid_one_shot(
+    accounting_target, provider_process, capsys, case
+):
+    _issue, target, load, dump = accounting_target
+    data = load(target.read_text())
+    data["chat_usage"] = _malformed_chat_groups(case)
+    target.write_text(dump(data))
+    original = target.read_bytes()
+    launch = provider_process(
+        [init("new", model="selected"), dict(type="result", usage={"input_tokens": 3})]
+    )
+    assert (
+        chat.launch_chat_session("developer", "x", phase_name="implementation", prompt="hello") == 1
+    )
+    assert launch.call_count == 0
+    assert "incomplete" in capsys.readouterr().out.lower()
+    assert target.read_bytes() == original
+    assert list(target.parent.glob(".usage-*")) == []
+
+
+@pytest.mark.parametrize("case", ["list", "missing_coverage"])
+def test_changed_accounting_is_revalidated_without_schema_crash_or_recovery(
+    accounting_target, provider_process, capsys, case
+):
+    from cafe.core.workspace_lock import workspace_execution_lock
+
+    _issue, target, load, dump = accounting_target
+    SessionManager().save_session("David", AgentCLI.CLAUDE, "stale", "x", "implementation")
+    launch = provider_process(
+        [init("stale", model="selected"), dict(type="result", usage={"input_tokens": 3})],
+        returncode=1,
+        stderr="no conversation found",
+    )
+    process = launch.return_value
+    changed = None
+
+    def change_metadata(command, **kwargs):
+        nonlocal changed
+        with workspace_execution_lock(Path.cwd()):
+            current = load(target.read_text())
+            current["chat_usage"] = _malformed_chat_groups(case)
+            target.write_text(dump(current))
+            changed = target.read_bytes()
+        return process
+
+    launch.side_effect = change_metadata
+    assert (
+        chat.launch_chat_session("developer", "x", phase_name="implementation", prompt="hello") == 1
+    )
+    assert launch.call_count == 1
+    assert "incomplete" in capsys.readouterr().out.lower()
+    assert target.read_bytes() == changed and list(target.parent.glob(".usage-*")) == []
+
+
+def test_invalid_accounting_preserves_interactive_terminal_with_explicit_gap(
+    accounting_target, terminal, capsys
+):
+    _issue, target, load, dump = accounting_target
+    current = load(target.read_text())
+    current["chat_usage"] = _malformed_chat_groups("missing_coverage")
+    target.write_text(dump(current))
+    original = target.read_bytes()
+    calls = []
+
+    def launch(command, **kwargs):
+        assert set(kwargs) == {"env"}
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    terminal(launch)
+    assert chat.launch_chat_session("developer", "x", phase_name="implementation") == 0
+    assert len(calls) == 1 and "incomplete" in capsys.readouterr().out.lower()
+    assert target.read_bytes() == original
