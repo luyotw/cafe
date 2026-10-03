@@ -286,6 +286,7 @@ def run_chat(cwd: Path, explicit: str | None = None) -> int:
                         on_response=lambda reply: print(reply.response),
                         execution_control=AgentExecutionControl(
                             working_directory=current.issue_dir.parents[2],
+                            max_duration_seconds=60,
                             max_output_bytes=1024 * 1024, max_output_lines=1024,
                         ),
                     )

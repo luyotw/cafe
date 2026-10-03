@@ -379,3 +379,52 @@ def test_worker_transition_during_grounding_never_submits_mixed_facts(
     assert 'verified reply' not in result.output
     launch.assert_not_called()
     assert snapshot(repo) == after_transition
+
+
+def test_noncompleting_provider_turn_is_timed_out_and_releases_chat_lock(
+    tmp_path, monkeypatch, provider_process,
+):
+    """Plan U9/I3/I6: exercise the real executor timer from the public caller."""
+    from threading import Event, Timer
+    from cafe.manager.cli import app
+    repo = repository(tmp_path / 'repo')
+    directory = issue(repo)
+    monkeypatch.chdir(repo)
+    launch = provider_process(codex_reply('topic-codex')[:2])
+    process = launch.return_value
+    terminated = Event()
+    records = iter([json.dumps(record) + '\n' for record in codex_reply('topic-codex')[:2]])
+    def read():
+        record = next(records, None)
+        if record is not None:
+            return record
+        assert terminated.wait(1), 'Provider was not terminated within the test deadline'
+        return ''
+    process.stdout.readline.side_effect = read
+    process.terminate.side_effect = terminated.set
+    durations = []
+    timers = []
+    def timer(duration, callback):
+        durations.append(duration)
+        # Accelerate only the clock boundary; production executor starts and cleans it up.
+        value = Timer(0.025, callback)
+        timers.append(value)
+        return value
+    monkeypatch.setattr('cafe.agents.executor.Timer', timer)
+    before = snapshot(repo)
+    result = CliRunner().invoke(app, ['manager', 'chat', '--issue', 'topic'], input='status?\n')
+    try:
+        assert len(durations) == 1 and 0 < durations[0] <= 60
+        assert result.exit_code != 0
+        assert 'verified reply' not in result.output
+        assert launch.call_count == 1
+        process.terminate.assert_called_once()
+        process.wait.assert_called()
+        assert snapshot(repo) == before
+        with adapter('workflow_event_callback')._session_lock(directory / 'manager', blocking=False):
+            pass
+    finally:
+        terminated.set()
+        for value in timers:
+            value.cancel()
+            value.join(timeout=1)
