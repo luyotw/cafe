@@ -712,3 +712,32 @@ def test_invalid_accounting_preserves_interactive_terminal_with_explicit_gap(
     assert chat.launch_chat_session("developer", "x", phase_name="implementation") == 0
     assert len(calls) == 1 and "incomplete" in capsys.readouterr().out.lower()
     assert target.read_bytes() == original
+
+
+def test_public_chat_settings_lock_uses_admitted_descriptor(
+    phase_chat, provider_process, monkeypatch
+):
+    import io
+
+    issue, iteration = phase_chat
+    iteration.unlink()
+    target = issue / "issue.yaml"
+    target.write_text(yaml.safe_dump({"feature_branch": "x", "unrelated": "kept"}))
+    original_open = io.open
+
+    def require_descriptor(file, *args, **kwargs):
+        # External filesystem boundary: reopening this sidecar by path is
+        # unavailable; opening it within the admitted directory remains valid.
+        if isinstance(file, (str, Path)) and Path(file).name == "issue-settings.lock":
+            raise PermissionError("settings lock requires its admitted descriptor")
+        return original_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(io, "open", require_descriptor)
+    launch = provider_process(
+        [init("new", model="selected"), dict(type="result", usage={"input_tokens": 2})]
+    )
+    assert chat.launch_chat_session("developer", "x", phase_name="implementation", prompt="hello") == 0
+    assert launch.call_count == 1
+    current = yaml.safe_load(target.read_text())
+    assert current["unrelated"] == "kept"
+    assert current["chat_usage"][0]["stats"]["input_tokens"] == 2
