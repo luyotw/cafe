@@ -300,6 +300,20 @@ class AbstractCLI(ABC):
         """Adapters opt in to exact identity record shapes."""
         return False
 
+    read_only_operations: frozenset[str] = frozenset()
+
+    def require_read_only(self, operation: str) -> None:
+        """Admit only an integrated native parameter path; no backend probe."""
+        if operation not in self.read_only_operations:
+            raise ValueError(
+                f"Read-only chat is unsupported for {self.config.cli.value}/{operation}"
+            )
+
+    def apply_read_only(self, command: List[str], operation: str) -> List[str]:
+        """Project native options, leaving ordinary construction unchanged."""
+        self.require_read_only(operation)
+        raise NotImplementedError("Integrated read-only operation has no projection")
+
     def prepare_project_workspace(self, project_root: Path) -> None:
         """Prepare CLI-specific project workspace before execution."""
         return None

@@ -876,6 +876,44 @@ class BlackboardStore:
         self.audit.high_water(state.workflow_id)
         self._load_receipts(state.workflow_id)
 
+    def load_read_only(self) -> BlackboardState:
+        """Read existing authorities without locks, initialization or reconciliation.
+
+        Diagnosis must not repair a partially committed workflow. Reject such
+        snapshots rather than presenting stale ownership or creating a baton.
+        """
+        snapshot = self.file_path.read_text(encoding="utf-8")
+        raw = json.loads(snapshot)
+        if (
+            not isinstance(raw, dict)
+            or not isinstance(raw.get("current_step"), str)
+            or not raw["current_step"].strip()
+        ):
+            raise ValueError("Read-only workflow context has no current step")
+        state = BlackboardState.from_dict(raw, initial_step=raw["current_step"])
+        checkpoint = state.applied_event_sequence
+        high_water = self.audit.high_water(state.workflow_id)
+        if checkpoint < 0 or checkpoint > high_water:
+            raise ValueError("Read-only workflow audit checkpoint is inconsistent")
+        for sequence in range(checkpoint + 1, high_water + 1):
+            if self.audit.read(state.workflow_id, sequence, bounded=True) is not None:
+                raise ValueError("Read-only workflow context requires reconciliation")
+        self._hydrate(state)
+        contract = self.load_handoff_contract(state, allowed_steps=[])
+        if (
+            state.handoff_contract is None
+            or state.handoff_contract.to_next_step_dict() != contract.to_next_step_dict()
+        ):
+            raise ValueError("Read-only workflow context has inconsistent handoff state")
+        # A concurrent writer may invalidate the snapshot, but must not make the
+        # diagnostic path reconcile it. Callers can retry a stable read.
+        if (
+            self.file_path.read_text(encoding="utf-8") != snapshot
+            or self.audit.high_water(state.workflow_id) != high_water
+        ):
+            raise ValueError("Read-only workflow context changed during inspection")
+        return state
+
     def load_or_create(
         self,
         initial_step: str,

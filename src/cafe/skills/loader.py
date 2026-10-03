@@ -126,12 +126,15 @@ class SkillLoader:
         global_root: Optional[Path] = None,
         builtin_root: Optional[Path] = None,
         resolve_presentation: bool = True,
+        read_only: bool = False,
     ) -> None:
         self.resolver = CatalogResolver(
             project_root=project_root,
             global_root=global_root,
             builtin_root=builtin_root,
+            read_only=read_only,
         )
+        self.read_only = read_only
         self.project_root = self.resolver.project_root
         self.global_root = self.resolver.global_root
         self.builtin_root = self.resolver.builtin_root
@@ -159,7 +162,7 @@ class SkillLoader:
 
     def discover(self, *, strict: bool = False) -> List[SkillCatalogEntry]:
         """Discover catalog entries and cache by lookup key (folder name)."""
-        with global_catalog_lock(self.global_root):
+        with global_catalog_lock(self.global_root, read_only=self.read_only):
             return self._discover_unlocked(strict=strict)
 
     def _discover_unlocked(self, *, strict: bool = False) -> List[SkillCatalogEntry]:
@@ -218,7 +221,7 @@ class SkillLoader:
 
     def get_skill_entry(self, name: str) -> SkillCatalogEntry:
         """Return the resolved skill and its discovery trust source."""
-        with global_catalog_lock(self.global_root):
+        with global_catalog_lock(self.global_root, read_only=self.read_only):
             return self._resolve_entry(name)
 
     @staticmethod
@@ -236,7 +239,7 @@ class SkillLoader:
 
     def activate(self, name: str, context: Optional[Dict[str, str]] = None) -> str:
         """Load full skill content and replace placeholders."""
-        with global_catalog_lock(self.global_root):
+        with global_catalog_lock(self.global_root, read_only=self.read_only):
             skill_dir = self._resolve_entry(name).directory
             skill_file = skill_dir / "SKILL.md"
             text = skill_file.read_text(encoding="utf-8")
@@ -261,7 +264,7 @@ class SkillLoader:
         self, name: str, *, validate_resources: bool = True
     ) -> tuple[SkillCatalogEntry, SkillWorkflowDeclaration]:
         """Return a declaration with the exact catalog entry that supplied it."""
-        with global_catalog_lock(self.global_root):
+        with global_catalog_lock(self.global_root, read_only=self.read_only):
             entry, raw_declaration = self.get_workflow_declaration_data(name)
             declaration = self.parse_workflow_declaration(entry, raw_declaration)
             if validate_resources:
@@ -272,7 +275,7 @@ class SkillLoader:
         self, name: str
     ) -> tuple[SkillCatalogEntry, object]:
         """Return resolved provenance and raw workflow metadata without validating it."""
-        with global_catalog_lock(self.global_root):
+        with global_catalog_lock(self.global_root, read_only=self.read_only):
             entry = self._resolve_entry(name)
             metadata = self._read_skill_frontmatter(entry.directory / "SKILL.md")
             return entry, metadata.get("workflow", {})
@@ -366,7 +369,7 @@ class SkillLoader:
 
     def get_reference(self, name: str, ref: str) -> str:
         """Read one reference file under skill references directory."""
-        with global_catalog_lock(self.global_root):
+        with global_catalog_lock(self.global_root, read_only=self.read_only):
             skill_dir = self._resolve_entry(name).directory
             ref_file = (skill_dir / "references" / ref).resolve()
             refs_dir = (skill_dir / "references").resolve()

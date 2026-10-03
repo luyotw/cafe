@@ -155,6 +155,7 @@ class ConversationTransport:
         required_evidence: frozenset[Evidence] = frozenset(),
         environment_overrides=None,
         on_accounting=None,
+        read_only: bool = False,
     ) -> TransportResult:
         self._admit("open_interactive_session", required_evidence)
         strategy = self.executor._get_cli_strategy()
@@ -164,6 +165,9 @@ class ConversationTransport:
                 {str(key): str(value) for key, value in environment_overrides.items()}
             )
         command = strategy.build_interactive_command(initial_prompt)
+        if read_only:
+            command = strategy.apply_read_only(command, "open_interactive_session")
+            on_accounting = None
         collect = None
         if on_accounting is not None:
             command, collect = strategy.prepare_interactive_accounting(command, environment)

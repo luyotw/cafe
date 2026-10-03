@@ -91,8 +91,12 @@ def bounded_directory_names(
 
 
 @contextmanager
-def global_catalog_lock(global_root: Path, *, exclusive: bool = False) -> Iterator[None]:
+def global_catalog_lock(
+    global_root: Path, *, exclusive: bool = False, read_only: bool = False
+) -> Iterator[None]:
     """Recover and coordinate catalog readers and publishers under one lock."""
+    if read_only and exclusive:
+        raise ValueError("Read-only catalog access cannot publish")
     lock_root = Path(global_root).resolve().parent
     if not lock_root.exists():
         if not exclusive:
@@ -106,6 +110,8 @@ def global_catalog_lock(global_root: Path, *, exclusive: bool = False) -> Iterat
         _catalog_lock_state.held = held
     state = held.get(key)
     if state is not None:
+        if state.get("read_only") and not read_only:
+            raise ValueError("Read-only catalog access cannot run recovery")
         if exclusive and not state["exclusive"]:
             raise RuntimeError("Cannot upgrade a shared catalog lock")
         state["depth"] += 1
@@ -122,8 +128,23 @@ def global_catalog_lock(global_root: Path, *, exclusive: bool = False) -> Iterat
     try:
         from cafe.catalogs.transactions import recover_catalog_transactions
 
-        recover_catalog_transactions(Path(global_root).resolve())
-        held[key] = {"depth": 1, "exclusive": True, "descriptor": descriptor}
+        if read_only:
+            transactions = Path(global_root).resolve() / ".catalog-transactions"
+            if transactions.is_symlink() or (
+                transactions.exists()
+                and (not transactions.is_dir() or next(transactions.iterdir(), None) is not None)
+            ):
+                raise CatalogValidationError(
+                    "Read-only catalog access requires transaction recovery"
+                )
+        else:
+            recover_catalog_transactions(Path(global_root).resolve())
+        held[key] = {
+            "depth": 1,
+            "exclusive": True,
+            "descriptor": descriptor,
+            "read_only": read_only,
+        }
         yield
     finally:
         held.pop(key, None)
@@ -360,7 +381,9 @@ class CatalogResolver:
         global_root: Optional[Path] = None,
         builtin_root: Optional[Path] = None,
         git_runner: GitRunner = _run_git,
+        read_only: bool = False,
     ) -> None:
+        self.read_only = read_only
         requested_root = Path(project_root).resolve() if project_root else None
         roots = discover_project_roots(requested_root or Path.cwd(), git_runner=git_runner)
         self.project_root = (
@@ -375,7 +398,11 @@ class CatalogResolver:
         if global_root is None:
             from cafe.utils import config
 
-            global_root = config.get_global_cafe_dir()
+            global_root = (
+                config.get_global_cafe_dir(read_only=True)
+                if read_only
+                else config.get_global_cafe_dir()
+            )
         self.global_root = Path(global_root).resolve()
         self.builtin_root = Path(
             builtin_root or (Path(__file__).resolve().parent.parent / "data")
@@ -462,7 +489,7 @@ class CatalogResolver:
         raise FileNotFoundError(f"{kind.value.title()} not found: {key}")
 
     def resolve(self, kind: CatalogKind, key: str) -> CatalogEntry:
-        with global_catalog_lock(self.global_root):
+        with global_catalog_lock(self.global_root, read_only=self.read_only):
             return self._resolve_unlocked(kind, key)
 
     def _keys_at_root(self, kind: CatalogKind, root: Path) -> Iterator[str]:
@@ -510,7 +537,7 @@ class CatalogResolver:
         return sorted(keys)
 
     def keys(self, kind: CatalogKind) -> list[str]:
-        with global_catalog_lock(self.global_root):
+        with global_catalog_lock(self.global_root, read_only=self.read_only):
             return self._keys_unlocked(kind)
 
     def entries(
@@ -520,7 +547,7 @@ class CatalogResolver:
         max_entries: Optional[int] = None,
     ) -> list[CatalogEntry]:
         selected = list(kinds or CatalogKind)
-        with global_catalog_lock(self.global_root):
+        with global_catalog_lock(self.global_root, read_only=self.read_only):
             results: list[CatalogEntry] = []
             for kind in selected:
                 remaining = None if max_entries is None else max_entries - len(results)

@@ -215,6 +215,7 @@ class AgentExecutor:
         streaming_output_file: Optional[str] = None,
         execution_control: AgentExecutionControl | None = None,
         exact_session: bool = False,
+        read_only: bool = False,
         environment_overrides: Optional[dict[str, str]] = None,
     ) -> AgentResponse:
         """Execute the agent with given prompt.
@@ -238,6 +239,10 @@ class AgentExecutor:
         try:
             # Get CLI strategy
             cli_strategy = self._get_cli_strategy()
+            if read_only:
+                cli_strategy.require_read_only("run_one_shot")
+                # Diagnostic output is terminal/response only; no CAFE log file.
+                streaming_output_file = None
             # Normal Gemini agents keep the repository-owned ignore file.
             # Decision-only execution creates it only inside its isolated cwd.
             decision_only = allowed_tools == [] and allowed_directories == []
@@ -261,6 +266,8 @@ class AgentExecutor:
                 allowed_directories,
                 execution_control,
             )
+            if read_only:
+                cmd = cli_strategy.apply_read_only(cmd, "run_one_shot")
             env = cli_strategy.build_environment()
             if environment_overrides:
                 env.update(
@@ -1533,7 +1540,6 @@ class AgentExecutor:
                                         except BaseException:
                                             observer_failed = True
                                             raise
-
 
                             if any(key in data and not isinstance(data[key], dict)
                                    for key in ("usage", "stats")):

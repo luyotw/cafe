@@ -167,7 +167,7 @@ def resolve_step_workflow_composition(
     workflow_skills: Iterable[str] = (),
 ) -> StepWorkflowComposition:
     """Compose one step against a stable catalog reader snapshot."""
-    with global_catalog_lock(skill_loader.global_root):
+    with global_catalog_lock(skill_loader.global_root, read_only=skill_loader.read_only):
         return _resolve_step_workflow_composition_locked(
             skill_loader,
             primary_skill=primary_skill,

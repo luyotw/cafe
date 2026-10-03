@@ -35,14 +35,16 @@ class SessionManager:
     Each issue has an independent session directory, and each agent+CLI combination has an independent session file.
     """
 
-    def __init__(self, sessions_dir: str = ".cafe/sessions") -> None:
+    def __init__(self, sessions_dir: str = ".cafe/sessions", *, read_only: bool = False) -> None:
         """Initialize session manager.
 
         Args:
             sessions_dir: Directory to store session files
         """
         self.sessions_dir = Path(sessions_dir)
-        self.sessions_dir.mkdir(parents=True, exist_ok=True)
+        self.read_only = read_only
+        if not read_only:
+            self.sessions_dir.mkdir(parents=True, exist_ok=True)
 
     def get_session_file(
         self,
@@ -68,7 +70,8 @@ class SessionManager:
         if issue_name:
             # Issue-specific sessions go under .cafe/issues/{issue_name}/sessions/
             issue_sessions_dir = Path(".cafe/issues") / issue_name / "sessions"
-            issue_sessions_dir.mkdir(parents=True, exist_ok=True)
+            if not self.read_only:
+                issue_sessions_dir.mkdir(parents=True, exist_ok=True)
             phase_suffix = f"_{phase_name}" if phase_name else ""
             return issue_sessions_dir / f"{agent_name}_{cli.value}{phase_suffix}.json"
 
@@ -93,6 +96,8 @@ class SessionManager:
             SessionData if exists, None otherwise
         """
         session_file = self.get_session_file(agent_name, cli, issue_name, phase_name)
+        if self.read_only and session_file.is_symlink() and not session_file.exists():
+            raise ValueError(f"Read-only session target is absent: {session_file}")
         if not session_file.exists():
             return None
 
@@ -101,6 +106,8 @@ class SessionManager:
                 data = json.load(f)
                 return SessionData(**data)
         except (json.JSONDecodeError, ValueError):
+            if self.read_only:
+                raise ValueError(f"Unreadable read-only session: {session_file}")
             # Invalid session file, return None
             return None
 
@@ -120,6 +127,8 @@ class SessionManager:
             session_id: Session ID to save
             issue_name: Name of the issue (for issue-specific sessions)
         """
+        if self.read_only:
+            raise PermissionError("Read-only session access cannot persist a session")
         session_file = self.get_session_file(agent_name, cli, issue_name, phase_name)
 
         # Load existing session to preserve created_at, or create new
@@ -152,6 +161,8 @@ class SessionManager:
             cli: CLI type
             issue_name: Name of the issue (for issue-specific sessions)
         """
+        if self.read_only:
+            raise PermissionError("Read-only session access cannot delete a session")
         session_file = self.get_session_file(agent_name, cli, issue_name, phase_name)
         if session_file.exists():
             session_file.unlink()
@@ -165,6 +176,8 @@ class SessionManager:
         Returns:
             Session ID (existing or newly created)
         """
+        if self.read_only:
+            raise PermissionError("Read-only session access cannot initialize a session")
         # Try to load existing session
         existing_session = self.load_session(agent_config.name)
         if existing_session:

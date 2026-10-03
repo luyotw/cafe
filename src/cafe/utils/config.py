@@ -8,7 +8,6 @@ import json
 import time
 
 
-
 class ConfigError(Exception):
     """Configuration error."""
 
@@ -49,14 +48,15 @@ def validate_directories_exist(dirs: List[str], base_dir: Path) -> None:
         )
 
 
-def get_global_cafe_dir() -> Path:
+def get_global_cafe_dir(*, read_only: bool = False) -> Path:
     """Get global CAFE directory path.
-    
+
     Returns:
-        Path to ~/.cafe directory (creates if not exists)
+        Path to ~/.cafe directory (creates unless read_only is requested)
     """
     global_dir = Path.home() / ".cafe"
-    global_dir.mkdir(parents=True, exist_ok=True)
+    if not read_only:
+        global_dir.mkdir(parents=True, exist_ok=True)
     return global_dir
 
 
@@ -122,14 +122,16 @@ def resolve_sync_github_config(
 class ConfigManager:
     """Manages CAFE configuration."""
 
-    def __init__(self, config_dir: str = ".cafe") -> None:
+    def __init__(self, config_dir: str = ".cafe", *, read_only: bool = False) -> None:
         """Initialize config manager.
 
         Args:
             config_dir: Directory for configuration files
         """
         self.config_dir = Path(config_dir)
-        self.config_dir.mkdir(parents=True, exist_ok=True)
+        self.read_only = read_only
+        if not read_only:
+            self.config_dir.mkdir(parents=True, exist_ok=True)
         self.config_file = self.config_dir / "config.yaml"
         self._config: Optional[Dict[str, Any]] = None
 
@@ -157,7 +159,9 @@ class ConfigManager:
             if issue_config.exists():
                 with open(issue_config, "r") as f:
                     return yaml.safe_load(f)
-        except Exception:
+        except Exception as exc:
+            if self.read_only:
+                raise ConfigError("Cannot resolve the read-only issue configuration") from exc
             pass
         return None
 
@@ -210,6 +214,8 @@ class ConfigManager:
         Args:
             config: Configuration to save
         """
+        if self.read_only:
+            raise PermissionError("Read-only configuration access cannot persist changes")
         with open(self.config_file, "w") as f:
             yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
         self._config = config
