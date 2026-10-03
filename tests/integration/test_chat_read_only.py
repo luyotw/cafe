@@ -401,6 +401,40 @@ def test_i4_actual_module_startup_does_not_install_or_repair(diagnostic_workspac
 
 
 @pytest.mark.integration
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["analyst", "--unknown-option", "--read-only"],
+        ["analyst", "--read-only", "--unknown-option"],
+        ["analyst", "--read-only", "--phase"],
+    ],
+)
+def test_i4_malformed_diagnostic_startup_preserves_real_state(diagnostic_workspace, args):
+    import os
+
+    repo, _, _ = diagnostic_workspace
+    configure_provider(repo, "codex")
+    before = inventory(repo.parent)
+    env = dict(
+        os.environ,
+        PYTHONPATH=str(Path(__file__).resolve().parents[2] / "src"),
+        PYTHONDONTWRITEBYTECODE="1",
+    )
+    # Exercise main and the real installer eligibility with an absent HOME;
+    # no skip-sync flag or mocked storage owner can hide startup writes.
+    env.pop("CAFE_SKIP_GLOBAL_SKILL_SYNC", None)
+    result = subprocess.run(
+        [sys.executable, "-m", "cafe.ui.cli", "chat", *args],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=20,
+    )
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert inventory(repo.parent) == before
+
+
+@pytest.mark.integration
 @pytest.mark.parametrize("provider", ["codex", "claude"])
 def test_i3_linked_worktree_shared_and_absent_context_remains_unchanged(
     diagnostic_workspace, native_io, provider, monkeypatch

@@ -250,9 +250,14 @@ def _should_auto_install_global_helper_skills(argv: list[str]) -> bool:
         from typer.main import get_command
 
         command = get_command(app).commands["chat"]
-        with command.make_context("chat", argv[1:], resilient_parsing=True) as context:
-            if context.params.get("read_only"):
-                return False
+        try:
+            with command.make_context("chat", argv[1:]) as context:
+                if context.params.get("read_only"):
+                    return False
+        except click.ClickException:
+            # Failed parsing can lose later options, including --read-only.
+            # Leave error reporting to dispatch without startup installation.
+            return False
     if argv[0] == "workflow":
         return "--execute" in argv and "--dry-run" not in argv
     if argv[0] in _AUTO_INSTALL_TOP_LEVEL_COMMANDS:

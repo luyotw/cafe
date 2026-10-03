@@ -73,6 +73,24 @@ def test_u1_prompt_text_is_not_a_read_only_option(message_option):
     )
 
 
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["analyst", "--unknown-option", "--read-only"],
+        ["analyst", "--read-only", "--unknown-option"],
+        ["analyst", "--read-only", "--phase"],
+        ["analyst", "--read-only", "-p"],
+        ["--read-only"],
+    ],
+)
+def test_u1_invalid_diagnostic_options_never_allow_startup_install(args):
+    assert cli._should_auto_install_global_helper_skills(["chat", *args]) is False
+
+
+def test_u1_valid_writable_chat_still_allows_startup_install():
+    assert cli._should_auto_install_global_helper_skills(["chat", "analyst"]) is True
+
+
 def test_u1_help_exposes_protection_and_provider_support():
     result = CliRunner().invoke(cli.app, ["chat", "--help"])
     assert result.exit_code == 0
