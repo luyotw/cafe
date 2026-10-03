@@ -112,6 +112,9 @@ class AgentResponse(BaseModel):
 
     response: str
     token_usage: TokenUsage
+    usage_available: bool = False
+    usage_accounted: bool = False
+    transport_result: Any = None
     permission_denials: List["PermissionDenial"] = Field(default_factory=list)
     cli_command_args: Optional[List[str]] = None  # CLI command arguments (excluding prompt)
     streaming_log: List[str] = Field(default_factory=list)  # Streaming fragment history

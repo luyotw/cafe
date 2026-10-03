@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Optional
 
 from cafe.agents.executor import AgentExecutionError
+from cafe.agents.transport import ConversationTransport
+from cafe.agents.transport_types import TransportResult
 from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.playbook import resolve_playbook_skills
@@ -516,6 +518,52 @@ def _warn_if_chat_handoff_missing(
         )
 
 
+def _chat_usage_sink(issue_dir: Path, step_name: str, *, cli, requested_model, mode):
+    """Admit existing metadata; missing iterations never become workflow authority."""
+    from cafe.core.usage import CHAT_USAGE_FIELDS, chat_usage_sink
+
+    directories = sorted((issue_dir / step_name).glob("iteration_[0-9]*"))
+    target = None
+    if directories:
+        directory = directories[-1]
+        target = directory / "iteration.json"
+        if not target.exists():
+            target = directory / "context.json"
+    if target is None or not target.exists():
+        target = issue_dir / "issue.yaml"
+    try:
+        sink = chat_usage_sink(
+            Path.cwd(),
+            target,
+            cli=cli,
+            requested_model=requested_model,
+            mode=mode,
+            phase=step_name,
+            issue_metadata=target.name == "issue.yaml",
+        )
+    except (OSError, ValueError) as error:
+        raise ValueError(f"Chat accounting incomplete: {error}") from error
+    if sink is None:
+        raise ValueError("Chat accounting incomplete: no existing accounting target")
+
+    def record(results):
+        try:
+            sink(results)
+        except (OSError, ValueError):
+            print("\n⚠️  Chat accounting incomplete: usage publication failed.\n")
+            raise
+        if mode == "interactive" or any(
+            result.reported_model is None
+            or result.usage is None
+            or not set(CHAT_USAGE_FIELDS).issubset(result.usage.model_fields_set)
+            or result.failure_code
+            for result in results
+        ):
+            print("\n⚠️  Chat accounting incomplete; see chat usage coverage in cafe status.\n")
+
+    return record
+
+
 def launch_chat_session(
     role: str,
     issue_name: str,
@@ -529,7 +577,7 @@ def launch_chat_session(
     """Launch an inline chat session with the agent for the given role.
 
     Resolves agent config from ConfigManager, loads the existing session,
-    builds the CLI command, and invokes it via subprocess.run(). Returns
+    opens its provider conversation through the shared transport. Returns
     when the user exits the chat. Errors are printed as warnings so the
     caller's prompt loop can continue.
 
@@ -634,7 +682,7 @@ def launch_chat_session(
     if phase_routing:
         # Phase-routed chat must not inherit a generic session from another step.
         executor.config.session_id = selected_session_id
-    cli_strategy = executor._get_cli_strategy()
+    transport = ConversationTransport(executor)
 
     _current_step, _valid_steps, _playbook_id = _prepare_chat_handoff_state(issue_dir)
     _prepare_chat_environment(
@@ -662,9 +710,29 @@ def launch_chat_session(
     if prompt is not None:
         executor.stream_output = True
         try:
-            response = executor.execute(prompt, environment_overrides=chat_env)
-        except AgentExecutionError as exc:
-            detail = exc.display_message or str(exc)
+            usage_sink = _chat_usage_sink(
+                issue_dir, execution_step, cli=agent_cli_str,
+                requested_model=executor.config.model, mode="one_shot",
+            )
+            responses = []
+
+            def attempt():
+                try:
+                    result = transport.run_one_shot(
+                        prompt, environment_overrides=chat_env, on_response=responses.append,
+                    )
+                except (AgentExecutionError, OSError, ValueError) as error:
+                    partial = getattr(error, "transport_result", None) or TransportResult(
+                        failure_code=getattr(error, "error_type", None) or "execution_failed",
+                    )
+                    usage_sink((partial,))
+                    raise
+                usage_sink((result,))
+                return responses[-1]
+
+            response = executor.with_session_recovery(attempt)
+        except (AgentExecutionError, OSError, ValueError) as exc:
+            detail = getattr(exc, "display_message", None) or str(exc)
             print(f"\n⚠️  Chat CLI failed: {detail}\n")
             return 1
 
@@ -695,9 +763,6 @@ def launch_chat_session(
 
     session_id: Optional[str] = executor.config.session_id
     codex_history_start_ts = int(time.time())
-    cli_command = cli_strategy.build_interactive_command(initial_prompt=initial_prompt)
-    env = cli_strategy.build_environment()
-    env.update(chat_env)
     print(f"\nOpening chat with {role} ({agent_name})...")
     if session_id:
         print(f"Resuming session: {session_id}")
@@ -705,8 +770,24 @@ def launch_chat_session(
 
     # Execute interactive CLI (blocks until user exits)
     try:
-        result = subprocess.run(cli_command, env=env)
-    except FileNotFoundError:
+        try:
+            usage_sink = _chat_usage_sink(
+                issue_dir, execution_step, cli=agent_cli_str,
+                requested_model=executor.config.model, mode="interactive",
+            )
+        except (OSError, ValueError) as error:
+            # Missing telemetry must remain visible without changing the user's
+            # native terminal or selecting a new workflow iteration.
+            print(f"\n⚠️  Chat accounting incomplete: {error}\n")
+            usage_sink = None
+        result = transport.open_interactive_session(
+            initial_prompt, environment_overrides=chat_env, on_accounting=usage_sink,
+        )
+    except AgentExecutionError as error:
+        if error.error_type != "cli_not_found":
+            print(f"\n⚠️  Failed to execute CLI: {error.display_message or str(error)}\n")
+            return 1
+
         print(f"\n⚠️  CLI tool '{agent_cli_str}' not found. Please install it first.\n")
         return 1
     except Exception as e:
@@ -734,7 +815,8 @@ def launch_chat_session(
                 )
 
     if result.returncode != 0:
-        return _handle_chat_launch_failure(agent_cli, result)
+        return _handle_chat_launch_failure(agent_cli, subprocess.CompletedProcess(
+            args=[], returncode=result.returncode, stderr=result.error_excerpt))
 
     _warn_if_chat_handoff_missing(issue_dir, _current_step, _valid_steps)
 

@@ -365,38 +365,9 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
         incoming: TokenUsage,
     ) -> Dict[str, Any]:
         """Merge one raw attempt into persisted iteration-level telemetry."""
-        merged = dict(existing) if isinstance(existing, dict) else {}
-        incoming_data = incoming.model_dump()
-        additive_fields = (
-            "input_tokens",
-            "output_tokens",
-            "cache_creation_input_tokens",
-            "cache_write_input_tokens",
-            "cache_read_input_tokens",
-            "reasoning_output_tokens",
-            "total_cost_usd",
-        )
-        for field in additive_fields:
-            prior = merged.get(field, 0)
-            value = incoming_data.get(field, 0)
-            merged[field] = (prior if isinstance(prior, (int, float)) else 0) + (
-                value if isinstance(value, (int, float)) else 0
-            )
+        from cafe.core.usage import merge_token_usage_stats
 
-        for field in ("duration_ms", "duration_api_ms"):
-            prior = merged.get(field)
-            value = incoming_data.get(field)
-            if isinstance(value, int):
-                merged[field] = (prior if isinstance(prior, int) else 0) + value
-            elif field not in merged:
-                merged[field] = None
-
-        prior_turns = merged.get("turn_usages")
-        incoming_turns = incoming_data.get("turn_usages")
-        merged["turn_usages"] = (
-            list(prior_turns) if isinstance(prior_turns, list) else []
-        ) + (list(incoming_turns) if isinstance(incoming_turns, list) else [])
-        return merged
+        return merge_token_usage_stats(existing, incoming)
 
     def _merge_iteration_token_usage(
         self,

@@ -7,6 +7,7 @@ from cafe.core.context_packet import (
     validate_context_packet_diagnostic,
 )
 from cafe.core.types import PhaseStatus
+from cafe.core.usage import CHAT_USAGE_FIELDS
 from cafe.services.time_formatter import (
     calculate_elapsed_time,
     format_duration,
@@ -18,6 +19,7 @@ from cafe.services.timeline_builder import TimelineEntry
 try:
     from rich.console import Console
     from rich.table import Table
+
     RICH_AVAILABLE = True
 except ImportError:
     RICH_AVAILABLE = False
@@ -40,6 +42,70 @@ class StatusDisplay:
     def __init__(self):
         """Initialize display formatter."""
         pass
+
+    def render_chat_usage_table(self, groups: List[dict]) -> None:
+        """Show known subtotals and coverage separately from phase accounting."""
+        if not groups:
+            return
+        headings = [
+            "Phase",
+            "CLI",
+            "Mode",
+            "Requested model",
+            "Reported model",
+            "Calls",
+            "Coverage",
+            "Input",
+            "Output",
+            "Cache creation",
+            "Cache write",
+            "Cache read",
+            "Reasoning",
+            "Cost (USD)",
+        ]
+        rows = []
+        for group in groups:
+            stats = group.get("stats", {})
+            unknown = set(group.get("unknown_fields", []))
+            values = []
+            for field in CHAT_USAGE_FIELDS:
+                value = stats.get(field)
+                if value is None:
+                    text = "unknown"
+                else:
+                    text = f"${value:.4f}" if field == "total_cost_usd" else f"{value:,}"
+                    if field in unknown:
+                        text += " (partial)"
+                values.append(text)
+            coverage = "incomplete" if group.get("incomplete_calls") else "complete"
+            if group.get("mode") == "interactive":
+                coverage = (
+                    "incomplete (native subset)" if stats else "incomplete (no native evidence)"
+                )
+            rows.append(
+                [
+                    group.get("phase") or "--",
+                    group.get("cli") or "unknown",
+                    group.get("mode") or "unknown",
+                    group.get("requested_model") or "unknown",
+                    group.get("reported_model") or "unknown",
+                    str(group.get("calls", "unknown")),
+                    coverage,
+                    *values,
+                ]
+            )
+        if not RICH_AVAILABLE:
+            print("\nChat usage (provider-reported subtotals)")
+            print(" | ".join(headings))
+            for row in rows:
+                print(" | ".join(row))
+            return
+        table = Table(title="Chat usage (provider-reported subtotals)")
+        for heading in headings:
+            table.add_column(heading)
+        for row in rows:
+            table.add_row(*row)
+        console.print(table)
 
     def format_token_count(self, count: Optional[int]) -> str:
         """Format token count with comma separators.
