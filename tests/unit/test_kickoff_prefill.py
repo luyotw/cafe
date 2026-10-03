@@ -55,6 +55,22 @@ def test_configured_values_are_written_to_the_actual_draft_without_granting_acti
     assert not (tmp_path / ".cafe/issues").exists()
 
 
+@pytest.mark.parametrize("source,expected", [("explicit", "zh-TW"), ("inferred", "fr-FR")])
+def test_schema_example_locale_uses_one_editable_map_and_preserves_precedence(tmp_path, source, expected):
+    module = load_kickoff_module("kickoff_inputs")
+    request = module.request_schema()["request_example"]
+    request.update(_project(tmp_path))
+    request.pop("preflight_files")
+    assert "current_explicit_inputs" not in request
+    request["formatter_inputs"]["locale_source"] = source
+    prefs = load_kickoff_module("kickoff_preferences").PreferenceStore(tmp_path / "prefs", repository_root=tmp_path)
+    prefs.set("conversation.locale", "fr-FR", scope="user", origin="explicit")
+    report = module.assemble_kickoff(request, preference_store=prefs)
+    assert report["formatter_draft"]["effective_locale"] == expected
+    assert report["formatter_draft"]["repository_content_locale"] == "en-US"
+    assert report["formatter_draft"]["phase_chain"] == ["outline=codex:configured-model"]
+
+
 def test_explicit_values_and_invalid_inputs_are_never_replaced_by_defaults(tmp_path):
     module = load_kickoff_module("kickoff_inputs")
     request = _project(tmp_path)

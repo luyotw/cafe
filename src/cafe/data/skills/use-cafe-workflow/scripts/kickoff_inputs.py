@@ -142,20 +142,19 @@ def request_schema() -> dict[str, Any]:
         "request_example": {
             "schema_version": 1, "project_root": "/work/project", "issue_name": "new-issue",
             "playbook_id": "<current selection>",
-            "current_explicit_inputs": {"effective_locale": "zh-TW", "locale_source": "explicit", "repository_content_locale": "en-US"},
             "preflight_files": {"update": "/tmp/update.json", "catalog": "/tmp/catalog.json"},
-            "formatter_inputs": {},
+            "formatter_inputs": {"effective_locale": "zh-TW", "locale_source": "explicit", "repository_content_locale": "en-US"},
         },
         "issue_id": "An explicit positive numeric issue ID supplies issue<id> when issue_name is absent. It is never inferred from an issue-like name.",
         "manager_cli": "Current calling Manager CLI; context, not a model choice. Codex sessions are also recognized by CODEX_THREAD_ID.",
-        "generated_inputs": "Helper-owned provenance map retained in editable requests: field -> origin, dependency and value_fingerprint. Unchanged source-backed values are revalidated at render. Preserve this map when filling gaps; deliberate current_explicit_inputs or an edited field supersede its generated value. It grants no authority.",
+        "generated_inputs": "Helper-owned provenance map retained in editable requests: field -> origin, dependency and value_fingerprint. Preserve it when editing formatter_inputs; unchanged source-backed values are revalidated at render. For deliberate same-value reassessment after invalidation, see kickoff_input_reference.md. It grants no authority.",
         "decision_examples": {
             "phase_chain": ["develop=codex:<exact-model>"],
             "capability_choice": ["pr.auto_create=true"],
             "deliver": [["<executable>", "<literal argument>"]],
             "cleanup": [],
         },
-        "guidance": "kickoff_inputs.md documents staged requests; kickoff.md owns the delivery contract and authority rules. Examples are placeholders, never approved decisions.",
+        "guidance": "Start with draft and edit existing formatter_inputs fields in place, without duplicating them in another input map. After assemble --draft-output, continue with that updated draft. Set effective_locale and its accurate locale_source together (explicit or inferred). Preserve generated_inputs and preflight references. kickoff_inputs.md documents preparation; kickoff.md owns delivery and authority rules. Examples are placeholders, never approved decisions.",
         "render_output": "Default JSON: render.output; --output PATH writes the complete text and returns status/output_file only.",
     }
 
