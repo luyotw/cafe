@@ -33,6 +33,20 @@ For Manager-managed preparation, resolve the user-facing runtime-update decision
 from `project_global_skill_sync.md` before invoking `cafe prepare
 --no-interactive`; callbacks never supply this answer.
 
+## Returning to the current Manager conversation
+
+Users can run `cafe manager chat` in the issue worktree, or
+`cafe manager chat --issue <issue-name>` from the repository root. This terminal
+entrypoint reconnects to an existing verified event-driven provider-owned Codex
+session, including an already active Codex fallback. Host-bound and unsupported
+mode/provider identities direct users to their originating conversation. Opening
+chat creates no identity, wake, task result or worker action. Each submitted turn
+refreshes current durable context and uses the existing session lock.
+
+When a HumanTask is pending, keep its exact `cafe task inspect <id>` and authorized
+`cafe task complete` instructions in the handoff. Manager chat can discuss the
+state; connection or acknowledgement is never a task answer or permission.
+
 ## Required Manager launch entrypoint
 
 The kickoff records one mode; it is a skill operating contract, not a CAFE-core

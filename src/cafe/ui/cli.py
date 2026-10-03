@@ -106,6 +106,7 @@ def _build_repo_entrypoint_mismatch_message(
     *,
     cwd: Optional[Path] = None,
     imported_cli_file: Optional[Path] = None,
+    entry_module: str = "cafe.ui.cli",
 ) -> Optional[str]:
     """Describe a repo/install mismatch when the CLI is not loaded from this checkout."""
     mismatch = _resolve_repo_entrypoint_mismatch(
@@ -133,7 +134,7 @@ def _build_repo_entrypoint_mismatch_message(
           1. Reinstall this checkout into the same interpreter:
              {python_bin} -m pip install -e .
           2. Or run the checkout directly:
-             PYTHONPATH=src {python_bin} -m cafe.ui.cli <command>
+             PYTHONPATH=src {python_bin} -m {entry_module} <command>
         """
     ).strip()
 
@@ -155,9 +156,11 @@ def _resolve_repo_entrypoint_mismatch(
     return repo_root, expected_cli, actual_cli
 
 
-def _build_repo_entrypoint_reexec_command(repo_root: Path) -> list[str]:
+def _build_repo_entrypoint_reexec_command(
+    repo_root: Path, *, entry_module: str = "cafe.ui.cli",
+) -> list[str]:
     """Build a command that runs the CLI from the detected checkout."""
-    return [str(Path(sys.executable).absolute()), "-m", "cafe.ui.cli", *sys.argv[1:]]
+    return [str(Path(sys.executable).absolute()), "-m", entry_module, *sys.argv[1:]]
 
 
 def _build_repo_entrypoint_reexec_env(repo_root: Path) -> dict[str, str]:
@@ -172,16 +175,16 @@ def _build_repo_entrypoint_reexec_env(repo_root: Path) -> dict[str, str]:
     return env
 
 
-def _reexec_repo_entrypoint(repo_root: Path) -> None:
+def _reexec_repo_entrypoint(repo_root: Path, *, entry_module: str = "cafe.ui.cli") -> None:
     """Replace the current process with the checkout-local CLI."""
     os.execvpe(
-        _build_repo_entrypoint_reexec_command(repo_root)[0],
-        _build_repo_entrypoint_reexec_command(repo_root),
+        _build_repo_entrypoint_reexec_command(repo_root, entry_module=entry_module)[0],
+        _build_repo_entrypoint_reexec_command(repo_root, entry_module=entry_module),
         _build_repo_entrypoint_reexec_env(repo_root),
     )
 
 
-def _check_repo_entrypoint_alignment() -> bool:
+def _check_repo_entrypoint_alignment(*, entry_module: Optional[str] = None) -> bool:
     """Fail fast when running inside a checkout but importing a different install."""
     if os.getenv("CAFE_SKIP_ENTRYPOINT_CHECK"):
         return True
@@ -190,11 +193,11 @@ def _check_repo_entrypoint_alignment() -> bool:
         return True
     repo_root, _, _ = mismatch
     try:
-        _reexec_repo_entrypoint(repo_root)
+        _reexec_repo_entrypoint(repo_root, **({"entry_module": entry_module} if entry_module else {}))
     except OSError:
         pass
 
-    message = _build_repo_entrypoint_mismatch_message()
+    message = _build_repo_entrypoint_mismatch_message(**({"entry_module": entry_module} if entry_module else {}))
     if message is None:
         return True
     console.print(f"[red]{message}[/red]")
@@ -1290,14 +1293,14 @@ def _load_issue_playbook_roles(issue_name: str) -> list[str]:
     return roles
 
 
-def main() -> Optional[int]:
+def main(*, application=None, entry_module: Optional[str] = None) -> Optional[int]:
     """Entry point for CLI."""
     # Check if all dependencies are installed
     _check_dependencies()
-    if not _check_repo_entrypoint_alignment():
+    if not _check_repo_entrypoint_alignment(**({"entry_module": entry_module} if entry_module else {})):
         return 1
     _auto_sync_global_helper_skills()
-    app()
+    (application if application is not None else app)()
     return None
 
 

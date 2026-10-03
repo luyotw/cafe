@@ -1156,3 +1156,106 @@ def test_acquisition_cannot_request_delivery_acceptance(provider_process):
     assert caught.value.transport_result.accepted is False
     assert selected.executor.config.session_id == "existing"
     launch.assert_not_called()
+
+
+def codex_reply(session='s', model=None, *, complete=True):
+    identity = dict(type='thread.started', thread_id=session)
+    if model is not None:
+        identity['model'] = model
+    records = [identity, dict(type='turn.started'),
+               dict(type='item.completed', item=dict(type='agent_message', text='verified reply'))]
+    if complete:
+        records.append(dict(type='turn.completed', usage=dict(input_tokens=2, output_tokens=3)))
+    return records
+
+
+@pytest.mark.parametrize('model', [None, 'confirmed-fallback'])
+def test_exact_delivery_exposes_parsed_reply_once_after_validation(provider_process, model):
+    launch = provider_process(codex_reply(model=model))
+    replies = []
+    selected = transport(AgentCLI.CODEX, model=model, session_id='s')
+    result = selected.deliver_to_exact_session(
+        'user-turn-1', 's', 'user-turn-1', on_response=replies.append,
+        required_evidence=frozenset({'model'}) if model else frozenset(),
+    )
+    assert result.accepted is True
+    assert result.completed is True
+    assert [reply.response for reply in replies] == ['verified reply']
+    assert launch.call_count == 1
+    assert selected.executor.config.session_id == 's'
+    command = launch.call_args.args[0]
+    assert ('--model' in command) == bool(model)
+
+
+@pytest.mark.parametrize('damage', ['identity', 'model', 'incomplete', 'missing_model', 'failed'])
+def test_failed_exact_delivery_publishes_no_reply_or_replacement(provider_process, damage):
+    records = codex_reply(session='wrong' if damage == 'identity' else 's',
+                          model=None if damage == 'missing_model' else 'wrong' if damage == 'model' else 'exact',
+                          complete=damage != 'incomplete')
+    launch = provider_process(records, returncode=1 if damage == 'failed' else 0)
+    replies = []
+    selected = transport(AgentCLI.CODEX, model='exact', session_id='s')
+    with pytest.raises(AgentExecutionError):
+        selected.deliver_to_exact_session('turn-1', 's', 'turn-1', on_response=replies.append,
+                                          required_evidence=frozenset({'model'}))
+    assert not replies
+    assert launch.call_count == 1
+    assert selected.executor.config.session_id == 's'
+
+
+def test_reply_observer_error_remains_a_caller_error_without_replay(provider_process):
+    launch = provider_process(codex_reply())
+    problem = RuntimeError('display failed')
+    def reject(reply):
+        assert reply.response == 'verified reply'
+        raise problem
+    with pytest.raises(RuntimeError) as caught:
+        transport(AgentCLI.CODEX, session_id='s').deliver_to_exact_session(
+            'turn-1', 's', 'turn-1', on_response=reject,
+        )
+    assert caught.value is problem
+    assert launch.call_count == 1
+
+
+def test_process_start_observer_runs_after_launch_before_output(provider_process):
+    """Plan U7/U9: a neutral submission observer precedes awaited provider output."""
+    from cafe.agents.executor import AgentExecutionControl
+    launch = provider_process(codex_reply('s'))
+    started = []
+    def submitted():
+        assert launch.call_count == 1
+        launch.return_value.stdout.readline.assert_not_called()
+        started.append(True)
+    def read():
+        assert started == [True]
+        return next(records, '')
+    records = iter([json.dumps(record) + '\n' for record in codex_reply('s')])
+    launch.return_value.stdout.readline.side_effect = read
+    result = transport(AgentCLI.CODEX, session_id='s').deliver_to_exact_session(
+        'delivery-1', 's', 'delivery-1',
+        execution_control=AgentExecutionControl(on_process_started=submitted),
+    )
+    assert result.accepted is True and result.completed is True
+    assert started == [True]
+    assert launch.call_count == 1
+
+
+def test_process_start_observer_failure_cleans_up_without_replay(provider_process):
+    """Plan U7/U9: caller errors retain their identity and clean only this child."""
+    from cafe.agents.executor import AgentExecutionControl
+    launch = provider_process(codex_reply('s'))
+    problem = OSError('submission observer failed')
+    def fail():
+        raise problem
+    selected = transport(AgentCLI.CODEX, session_id='s')
+    with pytest.raises(OSError) as caught:
+        selected.deliver_to_exact_session(
+            'delivery-1', 's', 'delivery-1',
+            execution_control=AgentExecutionControl(on_process_started=fail),
+        )
+    assert caught.value is problem
+    assert selected.executor.config.session_id == 's'
+    assert launch.call_count == 1
+    launch.return_value.terminate.assert_called_once()
+    launch.return_value.wait.assert_called_once_with(timeout=2)
+    launch.return_value.stdout.readline.assert_not_called()

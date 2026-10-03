@@ -129,6 +129,7 @@ def test_main_returns_error_code_without_traceback_when_auto_reexec_fails(
     capsys,
     tmp_path: Path,
 ) -> None:
+    monkeypatch.delenv("CAFE_SKIP_ENTRYPOINT_CHECK", raising=False)
     repo_root = tmp_path / "repo"
     expected_cli = repo_root / "src" / "cafe" / "ui" / "cli.py"
     actual_cli = tmp_path / "global" / "cafe" / "ui" / "cli.py"
@@ -155,3 +156,31 @@ def test_main_returns_error_code_without_traceback_when_auto_reexec_fails(
     assert result == 1
     assert "different installation than this checkout" in captured.out
     assert "Traceback" not in captured.out
+
+
+def test_public_startup_forwards_neutral_composition_to_checkout_reexec(monkeypatch, tmp_path):
+    """Plan U8/I7: a caller-owned module survives the complete public main path."""
+    root = tmp_path / 'repo'
+    monkeypatch.setattr(cli, '_check_dependencies', lambda: None)
+    monkeypatch.delenv('CAFE_SKIP_ENTRYPOINT_CHECK', raising=False)
+    monkeypatch.setattr(cli, '_resolve_repo_entrypoint_mismatch', lambda **_: (root, root/'expected', root/'actual'))
+    monkeypatch.setattr(cli.sys, 'argv', ['tool', 'custom', '--value', 'literal argument'])
+    class Reexecuted(BaseException): pass
+    calls = []
+    def reexec(executable, arguments, environment):
+        calls.append((executable, arguments, environment))
+        raise Reexecuted
+    monkeypatch.setattr(cli.os, 'execvpe', reexec)
+    with pytest.raises(Reexecuted):
+        cli.main(application=lambda: pytest.fail('old application started'), entry_module='example.custom_cli')
+    assert calls[0][1][1:] == ['-m', 'example.custom_cli', 'custom', '--value', 'literal argument']
+    assert calls[0][2]['PYTHONPATH'].split(cli.os.pathsep)[0] == str((root/'src').resolve())
+
+
+def test_public_startup_uses_supplied_neutral_application(monkeypatch):
+    monkeypatch.setattr(cli, '_check_dependencies', lambda: None)
+    monkeypatch.setattr(cli, '_check_repo_entrypoint_alignment', lambda **_: True)
+    monkeypatch.setattr(cli, '_auto_sync_global_helper_skills', lambda: None)
+    calls = []
+    assert cli.main(application=lambda: calls.append('custom'), entry_module='example.custom_cli') is None
+    assert calls == ['custom']

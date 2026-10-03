@@ -40,6 +40,7 @@ class AgentExecutionControl:
     max_duration_seconds: float | None = None
     max_output_bytes: int | None = None
     max_output_lines: int | None = None
+    on_process_started: Callable[[], None] | None = None
 
     def __post_init__(self) -> None:
         for name in ("max_duration_seconds", "max_output_bytes", "max_output_lines"):
@@ -408,6 +409,7 @@ class AgentExecutor:
         expected_session_id: str | None = None,
         event_id: str | None = None,
         on_acceptance: Callable[[], None] | None = None,
+        on_response: Callable[[AgentResponse], None] | None = None,
         environment_overrides: Optional[dict[str, str]] = None,
         allowed_tools: Optional[List[str]] = None,
         allowed_directories: Optional[List[str]] = None,
@@ -510,6 +512,8 @@ class AgentExecutor:
                 session_id=expected_session_id,
                 event_id=event_id,
             )
+        if on_response is not None:
+            on_response(response)
         return EventDriverExecutionResult(
             session_id=session_id,
             accepted=accepted,
@@ -597,6 +601,8 @@ class AgentExecutor:
         if execution_control is not None and execution_control.working_directory is not None:
             process_cwd = execution_control.working_directory.expanduser().resolve()
             process_cwd.mkdir(parents=True, exist_ok=True)
+            if self.config.cli == AgentCLI.CODEX:
+                cmd[cmd.index("-C") + 1] = str(process_cwd)
 
         decision_only = allowed_tools == [] and allowed_directories == []
         if not decision_only:
@@ -1221,6 +1227,22 @@ class AgentExecutor:
             )
             err.error_type = "cli_not_found"
             raise err from e
+
+        if execution_control is not None and execution_control.on_process_started is not None:
+            try:
+                execution_control.on_process_started()
+            except BaseException:
+                # Submission has happened; a caller error must not leave its child running.
+                try:
+                    process.terminate()
+                except OSError:
+                    pass
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=2)
+                raise
 
         # Check stderr first for immediate errors (e.g., session locked)
         import select
