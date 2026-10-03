@@ -8,6 +8,7 @@ import shutil
 import sys
 import uuid
 import subprocess
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -279,10 +280,11 @@ def run_chat(cwd: Path, explicit: str | None = None) -> int:
             if not text.strip():
                 continue
             try:
-                # Writers take only contract.lock. Keep the verified contract through the
-                # bounded reply, with no locks while waiting for terminal input.
+                # Protect the decision through process submission, then let the resumed
+                # provider use existing contract writers while its reply is awaited.
                 with (callback._session_lock(callback._manager_dir(target.issue_dir), blocking=False),
-                      _contract_lock(target)):
+                      ExitStack() as contract_guard):
+                    contract_guard.enter_context(_contract_lock(target))
                     current = resolve_target(target.issue_dir.parents[2], target.issue_dir.name)
                     if current != target:
                         raise ChatError('identity_conflict', locale=target.locale)
@@ -300,6 +302,7 @@ def run_chat(cwd: Path, explicit: str | None = None) -> int:
                             working_directory=current.issue_dir.parents[2],
                             max_duration_seconds=60,
                             max_output_bytes=1024 * 1024, max_output_lines=1024,
+                            on_process_started=contract_guard.close,
                         ),
                     )
             except BlockingIOError as error:

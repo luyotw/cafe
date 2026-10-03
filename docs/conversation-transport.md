@@ -63,6 +63,15 @@ existing callback/acquisition semantics remain unchanged. An observer exception
 is a caller error and never triggers another provider invocation. No response
 snapshot is added to a transport result.
 
+`AgentExecutionControl.on_process_started` is an optional synchronous observer
+called once after a successful subprocess launch and before reading provider
+output. Callers can finish a submission critical section before awaiting a
+reply. Process creation is not provider acceptance; session, acceptance and
+completion evidence still follow the normal validation path. An observer error
+propagates as a caller error, terminates and waits for that attempt's child
+(with a bounded kill fallback), and never triggers replay. Callers that omit
+the observer retain the existing behavior.
+
 `required_evidence` is a frozenset containing any of `session`, `model`, `usage`,
 and `acceptance`. Capability admission occurs before launch. Acquisition
 inherently requires session support; exact delivery inherently requires session

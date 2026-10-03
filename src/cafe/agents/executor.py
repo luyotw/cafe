@@ -40,6 +40,7 @@ class AgentExecutionControl:
     max_duration_seconds: float | None = None
     max_output_bytes: int | None = None
     max_output_lines: int | None = None
+    on_process_started: Callable[[], None] | None = None
 
     def __post_init__(self) -> None:
         for name in ("max_duration_seconds", "max_output_bytes", "max_output_lines"):
@@ -1226,6 +1227,22 @@ class AgentExecutor:
             )
             err.error_type = "cli_not_found"
             raise err from e
+
+        if execution_control is not None and execution_control.on_process_started is not None:
+            try:
+                execution_control.on_process_started()
+            except BaseException:
+                # Submission has happened; a caller error must not leave its child running.
+                try:
+                    process.terminate()
+                except OSError:
+                    pass
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=2)
+                raise
 
         # Check stderr first for immediate errors (e.g., session locked)
         import select

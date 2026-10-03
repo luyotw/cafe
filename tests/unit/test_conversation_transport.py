@@ -1215,3 +1215,47 @@ def test_reply_observer_error_remains_a_caller_error_without_replay(provider_pro
         )
     assert caught.value is problem
     assert launch.call_count == 1
+
+
+def test_process_start_observer_runs_after_launch_before_output(provider_process):
+    """Plan U7/U9: a neutral submission observer precedes awaited provider output."""
+    from cafe.agents.executor import AgentExecutionControl
+    launch = provider_process(codex_reply('s'))
+    started = []
+    def submitted():
+        assert launch.call_count == 1
+        launch.return_value.stdout.readline.assert_not_called()
+        started.append(True)
+    def read():
+        assert started == [True]
+        return next(records, '')
+    records = iter([json.dumps(record) + '\n' for record in codex_reply('s')])
+    launch.return_value.stdout.readline.side_effect = read
+    result = transport(AgentCLI.CODEX, session_id='s').deliver_to_exact_session(
+        'delivery-1', 's', 'delivery-1',
+        execution_control=AgentExecutionControl(on_process_started=submitted),
+    )
+    assert result.accepted is True and result.completed is True
+    assert started == [True]
+    assert launch.call_count == 1
+
+
+def test_process_start_observer_failure_cleans_up_without_replay(provider_process):
+    """Plan U7/U9: caller errors retain their identity and clean only this child."""
+    from cafe.agents.executor import AgentExecutionControl
+    launch = provider_process(codex_reply('s'))
+    problem = OSError('submission observer failed')
+    def fail():
+        raise problem
+    selected = transport(AgentCLI.CODEX, session_id='s')
+    with pytest.raises(OSError) as caught:
+        selected.deliver_to_exact_session(
+            'delivery-1', 's', 'delivery-1',
+            execution_control=AgentExecutionControl(on_process_started=fail),
+        )
+    assert caught.value is problem
+    assert selected.executor.config.session_id == 's'
+    assert launch.call_count == 1
+    launch.return_value.terminate.assert_called_once()
+    launch.return_value.wait.assert_called_once_with(timeout=2)
+    launch.return_value.stdout.readline.assert_not_called()

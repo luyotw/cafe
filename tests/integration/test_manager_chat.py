@@ -479,6 +479,15 @@ def test_public_contract_writer_cannot_replace_authority_during_submission(
     thread = Thread(target=replace, daemon=True)
     launch = provider_process(codex_reply('topic-codex', 'exact-fallback' if fallback else None))
     process = launch.return_value
+    records = iter(codex_reply('topic-codex', 'exact-fallback' if fallback else None))
+    def read():
+        record = next(records, None)
+        if record is None:
+            return ''
+        if record['type'] == 'item.completed':
+            assert finished.wait(1), 'Writer still waits while the provider is replying'
+        return json.dumps(record) + '\n'
+    process.stdout.readline.side_effect = read
     def deliver(command, **kwargs):
         # Run the actual public writer after final grounding and at the Popen boundary.
         thread.start()
@@ -542,3 +551,94 @@ def test_busy_contract_writer_rejects_chat_without_waiting_for_replacement(
     assert again.exit_code == 0, again.output
     assert launch.call_count == 1
     assert snapshot(repo) == before
+
+
+@pytest.mark.parametrize('authority,fallback,operation', [
+    ('manager', False, 'identical'), ('manager', True, 'identical'),
+    ('manager', False, 'update'), ('driver', False, 'identical'),
+    ('driver', False, 'update'), ('dual', False, 'identical'),
+])
+def test_resumed_provider_can_complete_existing_public_settings_operation(
+    tmp_path, monkeypatch, authority, fallback, operation,
+):
+    """Plan U7/U9, I2/I3/I6: actual child executes the existing public writer."""
+    from threading import Timer
+    from cafe.manager.cli import app
+    from tests.fixtures.manager_chat import legacy_chat_authority
+    repo = repository(tmp_path / 'repo')
+    directory = issue(repo, fallback=fallback)
+    if authority != 'manager':
+        legacy_chat_authority(directory, dual=authority == 'dual')
+    monkeypatch.chdir(repo)
+    role = 'manager' if authority == 'manager' else 'driver'
+    contract = json.loads((directory / role / 'contract.json').read_text())
+    current = contract[role]
+    settings = current if operation == 'identical' else {'mode': 'unattended'}
+    status = 'unchanged' if operation == 'identical' else 'saved'
+    model = 'exact-fallback' if fallback else None
+    script = f'''
+import json
+from typer.testing import CliRunner
+from cafe.manager.cli import app
+identity = {{'type': 'thread.started', 'thread_id': 'topic-codex'}}
+if {model!r} is not None:
+    identity['model'] = {model!r}
+print(json.dumps(identity), flush=True)
+print(json.dumps({{'type': 'turn.started'}}), flush=True)
+result = CliRunner().invoke(app, ['settings', 'update', 'topic', '--set',
+    {'manager=' + json.dumps(settings)!r}, '--json'])
+assert result.exit_code == 0, result.output
+assert json.loads(result.output)['status'] == {status!r}
+print(json.dumps({{'type': 'item.completed', 'item': {{'type': 'agent_message',
+    'text': {'settings ' + status!r}}}}}), flush=True)
+print(json.dumps({{'type': 'turn.completed', 'usage': {{'input_tokens': 2, 'output_tokens': 3}}}}), flush=True)
+'''
+    actual_popen = subprocess.Popen
+    children = []
+    source = Path(__file__).resolve().parents[2] / 'src'
+    def provider(command, **kwargs):
+        if command[0] != 'codex':
+            return actual_popen(command, **kwargs)
+        assert command[command.index('resume') + 1] == 'topic-codex'
+        assert ('--model' in command) == fallback
+        if fallback:
+            assert command[command.index('--model') + 1] == model
+        kwargs['env'] = {**kwargs['env'], 'PYTHONPATH': str(source)}
+        child = actual_popen([sys.executable, '-c', script], **kwargs)
+        children.append(child)
+        return child
+    monkeypatch.setattr(subprocess, 'Popen', provider)
+    def timer(duration, callback):
+        assert 0 < duration <= 60
+        return Timer(2, callback)
+    monkeypatch.setattr('cafe.agents.executor.Timer', timer)
+    before = snapshot(repo)
+    try:
+        result = CliRunner().invoke(app, ['manager', 'chat', '--issue', 'topic'],
+            input='Apply these Manager settings through the existing authorized settings route.\n/quit\n')
+        assert result.exit_code == 0, result.output
+        assert result.output.count('settings ' + status) == 1
+        assert len(children) == 1
+        assert children[0].poll() is not None
+        after = snapshot(repo)
+        contract_key = f'.cafe/issues/topic/{role}/contract.json'
+        if operation == 'identical':
+            assert after == before
+        else:
+            assert after[contract_key] != before[contract_key]
+            assert {key: value for key, value in after.items() if key != contract_key} == {
+                key: value for key, value in before.items() if key != contract_key
+            }
+        with adapter('workflow_event_callback')._session_lock(directory / role, blocking=False):
+            pass
+        if role == 'manager':
+            from cafe.manager._store import contract_lock
+        else:
+            from cafe.driver._store import contract_lock
+        with contract_lock(directory, blocking=False):
+            pass
+    finally:
+        for child in children:
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=3)
