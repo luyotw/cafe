@@ -244,6 +244,20 @@ def _should_auto_install_global_helper_skills(argv: list[str]) -> bool:
     """Return whether a declared mutating command may install missing helpers."""
     if not argv or any(arg in {"--help", "-h", "--version"} for arg in argv):
         return False
+    if argv[0] == "chat":
+        # Use the command's actual option parser: a prompt value or tokens after
+        # -- must not masquerade as the opt-in flag before startup sync.
+        from typer.main import get_command
+
+        command = get_command(app).commands["chat"]
+        try:
+            with command.make_context("chat", argv[1:]) as context:
+                if context.params.get("read_only"):
+                    return False
+        except click.ClickException:
+            # Failed parsing can lose later options, including --read-only.
+            # Leave error reporting to dispatch without startup installation.
+            return False
     if argv[0] == "workflow":
         return "--execute" in argv and "--dry-run" not in argv
     if argv[0] in _AUTO_INSTALL_TOP_LEVEL_COMMANDS:
@@ -395,15 +409,6 @@ from cafe.ui.cli_shared import (  # noqa: F401
 )
 
 
-
-
-
-
-
-
-
-
-
 @app.command()
 def edit(
     ctx: typer.Context,
@@ -439,12 +444,6 @@ def edit(
         raise typer.Exit(1)
 
 
-
-
-
-
-
-
 def _setup_agents(
     config_manager: ConfigManager,
     issue_name: Optional[str] = None,
@@ -470,9 +469,6 @@ def _find_latest_iteration_dir(phase_dir: Path) -> Optional[Path]:
     return _shared_find_latest_iteration_dir(phase_dir)
 
 
-
-
-
 def _resolve_iteration_index(iteration_numbers: List[int], iteration_input: int) -> int:
     """Resolve iteration number from user input."""
     return _shared_resolve_iteration_index(iteration_numbers, iteration_input)
@@ -493,9 +489,6 @@ def _get_latest_review_iteration(issue_name: str) -> int:
     return _shared_get_latest_review_iteration(issue_name)
 
 
-
-
-
 def _display_iteration_delta(
     iteration_count: int,
     output_file: Optional[str],
@@ -503,9 +496,6 @@ def _display_iteration_delta(
 ) -> None:
     """Display delta between current and previous iteration output files."""
     _shared_display_iteration_delta(iteration_count, output_file, console)
-
-
-
 
 
 _VALID_RIGOR_VALUES = ["low", "medium", "high"]
@@ -825,7 +815,6 @@ app.add_typer(task_commands.task_app, name="task")
 
 # Backward-compatible alias for TEMPLATE_TYPES (now defined in templates module)
 TEMPLATE_TYPES = template_commands.TEMPLATE_TYPES
-
 
 
 # Agent management commands (similar to template commands)
@@ -1227,8 +1216,6 @@ def agent_sync() -> None:
         console.print(f"  [yellow]⚠[/yellow] Warning: Failed to copy {agent_failed} agent file(s)")
 
 
-
-
 @app.command(name="chat", context_settings={"allow_extra_args": False, "ignore_unknown_options": False})
 def chat_with_agent(
     ctx: typer.Context,
@@ -1244,6 +1231,15 @@ def chat_with_agent(
         "-p",
         help="Send one message and exit instead of opening interactive chat",
     ),
+    read_only: bool = typer.Option(
+        False,
+        "--read-only",
+        help=(
+            "Restrict Codex/Claude native model tools and suppress CAFE state writes. "
+            "Native UI/integrations and provider persistence can bypass these limits; "
+            "this is not whole-process protection."
+        ),
+    ),
 ) -> None:
     """Chat with a playbook-declared role Agent.
 
@@ -1252,6 +1248,15 @@ def chat_with_agent(
     The system automatically infers the issue from current branch and loads corresponding session.
     Valid roles come from the active issue's playbook, including custom roles.
 
+    --read-only integrates Codex and Claude native model-tool restrictions while
+    skipping CAFE helper/skill sync, handoff preparation, session and usage writes.
+    Provider-owned persistence and native UI/integrations/IPC remain outside
+    these limits. Codex thread/settings/update accepted workspaceWrite in a
+    metadata-only probe with no file write. Claude Code 2.1.284 !touch wrote a
+    scratch file despite restricted model tools and plan mode. Codex's built-in
+    sandbox/backend can fail locally; actual errors are reported without a
+    writable fallback. These options do not provide whole-process protection.
+
     \b
     Examples:
         cafe chat developer
@@ -1259,15 +1264,27 @@ def chat_with_agent(
         cafe chat developer -p "Summarize the current implementation"
         cafe chat qa
         cafe chat researcher
+        cafe chat developer --read-only
+        cafe chat developer --phase develop --read-only -p "Diagnose the current issue"
     """
     # 1. Validate role parameter
     issue_name = _get_and_validate_branch(ctx, "chat")
-    valid_roles = _load_issue_playbook_roles(issue_name)
+    try:
+        valid_roles = (
+            _load_issue_playbook_roles(issue_name, read_only=True)
+            if read_only
+            else _load_issue_playbook_roles(issue_name)
+        )
+    except (OSError, ValueError) as exc:
+        console.print(f"[red]Error: Read-only chat context is unavailable: {exc}[/red]")
+        raise typer.Exit(1)
     if role not in valid_roles:
         console.print(f"[red]Error: Invalid role '{role}'. Must be one of: {', '.join(valid_roles)}[/red]")
         raise typer.Exit(1)
 
     launch_kwargs = {}
+    if read_only:
+        launch_kwargs["read_only"] = True
     if phase is not None:
         launch_kwargs["phase_name"] = phase
     if prompt is not None:
@@ -1275,17 +1292,28 @@ def chat_with_agent(
     raise typer.Exit(launch_chat_session(role, issue_name, **launch_kwargs))
 
 
-def _load_issue_playbook_roles(issue_name: str) -> list[str]:
+def _load_issue_playbook_roles(issue_name: str, *, read_only: bool = False) -> list[str]:
     roles = ["pm", "developer", "reviewer"]
     try:
         playbook_name = _resolve_issue_playbook_name(issue_name)
-        playbook_data = PlaybookLoader(project_root=Path.cwd()).load(playbook_name)
+        if read_only:
+            from cafe.core.blackboard import BlackboardStore
+
+            BlackboardStore(Path.cwd() / ".cafe/issues" / issue_name).load_read_only()
+            loader = PlaybookLoader(project_root=Path.cwd(), read_only=True)
+        else:
+            loader = PlaybookLoader(project_root=Path.cwd())
+        playbook_data = loader.load(playbook_name)
+        if read_only:
+            roles = []
         playbook_roles = playbook_data.get("roles", {})
         if isinstance(playbook_roles, dict) and playbook_roles:
             for role in playbook_roles:
                 if role not in roles:
                     roles.append(str(role))
     except Exception:
+        if read_only:
+            raise
         pass
     return roles
 

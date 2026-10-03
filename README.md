@@ -390,6 +390,57 @@ If behavior is wrong rather than merely incomplete, let `use-cafe-workflow`
 classify whether the defect belongs to a project playbook, a phase skill, or the
 CAFE runtime before changing sources.
 
+### Read-only diagnostic chat
+
+Use the current issue branch and its configured role, phase, provider, model and
+conversation context:
+
+```bash
+cafe chat developer --read-only
+cafe chat developer --phase develop --read-only
+cafe chat developer --read-only --prompt "Diagnose the current issue"
+cafe chat developer --phase develop --read-only -p "Diagnose the current issue"
+```
+
+Both interactive and one-shot diagnosis support fresh and resumed Codex/Claude
+conversations. Codex receives native `--sandbox read-only` and never approval.
+Claude receives `--tools Read,Glob,Grep`, matching read approvals, explicit
+`Bash,Edit,Write,NotebookEdit` denial and plan permission mode. The available-tool
+list restricts built-in model tools; an approval list alone does not do so.
+Unintegrated providers/operations fail before launch. Actual native option,
+authentication or backend errors remain errors, without switching provider or
+retrying writable chat. Omitting the flag retains ordinary writable behavior.
+
+CAFE skips helper/chat-skill synchronization, handoff preparation/clearing,
+session/timestamp persistence and usage publication. Existing artifacts, task
+and result records, baton, blackboard and associated linked/shared context are
+read without CAFE initialization, reconciliation, repair, task completion or
+ownership changes. Missing optional state stays absent; required unsafe context
+reports an error. Permitted stale-session or prompt-too-long recovery retains
+native restrictions and the configured provider/model, updating session identity
+only in memory. Diagnostic output remains available, but CAFE does not record
+chat usage or save the recovered session.
+
+These native model-tool parameters are not immutable protection of the entire
+CLI process. Provider-owned history/session/configuration persistence may still
+write inside or outside the repository. Native UI commands, permission changes,
+integrations/subprocesses and IPC/daemon paths are not guaranteed confined.
+Recorded limitations include:
+
+- Codex app-server `thread/settings/update` accepted changing read-only settings
+  to `workspaceWrite` in a metadata-only probe. No file write occurred in that
+  probe; it demonstrates mutable settings, not a demonstrated filesystem write.
+- Claude Code **2.1.284** native TUI `!touch` created a scratch file despite
+  restricted read tools, write/command denial and plan mode. That observed native
+  shell path bypasses the model-tool restriction; other versions were not tested.
+- Codex's native read-only mode can depend on its built-in sandbox/backend, which
+  may be unavailable locally. CAFE surfaces the actual failure and adds no outer
+  sandbox or environment admission probe.
+
+Argument/forwarding tests and isolated CAFE storage inventories verify the
+feature's wiring and CAFE effects. They do not prove native inference success,
+whole-process confinement or denial of every mutation path.
+
 ### Global helper skills
 
 CAFE synchronizes its bundled helper skills only for detected coding agents. An

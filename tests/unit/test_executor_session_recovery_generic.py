@@ -1,6 +1,7 @@
 """測試通用 session recovery 機制, 適用於所有 CLI"""
 
 import pytest
+from io import StringIO
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 from cafe.agents.executor import AgentExecutor
@@ -74,8 +75,7 @@ class TestGenericSessionRecovery:
             if call_count[0] == 1:
                 # 第一次：session 不存在
                 mock_proc.stdout.readline.side_effect = ['']
-                mock_proc.stderr = MagicMock()
-                mock_proc.stderr.read.return_value = "Session not found: old-copilot-session"
+                mock_proc.stderr = StringIO("Session not found: old-copilot-session\n")
                 mock_proc.wait.return_value = 1
             else:
                 # 第二次：成功
@@ -83,8 +83,7 @@ class TestGenericSessionRecovery:
                     "Response from Copilot\n",
                     ''
                 ]
-                mock_proc.stderr = MagicMock()
-                mock_proc.stderr.read.return_value = ""
+                mock_proc.stderr = StringIO("")
                 mock_proc.wait.return_value = 0
 
             return mock_proc

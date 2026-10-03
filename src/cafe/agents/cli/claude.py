@@ -21,6 +21,47 @@ logger = logging.getLogger(__name__)
 class ClaudeCLI(AbstractCLI):
     """Concrete implementation of Claude CLI tool."""
 
+    read_only_operations = frozenset({"open_interactive_session", "run_one_shot"})
+
+    def apply_read_only(self, command: List[str], operation: str) -> List[str]:
+        self.require_read_only(operation)
+        # --tools selects available built-in model tools; --allowed-tools alone
+        # only approves them. Claude Code 2.1.284 TUI !touch still wrote a scratch
+        # file despite these restrictions and plan mode. Native UI/permissions,
+        # integrations/subprocesses and IPC are not confined; provider-owned
+        # session/history persistence continues inside or outside the repository.
+        # Separate the positional interactive prompt before interpreting options:
+        # prompt/model values may themselves look like permission option names.
+        source = command[1:]
+        positional = []
+        if operation == "open_interactive_session" and len(source) % 2:
+            positional = ["--", source[-1]]
+            source = source[:-1]
+        native = []
+        index = 0
+        while index < len(source):
+            option = source[index]
+            if option in {"--tools", "--allowed-tools", "--disallowed-tools", "--permission-mode"}:
+                index += 2  # Replace only conflicting CAFE-built option pairs.
+            elif option in {"-p", "--resume", "--model", "--output-format", "--add-dir"}:
+                native.extend(source[index : index + 2])
+                index += 2
+            else:
+                native.append(option)
+                index += 1
+        native.extend(positional)
+        options = [
+            "--tools",
+            "Read,Glob,Grep",
+            "--allowed-tools",
+            "Read,Glob,Grep",
+            "--disallowed-tools",
+            "Bash,Edit,Write,NotebookEdit",
+            "--permission-mode",
+            "plan",
+        ]
+        return [command[0], *options, *native]
+
     def prepare_interactive_accounting(self, command, environment):
         """Read only native records appended during this terminal invocation.
 

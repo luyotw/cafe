@@ -19,6 +19,20 @@ _HOST_SESSION_ENVIRONMENT_KEYS = (
 class CodexCLI(AbstractCLI):
     """Concrete implementation of Codex CLI tool."""
 
+    read_only_operations = frozenset({"open_interactive_session", "run_one_shot"})
+
+    def apply_read_only(self, command: List[str], operation: str) -> List[str]:
+        self.require_read_only(operation)
+        # Native settings are mutable: thread/settings/update accepted changing
+        # read-only to workspaceWrite in a metadata-only probe (no file write).
+        # This is not immutable OS/IPC protection. Native persistence continues,
+        # and the built-in sandbox/backend may fail; surface that actual error.
+        options = ["--sandbox", "read-only"]
+        if operation == "open_interactive_session":
+            options += ["--ask-for-approval", "never"]
+        # Global options must precede exec/resume, including exec resume.
+        return [command[0], *options, *command[1:]]
+
     def build_environment(self) -> dict[str, str]:
         """Build an isolated child environment while preserving provider configuration.
 
