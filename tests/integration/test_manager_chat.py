@@ -642,3 +642,71 @@ print(json.dumps({{'type': 'turn.completed', 'usage': {{'input_tokens': 2, 'outp
             if child.poll() is None:
                 child.kill()
             child.wait(timeout=3)
+
+
+@pytest.mark.parametrize('authority', ['manager', 'driver', 'dual'])
+@pytest.mark.parametrize('alias', ['dangling', 'existing', 'hardlink', 'open_swap', 'role_swap', 'issue_swap'])
+def test_unsafe_lock_alias_rejects_before_outside_creation_or_submission(
+    tmp_path, monkeypatch, provider_process, authority, alias,
+):
+    """Plan U2/U4, I1/I3/I6: actual lock opens must remain under selected authority."""
+    from cafe.manager.cli import app
+    from tests.fixtures.manager_chat import legacy_chat_authority
+    repo = repository(tmp_path / 'repo')
+    directory = issue(repo)
+    if authority != 'manager':
+        legacy_chat_authority(directory, dual=authority == 'dual')
+    role = 'manager' if authority == 'manager' else 'driver'
+    lock = directory / role / 'contract.lock'
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    target = outside / 'contract.lock'
+    if alias in {'existing', 'hardlink'}:
+        target.write_text('Unrelated existing content')
+    if alias == 'issue_swap':
+        (outside / role).mkdir()
+    node = directory if alias == 'issue_swap' else directory / role
+    outside_before = {str(path.relative_to(outside)): path.read_bytes()
+                      for path in outside.rglob('*') if path.is_file()}
+    expected = None
+    def retarget():
+        nonlocal expected
+        if expected is not None:
+            return
+        if alias in {'role_swap', 'issue_swap'}:
+            node.rename(node.with_name(node.name + '-original'))
+            node.symlink_to(outside, target_is_directory=True)
+        else:
+            lock.unlink()
+            if alias == 'hardlink':
+                lock.hardlink_to(target)
+            else:
+                lock.symlink_to(target)
+        expected = snapshot(repo)
+    if alias in {'dangling', 'existing', 'hardlink'}:
+        retarget()
+    else:
+        # Substitute only filesystem open boundaries, after the preliminary checks.
+        actual_path_open, actual_os_open = Path.open, os.open
+        def path_open(path, *args, **kwargs):
+            if Path(path) == lock:
+                retarget()
+            return actual_path_open(path, *args, **kwargs)
+        def native_open(path, flags, *args, **kwargs):
+            name = Path(path).name
+            at_node = name == node.name and flags & os.O_DIRECTORY
+            at_lock = name == 'contract.lock'
+            if (alias == 'open_swap' and at_lock) or (alias != 'open_swap' and at_node):
+                retarget()
+            return actual_os_open(path, flags, *args, **kwargs)
+        monkeypatch.setattr(Path, 'open', path_open)
+        monkeypatch.setattr(os, 'open', native_open)
+    monkeypatch.chdir(repo)
+    launch = provider_process(codex_reply('topic-codex'))
+    result = CliRunner().invoke(app, ['manager', 'chat', '--issue', 'topic'], input='status?\n/quit\n')
+    assert expected is not None
+    assert result.exit_code != 0
+    launch.assert_not_called()
+    assert {str(path.relative_to(outside)): path.read_bytes()
+            for path in outside.rglob('*') if path.is_file()} == outside_before
+    assert snapshot(repo) == expected
