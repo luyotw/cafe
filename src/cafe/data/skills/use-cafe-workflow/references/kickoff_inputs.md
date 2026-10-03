@@ -102,6 +102,59 @@ that a model suits the current issue. Inspect missing, stale or contradictory
 sources; reuse valid facts for the conventions they cover. Saved preferences
 apply only to new proposals. An existing workflow keeps its confirmed contract.
 
+## Offer to remember preferences
+
+During new kickoff preparation, use the supported proposal preference keys in
+`kickoff_input_reference.md` and their applicability to the selected graph and
+Manager mode. These prompts and saved choices are project-specific: use
+`--scope repository --project-root <current-project-root>` with the same config
+directory for inspection and storage. Reuse reported repository preference
+records; inspect that scope when a key's storage status is not shown. A prefilled
+configuration, policy default or inherited user preference does not count as a
+saved project preference. A malformed or incompatible repository record needs
+correction, not treatment as an absent value.
+
+For preferences with independently configurable entries, check coverage per
+applicable entry, not just whether the top-level key exists. In `phase.chains`,
+a saved step selector covers that step; otherwise its saved role selector may
+cover it. In `review.decisions`, inspect each applicable step. Use the existing
+consumer's applicability and precedence rules; a partially saved map does not
+make its uncovered entries saved preferences.
+
+- For applicable keys or entries with no saved repository preference, ask whether the
+  user wants to remember the proposed values for future kickoffs in this project.
+  Group these into one concise question alongside contract confirmation, listing the values
+  and the project they apply to. Do not offer or write user-wide preferences
+  in this flow. For unresolved values, combine the reuse
+  question with the existing request for that decision; do not invent a value
+  just to save it.
+- When a user explicitly chooses a value different from what would otherwise
+  apply (saved preference, repository configuration or policy default), show the
+  old value/source and the current choice, then add: "This applies to this
+  kickoff. Tell me if you want it saved for future kickoffs in this project."
+  This also applies when a saved preference already exists. If the same key is in the unset
+  preference question, combine the reminder there instead of asking twice.
+- Ask once per proposed key/value/scope during this preparation. An explicit
+  request to remember it already answers the question. A decline or unanswered
+  save question leaves storage unchanged; ordinary contract confirmation is
+  not consent to save. Keep using the current proposal without adding a
+  separate workflow gate for optional preference storage.
+- Before saving a partial map change, inspect the current repository record and
+  preserve its other entries: `preferences set` replaces the whole value for a
+  key. Merge only the agreed entries into that record, without copying inherited
+  user preferences into project storage. Validate the resulting shape using the
+  existing consumer rules. Do not merge coupled arrays such as action/description
+  lists or gate partitions independently; show and obtain consent for their
+  complete replacement value when a change affects both.
+- After explicit reuse consent, run `preferences set --reuse --origin explicit
+  --scope repository --project-root <current-project-root>` for only the agreed
+  keys and values, then inspect repository scope to verify the stored result and
+  report what was remembered. Follow `kickoff_input_reference.md` for commands
+  and reusable value shapes. Issue-specific targets, permissions, capability
+  grants, evidence and model suitability judgments are not preference choices.
+  Inferred values require explicit user adoption before saving; action/worktree
+  conventions use reusable templates, not this issue's literal targets.
+
 ## Complete checks and render
 
 The response's `continuation` identifies missing checks and capture commands

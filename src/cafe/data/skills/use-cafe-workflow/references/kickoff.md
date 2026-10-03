@@ -36,8 +36,12 @@ those decisions and normalized formatter inputs through `assemble`, then use
 render an incomplete assembly, omit reported gaps, or start preparation or a
 workflow before the complete contract is confirmed.
 
-Read preferences by their user or repository scope. Save a value only when the
-user explicitly requests reusable preference; never turn an inferred language,
+Read preferences by their user or repository scope. Apply the preference prompts
+in `kickoff_inputs.md`: ask whether to save applicable unset preferences, and
+remind the user how to save explicit choices that differ from the effective
+defaults. These prompts save preferences only for the current project through
+repository scope; they never offer or write user-wide preferences. Save a value
+only when the user explicitly requests reusable preference; never turn an inferred language,
 one-off issue answer, model suitability decision, or action authorization into a
 saved preference. Use the documented `inspect`, `set`, and `clear` operations
 for the named scope. For evidence, inspect before refresh, gather and validate
