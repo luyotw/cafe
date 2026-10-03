@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import yaml
+
 from cafe.core.audit_events import AuditEventStore
 from cafe.core.blackboard import (
     BlackboardState,
@@ -18,6 +20,7 @@ from cafe.core.blackboard import (
 from cafe.core.git import GitOperations
 from cafe.core.human_task_records import HumanTaskRecordStore, HumanTaskStatus
 from cafe.core.types import PhaseStatus
+from cafe.core.usage import phase_stats_without_chat
 from cafe.core.workflow_models import BatonRejected
 
 _RUNTIME_PHASE_NAME = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
@@ -375,7 +378,14 @@ class StatusService:
                         "status_code": context_data.get("status_code"),
                         "cli": context_data.get("cli"),
                         "model": context_data.get("model"),
-                        "stats": context_data.get("stats"),
+                        "chat_usage": context_data.get("chat_usage", []),
+                        "stats": (
+                            phase_stats_without_chat(
+                                context_data.get("stats"), context_data.get("chat_usage")
+                            )
+                            if context_data.get("chat_usage")
+                            else context_data.get("stats")
+                        ),
                     }
                     iterations.append(iteration_info)
             except (json.JSONDecodeError, IOError) as e:
@@ -386,6 +396,25 @@ class StatusService:
                 continue
 
         return iterations
+
+    def load_chat_usage(self, issue_name: str, phase_names: List[str]) -> List[Dict[str, Any]]:
+        """Read existing chat aggregates without inventing timeline iterations."""
+        from cafe.utils.issue_config import read_issue_config_strict
+
+        groups = []
+        config = self.issues_root / issue_name / "issue.yaml"
+        if config.exists():
+            try:
+                groups.extend(read_issue_config_strict(config).get("chat_usage", []))
+            except (OSError, ValueError, yaml.YAMLError) as error:
+                self._load_errors.append(
+                    {"file": str(config), "error": str(error), "type": "chat_usage"}
+                )
+                groups.append(dict(cli=None, mode="unavailable", incomplete_calls=1, stats={}))
+        for phase in phase_names:
+            for iteration in self.load_iteration_statuses(issue_name, phase):
+                groups.extend(iteration.get("chat_usage", []))
+        return groups
 
     def get_load_errors(self) -> List[Dict[str, str]]:
         """Get any errors that occurred during file loading.

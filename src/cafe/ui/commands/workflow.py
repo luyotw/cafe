@@ -530,6 +530,7 @@ def status() -> None:
 
         # Display aggregated model token usage status
         display.render_model_status_table(entries)
+        display.render_chat_usage_table(service.load_chat_usage(issue_name, phase_names))
 
     except Exception as e:
         console.print(f"[red]Error: Failed to display status: {e}[/red]")

@@ -3,14 +3,18 @@
 import ctypes
 import errno
 import json
+import math
 import os
 import stat
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any, Dict
 
+import yaml
+
 from cafe.core.types import TokenUsage
 from cafe.core.workspace_lock import workspace_execution_lock
+from cafe.utils.issue_config import issue_config_lock
 
 
 def merge_token_usage_stats(existing: Any, incoming: TokenUsage) -> Dict[str, Any]:
@@ -70,13 +74,16 @@ def _usage_parent(target: Path):
         os.close(descriptor)
 
 
-def _read_usage_file(parent_fd, name):
+def _read_usage_file(parent_fd, name, *, issue_metadata=False):
     descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
     with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
         info = os.fstat(handle.fileno())
         if not stat.S_ISREG(info.st_mode):
             raise ValueError("usage target must be a regular file")
-        data = json.load(handle)
+        try:
+            data = yaml.safe_load(handle) if issue_metadata else json.load(handle)
+        except yaml.YAMLError as error:
+            raise ValueError("invalid accounting metadata") from error
         return data, _inode(info)
 
 
@@ -98,39 +105,64 @@ def _exchange_usage_file(parent_fd, source, destination, destination_parent_fd):
     operation.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p,
                           ctypes.c_uint]
     operation.restype = ctypes.c_int
-    if operation(parent_fd, os.fsencode(source), destination_parent_fd,
-                 os.fsencode(destination), flag):
+    if operation(
+        parent_fd, os.fsencode(source), destination_parent_fd, os.fsencode(destination), flag
+    ):
         error = ctypes.get_errno()
         raise OSError(error, os.strerror(error))
 
 
 def iteration_usage_sink(repository_root: Path, context_file: Path):
     """Pin an existing caller-admitted metadata target; never create an iteration."""
+    return _metadata_usage_sink(repository_root, context_file)
+
+
+def _metadata_usage_sink(repository_root, context_file, *, issue_metadata=False, update=None):
+    """Publish an update through the same pinned metadata and staging boundary."""
     root = Path(repository_root).resolve()
     target = Path(os.path.abspath(context_file))
     if target.resolve() != target or not target.is_relative_to(root):
         raise ValueError("usage target must remain within its admitted workspace")
     try:
         with _usage_parent(target) as (parent_fd, parents):
-            original, _ = _read_usage_file(parent_fd, target.name)
+            original, _ = _read_usage_file(parent_fd, target.name, issue_metadata=issue_metadata)
     except FileNotFoundError:
         return None
-    if not isinstance(original, dict) or not isinstance(original.get("iteration"), int):
+    if not isinstance(original, dict) or (
+        not issue_metadata and not isinstance(original.get("iteration"), int)
+    ):
         return None
-    identity = (original.get("iteration"), original.get("timestamp"))
 
-    def persist(usage: TokenUsage):
-        with workspace_execution_lock(root), _usage_parent(target) as (parent_fd, current_parents):
+    def metadata_identity(data):
+        if issue_metadata:
+            return tuple(
+                data.get(key)
+                for key in ("issue_name", "initial_input", "feature_branch", "worktree_path")
+            )
+        return data.get("iteration"), data.get("timestamp")
+
+    identity = metadata_identity(original)
+
+    def persist(usage):
+        with (
+            workspace_execution_lock(root),
+            issue_config_lock(target) if issue_metadata else nullcontext(),
+            _usage_parent(target) as (parent_fd, current_parents),
+        ):
             if current_parents != parents:
                 raise ValueError("usage target parent changed")
             # A cooperating writer can atomically replace this same iteration.
             # Read its latest counts under the shared lock; pin this read's inode
             # only through publication, not across independent provider calls.
-            current, current_inode = _read_usage_file(parent_fd, target.name)
-            if (not isinstance(current, dict)
-                    or (current.get("iteration"), current.get("timestamp")) != identity):
-                raise ValueError("admitted iteration identity changed")
-            current["stats"] = merge_token_usage_stats(current.get("stats"), usage)
+            current, current_inode = _read_usage_file(
+                parent_fd, target.name, issue_metadata=issue_metadata
+            )
+            if not isinstance(current, dict) or metadata_identity(current) != identity:
+                raise ValueError("admitted metadata identity changed")
+            if update is None:
+                current["stats"] = merge_token_usage_stats(current.get("stats"), usage)
+            else:
+                update(current, usage)
             # Exclusive creation prevents consuming an abandoned recovery object.
             # Cooperating writers hold the workspace lock throughout publication
             # and reclamation. Same-account hostile namespace mutation requires
@@ -142,15 +174,23 @@ def iteration_usage_sink(repository_root: Path, context_file: Path):
             cleanup_inode = None
             source = ".usage-publish.json"
             try:
-                private_fd = os.open(temporary, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                                     dir_fd=parent_fd)
-                staging_fd = os.open(source, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                                     0o600, dir_fd=private_fd)
+                private_fd = os.open(
+                    temporary, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd
+                )
+                staging_fd = os.open(
+                    source,
+                    os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    0o600,
+                    dir_fd=private_fd,
+                )
                 staged = os.fstat(staging_fd)
                 published_inode = _inode(staged)
                 cleanup_inode = published_inode
                 with os.fdopen(os.dup(staging_fd), "w", encoding="utf-8") as handle:
-                    json.dump(current, handle, ensure_ascii=False, indent=2)
+                    if issue_metadata:
+                        yaml.safe_dump(current, handle, sort_keys=False, allow_unicode=True)
+                    else:
+                        json.dump(current, handle, ensure_ascii=False, indent=2)
                 _exchange_usage_file(private_fd, source, target.name, parent_fd)
                 cleanup_inode = None
                 displaced = os.stat(source, dir_fd=private_fd, follow_symlinks=False)
@@ -183,3 +223,102 @@ def iteration_usage_sink(repository_root: Path, context_file: Path):
                         os.close(private_fd)
 
     return persist
+
+
+CHAT_USAGE_FIELDS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_creation_input_tokens",
+    "cache_write_input_tokens",
+    "cache_read_input_tokens",
+    "reasoning_output_tokens",
+    "total_cost_usd",
+)
+
+
+def chat_usage_sink(
+    repository_root, metadata_file, *, cli, requested_model, mode, phase, issue_metadata=False
+):
+    """Store bounded aggregates, including missing evidence, without new authority.
+
+    Known values are subtotals. Unknown fields remain unknown even when a later
+    call reports them. Requested model is never used as evidence of actual model.
+    """
+
+    def update(current, results):
+        groups = current.setdefault("chat_usage", [])
+        if not isinstance(groups, list):
+            raise ValueError("invalid existing chat accounting")
+        by_model = {}
+        for result in results:
+            by_model.setdefault(result.reported_model, []).append(result)
+        for model, records in by_model.items():
+            key = (cli, requested_model, model, mode, phase)
+            group = next(
+                (
+                    item
+                    for item in groups
+                    if isinstance(item, dict)
+                    and tuple(
+                        item.get(k)
+                        for k in ("cli", "requested_model", "reported_model", "mode", "phase")
+                    )
+                    == key
+                ),
+                None,
+            )
+            if group is None:
+                group = dict(
+                    zip(("cli", "requested_model", "reported_model", "mode", "phase"), key)
+                )
+                group.update(stats={}, calls=0, incomplete_calls=0, unknown_fields=[])
+                groups.append(group)
+            missing = set(group["unknown_fields"])
+            incomplete = model is None or mode == "interactive"
+            for record in records:
+                usage = record.usage
+                known = {}
+                if usage is not None:
+                    known = {
+                        field: getattr(usage, field)
+                        for field in CHAT_USAGE_FIELDS
+                        if field in usage.model_fields_set
+                    }
+                    if any(
+                        isinstance(value, bool)
+                        or not isinstance(value, (int, float))
+                        or not math.isfinite(value)
+                        or value < 0
+                        for value in known.values()
+                    ):
+                        raise ValueError("invalid reported chat statistics")
+                absent = set(CHAT_USAGE_FIELDS) - known.keys()
+                missing.update(absent)
+                incomplete = incomplete or bool(absent) or bool(record.failure_code)
+                merged = merge_token_usage_stats(group["stats"], TokenUsage(**known))
+                # The shared merge defaults are legacy iteration compatibility,
+                # not evidence that a provider reported missing counters as zero.
+                group["stats"] = {
+                    field: merged[field]
+                    for field in set(group["stats"]) | known.keys()
+                    if field in CHAT_USAGE_FIELDS
+                }
+                if not issue_metadata and usage is not None:
+                    current["stats"] = merge_token_usage_stats(current.get("stats"), usage)
+            group["calls"] += 1
+            group["incomplete_calls"] += int(incomplete)
+            group["unknown_fields"] = sorted(missing)
+
+    return _metadata_usage_sink(
+        repository_root, metadata_file, issue_metadata=issue_metadata, update=update
+    )
+
+
+def phase_stats_without_chat(stats, groups):
+    """Accounting consumers must not also bill chat under phase/model metadata."""
+    remaining = dict(stats) if isinstance(stats, dict) else {}
+    for group in groups or ():
+        for key, value in group.get("stats", {}).items():
+            if key in CHAT_USAGE_FIELDS and isinstance(value, (int, float)) and key in remaining:
+                remaining[key] -= value
+    return remaining

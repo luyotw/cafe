@@ -2,10 +2,16 @@
 
 import json
 import logging
+import math
+import os
+import re
+import stat
+import uuid
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 from cafe.agents.cli.abstract import AbstractCLI
+from cafe.agents.transport_types import TransportResult, _validated_evidence_scalar
 from cafe.core.types import PermissionDenial, TokenUsage
 from cafe.utils.git_utils import get_git_toplevel
 
@@ -14,6 +20,131 @@ logger = logging.getLogger(__name__)
 
 class ClaudeCLI(AbstractCLI):
     """Concrete implementation of Claude CLI tool."""
+
+    def prepare_interactive_accounting(self, command, environment):
+        """Read only native records appended during this terminal invocation.
+
+        Native assistant usage is partial evidence: it does not certify billing,
+        subagent coverage, or sessions the user switches to inside the terminal.
+        The caller retains that coverage gap even when counters are available.
+        """
+        session = self.config.session_id or str(uuid.uuid4())
+        try:
+            uuid.UUID(session)
+        except (ValueError, TypeError, AttributeError):
+            return command, None
+        if not self.config.session_id:
+            command = command[:1] + ["--session-id", session] + command[1:]
+        native_root = Path(environment.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+        project = re.sub(r"[^a-zA-Z0-9]", "-", str(Path.cwd()))
+        journal = native_root / "projects" / project / (session + ".jsonl")
+        # Bounded scans and line reads also bound ephemeral identity storage.
+        byte_limit, line_limit, record_limit = 16 * 1024 * 1024, 256 * 1024, 65536
+
+        def read_records(offset=0, expected=None, *, strict=True):
+            descriptor = os.open(journal, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(descriptor, "rb") as handle:
+                info = os.fstat(handle.fileno())
+                identity = info.st_dev, info.st_ino
+                if not stat.S_ISREG(info.st_mode) or (expected and identity != expected):
+                    raise ValueError("native accounting source changed")
+                if info.st_size < offset or (strict and info.st_size - offset > byte_limit):
+                    raise ValueError("native accounting source exceeds bound")
+                handle.seek(offset)
+                records = []
+                scanned = 0
+                while handle.tell() < min(info.st_size, offset + byte_limit):
+                    line = handle.readline(line_limit + 1)
+                    scanned += 1
+                    try:
+                        if (
+                            len(line) > line_limit
+                            or not line.endswith(b"\n")
+                            or scanned > record_limit
+                        ):
+                            raise ValueError("native accounting record exceeds bound")
+                        data = json.loads(line)
+                        if not isinstance(data, dict):
+                            raise ValueError("invalid native accounting record")
+                        # Drop all content immediately; retain only accounting evidence.
+                        message = data.get("message")
+                        if data.get("type") == "assistant" and isinstance(message, dict):
+                            if data.get("sessionId") != session:
+                                raise ValueError("native accounting session mismatch")
+                            identity_key = _validated_evidence_scalar(message.get("id"))
+                            if identity_key is None:
+                                raise ValueError("native accounting message identity missing")
+                            records.append(
+                                (identity_key, message.get("model"), message.get("usage"))
+                            )
+                    except ValueError:
+                        if strict:
+                            raise
+                        break  # Keep verified prefix subtotals, with incomplete coverage.
+                return identity, info.st_size, records
+
+        try:
+            inode, offset, history = read_records()
+            historical = {record[0] for record in history}
+        except FileNotFoundError:
+            if self.config.session_id:
+                # Resume may reconstruct history; without a baseline it cannot
+                # be safely attributed to this invocation.
+                return command, None
+            inode, offset, historical = None, 0, set()
+        except (OSError, ValueError):
+            return command, None
+
+        def collect():
+            try:
+                _inode, _end, records = read_records(offset, inode, strict=False)
+                unique = {}
+                for identity, model, usage in records:
+                    if identity in historical:
+                        continue
+                    try:
+                        reported = _validated_evidence_scalar(model)
+                    except ValueError:
+                        reported = None
+                    previous = unique.get(identity)
+                    if previous and previous[0] != reported:
+                        break  # Conflicting evidence cannot certify more usage.
+                    if not isinstance(usage, dict):
+                        # A model without usage must remain an explicit gap.
+                        if previous is None:
+                            unique[identity] = (reported, None)
+                        continue
+                    try:
+                        _text, parsed, _denials = self.parse_response(
+                            [json.dumps({"usage": usage})]
+                        )
+                    except (ValueError, TypeError):
+                        break
+                    known = parsed.model_dump(include=parsed.model_fields_set - {"turn_usages"})
+                    if any(
+                        isinstance(value, bool)
+                        or not isinstance(value, (int, float))
+                        or not math.isfinite(value)
+                        or value < 0
+                        for value in known.values()
+                    ):
+                        break
+                    # Repeated content blocks/cumulative snapshots of one message
+                    # are one API request. Preserve the largest observed counters.
+                    if previous and previous[1] is not None:
+                        prior = previous[1].model_dump(include=previous[1].model_fields_set)
+                        known = {
+                            key: max(prior.get(key, value), value) for key, value in known.items()
+                        } | {key: value for key, value in prior.items() if key not in known}
+                    unique[identity] = reported, TokenUsage(**known) if known else None
+                return tuple(
+                    TransportResult(reported_model=model, usage=usage)
+                    for model, usage in unique.values()
+                )
+            except (OSError, ValueError, TypeError):
+                return ()
+
+        return command, collect
 
     def build_command(
         self,

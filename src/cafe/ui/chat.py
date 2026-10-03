@@ -8,6 +8,7 @@ from typing import Optional
 
 from cafe.agents.executor import AgentExecutionError
 from cafe.agents.transport import ConversationTransport
+from cafe.agents.transport_types import TransportResult
 from cafe.agents.manager import AgentManager
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
 from cafe.core.playbook import resolve_playbook_skills
@@ -517,18 +518,50 @@ def _warn_if_chat_handoff_missing(
         )
 
 
-def _chat_usage_sink(issue_dir: Path, step_name: str):
-    """Admit the existing selected phase iteration before opening the conversation."""
-    from cafe.core.usage import iteration_usage_sink
+def _chat_usage_sink(issue_dir: Path, step_name: str, *, cli, requested_model, mode):
+    """Admit existing metadata; missing iterations never become workflow authority."""
+    from cafe.core.usage import CHAT_USAGE_FIELDS, chat_usage_sink
 
     directories = sorted((issue_dir / step_name).glob("iteration_[0-9]*"))
-    if not directories:
-        return None
-    directory = directories[-1]
-    target = directory / "iteration.json"
-    if not target.exists():
-        target = directory / "context.json"
-    return iteration_usage_sink(Path.cwd(), target)
+    target = None
+    if directories:
+        directory = directories[-1]
+        target = directory / "iteration.json"
+        if not target.exists():
+            target = directory / "context.json"
+    if target is None or not target.exists():
+        target = issue_dir / "issue.yaml"
+    try:
+        sink = chat_usage_sink(
+            Path.cwd(),
+            target,
+            cli=cli,
+            requested_model=requested_model,
+            mode=mode,
+            phase=step_name,
+            issue_metadata=target.name == "issue.yaml",
+        )
+    except (OSError, ValueError) as error:
+        raise ValueError(f"Chat accounting incomplete: {error}") from error
+    if sink is None:
+        raise ValueError("Chat accounting incomplete: no existing accounting target")
+
+    def record(results):
+        try:
+            sink(results)
+        except (OSError, ValueError):
+            print("\n⚠️  Chat accounting incomplete: usage publication failed.\n")
+            raise
+        if mode == "interactive" or any(
+            result.reported_model is None
+            or result.usage is None
+            or not set(CHAT_USAGE_FIELDS).issubset(result.usage.model_fields_set)
+            or result.failure_code
+            for result in results
+        ):
+            print("\n⚠️  Chat accounting incomplete; see chat usage coverage in cafe status.\n")
+
+    return record
 
 
 def launch_chat_session(
@@ -677,12 +710,24 @@ def launch_chat_session(
     if prompt is not None:
         executor.stream_output = True
         try:
-            usage_sink = _chat_usage_sink(issue_dir, execution_step)
+            usage_sink = _chat_usage_sink(
+                issue_dir, execution_step, cli=agent_cli_str,
+                requested_model=executor.config.model, mode="one_shot",
+            )
             responses = []
 
             def attempt():
-                transport.run_one_shot(prompt, environment_overrides=chat_env,
-                                       on_response=responses.append, on_usage=usage_sink)
+                try:
+                    result = transport.run_one_shot(
+                        prompt, environment_overrides=chat_env, on_response=responses.append,
+                    )
+                except (AgentExecutionError, OSError, ValueError) as error:
+                    partial = getattr(error, "transport_result", None) or TransportResult(
+                        failure_code=getattr(error, "error_type", None) or "execution_failed",
+                    )
+                    usage_sink((partial,))
+                    raise
+                usage_sink((result,))
                 return responses[-1]
 
             response = executor.with_session_recovery(attempt)
@@ -725,7 +770,19 @@ def launch_chat_session(
 
     # Execute interactive CLI (blocks until user exits)
     try:
-        result = transport.open_interactive_session(initial_prompt, environment_overrides=chat_env)
+        try:
+            usage_sink = _chat_usage_sink(
+                issue_dir, execution_step, cli=agent_cli_str,
+                requested_model=executor.config.model, mode="interactive",
+            )
+        except (OSError, ValueError) as error:
+            # Missing telemetry must remain visible without changing the user's
+            # native terminal or selecting a new workflow iteration.
+            print(f"\n⚠️  Chat accounting incomplete: {error}\n")
+            usage_sink = None
+        result = transport.open_interactive_session(
+            initial_prompt, environment_overrides=chat_env, on_accounting=usage_sink,
+        )
     except AgentExecutionError as error:
         if error.error_type != "cli_not_found":
             print(f"\n⚠️  Failed to execute CLI: {error.display_message or str(error)}\n")

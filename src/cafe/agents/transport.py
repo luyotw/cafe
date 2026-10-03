@@ -154,6 +154,7 @@ class ConversationTransport:
         *,
         required_evidence: frozenset[Evidence] = frozenset(),
         environment_overrides=None,
+        on_accounting=None,
     ) -> TransportResult:
         self._admit("open_interactive_session", required_evidence)
         strategy = self.executor._get_cli_strategy()
@@ -162,10 +163,12 @@ class ConversationTransport:
             environment.update(
                 {str(key): str(value) for key, value in environment_overrides.items()}
             )
+        command = strategy.build_interactive_command(initial_prompt)
+        collect = None
+        if on_accounting is not None:
+            command, collect = strategy.prepare_interactive_accounting(command, environment)
         try:
-            process = subprocess.run(
-                strategy.build_interactive_command(initial_prompt), env=environment
-            )
+            process = subprocess.run(command, env=environment)
         except OSError as cause:
             result = TransportResult(
                 failure_code=(
@@ -174,10 +177,12 @@ class ConversationTransport:
                 accepted=False,
                 error_excerpt=sanitize_error_excerpt(cause),
             )
+            if on_accounting is not None:
+                on_accounting((result,))
             self._fail(result)
         failure = None if process.returncode == 0 else "execution_failed"
         diagnostic = getattr(process, "stderr", None) or getattr(process, "stdout", None)
-        return TransportResult(
+        result = TransportResult(
             returncode=process.returncode,
             failure_code=failure,
             error_excerpt=(
@@ -186,6 +191,10 @@ class ConversationTransport:
                 else None
             ),
         )
+        if on_accounting is not None:
+            records = collect() if collect is not None else ()
+            on_accounting(records or (result,))
+        return result
 
     def run_one_shot(
         self,

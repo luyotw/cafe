@@ -120,7 +120,9 @@ tests. No live provider session or paid provider call was used for verification.
 | Copilot | Unique successful terminal `result.sessionId` | Correlated `user.message` and valid terminal result | Structured model only when supplied; ordinary usage/model summary parser; structured usage guarantee unsupported |
 
 All five adapters have existing interactive and one-shot invocation builders.
-Interactive launch advertises no session/model/usage/acceptance verification.
+Interactive launch advertises no guaranteed session/model/usage/acceptance
+verification. Its optional accounting observer can receive partial native
+evidence, as described below; this does not strengthen capability admission.
 Copilot's ordinary filesystem session discovery remains caller compatibility
 behavior; it is not verified transport identity. Its structured callback result
 must meet the terminal evidence contract. Default/nonconforming adapters do not
@@ -192,6 +194,72 @@ provider order, exact binding, acceptance writes, fallback and uncertain-outcome
 recovery. Its normal calls retain the existing 60-second, 64-KiB, 128-line limits
 and isolated bootstrap directory. Persisted acceptance/replay starts no new call.
 Legacy single-transport session persistence remains caller-owned compatibility.
+
+## User chat cost coverage
+
+Both interactive and `cafe chat -p` persist bounded `chat_usage` aggregates in
+the existing selected phase's iteration metadata (`iteration.json`, with the
+existing `context.json` fallback). If that iteration has no metadata, they use
+the existing issue's `issue.yaml`. This optional field extends existing metadata;
+chat never creates an iteration, issue authority, or separate accounting store.
+Issue metadata publication reuses the same descriptor traversal, exchange,
+rollback and private staging as iteration publication, with the existing issue
+settings lock as well as the workspace lock. Other issue settings remain intact.
+
+Each group records `cli`, `phase`, `mode`, `requested_model`, `reported_model`,
+`calls`, `incomplete_calls`, `unknown_fields` and `stats`. The group key separates
+requested model from provider-reported model; a missing reported model is null,
+never filled from configuration. `stats` contains only known token/cost
+subtotals. Default zeros in `TokenUsage` do not certify missing counters.
+`unknown_fields` retains fields missed by any contributing call, even if a later
+call reports those fields. A known zero remains zero. No prompt, response,
+message ID, session journal, per-call history, or raw event is added to this field.
+
+One-shot accounting uses the existing executor/provider result exactly once per
+physical attempt, including compact partial evidence on errors. The existing
+caller-owned session recovery remains unchanged: unsuccessful attempts and the
+successful retry each contribute once; the successful response is not replayed
+for accounting. Provider cumulative summaries replace intermediate snapshots
+through existing parsers, rather than being summed again. Missing models,
+unsupported or absent usage, partial counters, and execution failures contribute
+explicit incomplete coverage. A missing or invalid accounting target prevents
+one-shot launch and produces an observable error. Interactive launch reports
+that target gap while retaining its native terminal behavior.
+
+Interactive execution still inherits stdin/stdout/stderr directly. Its optional
+`on_accounting` observer receives compact native results after exit. Claude's
+adapter binds a new invocation using the documented
+[`--session-id` flag](https://code.claude.com/docs/en/cli-reference), or uses the
+already configured resume ID. It reads the exact provider-owned project session
+file under `CLAUDE_CONFIG_DIR` (default `~/.claude`), never discovers an unrelated
+session by scanning the user's history. The native assistant record shape is
+documented in this [provider issue example](https://github.com/anthropics/claude-code/issues/30802).
+Only appended assistant records for that session are considered; pre-existing
+message IDs exclude replayed history. A resumed session without a readable
+baseline contributes no inferred usage. Repeated records/cumulative snapshots
+for one message contribute the largest observed counters once, and distinct
+reported models receive separate groups. Numeric usage is projected through the
+existing Claude parser. Reads are bounded to 16 MiB, 256 KiB per line and 65,536
+records. Malformed tails retain verified prefix subtotals; ambiguous baselines,
+truncation, source replacement or absent sources remain coverage gaps.
+
+Claude native evidence is always incomplete: it does not certify USD billing,
+subagent usage, in-terminal session switches or overlapping native sessions.
+Other interactive adapters currently have no verified native accounting reader
+and persist unknown model/usage with incomplete coverage. This limitation is
+visible in both chat output and `cafe status`; it is never reported as zero cost.
+No live paid-provider verification was performed. No prices are inferred or
+looked up, and a partial subtotal must not be used as a complete invoice.
+
+`cafe status` shows chat separately with CLI, requested/reported models, known
+subtotals and coverage. Missing amounts display as unknown; amounts missing from
+some calls display as partial. Legacy iteration `stats` still include chat for
+compatibility. The status service subtracts its known chat subtotals from phase
+model totals before displaying the separate chat groups, so it does not bill the
+same usage twice or assign it to the phase's requested model. Groups remain
+visible even when no timeline iteration or timestamp exists. Other consumers of
+raw iteration metadata must apply the same subtraction when also counting
+`chat_usage`.
 
 ## Codex host exception
 

@@ -334,3 +334,11 @@ class AbstractCLI(ABC):
             command.append(initial_prompt)
 
         return command
+
+    def prepare_interactive_accounting(self, command, environment):
+        """Optional native evidence reader; never capture the user's terminal.
+
+        An absent reader means unsupported accounting, not verified zero usage.
+        """
+
+        return command, None

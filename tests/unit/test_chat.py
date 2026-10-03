@@ -88,6 +88,10 @@ class TestLaunchChatSession:
     def isolate_launcher_workspace(self, tmp_path, monkeypatch, mock_chat_catalog_reads):
         """Keep launcher tests local and independent from catalog traversal."""
         monkeypatch.chdir(tmp_path)
+        # A real chat belongs to existing issue metadata even before iterations.
+        issue = tmp_path / ".cafe/issues/issue123"
+        issue.mkdir(parents=True)
+        (issue / "issue.yaml").write_text("feature_branch: issue123\n")
 
     def _make_agent_config(self, cli: str, session_id=None, model=None):
         """Build a mock AgentConfig."""
@@ -123,7 +127,7 @@ class TestLaunchChatSession:
         """Chat reuses the role's last successful fallback CLI."""
         monkeypatch.chdir(tmp_path)
         issue_dir = tmp_path / ".cafe" / "issues" / "issue123"
-        issue_dir.mkdir(parents=True)
+        issue_dir.mkdir(parents=True, exist_ok=True)
         # configured_primary still claude → codex was a legit fallback, stay sticky.
         (issue_dir / "active_clis.json").write_text(
             json.dumps(
