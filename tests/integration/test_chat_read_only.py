@@ -352,6 +352,67 @@ def test_u2_custom_nested_playbook_read_does_not_recover(diagnostic_workspace):
 
 
 @pytest.mark.integration
+@pytest.mark.parametrize("custom", [False, True])
+@pytest.mark.parametrize("step", ["develop", "pr"])
+@pytest.mark.parametrize("prompt_option", ["--prompt", "-p"])
+def test_i9_public_nested_context_reads_existing_home_without_recovery(
+    tmp_path, monkeypatch, custom, step, prompt_option
+):
+    """Exercise production prepare assets/presentation under the pure-read lock."""
+    import os
+
+    repo = tmp_path / "project"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "issue520", str(repo)], check=True)
+    home = tmp_path / "home"
+    home.mkdir()  # An absent parent bypasses the nested lock guard entirely.
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(repo)
+    role, selected_step, playbook = "developer", step, "standard-qa"
+    if custom:
+        role, selected_step, playbook = "analyst", "inspect", "diagnostic"
+        builtin = Path(__file__).resolve().parents[2] / "src/cafe/data/playbooks/standard-qa.yaml"
+        def rename(value):
+            if isinstance(value, dict):
+                return {rename(k): rename(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [rename(v) for v in value]
+            if isinstance(value, str):
+                return {"developer": role, step: selected_step}.get(value, value)
+            return value
+
+        declaration = rename(yaml.safe_load(builtin.read_text()))
+        declaration["playbook"]["id"] = playbook
+        declaration["steps"]["spec"]["initial_input"].pop("legacy_presentation")
+        catalog = repo / ".cafe/playbooks"
+        catalog.mkdir(parents=True)
+        (catalog / f"{playbook}.yaml").write_text(yaml.safe_dump(declaration))
+    issue = repo / ".cafe/issues/issue520"
+    BlackboardStore(issue).load_or_create(selected_step, playbook)
+    (repo / ".cafe/phases.yaml").write_text(yaml.safe_dump({selected_step: {
+        "role": role, "name": "Ada", "clis": [{"cli": "codex", "model": "selected-model"}]
+    }}))
+    binary = tmp_path / "bin/codex"
+    binary.parent.mkdir()
+    binary.write_text(f"#!{sys.executable}\nimport json\n"
+                      "print(json.dumps({'type':'item.completed','item':"
+                      "{'type':'agent_message','text':'fixture diagnosis'}}))\n"
+                      "print(json.dumps({'type':'turn.completed'}))\n")
+    binary.chmod(0o755)
+    before = inventory(tmp_path)
+    env = dict(os.environ, PATH=str(binary.parent) + os.pathsep + os.environ["PATH"],
+               PYTHONPATH=str(Path(__file__).resolve().parents[2] / "src"),
+               PYTHONDONTWRITEBYTECODE="1")
+    env.pop("CAFE_SKIP_GLOBAL_SKILL_SYNC", None)
+    result = subprocess.run([sys.executable, "-m", "cafe.ui.cli", "chat", role,
+                             "--phase", selected_step, "--read-only", prompt_option, "diagnose"],
+                            capture_output=True, text=True, env=env, timeout=20)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "fixture diagnosis" in result.stdout
+    assert inventory(tmp_path) == before
+
+
+@pytest.mark.integration
 @pytest.mark.parametrize("unsafe", [None, "blackboard", "catalog", "session"])
 def test_i4_actual_module_startup_does_not_install_or_repair(diagnostic_workspace, unsafe):
     import os

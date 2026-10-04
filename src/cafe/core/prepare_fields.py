@@ -255,7 +255,9 @@ def load_fields_ref(
     skill_loader: SkillLoader,
 ) -> ParsedPrepareFields:
     """Load prepare fields from a static playbook or skill asset reference."""
-    with global_catalog_lock(skill_loader.global_root):
+    # Static prepare assets inherit their catalog reader's access mode. Nested
+    # playbook validation must not request recovery under a pure-read lock.
+    with global_catalog_lock(skill_loader.global_root, read_only=skill_loader.read_only):
         asset_path = resolve_fields_ref_path(
             ref=ref,
             playbook_path=playbook_path,
