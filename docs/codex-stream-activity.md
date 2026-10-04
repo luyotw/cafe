@@ -44,7 +44,10 @@ budgets remain enforced; activity records count toward output budgets.
 
 The receiver closes on success, timeout, process errors and caller exceptions.
 Failure diagnostics include the accepted stream-event count alongside stdout
-and stderr counters.
+and stderr counters, rejected HTTP requests and the largest request size.
+The loopback receiver accepts batches up to eight MiB: the installed CLI's
+ordinary 512-record batches are about 1.16 MB and exceeded the original one-MiB
+limit. The queue remains bounded and retained activity contains metadata only.
 
 ## Validation
 
