@@ -810,3 +810,27 @@ def test_i7_recovery_exhaustion_keeps_all_attempts_read_only(
     for command, _ in native_io[0]:
         assert_native_options(command, provider)
     assert inventory(repo.parent) == before
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("provider", ["codex", "claude", "gemini", "cursor-agent", "copilot"])
+def test_i2_existing_completed_result_and_pending_task_remain_unchanged(
+    diagnostic_workspace, native_io, provider
+):
+    repo, issue, blackboard = diagnostic_workspace
+    configure_provider(repo, provider, True)
+    records = HumanTaskRecordStore(issue)
+    workflow_id = blackboard.load_read_only().workflow_id
+    historical = records.materialize(
+        workflow_id=workflow_id, step="inspect", iteration=2,
+        trigger="need_clarification", policy_id="clarification-feedback",
+        prompt="Historical diagnosis", expected_result={"input_schema": "feedback", "required": True},
+        continuations={"submit": "inspect"}, assignee_type="user",
+    )
+    records.complete(workflow_id=workflow_id, task_id=historical.id,
+                     payload={"feedback": "Preserve this completed result"}, source="command")
+    before = inventory(repo.parent)
+    result = CliRunner().invoke(cli.app, ["chat", "analyst", "--read-only", "-p", "diagnose"])
+    assert result.exit_code == 0, result.output
+    assert_native_options(native_io[0][0][0], provider)
+    assert inventory(repo.parent) == before
