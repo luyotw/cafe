@@ -2159,6 +2159,21 @@ class TestToolNameTranslation:
 
         assert translated == ["write_file", "read_file", "write_file"]
 
+    @pytest.mark.parametrize("cli,native", [
+        (AgentCLI.GEMINI, "invoke_agent"),
+        (AgentCLI.COPILOT, "task"),
+    ])
+    @pytest.mark.parametrize("declared", ["Agent", "agent"])
+    def test_native_subagent_permission_reaches_cli_command(self, cli, native, declared):
+        executor = AgentExecutor(AgentConfig(name="test", cli=cli, agent_dir="agents"))
+        command = executor._get_cli_strategy().build_command(
+            "review", allowed_tools=executor._translate_tool_names([declared]),
+        )
+        option = "--allowed-tools" if cli == AgentCLI.GEMINI else "--allow-tool"
+        assert command[command.index(option) + 1] == native
+        assert "--allow-all-tools" not in command
+        assert "--yolo" not in command
+
     def test_translate_tool_names_with_patterns_for_gemini(self):
         """測試轉換帶 pattern 工具名給 Gemini"""
         config = AgentConfig(
