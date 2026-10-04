@@ -4,6 +4,47 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.7.0] - 2026-10-04
+
+### Added
+
+- Added `cafe manager chat` and explicit issue selection for terminal conversations
+  with the current verified event-driven, provider-owned Codex Manager session.
+  Unsupported or unverifiable identities receive recovery guidance without
+  replacement, fallback, workflow advancement, or automatic task completion.
+- Added `cafe chat <role> --read-only` for interactive and one-shot phase diagnosis
+  across all five integrated providers. CAFE suppresses its own chat lifecycle
+  writes and applies provider-native restrictions with documented limits.
+- Added a shared internal conversation transport for phase chat, Manager chat,
+  and event callbacks, reusing existing provider strategies and verified evidence.
+
+### Changed
+
+- Made authorized workflow diagnostic consultations use `--read-only`.
+- Added explicit project-preference choices to kickoff confirmation while
+  preserving the distinction between confirming once and remembering defaults.
+
+### Fixed
+
+- Drained provider stdout and stderr concurrently to avoid pipe backpressure and
+  delayed structured acknowledgements; retained bounded, safe failure diagnostics.
+- Preserved actionable native-option rejection guidance in read-only chat without
+  exposing raw provider diagnostics or retrying with weaker restrictions.
+- Validated the bound Codex host transport before callback delivery and allowed
+  fresh recovery after an explicitly new session fails without an observed ID.
+
+### Known limitations
+
+- Manager chat currently supports verified event-driven, provider-owned Codex
+  identities. Host-bound sessions, other providers, attached/unattended modes,
+  and missing identities retain their originating-conversation recovery paths.
+- Native read-only options restrict model tools and CAFE writes; they do not
+  provide immutable whole-process confinement or prevent all provider-owned UI,
+  settings, integration, or persistence writes.
+
+See [the v0.7.0 release notes](docs/releases/v0.7.0.md) for support boundaries and
+upgrade guidance.
+
 ## [0.6.0] - 2026-10-02
 
 ### Added
