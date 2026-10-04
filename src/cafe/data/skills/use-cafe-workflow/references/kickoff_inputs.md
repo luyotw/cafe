@@ -6,6 +6,16 @@ activate a workflow or execute proposed delivery actions.
 
 ## Prepare a draft
 
+Standalone kickoff preparation and formatting must use the same runtime as the
+CAFE CLI. In a CAFE checkout, the helpers select its `src/` before importing
+CAFE, using the explicit project root or the request's project root before the
+current directory. This also applies to installed helper copies and linked
+worktrees; ordinary projects keep their installed runtime. An already imported
+different CAFE package is an error, not a reason to mix runtime modules. Older
+helper copies need an explicit `PYTHONPATH=<cafe-checkout>/src` until separately
+authorized helper synchronization installs the fix. Changing Python interpreters
+alone does not ensure that the imported runtime matches the checkout.
+
 Create the draft directly; no handwritten request JSON is needed:
 
 ```sh
