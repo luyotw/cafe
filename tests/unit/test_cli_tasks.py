@@ -227,6 +227,35 @@ def test_fresh_session_completion_preserves_prior_session_and_user_input(
     assert BlackboardStore(issue_dir).load_or_create("spec").current_step == "spec"
 
 
+def test_existing_session_retry_without_identity_keeps_task_pending(tmp_path, monkeypatch):
+    issue_dir, iteration_dir, task = _legacy_interrupted_task_repo(tmp_path, monkeypatch)
+    path = iteration_dir / "iteration.json"
+    data = json.loads(path.read_text())
+    data.update(session_id=None, session_continuation={"policy": "new"})
+    path.write_text(json.dumps(data))
+    result = runner.invoke(app, ["task", "complete", task.id, "--result",
+                                 '{"decision":"retry"}', "--no-resume", "--json"])
+    assert result.exit_code != 0
+    store = HumanTaskRecordStore(issue_dir)
+    assert store.get_task(task.id).status is HumanTaskStatus.PENDING
+    assert store.get_result(task.id) is None
+    assert "identity was not saved or is invalid" in result.stdout
+
+
+def test_existing_retry_with_invalid_cli_keeps_task_pending(tmp_path, monkeypatch):
+    issue_dir, iteration_dir, task = _legacy_interrupted_task_repo(tmp_path, monkeypatch)
+    path = iteration_dir / "iteration.json"
+    data = json.loads(path.read_text())
+    data["cli"] = "invalid-cli"
+    path.write_text(json.dumps(data))
+    result = runner.invoke(app, ["task", "complete", task.id, "--result",
+                                 '{"decision":"retry"}', "--no-resume", "--json"])
+    assert result.exit_code != 0
+    store = HumanTaskRecordStore(issue_dir)
+    assert store.get_task(task.id).status is HumanTaskStatus.PENDING
+    assert store.get_result(task.id) is None
+
+
 @pytest.mark.parametrize("policy, allowed", [("new", True), ("resume_exact", False), ("auto", False)])
 def test_fresh_session_recovery_after_unobserved_new_session(tmp_path, monkeypatch, policy, allowed):
     """A failed explicitly new session can be retried without inventing an ID."""

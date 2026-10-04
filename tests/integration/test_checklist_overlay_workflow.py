@@ -182,8 +182,8 @@ def test_undeclared_checklist_accepts_agent_items_across_rebuild(tmp_path, monke
 
 
 @pytest.mark.parametrize("source", ["declared", "legacy", "overlay"])
-def test_empty_checklist_source_still_has_fixed_gates(tmp_path, monkeypatch, source):
-    """An intentionally empty source is distinct from having no source at all."""
+def test_empty_declared_checklist_accepts_completed_supplemental_records(tmp_path, monkeypatch, source):
+    """Declared source ownership survives additive completed observations."""
     from cafe.utils.checklist_validator import validate_checklist
 
     root = tmp_path / ".cafe/skills"
@@ -210,7 +210,10 @@ def test_empty_checklist_source_still_has_fixed_gates(tmp_path, monkeypatch, sou
     )
     generate(executor, step, state, directory)
     path = directory / "checklist.md"
-    path.write_text(path.read_text() + "\n- [x] Unrequested gate\n")
+    assert not executor._effective_checklist.agent_owned
+    path.write_text(path.read_text().replace("[ ]", "[x]") + "\n- [x] Supplemental observation\n")
+    assert validate_checklist(path, expected=executor._effective_checklist).is_complete
+    path.write_text(path.read_text() + "- [ ] Unfinished observation\n")
     assert not validate_checklist(path, expected=executor._effective_checklist).is_complete
 
 
@@ -407,10 +410,10 @@ def test_interrupted_identical_gates_restore_only_proven_source(tmp_path, monkey
 
 
 @pytest.mark.parametrize("mutation", ["delete", "duplicate", "alter", "reorder", "continuation"])
-def test_success_validation_uses_gate_count_and_completion_not_gate_wording(
+def test_success_validation_requires_original_gates_and_allows_supplemental_records(
     tmp_path, monkeypatch, mutation
 ):
-    """Missing or extra gates block handoff; reviewer annotations do not."""
+    """Required gate coverage survives additions but rejects changed obligations."""
     from cafe.utils.checklist_validator import validate_checklist
 
     root = tmp_path / ".cafe/skills"
@@ -435,15 +438,14 @@ def test_success_validation_uses_gate_count_and_completion_not_gate_wording(
     elif mutation == "alter":
         content = content.replace("Policy B", "Other task")
     elif mutation == "reorder":
-        content = (
-            content.replace("Policy A", "swap")
-            .replace("Policy B", "Policy A")
-            .replace("swap", "Policy B")
+        content = content.replace(
+            "[x] Policy A\n  Required rule\n[x] Policy B\n",
+            "[x] Policy B\n[x] Policy A\n  Required rule\n",
         )
     else:
         content = content.replace("Required rule", "Weakened rule")
     path.write_text(content)
-    assert validate_checklist(path).is_complete is (mutation not in {"delete", "duplicate"})
+    assert validate_checklist(path).is_complete is (mutation in {"duplicate", "reorder"})
 
 
 def git_evidence(tmp_path):
@@ -637,6 +639,63 @@ def direct_subagent_review_fixture(tmp_path, monkeypatch):
     state.playbook_id = "direct-subagent-review"
     BlackboardStore(executor.issue_dir).save(state)
     return executor, step, state, directory
+
+
+@pytest.mark.parametrize("valid_evidence", [True, False])
+def test_custom_handoff_accepts_supplemental_checks_and_still_requires_todo_evidence(
+    tmp_path, monkeypatch, valid_evidence
+):
+    """The production completion path accepts records without bypassing Todo proof."""
+    import subprocess
+
+    from cafe.core.blackboard import BlackboardStore
+
+    executor, step, state, _directory = lifecycle_fixture(tmp_path, monkeypatch)
+    step["input_artifacts"] = ["blueprint"]
+    write_skill(
+        tmp_path / ".cafe/skills",
+        "primary",
+        {"checklist": {"variants": [{"sections": [
+            {"reference": "work.md"},
+            {"todo_projection": {"artifact": "blueprint", "source": "bespoke"}},
+        ]}]}},
+        {"work.md": "[ ] Primary\n"},
+    )
+    source = executor.issue_dir / "blueprint.md"
+    source.write_text(
+        "## Todo List\n- [ ] `TASK-001` — Source: `bespoke` — Work: correction "
+        "— Closure: verified — Evidence: targeted test\n"
+    )
+    store = BlackboardStore(executor.issue_dir)
+    store.set_artifact(state, "blueprint", str(source))
+    commit = subprocess.check_output(
+        ["git", "-C", str(tmp_path), "rev-parse", "HEAD"], text=True
+    ).strip()
+
+    def finish(directory):
+        complete_ledger(directory, commit)
+        checklist = directory / "checklist.md"
+        checklist.write_text(
+            checklist.read_text() + "[x] Recorded corrective source and Todo cross-check\n"
+        )
+        if not valid_evidence:
+            output = directory / "output.md"
+            output.write_text(output.read_text().replace(commit, "a" * 40))
+        (executor.issue_dir / "next_step.txt").write_text(json.dumps({
+            "version": 1, "to_owner": "agent", "to_step": "inspect", "intent": "await_agent",
+        }))
+        return "confirmed"
+
+    executor.agent_manager = JourneyAgent(executor, [finish])
+    result = executor.execute_step("assemble", step, state)
+    assert result.artifact_ready is valid_evidence
+    assert executor.agent_manager.calls == (1 if valid_evidence else 4)
+    handoff = store.load_or_create("assemble").handoff_contract
+    if valid_evidence:
+        assert handoff.to_step == "inspect"
+    else:
+        assert handoff is None or handoff.to_step != "inspect"
+        assert any(event["type"] == "checklist_validation_failed" for event in result.events)
 
 
 @pytest.mark.parametrize("correction", [False, True])

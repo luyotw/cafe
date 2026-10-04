@@ -3,6 +3,7 @@
 import re
 from typing import Any, Dict, Union
 
+from cafe.agents.transport_types import TransportResult, _validated_evidence_scalar
 from cafe.core.types import AgentCLI
 
 ERROR_EXCERPT_LIMIT = 400
@@ -66,10 +67,23 @@ def build_failed_attempt(
     """Build the additive JSON-safe record for one unsuccessful CLI call."""
     cli_name = cli.value if isinstance(cli, AgentCLI) else str(cli)
     error_type = getattr(error, "error_type", None) or type(error).__name__
-    return {
+    record = {
         "cli": cli_name,
         "chain_role": chain_role,
         "attempt": attempt,
         "error_type": error_type,
         "error_excerpt": sanitize_error_excerpt(error),
     }
+    evidence = getattr(error, "transport_result", None)
+    if (
+        isinstance(evidence, TransportResult)
+        and error_type in {"timeout", "execution_limit", "incomplete_stream"}
+        and evidence.failure_code in {None, error_type}
+    ):
+        try:
+            record["session_id"] = _validated_evidence_scalar(
+                evidence.observed_session_id, strip=True
+            )
+        except ValueError:
+            pass
+    return record

@@ -44,7 +44,10 @@ budgets remain enforced; activity records count toward output budgets.
 
 The receiver closes on success, timeout, process errors and caller exceptions.
 Failure diagnostics include the accepted stream-event count alongside stdout
-and stderr counters.
+and stderr counters, rejected HTTP requests and the largest request size.
+The loopback receiver accepts batches up to eight MiB: the installed CLI's
+ordinary 512-record batches are about 1.16 MB and exceeded the original one-MiB
+limit. The queue remains bounded and retained activity contains metadata only.
 
 ## Validation
 
@@ -65,3 +68,17 @@ workflow has resumed successfully.
 
 Codex's supported telemetry settings and events are documented in
 [Advanced Configuration](https://learn.chatgpt.com/docs/config-file/config-advanced#observability-and-telemetry).
+
+## Interrupted sessions
+
+A timeout or incomplete stream can still contain a verified provider thread
+identity. Failed-attempt diagnostics retain that CLI/session pair, and the
+phase saves the final attempt's pair in its iteration metadata for an exact
+user-selected retry. Conflicting or invalid transport evidence is excluded;
+the retained identity does not establish completion.
+
+An existing-session recovery choice requires a valid CLI/session pair before
+the task is completed. Missing or invalid identity leaves the task pending.
+The phase also rejects legacy completed retry choices without a resumable pair,
+rather than silently starting a new session. Fresh-session recovery remains
+an explicit user-owned choice.

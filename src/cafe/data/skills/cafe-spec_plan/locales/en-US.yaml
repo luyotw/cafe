@@ -1,0 +1,6 @@
+human_task.cafe_spec_plan.clarification_answers.prompt: Answer the unresolved questions so the requirements and implementation plan can be completed.
+human_task.cafe_spec_plan.discussion_recovery.prompt: Subagent discussion could not finish. Resolve the reported limitation or clarify the disputed decision, then resume this phase.
+human_task.cafe_spec_plan.output_review.decisions.confirm.label: Confirm requirements and plan
+human_task.cafe_spec_plan.output_review.decisions.revise.label: Revise requirements or plan
+human_task.cafe_spec_plan.output_review.prompt: Review the complete requirements and implementation plan together. Confirm both to begin implementation, or request a revision to either part.
+human_task.cafe_spec_plan.permission_feedback.prompt: Resolve the reported permission limitation, then resume planning.

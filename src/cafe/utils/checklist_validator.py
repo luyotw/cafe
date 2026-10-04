@@ -2,6 +2,7 @@
 
 import re
 import subprocess
+from collections import defaultdict, deque
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Mapping
@@ -74,6 +75,96 @@ def completion_requires_checklist(
     return status_code in CHECKLIST_COMPLETION_STATUS_CODES
 
 
+def _required_gates_present(content: str, expected: ChecklistMaterialization) -> bool:
+    """Match each declared gate once, allowing additive checks and annotations."""
+    from cafe.core.checklist import _CHECKBOX_LINE, _checklist_item_blocks
+
+    def rules(block: str) -> tuple[tuple[bool, str], ...]:
+        result = []
+        for line in block.splitlines():
+            if not line.strip():
+                continue
+            checkbox = _CHECKBOX_LINE.match(line)
+            text = checkbox.group("body") if checkbox else line
+            result.append((checkbox is not None, " ".join(text.split())))
+        return tuple(result)
+
+    def retains(required: tuple[bool, str], actual: tuple[bool, str]) -> bool:
+        if required[0] != actual[0]:
+            return False
+        text, observed = required[1], actual[1]
+        return observed == text or bool(
+            text and observed.startswith(text)
+            and observed[len(text):].startswith((" ", ":", ";", "(", "[", "—", "–"))
+        )
+
+    def covers(required, actual) -> bool:
+        if not actual or not retains(required[0], actual[0]):
+            return False
+        remaining = iter(actual[1:])
+        return all(any(retains(rule, observed) for observed in remaining) for rule in required[1:])
+
+    required = [rules(gate.block) for gate in expected.gates]
+    observed = [rules(block) for _, block, _ in _checklist_item_blocks(content)]
+    if len(observed) < len(required):
+        return False
+    # Unchanged checklists take a linear path, including repeated gate wording.
+    exact = defaultdict(list)
+    headings = defaultdict(list)
+    required_headings = {gate[0][1] for gate in required}
+    for index, gate in enumerate(observed):
+        exact[gate].append(index)
+        heading = gate[0][1]
+        prefixes = {heading, *(
+            heading[:boundary.start()]
+            for boundary in re.finditer(r"[ :;(\[—–]", heading)
+        )}
+        for prefix in prefixes & required_headings:
+            headings[prefix].append(index)
+    matched: dict[int, int] = {}
+    unmatched = []
+    for index, gate in enumerate(required):
+        if exact[gate]:
+            matched[exact[gate].pop()] = index
+        else:
+            unmatched.append(index)
+
+    # Reassign matches when identical headings have different subordinate rules;
+    # one observed item must never satisfy two distinct required occurrences.
+    candidates = {}
+    for start in unmatched:
+        pending = deque([start])
+        parents = {start: None}
+        visited = set()
+        found = False
+        while pending and not found:
+            index = pending.popleft()
+            if index not in candidates:
+                candidates[index] = [
+                    observed_index for observed_index in headings[required[index][0][1]]
+                    if covers(required[index], observed[observed_index])
+                ]
+            for observed_index in candidates[index]:
+                if observed_index in visited:
+                    continue
+                visited.add(observed_index)
+                previous = matched.get(observed_index)
+                if previous is None:
+                    while True:
+                        matched[observed_index] = index
+                        if parents[index] is None:
+                            break
+                        index, observed_index = parents[index]
+                    found = True
+                    break
+                if previous not in parents:
+                    parents[previous] = (index, observed_index)
+                    pending.append(previous)
+        if not found:
+            return False
+    return True
+
+
 def validate_checklist(
     checklist_path: Path, *, expected: ChecklistMaterialization | None = None
 ) -> ChecklistValidationResult:
@@ -111,15 +202,11 @@ def validate_checklist(
         pinned = load_materialization(checklist_path.parent / "iteration.json")
         integrity_valid = expected is None or pinned == expected
         expected = expected or pinned
-        # A declared checklist fixes how many gates this iteration has. An
-        # explicitly agent-owned checklist instead checks all authored items
-        # for completion, without pinning their count at phase initialization.
-        # Reviewers may annotate or paraphrase a gate while recording evidence;
-        # text equality is not a useful completion signal. Projected Todo rows
-        # retain their separate exact-identity and evidence validation.
-        gate_count = sum(1 for line in content.splitlines() if _CHECKBOX_LINE.match(line))
+        # Declared gates are required coverage, not a cap on recorded checks.
+        # Keep their instructions while allowing appended observations. Todo
+        # rows retain their separate exact-identity and evidence validation.
         integrity_valid = integrity_valid and (
-            expected is None or expected.agent_owned or gate_count == len(expected.gates)
+            expected is None or expected.agent_owned or _required_gates_present(content, expected)
         )
     except ValueError as exc:
         integrity_valid = False

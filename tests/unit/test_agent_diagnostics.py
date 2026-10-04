@@ -10,6 +10,25 @@ from cafe.agents.diagnostics import (
 )
 from cafe.agents.executor import AgentExecutionError
 from cafe.core.types import AgentCLI
+from cafe.agents.transport_types import TransportResult
+
+
+@pytest.mark.parametrize("failure", ["timeout", "conflicting_session_evidence", "invalid_evidence"])
+def test_failed_attempt_keeps_only_verified_session_identity(failure):
+    error = AgentExecutionError("interrupted", error_type="timeout")
+    error.transport_result = TransportResult(observed_session_id="observed-thread", failure_code=failure)
+    record = build_failed_attempt(cli=AgentCLI.CODEX, chain_role="primary", attempt=1, error=error)
+    if failure == "timeout":
+        assert record["session_id"] == "observed-thread"
+    else:
+        assert "session_id" not in record
+
+
+def test_incomplete_native_stream_retains_verified_thread():
+    error = AgentExecutionError("missing completion", error_type="incomplete_stream")
+    error.transport_result = TransportResult(observed_session_id="observed-thread", failure_code="incomplete_stream")
+    record = build_failed_attempt(cli=AgentCLI.CODEX, chain_role="primary", attempt=1, error=error)
+    assert record["session_id"] == "observed-thread"
 
 
 def test_sanitized_excerpt_preserves_reason_without_sensitive_values() -> None:

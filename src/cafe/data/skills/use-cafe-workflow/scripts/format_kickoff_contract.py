@@ -15,9 +15,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
-_SOURCE_ROOT = Path(__file__).resolve().parents[5]
-if str(_SOURCE_ROOT) not in sys.path:
-    sys.path.insert(0, str(_SOURCE_ROOT))
+_SCRIPT_ROOT = Path(__file__).resolve().parent
+if str(_SCRIPT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_ROOT))
+
+from _runtime_bootstrap import align_checkout_runtime
+
+if __name__ == "__main__":
+    align_checkout_runtime()
 
 _MANAGER_MODES = {"attached", "unattended", "event-driven"}
 _EVENT_DRIVEN_CLIS = {"claude", "codex", "gemini", "copilot", "cursor-agent"}

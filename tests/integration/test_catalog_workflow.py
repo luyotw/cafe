@@ -144,6 +144,15 @@ def test_linked_worktree_preview_and_sync_use_the_effective_project_overlay(
     monkeypatch.chdir(command_directory)
     monkeypatch.setattr("cafe.utils.config.get_global_cafe_dir", lambda: global_root)
 
+    # This journey concerns project overlays. Keep the builtin catalog isolated
+    # from bytecode writes by other workers executing checkout-owned scripts.
+    monkeypatch.setattr(
+        "cafe.ui.commands.catalog._build_catalog_service",
+        lambda: CatalogSyncService(
+            CatalogResolver(project_root=Path.cwd(), builtin_root=tmp_path / "builtin")
+        ),
+    )
+
     preview = runner.invoke(app, ["catalog", "check", "--json"])
     payload = json.loads(preview.stdout)
     entries = {item["entry_id"]: item for item in payload["entries"]}

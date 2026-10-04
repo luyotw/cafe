@@ -19,6 +19,9 @@ except ModuleNotFoundError:  # Python 3.10
 class CodexStreamActivity:
     """Run a bounded, loopback-only receiver for Codex's native OTel events."""
 
+    # Native exporters batch 512 records; ordinary batches exceed one MiB.
+    MAX_REQUEST_BYTES = 8 * 1_048_576
+
     def __init__(self):
         self._lock = Lock()
         self._pending = deque(maxlen=64)
@@ -26,6 +29,8 @@ class CodexStreamActivity:
         self._latest_timestamp = 0.0
         self._latest_kinds = set()
         self._accepted = 0
+        self._rejected_requests = 0
+        self._max_request_bytes = 0
         self._path = f"/{secrets.token_hex(24)}/v1/logs"
         self._server = None
         self._thread = None
@@ -41,11 +46,17 @@ class CodexStreamActivity:
                 self.connection.settimeout(1)
                 try:
                     size = int(self.headers.get("Content-Length", "0"))
-                    if self.path != owner._path or not 0 < size <= 1_048_576:
+                    with owner._lock:
+                        owner._max_request_bytes = max(owner._max_request_bytes, size)
+                    if self.path != owner._path or not 0 < size <= owner.MAX_REQUEST_BYTES:
+                        with owner._lock:
+                            owner._rejected_requests += 1
                         self.send_error(400)
                         return
                     owner.receive(json.loads(self.rfile.read(size)))
                 except (OSError, ValueError, TypeError, RecursionError):
+                    with owner._lock:
+                        owner._rejected_requests += 1
                     self.send_error(400)
                     return
                 self.send_response(200)
@@ -236,4 +247,8 @@ class CodexStreamActivity:
 
     def diagnostics(self):
         with self._lock:
-            return {"stream_activity_events": self._accepted}
+            return {
+                "stream_activity_events": self._accepted,
+                "stream_activity_rejected_requests": self._rejected_requests,
+                "stream_activity_max_request_bytes": self._max_request_bytes,
+            }

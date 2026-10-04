@@ -1,7 +1,7 @@
 ---
 name: cafe-spec_plan
 description: Discuss requirements and an implementation plan with a native subagent, then submit both for joint confirmation before development.
-version: 1.1.0
+version: 1.1.1
 workflow:
   execution_profile:
     workload: planning
@@ -12,39 +12,39 @@ workflow:
   human_tasks:
     - id: output-review
       pattern: confirm_output
-      prompt: Review the complete requirements and implementation plan together. Confirm both to begin implementation, or request a revision to either part.
+      prompt: {message_key: human_task.cafe_spec_plan.output_review.prompt}
       prompt_locales:
-        zh-TW: 請一起檢視完整需求規格與實作計畫。確認兩者後開始實作，或提出任一部分的修改。
+        zh-TW: {message_key: human_task.cafe_spec_plan.output_review.prompt}
       input_schema: decision
       decisions:
         - id: confirm
-          label: Confirm requirements and plan
+          label: {message_key: human_task.cafe_spec_plan.output_review.decisions.confirm.label}
           label_locales:
-            zh-TW: 確認需求規格與實作計畫
+            zh-TW: {message_key: human_task.cafe_spec_plan.output_review.decisions.confirm.label}
         - id: revise
-          label: Revise requirements or plan
+          label: {message_key: human_task.cafe_spec_plan.output_review.decisions.revise.label}
           label_locales:
-            zh-TW: 修改需求規格或實作計畫
+            zh-TW: {message_key: human_task.cafe_spec_plan.output_review.decisions.revise.label}
           requires_feedback: true
           correction: true
     - id: clarification-answers
       pattern: answer_questions
-      prompt: Answer the unresolved questions so the requirements and implementation plan can be completed.
+      prompt: {message_key: human_task.cafe_spec_plan.clarification_answers.prompt}
       prompt_locales:
-        zh-TW: 請回答尚未釐清的問題，讓需求規格與實作計畫可以完成。
+        zh-TW: {message_key: human_task.cafe_spec_plan.clarification_answers.prompt}
       input_schema: answers
       questions_from_xml: true
     - id: discussion-recovery
       pattern: revision_feedback
-      prompt: Subagent discussion could not finish. Resolve the reported limitation or clarify the disputed decision, then resume this phase.
+      prompt: {message_key: human_task.cafe_spec_plan.discussion_recovery.prompt}
       prompt_locales:
-        zh-TW: Subagent 討論尚未完成。請處理回報的限制或釐清有爭議的決策，再繼續此階段。
+        zh-TW: {message_key: human_task.cafe_spec_plan.discussion_recovery.prompt}
       input_schema: feedback
     - id: permission-feedback
       pattern: revision_feedback
-      prompt: Resolve the reported permission limitation, then resume planning.
+      prompt: {message_key: human_task.cafe_spec_plan.permission_feedback.prompt}
       prompt_locales:
-        zh-TW: 請處理回報的權限限制，再繼續規劃。
+        zh-TW: {message_key: human_task.cafe_spec_plan.permission_feedback.prompt}
       input_schema: feedback
   prompt_inputs:
     - artifacts: [plan]

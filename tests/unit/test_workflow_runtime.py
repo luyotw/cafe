@@ -6278,6 +6278,13 @@ def test_runtime_handles_agent_execution_error(
 
     def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
         if step_name == "spec":
+            # Model the persisted identity from an interrupted real invocation.
+            iteration_dir = issue_dir / "spec" / "iteration_001"
+            iteration_dir.mkdir(parents=True, exist_ok=True)
+            (iteration_dir / "iteration.json").write_text(
+                json.dumps({"iteration": 1, "cli": "codex", "session_id": "interrupted-session"}),
+                encoding="utf-8",
+            )
             raise AgentExecutionError("Rate limit exceeded", error_type="rate_limit")
         return StepExecutionResult(response="done", artifacts={}, status_code="confirmed")
 

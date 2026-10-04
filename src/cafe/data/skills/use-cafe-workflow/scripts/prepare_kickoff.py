@@ -14,6 +14,11 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
+from _runtime_bootstrap import align_checkout_runtime
+
+if __name__ == "__main__":
+    align_checkout_runtime()
+
 from _kickoff_store import atomic_write_text, VersionedJsonStore, repository_identity, _lock
 import kickoff_inputs
 import kickoff_preferences

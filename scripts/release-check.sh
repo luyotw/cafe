@@ -88,6 +88,11 @@ for arguments, options in (
             raise SystemExit(f"Installed command {arguments!r} is missing {option}")
 PYCODE
 
+echo "Verifying packaged subagent planning playbooks..."
+for playbook in subagent-flow subagent-flow-qa; do
+    "$SMOKE_VENV/bin/cafe" playbook validate "$playbook" --strict >/dev/null
+done
+
 "$SMOKE_VENV/bin/cafe" audit >/dev/null
 "$SMOKE_VENV/bin/cafe" skill validate --strict >/dev/null
 

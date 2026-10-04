@@ -1,0 +1,6 @@
+human_task.cafe_spec_plan.clarification_answers.prompt: 請回答尚未釐清的問題，讓需求規格與實作計畫可以完成。
+human_task.cafe_spec_plan.discussion_recovery.prompt: Subagent 討論尚未完成。請處理回報的限制或釐清有爭議的決策，再繼續此階段。
+human_task.cafe_spec_plan.output_review.decisions.confirm.label: 確認需求規格與實作計畫
+human_task.cafe_spec_plan.output_review.decisions.revise.label: 修改需求規格或實作計畫
+human_task.cafe_spec_plan.output_review.prompt: 請一起檢視完整需求規格與實作計畫。確認兩者後開始實作，或提出任一部分的修改。
+human_task.cafe_spec_plan.permission_feedback.prompt: 請處理回報的權限限制，再繼續規劃。

@@ -5565,6 +5565,66 @@ def test_incomplete_iteration_selects_exact_resume(tmp_path: Path) -> None:
     assert continuation.session_id == "interrupted-session"
 
 
+def test_new_thread_timeout_retains_identity_for_next_exact_retry(tmp_path, monkeypatch):
+    from cafe.agents.diagnostics import build_failed_attempt
+    from cafe.agents.transport_types import TransportResult
+
+    monkeypatch.chdir(tmp_path)
+    error = AgentExecutionError("idle timeout", error_type="timeout")
+    error.transport_result = TransportResult(observed_session_id="new-observed-thread", failure_code="timeout")
+
+    def fail(**_kwargs):
+        raise error
+
+    manager = FakeAgentManager("confirmed", on_execute=fail)
+    manager.get_failed_attempts = lambda: [build_failed_attempt(
+        cli=AgentCLI.CODEX, chain_role="primary", attempt=1, error=error
+    )]
+    executor = _minimal_spec_executor(tmp_path, agent_manager=manager)
+    executor.phase_dir = executor.issue_dir / "spec"
+    executor.iteration = 1
+    executor._session_continuation = SessionContinuation.new()
+    with pytest.raises(AgentExecutionError):
+        executor._execute_agent_iteration(
+            agent_name="Roger", prompt="continue", user_input="requirements",
+            valid_intents=[], require_status_code=False, allowed_tools=[],
+            phase_specific_data={"step_name": "spec"},
+        )
+    saved = json.loads((executor.phase_dir / "iteration_001" / "iteration.json").read_text())
+    assert saved["session_id"] == "new-observed-thread"
+    assert saved.get("workflow_completion_trusted") is not True
+    continuation = executor._select_session_continuation(
+        agent_name="Roger", step_def=executor.playbook["steps"]["spec"]
+    )
+    assert continuation.policy == SessionContinuationPolicy.RESUME_EXACT
+    assert continuation.session_id == "new-observed-thread"
+
+
+def test_legacy_completed_existing_retry_cannot_silently_start_new_thread(tmp_path):
+    executor = _minimal_spec_executor(tmp_path, agent_manager=FakeAgentManager("confirmed"))
+    executor.phase_name = "spec"
+    executor.phase_dir = executor.issue_dir / "spec"
+    executor.iteration = 1
+    current = executor.phase_dir / "iteration_001"
+    current.mkdir(parents=True)
+    (current / "iteration.json").write_text(json.dumps({"cli": "codex", "session_id": None}))
+    policy, binding = agent_execution_interrupted_human_task(step_name="spec")
+    store = HumanTaskRecordStore(executor.issue_dir)
+    task = store.materialize(
+        workflow_id="legacy-workflow", step="spec", iteration=1,
+        trigger="agent_execution_interrupted", policy_id=policy.id,
+        prompt=policy.prompt, expected_result=policy.model_dump(mode="json"),
+        continuations=binding.outcomes, assignee_type="user",
+    )
+    store.complete(workflow_id="legacy-workflow", task_id=task.id,
+                   payload={"decision": "retry"}, source="command")
+    with pytest.raises(RuntimeError, match="identity was not saved"):
+        executor._select_session_continuation(
+            agent_name="Roger", step_def=executor.playbook["steps"]["spec"],
+            workflow_id="legacy-workflow",
+        )
+
+
 def test_interrupted_correction_preserves_partial_output_before_resume(
     tmp_path: Path,
     monkeypatch,

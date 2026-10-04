@@ -510,9 +510,12 @@ def test_i2_prior_provider_recovery_cannot_grant_a_later_automatic_submission(jo
     j.runtime.run(start_step="inspect_custom")
     task = HumanTaskRecordStore(j.issue).tasks()[0]
     state = BlackboardStore(j.issue).load_or_create("inspect_custom")
-    apply_human_task_payload(issue_dir=j.issue, playbook_data=j.playbook, blackboard=state,
+    # This provider failed before a thread was observed; recovery must explicitly
+    # select a fresh session rather than pretending an existing one can resume.
+    application = apply_human_task_payload(issue_dir=j.issue, playbook_data=j.playbook, blackboard=state,
         from_step="inspect_custom", trigger=task.trigger,
-        raw_payload={"task": task.policy_id, "decision": "retry", "human_task_id": task.id}, source="test")
+        raw_payload={"task": task.policy_id, "decision": "retry_fresh_session", "human_task_id": task.id}, source="test")
+    assert application.rejection is None
     resumed = BlackboardWorkflowRuntime(issue_dir=j.issue, playbook=j.playbook, executor=j.executor.execute_step)
     resumed.run()
     assert len(j.manager.calls) == 4  # Failed execution, then initial report plus two corrections.

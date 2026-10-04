@@ -42,6 +42,7 @@ from cafe.core.human_tasks import (
     resolve_step_human_task as _resolve_step_human_task,
 )
 from cafe.core.phase_state_mixin import next_runnable_iteration_number
+from cafe.core.session_continuation import exact_continuation_from_context
 from cafe.core.playbook import resolve_step_attempt_limit
 from cafe.core.workflow_feedback import WorkflowFeedbackError, WorkflowFeedbackLedger
 from cafe.skills.loader import SkillLoader
@@ -1128,6 +1129,19 @@ def _apply_human_task_payload(
                     continuation,
                     declared_continuation=declared_continuation,
                 )
+                if (
+                    trigger == AGENT_EXECUTION_INTERRUPTED_TRIGGER
+                    and validated_completion.decision == "retry"
+                ):
+                    iteration_data = _load_recovery_json(
+                        issue_dir / from_step / f"iteration_{iteration:03d}" / "iteration.json"
+                    )
+                    if exact_continuation_from_context(iteration_data) is None:
+                        raise ValueError(
+                            "The interrupted CLI/session identity was not saved or is invalid. "
+                            "An existing-session retry cannot start a fresh session; "
+                            "select fresh-session recovery explicitly."
+                        )
                 if (
                     trigger == AGENT_EXECUTION_INTERRUPTED_TRIGGER
                     and validated_completion.decision == AGENT_EXECUTION_FRESH_SESSION_DECISION

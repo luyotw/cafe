@@ -4,6 +4,8 @@ import json
 import os
 import textwrap
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -88,6 +90,40 @@ def test_websocket_transport_is_observed():
     activity.bind("session")
     activity.receive(payload(source="codex.websocket_event"))
     assert activity.drain()["source"] == "codex.websocket_event"
+
+
+def test_native_sized_otel_batch_is_not_discarded():
+    data = payload()
+    records = data["resourceLogs"][0]["scopeLogs"][0]["logRecords"]
+    # The installed native exporter sends 512-record batches around 1.16 MB.
+    records[0]["body"]["stringValue"] = "private-model-content" * 140
+    records *= 512
+    encoded = json.dumps(data).encode()
+    assert len(encoded) > 1_048_576
+    with CodexStreamActivity() as activity:
+        activity.bind("session")
+        endpoint = f"http://127.0.0.1:{activity._server.server_port}{activity._path}"
+        with urllib.request.urlopen(urllib.request.Request(endpoint, encoded), timeout=2) as response:
+            assert response.status == 200
+        result = activity.drain()
+        assert result is not None
+        assert "private" not in json.dumps(result)
+        assert activity.diagnostics()["stream_activity_rejected_requests"] == 0
+        assert activity.diagnostics()["stream_activity_max_request_bytes"] == len(encoded)
+
+
+def test_receiver_rejects_unbounded_requests_without_counting_activity():
+    with CodexStreamActivity() as activity:
+        activity.bind("session")
+        endpoint = f"http://127.0.0.1:{activity._server.server_port}{activity._path}"
+        request = urllib.request.Request(
+            endpoint, b"{}", headers={"Content-Length": str(activity.MAX_REQUEST_BYTES + 1)}
+        )
+        with pytest.raises(urllib.error.HTTPError) as error:
+            urllib.request.urlopen(request, timeout=2)
+        assert error.value.code == 400
+        assert activity.drain() is None
+        assert activity.diagnostics()["stream_activity_rejected_requests"] == 1
 
 
 def test_existing_exporter_is_preserved(tmp_path):
@@ -227,6 +263,10 @@ def run_codex_fixture(tmp_path: Path, monkeypatch, mode, **limits):
                       'delta':'private-token-text','prompt':'private-prompt'}
             data={'resourceLogs':[{'scopeLogs':[{'logRecords':[{'attributes':{
                 k:{'stringValue':v} for k,v in values.items()}}]}]}]}
+            if mode=='batch':
+                records=data['resourceLogs'][0]['scopeLogs'][0]['logRecords']
+                records[0]['body']={'stringValue':'private-model-content'*140}
+                records*=512
             with urllib.request.urlopen(urllib.request.Request(endpoint,json.dumps(data).encode(),
                 headers={'Content-Type':'application/json'}),timeout=2) as response:
                 response.read()
@@ -262,8 +302,9 @@ def run_codex_fixture(tmp_path: Path, monkeypatch, mode, **limits):
     )
 
 
-def test_streaming_without_stdout_is_visible_and_does_not_idle_timeout(tmp_path, monkeypatch):
-    result = run_codex_fixture(tmp_path, monkeypatch, "live")
+@pytest.mark.parametrize("mode", ["live", "batch"])
+def test_streaming_without_stdout_is_visible_and_does_not_idle_timeout(tmp_path, monkeypatch, mode):
+    result = run_codex_fixture(tmp_path, monkeypatch, mode)
     records = [json.loads(line) for line in (tmp_path / "stream.jsonl").read_text().splitlines()]
     activity = [record for record in records if record["type"] == "cafe.stream_activity"]
     assert activity
