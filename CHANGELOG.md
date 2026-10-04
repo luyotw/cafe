@@ -24,6 +24,10 @@ workflow capabilities alongside fixes.
 
 ### Fixed
 
+- Validate required checklist coverage instead of demanding an identical checkbox
+  count. Completed supplemental checks and additive annotations are accepted;
+  missing or changed required rules and mismatched Todo evidence still block
+  completion.
 - Accept native-sized Codex telemetry batches up to eight MiB and expose rejected
   request counts and maximum batch size in stream diagnostics.
 - Retain verified interrupted CLI/session identities and require exact evidence

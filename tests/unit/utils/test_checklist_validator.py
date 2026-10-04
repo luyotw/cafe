@@ -77,8 +77,8 @@ def test_validate_checklist_empty_file(tmp_path):
 
 
 @pytest.mark.parametrize("ownership", [None, False, True])
-def test_empty_materialization_ownership_controls_authored_items(tmp_path, ownership):
-    """Old empty records remain fixed until the runtime rebuilds their sources."""
+def test_empty_materialization_allows_completed_supplemental_checks(tmp_path, ownership):
+    """Empty required coverage still checks every supplemental item's completion."""
     import json
 
     from cafe.core.checklist import load_materialization
@@ -91,8 +91,108 @@ def test_empty_materialization_ownership_controls_authored_items(tmp_path, owner
     expected = load_materialization(metadata)
     checklist = tmp_path / "checklist.md"
     checklist.write_text("- [x] Observed result\n")
-    assert validate_checklist(checklist, expected=expected).is_complete is (ownership is True)
+    assert validate_checklist(checklist, expected=expected).is_complete
     checklist.write_text("- [ ] Remaining check\n")
+    result = validate_checklist(checklist, expected=expected)
+    assert not result.is_complete and result.unchecked_count == 1
+
+
+def pinned_checklist(tmp_path, content):
+    import json
+
+    from cafe.core.checklist import (
+        ChecklistGate, ChecklistMaterialization, _checklist_item_blocks, checklist_digest,
+    )
+
+    gates = tuple(
+        ChecklistGate(checklist_digest([index, block]), "custom-policy", block)
+        for index, (_, block, _) in enumerate(_checklist_item_blocks(content))
+    )
+    expected = ChecklistMaterialization(content, gates, (), False)
+    (tmp_path / "iteration.json").write_text(
+        json.dumps({"effective_checklist": expected.to_dict()}), encoding="utf-8"
+    )
+    return expected
+
+
+@pytest.mark.parametrize("placement", ["before", "between", "after", "nested"])
+def test_required_checklist_accepts_completed_supplemental_records(tmp_path, placement):
+    source = "[ ] Check corrective source\n  Retain source evidence\n[ ] Check Todo coverage\n"
+    expected = pinned_checklist(tmp_path, source)
+    completed = source.replace("[ ]", "[x]")
+    observation = "- [x] Recorded corrective source and Todo cross-check\n"
+    if placement == "before":
+        completed = observation + completed
+    elif placement == "between":
+        completed = completed.replace("[x] Check Todo coverage", observation + "[x] Check Todo coverage")
+    elif placement == "nested":
+        completed = completed.replace("  Retain source evidence", "  " + observation + "  Retain source evidence")
+    else:
+        completed += observation
+    checklist = tmp_path / "checklist.md"
+    checklist.write_text(completed, encoding="utf-8")
+    result = validate_checklist(checklist, expected=expected)
+    assert result.is_complete and not result.detail
+
+
+def test_required_checklist_retains_rules_with_annotations_and_format_changes(tmp_path):
+    expected = pinned_checklist(
+        tmp_path, "[ ] Verify correction\n  Preserve acceptance criteria\n[ ] Verify handoff\n"
+    )
+    checklist = tmp_path / "checklist.md"
+    checklist.write_text(
+        "* [X] Verify handoff (confirmed)\n"
+        "- [x] Verify correction — checked against the current source\n"
+        "  Evidence: reviewed the current Todo\n"
+        "  Preserve acceptance criteria (verified)\n",
+        encoding="utf-8",
+    )
+    assert validate_checklist(checklist, expected=expected).is_complete
+
+
+@pytest.mark.parametrize("mutation", ["missing", "replacement", "rule", "unchecked", "duplicate"])
+def test_supplemental_records_cannot_replace_or_complete_required_gates(tmp_path, mutation):
+    expected = pinned_checklist(tmp_path, "[ ] Required A\n  Keep acceptance rule\n[ ] Required B\n")
+    completed = "[x] Required A\n  Keep acceptance rule\n[x] Required B\n"
+    if mutation == "missing":
+        completed = completed.replace("[x] Required B\n", "")
+    elif mutation == "replacement":
+        completed = completed.replace("Required B", "Different check")
+    elif mutation == "rule":
+        completed = completed.replace("Keep acceptance rule", "Weakened acceptance rule")
+    elif mutation == "duplicate":
+        completed = completed.replace("Required B", "Required A")
+    else:
+        completed = completed.replace("[x] Required B", "[ ] Required B")
+    checklist = tmp_path / "checklist.md"
+    checklist.write_text(completed + "[x] Supplemental observation\n", encoding="utf-8")
+    assert not validate_checklist(checklist, expected=expected).is_complete
+
+
+def test_repeated_required_wording_needs_distinct_completed_occurrences(tmp_path):
+    expected = pinned_checklist(tmp_path, "[ ] Required check\n[ ] Required check\n")
+    checklist = tmp_path / "checklist.md"
+    checklist.write_text("[x] Required check\n[x] Supplemental observation\n", encoding="utf-8")
+    assert not validate_checklist(checklist, expected=expected).is_complete
+    checklist.write_text("[x] Required check\n[x] Required check — verified\n", encoding="utf-8")
+    assert validate_checklist(checklist, expected=expected).is_complete
+
+
+def test_duplicate_headings_match_their_required_subordinate_rules(tmp_path):
+    expected = pinned_checklist(tmp_path, "[ ] Verify\n  Rule A\n[ ] Verify\n  Rule B\n")
+    checklist = tmp_path / "checklist.md"
+    checklist.write_text(
+        "[x] Verify — both rules checked\n  Rule A\n  Rule B\n"
+        "[x] Verify (other occurrence)\n  Rule A\n",
+        encoding="utf-8",
+    )
+    assert validate_checklist(checklist, expected=expected).is_complete
+
+
+def test_unfinished_supplemental_check_still_blocks_completion(tmp_path):
+    expected = pinned_checklist(tmp_path, "[ ] Required check\n")
+    checklist = tmp_path / "checklist.md"
+    checklist.write_text("[x] Required check\n[ ] Additional check\n", encoding="utf-8")
     result = validate_checklist(checklist, expected=expected)
     assert not result.is_complete and result.unchecked_count == 1
 
