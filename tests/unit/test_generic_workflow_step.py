@@ -5107,9 +5107,11 @@ def test_execute_step_same_session_resume_keeps_real_input_in_prompt_and_user_in
     )
 
 
+@pytest.mark.parametrize("interrupted_session", ["interrupted-session", None])
 def test_execute_step_interrupted_fresh_session_surfaces_declared_current_scope(
     tmp_path: Path,
     monkeypatch,
+    interrupted_session,
 ) -> None:
     monkeypatch.chdir(tmp_path)
     issue_dir = tmp_path / ".cafe" / "issues" / "issue-resume-artifacts"
@@ -5120,7 +5122,8 @@ def test_execute_step_interrupted_fresh_session_surfaces_declared_current_scope(
         json.dumps(
             {
                 "cli": "codex",
-                "session_id": "interrupted-session",
+                "session_id": interrupted_session,
+                "session_continuation": {"policy": "new"},
                 "end_time": "2026-09-12T09:26:54+08:00",
                 "workflow_completion_trusted": False,
             }
@@ -5171,7 +5174,8 @@ def test_execute_step_interrupted_fresh_session_surfaces_declared_current_scope(
                 "previous": {
                     "cli": "codex",
                     "model": "gpt-5-test",
-                    "session_id": "interrupted-session",
+                    "session_id": interrupted_session,
+                    **({"session_unobserved": True} if interrupted_session is None else {}),
                 },
             },
         },
@@ -5220,7 +5224,7 @@ def test_execute_step_interrupted_fresh_session_surfaces_declared_current_scope(
     assert str(historical) not in scope
     iteration_data = json.loads((current_iter / "iteration.json").read_text(encoding="utf-8"))
     assert iteration_data["session_continuation"]["policy"] == "new"
-    assert iteration_data["session_recovery"]["previous"]["session_id"] == "interrupted-session"
+    assert iteration_data["session_recovery"]["previous"]["session_id"] == interrupted_session
     assert iteration_data["model"] == "gpt-5-test"
     assert "workflow_completion_trusted" not in iteration_data
 

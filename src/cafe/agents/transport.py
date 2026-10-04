@@ -45,6 +45,7 @@ class ConversationTransport:
         required_evidence: frozenset[Evidence] = frozenset(),
         on_usage=None,
         on_acceptance=None,
+        on_response=None,
         allowed_tools=None,
         allowed_directories=None,
         execution_control=None,
@@ -55,12 +56,14 @@ class ConversationTransport:
         self._admit(operation, required_evidence | inherent)
         previous = self.executor.config.session_id
         self.executor.config.session_id = session_id
+        responses = []
+        response_options = {"on_response": responses.append} if on_response is not None else {}
         try:
             executed = self.executor.execute_event_driver(
                 prompt, expected_session_id=session_id, event_id=delivery_id,
                 on_acceptance=on_acceptance, allowed_tools=allowed_tools,
                 allowed_directories=allowed_directories, execution_control=execution_control,
-                environment_overrides=environment_overrides,
+                environment_overrides=environment_overrides, **response_options,
             )
             result = executed.transport_result
         except AgentExecutionError as error:
@@ -105,6 +108,12 @@ class ConversationTransport:
             self._fail(replace(result, failure_code=result.failure_code or "missing_evidence"))
         if session_id is not None and result.observed_session_id != session_id:
             self._fail(replace(result, failure_code="session_mismatch"))
+        if on_response is not None and session_id is not None and (result.accepted is not True or result.completed is not True):
+            self._fail(replace(result, failure_code="incomplete_delivery"))
+        if on_response is not None:
+            if len(responses) != 1:
+                self._fail(replace(result, failure_code="missing_response"))
+            on_response(responses[0])
         return result
 
     def acquire_session(
@@ -132,6 +141,7 @@ class ConversationTransport:
         *,
         required_evidence: frozenset[Evidence] = frozenset(),
         on_acceptance=None,
+        on_response=None,
         on_usage=None,
         allowed_tools=None,
         allowed_directories=None,
@@ -143,7 +153,7 @@ class ConversationTransport:
             raise ValueError("delivery requires a correlation identity in its prompt")
         return self._callback(
             prompt, session_id=session_id, delivery_id=delivery_id, required_evidence=required_evidence,
-            on_acceptance=on_acceptance, on_usage=on_usage, allowed_tools=allowed_tools,
+            on_acceptance=on_acceptance, on_response=on_response, on_usage=on_usage, allowed_tools=allowed_tools,
             allowed_directories=allowed_directories, execution_control=execution_control,
             environment_overrides=environment_overrides,
         )

@@ -25,6 +25,7 @@ import yaml
 
 from cafe.agents.executor import AgentExecutionControl, AgentExecutionError, AgentExecutor
 from cafe.agents.transport import ConversationTransport
+from cafe.core.audit_events import AuditEventStore
 from cafe.core.conversation_locale import DEFAULT_CONVERSATION_LOCALE
 from cafe.core.human_task_notifications import (
     build_workflow_callback_failure_message,
@@ -140,19 +141,24 @@ def _read_bounded_text(path: Path, *, label: str) -> str:
 
 
 @contextmanager
-def _session_lock(manager_dir: Path) -> Iterator[None]:
+def _session_lock(manager_dir: Path, *, blocking: bool = True) -> Iterator[None]:
     manager_dir.mkdir(parents=True, exist_ok=True)
     lock_path = manager_dir / LOCK_FILENAME
-    with lock_path.open("a+", encoding="utf-8") as handle:
+    if manager_dir.is_symlink() or lock_path.is_symlink():
+        raise ValueError("session lock path is unsafe")
+    descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(descriptor, "a+", encoding="utf-8") as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            raise ValueError("session lock must be a regular file")
         if fcntl is not None:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
         elif msvcrt is not None:  # pragma: no branch - platform-specific.
             handle.seek(0, 2)
             if handle.tell() == 0:
                 handle.write("\0")
                 handle.flush()
             handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK, 1)
         else:
             raise RuntimeError("event-driven callbacks require cross-process file locking")
         try:
@@ -1139,6 +1145,65 @@ def _project_v3_events(state: dict[str, Any]) -> list[dict[str, Any]]:
     return sorted(projected, key=lambda item: (item["sequence"], item["event_id"]))
 
 
+def read_chat_session(issue_dir: Path, *, workflow_id: str) -> dict[str, Any]:
+    """Verify the stored current route without initializing or adapting dispatch."""
+    from cafe.agents.transport_types import _validated_evidence_scalar
+
+    config = _contract_callback_config(
+        issue_dir=issue_dir, issue_name=issue_dir.name, workflow_id=workflow_id,
+    )
+    if config is None:
+        raise ValueError("unsupported_mode")
+    manager_dir = _manager_dir(issue_dir)
+    path = manager_dir / DISPATCH_STATE_FILENAME
+    if not path.exists():
+        raise ValueError("identity_absent")
+    from cafe.manager._store import _decode_exact
+
+    state = _decode_exact(_read_bounded_text(path, label="chat dispatch state").encode("utf-8"))
+    expected = {"schema_version", "workflow_id", "contract_sha256", "active_index",
+                "entries", "events", "updated_at"}
+    if (not isinstance(state, dict) or set(state) != expected
+            or state["schema_version"] != 2 or state["workflow_id"] != workflow_id
+            or state["contract_sha256"] != config["contract_sha256"]
+            or not _valid_nonempty_string(state["updated_at"])):
+        raise ValueError("identity_conflict")
+    entries = state["entries"]
+    active = state["active_index"]
+    if (not isinstance(entries, list) or len(entries) != len(config["clis"])
+            or type(active) is not int or not 0 <= active < len(entries)
+            or not isinstance(state["events"], dict)):
+        raise ValueError("identity_conflict")
+    for index, (entry, policy) in enumerate(zip(entries, config["clis"])):
+        if (not isinstance(entry, dict)
+                or set(entry) not in ({"index", "cli", "session"}, {"index", "cli", "model", "session"})
+                or type(entry["index"]) is not int or entry["index"] != index
+                or entry["cli"] != policy["cli"] or entry.get("model") != policy.get("model")):
+            raise ValueError("identity_conflict")
+        session = entry["session"]
+        if session is not None:
+            if (not isinstance(session, dict) or set(session) != {"id", "source", "acquired_at"}
+                    or session["source"] not in {"provider", "host_session"}
+                    or not _valid_nonempty_string(session["acquired_at"])
+                    or (session["source"] == "host_session" and (index != 0 or entry["cli"] != "codex"))):
+                raise ValueError("identity_conflict")
+            _validated_evidence_scalar(session["id"])
+    _validate_dispatch_events(state)
+    if any(event["recovery_pending"] or event["status"] == "routing"
+           or any(attempt["status"] in {"pending", "ambiguous"} for attempt in event["attempts"])
+           for event in state["events"].values()):
+        raise ValueError("recovery_pending")
+    entry = entries[active]
+    if entry["session"] is None:
+        raise ValueError("identity_absent")
+    if entry["session"]["source"] == "host_session":
+        raise ValueError("host_bound")
+    if entry["cli"] != "codex":
+        raise ValueError("unsupported_provider")
+    return {"session_id": entry["session"]["id"], "cli": entry["cli"],
+            "model": entry.get("model"), "contract_sha256": config["contract_sha256"]}
+
+
 def read_status(issue_dir: Path) -> dict[str, Any]:
     """Project exact event-manager state without locks, writes, or output inference."""
     manager_dir = _manager_dir(issue_dir)
@@ -1346,6 +1411,10 @@ def _ensure_dispatch_event(
 
 
 def _classify_provider_failure(error: BaseException) -> str:
+    if isinstance(error, _HostTransportUnavailable):
+        # Checked before starting the proxy or sending any RPC; no delivery
+        # could have occurred. Do not label this as a lost acknowledgement.
+        return "conclusive_nonacceptance"
     conclusive = {
         "cli_not_found",
         "cli_unavailable",
@@ -1654,34 +1723,89 @@ class EventManagerSessionStore(SessionStore):
 EventDriverSessionStore = EventManagerSessionStore
 
 
-def _callback_prompt(event: dict[str, Any], *, repository_root: Path) -> str:
-    notice = json.dumps(event, ensure_ascii=False, sort_keys=True)
+def _callback_to_step(event: dict[str, Any], *, repository_root: Path) -> str | None:
+    """Project the event-time baton without changing callback or workflow authority."""
+    issue = event.get("issue")
+    if not isinstance(issue, str) or issue in {"", ".", ".."} or Path(issue).name != issue:
+        return None
+    audit = AuditEventStore(repository_root / ".cafe" / "issues" / issue)
+    try:
+        record = audit.read(event.get("workflow_id"), event.get("sequence"), bounded=True)
+        if (record is None or record["event_id"] != event.get("event_id")
+                or record["timestamp"] != event.get("occurred_at")
+                or record["event_type"] != "workflow_event_callback_enqueued"):
+            return None
+        for sequence in range(record["sequence"] - 1, 0, -1):
+            prior = audit.read(event["workflow_id"], sequence, bounded=True)
+            if prior is None:
+                continue
+            change = prior["patch"].get("handoff_contract")
+            if change is not None:
+                handoff = change.get("after") if isinstance(change, dict) else None
+            elif "baton" in prior:
+                handoff = prior["baton"]
+            elif prior["event_type"] == "workflow_paused":
+                return "user"
+            elif prior["event_type"] == "workflow_completed":
+                return "done"
+            elif prior["event_type"] == "transition":
+                handoff = {"to_step": prior["data"].get("to")}
+            else:
+                continue
+            target = handoff.get("to_step") if isinstance(handoff, dict) else None
+            return target if isinstance(target, str) and target else None
+    except (OSError, ValueError, TypeError):
+        pass
+    return None
+
+
+def _callback_prompt(
+    event: dict[str, Any], *, repository_root: Path, include_instructions: bool = False
+) -> str:
+    notice = json.dumps(
+        {**event, "to_step": _callback_to_step(event, repository_root=repository_root)},
+        ensure_ascii=False, sort_keys=True,
+    )
+    instructions = (
+        "You are the event-driven CAFE workflow manager.",
+        "This is an asynchronous wake notification, not a workflow advancement gate.",
+        "Read the builtin use-cafe-workflow skill and follow its current confirmed contract.",
+        "First inspect current durable state with cafe status/show before acting; "
+        "the event may be stale.",
+        "For the current task, run cafe task inspect <task-id> --json, then "
+        "inspect_task_authority.py --issue-dir <issue-dir> --task-id <task-id> --json. "
+        "Treat route_status, resolution_owner, and evidence_reason independently.",
+        "Do not answer mandatory, user-required, permission, or capability tasks; only "
+        "a user-facing manager turn may relay an explicit user-owned answer.",
+        "You may complete a manager_confirmable task authorized by its explicit declaration "
+        "or the confirmed overall need_clarification policy, only after verifying its "
+        "confirmed contract and evidence. "
+        "Explicit task ownership overrides the overall policy. "
+        "Use complete_manager_task.py with the same assessment and inspected digests "
+        "so authority is rechecked at durable completion. "
+        "A clarification answer must stay within confirmed scope, constraints and authority "
+        "and trigger no contract deviation; otherwise leave it for the user. Do not grant "
+        "permissions/capabilities or wait for this callback.",
+        "Do not assume you own a running background process. Only use an already "
+        "reliable, authorized control path.",
+    ) if include_instructions else ()
     return "\n".join(
-        (
-            "You are the event-driven CAFE workflow manager.",
-            "This is an asynchronous wake notification, not a workflow advancement gate.",
-            "Read the builtin use-cafe-workflow skill and follow its current confirmed contract.",
-            "First inspect current durable state with cafe status/show before acting; "
-            "the event may be stale.",
-            "For the current task, run cafe task inspect <task-id> --json, then "
-            "inspect_task_authority.py --issue-dir <issue-dir> --task-id <task-id> --json. "
-            "Treat route_status, resolution_owner, and evidence_reason independently.",
-            "Do not answer mandatory, user-required, permission, or capability tasks; only "
-            "a user-facing manager turn may relay an explicit user-owned answer.",
-            "You may complete a manager_confirmable task authorized by its explicit declaration "
-            "or the confirmed overall need_clarification policy, only after verifying its "
-            "confirmed contract and evidence. "
-            "Explicit task ownership overrides the overall policy. "
-            "Use complete_manager_task.py with the same assessment and inspected digests "
-            "so authority is rechecked at durable completion. "
-            "A clarification answer must stay within confirmed scope, constraints and authority "
-            "and trigger no contract deviation; otherwise leave it for the user. Do not grant "
-            "permissions/capabilities or wait for this callback.",
-            "Do not assume you own a running background process. Only use an already "
-            "reliable, authorized control path.",
-            f"Repository: {repository_root}",
-            f"Wake notice: {notice}",
-        )
+        ("CAFE callback", *instructions, f"Repository: {repository_root}", f"Wake notice: {notice}")
+    )
+
+
+def _fallback_needs_instructions(state: dict[str, Any], index: int) -> bool:
+    """Reuse verified delivery history across events and reordered routing chains."""
+    if index == 0:
+        return False
+    entry = state["entries"][index]
+    session_id = entry["session"]["id"]
+    return not any(
+        attempt.get("stage") == "delivery" and attempt.get("status") == "accepted"
+        and attempt.get("cli") == entry["cli"] and attempt.get("model") == entry.get("model")
+        and attempt.get("session_id") == session_id
+        for event_state in _project_v3_events(state)
+        for attempt in event_state["attempts"]
     )
 
 
@@ -1720,6 +1844,53 @@ def _with_current_task_authority(
 
 class _HostRPCError(RuntimeError):
     """A daemon rejection; never include provider output in durable errors."""
+
+
+class _HostTransportUnavailable(ValueError):
+    """The existing host endpoint is absent before any delivery is attempted."""
+
+    error_type = "host_control_socket_unavailable"
+
+
+def _require_host_control_socket() -> Path:
+    home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+    endpoint = home / "app-server-control" / "app-server-control.sock"
+    try:
+        endpoint_metadata = endpoint.lstat()
+        # Managed Codex daemons publish the control path as an owned symlink
+        # to their Unix socket. Validate the resolved socket, not just the link.
+        metadata = endpoint.stat()
+        available = (
+            stat.S_ISSOCK(metadata.st_mode)
+            and hasattr(os, "getuid")
+            and metadata.st_uid == os.getuid()
+            and endpoint_metadata.st_uid == os.getuid()
+        )
+    except OSError:
+        available = False
+    if not available:
+        raise _HostTransportUnavailable(
+            "The bound Codex App has no usable daemon control socket. "
+            "Local App stdio sessions cannot receive this callback. "
+            "Use an explicitly confirmed attached Manager mode, or connect the App "
+            "to a supported existing daemon before restoring event-driven mode."
+        )
+    return endpoint
+
+
+def validate_bound_host_transport(issue_dir: Path) -> None:
+    """Check a bound host's endpoint without creating a session or sending input."""
+    status = read_status(issue_dir)
+    entries = status.get("entries", [])
+    # Later confirmed providers remain usable without the primary host socket.
+    # Runtime routing handles this conclusive failure through the same chain.
+    if len(entries) != 1 or status.get("active_index", 0) != 0:
+        return
+    first = entries[0]
+    session = first.get("acquisition", {}).get("session")
+    if first.get("cli") == "codex" and isinstance(session, dict):
+        if session.get("source") == "host_session":
+            _require_host_control_socket()
 
 
 class _HostConnection:
@@ -1899,6 +2070,7 @@ def _queue_host_callback(
     repository_root: Path,
 ) -> None:
     """Load and wake the bound thread through the already running host daemon."""
+    _require_host_control_socket()
     # No new daemon, session, config, cwd, model or permission override. The
     # repository root is already in the event prompt; the host owns its cwd.
     process = subprocess.Popen(
@@ -2126,7 +2298,10 @@ def _deliver_v3_callback(
                 stream_output=False,
             )
             result = ConversationTransport(executor).deliver_to_exact_session(
-                _callback_prompt(event, repository_root=repository_root),
+                _callback_prompt(
+                    event, repository_root=repository_root,
+                    include_instructions=_fallback_needs_instructions(state, index),
+                ),
                 session_id=session_id,
                 delivery_id=event_id,
                 on_usage=persist_usage if on_usage is not None else None,

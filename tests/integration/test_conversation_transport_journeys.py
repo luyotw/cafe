@@ -201,21 +201,25 @@ def test_callback_persists_acquisition_and_acceptance_before_output_finishes(
 
     monkeypatch.setattr(ConversationTransport, "acquire_session", acquire_observer)
     monkeypatch.setattr(ConversationTransport, "deliver_to_exact_session", deliver_observer)
-    original_read = delivery.stdout.readline.side_effect
-    records = iter(original_read)
-    line_number = 0
+    from cafe.agents.process_output import ProcessOutput
 
-    def read():
-        nonlocal line_number
-        line_number += 1
-        if line_number == 3:
+    original_read = ProcessOutput.readline
+    accepted_before_completion = []
+
+    def read(self, timeout):
+        line = original_read(self, timeout)
+        # Pipe readers may prefetch. Acceptance must be durable before the
+        # consumer processes the delivery's completion, not before fd reads.
+        if line and json.loads(line).get("usage", {}).get("input_tokens") == 3:
             persisted = json.loads((directory / "dispatch_state.json").read_text())
             assert persisted["events"][event["event_id"]]["status"] == "accepted"
-        return next(records)
+            accepted_before_completion.append(True)
+        return line
 
-    delivery.stdout.readline.side_effect = read
+    monkeypatch.setattr(ProcessOutput, "readline", read)
     updated = callback._run_v3_callback(directory, state, event, repository_root=tmp_path)
     assert calls == ["acquire", "deliver"]
+    assert accepted_before_completion == [True]
     assert launch.call_count == 2
     assert updated["events"][event["event_id"]]["status"] == "accepted"
     assert json.loads(target.read_text())["stats"]["input_tokens"] == 5

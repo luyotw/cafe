@@ -607,7 +607,7 @@ with open(os.environ['NATIVE_STDERR_RECEIPT'], 'a') as handle:
     handle.write(json.dumps({'argv': args, 'context': context}) + '\\n')
 if os.environ['NATIVE_STDERR_SCENARIO'] == 'failure':
     print('native option rejected', file=sys.stderr)
-    print('native rejection detail', file=sys.stderr)
+    print('native rejection detail private-provider-configuration-fixture', file=sys.stderr)
     sys.exit(1)
 if 'stored-session' in args:
     print('No conversation found', file=sys.stderr)
@@ -680,7 +680,11 @@ for record in records:
         assert result.returncode != 0
         assert len(attempts) == 1
         assert "native option rejected" in result.stdout + result.stderr
-        assert "native rejection detail" in result.stdout + result.stderr
+        diagnostic = result.stdout + result.stderr
+        assert "installed provider CLI version" in diagnostic
+        assert "do not retry with weaker restrictions" in diagnostic
+        assert "native rejection detail" not in diagnostic
+        assert "private-provider-configuration-fixture" not in diagnostic
 
 
 @pytest.mark.integration

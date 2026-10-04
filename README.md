@@ -360,6 +360,14 @@ and a completed workflow is explicitly labeled. Missing or conflicting records
 are reported as unknown rather than guessed. Status inspection does not resume
 work, complete tasks, or repair records.
 
+To talk to the current workflow Manager from its issue worktree, run
+`cafe manager chat`. From the repository root, use
+`cafe manager chat --issue <issue-name>`. The terminal reconnects to an existing
+verified event-driven Codex session; other combinations give recovery guidance.
+See [Manager chat](docs/manager-chat.md) for the support matrix and terminal exit
+behavior. Pending HumanTasks retain their `cafe task inspect` and
+`cafe task complete` answer routes.
+
 Ask the manager for the information or recovery outcome you need:
 
 ```text

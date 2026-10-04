@@ -5,11 +5,13 @@ import re
 import subprocess
 from dataclasses import dataclass, replace
 from pathlib import Path
+from queue import Empty
 from threading import Event, Timer
 from typing import Any, Callable, List, Optional
 
 from cafe.agents.cli import AbstractCLI, ClaudeCLI, CodexCLI, CopilotCLI, CursorCLI, GeminiCLI
 from cafe.agents.diagnostics import sanitize_error_excerpt
+from cafe.agents.process_output import ProcessOutput, ProcessOutputError
 from cafe.agents.transport_types import (
     TransportResult,
     _has_evidence_conflict,
@@ -40,6 +42,7 @@ class AgentExecutionControl:
     max_duration_seconds: float | None = None
     max_output_bytes: int | None = None
     max_output_lines: int | None = None
+    on_process_started: Callable[[], None] | None = None
 
     def __post_init__(self) -> None:
         for name in ("max_duration_seconds", "max_output_bytes", "max_output_lines"):
@@ -416,6 +419,7 @@ class AgentExecutor:
         expected_session_id: str | None = None,
         event_id: str | None = None,
         on_acceptance: Callable[[], None] | None = None,
+        on_response: Callable[[AgentResponse], None] | None = None,
         environment_overrides: Optional[dict[str, str]] = None,
         allowed_tools: Optional[List[str]] = None,
         allowed_directories: Optional[List[str]] = None,
@@ -518,6 +522,8 @@ class AgentExecutor:
                 session_id=expected_session_id,
                 event_id=event_id,
             )
+        if on_response is not None:
+            on_response(response)
         return EventDriverExecutionResult(
             session_id=session_id,
             accepted=accepted,
@@ -605,6 +611,8 @@ class AgentExecutor:
         if execution_control is not None and execution_control.working_directory is not None:
             process_cwd = execution_control.working_directory.expanduser().resolve()
             process_cwd.mkdir(parents=True, exist_ok=True)
+            if self.config.cli == AgentCLI.CODEX:
+                cmd[cmd.index("-C") + 1] = str(process_cwd)
 
         decision_only = allowed_tools == [] and allowed_directories == []
         if not decision_only:
@@ -953,6 +961,14 @@ class AgentExecutor:
             return "model_not_found", self._format_model_not_found_display_message(
                 cli_name, error_text
             )
+        if any(pattern in error_text.lower() for pattern in (
+            "native option rejected", "unknown option", "unrecognized option",
+            "unrecognized argument", "unexpected argument",
+        )):
+            return "unsupported_option", (
+                f"{cli_name} native option rejected. Check the installed provider CLI "
+                "version and supported options; do not retry with weaker restrictions."
+            )
         return None, None
 
     def _is_provider_overloaded_error(self, error_text: str) -> bool:
@@ -1230,23 +1246,30 @@ class AgentExecutor:
             err.error_type = "cli_not_found"
             raise err from e
 
+        if execution_control is not None and execution_control.on_process_started is not None:
+            try:
+                execution_control.on_process_started()
+            except BaseException:
+                # Submission has happened; a caller error must not leave its child running.
+                try:
+                    process.terminate()
+                except OSError:
+                    pass
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=2)
+                raise
+
         # Check stderr first for immediate errors (e.g., session locked)
-        import select
         import sys
 
-        stderr_check_timeout = 0.5  # 500ms to check for immediate errors
-        stderr_output = ""
-
-        if sys.platform != "win32" and process.stderr:
-            # Use select on Unix-like systems to check for immediate stderr output
-            ready, _, _ = select.select([process.stderr], [], [], stderr_check_timeout)
-
-            if process.stderr in ready:
-                # Read first line of stderr if available (non-blocking)
-                stderr_line = process.stderr.readline()
-                # Preserve nonfatal diagnostics for normal reporting/recovery;
-                # the final stderr drain must append rather than replace them.
-                stderr_output = stderr_line
+        process_output = ProcessOutput(process)
+        if sys.platform != "win32":
+            process_output.first_stderr_ready.wait(timeout=0.5)
+            stderr_line = process_output.first_stderr_line
+            if stderr_line:
                 # Only treat as fatal error if it's NOT a tool execution error
                 # Tool errors like "Error executing tool" are recoverable and agent continues
                 is_tool_error = "error executing tool" in stderr_line.lower()
@@ -1260,8 +1283,9 @@ class AgentExecutor:
                 if is_fatal_error:
                     # Likely a fatal error, read rest and terminate
                     process.kill()
-                    remaining_stderr = process.stderr.read()
-                    full_stderr = stderr_line + remaining_stderr
+                    process.wait(timeout=2)
+                    full_stderr = process_output.stderr_text()
+                    process_output.close()
 
                     error_type, display_message = self._classify_execution_error(
                         cli_name, full_stderr
@@ -1271,296 +1295,442 @@ class AgentExecutor:
                     err = AgentExecutionError(
                         f"{cli_name} execution failed: {full_stderr}",
                         error_type=error_type,
-                        display_message=display_message,
+                        display_message=display_message or f"{cli_name} failed before producing a complete response.",
                     )
                     # Exclude executable itself (e.g. 'gemini' / 'claude')
                     err.cli_command_args = cmd[1:]
                     raise err
 
-        # Agent narration may be muted for a supervising driver. Parsing, durable
-        # streaming logs, lifecycle events, and error output remain unaffected.
-        if self.stream_output:
-            print(f"\n{'=' * 80}")
-            print(f"{cli_name} Response (streaming):")
-            print(f"{'=' * 80}")
-
-        output_lines = []
-        response_text = ""
-        streaming_log: List[str] = []  # Record all streaming fragments
-        token_usage = TokenUsage()
-        returncode = None
-        observer_failed = False
-        observation_evidence = TransportResult()
-        observation_strategy = self._get_cli_strategy()
-        parsed_for_call = None
-        session_id = None
-        model: Optional[str] = None
-        permission_denials: List[PermissionDenial] = []
-        retained_output_bytes = 0
-        retained_output_lines = 0
-        structured_record_limit = _structured_record_limit(execution_control)
-        execution_limit_reached = Event()
-
-        def trigger_execution_limit() -> None:
-            if execution_limit_reached.is_set():
-                return
-            execution_limit_reached.set()
-            try:
-                process.terminate()
-            except OSError:
-                pass
-
-        execution_timer = None
-        if execution_control is not None and execution_control.max_duration_seconds is not None:
-            execution_timer = Timer(
-                execution_control.max_duration_seconds,
-                trigger_execution_limit,
-            )
-            execution_timer.daemon = True
-            execution_timer.start()
-
-        # Add idle timeout to prevent hanging when process stops outputting
-        import select
-        import sys
-        import time
-
-        use_idle_timeout = sys.platform != "win32"
-        # Gemini needs longer timeout (10 min), others use 5 min
-        idle_timeout = (
-            600 if self.config.cli == AgentCLI.GEMINI else 300
-        )  # seconds - timeout if no new output
-        last_output_time = time.time() if use_idle_timeout else None
-        idle_timeout_triggered = False  # Track if we exited due to idle timeout
-        # A workflow-backed structured stream must end in an explicit completion
-        # event. A zero subprocess exit alone is not enough evidence: a provider
-        # can stop while it is mid-turn and leave the workflow with only partial
-        # output. Direct executor consumers without a durable iteration log keep
-        # their existing compatibility behavior.
-        # ``result`` is the completion event used by the stream-json CLIs;
-        # Codex uses ``turn.completed``. Treat both as part of CAFE's generic
-        # stream contract so the phase layer can durably record an interrupted
-        # iteration rather than mistaking partial work for a completed handoff.
-        terminal_stream_event_types = {"result", "turn.completed"}
-        received_terminal_stream_event = False
-        requires_terminal_stream_event = parse_stream_json and (
-            streaming_output_file is not None or require_terminal_stream_event
-        )
-
-        # Open streaming output file if provided
-        streaming_file_handle = None
-        streaming_line_index = 0
-        if streaming_output_file:
-            try:
-                streaming_file_handle = open(streaming_output_file, "w", encoding="utf-8")
-            except Exception as e:
-                print(f"⚠️  Failed to open streaming output file: {e}")
-
-        def collect_usage():
-            nonlocal parsed_for_call
-            if parsed_for_call is not None:
-                return parsed_for_call
-            try:
-                if response_parser:
-                    parsed = response_parser(output_lines)
-                else:
-                    strategy = self._get_cli_strategy()
-                    if parse_stream_json:
-                        parsed = self._parse_using_strategy(strategy, output_lines)
-                    else:
-                        from cafe.agents.cli.copilot import CopilotCLI
-
-                        result = CopilotCLI(self.config).parse_response(
-                            output_lines, stderr_output=stderr_output
-                        )
-                        parsed = AgentResponse(response=result[0], token_usage=result[1],
-                                               model=result[3] if len(result) > 3 else None,
-                                               permission_denials=result[2],
-                                               usage_available=bool(result[1].model_fields_set))
-                for name in ("duration_ms", "duration_api_ms"):
-                    value = getattr(token_usage, name)
-                    if value is not None:
-                        setattr(parsed.token_usage, name, value)
-                        parsed.usage_available = True
-                parsed.token_usage = TokenUsage(**parsed.token_usage.model_dump(exclude_unset=True))
-                if parsed.usage_available:
-                    self._accumulate_usage(parsed.token_usage)
-            except (ValueError, TypeError, AttributeError) as cause:
-                error = AgentExecutionError("Malformed provider statistics", error_type="invalid_evidence")
-                error.transport_result = replace(
-                    observation_evidence, failure_code="invalid_evidence", returncode=returncode,
-                    completed=True if received_terminal_stream_event else None,
-                    error_excerpt=sanitize_error_excerpt(error),
-                )
-                raise error from cause
-            evidence = observation_evidence
-            if parsed.model is not None:
-                try:
-                    model = _validated_evidence_scalar(parsed.model)
-                except ValueError:
-                    evidence = replace(evidence, failure_code="invalid_evidence")
-                else:
-                    mismatch = _has_evidence_conflict((self.config.model, model))
-                    evidence = replace(evidence, reported_model=model,
-                                       failure_code=evidence.failure_code or ("model_mismatch" if mismatch else None))
-            parsed.transport_result = replace(
-                evidence,
-                usage=self._compact_usage(parsed.token_usage) if parsed.usage_available else None,
-                completed=True if received_terminal_stream_event else None,
-                returncode=returncode,
-            )
-            parsed.usage_accounted = True
-            parsed_for_call = parsed
-            return parsed
-
-        def persist_safe_stream_error(error: AgentExecutionError) -> None:
-            """Replace any streamed error payload with one safe durable record."""
-            nonlocal streaming_file_handle
-            parsed = collect_usage()
-            error.transport_result = replace(parsed.transport_result,
-                failure_code=parsed.transport_result.failure_code or error.error_type or "execution_failed",
-                error_excerpt=sanitize_error_excerpt(error))
-            if streaming_file_handle is None:
-                return
-            try:
-                safe_record = {
-                    "type": "error",
-                    "error_type": error.error_type,
-                    "error_excerpt": sanitize_error_excerpt(error),
-                }
-                streaming_file_handle.seek(0)
-                streaming_file_handle.truncate()
-                streaming_file_handle.write(json.dumps(safe_record, ensure_ascii=False) + "\n")
-                streaming_file_handle.flush()
-            except Exception as write_error:
-                print(f"⚠️  Failed to sanitize streaming error output: {write_error}")
-            finally:
-                streaming_file_handle.close()
-                streaming_file_handle = None
-
         try:
-            if process.stdout:
-                while True:
-                    if execution_limit_reached.is_set():
-                        break
-                    # Check if stdout has data available (with timeout)
-                    if use_idle_timeout:
-                        # Unix-like systems: use select with timeout to prevent indefinite blocking
-                        ready, _, _ = select.select(
-                            [process.stdout], [], [], 1.0
-                        )  # 1 second timeout per check
+            # Agent narration may be muted for a supervising driver. Parsing, durable
+            # streaming logs, lifecycle events, and error output remain unaffected.
+            if self.stream_output:
+                print(f"\n{'=' * 80}")
+                print(f"{cli_name} Response (streaming):")
+                print(f"{'=' * 80}")
 
-                        if not ready:
+            output_lines = []
+            response_text = ""
+            streaming_log: List[str] = []  # Record all streaming fragments
+            token_usage = TokenUsage()
+            returncode = None
+            stderr_output = ""
+            observer_failed = False
+            observation_evidence = TransportResult()
+            observation_strategy = self._get_cli_strategy()
+            parsed_for_call = None
+            session_id = None
+            model: Optional[str] = None
+            permission_denials: List[PermissionDenial] = []
+            retained_output_bytes = 0
+            retained_output_lines = 0
+            structured_record_limit = _structured_record_limit(execution_control)
+            execution_limit_reached = Event()
+
+            def trigger_execution_limit() -> None:
+                if execution_limit_reached.is_set():
+                    return
+                execution_limit_reached.set()
+                try:
+                    process.terminate()
+                except OSError:
+                    pass
+
+            execution_timer = None
+            if execution_control is not None and execution_control.max_duration_seconds is not None:
+                execution_timer = Timer(
+                    execution_control.max_duration_seconds,
+                    trigger_execution_limit,
+                )
+                execution_timer.daemon = True
+                execution_timer.start()
+
+            # Add idle timeout to prevent hanging when process stops outputting
+            import time
+
+            use_idle_timeout = sys.platform != "win32"
+            # Gemini needs longer timeout (10 min), others use 5 min
+            idle_timeout = (
+                600 if self.config.cli == AgentCLI.GEMINI else 300
+            )  # seconds - timeout if no new output
+            last_output_time = time.time() if use_idle_timeout else None
+            idle_timeout_triggered = False  # Track if we exited due to idle timeout
+            # A workflow-backed structured stream must end in an explicit completion
+            # event. A zero subprocess exit alone is not enough evidence: a provider
+            # can stop while it is mid-turn and leave the workflow with only partial
+            # output. Direct executor consumers without a durable iteration log keep
+            # their existing compatibility behavior.
+            # ``result`` is the completion event used by the stream-json CLIs;
+            # Codex uses ``turn.completed``. Treat both as part of CAFE's generic
+            # stream contract so the phase layer can durably record an interrupted
+            # iteration rather than mistaking partial work for a completed handoff.
+            terminal_stream_event_types = {"result", "turn.completed"}
+            received_terminal_stream_event = False
+            requires_terminal_stream_event = parse_stream_json and (
+                streaming_output_file is not None or require_terminal_stream_event
+            )
+
+            # Open streaming output file if provided
+            streaming_file_handle = None
+            streaming_line_index = 0
+            if streaming_output_file:
+                try:
+                    streaming_file_handle = open(streaming_output_file, "w", encoding="utf-8")
+                except Exception as e:
+                    print(f"⚠️  Failed to open streaming output file: {e}")
+
+            def collect_usage():
+                nonlocal parsed_for_call
+                if parsed_for_call is not None:
+                    return parsed_for_call
+                try:
+                    if response_parser:
+                        parsed = response_parser(output_lines)
+                    else:
+                        strategy = self._get_cli_strategy()
+                        if parse_stream_json:
+                            parsed = self._parse_using_strategy(strategy, output_lines)
+                        else:
+                            from cafe.agents.cli.copilot import CopilotCLI
+
+                            result = CopilotCLI(self.config).parse_response(
+                                output_lines, stderr_output=stderr_output
+                            )
+                            parsed = AgentResponse(response=result[0], token_usage=result[1],
+                                                   model=result[3] if len(result) > 3 else None,
+                                                   permission_denials=result[2],
+                                                   usage_available=bool(result[1].model_fields_set))
+                    for name in ("duration_ms", "duration_api_ms"):
+                        value = getattr(token_usage, name)
+                        if value is not None:
+                            setattr(parsed.token_usage, name, value)
+                            parsed.usage_available = True
+                    parsed.token_usage = TokenUsage(**parsed.token_usage.model_dump(exclude_unset=True))
+                    if parsed.usage_available:
+                        self._accumulate_usage(parsed.token_usage)
+                except (ValueError, TypeError, AttributeError) as cause:
+                    error = AgentExecutionError("Malformed provider statistics", error_type="invalid_evidence")
+                    error.transport_result = replace(
+                        observation_evidence, failure_code="invalid_evidence", returncode=returncode,
+                        completed=True if received_terminal_stream_event else None,
+                        error_excerpt=sanitize_error_excerpt(error),
+                    )
+                    raise error from cause
+                evidence = observation_evidence
+                if parsed.model is not None:
+                    try:
+                        model = _validated_evidence_scalar(parsed.model)
+                    except ValueError:
+                        evidence = replace(evidence, failure_code="invalid_evidence")
+                    else:
+                        mismatch = _has_evidence_conflict((self.config.model, model))
+                        evidence = replace(evidence, reported_model=model,
+                                           failure_code=evidence.failure_code or ("model_mismatch" if mismatch else None))
+                parsed.transport_result = replace(
+                    evidence,
+                    usage=self._compact_usage(parsed.token_usage) if parsed.usage_available else None,
+                    completed=True if received_terminal_stream_event else None,
+                    returncode=returncode,
+                )
+                parsed.usage_accounted = True
+                parsed_for_call = parsed
+                return parsed
+
+            def persist_safe_stream_error(error: AgentExecutionError) -> None:
+                """Replace any streamed error payload with one safe durable record."""
+                nonlocal streaming_file_handle
+                parsed = collect_usage()
+                error.transport_result = replace(parsed.transport_result,
+                    failure_code=parsed.transport_result.failure_code or error.error_type or "execution_failed",
+                    error_excerpt=sanitize_error_excerpt(error))
+                if streaming_file_handle is None:
+                    return
+                try:
+                    safe_record = {
+                        "type": "error",
+                        "error_type": error.error_type,
+                        "error_excerpt": sanitize_error_excerpt(error),
+                        "stream_diagnostics": {
+                            "stdout_lines": retained_output_lines,
+                            "stdout_bytes": retained_output_bytes,
+                            "terminal_event_observed": received_terminal_stream_event,
+                            **process_output.diagnostics(),
+                        },
+                    }
+                    streaming_file_handle.seek(0)
+                    streaming_file_handle.truncate()
+                    streaming_file_handle.write(json.dumps(safe_record, ensure_ascii=False) + "\n")
+                    streaming_file_handle.flush()
+                except Exception as write_error:
+                    print(f"⚠️  Failed to sanitize streaming error output: {write_error}")
+                finally:
+                    streaming_file_handle.close()
+                    streaming_file_handle = None
+
+            try:
+                if process.stdout:
+                    while True:
+                        if execution_limit_reached.is_set():
+                            break
+                        try:
+                            line = process_output.readline(timeout=1.0)
+                        except ProcessOutputError as cause:
+                            error = AgentExecutionError(
+                                "Unable to read provider output.", error_type="pipe_read_error"
+                            )
+                            persist_safe_stream_error(error)
+                            raise error from cause
+                        except Empty:
                             if execution_limit_reached.is_set():
                                 break
-                            # No data available, check if idle timeout exceeded
-                            if time.time() - last_output_time > idle_timeout:
-                                print(
-                                    f"\n⚠️  No output from {cli_name} for {idle_timeout}s, assuming completion..."
-                                )
+                            if use_idle_timeout and time.time() - last_output_time > idle_timeout:
+                                print(f"\n⚠️  No output from {cli_name} for {idle_timeout}s...")
                                 idle_timeout_triggered = True
                                 break
-                            continue  # Continue waiting
+                            continue
+                        if line is None:
+                            break
 
-                    # Read the line
-                    line = process.stdout.readline()
-                    if not line:
-                        break
-
-                    line_bytes = len(line.encode("utf-8", errors="replace"))
-                    retained_output_lines += 1
-                    retained_output_bytes += line_bytes
-                    if execution_control is not None and (
-                        (
-                            execution_control.max_output_lines is not None
-                            and retained_output_lines > execution_control.max_output_lines
-                        )
-                        or (
-                            execution_control.max_output_bytes is not None
-                            and retained_output_bytes > execution_control.max_output_bytes
-                        )
-                    ):
-                        trigger_execution_limit()
-                        break
-
-                    # Update last output time (if tracking)
-                    if use_idle_timeout:
-                        last_output_time = time.time()
-
-                    # Write line to streaming output file immediately
-                    if streaming_file_handle:
-                        try:
-                            if parse_stream_json:
-                                # For stream-json: write raw JSON line
-                                streaming_file_handle.write(line)
-                            else:
-                                # For non-stream-json: wrap in JSON object with index and timestamp
-                                from datetime import datetime
-
-                                json_obj = {
-                                    "index": streaming_line_index,
-                                    "timestamp": datetime.now().astimezone().isoformat(),
-                                    "content": line.rstrip("\n"),
-                                }
-                                streaming_file_handle.write(
-                                    json.dumps(json_obj, ensure_ascii=False) + "\n"
-                                )
-                                streaming_line_index += 1
-                            streaming_file_handle.flush()
-                        except Exception as e:
-                            print(f"⚠️  Failed to write to streaming output file: {e}")
-
-                    if parse_stream_json:
-                        # Parse stream-json format
-                        try:
-                            data = json.loads(line.strip())
-
-                            if not isinstance(data, dict):
-                                continue
-                            output_lines.append(line)
-                            observed = observation_strategy.conversation_evidence((data,))
-                            failure = observation_evidence.failure_code or observed.failure_code
-                            if _has_evidence_conflict((
-                                observation_evidence.observed_session_id, observed.observed_session_id
-                            )):
-                                failure = "conflicting_session_evidence"
-                            if _has_evidence_conflict((
-                                observation_evidence.reported_model, observed.reported_model
-                            )):
-                                failure = failure or "model_mismatch"
-                            observation_evidence = replace(
-                                observation_evidence,
-                                observed_session_id=observation_evidence.observed_session_id or observed.observed_session_id,
-                                reported_model=observation_evidence.reported_model or observed.reported_model,
-                                failure_code=failure,
+                        line_bytes = len(line.encode("utf-8", errors="replace"))
+                        retained_output_lines += 1
+                        retained_output_bytes += line_bytes
+                        if execution_control is not None and (
+                            (
+                                execution_control.max_output_lines is not None
+                                and retained_output_lines > execution_control.max_output_lines
                             )
-                            if data.get("type") in terminal_stream_event_types:
-                                received_terminal_stream_event = True
-                            if isinstance(data, dict) and structured_records is not None:
-                                if len(structured_records) < structured_record_limit:
-                                    structured_records.append(dict(data))
-                                    if structured_record_observer is not None:
-                                        try:
-                                            structured_record_observer(dict(data))
-                                        except BaseException:
-                                            observer_failed = True
-                                            raise
+                            or (
+                                execution_control.max_output_bytes is not None
+                                and retained_output_bytes > execution_control.max_output_bytes
+                            )
+                        ):
+                            trigger_execution_limit()
+                            break
 
-                            if any(key in data and not isinstance(data[key], dict)
-                                   for key in ("usage", "stats")):
-                                output_lines.pop()
-                                error = AgentExecutionError("Malformed provider statistics", error_type="invalid_evidence")
-                                persist_safe_stream_error(error)
-                                raise error
-                            json_error_text = self._extract_stream_json_error_text(data)
-                            if json_error_text:
+                        # Update last output time (if tracking)
+                        if use_idle_timeout:
+                            last_output_time = time.time()
+
+                        # Write line to streaming output file immediately
+                        if streaming_file_handle:
+                            try:
+                                if parse_stream_json:
+                                    # For stream-json: write raw JSON line
+                                    streaming_file_handle.write(line)
+                                else:
+                                    # For non-stream-json: wrap in JSON object with index and timestamp
+                                    from datetime import datetime
+
+                                    json_obj = {
+                                        "index": streaming_line_index,
+                                        "timestamp": datetime.now().astimezone().isoformat(),
+                                        "content": line.rstrip("\n"),
+                                    }
+                                    streaming_file_handle.write(
+                                        json.dumps(json_obj, ensure_ascii=False) + "\n"
+                                    )
+                                    streaming_line_index += 1
+                                streaming_file_handle.flush()
+                            except Exception as e:
+                                print(f"⚠️  Failed to write to streaming output file: {e}")
+
+                        if parse_stream_json:
+                            # Parse stream-json format
+                            try:
+                                data = json.loads(line.strip())
+
+                                if not isinstance(data, dict):
+                                    continue
+                                output_lines.append(line)
+                                observed = observation_strategy.conversation_evidence((data,))
+                                failure = observation_evidence.failure_code or observed.failure_code
+                                if _has_evidence_conflict((
+                                    observation_evidence.observed_session_id, observed.observed_session_id
+                                )):
+                                    failure = "conflicting_session_evidence"
+                                if _has_evidence_conflict((
+                                    observation_evidence.reported_model, observed.reported_model
+                                )):
+                                    failure = failure or "model_mismatch"
+                                observation_evidence = replace(
+                                    observation_evidence,
+                                    observed_session_id=observation_evidence.observed_session_id or observed.observed_session_id,
+                                    reported_model=observation_evidence.reported_model or observed.reported_model,
+                                    failure_code=failure,
+                                )
+                                if data.get("type") in terminal_stream_event_types:
+                                    received_terminal_stream_event = True
+                                if isinstance(data, dict) and structured_records is not None:
+                                    if len(structured_records) < structured_record_limit:
+                                        structured_records.append(dict(data))
+                                        if structured_record_observer is not None:
+                                            try:
+                                                structured_record_observer(dict(data))
+                                            except BaseException:
+                                                observer_failed = True
+                                                raise
+
+
+                                if any(key in data and not isinstance(data[key], dict)
+                                       for key in ("usage", "stats")):
+                                    output_lines.pop()
+                                    error = AgentExecutionError("Malformed provider statistics", error_type="invalid_evidence")
+                                    persist_safe_stream_error(error)
+                                    raise error
+                                json_error_text = self._extract_stream_json_error_text(data)
+                                if json_error_text:
+                                    error_type, display_message = self._classify_execution_error(
+                                        cli_name,
+                                        json_error_text,
+                                    )
+                                    if error_type:
+                                        process.terminate()
+                                        err = AgentExecutionError(
+                                            f"{cli_name} execution failed: {json_error_text}",
+                                            error_type=error_type,
+                                            display_message=display_message,
+                                        )
+                                        err.cli_command_args = cmd[1:]
+                                        persist_safe_stream_error(err)
+                                        raise err
+
+                                # Check for error field (e.g., "invalid_request" for prompt too long)
+                                if "error" in data and data.get("error") == "invalid_request":
+                                    # Extract error message from response text
+                                    error_text = response_text or ""
+                                    message = data.get("message")
+                                    if isinstance(message, dict) and isinstance(
+                                        message.get("content"), list
+                                    ):
+                                        for content_block in message["content"]:
+                                            if not isinstance(content_block, dict):
+                                                continue
+                                            if content_block.get("type") == "text":
+                                                error_text = content_block.get("text", "")
+
+                                    # Raise error with specific type for session recovery handling
+                                    err = AgentExecutionError(
+                                        f"{cli_name} invalid request: {error_text}"
+                                    )
+                                    err.error_type = "invalid_request"
+                                    err.cli_command_args = cmd[1:]
+                                    persist_safe_stream_error(err)
+                                    raise err
+
+                                # Extract session_id (from init message for Gemini, or any message for Claude)
+                                if "session_id" in data and not session_id:
+                                    session_id = data["session_id"]
+                                elif (
+                                    data.get("type") == "thread.started"
+                                    and "thread_id" in data
+                                    and not session_id
+                                ):
+                                    session_id = data["thread_id"]
+
+                                # Extract token usage (usually in final message)
+                                if "usage" in data:
+                                    usage_data = data["usage"]
+                                    token_usage = TokenUsage(
+                                        input_tokens=usage_data.get("input_tokens", 0),
+                                        output_tokens=usage_data.get("output_tokens", 0),
+                                        cache_creation_input_tokens=usage_data.get(
+                                            "cache_creation_input_tokens", 0
+                                        ),
+                                        cache_write_input_tokens=usage_data.get(
+                                            "cache_write_input_tokens", 0
+                                        ),
+                                        cache_read_input_tokens=usage_data.get(
+                                            "cache_read_input_tokens", 0
+                                        ),
+                                        reasoning_output_tokens=usage_data.get(
+                                            "reasoning_output_tokens", 0
+                                        ),
+                                    )
+
+                                if "total_cost_usd" in data:
+                                    token_usage.total_cost_usd = data["total_cost_usd"]
+
+                                # Extract duration (from result message)
+                                if "duration_ms" in data:
+                                    token_usage.duration_ms = data["duration_ms"]
+                                if "duration_api_ms" in data:
+                                    token_usage.duration_api_ms = data["duration_api_ms"]
+
+                                # Extract stats (Gemini format)
+                                if "stats" in data:
+                                    stats_data = data["stats"]
+                                    if "total_tokens" in stats_data:
+                                        token_usage.input_tokens = stats_data.get("input_tokens", 0)
+                                        token_usage.output_tokens = stats_data.get("output_tokens", 0)
+                                    if "duration_ms" in stats_data:
+                                        token_usage.duration_ms = stats_data["duration_ms"]
+
+                                # Extract model (from init or result message)
+                                if "model" in data and data["model"]:
+                                    model = data["model"]
+
+                                # A terminal event is the only durable confirmation
+                                # that a structured agent stream finished. Do not
+                                # infer completion from an otherwise-successful
+                                # process exit: that loses mid-turn failures.
+                                if data.get("type") in terminal_stream_event_types:
+                                    received_terminal_stream_event = True
+                                    break
+
+                                # Extract content using custom extractor or default Claude extractor
+                                # FIXME: Should implement extractors seperately for each CLI
+                                if json_content_extractor:
+                                    content = json_content_extractor(data)
+                                    if content and self.stream_output:
+                                        print(content, end="\n\n", flush=True)
+                                    if content:
+                                        streaming_log.append(content)
+                                        response_text = content  # Only save the last fragment
+                                else:
+                                    # Default Claude format extractor
+                                    # Extract content from message.content[] (new Claude format)
+                                    message = data.get("message")
+                                    if isinstance(message, dict) and isinstance(
+                                        message.get("content"), list
+                                    ):
+                                        for content_block in message["content"]:
+                                            if not isinstance(content_block, dict):
+                                                continue
+                                            if content_block.get("type") == "text":
+                                                text = content_block.get("text", "")
+                                                if self.stream_output:
+                                                    print(text, end="\n\n", flush=True)
+                                                streaming_log.append(text)
+                                                response_text = text  # Only save the last fragment
+
+                                    # Old format: direct content field
+                                    elif "content" in data:
+                                        content = data["content"]
+                                        if self.stream_output:
+                                            print(content, end="\n\n", flush=True)
+                                        streaming_log.append(content)
+                                        response_text = content  # Only save the last fragment
+
+                                # Extract permission_denials (usually in final message)
+                                if "permission_denials" in data and data["permission_denials"]:
+                                    for denial_data in data["permission_denials"]:
+                                        permission_denials.append(
+                                            PermissionDenial(
+                                                tool_name=denial_data["tool_name"],
+                                                tool_input=denial_data["tool_input"],
+                                            )
+                                        )
+
+                            except json.JSONDecodeError:
+                                if observer_failed:
+                                    raise
                                 error_type, display_message = self._classify_execution_error(
-                                    cli_name,
-                                    json_error_text,
+                                    cli_name, line
                                 )
                                 if error_type:
                                     process.terminate()
                                     err = AgentExecutionError(
-                                        f"{cli_name} execution failed: {json_error_text}",
+                                        f"{cli_name} execution failed: {line.strip()}",
                                         error_type=error_type,
                                         display_message=display_message,
                                     )
@@ -1568,190 +1738,290 @@ class AgentExecutor:
                                     persist_safe_stream_error(err)
                                     raise err
 
-                            # Check for error field (e.g., "invalid_request" for prompt too long)
-                            if "error" in data and data.get("error") == "invalid_request":
-                                # Extract error message from response text
-                                error_text = response_text or ""
-                                message = data.get("message")
-                                if isinstance(message, dict) and isinstance(
-                                    message.get("content"), list
-                                ):
-                                    for content_block in message["content"]:
-                                        if not isinstance(content_block, dict):
-                                            continue
-                                        if content_block.get("type") == "text":
-                                            error_text = content_block.get("text", "")
-
-                                # Raise error with specific type for session recovery handling
-                                err = AgentExecutionError(
-                                    f"{cli_name} invalid request: {error_text}"
-                                )
-                                err.error_type = "invalid_request"
-                                err.cli_command_args = cmd[1:]
-                                persist_safe_stream_error(err)
-                                raise err
-
-                            # Extract session_id (from init message for Gemini, or any message for Claude)
-                            if "session_id" in data and not session_id:
-                                session_id = data["session_id"]
-                            elif (
-                                data.get("type") == "thread.started"
-                                and "thread_id" in data
-                                and not session_id
-                            ):
-                                session_id = data["thread_id"]
-
-                            # Extract token usage (usually in final message)
-                            if "usage" in data:
-                                usage_data = data["usage"]
-                                token_usage = TokenUsage(
-                                    input_tokens=usage_data.get("input_tokens", 0),
-                                    output_tokens=usage_data.get("output_tokens", 0),
-                                    cache_creation_input_tokens=usage_data.get(
-                                        "cache_creation_input_tokens", 0
-                                    ),
-                                    cache_write_input_tokens=usage_data.get(
-                                        "cache_write_input_tokens", 0
-                                    ),
-                                    cache_read_input_tokens=usage_data.get(
-                                        "cache_read_input_tokens", 0
-                                    ),
-                                    reasoning_output_tokens=usage_data.get(
-                                        "reasoning_output_tokens", 0
-                                    ),
-                                )
-
-                            if "total_cost_usd" in data:
-                                token_usage.total_cost_usd = data["total_cost_usd"]
-
-                            # Extract duration (from result message)
-                            if "duration_ms" in data:
-                                token_usage.duration_ms = data["duration_ms"]
-                            if "duration_api_ms" in data:
-                                token_usage.duration_api_ms = data["duration_api_ms"]
-
-                            # Extract stats (Gemini format)
-                            if "stats" in data:
-                                stats_data = data["stats"]
-                                if "total_tokens" in stats_data:
-                                    token_usage.input_tokens = stats_data.get("input_tokens", 0)
-                                    token_usage.output_tokens = stats_data.get("output_tokens", 0)
-                                if "duration_ms" in stats_data:
-                                    token_usage.duration_ms = stats_data["duration_ms"]
-
-                            # Extract model (from init or result message)
-                            if "model" in data and data["model"]:
-                                model = data["model"]
-
-                            # A terminal event is the only durable confirmation
-                            # that a structured agent stream finished. Do not
-                            # infer completion from an otherwise-successful
-                            # process exit: that loses mid-turn failures.
-                            if data.get("type") in terminal_stream_event_types:
-                                received_terminal_stream_event = True
-                                break
-
-                            # Extract content using custom extractor or default Claude extractor
-                            # FIXME: Should implement extractors seperately for each CLI
-                            if json_content_extractor:
-                                content = json_content_extractor(data)
-                                if content and self.stream_output:
-                                    print(content, end="\n\n", flush=True)
-                                if content:
-                                    streaming_log.append(content)
-                                    response_text = content  # Only save the last fragment
-                            else:
-                                # Default Claude format extractor
-                                # Extract content from message.content[] (new Claude format)
-                                message = data.get("message")
-                                if isinstance(message, dict) and isinstance(
-                                    message.get("content"), list
-                                ):
-                                    for content_block in message["content"]:
-                                        if not isinstance(content_block, dict):
-                                            continue
-                                        if content_block.get("type") == "text":
-                                            text = content_block.get("text", "")
-                                            if self.stream_output:
-                                                print(text, end="\n\n", flush=True)
-                                            streaming_log.append(text)
-                                            response_text = text  # Only save the last fragment
-
-                                # Old format: direct content field
-                                elif "content" in data:
-                                    content = data["content"]
-                                    if self.stream_output:
-                                        print(content, end="\n\n", flush=True)
-                                    streaming_log.append(content)
-                                    response_text = content  # Only save the last fragment
-
-                            # Extract permission_denials (usually in final message)
-                            if "permission_denials" in data and data["permission_denials"]:
-                                for denial_data in data["permission_denials"]:
-                                    permission_denials.append(
-                                        PermissionDenial(
-                                            tool_name=denial_data["tool_name"],
-                                            tool_input=denial_data["tool_input"],
-                                        )
-                                    )
-
-                        except json.JSONDecodeError:
-                            if observer_failed:
-                                raise
-                            error_type, display_message = self._classify_execution_error(
-                                cli_name, line
-                            )
-                            if error_type:
-                                process.terminate()
-                                err = AgentExecutionError(
-                                    f"{cli_name} execution failed: {line.strip()}",
-                                    error_type=error_type,
-                                    display_message=display_message,
-                                )
-                                err.cli_command_args = cmd[1:]
-                                persist_safe_stream_error(err)
-                                raise err
-
-                            # Preserve non-JSON output even when console narration is muted.
+                                # Preserve non-JSON output even when console narration is muted.
+                                if self.stream_output:
+                                    print(line, end="")
+                                output_lines.append(line)
+                            except (ValueError, TypeError, AttributeError) as cause:
+                                if observer_failed:
+                                    raise
+                                if output_lines and output_lines[-1] == line:
+                                    output_lines.pop()
+                                error = AgentExecutionError("Malformed provider evidence", error_type="invalid_evidence")
+                                persist_safe_stream_error(error)
+                                raise error from cause
+                        else:
+                            # Simple line-by-line streaming (Copilot style)
                             if self.stream_output:
                                 print(line, end="")
                             output_lines.append(line)
-                        except (ValueError, TypeError, AttributeError) as cause:
-                            if observer_failed:
-                                raise
-                            if output_lines and output_lines[-1] == line:
-                                output_lines.pop()
-                            error = AgentExecutionError("Malformed provider evidence", error_type="invalid_evidence")
-                            persist_safe_stream_error(error)
-                            raise error from cause
-                    else:
-                        # Simple line-by-line streaming (Copilot style)
-                        if self.stream_output:
-                            print(line, end="")
-                        output_lines.append(line)
-                        streaming_log.append(line)  # Record each line to streaming_log
-        except AgentExecutionError:
+                            streaming_log.append(line)  # Record each line to streaming_log
+            except AgentExecutionError:
+                if execution_timer is not None:
+                    execution_timer.cancel()
+                raise
+            except KeyboardInterrupt:
+                if execution_timer is not None:
+                    execution_timer.cancel()
+                print(f"\n\n⚠️  Interrupted by user, terminating {cli_name} process...")
+                process.terminate()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    print("⚠️  Process did not respond to SIGTERM, sending SIGKILL...")
+                    process.kill()
+                    process.wait(timeout=2)
+                # Close streaming file handle if open
+                if streaming_file_handle:
+                    streaming_file_handle.close()
+                raise
+            except BaseException as error:
+                if execution_timer is not None:
+                    execution_timer.cancel()
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=2)
+                if observer_failed:
+                    parsed = collect_usage()
+                    error.transport_result = parsed.transport_result
+                raise
+
             if execution_timer is not None:
                 execution_timer.cancel()
-            raise
-        except KeyboardInterrupt:
-            if execution_timer is not None:
-                execution_timer.cancel()
-            print(f"\n\n⚠️  Interrupted by user, terminating {cli_name} process...")
-            process.terminate()
-            try:
-                process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                print("⚠️  Process did not respond to SIGTERM, sending SIGKILL...")
-                process.kill()
-                process.wait(timeout=2)
-            # Close streaming file handle if open
+
+            if execution_limit_reached.is_set():
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=2)
+                stderr_output = process_output.stderr_text()
+                err = AgentExecutionError(
+                    f"{cli_name} execution exceeded its bounded decision budget",
+                    error_type="execution_limit",
+                    display_message=(
+                        f"{cli_name} exceeded the configured response time or output limit."
+                    ),
+                )
+                err.cli_command_args = cmd[1:]
+                persist_safe_stream_error(err)
+                raise err
+
+            if self.stream_output:
+                print(f"\n{'=' * 80}\n")
+
+            post_output_timeout_triggered = False
+
+            # If idle timeout triggered, terminate process immediately
+            if idle_timeout_triggered:
+                print(f"⚠️  Terminating {cli_name} process due to idle timeout...")
+                process.terminate()
+                try:
+                    returncode = process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    print("⚠️  Process did not respond to SIGTERM, sending SIGKILL...")
+                    process.kill()
+                    try:
+                        returncode = process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        # If even kill doesn't work, something is very wrong
+                        print("❌ Process could not be killed, giving up...")
+                        returncode = -1
+
+                # Read stderr after termination
+                stderr_output = process_output.stderr_text()
+
+                # Treat as success only if we can actually tell the run finished:
+                # either the CLI has no structured completion signal at all (e.g.
+                # Copilot's raw line streaming, where this ambiguity has always
+                # existed), or it does and we saw that signal (`received_terminal_stream_event`)
+                # before going idle. Otherwise the idle timeout fired while the
+                # CLI was still actively working (e.g. stuck on an inner tool
+                # call) -- that's a genuine timeout, not a success, and must be
+                # left as a non-zero returncode so it can be classified below.
+                if output_lines and (not parse_stream_json or received_terminal_stream_event):
+                    print(f"✓ Got output from {cli_name}, treating as success despite idle timeout")
+                    returncode = 0
+            else:
+                # Add timeout to prevent hanging (especially for copilot)
+                # Timeout starts after all output has been read from stdout
+                # If timeout, terminate and treat as success if we got output
+                try:
+                    returncode = process.wait(timeout=300)
+                    # Only read stderr after process completes normally
+                    stderr_output = process_output.stderr_text()
+                except subprocess.TimeoutExpired:
+                    print(f"⚠️  {cli_name} process did not exit within timeout, terminating...")
+                    process.terminate()
+                    post_output_timeout_triggered = True
+                    try:
+                        returncode = process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        returncode = process.wait()
+
+                    # Read stderr after termination
+                    stderr_output = process_output.stderr_text()
+
+                    # Same reasoning as the idle-timeout branch above: only treat
+                    # this as "finished but slow to exit" when we have a way to
+                    # know the run actually finished.
+                    if output_lines and (not parse_stream_json or received_terminal_stream_event):
+                        print(f"✓ Got output from {cli_name}, treating as success despite timeout")
+                        returncode = 0
+
+            if process_output.stderr_read_failed:
+                error = AgentExecutionError(
+                    "Unable to read provider stderr.", error_type="pipe_read_error"
+                )
+                persist_safe_stream_error(error)
+                raise error
+
+            if returncode != 0:
+                # Check if stderr only contains usage summary (Copilot may output usage to stderr)
+                if stderr_output and self._is_usage_summary_only(stderr_output):
+                    # Treat as success if we got valid output and stderr is just usage summary
+                    if output_lines:
+                        print(
+                            f"✓ Got valid output from {cli_name}, ignoring non-zero exit code (stderr contains only usage summary)"
+                        )
+                        returncode = 0
+
+                # If still non-zero, it's a real error
+                if returncode != 0:
+                    combined_output = (stderr_output or "") + "\n".join(output_lines)
+                    error_type, display_message = self._classify_execution_error(
+                        cli_name,
+                        combined_output,
+                    )
+
+                    # Preserve the executor-local timeout classification for reporting.
+                    if error_type is None and (idle_timeout_triggered or post_output_timeout_triggered):
+                        error_type = "timeout"
+                        display_message = (
+                            f"{cli_name} did not produce output before the execution timeout"
+                        )
+
+                    err = AgentExecutionError(
+                        f"{cli_name} execution failed with code {returncode}: {stderr_output}",
+                        error_type=error_type,
+                        display_message=display_message or f"{cli_name} exited unsuccessfully (code {returncode}).",
+                    )
+                    # Attach actual CLI arguments for Phase to write to iteration history on error
+                    err.cli_command_args = cmd[1:]
+                    persist_safe_stream_error(err)
+                    raise err
+
+            if requires_terminal_stream_event and not received_terminal_stream_event:
+                err = AgentExecutionError(
+                    f"{cli_name} execution ended without a terminal stream event",
+                    error_type="incomplete_stream",
+                    display_message=(
+                        f"{cli_name} ended before reporting completion; retry the workflow step."
+                    ),
+                )
+                err.cli_command_args = cmd[1:]
+                persist_safe_stream_error(err)
+                raise err
+
+            # Append stderr to streaming output file (for debugging token usage parsing)
+            if streaming_file_handle and stderr_output:
+                try:
+                    from datetime import datetime
+
+                    stderr_obj = {
+                        "index": streaming_line_index,
+                        "timestamp": datetime.now().astimezone().isoformat(),
+                        "type": "stderr",
+                        "content": stderr_output.rstrip("\n"),
+                    }
+                    streaming_file_handle.write(json.dumps(stderr_obj, ensure_ascii=False) + "\n")
+                    streaming_file_handle.flush()
+                except Exception as e:
+                    print(f"⚠️  Failed to write stderr to streaming output file: {e}")
+
+            # Close streaming output file
             if streaming_file_handle:
-                streaming_file_handle.close()
-            raise
-        except BaseException as error:
-            if execution_timer is not None:
-                execution_timer.cancel()
+                try:
+                    streaming_file_handle.close()
+                except Exception as e:
+                    print(f"⚠️  Failed to close streaming output file: {e}")
+
+            # Save session_id if extracted (always update to handle session expiration)
+            if session_id:
+                self.config.session_id = session_id
+
+            codex_permission_denials = self._extract_codex_permission_denials_from_stderr(stderr_output)
+            permission_denials.extend(codex_permission_denials)
+
+            # Use custom response parser if provided
+            if response_parser:
+                parsed_response = collect_usage()
+                if codex_permission_denials:
+                    existing_pairs = {
+                        (denial.tool_name, json.dumps(denial.tool_input, sort_keys=True))
+                        for denial in parsed_response.permission_denials
+                    }
+                    for denial in codex_permission_denials:
+                        key = (denial.tool_name, json.dumps(denial.tool_input, sort_keys=True))
+                        if key not in existing_pairs:
+                            parsed_response.permission_denials.append(denial)
+                            existing_pairs.add(key)
+                # Merge streaming_log from custom parser with accumulated streaming_log
+                # If parser doesn't provide streaming_log, use our accumulated one
+                if not parsed_response.streaming_log:
+                    parsed_response.streaming_log = streaming_log if streaming_log else []
+                # Preserve model extracted during streaming
+                if model is not None:
+                    parsed_response.model = model
+                # Preserve duration extracted during streaming (parser doesn't have this info)
+                if token_usage.duration_ms is not None:
+                    parsed_response.token_usage.duration_ms = token_usage.duration_ms
+                if token_usage.duration_api_ms is not None:
+                    parsed_response.token_usage.duration_api_ms = token_usage.duration_api_ms
+                return parsed_response
+
+            # Return response (either from stream-json or combined lines)
+            if parse_stream_json:
+                # response_text is already the last fragment, use output_lines if empty
+                final_response = response_text if response_text else "".join(output_lines)
+                # streaming_log contains extracted text content for context.json
+                final_streaming_log = streaming_log if streaming_log else []
+            else:
+                # Reuse the same evidence validation/accounting as partial-error exits.
+                parsed_response = collect_usage()
+                final_response = parsed_response.response
+                token_usage = parsed_response.token_usage
+                model = parsed_response.model
+                permission_denials.extend(parsed_response.permission_denials)
+                final_streaming_log = output_lines
+
+            # Model is already tracked separately, duration stays in token_usage
+            usage_available = bool(token_usage.model_fields_set)
+            if usage_available and parse_stream_json:
+                self._accumulate_usage(token_usage)
+            return AgentResponse(
+                response=final_response,
+                token_usage=token_usage,
+                usage_available=usage_available,
+                usage_accounted=True,
+                transport_result=parsed_response.transport_result if not parse_stream_json else replace(
+                    observation_evidence,
+                    reported_model=model,
+                    usage=self._compact_usage(token_usage) if usage_available else None,
+                    completed=True if received_terminal_stream_event else None, returncode=returncode,
+                ),
+                permission_denials=permission_denials,
+                streaming_log=final_streaming_log,
+                model=model,
+                cli=self.config.cli,
+                session_id=self.config.session_id,
+            )
+        finally:
             if process.poll() is None:
                 process.terminate()
                 try:
@@ -1759,231 +2029,4 @@ class AgentExecutor:
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait(timeout=2)
-            if observer_failed:
-                parsed = collect_usage()
-                error.transport_result = parsed.transport_result
-            raise
-
-        if execution_timer is not None:
-            execution_timer.cancel()
-
-        if execution_limit_reached.is_set():
-            try:
-                process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=2)
-            err = AgentExecutionError(
-                f"{cli_name} execution exceeded its bounded decision budget",
-                error_type="execution_limit",
-                display_message=(
-                    f"{cli_name} exceeded the configured response time or output limit."
-                ),
-            )
-            err.cli_command_args = cmd[1:]
-            persist_safe_stream_error(err)
-            raise err
-
-        if self.stream_output:
-            print(f"\n{'=' * 80}\n")
-
-        post_output_timeout_triggered = False
-
-        # If idle timeout triggered, terminate process immediately
-        if idle_timeout_triggered:
-            print(f"⚠️  Terminating {cli_name} process due to idle timeout...")
-            process.terminate()
-            try:
-                returncode = process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                print("⚠️  Process did not respond to SIGTERM, sending SIGKILL...")
-                process.kill()
-                try:
-                    returncode = process.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    # If even kill doesn't work, something is very wrong
-                    print("❌ Process could not be killed, giving up...")
-                    returncode = -1
-
-            # Read stderr after termination
-            stderr_output += process.stderr.read() if process.stderr else ""
-
-            # Treat as success only if we can actually tell the run finished:
-            # either the CLI has no structured completion signal at all (e.g.
-            # Copilot's raw line streaming, where this ambiguity has always
-            # existed), or it does and we saw that signal (`received_terminal_stream_event`)
-            # before going idle. Otherwise the idle timeout fired while the
-            # CLI was still actively working (e.g. stuck on an inner tool
-            # call) -- that's a genuine timeout, not a success, and must be
-            # left as a non-zero returncode so it can be classified below.
-            if output_lines and (not parse_stream_json or received_terminal_stream_event):
-                print(f"✓ Got output from {cli_name}, treating as success despite idle timeout")
-                returncode = 0
-        else:
-            # Add timeout to prevent hanging (especially for copilot)
-            # Timeout starts after all output has been read from stdout
-            # If timeout, terminate and treat as success if we got output
-            try:
-                returncode = process.wait(timeout=300)
-                # Only read stderr after process completes normally
-                stderr_output += process.stderr.read() if process.stderr else ""
-            except subprocess.TimeoutExpired:
-                print(f"⚠️  {cli_name} process did not exit within timeout, terminating...")
-                process.terminate()
-                post_output_timeout_triggered = True
-                try:
-                    returncode = process.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    returncode = process.wait()
-
-                # Read stderr after termination
-                stderr_output += process.stderr.read() if process.stderr else ""
-
-                # Same reasoning as the idle-timeout branch above: only treat
-                # this as "finished but slow to exit" when we have a way to
-                # know the run actually finished.
-                if output_lines and (not parse_stream_json or received_terminal_stream_event):
-                    print(f"✓ Got output from {cli_name}, treating as success despite timeout")
-                    returncode = 0
-
-        if returncode != 0:
-            # Check if stderr only contains usage summary (Copilot may output usage to stderr)
-            if stderr_output and self._is_usage_summary_only(stderr_output):
-                # Treat as success if we got valid output and stderr is just usage summary
-                if output_lines:
-                    print(
-                        f"✓ Got valid output from {cli_name}, ignoring non-zero exit code (stderr contains only usage summary)"
-                    )
-                    returncode = 0
-
-            # If still non-zero, it's a real error
-            if returncode != 0:
-                combined_output = (stderr_output or "") + "\n".join(output_lines)
-                error_type, display_message = self._classify_execution_error(
-                    cli_name,
-                    combined_output,
-                )
-
-                # Preserve the executor-local timeout classification for reporting.
-                if error_type is None and (idle_timeout_triggered or post_output_timeout_triggered):
-                    error_type = "timeout"
-                    display_message = (
-                        f"{cli_name} did not produce output before the execution timeout"
-                    )
-
-                err = AgentExecutionError(
-                    f"{cli_name} execution failed with code {returncode}: {stderr_output}",
-                    error_type=error_type,
-                    display_message=display_message,
-                )
-                # Attach actual CLI arguments for Phase to write to iteration history on error
-                err.cli_command_args = cmd[1:]
-                persist_safe_stream_error(err)
-                raise err
-
-        if requires_terminal_stream_event and not received_terminal_stream_event:
-            err = AgentExecutionError(
-                f"{cli_name} execution ended without a terminal stream event",
-                error_type="incomplete_stream",
-                display_message=(
-                    f"{cli_name} ended before reporting completion; retry the workflow step."
-                ),
-            )
-            err.cli_command_args = cmd[1:]
-            persist_safe_stream_error(err)
-            raise err
-
-        # Append stderr to streaming output file (for debugging token usage parsing)
-        if streaming_file_handle and stderr_output:
-            try:
-                from datetime import datetime
-
-                stderr_obj = {
-                    "index": streaming_line_index,
-                    "timestamp": datetime.now().astimezone().isoformat(),
-                    "type": "stderr",
-                    "content": stderr_output.rstrip("\n"),
-                }
-                streaming_file_handle.write(json.dumps(stderr_obj, ensure_ascii=False) + "\n")
-                streaming_file_handle.flush()
-            except Exception as e:
-                print(f"⚠️  Failed to write stderr to streaming output file: {e}")
-
-        # Close streaming output file
-        if streaming_file_handle:
-            try:
-                streaming_file_handle.close()
-            except Exception as e:
-                print(f"⚠️  Failed to close streaming output file: {e}")
-
-        # Save session_id if extracted (always update to handle session expiration)
-        if session_id:
-            self.config.session_id = session_id
-
-        codex_permission_denials = self._extract_codex_permission_denials_from_stderr(stderr_output)
-        permission_denials.extend(codex_permission_denials)
-
-        # Use custom response parser if provided
-        if response_parser:
-            parsed_response = collect_usage()
-            if codex_permission_denials:
-                existing_pairs = {
-                    (denial.tool_name, json.dumps(denial.tool_input, sort_keys=True))
-                    for denial in parsed_response.permission_denials
-                }
-                for denial in codex_permission_denials:
-                    key = (denial.tool_name, json.dumps(denial.tool_input, sort_keys=True))
-                    if key not in existing_pairs:
-                        parsed_response.permission_denials.append(denial)
-                        existing_pairs.add(key)
-            # Merge streaming_log from custom parser with accumulated streaming_log
-            # If parser doesn't provide streaming_log, use our accumulated one
-            if not parsed_response.streaming_log:
-                parsed_response.streaming_log = streaming_log if streaming_log else []
-            # Preserve model extracted during streaming
-            if model is not None:
-                parsed_response.model = model
-            # Preserve duration extracted during streaming (parser doesn't have this info)
-            if token_usage.duration_ms is not None:
-                parsed_response.token_usage.duration_ms = token_usage.duration_ms
-            if token_usage.duration_api_ms is not None:
-                parsed_response.token_usage.duration_api_ms = token_usage.duration_api_ms
-            return parsed_response
-
-        # Return response (either from stream-json or combined lines)
-        if parse_stream_json:
-            # response_text is already the last fragment, use output_lines if empty
-            final_response = response_text if response_text else "".join(output_lines)
-            # streaming_log contains extracted text content for context.json
-            final_streaming_log = streaming_log if streaming_log else []
-        else:
-            # Reuse the same evidence validation/accounting as partial-error exits.
-            parsed_response = collect_usage()
-            final_response = parsed_response.response
-            token_usage = parsed_response.token_usage
-            model = parsed_response.model
-            permission_denials.extend(parsed_response.permission_denials)
-            final_streaming_log = output_lines
-
-        # Model is already tracked separately, duration stays in token_usage
-        usage_available = bool(token_usage.model_fields_set)
-        if usage_available and parse_stream_json:
-            self._accumulate_usage(token_usage)
-        return AgentResponse(
-            response=final_response,
-            token_usage=token_usage,
-            usage_available=usage_available,
-            usage_accounted=True,
-            transport_result=parsed_response.transport_result if not parse_stream_json else replace(
-                observation_evidence,
-                reported_model=model,
-                usage=self._compact_usage(token_usage) if usage_available else None,
-                completed=True if received_terminal_stream_event else None, returncode=returncode,
-            ),
-            permission_denials=permission_denials,
-            streaming_log=final_streaming_log,
-            model=model,
-            cli=self.config.cli,
-            session_id=self.config.session_id,
-        )
+            process_output.close()

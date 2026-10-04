@@ -1,0 +1,42 @@
+chat.invalid_issue: Invalid issue name. Use cafe manager chat --issue <issue-name>
+  with a single directory name.
+chat.issue_required: No unambiguous current issue. Enter its worktree or use cafe
+  manager chat --issue <issue-name>.
+chat.selection_conflict: Current branch and active issue disagree. Select deliberately
+  with --issue <issue-name>.
+chat.issue_conflict: Competing issue authorities. Restore the confirmed registered
+  worktree pointer, then retry --issue <issue-name>.
+chat.issue_missing: Live issue policy is missing. Enter a prepared issue worktree
+  or select a live issue with --issue <issue-name>.
+chat.issue_archived: This issue is archived. Select a live issue with --issue <issue-name>;
+  chat does not restore issues.
+chat.identity_absent: No resumable Manager identity is recorded. Return to the originating
+  Manager conversation and its confirmed setup procedure; chat does not create a replacement.
+chat.identity_conflict: Manager identity or issue state is stale, conflicting, or
+  unreadable. Return to the originating conversation to inspect and restore the confirmed
+  records, then retry cafe manager chat.
+chat.unsupported_mode: This Manager mode has no verified terminal reconnect path.
+  Return to its originating conversation; preserve the confirmed mode.
+chat.unsupported_provider: This active provider has no supported Manager terminal
+  path. Return to its originating conversation; do not switch providers to reconnect.
+chat.host_bound: The Manager is bound to its originating host conversation. Return
+  to that thread, or restore host access there; the CLI cannot resume its host identity.
+chat.recovery_pending: A Manager delivery is outstanding or needs recovery. Check
+  the originating conversation and current callback status before retrying; do not
+  replay it automatically.
+chat.busy: The current Manager conversation is busy. Wait for its current turn to
+  finish, then retry cafe manager chat; do not interrupt the worker.
+chat.provider_unavailable: The Codex CLI is unavailable. Restore codex on PATH, then
+  retry cafe manager chat with the same identity, or return to the originating conversation.
+chat.connected: Connected to current Manager for {issue} in {worktree}. Enter a message;
+  /quit, EOF or Ctrl-C exits. Pending HumanTasks retain cafe task inspect / cafe task
+  complete routes.
+chat.terminal_required: An interactive terminal is required. Run cafe manager chat
+  in a terminal, or return to the originating conversation.
+chat.delivery_uncertain: The message may already have reached the Manager. Check the
+  originating conversation before an explicit retry; no automatic replay occurred.
+chat.delivery_failed: Manager delivery failed before acceptance. Restore the existing
+  conversation/provider access, then explicitly retry cafe manager chat; identity
+  is preserved.
+chat.cancelled: Chat turn cancelled. Check the originating conversation before retrying
+  a submitted message; worker and workflow state are preserved.

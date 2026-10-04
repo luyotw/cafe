@@ -7,9 +7,12 @@ import hashlib
 import importlib.util
 import json
 import os
+import socket
 import struct
 import subprocess
+import tempfile
 import threading
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,9 +21,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
-from cafe.core.packet_io import canonical_json
 from cafe.agents.executor import AgentExecutor, EventDriverExecutionResult
 from cafe.agents.transport_types import TransportResult
+from cafe.core.packet_io import canonical_json
 from cafe.core.types import AgentCLI, AgentResponse, TokenUsage
 from tests.fixtures.delivery_contract import delivery_contract, legacy_driver_contract
 
@@ -119,6 +122,17 @@ def _activate_event_contract(
 def _clear_host_session_binding(monkeypatch) -> None:
     """Keep the test process's Codex App thread out of ordinary callback tests."""
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    # Mock daemon peers below use OS pipes. Give their endpoint preflight a
+    # real socket owned by this test, without touching the user's Codex home.
+    # Keep below macOS's Unix socket path limit, including pytest's directory.
+    with tempfile.TemporaryDirectory(prefix="cafe-host-", dir="/tmp") as directory:
+        home = Path(directory)
+        endpoint = home / "app-server-control" / "app-server-control.sock"
+        endpoint.parent.mkdir(parents=True)
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(str(endpoint))
+        monkeypatch.setenv("CODEX_HOME", str(home))
+        yield
 
 
 def test_callback_prompt_allows_only_bounded_driver_confirmable_clarification(
@@ -128,6 +142,7 @@ def test_callback_prompt_allows_only_bounded_driver_confirmable_clarification(
     prompt = callback._callback_prompt(
         {"event_id": "event-1", "event_type": "human_task"},
         repository_root=tmp_path,
+        include_instructions=True,
     )
 
     assert "confirmed overall need_clarification policy" in prompt
@@ -137,6 +152,107 @@ def test_callback_prompt_allows_only_bounded_driver_confirmable_clarification(
     assert "otherwise leave it for the user" in prompt
     assert "Do not answer mandatory, user-required, permission, or capability tasks" in prompt
     assert "user-required, clarification" not in prompt
+
+
+def test_existing_session_notice_is_compact_and_keeps_event_identity(tmp_path: Path) -> None:
+    callback = _callback_module()
+    event = {"event_id": "event-1", "event_type": "human_task", "task_id": "task-1"}
+
+    lines = callback._callback_prompt(event, repository_root=tmp_path).splitlines()
+
+    assert lines[:2] == ["CAFE callback", f"Repository: {tmp_path}"]
+    assert len(lines) == 3
+    assert json.loads(lines[2].removeprefix("Wake notice: ")) == {**event, "to_step": None}
+
+
+@pytest.mark.parametrize("later_handoff", [False, True, "backdated"])
+def test_notice_projects_event_time_baton_without_mutating_state(
+    tmp_path: Path, later_handoff: bool | str,
+) -> None:
+    from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
+
+    callback = _callback_module()
+    issue_dir = tmp_path / ".cafe/issues/issue457"
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("pr")
+    handoff = store.build_handoff_contract(
+        from_step="pr", to_owner=HandoffOwner.AGENT,
+        to_step="develop", intent=HandoffIntent.AWAIT_AGENT,
+    )
+    state.handoff_contract = handoff
+    original_handoff = handoff
+    store.record_event(state, "transition", {"from": "pr", "to": "develop"},
+                       baton_contract=handoff)
+    event = store.prepare_workflow_callback_event(
+        state, {"workflow_id": state.workflow_id, "issue": issue_dir.name,
+                "event_type": "phase_terminal", "step": "pr"},
+    )
+    if later_handoff:
+        handoff = store.build_handoff_contract(
+            from_step="develop", to_owner=HandoffOwner.AGENT,
+            to_step="review", intent=HandoffIntent.AWAIT_AGENT,
+        )
+        if later_handoff == "backdated":
+            handoff = replace(handoff, created_at=original_handoff.created_at)
+        state.handoff_contract = handoff
+        store.record_event(state, "transition", {"from": "develop", "to": "review"},
+                           baton_contract=handoff)
+    before = {p: p.read_bytes() for p in issue_dir.rglob("*") if p.is_file()}
+
+    prompt = callback._callback_prompt(event, repository_root=tmp_path)
+    notice = json.loads(prompt.split("Wake notice: ", 1)[1])
+
+    assert notice == {**event, "to_step": "develop"}
+    assert store.validate_workflow_callback_event(state.workflow_id, event)
+    assert before == {p: p.read_bytes() for p in issue_dir.rglob("*") if p.is_file()}
+
+
+@pytest.mark.parametrize("later_handoff", [False, True])
+@pytest.mark.parametrize("event_type,target", [("workflow_paused", "user"),
+                                              ("workflow_completed", "done")])
+def test_notice_keeps_pause_or_completion_destination_when_later_baton_changes(
+    tmp_path: Path, later_handoff: bool, event_type: str, target: str,
+) -> None:
+    from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
+
+    callback = _callback_module()
+    issue_dir = tmp_path / ".cafe/issues/issue457"
+    store = BlackboardStore(issue_dir)
+    state = store.load_or_create("develop")
+    handoff = store.build_handoff_contract(
+        from_step="develop", to_owner=HandoffOwner.AGENT,
+        to_step="review", intent=HandoffIntent.AWAIT_AGENT,
+    )
+    state.handoff_contract = handoff
+    store.record_event(state, "transition", {"from": "develop", "to": "review"},
+                       baton_contract=handoff)
+    store.record_event(state, event_type, {"step": "develop"})
+    event = store.prepare_workflow_callback_event(
+        state, {"workflow_id": state.workflow_id, "issue": issue_dir.name,
+                "event_type": "human_task" if target == "user" else event_type,
+                "step": "develop"},
+    )
+    if later_handoff:
+        store.record_event(state, "transition", {"from": "review", "to": "pr"})
+
+    notice = json.loads(
+        callback._callback_prompt(event, repository_root=tmp_path).split("Wake notice: ", 1)[1]
+    )
+
+    assert notice["to_step"] == target
+
+
+def test_notice_does_not_guess_target_from_an_unverified_event(tmp_path: Path) -> None:
+    callback = _callback_module()
+    driver_dir, _state, event = _v3_event_context(callback, tmp_path, [("claude", "exact")])
+    event = {**event, "event_id": "another-event"}
+
+    notice = json.loads(
+        callback._callback_prompt(event, repository_root=tmp_path).split("Wake notice: ", 1)[1]
+    )
+
+    assert notice["to_step"] is None
+    assert driver_dir.is_dir()
 
 
 def test_event_driver_config_is_per_issue_and_cannot_replace_session(tmp_path: Path) -> None:
@@ -1428,6 +1544,73 @@ def test_multi_hop_delivery_is_serial_forward_only_and_sticky(tmp_path: Path) ->
     assert later_state["active_index"] == 2
 
 
+@pytest.mark.parametrize("contract_managed", [False, True])
+def test_fallback_receives_instructions_once_and_reuses_durable_delivery_history(
+    tmp_path: Path, contract_managed: bool,
+) -> None:
+    from cafe.core.blackboard import BlackboardStore
+
+    callback = _callback_module()
+    prepare = _contract_event_context if contract_managed else _v3_event_context
+    manager_dir, state, event = prepare(
+        callback, tmp_path, [("codex", "primary"), ("claude", "fallback")],
+    )
+    calls = []
+
+    class Provider(AgentExecutor):
+        def __init__(self, config, **_kwargs):
+            super().__init__(config, stream_output=False)
+            self.config = config
+
+        def execute_event_driver(self, prompt, **kwargs):
+            delivery = kwargs.get("expected_session_id") is not None
+            calls.append((self.config.cli.value, delivery, prompt))
+            return _executor_result(
+                session_id=f"{self.config.cli.value}-session",
+                accepted=delivery and self.config.cli is AgentCLI.CLAUDE,
+                records=(),
+            )
+
+    updated = callback._run_v3_callback(
+        manager_dir, state, event, repository_root=tmp_path, executor_factory=Provider,
+    )
+    deliveries = [(cli, prompt) for cli, delivery, prompt in calls if delivery]
+    assert [cli for cli, _prompt in deliveries] == ["codex", "claude"]
+    assert len(deliveries[0][1].splitlines()) == 3
+    assert "Read the builtin use-cafe-workflow skill" in deliveries[1][1]
+    assert (
+        "Do not answer mandatory, user-required, permission, or capability tasks"
+        in deliveries[1][1]
+    )
+    assert [prompt for _cli, delivery, prompt in calls if not delivery] == ['say "HI"'] * 2
+    assert updated.keys() == state.keys()
+
+    config = callback._contract_callback_config(
+        issue_dir=manager_dir.parent, issue_name=manager_dir.parent.name,
+        workflow_id=state["workflow_id"],
+    ) if contract_managed else callback._load_config(manager_dir)
+    reloaded = callback._load_or_initialize_dispatch_state(
+        manager_dir, workflow_id=state["workflow_id"], config=config,
+    )
+    store = BlackboardStore(manager_dir.parent)
+    blackboard = store.load_or_create("spec")
+    later = store.prepare_workflow_callback_event(
+        blackboard, {"workflow_id": state["workflow_id"], "issue": manager_dir.parent.name,
+                     "event_type": "phase_terminal", "step": "review"},
+    )
+    reloaded = callback._ensure_dispatch_event(manager_dir, reloaded, later)
+    calls.clear()
+    callback._run_v3_callback(
+        manager_dir, reloaded, later, repository_root=tmp_path, executor_factory=Provider,
+    )
+
+    assert len(calls) == 1
+    cli, delivery, prompt = calls[0]
+    assert cli == "claude" and delivery
+    assert len(prompt.splitlines()) == 3
+    assert json.loads(prompt.split("Wake notice: ", 1)[1])["event_id"] == later["event_id"]
+
+
 def test_ambiguous_actual_delivery_stops_before_later_entry(tmp_path: Path) -> None:
     callback = _callback_module()
     driver_dir, state, event = _v3_event_context(
@@ -2333,12 +2516,107 @@ def test_callback_queues_the_bound_codex_host_thread(tmp_path: Path, monkeypatch
     assert launch.call_args.args[0] == ["codex", "app-server", "proxy"]
     assert daemon.resume_params == {"threadId": "visible-thread", "excludeTurns": True}
     prompt = daemon.input[0]["text"]
-    assert "event-driven CAFE workflow manager" in prompt
+    assert prompt.startswith("CAFE callback\n")
+    assert "Read the builtin" not in prompt
     assert '"event_type": "human_task"' in prompt
     assert str(tmp_path) in prompt
     assert daemon.starts == 0
     persisted = json.loads((driver_dir / "dispatch_state.json").read_text(encoding="utf-8"))
     assert persisted["entries"][0]["session"]["id"] == "visible-thread"
+
+
+def test_missing_host_socket_is_conclusive_before_any_delivery(tmp_path, monkeypatch):
+    callback = _callback_module()
+    monkeypatch.setenv("CODEX_THREAD_ID", "visible-thread")
+    driver_dir, _state, event = _contract_event_context(
+        callback, tmp_path, [("codex", "exact")], bind_host=True,
+    )
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "missing-codex-home"))
+    with patch.object(callback.subprocess, "Popen", side_effect=AssertionError("no proxy")):
+        callback.run_callback(event, repository_root=tmp_path)
+        callback.run_callback(event, repository_root=tmp_path)
+    state = json.loads((driver_dir / "dispatch_state.json").read_text())
+    dispatched = state["events"][event["event_id"]]
+    assert dispatched["status"] == "exhausted"
+    assert len(dispatched["attempts"]) == 1
+    assert dispatched["attempts"][0]["outcome"] == "conclusive_nonacceptance"
+    assert dispatched["attempts"][0]["reason"] == "host_control_socket_unavailable"
+    assert state["entries"][0]["session"]["id"] == "visible-thread"
+
+
+@pytest.mark.parametrize("kind", ["file", "symlink"])
+def test_host_preflight_rejects_non_socket_without_exposing_contents(tmp_path, monkeypatch, kind):
+    callback = _callback_module()
+    home = tmp_path / "unsafe-home"
+    endpoint = home / "app-server-control" / "app-server-control.sock"
+    endpoint.parent.mkdir(parents=True)
+    target = tmp_path / "private"
+    target.write_text("private-provider-token")
+    if kind == "file":
+        endpoint.write_text(target.read_text())
+    else:
+        endpoint.symlink_to(target)
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    with pytest.raises(callback._HostTransportUnavailable) as raised:
+        callback._require_host_control_socket()
+    assert "private-provider-token" not in str(raised.value)
+    assert callback._classify_provider_failure(raised.value) == "conclusive_nonacceptance"
+
+
+def test_host_preflight_accepts_managed_daemon_socket_symlink(monkeypatch):
+    callback = _callback_module()
+    with tempfile.TemporaryDirectory(prefix="cafe-link-", dir="/tmp") as directory:
+        home = Path(directory)
+        endpoint = home / "app-server-control" / "app-server-control.sock"
+        endpoint.parent.mkdir()
+        target = home / "daemon.sock"
+        with socket.socket(socket.AF_UNIX) as listener:
+            listener.bind(str(target))
+            endpoint.symlink_to(target)
+            monkeypatch.setenv("CODEX_HOME", str(home))
+            assert callback._require_host_control_socket() == endpoint
+
+
+@pytest.mark.parametrize("metadata_method", ["stat", "lstat"])
+def test_host_preflight_rejects_socket_or_alias_owned_by_another_user(monkeypatch, metadata_method):
+    callback = _callback_module()
+    original = getattr(Path, metadata_method)
+
+    def foreign_owner(path, *args, **kwargs):
+        metadata = original(path, *args, **kwargs)
+        if path.name == "app-server-control.sock":
+            return SimpleNamespace(st_mode=metadata.st_mode, st_uid=os.getuid() + 1)
+        return metadata
+
+    monkeypatch.setattr(Path, metadata_method, foreign_owner)
+    with pytest.raises(callback._HostTransportUnavailable):
+        callback._require_host_control_socket()
+
+
+def test_provider_session_needs_no_host_control_socket(tmp_path, monkeypatch):
+    callback = _callback_module()
+    monkeypatch.setattr(callback, "read_status", lambda path: {
+        "entries": [{"cli": "codex", "acquisition": {"session": {
+            "id": "provider-session", "source": "provider",
+        }}}],
+    })
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "missing-home"))
+    callback.validate_bound_host_transport(tmp_path)
+
+
+def test_missing_primary_socket_does_not_block_confirmed_fallback(tmp_path, monkeypatch):
+    callback = _callback_module()
+    monkeypatch.setattr(callback, "read_status", lambda path: {
+        "active_index": 0,
+        "entries": [
+            {"cli": "codex", "acquisition": {"session": {
+                "id": "visible-thread", "source": "host_session",
+            }}},
+            {"cli": "claude", "acquisition": {"session": None}},
+        ],
+    })
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "missing-home"))
+    callback.validate_bound_host_transport(tmp_path)
 
 
 def test_bound_host_thread_queue_failure_never_creates_a_new_session(

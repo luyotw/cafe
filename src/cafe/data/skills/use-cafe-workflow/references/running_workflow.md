@@ -33,6 +33,20 @@ For Manager-managed preparation, resolve the user-facing runtime-update decision
 from `project_global_skill_sync.md` before invoking `cafe prepare
 --no-interactive`; callbacks never supply this answer.
 
+## Returning to the current Manager conversation
+
+Users can run `cafe manager chat` in the issue worktree, or
+`cafe manager chat --issue <issue-name>` from the repository root. This terminal
+entrypoint reconnects to an existing verified event-driven provider-owned Codex
+session, including an already active Codex fallback. Host-bound and unsupported
+mode/provider identities direct users to their originating conversation. Opening
+chat creates no identity, wake, task result or worker action. Each submitted turn
+refreshes current durable context and uses the existing session lock.
+
+When a HumanTask is pending, keep its exact `cafe task inspect <id>` and authorized
+`cafe task complete` instructions in the handoff. Manager chat can discuss the
+state; connection or acknowledgement is never a task answer or permission.
+
 ## Required Manager launch entrypoint
 
 The kickoff records one mode; it is a skill operating contract, not a CAFE-core
@@ -132,7 +146,14 @@ When the first entry is Codex and activation runs from the Codex App, its
 runtime-owned host thread is a best-effort hint for the first session. A
 persisted acquired session always wins, and host-binding failure warns without
 blocking workflow execution. A successfully bound host session connects through
-`codex app-server proxy` to the already running daemon. It reads the original
+`codex app-server proxy` to the already running daemon. Local App stdio sessions
+may have a valid thread ID but no daemon control socket; a bound host's socket
+is checked read-only before event-driven launch and before callback delivery.
+An absent or unsafe socket fails before sending input, with a specific durable
+nonacceptance reason. Use an explicitly confirmed attached mode until the App
+is connected to a supported existing daemon; never start a second daemon to
+resume the same conversation, replace its binding, or replay an ambiguous
+historical event as a workaround. It reads the original
 thread and, when unloaded, resumes that exact thread before enqueueing the wake
 notice. `codex queue` alone wakes only loaded threads; resuming the bound thread
 makes delivery independent of opening its conversation in the UI. Resume
