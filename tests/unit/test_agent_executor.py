@@ -101,14 +101,20 @@ class TestAgentExecutorErrorHandling:
         mock_process.stderr.read.return_value = ""
         mock_process.wait.return_value = -15
 
-        def mock_select(rlist, wlist, xlist, timeout=None):
-            if mock_process.stdout.readline.call_count == 0:
-                return (rlist, [], [])
-            return ([], [], [])
+        from queue import Empty
+
+        pipe_reader = MagicMock()
+        pipe_reader.first_stderr_line = ""
+        pipe_reader.stderr_read_failed = False
+        pipe_reader.stderr_text.return_value = ""
+        pipe_reader.readline.side_effect = [
+            mock_process.stdout.readline.return_value,
+            Empty(),
+        ]
 
         with (
             patch("subprocess.Popen", return_value=mock_process),
-            patch("select.select", side_effect=mock_select),
+            patch("cafe.agents.executor.ProcessOutput", return_value=pipe_reader),
             patch("time.time", side_effect=[0, 0, 301]),
         ):
             with pytest.raises(AgentExecutionError) as exc_info:
@@ -1256,7 +1262,7 @@ class TestStreamingExecution:
         assert "Line 2" in captured.out
         assert "Line 3" in captured.out
 
-    def test_execution_control_stops_before_unbounded_output_is_retained(self) -> None:
+    def test_execution_control_stops_before_unbounded_output_is_retained(self, tmp_path) -> None:
         executor = AgentExecutor(AgentConfig(name="Driver", cli=AgentCLI.COPILOT))
         mock_process = MagicMock()
         mock_process.stdout.readline.side_effect = ["12345\n"] * 20_000
@@ -1270,6 +1276,7 @@ class TestStreamingExecution:
                 executor._execute_with_streaming(
                     cmd=["copilot"],
                     cli_name="Copilot",
+                    streaming_output_file=str(tmp_path / "stream.jsonl"),
                     execution_control=AgentExecutionControl(
                         max_duration_seconds=60,
                         max_output_bytes=1024,
@@ -1278,7 +1285,11 @@ class TestStreamingExecution:
                 )
 
         assert exc_info.value.error_type == "execution_limit"
-        assert mock_process.stdout.readline.call_count == 3
+        import json
+
+        saved = json.loads((tmp_path / "stream.jsonl").read_text())
+        assert saved["stream_diagnostics"]["stdout_lines"] == 3
+        assert "12345" not in (tmp_path / "stream.jsonl").read_text()
         mock_process.terminate.assert_called_once()
 
     def test_execution_control_absolute_deadline_terminates_continuous_process(self) -> None:
@@ -1488,8 +1499,7 @@ class TestStreamingExecution:
         executor = AgentExecutor(config)
 
         mock_process = MagicMock()
-        mock_process.stderr.readline.return_value = "Error: session not found\n"
-        mock_process.stderr.read.return_value = ""
+        mock_process.stderr.read.return_value = "Error: session not found\n"
         mock_process.kill.return_value = None
 
         with patch("subprocess.Popen", return_value=mock_process), \
