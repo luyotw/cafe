@@ -6,10 +6,17 @@ from pathlib import Path
 
 import pytest
 
-from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
+from cafe.core.blackboard import (
+    ArtifactEntry,
+    ArtifactKind,
+    BlackboardStore,
+    HandoffIntent,
+    HandoffOwner,
+)
 from cafe.core.workflow_models import StepExecutionResult
 from cafe.core.workflow_runtime import BlackboardWorkflowRuntime
 from cafe.playbooks.loader import PlaybookLoader
+from cafe.phases.generic_workflow_step import GenericWorkflowStepExecutor
 
 pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 
@@ -59,9 +66,7 @@ def test_qa_happy_path_reaches_pr(tmp_path: Path, name: str) -> None:
 
 
 @pytest.mark.parametrize("origin", ["review", "qa", "pr"])
-def test_every_correction_repeats_develop_review_and_qa(
-    tmp_path: Path, origin: str
-) -> None:
+def test_every_correction_repeats_develop_review_and_qa(tmp_path: Path, origin: str) -> None:
     issue_dir = tmp_path / f"correction-{origin}"
     calls: list[str] = []
 
@@ -171,3 +176,78 @@ def test_simple_no_change_correction_returns_to_qa_before_pr(tmp_path: Path) -> 
 
     assert result.completed is True
     assert calls == ["qa", "develop", "qa", "pr"]
+
+
+@pytest.mark.parametrize("origin", ["qa", "pr"])
+def test_subagent_qa_corrections_repeat_reviewed_development_and_acceptance(
+    tmp_path: Path, origin: str
+) -> None:
+    issue_dir = tmp_path / f"subagent-correction-{origin}"
+    calls: list[str] = []
+
+    def executor(step_name: str, step_def: dict, state: object) -> StepExecutionResult:
+        calls.append(step_name)
+        if step_name == origin and calls.count(origin) == 1:
+            return StepExecutionResult(
+                response="needs_changes", artifacts={}, status_code="needs_changes"
+            )
+        if step_name == "pr":
+            _finish_pr(issue_dir)
+        return StepExecutionResult(response="confirmed", artifacts={}, status_code="confirmed")
+
+    result = BlackboardWorkflowRuntime(
+        issue_dir=issue_dir,
+        playbook=_runtime_playbook("subagent-flow-qa"),
+        executor=executor,
+    ).run(start_step=origin)
+
+    assert result.completed is True
+    correction = calls.index("develop")
+    assert calls[correction : correction + 3] == ["develop", "qa", "pr"]
+
+
+@pytest.mark.parametrize("sender", ["spec_plan", "qa"])
+def test_subagent_qa_projects_only_the_current_correction_source(
+    tmp_path: Path, sender: str
+) -> None:
+    store = BlackboardStore(tmp_path / "issue")
+    state = store.load_or_create("develop")
+    store.update_handoff_contract(
+        state,
+        from_step=sender,
+        to_owner=HandoffOwner.AGENT,
+        to_step="develop",
+        intent=HandoffIntent.AWAIT_AGENT,
+        source="test.current_sender",
+    )
+    artifacts = {}
+    for name, owner, item_id, todo_source in (
+        ("plan", "spec_plan", "PLAN-001", "plan"),
+        ("qa_feedback", "qa", "QA-001", "qa"),
+    ):
+        report = tmp_path / f"{name}.md"
+        report.write_text(
+            "## Todo List\n"
+            f"- [ ] `{item_id}` — Source: `{todo_source}` — Work: repair acceptance — "
+            "Closure: requested journey passes — Evidence: targeted acceptance check\n",
+            encoding="utf-8",
+        )
+        artifacts[name] = ArtifactEntry(
+            name=name,
+            kind=ArtifactKind.DOCUMENT,
+            version=1,
+            updated_by=owner,
+            path=str(report),
+        )
+
+    resolved = GenericWorkflowStepExecutor._add_causal_todo_artifact(
+        artifacts,
+        state,
+        playbook=PlaybookLoader().load("subagent-flow-qa", strict=True),
+    )
+
+    if sender == "qa":
+        assert resolved["causal_todo"] is artifacts["qa_feedback"]
+    else:
+        assert "causal_todo" not in resolved
+    assert resolved["plan"] is artifacts["plan"]

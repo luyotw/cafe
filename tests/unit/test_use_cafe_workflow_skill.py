@@ -996,6 +996,23 @@ def test_manager_selection_is_evidence_based_across_every_effective_candidate() 
     assert "`references/playbook_selection.md`" in normalized_skill
 
 
+def test_native_subagent_preference_checks_chains_without_overriding_scope() -> None:
+    selection = " ".join(_read_skill_resource("references/playbook_selection.md").split())
+    models = " ".join(_read_skill_resource("references/model_selection.md").split())
+
+    assert "same required responsibilities and QA boundaries" in selection
+    assert "`native_subagent_steps`" in selection
+    assert "user's explicit capability confirmation" in selection
+    assert "both launches before either completes" in selection
+    assert "`Agent` alone requires native delegation; it does not imply parallel reviewers" in selection
+    assert "verify one native launch, a successful result, and parent collection" in selection
+    assert "single-partner planning does not require parallel review capability" in models
+    assert "cannot override an explicit or persisted choice" in selection
+    assert "Do not hardcode a provider ranking" in selection
+    assert "every entry in its execution chain" in models
+    assert "candidate probe and fallback smoke below do not exercise native subagents" in models
+
+
 def test_kickoff_contract_formatter_lists_all_phases_and_confirmation_owners(
     tmp_path: Path,
 ) -> None:

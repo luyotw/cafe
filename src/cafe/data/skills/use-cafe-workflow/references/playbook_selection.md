@@ -48,7 +48,8 @@ Derive the required responsibilities and boundaries from the confirmed scope.
 Reject candidates whose resolved graph or phase skills are insufficient before
 comparing applicability. Applicability cannot compensate for a missing
 responsibility. For the remaining candidates, compare the graph and declared
-selection intent, then choose the smallest sufficient graph. Candidate names
+selection intent, apply the native-subagent preference below, then choose the
+smallest sufficient graph among equally suitable candidates. Candidate names
 and catalog sources are not ranking signals. Evaluate:
 
 - workflow domain and outcome, such as product development, hotfix, incident,
@@ -89,6 +90,44 @@ owner. Make that judgment before proposing the graph; no rationale field is requ
 When both a base and QA variant are plausible, compare their graphs directly.
 Prefer the QA variant when the evidence above applies; otherwise prefer the base
 variant when its verification and review phases are sufficient.
+
+## Prefer verified native subagents
+
+When candidates cover the same required responsibilities and QA boundaries,
+prefer a graph that delegates planning or review to native subagents if the
+intended execution chains support those delegations. Use the index's
+`native_subagent_steps` and each profile's `required_tools`, resolved across all
+iteration variants and shared, role, and step workflow skills. Never detect this
+behavior from a playbook name or from an allowed tool alone.
+
+Assess capability provisionally before recommending the graph, then verify it
+for every primary and configured fallback of the affected steps during model
+preflight. Accept the user's explicit capability confirmation for the current
+setup or successful native execution evidence for the installed CLI, selected
+model, and effective settings. Documentation, a version number, model login,
+or an ordinary model probe alone does not prove usable delegation.
+
+If capability is unknown, inspect the affected phase's resolved skills and use
+a bounded disposable probe matching its actual delegation requirements.
+`Agent` alone requires native delegation; it does not imply parallel reviewers.
+For a phase needing one read-only planning partner, verify one native launch,
+a successful result, and parent collection. For a phase requiring two parallel
+read-only reviewers, verify both launches before either completes, both
+successful results, and parent collection of both. A single-partner phase must
+not be rejected solely because two concurrent reviewers are unavailable.
+Honor native workspace trust and custom-agent acknowledgment. An unregistered
+probe definition is a setup failure, not proof that the provider lacks subagents.
+Require native tool events rather than a parent claim of delegation. A missing
+result or permission denial is a failure; serial execution fails a phase that
+requires parallelism. Keep evidence local; recheck when the CLI,
+model, settings, or a live failure contradict it. Do not hardcode a provider
+ranking or maintain a second runtime capability registry here.
+
+The preference cannot override an explicit or persisted choice, repository
+methods, independent QA, or mandatory confirmation gates. If preflight cannot
+verify a required delegation, reconsider the unconfirmed chain or recommend an
+otherwise sufficient graph through the existing kickoff decision; do not
+silently replace native subagents with shell-launched agents or omit review.
 
 ## Record and reconfirm
 

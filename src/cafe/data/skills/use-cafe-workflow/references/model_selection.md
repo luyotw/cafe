@@ -193,6 +193,16 @@ primary-only chain, a primary failure is a hard stop unless the user explicitly
 requests a different chain. Preserve the execution record showing which
 CLI/model actually ran.
 
+For every selected step in the catalog's `native_subagent_steps`, also apply
+the native-subagent check in `playbook_selection.md` to every entry in its
+execution chain. Each primary and fallback must support the step's required
+delegation with the selected model and effective permissions. Match the probe
+to that phase's actual requirements: single-partner planning does not require
+parallel review capability. The candidate probe and fallback smoke below do not
+exercise native subagents and cannot satisfy that check. Resolve missing
+evidence before confirming the chain; do not silently activate a fallback that
+cannot perform the required delegation.
+
 ### Reuse successful preflight evidence
 
 Use `scripts/preflight_cache.py` to run or reuse the model probe. The cache is

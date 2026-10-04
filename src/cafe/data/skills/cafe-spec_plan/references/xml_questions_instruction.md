@@ -1,0 +1,36 @@
+
+## Interactive Q&A Questions
+
+[ ] If user clarification is needed: write questions to {questions_xml_file} in the following XML format and hand off to `user` with need_clarification:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<questions>
+  <question id="1">
+    <title>Your question text here?</title>
+    <options>
+      <option>Suggested answer 1</option>
+      <option>Suggested answer 2</option>
+      <option>Suggested answer 3</option>
+    </options>
+  </question>
+  <question id="2">
+    <title>Another question?</title>
+    <options>
+      <option>Option A</option>
+      <option>Option B</option>
+    </options>
+  </question>
+</questions>
+```
+
+Rules:
+- Write all questions and options in the workflow conversation language stated in the runtime context; your own preferred language never overrides it
+- Keep question `id` attributes and any option value the workflow matches on untranslated
+- Root element must be `<questions>`
+- Each question must have a unique `id` attribute, a `<title>`, and `<options>` with at least one `<option>`
+- Provide 2-4 concise suggested options per question
+- Options should be concise and distinct
+- For multi-select questions (user can pick multiple options), you MUST add `type="checkbox"` attribute to the `<question>` element (e.g., `<question id="1" type="checkbox">`). This includes DoD questions.
+- Make each question self-contained: state the missing decision and material scope or tradeoffs without requiring the user to open the draft.
+- Hand off to `user` with `need_clarification`; the final joint output review uses the declared `confirm_output` HumanTask instead of a clarification question.

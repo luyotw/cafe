@@ -13,6 +13,202 @@ from _kickoff_test_support import load_kickoff_module
 pytestmark = pytest.mark.release_extended
 
 
+@pytest.mark.parametrize("scope,key", [("roles", "operator"), ("steps", "first")])
+def test_alias_overlay_cache_tracks_effective_skill_and_direct_override(tmp_path, scope, key):
+    import yaml
+
+    module = load_kickoff_module("kickoff_catalog")
+    project = tmp_path / "project"
+
+    def write_skill(name, tool):
+        path = project / f".cafe/skills/{name}/SKILL.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            f"---\nname: {name}\ndescription: Test\n"
+            f"workflow: {{required_tools: [{tool}]}}\n---\n"
+        )
+        return path
+
+    write_skill("plain", "Read")
+    canonical = write_skill("cafe-workflow-common", "Agent")
+    playbook = project / ".cafe/playbooks/custom.yaml"
+    playbook.parent.mkdir(parents=True)
+    playbook.write_text(yaml.safe_dump({
+        "playbook": {
+            "id": "custom",
+            "applicability": {"summary": "Custom", "use_when": ["x"], "avoid_when": ["y"]},
+        },
+        "roles": {"operator": {}},
+        "skills": {"workflow": {
+            "shared": [], scope: {key: {"mode": "extend", "skills": ["workflow-common"]}},
+        }},
+        "steps": {"first": {
+            "role": "operator", "skill": "plain", "allowed_tools": ["Read", "Agent"],
+            "on": {"await_agent": "_done"},
+        }},
+    }))
+    kwargs = dict(
+        project_root=project, global_root=tmp_path / "global", builtin_root=tmp_path / "builtin",
+        cache_file=tmp_path / "catalog.json",
+    )
+
+    def profile(report):
+        candidate = next(item for item in report["candidates"] if item["id"] == "custom")
+        assert candidate["eligible"] is True
+        return candidate["native_subagent_steps"], candidate["profiles"]["first"]
+
+    cold = module.discover_index(**kwargs)
+    assert profile(cold)[0] == ["first"]
+    assert profile(cold)[1]["skills"] == ["plain", "cafe-workflow-common"]
+    assert module.discover_index(**kwargs)["reuse"]["custom"] is True
+
+    canonical.write_text(canonical.read_text().replace("[Agent]", "[Read]"))
+    changed = module.discover_index(**kwargs)
+    assert changed["reuse"]["custom"] is False
+    assert profile(changed)[0] == []
+    assert profile(changed)[1]["required_tools"] == ["Read"]
+
+    direct = write_skill("workflow-common", "Agent")
+    overridden = module.discover_index(**kwargs)
+    assert overridden["reuse"]["custom"] is False
+    assert profile(overridden)[0] == ["first"]
+    assert profile(overridden)[1]["skills"] == ["plain", "workflow-common"]
+
+    canonical.write_text(canonical.read_text().replace("[Read]", "[Agent]"))
+    assert module.discover_index(**kwargs)["reuse"]["custom"] is True
+
+    direct.write_text(direct.read_text().replace("[Agent]", "[Read]"))
+    refreshed = module.discover_index(**kwargs)
+    assert refreshed["reuse"]["custom"] is False
+    assert profile(refreshed)[0] == []
+    assert profile(refreshed)[1]["required_tools"] == ["Read"]
+
+
+@pytest.mark.parametrize("scope", ["shared", "roles", "steps"])
+def test_index_normalizes_workflow_skill_names_and_tracks_their_dependencies(tmp_path, scope):
+    import yaml
+    from cafe.playbooks.loader import PlaybookLoader
+
+    module = load_kickoff_module("kickoff_catalog")
+    project = tmp_path / "project"
+    global_root = tmp_path / "global"
+    builtin = tmp_path / "builtin"
+    for name, declaration in {"plain": "{}", "partner": "{required_tools: [Agent]}"}.items():
+        skill = project / f".cafe/skills/{name}/SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text(
+            f"---\nname: {name}\ndescription: Test\nworkflow: {declaration}\n---\n"
+        )
+    workflow = {"shared": []}
+    if scope == "shared":
+        workflow[scope] = [" partner "]
+    else:
+        key = "operator" if scope == "roles" else "first"
+        workflow[scope] = {key: {"mode": "extend", "skills": [" partner "]}}
+    playbook = project / ".cafe/playbooks/custom.yaml"
+    playbook.parent.mkdir(parents=True)
+    playbook.write_text(yaml.safe_dump({
+        "playbook": {
+            "id": "custom",
+            "applicability": {"summary": "Custom", "use_when": ["x"], "avoid_when": ["y"]},
+        },
+        "roles": {"operator": {}},
+        "skills": {"workflow": workflow},
+        "steps": {"first": {
+            "role": "operator", "skill": "plain", "allowed_tools": ["Read", "Agent"],
+            "on": {"await_agent": "_done"},
+        }},
+    }))
+    kwargs = dict(project_root=project, global_root=global_root, builtin_root=builtin)
+    loaded = PlaybookLoader(**kwargs).load_model("custom")
+    assert module.resolve_playbook_skills(
+        loaded.model, channel="workflow", role="operator", step_name="first",
+    ) == ["partner"]
+
+    kwargs["cache_file"] = tmp_path / "catalog.json"
+    cold = module.discover_index(**kwargs)
+    assert not cold["diagnostics"]
+    candidate = next(item for item in cold["candidates"] if item["id"] == "custom")
+    assert candidate["eligible"] is True
+    assert candidate["profiles"]["first"]["skills"] == ["plain", "partner"]
+    assert candidate["native_subagent_steps"] == ["first"]
+    assert module.discover_index(**kwargs)["reuse"]["custom"] is True
+
+    partner = project / ".cafe/skills/partner/SKILL.md"
+    partner.write_text(partner.read_text().replace("[Agent]", "[Read]"))
+    changed = module.discover_index(**kwargs)
+    assert changed["reuse"]["custom"] is False
+    candidate = next(item for item in changed["candidates"] if item["id"] == "custom")
+    assert candidate["profiles"]["first"]["required_tools"] == ["Read"]
+    assert candidate["native_subagent_steps"] == []
+    assert module.discover_index(**kwargs)["reuse"]["custom"] is True
+
+
+def test_native_subagent_requirements_include_variants_and_effective_overlays(tmp_path):
+    module = load_kickoff_module("kickoff_catalog")
+    project = tmp_path / "project"
+    builtin = Path(__file__).resolve().parents[2] / "src/cafe/data"
+    for name, declaration in {
+        "plain": "{}",
+        "delegate": "{required_tools: [Agent]}",
+        "role-overlay": "{required_tools: [Read]}",
+        "step-overlay": "{}",
+    }.items():
+        skill = project / f".cafe/skills/{name}/SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text(
+            f"---\nname: {name}\ndescription: Test\nworkflow: {declaration}\n---\n"
+        )
+    playbook = project / ".cafe/playbooks/custom.yaml"
+    playbook.parent.mkdir(parents=True)
+    playbook.write_text(
+        "playbook: {id: custom, applicability: {summary: Custom, use_when: [x], avoid_when: [y]}}\n"
+        "roles: {operator: {}}\n"
+        "skills:\n  workflow:\n"
+        "    shared: [delegate]\n"
+        "    roles: {operator: {mode: replace, skills: [role-overlay]}}\n"
+        "    steps: {overlay: {mode: extend, skills: [step-overlay]}}\n"
+        "steps:\n"
+        "  variant: {role: operator, skill: {'1': plain, default: delegate}, "
+        "allowed_tools: [Read, Agent], on: {await_agent: overlay}}\n"
+        "  overlay: {role: operator, skill: plain, allowed_tools: [Read, Agent], "
+        "on: {await_agent: _done}}\n"
+    )
+    args = dict(project_root=project, global_root=tmp_path / "global", builtin_root=builtin,
+                cache_file=tmp_path / "catalog.json")
+
+    def custom(report):
+        return next(item for item in report["candidates"] if item["id"] == "custom")
+
+    cold = module.discover_index(**args)
+    assert custom(cold)["native_subagent_steps"] == ["variant"]
+    assert custom(cold)["profiles"]["overlay"]["required_tools"] == ["Read"]
+    assert custom(cold)["profiles"]["overlay"]["skills"] == ["plain", "role-overlay", "step-overlay"]
+    assert module.discover_index(**args)["reuse"]["custom"] is True
+
+    overlay = project / ".cafe/skills/step-overlay/SKILL.md"
+    overlay.write_text(overlay.read_text().replace("workflow: {}", "workflow: {required_tools: [Agent]}"))
+    changed = module.discover_index(**args)
+    assert changed["reuse"]["custom"] is False
+    assert custom(changed)["native_subagent_steps"] == ["variant", "overlay"]
+
+    role = project / ".cafe/skills/role-overlay/SKILL.md"
+    role.write_text(role.read_text().replace("[Read]", "[Read, Agent]"))
+    assert module.discover_index(**args)["reuse"]["custom"] is False
+
+
+def test_builtin_subagent_flow_reports_planning_and_review_steps(tmp_path):
+    module = load_kickoff_module("kickoff_catalog")
+    report = module.discover_index(
+        project_root=tmp_path / "project", global_root=tmp_path / "global",
+        builtin_root=Path(__file__).resolve().parents[2] / "src/cafe/data",
+        cache_file=tmp_path / "catalog.json",
+    )
+    for candidate_id in ("subagent-flow", "subagent-flow-qa"):
+        candidate = next(item for item in report["candidates"] if item["id"] == candidate_id)
+        assert candidate["native_subagent_steps"] == ["spec_plan", "develop"]
+
+
 def test_index_keeps_effective_candidates_and_invalid_overlay_diagnostics(tmp_path: Path) -> None:
     module = load_kickoff_module("kickoff_catalog")
     project = tmp_path / "project"

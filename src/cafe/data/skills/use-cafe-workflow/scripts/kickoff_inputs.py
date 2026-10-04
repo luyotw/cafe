@@ -320,7 +320,7 @@ def _compact_candidate(candidate: Any) -> dict[str, Any]:
             omitted_step_fields[step_id] = sorted(set(step) - set(step_fields))
     candidate_fields = (
         "id", "eligible", "source", "fingerprint", "applicability", "behavior", "roles",
-        "profiles", "skills", "confirmation_gates", "mandatory_confirmation_gates",
+        "profiles", "skills", "native_subagent_steps", "confirmation_gates", "mandatory_confirmation_gates",
         "capability_requirements", "capability_setup", "diagnostics",
     )
     summary = {key: candidate[key] for key in candidate_fields if key in candidate}

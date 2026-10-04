@@ -110,6 +110,8 @@ class AgentExecutor:
             "ls": "list_directory",
             "web_fetch": "web_fetch",
             "web_search": "google_web_search",
+            "agent": "invoke_agent",
+            "Agent": "invoke_agent",
         },
         AgentCLI.CURSOR: {
             # Cursor tool name translations
@@ -136,6 +138,8 @@ class AgentExecutor:
             "ls": "shell(ls)",
             "web_fetch": "shell(curl)",
             "web_search": "shell(curl)",
+            "agent": "task",
+            "Agent": "task",
         },
         AgentCLI.CODEX: {},
     }

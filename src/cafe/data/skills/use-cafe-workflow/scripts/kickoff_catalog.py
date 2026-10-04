@@ -10,16 +10,25 @@ from typing import Any
 
 import yaml
 
-from cafe.catalogs.resolver import CatalogKind, CatalogResolver
+from cafe.catalogs.resolver import CatalogKind, CatalogResolver, content_digest
 from cafe.core.capabilities import default_capability_definition_dirs, load_capability_registry
-from cafe.core.playbook import confirmation_gate_steps, mandatory_confirmation_gate_steps
+from cafe.core.playbook import (
+    PlaybookDefinition,
+    confirmation_gate_steps,
+    iter_declared_playbook_skills,
+    mandatory_confirmation_gate_steps,
+    normalize_playbook_yaml,
+    resolve_playbook_skills,
+)
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.skills.execution_profile import resolve_execution_profile
+from cafe.skills.exceptions import SkillDiscoveryError
 from cafe.skills.loader import SkillLoader
 from cafe.skills.selectors import skill_selector_names
+from cafe.skills.workflow_composition import resolve_step_workflow_composition
 from _kickoff_store import VersionedJsonStore
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 _DEPENDENCY_FILES = (
     "src/cafe/catalogs/resolver.py",
     "src/cafe/playbooks/loader.py",
@@ -49,35 +58,37 @@ def _json_safe(value: Any) -> Any:
 
 
 def _dependency_closure(
-    playbook: dict[str, Any], skill_loader: SkillLoader,
+    playbook: PlaybookDefinition, skill_loader: SkillLoader,
     skill_dependencies: dict[str, list[tuple[str, str]]],
 ) -> list[tuple[str, str]]:
     dependencies: list[tuple[str, str]] = []
-    skills = playbook.get("skills", {})
-    workflow = skills.get("workflow", {}) if isinstance(skills, dict) else {}
-    shared = workflow.get("shared", []) if isinstance(workflow, dict) else []
-    names: set[str] = set(shared if isinstance(shared, list) else [])
-    steps = playbook.get("steps", {})
-    for step in steps.values() if isinstance(steps, dict) else ():
-        if isinstance(step, dict):
-            selector = step.get("skill") or step.get("skill_selector")
-            if selector is not None:
-                names.update(skill_selector_names(selector))
+    # Include declarations hidden by a replace overlay: the loader still
+    # validates these catalog references even when execution does not use them.
+    names = {
+        name for field, name in iter_declared_playbook_skills(playbook)
+        if field.startswith("skills.workflow.")
+    }
+    for step in playbook.steps.values():
+        names.update(skill_selector_names(step.skill))
     for name in sorted(names):
         if name in skill_dependencies:
             dependencies.extend(skill_dependencies[name])
             continue
         rows: list[tuple[str, str]] = []
         try:
-            entry = skill_loader.resolver.resolve(CatalogKind.PHASE, name)
-            rows.append((f"skill:{name}:effective_digest", entry.digest))
-            paths = [entry.path] if entry.path.is_file() else sorted(entry.path.rglob("*"))
+            entry = skill_loader.get_skill_entry(name)
+            rows.append((
+                f"skill:{name}:effective_identity",
+                json.dumps([entry.name, entry.source, str(entry.directory)]),
+            ))
+            rows.append((f"skill:{name}:effective_digest", content_digest(entry.directory)))
+            paths = sorted(entry.directory.rglob("*"))
             for path in paths:
                 if not path.is_file() or path.is_symlink():
                     continue
-                relative = path.relative_to(entry.path) if entry.path.is_dir() else Path(path.name)
+                relative = path.relative_to(entry.directory)
                 rows.append((f"skill:{name}/{relative.as_posix()}", hashlib.sha256(path.read_bytes()).hexdigest()))
-        except (OSError, ValueError, FileNotFoundError) as exc:
+        except (OSError, ValueError, SkillDiscoveryError) as exc:
             rows.append((f"skill:{name}:diagnostic", type(exc).__name__))
         skill_dependencies[name] = rows
         dependencies.extend(rows)
@@ -86,7 +97,7 @@ def _dependency_closure(
 
 def _candidate_details(
     candidate_id: str, path: Path, source: str, project_root: Path,
-    validated_model: Any, skill_loader: SkillLoader,
+    validated_model: PlaybookDefinition, skill_loader: SkillLoader,
 ) -> dict[str, Any]:
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
@@ -95,25 +106,33 @@ def _candidate_details(
     steps = raw.get("steps", {})
     if not isinstance(playbook, dict) or not isinstance(steps, dict):
         raise ValueError("Playbook metadata and steps must be mappings")
-    workflow_skills = playbook and raw.get("skills", {}).get("workflow", {}).get("shared", [])
     profiles: dict[str, dict[str, Any]] = {}
     diagnostics: list[dict[str, str]] = []
-    for step_name, step in steps.items():
-        if not isinstance(step, dict):
-            diagnostics.append({"step": str(step_name), "status": "invalid", "reason": "step_not_mapping"})
-            continue
-        selector = step.get("skill") or step.get("skill_selector")
-        if selector is None:
-            continue
+    for step_name, step in validated_model.steps.items():
+        selector = step.skill
         try:
+            workflow_skills = resolve_playbook_skills(
+                validated_model, channel="workflow", role=step.role, step_name=step_name,
+            )
             profile = resolve_execution_profile(
                 skill_loader,
                 selector,
-                workflow_skills=workflow_skills if isinstance(workflow_skills, list) else [],
+                workflow_skills=workflow_skills,
                 step_name=str(step_name),
+            )
+            required_tools = list(
+                dict.fromkeys(
+                    tool
+                    for name in skill_selector_names(selector)
+                    for tool in resolve_step_workflow_composition(
+                        skill_loader, primary_skill=name, workflow_skills=workflow_skills,
+                        step_name=str(step_name),
+                    ).required_tools
+                )
             )
             profiles[str(step_name)] = {
                 "skills": list(profile.skill_names),
+                "required_tools": required_tools,
                 "workloads": list(profile.workloads),
                 "reasoning": profile.reasoning,
                 "risk_domains": list(profile.risk_domains),
@@ -166,6 +185,14 @@ def _candidate_details(
         "skills": raw.get("skills", {}),
         "steps": steps,
         "profiles": profiles,
+        "native_subagent_steps": [
+            name
+            for name, profile in profiles.items()
+            if any(
+                tool.split("(", 1)[0].casefold() == "agent"
+                for tool in profile["required_tools"]
+            )
+        ],
         "confirmation_gates": list(declared_gates),
         "mandatory_confirmation_gates": list(mandatory_gates),
         "capability_requirements": requested_capabilities,
@@ -227,8 +254,8 @@ def discover_index(
         try:
             entry = resolver.resolve(CatalogKind.PLAYBOOK, candidate_id)
             raw = yaml.safe_load(entry.path.read_text(encoding="utf-8"))
-            raw = raw if isinstance(raw, dict) else {}
-            dependencies = _dependency_closure(raw, skill_loader, skill_dependencies)
+            model = PlaybookDefinition.model_validate(normalize_playbook_yaml(raw))
+            dependencies = _dependency_closure(model, skill_loader, skill_dependencies)
             fingerprint = _digest(
                 [("entry", entry.digest), ("source", entry.source), *dependencies, *dependency_code]
             )
@@ -256,7 +283,7 @@ def discover_index(
             candidates.append(candidate)
             cache_record = {"fingerprint": fingerprint, "candidate": candidate}
             previous[candidate_id] = cache_record
-        except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError) as exc:
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, yaml.YAMLError) as exc:
             diagnostics.append({"id": candidate_id, "status": "invalid", "reason": type(exc).__name__, "detail": str(exc)[:250]})
             reuse[candidate_id] = False
     try:

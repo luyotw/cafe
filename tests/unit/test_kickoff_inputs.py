@@ -12,6 +12,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _kickoff_test_support import load_kickoff_module
 
 
+def test_compact_catalog_keeps_native_subagent_requirements():
+    module = load_kickoff_module("kickoff_inputs")
+    candidate = {
+        "id": "custom", "steps": {}, "native_subagent_steps": ["develop"],
+        "profiles": {"develop": {"required_tools": ["Agent"]}},
+    }
+    compact = module._compact_candidate(candidate)
+    assert compact["native_subagent_steps"] == ["develop"]
+    assert compact["profiles"]["develop"]["required_tools"] == ["Agent"]
+    assert "native_subagent_steps" not in compact["omitted_detail_fields"]
+
+
 def test_unselected_graph_and_missing_decisions_remain_explicit(tmp_path: Path) -> None:
     module = load_kickoff_module("kickoff_inputs")
 

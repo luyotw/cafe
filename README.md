@@ -163,6 +163,8 @@ requirements and delivery rigor:
 | `direct` | develop → review → PR | The requested change is already clear and still needs independent review. |
 | `direct-qa` | spec → develop → review → QA → PR | Requirements need confirmation and acceptance needs both independent review and QA, but implementation does not need a separate plan. |
 | `direct-subagent-review` | develop + two subagent reviews → PR | The implementation boundary is already confirmed and focused detail and scope reviews can run inside Develop. |
+| `subagent-flow` | spec + plan with subagent → develop + subagent reviews → PR | One owner should resolve requirements and implementation together with a planning partner before joint confirmation. |
+| `subagent-flow-qa` | spec + plan with subagent → develop + subagent reviews → QA → PR | Subagent-assisted planning and review also need independent acceptance testing. |
 | `simple` | spec → develop → QA → PR | The outcome needs confirmation and independent acceptance, but a low-risk docs, data, or config change does not need a separate plan or code review. |
 | `standard` | spec → plan → develop → review → PR | The standard development path and built-in default. |
 | `standard-qa` | spec → plan → develop → review → QA → PR | Standard development needs independent product acceptance. |
@@ -173,6 +175,22 @@ requirements and delivery rigor:
 automatic migration. `hotfix` remains available for urgent production fixes,
 and the research, editorial, and incident playbooks retain their domain-specific
 flows.
+
+`subagent-flow` and `subagent-flow-qa` use one `spec_plan` phase and one combined `plan`
+artifact containing the complete requirements, implementation approach, Test
+List, and Todo List. A native planning partner discusses the draft before its
+joint confirmation gate. When preparing this workflow for a user who wants to
+approve the draft personally, assign the `spec_plan` confirmation gate to the
+user in the kickoff stop contract. Early clarification saves the original
+request and known decisions in a provisional plan so a fresh session can resume
+without losing requirements; it adds no confirmation gate. Revisions stay in
+the same phase and repeat the discussion. Confirmed requirements invalidated
+during development return to `spec_plan`; routine implementation corrections
+stay in Develop. The existing detail/scope review and mandatory PR local review
+still apply.
+The QA variant adds independent acceptance against the requirements embedded
+in the combined plan. QA failures return to Develop; each correction repeats
+the subagent reviews and QA before publication.
 
 To inspect what is available, ask your agent:
 
