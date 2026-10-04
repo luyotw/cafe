@@ -4,6 +4,37 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.7.1] - 2026-10-04
+
+This release uses the explicitly requested `0.7.1` version and includes new
+workflow capabilities alongside fixes.
+
+### Added
+
+- Added `subagent-flow` and `subagent-flow-qa` playbooks with joint requirements
+  and implementation planning, a native planning partner, one combined plan,
+  subagent development reviews, and optional independent acceptance QA.
+
+### Changed
+
+- Prefer verified native-subagent workflows among equally suitable kickoff
+  candidates, checking every selected primary and fallback against the phase's
+  actual delegation requirements while preserving explicit workflow choices.
+- Map the declared `Agent` tool to native Gemini and Copilot delegation tools.
+
+### Fixed
+
+- Accept native-sized Codex telemetry batches up to eight MiB and expose rejected
+  request counts and maximum batch size in stream diagnostics.
+- Retain verified interrupted CLI/session identities and require exact evidence
+  before completing existing-session retry choices.
+- Preserve canonical mixed-source feedback through declared PR curation handoffs.
+- Align standalone kickoff helpers and their Python children with the selected
+  CAFE checkout, avoiding a mixture of installed and checkout runtimes.
+
+See [the v0.7.1 release notes](docs/releases/v0.7.1.md) for workflow selection,
+recovery behavior, and upgrade guidance.
+
 ## [0.7.0] - 2026-10-04
 
 ### Added
