@@ -1075,6 +1075,31 @@ class Phase(PhaseStateMixin, PhaseSandboxMixin, PhaseReviewMixin, PhaseChecklist
             from cafe.agents.diagnostics import sanitize_error_excerpt
 
             failed_attempts = get_failed_attempts()
+            # Failed calls still identify the provider thread. Retain the final
+            # attempt's verified pair so a user-selected retry can resume it.
+            if failed_attempts:
+                last_attempt = failed_attempts[-1]
+                observed_session = last_attempt.get("session_id")
+                observed_cli = last_attempt.get("cli")
+                if isinstance(observed_session, str) and observed_session:
+                    try:
+                        actual_cli_enum = AgentCLI(observed_cli)
+                    except (ValueError, TypeError):
+                        pass
+                    else:
+                        agent_cli = actual_cli_enum.value
+                        agent_session_id = observed_session
+                        self._session_continuation = SessionContinuation.resume_exact(
+                            actual_cli_enum, observed_session
+                        )
+                        if context_file.exists():
+                            context_data = json.loads(context_file.read_text(encoding="utf-8"))
+                            context_data["cli"] = agent_cli
+                            context_data["session_id"] = agent_session_id
+                            context_data["session_continuation"] = self._session_continuation.to_dict()
+                            context_file.write_text(
+                                json.dumps(context_data, ensure_ascii=False, indent=2), encoding="utf-8"
+                            )
             display_error = sanitize_error_excerpt(e)
             print(f"⚠️  Agent execution failed: {display_error}")
 

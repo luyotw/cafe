@@ -2428,6 +2428,7 @@ class GenericWorkflowStepExecutor(Phase):
             recovery = self._selected_fresh_session_recovery(
                 workflow_id=workflow_id,
                 current_data=current_data,
+                configured_clis=configured_clis,
             )
             if recovery is not None:
                 self._session_recovery = recovery
@@ -2459,6 +2460,7 @@ class GenericWorkflowStepExecutor(Phase):
         *,
         workflow_id: Optional[str],
         current_data: Optional[dict[str, Any]],
+        configured_clis: list[AgentCLI],
     ) -> Optional[Dict[str, Any]]:
         """Return the latest applicable user-authorized session rotation."""
         store = HumanTaskRecordStore(self.issue_dir)
@@ -2489,6 +2491,14 @@ class GenericWorkflowStepExecutor(Phase):
         if result is None:
             return None
         if result.payload.get("decision") != AGENT_EXECUTION_FRESH_SESSION_DECISION:
+            if result.payload.get("decision") == "retry" and exact_continuation_from_context(
+                current_data,
+                configured_clis=configured_clis,
+            ) is None:
+                raise RuntimeError(
+                    "Cannot resume the interrupted session: its identity was not saved. "
+                    "Fresh-session recovery requires an explicit user choice."
+                )
             return None
 
         declared_decisions = latest.expected_result.get("decisions")
