@@ -1411,6 +1411,10 @@ def _ensure_dispatch_event(
 
 
 def _classify_provider_failure(error: BaseException) -> str:
+    if isinstance(error, _HostTransportUnavailable):
+        # Checked before starting the proxy or sending any RPC; no delivery
+        # could have occurred. Do not label this as a lost acknowledgement.
+        return "conclusive_nonacceptance"
     conclusive = {
         "cli_not_found",
         "cli_unavailable",
@@ -1842,6 +1846,53 @@ class _HostRPCError(RuntimeError):
     """A daemon rejection; never include provider output in durable errors."""
 
 
+class _HostTransportUnavailable(ValueError):
+    """The existing host endpoint is absent before any delivery is attempted."""
+
+    error_type = "host_control_socket_unavailable"
+
+
+def _require_host_control_socket() -> Path:
+    home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+    endpoint = home / "app-server-control" / "app-server-control.sock"
+    try:
+        endpoint_metadata = endpoint.lstat()
+        # Managed Codex daemons publish the control path as an owned symlink
+        # to their Unix socket. Validate the resolved socket, not just the link.
+        metadata = endpoint.stat()
+        available = (
+            stat.S_ISSOCK(metadata.st_mode)
+            and hasattr(os, "getuid")
+            and metadata.st_uid == os.getuid()
+            and endpoint_metadata.st_uid == os.getuid()
+        )
+    except OSError:
+        available = False
+    if not available:
+        raise _HostTransportUnavailable(
+            "The bound Codex App has no usable daemon control socket. "
+            "Local App stdio sessions cannot receive this callback. "
+            "Use an explicitly confirmed attached Manager mode, or connect the App "
+            "to a supported existing daemon before restoring event-driven mode."
+        )
+    return endpoint
+
+
+def validate_bound_host_transport(issue_dir: Path) -> None:
+    """Check a bound host's endpoint without creating a session or sending input."""
+    status = read_status(issue_dir)
+    entries = status.get("entries", [])
+    # Later confirmed providers remain usable without the primary host socket.
+    # Runtime routing handles this conclusive failure through the same chain.
+    if len(entries) != 1 or status.get("active_index", 0) != 0:
+        return
+    first = entries[0]
+    session = first.get("acquisition", {}).get("session")
+    if first.get("cli") == "codex" and isinstance(session, dict):
+        if session.get("source") == "host_session":
+            _require_host_control_socket()
+
+
 class _HostConnection:
     """Bounded JSON-RPC over a proxy to the existing daemon, without approvals."""
 
@@ -2019,6 +2070,7 @@ def _queue_host_callback(
     repository_root: Path,
 ) -> None:
     """Load and wake the bound thread through the already running host daemon."""
+    _require_host_control_socket()
     # No new daemon, session, config, cwd, model or permission override. The
     # repository root is already in the event prompt; the host owns its cwd.
     process = subprocess.Popen(

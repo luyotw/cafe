@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -272,7 +273,7 @@ def _validate_event_binding(
     contract: Mapping[str, Any],
     digest: str,
     project_root: Path,
-) -> None:
+) -> Path:
     binding = resolve_builtin_workflow_event_callback(CALLBACK_ID, project_root=project_root)
     if binding.callback_id != CALLBACK_ID:
         raise ValueError("trusted workflow callback binding changed")
@@ -298,6 +299,18 @@ def _validate_event_binding(
     expected = manager.get("clis") if isinstance(manager, Mapping) else None
     if len(projected) != len(entries) or projected != expected:
         raise ValueError("event-driven Manager CLI order differs from the confirmed contract")
+    return binding.script
+
+
+def _validate_host_callback_transport(script: Path, issue_dir: Path) -> None:
+    # A local Desktop stdio session has a thread ID but no daemon control
+    # endpoint. Catch this before launching hours of background phase work.
+    spec = importlib.util.spec_from_file_location("cafe_callback_transport_check", script)
+    if spec is None or spec.loader is None:
+        raise ValueError("trusted workflow callback transport check is unavailable")
+    callback = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(callback)
+    callback.validate_bound_host_transport(issue_dir)
 
 
 def _is_user_boundary(state: Mapping[str, Any]) -> bool:
@@ -553,7 +566,7 @@ def run(
         if user_input is not None and not _is_user_boundary(state):
             raise ValueError("explicit user input requires a current user-owned boundary")
         if mode == "event-driven":
-            _validate_event_binding(
+            callback_script = _validate_event_binding(
                 issue_dir=issue_dir,
                 issue_name=issue_name,
                 workflow_id=workflow_id,
@@ -577,6 +590,12 @@ def run(
             conversation_locale=conversation_locale,
         )
         return 0
+
+    if mode == "event-driven":
+        try:
+            _validate_host_callback_transport(callback_script, issue_dir)
+        except (OSError, ValueError) as exc:
+            return _launch_failed(mode, str(exc))
 
     command = [
         interpreter,

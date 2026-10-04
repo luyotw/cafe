@@ -7,8 +7,10 @@ import hashlib
 import importlib.util
 import json
 import os
+import socket
 import struct
 import subprocess
+import tempfile
 import threading
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -19,9 +21,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
-from cafe.core.packet_io import canonical_json
 from cafe.agents.executor import AgentExecutor, EventDriverExecutionResult
 from cafe.agents.transport_types import TransportResult
+from cafe.core.packet_io import canonical_json
 from cafe.core.types import AgentCLI, AgentResponse, TokenUsage
 from tests.fixtures.delivery_contract import delivery_contract, legacy_driver_contract
 
@@ -120,6 +122,17 @@ def _activate_event_contract(
 def _clear_host_session_binding(monkeypatch) -> None:
     """Keep the test process's Codex App thread out of ordinary callback tests."""
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    # Mock daemon peers below use OS pipes. Give their endpoint preflight a
+    # real socket owned by this test, without touching the user's Codex home.
+    # Keep below macOS's Unix socket path limit, including pytest's directory.
+    with tempfile.TemporaryDirectory(prefix="cafe-host-", dir="/tmp") as directory:
+        home = Path(directory)
+        endpoint = home / "app-server-control" / "app-server-control.sock"
+        endpoint.parent.mkdir(parents=True)
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(str(endpoint))
+        monkeypatch.setenv("CODEX_HOME", str(home))
+        yield
 
 
 def test_callback_prompt_allows_only_bounded_driver_confirmable_clarification(
@@ -2510,6 +2523,100 @@ def test_callback_queues_the_bound_codex_host_thread(tmp_path: Path, monkeypatch
     assert daemon.starts == 0
     persisted = json.loads((driver_dir / "dispatch_state.json").read_text(encoding="utf-8"))
     assert persisted["entries"][0]["session"]["id"] == "visible-thread"
+
+
+def test_missing_host_socket_is_conclusive_before_any_delivery(tmp_path, monkeypatch):
+    callback = _callback_module()
+    monkeypatch.setenv("CODEX_THREAD_ID", "visible-thread")
+    driver_dir, _state, event = _contract_event_context(
+        callback, tmp_path, [("codex", "exact")], bind_host=True,
+    )
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "missing-codex-home"))
+    with patch.object(callback.subprocess, "Popen", side_effect=AssertionError("no proxy")):
+        callback.run_callback(event, repository_root=tmp_path)
+        callback.run_callback(event, repository_root=tmp_path)
+    state = json.loads((driver_dir / "dispatch_state.json").read_text())
+    dispatched = state["events"][event["event_id"]]
+    assert dispatched["status"] == "exhausted"
+    assert len(dispatched["attempts"]) == 1
+    assert dispatched["attempts"][0]["outcome"] == "conclusive_nonacceptance"
+    assert dispatched["attempts"][0]["reason"] == "host_control_socket_unavailable"
+    assert state["entries"][0]["session"]["id"] == "visible-thread"
+
+
+@pytest.mark.parametrize("kind", ["file", "symlink"])
+def test_host_preflight_rejects_non_socket_without_exposing_contents(tmp_path, monkeypatch, kind):
+    callback = _callback_module()
+    home = tmp_path / "unsafe-home"
+    endpoint = home / "app-server-control" / "app-server-control.sock"
+    endpoint.parent.mkdir(parents=True)
+    target = tmp_path / "private"
+    target.write_text("private-provider-token")
+    if kind == "file":
+        endpoint.write_text(target.read_text())
+    else:
+        endpoint.symlink_to(target)
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    with pytest.raises(callback._HostTransportUnavailable) as raised:
+        callback._require_host_control_socket()
+    assert "private-provider-token" not in str(raised.value)
+    assert callback._classify_provider_failure(raised.value) == "conclusive_nonacceptance"
+
+
+def test_host_preflight_accepts_managed_daemon_socket_symlink(monkeypatch):
+    callback = _callback_module()
+    with tempfile.TemporaryDirectory(prefix="cafe-link-", dir="/tmp") as directory:
+        home = Path(directory)
+        endpoint = home / "app-server-control" / "app-server-control.sock"
+        endpoint.parent.mkdir()
+        target = home / "daemon.sock"
+        with socket.socket(socket.AF_UNIX) as listener:
+            listener.bind(str(target))
+            endpoint.symlink_to(target)
+            monkeypatch.setenv("CODEX_HOME", str(home))
+            assert callback._require_host_control_socket() == endpoint
+
+
+@pytest.mark.parametrize("metadata_method", ["stat", "lstat"])
+def test_host_preflight_rejects_socket_or_alias_owned_by_another_user(monkeypatch, metadata_method):
+    callback = _callback_module()
+    original = getattr(Path, metadata_method)
+
+    def foreign_owner(path, *args, **kwargs):
+        metadata = original(path, *args, **kwargs)
+        if path.name == "app-server-control.sock":
+            return SimpleNamespace(st_mode=metadata.st_mode, st_uid=os.getuid() + 1)
+        return metadata
+
+    monkeypatch.setattr(Path, metadata_method, foreign_owner)
+    with pytest.raises(callback._HostTransportUnavailable):
+        callback._require_host_control_socket()
+
+
+def test_provider_session_needs_no_host_control_socket(tmp_path, monkeypatch):
+    callback = _callback_module()
+    monkeypatch.setattr(callback, "read_status", lambda path: {
+        "entries": [{"cli": "codex", "acquisition": {"session": {
+            "id": "provider-session", "source": "provider",
+        }}}],
+    })
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "missing-home"))
+    callback.validate_bound_host_transport(tmp_path)
+
+
+def test_missing_primary_socket_does_not_block_confirmed_fallback(tmp_path, monkeypatch):
+    callback = _callback_module()
+    monkeypatch.setattr(callback, "read_status", lambda path: {
+        "active_index": 0,
+        "entries": [
+            {"cli": "codex", "acquisition": {"session": {
+                "id": "visible-thread", "source": "host_session",
+            }}},
+            {"cli": "claude", "acquisition": {"session": None}},
+        ],
+    })
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "missing-home"))
+    callback.validate_bound_host_transport(tmp_path)
 
 
 def test_bound_host_thread_queue_failure_never_creates_a_new_session(

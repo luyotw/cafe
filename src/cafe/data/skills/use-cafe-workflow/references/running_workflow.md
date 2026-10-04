@@ -146,7 +146,14 @@ When the first entry is Codex and activation runs from the Codex App, its
 runtime-owned host thread is a best-effort hint for the first session. A
 persisted acquired session always wins, and host-binding failure warns without
 blocking workflow execution. A successfully bound host session connects through
-`codex app-server proxy` to the already running daemon. It reads the original
+`codex app-server proxy` to the already running daemon. Local App stdio sessions
+may have a valid thread ID but no daemon control socket; a bound host's socket
+is checked read-only before event-driven launch and before callback delivery.
+An absent or unsafe socket fails before sending input, with a specific durable
+nonacceptance reason. Use an explicitly confirmed attached mode until the App
+is connected to a supported existing daemon; never start a second daemon to
+resume the same conversation, replace its binding, or replay an ambiguous
+historical event as a workaround. It reads the original
 thread and, when unloaded, resumes that exact thread before enqueueing the wake
 notice. `codex queue` alone wakes only loaded threads; resuming the bound thread
 makes delivery independent of opening its conversation in the UI. Resume
