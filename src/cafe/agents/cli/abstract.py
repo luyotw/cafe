@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Callable, List, Mapping, Optional, Sequence, Tuple
 
+from cafe.agents.stream_activity import StreamActivity
 from cafe.agents.transport_types import _has_evidence_conflict, _validated_evidence_scalar
 from cafe.core.types import AgentConfig, PermissionDenial, TokenUsage
 
@@ -23,6 +24,14 @@ class AbstractCLI(ABC):
             config: Agent configuration
         """
         self.config = config
+
+    def create_stream_activity(self, cmd: List[str]) -> StreamActivity | None:
+        """Supply optional native activity for this invocation; stdout is default.
+
+        The executor owns resource cleanup, idle policy and completion checks.
+        An adapter owns native setup, session verification and metadata filtering.
+        """
+        return None
 
     @abstractmethod
     def build_command(

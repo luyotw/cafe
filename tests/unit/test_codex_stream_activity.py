@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from cafe.agents.codex_stream_activity import CodexStreamActivity
+from cafe.agents.cli.codex_stream_activity import CodexStreamActivity
 from cafe.agents.executor import AgentExecutionControl, AgentExecutionError, AgentExecutor
 from cafe.core.types import AgentCLI, AgentConfig
 

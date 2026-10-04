@@ -6,6 +6,13 @@ native `codex.sse_event` and `codex.websocket_event` OTel log events as well as
 stdout. The Codex idle timeout remains 300 seconds; it is not a whole-call
 deadline.
 
+The executor depends on the provider-neutral `StreamActivity` protocol. It asks
+the selected CLI strategy for `create_stream_activity(cmd)` and owns cleanup,
+idle policy and completion checks. The base CLI strategy returns `None`, using
+stdout only. `CodexCLI` supplies its native adapter for noninteractive Codex
+commands. New CLI activity adapters can implement the same contract without
+adding provider branches to the executor.
+
 For each noninteractive Codex invocation, CAFE starts a temporary HTTP receiver
 on loopback with an unpredictable URL. It appends invocation-only `-c` options
 to the executed subcommand, enabling JSON OTLP log export to that receiver and

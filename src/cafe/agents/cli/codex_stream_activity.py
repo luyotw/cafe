@@ -1,4 +1,4 @@
-"""Observe Codex transport activity without retaining prompts or streamed text."""
+"""Codex's native stream-activity adapter; retain no prompts or streamed text."""
 
 import json
 import re

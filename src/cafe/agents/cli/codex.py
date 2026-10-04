@@ -5,9 +5,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from cafe.agents.cli.abstract import AbstractCLI
+from cafe.agents.cli.codex_stream_activity import CodexStreamActivity
+from cafe.agents.stream_activity import StreamActivity
 from cafe.core.types import PermissionDenial, TokenUsage
 from cafe.utils.git_utils import get_git_dir
-
 
 _HOST_SESSION_ENVIRONMENT_KEYS = (
     "CODEX_REMOTE_PAYLOAD",
@@ -18,6 +19,11 @@ _HOST_SESSION_ENVIRONMENT_KEYS = (
 
 class CodexCLI(AbstractCLI):
     """Concrete implementation of Codex CLI tool."""
+
+    def create_stream_activity(self, cmd: List[str]) -> StreamActivity | None:
+        if cmd and Path(cmd[0]).stem == "codex" and "exec" in cmd:
+            return CodexStreamActivity()
+        return None
 
     def build_environment(self) -> dict[str, str]:
         """Build an isolated child environment while preserving provider configuration.

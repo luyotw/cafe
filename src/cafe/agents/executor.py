@@ -11,9 +11,9 @@ from threading import Event, Timer
 from typing import Any, Callable, List, Optional
 
 from cafe.agents.cli import AbstractCLI, ClaudeCLI, CodexCLI, CopilotCLI, CursorCLI, GeminiCLI
-from cafe.agents.codex_stream_activity import CodexStreamActivity
 from cafe.agents.diagnostics import sanitize_error_excerpt
 from cafe.agents.process_output import ProcessOutput, ProcessOutputError
+from cafe.agents.stream_activity import StreamActivity
 from cafe.agents.transport_types import (
     TransportResult,
     _has_evidence_conflict,
@@ -1181,9 +1181,9 @@ class AgentExecutor:
         return permission_denials
 
     def _execute_with_streaming(self, cmd, cli_name, *args, **kwargs):
-        """Keep CLI execution while observing native Codex transport activity."""
-        if self.config.cli == AgentCLI.CODEX and Path(cmd[0]).stem == "codex" and "exec" in cmd:
-            activity = CodexStreamActivity()
+        """Run with optional native activity supplied by the CLI adapter."""
+        activity = self._get_cli_strategy().create_stream_activity(cmd)
+        if activity is not None:
             try:
                 activity.__enter__()
                 environment = kwargs.get("env", args[0] if args else None) or os.environ
@@ -1191,7 +1191,7 @@ class AgentExecutor:
             except (OSError, ValueError) as cause:
                 activity.__exit__(None, None, None)
                 raise AgentExecutionError(
-                    "Codex native stream activity could not be initialized.",
+                    f"{cli_name} native stream activity could not be initialized.",
                     error_type="stream_activity_unavailable",
                 ) from cause
             try:
@@ -1216,7 +1216,7 @@ class AgentExecutor:
         structured_records: list[dict[str, Any]] | None = None,
         structured_record_observer: Callable[[dict[str, Any]], None] | None = None,
         require_terminal_stream_event: bool = False,
-        stream_activity: CodexStreamActivity | None = None,
+        stream_activity: StreamActivity | None = None,
     ) -> AgentResponse:
         """Execute command with streaming output.
 
