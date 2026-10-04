@@ -28,6 +28,10 @@ All notable changes to this project will be documented in this file.
 
 - Drained provider stdout and stderr concurrently to avoid pipe backpressure and
   delayed structured acknowledgements; retained bounded, safe failure diagnostics.
+- Observed verified native Codex stream activity when stdout is quiet to avoid
+  false idle timeouts, retaining the 300-second idle policy, explicit execution
+  budgets, and native completion requirements. Existing telemetry exporters are
+  preserved; activity records contain metadata without prompt or delta content.
 - Preserved actionable native-option rejection guidance in read-only chat without
   exposing raw provider diagnostics or retrying with weaker restrictions.
 - Validated the bound Codex host transport before callback delivery and allowed

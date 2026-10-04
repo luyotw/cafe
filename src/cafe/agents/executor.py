@@ -1,6 +1,7 @@
 """Agent executor for running AI agents."""
 
 import json
+import os
 import re
 import subprocess
 from dataclasses import dataclass, replace
@@ -12,6 +13,7 @@ from typing import Any, Callable, List, Optional
 from cafe.agents.cli import AbstractCLI, ClaudeCLI, CodexCLI, CopilotCLI, CursorCLI, GeminiCLI
 from cafe.agents.diagnostics import sanitize_error_excerpt
 from cafe.agents.process_output import ProcessOutput, ProcessOutputError
+from cafe.agents.stream_activity import StreamActivity
 from cafe.agents.transport_types import (
     TransportResult,
     _has_evidence_conflict,
@@ -1194,7 +1196,29 @@ class AgentExecutor:
 
         return permission_denials
 
-    def _execute_with_streaming(
+    def _execute_with_streaming(self, cmd, cli_name, *args, **kwargs):
+        """Run with optional native activity supplied by the CLI adapter."""
+        activity = self._get_cli_strategy().create_stream_activity(cmd)
+        if activity is not None:
+            try:
+                activity.__enter__()
+                environment = kwargs.get("env", args[0] if args else None) or os.environ
+                observed_cmd = activity.command(cmd, environment)
+            except (OSError, ValueError) as cause:
+                activity.__exit__(None, None, None)
+                raise AgentExecutionError(
+                    f"{cli_name} native stream activity could not be initialized.",
+                    error_type="stream_activity_unavailable",
+                ) from cause
+            try:
+                return self._execute_streaming_process(
+                    observed_cmd, cli_name, *args, stream_activity=activity, **kwargs
+                )
+            finally:
+                activity.__exit__(None, None, None)
+        return self._execute_streaming_process(cmd, cli_name, *args, **kwargs)
+
+    def _execute_streaming_process(
         self,
         cmd: List[str],
         cli_name: str,
@@ -1208,6 +1232,7 @@ class AgentExecutor:
         structured_records: list[dict[str, Any]] | None = None,
         structured_record_observer: Callable[[dict[str, Any]], None] | None = None,
         require_terminal_stream_event: bool = False,
+        stream_activity: StreamActivity | None = None,
     ) -> AgentResponse:
         """Execute command with streaming output.
 
@@ -1324,6 +1349,8 @@ class AgentExecutor:
             permission_denials: List[PermissionDenial] = []
             retained_output_bytes = 0
             retained_output_lines = 0
+            activity_output_bytes = 0
+            activity_output_lines = 0
             structured_record_limit = _structured_record_limit(execution_control)
             execution_limit_reached = Event()
 
@@ -1455,6 +1482,7 @@ class AgentExecutor:
                             "stdout_bytes": retained_output_bytes,
                             "terminal_event_observed": received_terminal_stream_event,
                             **process_output.diagnostics(),
+                            **(stream_activity.diagnostics() if stream_activity else {}),
                         },
                     }
                     streaming_file_handle.seek(0)
@@ -1467,9 +1495,35 @@ class AgentExecutor:
                     streaming_file_handle.close()
                     streaming_file_handle = None
 
+            def record_stream_activity() -> None:
+                nonlocal last_output_time, activity_output_bytes, activity_output_lines
+                activity_record = stream_activity.drain() if stream_activity else None
+                if activity_record is not None:
+                    # Native transport events are activity, never response or
+                    # completion evidence. Persist metadata only, not token text.
+                    if use_idle_timeout:
+                        last_output_time = time.time()
+                    encoded_activity = json.dumps(activity_record, ensure_ascii=False) + "\n"
+                    activity_output_bytes += len(encoded_activity.encode("utf-8"))
+                    activity_output_lines += 1
+                    if execution_control is not None and (
+                        (execution_control.max_output_lines is not None and
+                         retained_output_lines + activity_output_lines > execution_control.max_output_lines)
+                        or (execution_control.max_output_bytes is not None and
+                            retained_output_bytes + activity_output_bytes > execution_control.max_output_bytes)
+                    ):
+                        trigger_execution_limit()
+                        return
+                    if streaming_file_handle:
+                        streaming_file_handle.write(encoded_activity)
+                        streaming_file_handle.flush()
+
             try:
                 if process.stdout:
                     while True:
+                        if execution_limit_reached.is_set():
+                            break
+                        record_stream_activity()
                         if execution_limit_reached.is_set():
                             break
                         try:
@@ -1481,6 +1535,8 @@ class AgentExecutor:
                             persist_safe_stream_error(error)
                             raise error from cause
                         except Empty:
+                            # Activity can arrive while stdout readline is waiting.
+                            record_stream_activity()
                             if execution_limit_reached.is_set():
                                 break
                             if use_idle_timeout and time.time() - last_output_time > idle_timeout:
@@ -1497,11 +1553,11 @@ class AgentExecutor:
                         if execution_control is not None and (
                             (
                                 execution_control.max_output_lines is not None
-                                and retained_output_lines > execution_control.max_output_lines
+                                and retained_output_lines + activity_output_lines > execution_control.max_output_lines
                             )
                             or (
                                 execution_control.max_output_bytes is not None
-                                and retained_output_bytes > execution_control.max_output_bytes
+                                and retained_output_bytes + activity_output_bytes > execution_control.max_output_bytes
                             )
                         ):
                             trigger_execution_limit()
@@ -1543,6 +1599,8 @@ class AgentExecutor:
                                     continue
                                 output_lines.append(line)
                                 observed = observation_strategy.conversation_evidence((data,))
+                                if stream_activity and observed.observed_session_id:
+                                    stream_activity.bind(observed.observed_session_id)
                                 failure = observation_evidence.failure_code or observed.failure_code
                                 if _has_evidence_conflict((
                                     observation_evidence.observed_session_id, observed.observed_session_id
