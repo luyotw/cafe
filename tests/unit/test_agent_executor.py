@@ -375,6 +375,56 @@ class TestAgentExecutorErrorHandling:
         assert error_type is None
         assert display_message is None
 
+    def test_tool_output_rate_limit_text_does_not_classify_nonzero_exit(self):
+        """Application documentation is not provider failure evidence."""
+        executor = AgentExecutor(AgentConfig(name="Nick", cli=AgentCLI.CODEX))
+        process = MagicMock()
+        process.stdout.readline.side_effect = [
+            '{"type":"item.completed","item":{"type":"command_execution",'
+            '"aggregated_output":"Pairing rate limit must be implemented by the application",'
+            '"exit_code":0,"status":"completed"}}\n',
+            "",
+        ]
+        process.stderr.read.return_value = "connection closed unexpectedly"
+        process.wait.return_value = 1
+        with patch("subprocess.Popen", return_value=process), patch("sys.platform", "win32"):
+            with pytest.raises(AgentExecutionError) as caught:
+                executor._execute_with_streaming(["codex"], "Codex", parse_stream_json=True)
+        assert caught.value.error_type != "rate_limit"
+        assert "API rate limit reached" not in (caught.value.display_message or "")
+
+    def test_plain_provider_stdout_still_classifies_quota_error(self):
+        executor = AgentExecutor(AgentConfig(name="Nick", cli=AgentCLI.COPILOT))
+        process = MagicMock()
+        process.stdout.readline.side_effect = [
+            "You have exceeded your monthly quota\n", "",
+        ]
+        process.stderr.read.return_value = ""
+        process.wait.return_value = 1
+        with patch("subprocess.Popen", return_value=process), patch("sys.platform", "win32"):
+            with pytest.raises(AgentExecutionError) as caught:
+                executor._execute_with_streaming(["copilot"], "Copilot", parse_stream_json=False)
+        assert caught.value.error_type == "rate_limit"
+
+    def test_idle_timeout_takes_precedence_over_stderr_rate_limit_words(self):
+        executor = AgentExecutor(AgentConfig(name="Nick", cli=AgentCLI.CODEX))
+        process = MagicMock()
+        process.wait.return_value = -15
+        from queue import Empty
+        reader = MagicMock()
+        reader.first_stderr_line = ""
+        reader.stderr_read_failed = False
+        reader.stderr_text.return_value = "debug: rate limit configuration loaded"
+        reader.readline.side_effect = [Empty()]
+        with (
+            patch("subprocess.Popen", return_value=process),
+            patch("cafe.agents.executor.ProcessOutput", return_value=reader),
+            patch("time.time", side_effect=[0, 301]),
+        ):
+            with pytest.raises(AgentExecutionError) as caught:
+                executor._execute_with_streaming(["codex"], "Codex", parse_stream_json=True)
+        assert caught.value.error_type == "timeout"
+
     @pytest.mark.parametrize(
         ("cli", "message"),
         [

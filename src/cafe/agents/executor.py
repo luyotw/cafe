@@ -11,7 +11,7 @@ from threading import Event, Timer
 from typing import Any, Callable, List, Optional
 
 from cafe.agents.cli import AbstractCLI, ClaudeCLI, CodexCLI, CopilotCLI, CursorCLI, GeminiCLI
-from cafe.agents.diagnostics import sanitize_error_excerpt
+from cafe.agents.diagnostics import sanitize_error_excerpt, save_stderr_diagnostics
 from cafe.agents.process_output import ProcessOutput, ProcessOutputError
 from cafe.agents.stream_activity import StreamActivity
 from cafe.agents.transport_types import (
@@ -1295,42 +1295,52 @@ class AgentExecutor:
         import sys
 
         process_output = ProcessOutput(process)
-        if sys.platform != "win32":
-            process_output.first_stderr_ready.wait(timeout=0.5)
-            stderr_line = process_output.first_stderr_line
-            if stderr_line:
-                # Only treat as fatal error if it's NOT a tool execution error
-                # Tool errors like "Error executing tool" are recoverable and agent continues
-                is_tool_error = "error executing tool" in stderr_line.lower()
-                is_fatal_error = stderr_line and (
-                    "already in use" in stderr_line.lower()
-                    or "limit reached" in stderr_line.lower()
-                    or "hit your limit" in stderr_line.lower()
-                    or ("error" in stderr_line.lower() and not is_tool_error)
-                )
-
-                if is_fatal_error:
-                    # Likely a fatal error, read rest and terminate
-                    process.kill()
-                    process.wait(timeout=2)
-                    full_stderr = process_output.stderr_text()
-                    process_output.close()
-
-                    error_type, display_message = self._classify_execution_error(
-                        cli_name, full_stderr
-                    )
-
-                    # Attach actual CLI arguments to error object for history recording
-                    err = AgentExecutionError(
-                        f"{cli_name} execution failed: {full_stderr}",
-                        error_type=error_type,
-                        display_message=display_message or f"{cli_name} failed before producing a complete response.",
-                    )
-                    # Exclude executable itself (e.g. 'gemini' / 'claude')
-                    err.cli_command_args = cmd[1:]
-                    raise err
-
+        attempt_error = None
+        idle_timeout_triggered = False
+        post_output_timeout_triggered = False
+        execution_limit_reached = Event()
+        streaming_file_handle = None
+        safe_error_record = None
+        retained_output_lines = 0
+        retained_output_bytes = 0
+        received_terminal_stream_event = False
         try:
+            if sys.platform != "win32":
+                process_output.first_stderr_ready.wait(timeout=0.5)
+                stderr_line = process_output.first_stderr_line
+                if stderr_line:
+                    # Only treat as fatal error if it's NOT a tool execution error
+                    # Tool errors like "Error executing tool" are recoverable and agent continues
+                    is_tool_error = "error executing tool" in stderr_line.lower()
+                    is_fatal_error = stderr_line and (
+                        "already in use" in stderr_line.lower()
+                        or "limit reached" in stderr_line.lower()
+                        or "hit your limit" in stderr_line.lower()
+                        or ("error" in stderr_line.lower() and not is_tool_error)
+                    )
+
+                    if is_fatal_error:
+                        # Likely a fatal error, read rest and terminate
+                        process.kill()
+                        process.wait(timeout=2)
+                        full_stderr = process_output.stderr_text()
+
+                        error_type, display_message = self._classify_execution_error(
+                            cli_name, full_stderr
+                        )
+
+                        # Attach actual CLI arguments to error object for history recording
+                        err = AgentExecutionError(
+                            f"{cli_name} execution failed: {full_stderr}",
+                            error_type=error_type,
+                            display_message=display_message or (
+                                f"{cli_name} failed before producing a complete response."
+                            ),
+                        )
+                        # Exclude executable itself (e.g. 'gemini' / 'claude')
+                        err.cli_command_args = cmd[1:]
+                        raise err
+
             # Agent narration may be muted for a supervising driver. Parsing, durable
             # streaming logs, lifecycle events, and error output remain unaffected.
             if self.stream_output:
@@ -1469,7 +1479,7 @@ class AgentExecutor:
 
             def persist_safe_stream_error(error: AgentExecutionError) -> None:
                 """Replace any streamed error payload with one safe durable record."""
-                nonlocal streaming_file_handle
+                nonlocal streaming_file_handle, safe_error_record
                 parsed = collect_usage()
                 error.transport_result = replace(parsed.transport_result,
                     failure_code=parsed.transport_result.failure_code or error.error_type or "execution_failed",
@@ -1489,6 +1499,7 @@ class AgentExecutor:
                             **(stream_activity.diagnostics() if stream_activity else {}),
                         },
                     }
+                    safe_error_record = safe_record
                     streaming_file_handle.seek(0)
                     streaming_file_handle.truncate()
                     streaming_file_handle.write(json.dumps(safe_record, ensure_ascii=False) + "\n")
@@ -1955,17 +1966,20 @@ class AgentExecutor:
 
                 # If still non-zero, it's a real error
                 if returncode != 0:
-                    combined_output = (stderr_output or "") + "\n".join(output_lines)
-                    error_type, display_message = self._classify_execution_error(
-                        cli_name,
-                        combined_output,
-                    )
-
-                    # Preserve the executor-local timeout classification for reporting.
-                    if error_type is None and (idle_timeout_triggered or post_output_timeout_triggered):
+                    # Structured provider errors were classified while reading the
+                    # stream. Successful structured tool output is not error evidence.
+                    # Plain-output CLIs may report their own errors on stdout.
+                    if idle_timeout_triggered or post_output_timeout_triggered:
                         error_type = "timeout"
                         display_message = (
                             f"{cli_name} did not produce output before the execution timeout"
+                        )
+                    else:
+                        error_output = stderr_output or ""
+                        if not parse_stream_json:
+                            error_output += "\n" + "".join(output_lines)
+                        error_type, display_message = self._classify_execution_error(
+                            cli_name, error_output
                         )
 
                     err = AgentExecutionError(
@@ -1989,22 +2003,6 @@ class AgentExecutor:
                 err.cli_command_args = cmd[1:]
                 persist_safe_stream_error(err)
                 raise err
-
-            # Append stderr to streaming output file (for debugging token usage parsing)
-            if streaming_file_handle and stderr_output:
-                try:
-                    from datetime import datetime
-
-                    stderr_obj = {
-                        "index": streaming_line_index,
-                        "timestamp": datetime.now().astimezone().isoformat(),
-                        "type": "stderr",
-                        "content": stderr_output.rstrip("\n"),
-                    }
-                    streaming_file_handle.write(json.dumps(stderr_obj, ensure_ascii=False) + "\n")
-                    streaming_file_handle.flush()
-                except Exception as e:
-                    print(f"⚠️  Failed to write stderr to streaming output file: {e}")
 
             # Close streaming output file
             if streaming_file_handle:
@@ -2083,6 +2081,9 @@ class AgentExecutor:
                 cli=self.config.cli,
                 session_id=self.config.session_id,
             )
+        except BaseException as error:
+            attempt_error = error
+            raise
         finally:
             if process.poll() is None:
                 process.terminate()
@@ -2091,4 +2092,52 @@ class AgentExecutor:
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait(timeout=2)
-            process_output.close()
+            try:
+                stderr_snapshot = process_output.stderr_text()
+                if streaming_output_file:
+                    actual_returncode = process.poll()
+                    metadata = save_stderr_diagnostics(
+                        streaming_output_file,
+                        stderr_snapshot,
+                        diagnostics=process_output.diagnostics(),
+                        returncode=actual_returncode if type(actual_returncode) is int else None,
+                        timeout_kind=(
+                            "execution_limit" if execution_limit_reached.is_set()
+                            else "idle" if idle_timeout_triggered
+                            else "post_output" if post_output_timeout_triggered
+                            else None
+                        ),
+                    )
+                    if isinstance(attempt_error, AgentExecutionError):
+                        attempt_error.stderr_diagnostics = metadata
+                        if safe_error_record is None:
+                            safe_error_record = {
+                                "type": "error",
+                                "error_type": attempt_error.error_type,
+                                "error_excerpt": sanitize_error_excerpt(attempt_error),
+                                "stream_diagnostics": {
+                                    "stdout_lines": retained_output_lines,
+                                    "stdout_bytes": retained_output_bytes,
+                                    "terminal_event_observed": received_terminal_stream_event,
+                                    **process_output.diagnostics(),
+                                },
+                            }
+                    if streaming_file_handle is not None and not streaming_file_handle.closed:
+                        streaming_file_handle.close()
+                    if safe_error_record is not None:
+                        safe_error_record["stderr_diagnostics"] = metadata
+                        Path(streaming_output_file).write_text(
+                            json.dumps(safe_error_record, ensure_ascii=False) + "\n",
+                            encoding="utf-8",
+                        )
+                    elif attempt_error is None:
+                        with open(streaming_output_file, "a", encoding="utf-8") as handle:
+                            handle.write(
+                                json.dumps({"type": "stderr_diagnostics", **metadata}) + "\n"
+                            )
+            except (OSError, UnicodeError) as diagnostic_error:
+                print(f"⚠️  Failed to save stderr diagnostics: {type(diagnostic_error).__name__}")
+            finally:
+                if streaming_file_handle is not None and not streaming_file_handle.closed:
+                    streaming_file_handle.close()
+                process_output.close()

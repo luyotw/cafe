@@ -1,5 +1,7 @@
 """Tests for safe, durable agent-attempt diagnostics."""
 
+import json
+
 import pytest
 
 from cafe.agents.diagnostics import (
@@ -9,8 +11,8 @@ from cafe.agents.diagnostics import (
     sanitize_error_excerpt,
 )
 from cafe.agents.executor import AgentExecutionError
-from cafe.core.types import AgentCLI
 from cafe.agents.transport_types import TransportResult
+from cafe.core.types import AgentCLI
 
 
 @pytest.mark.parametrize("failure", ["timeout", "conflicting_session_evidence", "invalid_evidence"])
@@ -83,6 +85,28 @@ def test_sanitized_excerpt_handles_empty_and_overlong_error_text() -> None:
     excerpt = sanitize_error_excerpt(AgentExecutionError("x" * (ERROR_EXCERPT_LIMIT + 50)))
 
     assert len(excerpt) == ERROR_EXCERPT_LIMIT
+
+
+def test_failed_attempt_preserves_stderr_reference_without_raw_content():
+    error = AgentExecutionError("failed", error_type="timeout")
+    error.stderr_diagnostics = {
+        "stderr_log": "/private/iteration/stream.stderr-attempt.log",
+        "stderr_bytes": 41,
+        "stderr_retained_bytes": 41,
+        "stderr_truncated": False,
+        "stderr_complete": True,
+        "stderr_read_failed": False,
+        "returncode": -15,
+        "timeout_kind": "idle",
+        "raw_stderr": "token=private-fixture",
+    }
+    record = build_failed_attempt(
+        cli=AgentCLI.CODEX, chain_role="primary", attempt=2, error=error
+    )
+    assert record["stderr_diagnostics"]["stderr_log"] == error.stderr_diagnostics["stderr_log"]
+    assert record["stderr_diagnostics"]["returncode"] == -15
+    assert record["stderr_diagnostics"]["timeout_kind"] == "idle"
+    assert "private-fixture" not in json.dumps(record)
 
 
 def test_classified_auth_error_is_not_retried_for_raw_socket_text() -> None:

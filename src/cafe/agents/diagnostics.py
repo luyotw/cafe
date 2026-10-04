@@ -1,6 +1,9 @@
 """Safe diagnostics and retry policy for agent execution attempts."""
 
+import os
 import re
+import tempfile
+from pathlib import Path
 from typing import Any, Dict, Union
 
 from cafe.agents.transport_types import TransportResult, _validated_evidence_scalar
@@ -39,6 +42,38 @@ def sanitize_error_excerpt(error: BaseException) -> str:
     return text[:ERROR_EXCERPT_LIMIT]
 
 
+def save_stderr_diagnostics(
+    streaming_output_file: str,
+    stderr: str,
+    *,
+    diagnostics: Dict[str, Any],
+    returncode: int | None,
+    timeout_kind: str | None,
+) -> Dict[str, Any]:
+    """Keep the bounded pipe snapshot in a private, unique attempt file."""
+    stream = Path(streaming_output_file)
+    descriptor, filename = tempfile.mkstemp(
+        prefix=f"{stream.stem}.stderr-", suffix=".log", dir=stream.parent
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(stderr)
+    except BaseException:
+        Path(filename).unlink(missing_ok=True)
+        raise
+    retained_bytes = len(stderr.encode("utf-8"))
+    return {
+        "stderr_log": str(Path(filename).resolve()),
+        "stderr_bytes": diagnostics["stderr_bytes"],
+        "stderr_retained_bytes": retained_bytes,
+        "stderr_truncated": diagnostics["stderr_bytes"] > retained_bytes,
+        "stderr_complete": diagnostics["stderr_complete"],
+        "stderr_read_failed": diagnostics["stderr_read_failed"],
+        "returncode": returncode,
+        "timeout_kind": timeout_kind,
+    }
+
+
 def is_transient_same_cli_error(error: BaseException) -> bool:
     """Return whether an error merits the one permitted same-CLI retry."""
     if getattr(error, "error_type", None) != "cli_unavailable":
@@ -74,6 +109,15 @@ def build_failed_attempt(
         "error_type": error_type,
         "error_excerpt": sanitize_error_excerpt(error),
     }
+    stderr_diagnostics = getattr(error, "stderr_diagnostics", None)
+    if isinstance(stderr_diagnostics, dict):
+        record["stderr_diagnostics"] = {
+            key: value for key, value in stderr_diagnostics.items()
+            if key in {
+                "stderr_log", "stderr_bytes", "stderr_retained_bytes", "stderr_truncated",
+                "stderr_complete", "stderr_read_failed", "returncode", "timeout_kind",
+            }
+        }
     evidence = getattr(error, "transport_result", None)
     if (
         isinstance(evidence, TransportResult)
