@@ -46,7 +46,7 @@ requested model when present.
 and `on_acceptance` with `TypeError` before executor invocation. A caller's existing
 configured session is restored after the attempt, while acquisition always launches
 without a resume target or delivery correlation. Exact delivery accepts the same
-keyword-only options plus `on_acceptance`, with its required `session_id` and
+keyword-only options plus `on_acceptance` and `on_response`, with its required `session_id` and
 `delivery_id` validated before invocation. Unsupported required acceptance evidence
 cannot turn acquisition into delivery.
 
@@ -55,8 +55,22 @@ Noninteractive operations reuse executor tool/directory translation and accept
 `environment_overrides`. Interactive launch accepts environment overrides and
 inherits the terminal and current working directory. One-shot execution keeps
 the existing streaming output; `on_response(AgentResponse)` receives its normal
-response separately from compact evidence. No response snapshot is added to a
-transport result.
+response separately from compact evidence. Exact delivery also accepts an
+optional `on_response(AgentResponse)` observer. The executor captures the parsed
+response once; the transport publishes it only after successful identity,
+requested evidence, acceptance and completion checks. Without this observer,
+existing callback/acquisition semantics remain unchanged. An observer exception
+is a caller error and never triggers another provider invocation. No response
+snapshot is added to a transport result.
+
+`AgentExecutionControl.on_process_started` is an optional synchronous observer
+called once after a successful subprocess launch and before reading provider
+output. Callers can finish a submission critical section before awaiting a
+reply. Process creation is not provider acceptance; session, acceptance and
+completion evidence still follow the normal validation path. An observer error
+propagates as a caller error, terminates and waits for that attempt's child
+(with a bounded kill fallback), and never triggers replay. Callers that omit
+the observer retain the existing behavior.
 
 `required_evidence` is a frozenset containing any of `session`, `model`, `usage`,
 and `acceptance`. Capability admission occurs before launch. Acquisition

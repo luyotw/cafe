@@ -72,6 +72,22 @@ case "$actual_version" in
 esac
 
 "$SMOKE_VENV/bin/cafe" --help >/dev/null
+
+echo "Verifying packaged Manager and diagnostic chat commands..."
+"$SMOKE_VENV/bin/python" - "$SMOKE_VENV/bin/cafe" <<'PYCODE'
+import subprocess
+import sys
+
+for arguments, options in (
+    (["manager", "chat", "--help"], ("--issue",)),
+    (["chat", "--help"], ("--read-only", "--phase", "--prompt")),
+):
+    result = subprocess.run([sys.argv[1], *arguments], capture_output=True, text=True, check=True)
+    for option in options:
+        if option not in result.stdout:
+            raise SystemExit(f"Installed command {arguments!r} is missing {option}")
+PYCODE
+
 "$SMOKE_VENV/bin/cafe" audit >/dev/null
 "$SMOKE_VENV/bin/cafe" skill validate --strict >/dev/null
 

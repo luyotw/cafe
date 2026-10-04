@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from cafe.core.blackboard import BlackboardStore, HandoffIntent, HandoffOwner
@@ -224,6 +225,29 @@ def test_fresh_session_completion_preserves_prior_session_and_user_input(
         "Keep the previously confirmed requirement."
     )
     assert BlackboardStore(issue_dir).load_or_create("spec").current_step == "spec"
+
+
+@pytest.mark.parametrize("policy, allowed", [("new", True), ("resume_exact", False), ("auto", False)])
+def test_fresh_session_recovery_after_unobserved_new_session(tmp_path, monkeypatch, policy, allowed):
+    """A failed explicitly new session can be retried without inventing an ID."""
+    issue_dir, iteration_dir, task = _legacy_interrupted_task_repo(tmp_path, monkeypatch)
+    path = iteration_dir / "iteration.json"
+    data = json.loads(path.read_text())
+    data.update(session_id=None, session_continuation={"policy": policy})
+    path.write_text(json.dumps(data))
+    result = runner.invoke(app, ["task", "complete", task.id, "--result",
+                                 '{"decision":"retry_fresh_session"}', "--no-resume", "--json"])
+    assert (result.exit_code == 0) is allowed
+    receipt = HumanTaskRecordStore(issue_dir).get_result(task.id)
+    if allowed:
+        previous = receipt.payload["session_continuation"]["previous"]
+        assert previous["session_id"] is None
+        assert previous["session_unobserved"] is True
+        assert (iteration_dir / "user_input.md").read_text() == (
+            "Keep the previously confirmed requirement."
+        )
+    else:
+        assert receipt is None
 
 
 def test_json_failure_is_one_document_and_nonzero(tmp_path: Path, monkeypatch) -> None:

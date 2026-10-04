@@ -10,8 +10,10 @@ new schema, authority or freshness owner.
 The normal entry point is `prepare_kickoff.py draft --issue-id <id> --output
 <draft.json>`, with optional `--project-root`, `--playbook-id`, `--manager-cli`
 and repeated `--phase-chain`. Use `--issue-name` instead for a nonnumeric local
-identity. The program creates and prefills this request; edit only its gaps or
-intentional overrides. Existing output files are not overwritten. The schema
+identity. The program creates and prefills this request; edit gaps or intentional
+overrides in its existing `formatter_inputs` fields. After `assemble --draft-output`,
+use the updated draft for subsequent edits, report captures and rendering.
+Existing output files are not overwritten. The schema
 below is for inspecting or integrating requests, not a requirement to author
 a starter JSON object by hand.
 
@@ -56,6 +58,20 @@ template or default rules; otherwise it remains missing. An explicitly empty
 distinct values. The helper accepts only the declared formatter fields, encodes
 each value as a JSON or argv element, and rejects activation metadata, shell
 commands, and unknown fields.
+
+### Legacy and advanced explicit inputs
+
+Normal generated drafts use `formatter_inputs` for current choices and assessed
+decisions alike. Set `effective_locale` with its accurate `locale_source`
+(`explicit` for a user choice, `inferred` for an inference). Preserve
+`generated_inputs` and preflight references when editing.
+
+`current_explicit_inputs` remains an adapter for legacy callers and deliberate
+same-value reassessment of invalidated generated values. It is not a second map
+to populate during ordinary draft completion. Conflicting duplicate fields in
+the two maps are rejected; remove the affected `formatter_inputs` entry when
+supplying it through this adapter. Explicit null in this map remains an unresolved
+current decision rather than permission to use a generated default.
 
 ## Staged commands
 
@@ -284,9 +300,11 @@ A saved value never confirms or activates a contract.
 Generated delivery values carry `generated_inputs` provenance in the editable
 request. Preserve that metadata when editing gaps. Unchanged generated values
 must still have valid matching evidence and target context at render time. If
-these change, reassess the action and supply the deliberate current value in
-`current_explicit_inputs` (remove any conflicting draft value), or deliberately
-edit the affected draft field. Legacy requests without generated metadata retain
+these change, reassess the action and edit the affected `formatter_inputs` field.
+If reassessment deliberately retains the same value, use the advanced
+`current_explicit_inputs` adapter and remove that field from `formatter_inputs`;
+an unchanged value alone does not record reassessment. Never remove provenance
+to bypass invalidation. Legacy requests without generated metadata retain
 their explicit-input semantics. This metadata is freshness evidence, not authority.
 
 Report capture publishes the raw report and request atomically per file. When

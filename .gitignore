@@ -4,6 +4,7 @@
 *.pyc
 .pytest_cache/
 .coverage
+.coverage.*
 .cafe
 .claude
 .codex

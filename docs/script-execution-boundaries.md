@@ -18,7 +18,7 @@ This inventory is executable documentation: the unit contract discovers every `s
 
 | Launcher identity | Classification |
 | --- | --- |
-| `src/cafe/agents/executor.py::_execute_with_streaming` | Internal agent CLI transport |
+| `src/cafe/agents/executor.py::_execute_streaming_process` | Internal agent CLI transport |
 | `src/cafe/agents/manager.py::_create_claude_session` | Internal agent CLI transport |
 | `src/cafe/core/capabilities.py::_current_repo_slug` | Internal fixed Git query |
 | `src/cafe/core/capabilities.py::_git_ref_exists` | Internal fixed Git query |
@@ -40,6 +40,7 @@ This inventory is executable documentation: the unit contract discovers every `s
 | `src/cafe/data/skills/use-cafe-workflow/scripts/execute_closeout.py::_common_dir` | Internal fixed Git common-directory query |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/execute_closeout.py::main` | Explicit confirmed closeout command adapter |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/_kickoff_store.py::repository_identity` | Internal fixed Git common-directory query |
+| `src/cafe/data/skills/use-cafe-workflow/scripts/manager_chat.py::_git` | Internal fixed read-only Git root and branch query family |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/kickoff_delivery.py::_inventory` | Internal fixed Git tracked-file inventory query |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/sync_helper_with_preflight.py::_run_command` | Explicit CLI-native helper publication with fixed CAFE pre/post checks |
 | `src/cafe/data/skills/use-cafe-workflow/scripts/preflight_cache.py::_cli_fingerprint` | Internal version probe |

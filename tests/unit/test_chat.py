@@ -287,13 +287,15 @@ class TestLaunchChatSession:
 
         agent_manager = self._make_agent_manager("David", "claude")
         executor = agent_manager.get_agent.return_value
-        provider_process([], returncode=1, stderr="provider failed")
+        provider_process([], returncode=1, stderr="provider failed: private-provider-configuration-fixture")
         mock_agent_manager_cls.return_value = agent_manager
 
         result = launch_chat_session("developer", "issue123", prompt="Status?")
 
         assert result == 1
-        assert "provider failed" in capsys.readouterr().out
+        output = capsys.readouterr().out
+        assert "Claude exited unsuccessfully (code 1)." in output
+        assert "private-provider-configuration-fixture" not in output
         agent_manager.session_manager.save_session.assert_not_called()
 
     @patch("builtins.print")

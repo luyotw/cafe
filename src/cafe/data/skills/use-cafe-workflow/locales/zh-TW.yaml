@@ -1,0 +1,28 @@
+chat.invalid_issue: issue 名稱無效。請用 cafe manager chat --issue <issue-name> 指定單一目錄名稱。
+chat.issue_required: 無法確定目前的 issue。請進入其 worktree，或用 cafe manager chat --issue <issue-name>
+  選擇。
+chat.selection_conflict: 目前 branch 與 active issue 不一致。請用 --issue <issue-name> 明確選擇。
+chat.issue_conflict: issue authority 衝突。請恢復已確認的註冊 worktree 指標，再用 --issue <issue-name>
+  重試。
+chat.issue_missing: 缺少有效的 issue policy。請進入已準備的 issue worktree，或用 --issue <issue-name>
+  選擇有效 issue。
+chat.issue_archived: 此 issue 已封存。請用 --issue <issue-name> 選擇有效 issue；chat 不會還原 issue。
+chat.identity_absent: 未記錄可恢復的 Manager identity。請回到原始 Manager 對話及其已確認的設定程序；chat 不會建立替代
+  session。
+chat.identity_conflict: Manager identity 或 issue 狀態已過期、衝突或無法讀取。請回到原始對話檢查並恢復已確認的紀錄，再重試
+  cafe manager chat。
+chat.unsupported_mode: 此 Manager mode 沒有已驗證的終端重接路徑。請回到原始對話，保留已確認的 mode。
+chat.unsupported_provider: 此 active provider 尚不支援 Manager 終端對話。請回到原始對話；不要透過切換 provider
+  重接。
+chat.host_bound: Manager 綁定於原始 host 對話。請回到該 thread，或恢復該 host 的存取；CLI 無法恢復其 host identity。
+chat.recovery_pending: Manager delivery 尚未完成或需要復原。請先檢查原始對話與目前 callback 狀態，再重試；不要自動重送。
+chat.busy: 目前 Manager 對話忙碌中。請等待目前回合完成，再重試 cafe manager chat；不要中斷 worker。
+chat.provider_unavailable: 無法使用 Codex CLI。請恢復 PATH 中的 codex，再用相同 identity 重試 cafe
+  manager chat，或回到原始對話。
+chat.connected: 已連接 {worktree} 中 {issue} 的目前 Manager。輸入訊息；/quit、EOF 或 Ctrl-C 離開。待處理
+  HumanTask 保留 cafe task inspect / cafe task complete 路徑。
+chat.terminal_required: 需要互動終端。請在終端執行 cafe manager chat，或回到原始對話。
+chat.delivery_uncertain: 訊息可能已送達 Manager。請先檢查原始對話，再明確重試；未自動重送。
+chat.delivery_failed: Manager 訊息在接受前傳送失敗。請恢復既有對話或 provider 存取，再明確重試 cafe manager chat；identity
+  已保留。
+chat.cancelled: 對話回合已取消。重試已提交訊息前，請先檢查原始對話；worker 與 workflow 狀態已保留。

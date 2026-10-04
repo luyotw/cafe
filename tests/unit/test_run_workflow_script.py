@@ -111,7 +111,9 @@ def _install_contract_stubs(monkeypatch, module, contract):
     monkeypatch.setattr(
         module,
         "resolve_builtin_workflow_event_callback",
-        lambda callback_id, **kwargs: SimpleNamespace(callback_id=callback_id),
+        lambda callback_id, **kwargs: SimpleNamespace(
+            callback_id=callback_id, script=SCRIPT.with_name("workflow_event_callback.py")
+        ),
     )
 
 
@@ -440,6 +442,39 @@ def test_event_binding_or_order_change_fails_before_launch(
 
     assert result == 2
     assert "launch_failed" in capsys.readouterr().out
+
+
+def test_bound_host_transport_failure_stops_before_background_worker(tmp_path, monkeypatch, capsys):
+    module = _module()
+    issue_dir = _prepared(tmp_path)
+    _install_contract_stubs(monkeypatch, module, _contract("event-driven", tmp_path))
+    callback = tmp_path / "trusted_callback.py"
+    callback.write_text(
+        "def validate_bound_host_transport(issue_dir):\n"
+        "    raise ValueError('Codex App has no usable daemon control socket')\n"
+    )
+    monkeypatch.setattr(module, "resolve_builtin_workflow_event_callback", lambda *args, **kwargs:
+        SimpleNamespace(callback_id=CALLBACK_ID, script=callback))
+    before = (issue_dir / "blackboard.json").read_bytes()
+    result = module.run(_args("event-driven"), cwd=tmp_path,
+                        process_factory=lambda *args, **kwargs: pytest.fail("no worker"))
+    assert result == 2
+    captured = capsys.readouterr()
+    assert "launch_failed" in captured.out
+    assert "no usable daemon control socket" in captured.err
+    assert (issue_dir / "blackboard.json").read_bytes() == before
+
+
+def test_pending_user_task_needs_no_host_transport(tmp_path, monkeypatch, capsys):
+    module = _module()
+    _prepared(tmp_path, step="user")
+    _install_contract_stubs(monkeypatch, module, _contract("event-driven", tmp_path))
+    monkeypatch.setattr(module, "_validate_host_callback_transport", lambda *args:
+                        pytest.fail("no launch or delivery while waiting for user"))
+    result = module.run(_args("event-driven"), cwd=tmp_path,
+                        process_factory=lambda *args, **kwargs: pytest.fail("no worker"))
+    assert result == 0
+    assert '"action":"await_user"' in capsys.readouterr().out
 
 
 def test_launch_failure_and_durable_user_boundary_have_stable_directives(

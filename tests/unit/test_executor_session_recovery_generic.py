@@ -212,8 +212,10 @@ class TestGenericSessionRecovery:
             model="gpt-5.3-codex",
         )
         executor = AgentExecutor(config)
+        launched_commands = []
 
         def mock_popen(*args, **kwargs):
+            launched_commands.append(list(args[0]))
             mock_proc = MagicMock()
             mock_proc.stdout.readline.side_effect = [""]
             mock_proc.stderr = MagicMock()
@@ -231,7 +233,11 @@ class TestGenericSessionRecovery:
 
         err = exc_info.value
         assert "no rollout found" in str(err).lower()
-        assert getattr(err, "cli_command_args", None) == [
+        cli_command_args = getattr(err, "cli_command_args", None)
+        # Preserve the exact launched arguments, including invocation-only
+        # activity settings, while independently checking recovery inputs.
+        assert cli_command_args == launched_commands[-1][1:]
+        expected_recovery_args = [
             "-C",
             str(Path.cwd().resolve()),
             "-a",
@@ -242,6 +248,7 @@ class TestGenericSessionRecovery:
             "gpt-5.3-codex",
             "--json",
         ]
+        assert cli_command_args[:len(expected_recovery_args)] == expected_recovery_args
 
 
     def test_non_session_error_still_raises(self):

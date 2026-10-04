@@ -18,7 +18,9 @@ the caller cannot be identified from its session, and repeated `--phase-chain
 phase=cli:model` only for explicit model overrides. Configured values need no
 manual transcription. The command refuses to overwrite an existing draft.
 
-Read `draft.json` and fill the unresolved fields in place. Keep the computed
+Read `draft.json` and fill unresolved fields in `formatter_inputs` in place.
+Make intentional overrides in those same fields, without creating a second input
+map. Keep the computed
 worktree, mode, actions and configured values unless the current request calls
 for an exception. Product fields, `phase_chain` and `capability_choice` use their
 actual names and types in the generated draft; do not reconstruct this schema.
@@ -29,6 +31,9 @@ reassemble to populate that playbook's defaults:
 ```sh
 python scripts/prepare_kickoff.py assemble --request-file draft.json --summary --draft-output updated-draft.json
 ```
+
+Continue all edits, report captures and rendering with `updated-draft.json`;
+it replaces `draft.json` as the working request in the commands below.
 
 Use inherited preference/evidence directories throughout preparation. Temporary
 proposal files do not require empty stores. Explicit `--config-dir` and
@@ -83,9 +88,14 @@ subsequent commands. There is no separate decision view, source-reference index
 or generated policy reading plan. Read applicable policy from its owner:
 `kickoff.md`, `model_selection.md` and `strategic_context.md`.
 
-Put current named choices in `current_explicit_inputs` and assessed decisions
-in `formatter_inputs`; conflicting duplicates are rejected. Supplied false and
-empty values are preserved. Product fields use the existing `DeliveryContractV3`
+Use the existing named fields in `formatter_inputs` for both current choices and
+assessed decisions. For conversation language, set `effective_locale` and
+`locale_source` together: `explicit` for a user choice, `inferred` for an inference.
+Do not retain a generated playbook source when changing the language. Preserve
+`generated_inputs` provenance and `preflight_files` references; removing them
+does not repair stale evidence. Supplied false and empty values are preserved.
+An empty `phase_chain` requests no per-phase overrides; assembly fills configured
+chains for the selected graph. Product fields use the existing `DeliveryContractV3`
 schema. `implementation_direction` is a string; list fields are arrays.
 `closeout_plan` is built by the formatter. An unresolved delivery route remains
 null, not an automatic empty array. A null draft action slot may receive a

@@ -2521,7 +2521,18 @@ class GenericWorkflowStepExecutor(Phase):
         previous_session = previous.get("session_id")
         if not isinstance(previous_cli, str) or not previous_cli.strip():
             raise RuntimeError("Fresh-session recovery prior CLI is invalid")
-        if not isinstance(previous_session, str) or not previous_session.strip():
+        unobserved_new_session = (
+            previous_session is None and previous.get("session_unobserved") is True
+        )
+        if unobserved_new_session:
+            current_continuation = current_data.get("session_continuation")
+            if current_data.get("session_recovery") != dict(recovery) and not (
+                current_data.get("session_id") is None
+                and isinstance(current_continuation, Mapping)
+                and current_continuation.get("policy") == "new"
+            ):
+                raise RuntimeError("Fresh-session recovery has no unobserved new-session evidence")
+        elif not isinstance(previous_session, str) or not previous_session.strip():
             raise RuntimeError("Fresh-session recovery prior session is invalid")
 
         persisted_recovery = current_data.get("session_recovery")
