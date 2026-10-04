@@ -17,9 +17,13 @@ For each noninteractive Codex invocation, CAFE starts a temporary HTTP receiver
 on loopback with an unpredictable URL. It appends invocation-only `-c` options
 to the executed subcommand, enabling JSON OTLP log export to that receiver and
 disabling user-prompt logging. It does not modify `config.toml`. Existing log
-export destinations are not overwritten: initialization fails if a configured
-exporter or an exporter override is present. Interactive Codex and other CLIs
-retain their existing execution paths.
+export destinations are not overwritten: initialization fails if an effective
+exporter or an exporter override is present. Without `--ignore-user-config`,
+CAFE checks the base configuration followed by the selected
+`$CODEX_HOME/<profile>.config.toml`; the profile's exporter takes precedence.
+With `--ignore-user-config`, neither file is loaded, matching the installed
+Codex CLI. Explicit exporter overrides are still protected. Interactive Codex
+and other CLIs retain their existing execution paths.
 
 Only fresh `response.*` events belonging to the stdout-verified
 `thread.started` identity count as activity. Unrelated requests, plugin events,
@@ -47,8 +51,9 @@ and stderr counters.
 `tests/unit/test_codex_stream_activity.py` checks quiet-stdout live streams,
 real inactivity, foreign sessions, repeated/stale exports, metadata privacy,
 explicit duration/output limits and telemetry completion without native turn
-completion. It accelerates only the watchdog clock, leaving subprocess and
-transport clocks unchanged.
+completion. It also covers isolated decision commands, ignored malformed
+configuration and selected-profile exporter precedence. It accelerates only
+the watchdog clock, leaving subprocess and transport clocks unchanged.
 
 A local Responses SSE fixture with the installed Codex CLI 0.160.0 sent one
 text delta per second for eight seconds. The original executor timed out after

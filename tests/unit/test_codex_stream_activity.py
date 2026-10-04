@@ -99,6 +99,116 @@ def test_existing_exporter_is_preserved(tmp_path):
     assert config.read_text() == original
 
 
+@pytest.mark.parametrize("resume", [False, True])
+@pytest.mark.parametrize(
+    "contents",
+    [
+        '[otel]\nexporter={otlp-http={endpoint="https://existing.invalid/v1/logs",protocol="json"}}\n',
+        "[otel\n",
+    ],
+)
+def test_isolated_decision_command_ignores_inactive_user_config(tmp_path, resume, contents):
+    home = tmp_path / "home"
+    home.mkdir()
+    config = home / "config.toml"
+    config.write_text(contents)
+    executor = AgentExecutor(
+        AgentConfig(
+            name="decision",
+            cli=AgentCLI.CODEX,
+            session_id="existing-session" if resume else None,
+        )
+    )
+    strategy = executor._get_cli_strategy()
+    cmd, _ = executor._build_controlled_command(
+        strategy,
+        "prompt",
+        [],
+        [],
+        AgentExecutionControl(working_directory=tmp_path / "decision"),
+    )
+    assert "--ignore-user-config" in cmd
+    with strategy.create_stream_activity(cmd) as activity:
+        observed_cmd = activity.command(cmd, {"CODEX_HOME": str(home)})
+    assert observed_cmd[: len(cmd)] == cmd
+    assert any(arg.startswith("otel.exporter=") for arg in observed_cmd)
+    assert config.read_text() == contents
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--profile", "monitoring"],
+        ["-p", "monitoring"],
+        ["--profile=monitoring"],
+        ["-pmonitoring"],
+        ["-p=monitoring"],
+    ],
+)
+def test_active_profile_exporter_is_preserved(tmp_path, arguments):
+    base = tmp_path / "config.toml"
+    base.write_text('[otel]\nexporter="none"\n')
+    profile = tmp_path / "monitoring.config.toml"
+    contents = '[otel]\nexporter={otlp-http={endpoint="https://existing.invalid/v1/logs",protocol="json"}}\n'
+    profile.write_text(contents)
+    with CodexStreamActivity() as activity, pytest.raises(ValueError):
+        activity.command(
+            ["codex", "exec", *arguments, "--json", "prompt"], {"CODEX_HOME": str(tmp_path)}
+        )
+    assert profile.read_text() == contents
+    assert base.read_text() == '[otel]\nexporter="none"\n'
+
+
+def test_profile_without_exporter_retains_base_exporter_protection(tmp_path):
+    (tmp_path / "config.toml").write_text(
+        '[otel]\nexporter={otlp-http={endpoint="https://existing.invalid/v1/logs",protocol="json"}}\n'
+    )
+    (tmp_path / "monitoring.config.toml").write_text("[otel]\nlog_user_prompt=false\n")
+    with CodexStreamActivity() as activity, pytest.raises(ValueError):
+        activity.command(
+            ["codex", "exec", "--profile", "monitoring", "prompt"], {"CODEX_HOME": str(tmp_path)}
+        )
+
+
+def test_profile_can_disable_base_exporter(tmp_path):
+    (tmp_path / "config.toml").write_text(
+        '[otel]\nexporter={otlp-http={endpoint="https://existing.invalid/v1/logs",protocol="json"}}\n'
+    )
+    (tmp_path / "monitoring.config.toml").write_text('[otel]\nexporter="none"\n')
+    with CodexStreamActivity() as activity:
+        cmd = activity.command(
+            ["codex", "exec", "--profile", "monitoring", "prompt"], {"CODEX_HOME": str(tmp_path)}
+        )
+    assert any(arg.startswith("otel.exporter=") for arg in cmd)
+
+
+@pytest.mark.parametrize(
+    "contents",
+    [
+        '[otel]\nexporter={otlp-http={endpoint="https://existing.invalid/v1/logs",protocol="json"}}\n',
+        "[otel\n",
+    ],
+)
+def test_ignore_user_config_also_skips_selected_profile(tmp_path, contents):
+    (tmp_path / "config.toml").write_text(contents)
+    profile = tmp_path / "monitoring.config.toml"
+    profile.write_text(contents)
+    with CodexStreamActivity() as activity:
+        cmd = activity.command(
+            [
+                "codex",
+                "exec",
+                "--ignore-user-config",
+                "--profile",
+                "monitoring",
+                "prompt",
+            ],
+            {"CODEX_HOME": str(tmp_path)},
+        )
+    assert any(arg.startswith("otel.exporter=") for arg in cmd)
+    assert profile.read_text() == contents
+
+
 def run_codex_fixture(tmp_path: Path, monkeypatch, mode, **limits):
     executable = tmp_path / "codex"
     executable.write_text(
@@ -216,12 +326,29 @@ def test_export_settings_belong_to_executed_subcommand(tmp_path, resume):
     [
         ["-c", 'otel.exporter="none"'],
         ['--config=otel.exporter="none"'],
+        ['-cotel.exporter="none"'],
+        ['-c=otel.exporter="none"'],
         ["--config", 'otel.exporter.otlp-http.endpoint="https://existing.invalid"'],
     ],
 )
 def test_existing_invocation_export_settings_are_not_overwritten(tmp_path, arguments):
     with CodexStreamActivity() as activity, pytest.raises(ValueError):
         activity.command(["codex", "exec", "prompt", *arguments], {"CODEX_HOME": str(tmp_path)})
+
+
+def test_ignore_user_config_does_not_hide_invocation_exporter_override(tmp_path):
+    with CodexStreamActivity() as activity, pytest.raises(ValueError):
+        activity.command(
+            [
+                "codex",
+                "exec",
+                "--ignore-user-config",
+                "prompt",
+                "-c",
+                'otel.exporter="none"',
+            ],
+            {"CODEX_HOME": str(tmp_path)},
+        )
 
 
 @pytest.mark.parametrize(

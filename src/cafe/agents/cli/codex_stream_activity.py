@@ -70,26 +70,49 @@ class CodexStreamActivity:
 
     def command(self, cmd, environment):
         """Add invocation-only export settings; never overwrite an existing exporter."""
-        home = Path(environment.get("CODEX_HOME") or Path.home() / ".codex")
-        config_file = home / "config.toml"
-        if config_file.exists():
-            config = tomllib.loads(config_file.read_text(encoding="utf-8"))
-            if config.get("otel", {}).get("exporter", "none") != "none":
-                raise ValueError(
-                    "Live Codex stream capture cannot replace an existing telemetry exporter."
-                )
-        for index, argument in enumerate(cmd):
+        ignore_user_config = False
+        profile = None
+        arguments = iter(cmd[1:])
+        for argument in arguments:
+            if argument == "--":
+                break
             override = None
-            if argument in {"-c", "--config"} and index + 1 < len(cmd):
-                override = cmd[index + 1]
+            if argument == "--ignore-user-config":
+                ignore_user_config = True
+            elif argument in {"-p", "--profile"}:
+                profile = next(arguments, None)
+            elif argument.startswith("--profile="):
+                profile = argument.removeprefix("--profile=")
+            elif argument.startswith("-p") and len(argument) > 2:
+                profile = argument[2:].removeprefix("=")
+            elif argument in {"-c", "--config"}:
+                override = next(arguments, None)
             elif argument.startswith("--config="):
                 override = argument.removeprefix("--config=")
+            elif argument.startswith("-c") and len(argument) > 2:
+                override = argument[2:].removeprefix("=")
             if override:
                 key = override.split("=", 1)[0].strip()
                 if key == "otel.exporter" or key.startswith("otel.exporter."):
                     raise ValueError(
                         "Live Codex stream capture cannot replace an existing telemetry exporter."
                     )
+        # Native --ignore-user-config excludes both base and profile files.
+        # Otherwise the selected profile's exporter overrides the base value.
+        if not ignore_user_config:
+            home = Path(environment.get("CODEX_HOME") or Path.home() / ".codex")
+            config_files = [home / "config.toml"]
+            if profile:
+                config_files.append(home / f"{profile}.config.toml")
+            exporter = "none"
+            for config_file in config_files:
+                if config_file.exists():
+                    config = tomllib.loads(config_file.read_text(encoding="utf-8"))
+                    exporter = config.get("otel", {}).get("exporter", exporter)
+            if exporter != "none":
+                raise ValueError(
+                    "Live Codex stream capture cannot replace an existing telemetry exporter."
+                )
         endpoint = f"http://127.0.0.1:{self._server.server_port}{self._path}"
         # exec owns config overrides: global flags before exec are ignored by
         # exec --ignore-user-config. Append to the executed subcommand instead.
