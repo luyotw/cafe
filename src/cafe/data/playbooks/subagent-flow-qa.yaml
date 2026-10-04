@@ -1,0 +1,192 @@
+playbook:
+  id: subagent-flow-qa
+  name: "Subagent Flow + QA"
+  conversation_locale: en-US
+  applicability:
+    summary: "Subagent-assisted requirements and implementation planning for software changes needing independent acceptance evidence."
+    use_when:
+      - "Requirements and implementation direction need to be resolved together by one owner."
+      - "Acceptance needs observable evidence from an independent QA owner."
+    avoid_when:
+      - "The requested behavior and implementation boundary are already confirmed."
+      - "Requirements need independent ownership or a separately reusable specification."
+      - "Implementation verification and subagent review fully cover the acceptance boundary."
+
+behavior:
+  completion: status_code
+  allow_issue_decomposition: true
+
+skills:
+  workflow:
+    shared: [cafe-workflow-common, cafe-github_sync]
+    steps:
+      develop:
+        mode: extend
+        skills: [cafe-develop_subagent_review, cafe-qa-feedback-context]
+  chat:
+    shared: [cafe-common-chat-handoff, cafe-chat-develop-change, cafe-chat-spec-revision, cafe-chat-plan-revision, cafe-chat-alignment-decision]
+
+roles:
+  developer:
+    description: "Requirements and implementation owner"
+    default_agent: "David"
+    default_cli: "claude"
+  qa:
+    description: "Product Acceptance QA"
+    default_agent: "Quinn"
+    default_cli: "gemini"
+
+commands:
+  prepare:
+    fields:
+      - id: input_method
+        type: enum
+        label: "Input method"
+        help: "Choose how the requirements for joint specification and planning are provided."
+        write: spec_plan.input_method
+        default: manual
+        required: true
+        show_when:
+          github_repo: true
+        choices:
+          - value: manual
+            label: "Manual input"
+          - value: github
+            label: "GitHub issue"
+      - id: github_issue_id
+        type: text
+        label: "GitHub issue ID or URL"
+        write: spec_plan.issue_id
+        normalize: github_issue
+        show_when:
+          issue_id_present: true
+
+steps:
+  spec_plan:
+    type: skill
+    skill: cafe-spec_plan
+    handoff_label: Revise requirements and implementation plan
+    role: developer
+    assignee_type: agent
+    input_artifacts: [plan]
+    output_artifact: plan
+    todo_identity_input_artifact: plan
+    valid_intents: [confirmed, ready_for_review, need_clarification, need_permission, needs_changes]
+    initial_input:
+      providers: [manual_text, github_issue]
+      bind:
+        artifact: plan
+        prompt_context: user_input
+    human_tasks:
+      - trigger: confirm_output
+        task_id: output-review
+        outcomes: {confirm: develop, revise: spec_plan}
+      - trigger: need_clarification
+        task_id: clarification-answers
+        outcomes: {submit: spec_plan}
+      - trigger: need_permission
+        task_id: permission-feedback
+        outcomes: {submit: spec_plan}
+      - trigger: manual_handoff
+        task_id: discussion-recovery
+        outcomes: {submit: spec_plan}
+    allowed_tools: [Read, Edit, Write, Grep, Glob, Bash, Agent, WebFetch, WebSearch]
+    hooks:
+      prepare_input: [InitialInputProviderResolver, UserInputCollector]
+    "on":
+      await_agent: develop
+      confirm_output: spec_plan
+      need_clarification: spec_plan
+      need_permission: spec_plan
+      manual_handoff: spec_plan
+
+  develop:
+    type: skill
+    skill: cafe-develop
+    handoff_label: Continue implementation
+    role: developer
+    assignee_type: agent
+    input_artifacts: [plan, qa_feedback, pr_result, workflow_feedback]
+    output_artifact: code
+    workspace_artifact: workspace
+    human_tasks:
+      - trigger: need_clarification
+        task_id: clarification-feedback
+        outcomes: {submit: develop}
+      - trigger: need_permission
+        task_id: permission-answers
+        outcomes: {submit: develop}
+      - trigger: no_changes_needed
+        task_id: no-change-decision
+        outcomes: {agree: develop, disagree: develop}
+    allowed_tools: [Read, Edit, Write, Grep, Glob, Bash, Agent, WebFetch, WebSearch]
+    allowed_goto: [spec_plan]
+    hooks:
+      prepare_input: [UserInputCollector]
+      after_execute: [NoChangesNeededHandler, PermissionRetryHandler]
+    "on":
+      await_agent: qa
+      manual_handoff: develop
+      need_clarification: develop
+      need_permission: develop
+      no_changes_needed: develop
+
+  qa:
+    type: skill
+    skill: cafe-qa
+    handoff_label: Repeat acceptance testing
+    role: qa
+    assignee_type: agent
+    input_artifacts: [plan, code, workspace]
+    workspace_input_artifact: workspace
+    output_artifact: qa_feedback
+    behavior:
+      feedback_target: develop
+      feedback_artifact: qa_feedback
+      feedback_source_kind: qa
+      feedback_todo_source: qa
+      feedback_todo_id_prefix: QA
+    human_tasks:
+      - {trigger: need_clarification, task_id: clarification-feedback, outcomes: {submit: qa}}
+      - {trigger: manual_handoff, task_id: iteration-limit, outcomes: {resume: qa}}
+    allowed_tools: [Read, Grep, Glob, Bash]
+    max_attempts_per_cycle: 5
+    allowed_goto: [develop]
+    hooks: {prepare_input: [UserInputCollector]}
+    "on": {await_agent: pr, manual_handoff: develop, need_clarification: qa, need_permission: qa}
+
+  pr:
+    type: skill
+    skill: cafe-pr
+    handoff_label: Refresh PR output
+    role: developer
+    assignee_type: agent
+    input_artifacts: [plan, code, workspace, qa_feedback, workflow_feedback]
+    workspace_input_artifact: workspace
+    output_artifact: pr_result
+    behavior:
+      completion: baton
+      publish_confirmation: true
+      feedback_target: pr
+      feedback_artifact: workflow_feedback
+      feedback_source_kind: github_pr
+      feedback_todo_source: pr_comment
+      feedback_todo_id_prefix: PRC
+      context_providers: [git_history, local_review]
+    capability_requests: [cafe.pr.publish]
+    allowed_tools: [Read, Edit, Write, Grep, Glob]
+    allowed_goto: [develop]
+    hooks:
+      prepare_input: [GitHubPRCreator, GitHubPRFeedbackSource, UserInputCollector]
+      publish_output: [GitHubPRCreator, LocalReviewContextProvider, PRLinkOpener]
+    human_tasks:
+      - trigger: confirm_output
+        task_id: local-review
+        outcomes: {fix_now: pr, create_follow_up: _done, continue_without_issue: _done}
+        feedback_delivery: {artifact: workflow_feedback, source_kind: local_review, todo_source: workflow_feedback, todo_id_prefix: WF}
+    "on":
+      confirm_output: pr
+      need_permission: pr
+      manual_handoff: develop
+
+entry_point: spec_plan

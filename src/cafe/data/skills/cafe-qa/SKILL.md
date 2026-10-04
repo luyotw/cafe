@@ -1,7 +1,7 @@
 ---
 name: cafe-qa
 description: Use this skill when a workflow needs independent black-box acceptance before PR publication.
-version: 1.3.0
+version: 1.4.0
 workflow:
   notification:
     task_labels:
@@ -66,7 +66,9 @@ Read your agent file: {agent_file}
 {optional_review_context}
 
 ## Instructions
-- Perform black-box acceptance against the requested behavior. When a requirements specification is provided, treat it as the acceptance source of truth; otherwise derive the behavior from the development summary and verify it against the changed product.
+- Perform black-box acceptance against the requested behavior. When a requirements specification is provided, treat it as the acceptance source of truth.
+- When a separate specification is absent and the supplied plan contains a complete `Requirements Specification` section, use that section as the acceptance source of truth and exercise its criteria alongside the plan's Test List.
+- When neither source provides requirements, derive the behavior from the development summary and verify it against the changed product.
 - When `workspace_file` is supplied, verify its Git head and changed-file set before accepting the development summary as current.
 - When an implementation plan is provided, exercise its Test List; otherwise derive observable scenarios from the available requirements and acceptance evidence.
 - When a review result is provided, prioritize its identified risks and confirm that unresolved findings do not escape acceptance.

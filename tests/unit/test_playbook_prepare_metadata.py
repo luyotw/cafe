@@ -335,7 +335,10 @@ def test_builtin_hotfix_disables_spec_plan_prompts() -> None:
     assert resolved.quick_setup.pr.post_todo_list_when_auto_create is True
 
 
-@pytest.mark.parametrize("playbook_name", ["direct", "direct-subagent-review", "direct-qa"])
+@pytest.mark.parametrize(
+    "playbook_name",
+    ["direct", "direct-subagent-review", "direct-qa", "subagent-flow", "subagent-flow-qa"],
+)
 def test_builtin_direct_playbooks_use_declarative_input_fields(
     playbook_name: str,
 ) -> None:
@@ -363,6 +366,8 @@ def test_every_builtin_prepare_is_declarative_or_explicitly_promptless() -> None
     for name in (
         "direct",
         "direct-subagent-review",
+        "subagent-flow",
+        "subagent-flow-qa",
         "direct-qa",
         "simple",
         "standard",

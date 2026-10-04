@@ -5,7 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from cafe.core.playbook import resolve_playbook_skills, resolve_step_behavior
+from cafe.core.playbook import (
+    confirmation_gate_steps,
+    mandatory_confirmation_gate_steps,
+    resolve_playbook_skills,
+    resolve_step_behavior,
+)
 from cafe.playbooks.loader import PlaybookLoader
 from cafe.playbooks.simulate import analyze_playbook
 from cafe.skills.checklist_composer import select_checklist_variant
@@ -18,6 +23,8 @@ pytestmark = pytest.mark.usefixtures("cached_builtin_playbook_models")
 DEVELOPMENT_PLAYBOOKS = {
     "direct",
     "direct-subagent-review",
+    "subagent-flow",
+    "subagent-flow-qa",
     "direct-qa",
     "simple",
     "standard",
@@ -72,9 +79,9 @@ def test_every_builtin_discretionary_destination_has_a_declared_label() -> None:
         for source_name, source in playbook.steps.items():
             for target_name in source.allowed_goto:
                 label = playbook.steps[target_name].handoff_label
-                assert label and label.strip(), (
-                    f"{playbook_id}:{source_name} -> {target_name} needs handoff_label"
-                )
+                assert (
+                    label and label.strip()
+                ), f"{playbook_id}:{source_name} -> {target_name} needs handoff_label"
 
 
 def test_builtin_phase_routing_guidance_uses_injected_routes_not_step_names() -> None:
@@ -98,10 +105,7 @@ def test_builtin_phase_routing_guidance_uses_injected_routes_not_step_names() ->
     ]
 
     assert findings == []
-    assert all(
-        "{step_transitions}" not in path.read_text(encoding="utf-8")
-        for path in phase_files
-    )
+    assert all("{step_transitions}" not in path.read_text(encoding="utf-8") for path in phase_files)
 
 
 def test_every_builtin_pr_requires_local_review_before_done() -> None:
@@ -173,9 +177,7 @@ def test_cafe_review_convergence_contract_preserves_critical_blockers() -> None:
     skill = (root / "SKILL.md").read_text(encoding="utf-8")
     convergence = (root / "references" / "execution_convergence.md").read_text(encoding="utf-8")
     finalize = (root / "references" / "execution_finalize.md").read_text(encoding="utf-8")
-    risk = (root / "references" / "execution_risk_assessment.md").read_text(
-        encoding="utf-8"
-    )
+    risk = (root / "references" / "execution_risk_assessment.md").read_text(encoding="utf-8")
     acceptance = (root / "references" / "execution_acceptance_closure.md").read_text(
         encoding="utf-8"
     )
@@ -312,8 +314,7 @@ def test_direct_subagent_review_composes_develop_with_one_review_overlay() -> No
     ]
 
     skill_path = (
-        Path(__file__).parents[2]
-        / "src/cafe/data/skills/cafe-develop_subagent_review/SKILL.md"
+        Path(__file__).parents[2] / "src/cafe/data/skills/cafe-develop_subagent_review/SKILL.md"
     )
     skill = skill_path.read_text(encoding="utf-8")
     assert "剛好兩個原生 subagent" in skill
@@ -341,6 +342,151 @@ def test_standard_owns_the_established_full_development_graph() -> None:
     assert playbook.steps["review"].on["await_agent"] == "pr"
 
 
+@pytest.mark.parametrize("playbook_id", ["subagent-flow", "subagent-flow-qa"])
+def test_joint_spec_plan_has_one_planning_gate_and_same_phase_revisions(playbook_id: str) -> None:
+    playbook = PlaybookLoader().load_model(playbook_id, strict=True).model
+    planning = playbook.steps["spec_plan"]
+
+    assert playbook.entry_point == "spec_plan"
+    expected_steps = ["spec_plan", "develop", "pr"]
+    if playbook_id == "subagent-flow-qa":
+        expected_steps.insert(2, "qa")
+    assert list(playbook.steps) == expected_steps
+    assert confirmation_gate_steps(playbook) == ("spec_plan",)
+    assert mandatory_confirmation_gate_steps(playbook) == ("pr",)
+    assert planning.output_artifact == "plan"
+    assert planning.input_artifacts == ["plan"]
+    assert planning.todo_identity_input_artifact == "plan"
+    assert planning.initial_input.bind.prompt_context == "user_input"
+    assert planning.initial_input.bind.artifact == "plan"
+    review = next(task for task in planning.human_tasks if task.trigger == "confirm_output")
+    assert review.outcomes == {"confirm": "develop", "revise": "spec_plan"}
+    for trigger in ("need_clarification", "need_permission", "manual_handoff"):
+        task = next(task for task in planning.human_tasks if task.trigger == trigger)
+        assert task.outcomes == {"submit": "spec_plan"}
+    assert planning.on["confirm_output"] == "spec_plan"
+    assert planning.on["await_agent"] == "develop"
+    assert playbook.steps["develop"].allowed_goto == ["spec_plan"]
+    assert all("spec" not in step.input_artifacts for step in playbook.steps.values())
+
+
+@pytest.mark.parametrize("playbook_id", ["subagent-flow", "subagent-flow-qa"])
+def test_joint_plan_reuses_direct_review_and_does_not_skip_no_change_review(
+    playbook_id: str,
+) -> None:
+    loader = PlaybookLoader()
+    raw = loader.load(playbook_id)
+    playbook = loader.load_model(playbook_id, strict=True).model
+    direct = loader.load_model("direct-subagent-review", strict=True).model
+    develop = playbook.steps["develop"]
+
+    assert develop.skill == direct.steps["develop"].skill
+    expected_routes = dict(direct.steps["develop"].on)
+    if playbook_id == "subagent-flow-qa":
+        expected_routes["await_agent"] = "qa"
+    assert develop.on == expected_routes
+    assert develop.human_tasks == direct.steps["develop"].human_tasks
+    assert develop.workspace_artifact == "workspace"
+    assert "plan" in develop.input_artifacts
+    assert "plan" in playbook.steps["pr"].input_artifacts
+    assert "InitialInputProviderResolver" not in develop.hooks.prepare_input
+    assert playbook.steps["pr"].hooks == direct.steps["pr"].hooks
+
+    composition = resolve_step_workflow_composition(
+        SkillLoader(),
+        primary_skill=develop.skill,
+        step_name="develop",
+        workflow_skills=resolve_playbook_skills(
+            raw, channel="workflow", role="developer", step_name="develop"
+        ),
+    )
+    assert "cafe-develop_subagent_review" in composition.skill_names
+    assert composition.required_tools == ("Agent",)
+    planned = select_checklist_variant(
+        composition.contributors[0].declaration,
+        step="develop",
+        iteration=1,
+        artifacts={"plan": object()},
+        feedback=False,
+    )
+    assert planned is not None
+    assert any(
+        section.todo_projection is not None
+        and section.todo_projection.artifact == "plan"
+        and section.todo_projection.source == "plan"
+        for section in planned.sections
+    )
+
+
+@pytest.mark.parametrize("playbook_id", ["subagent-flow", "subagent-flow-qa"])
+def test_joint_planning_composition_requires_real_subagents_and_prior_plan_authority(
+    playbook_id: str,
+) -> None:
+    playbook = PlaybookLoader().load(playbook_id)
+    composition = resolve_step_workflow_composition(
+        SkillLoader(),
+        primary_skill="cafe-spec_plan",
+        step_name="spec_plan",
+        workflow_skills=resolve_playbook_skills(
+            playbook, channel="workflow", role="developer", step_name="spec_plan"
+        ),
+    )
+    assert set(composition.required_tools) == {"Agent", "Bash"}
+    assert "cafe-plan" not in composition.skill_names
+    prior = next(
+        item for item in composition.prompt_inputs if item.placeholder == "prior_plan_file"
+    )
+    assert prior.artifacts == ("plan",)
+    assert prior.required is False
+    review = next(task for task in composition.human_tasks if task.id == "output-review")
+    decisions = {decision.id: decision for decision in review.decisions}
+    assert set(decisions) == {"confirm", "revise"}
+    assert decisions["revise"].requires_feedback is True
+
+
+def test_subagent_qa_keeps_acceptance_and_correction_feedback_in_the_graph() -> None:
+    loader = PlaybookLoader()
+    raw = loader.load("subagent-flow-qa")
+    playbook = loader.load_model("subagent-flow-qa", strict=True).model
+    qa = playbook.steps["qa"]
+
+    assert "review" not in playbook.steps
+    assert playbook.steps["develop"].on["await_agent"] == "qa"
+    assert qa.skill == "cafe-qa"
+    assert qa.role == "qa"
+    assert qa.input_artifacts == ["plan", "code", "workspace"]
+    assert qa.workspace_input_artifact == "workspace"
+    assert qa.output_artifact == "qa_feedback"
+    assert qa.max_attempts_per_cycle == 5
+    assert qa.allowed_goto == ["develop"]
+    assert qa.on == {
+        "await_agent": "pr",
+        "manual_handoff": "develop",
+        "need_clarification": "qa",
+        "need_permission": "qa",
+    }
+    limit = next(task for task in qa.human_tasks if task.task_id == "iteration-limit")
+    assert limit.outcomes == {"resume": "qa"}
+    feedback = resolve_step_behavior(playbook, "qa")
+    assert feedback.feedback_target == "develop"
+    assert feedback.feedback_artifact == "qa_feedback"
+    assert feedback.feedback_source_kind == "qa"
+    assert feedback.feedback_todo_source == "qa"
+    assert feedback.feedback_todo_id_prefix == "QA"
+    for step_name in ("develop", "pr"):
+        assert "qa_feedback" in playbook.steps[step_name].input_artifacts
+
+    composition = resolve_step_workflow_composition(
+        SkillLoader(),
+        primary_skill="cafe-develop",
+        step_name="develop",
+        workflow_skills=resolve_playbook_skills(
+            raw, channel="workflow", role="developer", step_name="develop"
+        ),
+    )
+    assert any(item.artifacts == ("qa_feedback",) for item in composition.prompt_inputs)
+
+
 @pytest.mark.parametrize("playbook_id", ["standard", "standard-qa", "tdd", "tdd-qa"])
 def test_solution_alignment_stays_inside_the_plan_step(playbook_id: str) -> None:
     playbook = PlaybookLoader().load_model(playbook_id, strict=True).model
@@ -350,9 +496,7 @@ def test_solution_alignment_stays_inside_the_plan_step(playbook_id: str) -> None
     assert plan.on["need_clarification"] == "plan"
     assert plan.on["confirm_output"] == "plan"
     assert plan.on["await_agent"] == "develop"
-    clarification = next(
-        task for task in plan.human_tasks if task.trigger == "need_clarification"
-    )
+    clarification = next(task for task in plan.human_tasks if task.trigger == "need_clarification")
     assert clarification.task_id == "clarification-answers"
     assert clarification.outcomes == {"submit": "plan"}
 
@@ -360,7 +504,9 @@ def test_solution_alignment_stays_inside_the_plan_step(playbook_id: str) -> None
 def test_plan_steps_declare_the_prior_identity_authority_and_skill_input() -> None:
     loader = PlaybookLoader()
     contract = SkillLoader().get_workflow_declaration("cafe-plan")
-    prior_input = next(item for item in contract.prompt_inputs if item.placeholder == "prior_plan_file")
+    prior_input = next(
+        item for item in contract.prompt_inputs if item.placeholder == "prior_plan_file"
+    )
     assert prior_input.artifacts == ("plan",)
     assert prior_input.required is False
     for playbook_id in ("standard", "standard-qa", "tdd", "tdd-qa"):
@@ -446,6 +592,8 @@ def test_existing_hotfix_and_tdd_paths_remain_unchanged() -> None:
         "standard-qa",
         "direct",
         "direct-subagent-review",
+        "subagent-flow",
+        "subagent-flow-qa",
         "direct-qa",
         "hotfix",
         "simple",
@@ -477,6 +625,8 @@ def test_builtin_pr_feedback_routes_declare_portable_todo_metadata(
         "standard-qa",
         "direct",
         "direct-subagent-review",
+        "subagent-flow",
+        "subagent-flow-qa",
         "direct-qa",
         "hotfix",
         "simple",
@@ -536,15 +686,9 @@ def test_qa_feedback_is_exposed_by_every_correction_and_publication_skill() -> N
         assert any("qa_feedback" in item.artifacts for item in prompt_inputs)
 
     qa_contract = loader.get_workflow_declaration("cafe-qa")
-    required = {
-        mapping.artifacts[0]
-        for mapping in qa_contract.prompt_inputs
-        if mapping.required
-    }
+    required = {mapping.artifacts[0] for mapping in qa_contract.prompt_inputs if mapping.required}
     optional = {
-        mapping.artifacts[0]
-        for mapping in qa_contract.prompt_inputs
-        if not mapping.required
+        mapping.artifacts[0] for mapping in qa_contract.prompt_inputs if not mapping.required
     }
     assert required == {"code"}
     assert optional == {"spec", "plan", "review_feedback", "workspace"}
