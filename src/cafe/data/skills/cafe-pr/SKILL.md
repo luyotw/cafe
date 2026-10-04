@@ -1,7 +1,7 @@
 ---
 name: cafe-pr
 description: "Prepare the local pull request title and description for publication"
-version: 1.7.0
+version: 1.8.0
 workflow:
   notification:
     step_label:
@@ -138,7 +138,9 @@ When `workflow_feedback_file` contains feedback for this cycle, or `Current user
  - When runtime provides `workflow_feedback_batch_file`, it is the only immutable source context for this cycle. Select Todo items only from that batch; later items remain for a later cycle. Use the paired ID and Source from runtime's `Canonical Todo fields for this batch` block exactly as shown for each selected batch entry; do not derive or substitute a generic PR-comment prefix or source. Otherwise, `workflow_feedback_file` and review comments are PR-agent context, not a Develop worklist. Process only unresolved corrective input declared for this step; do not import resolved, stale, duplicate, informational, ordinary PR-body, `## Test Plan`, or open follow-up proposal text.
  - Decide which sources in the current corrective batch need implementation. Normalize each applicable source into the output's one `## Todo List` of at most 100 rows. Preserve one-to-one source identity, and never merge distinct sources because their text matches.
  - For applicable work, Todo rows must use ``- [ ] `<id>` — Source: `<source>` — Work: ... — Closure: ... — Evidence: ...``. Write only the normalized list; do not include raw PR comments or HumanTask feedback.
- - When this batch has applicable corrective work, write the declared `manual_handoff` using the injected discretionary route marked `carries_feedback`. Do not hardcode step names or select an undeclared route.
+ - When this batch has applicable corrective work, write the declared `manual_handoff`. Prefer an injected discretionary route marked `carries_feedback`; when none exists, use the injected `defaults.manual_handoff` destination only if it is also listed in the injected `goto` entries.
+ - This declared curation handoff delivers the current normalized `{output_file}` Todo List. Preserve all runtime-assigned IDs and Sources, including a batch with multiple source kinds. Runtime validates the receiving phase's declared artifact input and canonical worklist before transition.
+ - Do not change the incoming feedback target, hardcode step names, select an undeclared route, or hand raw feedback to an execution phase. If neither route is available, report the missing curation route through the declared output-review handoff instead of inventing a destination.
  - When this batch has no applicable corrective work, prepare the complete PR title and description using the PR content steps below. Include exactly one `## Todo List` containing only `No actionable work.` so the runtime can settle this batch as excluded. Choose the declared `confirm_output` route to `user`, or the declared `workflow_complete` default to `done` when no review gate exists. Do not send an empty worklist to a correction consumer or decide the user's follow-up proposals.
 
 ### PR content mode

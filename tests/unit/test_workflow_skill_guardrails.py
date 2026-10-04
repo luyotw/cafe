@@ -57,7 +57,7 @@ def test_behaviorally_changed_skills_have_minor_version_bumps() -> None:
         "cafe-spec": "version: 1.7.0",
         "cafe-plan": "version: 1.11.0",
         "cafe-review": "version: 1.14.0",
-        "cafe-pr": "version: 1.7.0",
+        "cafe-pr": "version: 1.8.0",
         "cafe-workflow-common": "version: 1.9.0",
         "use-cafe-workflow": "metadata: {version: 1.71.4}",
     }
