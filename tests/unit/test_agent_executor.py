@@ -2648,6 +2648,8 @@ class TestAllowedDirectoriesParameter:
             "Test response\n",
             "",
         ]
+        # The native stderr pre-read must see EOF, not a MagicMock record.
+        mock_process.stderr.readline.return_value = ""
         mock_process.stderr.read.return_value = ""
         mock_process.wait.return_value = 0
 

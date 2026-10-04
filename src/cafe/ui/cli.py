@@ -1235,7 +1235,8 @@ def chat_with_agent(
         False,
         "--read-only",
         help=(
-            "Restrict Codex/Claude native model tools and suppress CAFE state writes. "
+            "Use native read-only options for Codex, Claude, Gemini, Cursor and Copilot; "
+            "suppress CAFE state writes. "
             "Native UI/integrations and provider persistence can bypass these limits; "
             "this is not whole-process protection."
         ),
@@ -1248,14 +1249,19 @@ def chat_with_agent(
     The system automatically infers the issue from current branch and loads corresponding session.
     Valid roles come from the active issue's playbook, including custom roles.
 
-    --read-only integrates Codex and Claude native model-tool restrictions while
+    --read-only integrates Codex, Claude, Gemini, Cursor and Copilot native options while
     skipping CAFE helper/skill sync, handoff preparation, session and usage writes.
     Provider-owned persistence and native UI/integrations/IPC remain outside
     these limits. Codex thread/settings/update accepted workspaceWrite in a
     metadata-only probe with no file write. Claude Code 2.1.284 !touch wrote a
     scratch file despite restricted model tools and plan mode. Codex's built-in
     sandbox/backend can fail locally; actual errors are reported without a
-    writable fallback. These options do not provide whole-process protection.
+    writable fallback. Gemini plan mode permits plan-file writes; its documented
+    headless exit switches to YOLO execution. Cursor ask and Copilot read-tool
+    availability do not confine native UI, plugins or persistence. Copilot uses
+    view/glob/grep availability, read approval and shell/write denial; native
+    option/version rejection remains an error. These options do not provide
+    whole-process protection.
 
     \b
     Examples:

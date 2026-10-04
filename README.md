@@ -402,17 +402,30 @@ cafe chat developer --read-only --prompt "Diagnose the current issue"
 cafe chat developer --phase develop --read-only -p "Diagnose the current issue"
 ```
 
-Both interactive and one-shot diagnosis support fresh and resumed Codex/Claude
-conversations. Codex receives native `--sandbox read-only` and never approval.
-Claude receives `--tools Read,Glob,Grep`, matching read approvals, explicit
-`Bash,Edit,Write,NotebookEdit` denial and plan permission mode. The available-tool
-list restricts built-in model tools; an approval list alone does not do so.
-Unintegrated providers/operations fail before launch. Actual native option,
+Both interactive and one-shot diagnosis support fresh and resumed conversations
+with all five integrated providers, including custom roles/phases and currently
+configured backup sessions. The current invocation receives these native options:
+
+| Provider | Native options |
+| --- | --- |
+| Codex | `--sandbox read-only`, never approval |
+| Claude | `--tools Read,Glob,Grep`, matching `--allowed-tools`, `--disallowed-tools Bash,Edit,Write,NotebookEdit`, `--permission-mode plan` |
+| Gemini | `--approval-mode plan` |
+| Cursor | `--mode ask`, removing CAFE-built `--force`/`--yolo` |
+| Copilot | `--available-tools=view,glob,grep`, `--allow-tool=read`, `--deny-tool=shell`, `--deny-tool=write`, removing CAFE-built broad tool approvals |
+
+Availability lists restrict model tools; approval lists alone do not do so.
+Copilot availability names differ from permission kinds. Its installed help and
+command reference describe `--allow-all-tools` as required for programmatic use;
+CAFE uses the explicit read approval/cap instead and reports any actual version
+rejection without restoring broad approval. Unsupported operations fail before
+launch. Actual native option,
 authentication or backend errors remain errors, without switching provider or
 retrying writable chat. Omitting the flag retains ordinary writable behavior.
 
 CAFE skips helper/chat-skill synchronization, handoff preparation/clearing,
-session/timestamp persistence and usage publication. Existing artifacts, task
+session/timestamp persistence, usage publication and Gemini `.geminiignore`
+preparation (including existing files and linked targets). Existing artifacts, task
 and result records, baton, blackboard and associated linked/shared context are
 read without CAFE initialization, reconciliation, repair, task completion or
 ownership changes. Missing optional state stays absent; required unsafe context
@@ -436,6 +449,17 @@ Recorded limitations include:
 - Codex's native read-only mode can depend on its built-in sandbox/backend, which
   may be unavailable locally. CAFE surfaces the actual failure and adds no outer
   sandbox or environment admission probe.
+- Gemini's documented plan mode permits writes to plan files and mutable policy.
+  In headless execution, entry/exit of plan mode is automatically approved, and
+  exit switches to YOLO automated implementation. This is a documentation-derived
+  limitation, not a new native observation. See [Plan Mode](https://geminicli.com/docs/cli/plan-mode/)
+  and [Policy engine](https://geminicli.com/docs/reference/policy-engine/).
+- Cursor ask mode and Copilot's read-tool availability do not guarantee protection
+  from native UI/settings, hooks/plugins/MCP, integrations/subprocesses, external
+  IPC/daemon paths or provider-owned history/session/configuration writes. No new
+  native mutation-denial experiment was run for these providers. Option sources:
+  [Cursor parameters](https://cursor.com/docs/cli/reference/parameters) and
+  [Copilot command/tool reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference).
 
 Argument/forwarding tests and isolated CAFE storage inventories verify the
 feature's wiring and CAFE effects. They do not prove native inference success,

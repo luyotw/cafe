@@ -2,7 +2,7 @@
 
 import pytest
 
-from cafe.agents.cli import CodexCLI, GeminiCLI
+from cafe.agents.cli import CodexCLI
 from cafe.core.types import AgentCLI, AgentConfig
 
 
@@ -38,7 +38,6 @@ def test_u4_codex_native_options_preserve_context(session, operation):
 
 def test_u6_unintegrated_provider_or_operation_rejects_before_launch():
     for strategy, operation in [
-        (GeminiCLI(AgentConfig(name="Ada", cli=AgentCLI.GEMINI)), "run_one_shot"),
         (CodexCLI(AgentConfig(name="Ada", cli=AgentCLI.CODEX)), "deliver_to_exact_session"),
     ]:
         with pytest.raises(ValueError) as caught:

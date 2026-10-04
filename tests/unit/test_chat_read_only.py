@@ -96,7 +96,7 @@ def test_u1_help_exposes_protection_and_provider_support():
     assert result.exit_code == 0
     assert "--read-only" in result.output
     assert "provider" in result.output.lower()
-    for term in ["Codex", "Claude", "CAFE", "workspaceWrite", "2.1.284", "!touch", "backend"]:
+    for term in ["Codex", "Claude", "Gemini", "Cursor", "Copilot", "CAFE", "workspaceWrite", "2.1.284", "!touch", "backend", "YOLO"]:
         assert term in result.output
 
 

@@ -10,6 +10,36 @@ from cafe.core.types import PermissionDenial, TokenUsage
 class CursorCLI(AbstractCLI):
     """Concrete implementation of Cursor CLI tool."""
 
+    read_only_operations = frozenset({"open_interactive_session", "run_one_shot"})
+
+    def apply_read_only(self, command: List[str], operation: str) -> List[str]:
+        self.require_read_only(operation)
+        # Native ask mode restricts model actions; native UI/settings, plugins,
+        # integrations/subprocesses, IPC and session/history persistence are not
+        # whole-process confined. No native mutation-denial experiment is claimed.
+        native = []
+        index = 1
+        while index < len(command):
+            option = command[index]
+            if option == "--":
+                native.extend(command[index:])
+                break
+            if option == "--mode":
+                index += 2
+            elif option in {"--force", "-f", "--yolo"} or option.startswith("--mode="):
+                index += 1
+            elif option in {"-p", "--model", "--resume", "--output-format"}:
+                native.extend(command[index:index + 2])
+                index += 2
+            else:
+                native.append(option)
+                index += 1
+        # The shared interactive builder omits Cursor's model flag. Diagnostics
+        # must retain configured model authority without changing writable chat.
+        if operation == "open_interactive_session" and self.config.model:
+            native = ["--model", self.config.model, *native]
+        return [command[0], "--mode", "ask", *native]
+
     def build_command(
         self,
         prompt: str,

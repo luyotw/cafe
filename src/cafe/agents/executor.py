@@ -245,8 +245,9 @@ class AgentExecutor:
                 streaming_output_file = None
             # Normal Gemini agents keep the repository-owned ignore file.
             # Decision-only execution creates it only inside its isolated cwd.
+            # Read-only chat preserves absent/existing/shared ignore state.
             decision_only = allowed_tools == [] and allowed_directories == []
-            if self.config.cli == AgentCLI.GEMINI and not decision_only:
+            if self.config.cli == AgentCLI.GEMINI and not decision_only and not read_only:
                 cli_strategy.ensure_geminiignore()
             if self.config.cli == AgentCLI.COPILOT:
                 cli_strategy.record_existing_sessions()

@@ -1,4 +1,4 @@
-"""Read-only inspection journeys; successful enforcement must use a real backend."""
+"""Read-only wiring/storage journeys; native fixtures do not prove process confinement."""
 
 import json
 import subprocess
@@ -198,6 +198,12 @@ def native_io(monkeypatch):
                 },
             ]
         )
+        if command[0] == "gemini":
+            records = [
+                {"type": "init", "session_id": session},
+                {"type": "message", "role": "assistant", "content": "diagnostic response"},
+                {"type": "result", "status": "success"},
+            ]
         if current.get("invalid_request"):
             records.insert(
                 1,
@@ -208,7 +214,9 @@ def native_io(monkeypatch):
                 },
             )
         process = MagicMock()
-        process.stdout.readline.side_effect = [json.dumps(r) + "\n" for r in records] + [""]
+        lines = (["diagnostic response\n"] if command[0] == "copilot"
+                 else [json.dumps(r) + "\n" for r in records])
+        process.stdout.readline.side_effect = lines + [""]
         process.stderr.read.return_value = current["stderr"]
         process.poll.return_value = None
         process.wait.return_value = current["returncode"]
@@ -229,13 +237,25 @@ def assert_native_options(command, provider):
         assert command[command.index("--sandbox") + 1] == "read-only"
         approval = "-a" if "-a" in command else "--ask-for-approval"
         assert command[command.index(approval) + 1] == "never"
-    else:
+    elif provider == "claude":
         assert command[command.index("--tools") + 1] == "Read,Glob,Grep"
+        assert command[command.index("--allowed-tools") + 1] == "Read,Glob,Grep"
+        assert command[command.index("--disallowed-tools") + 1] == "Bash,Edit,Write,NotebookEdit"
         assert command[command.index("--permission-mode") + 1] == "plan"
+    elif provider == "gemini":
+        assert command[command.index("--approval-mode") + 1] == "plan"
+    elif provider == "cursor-agent":
+        assert command[command.index("--mode") + 1] == "ask"
+        assert "--force" not in command and "--yolo" not in command
+    elif provider == "copilot":
+        assert "--available-tools=view,glob,grep" in command
+        assert "--allow-tool=read" in command
+        assert "--deny-tool=shell" in command and "--deny-tool=write" in command
+        assert "--allow-all-tools" not in command
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("provider", ["codex", "claude"])
+@pytest.mark.parametrize("provider", ["codex", "claude", "gemini", "cursor-agent", "copilot"])
 @pytest.mark.parametrize("resumed", [False, True])
 @pytest.mark.parametrize("mode", [None, "--prompt", "-p"])
 @pytest.mark.parametrize("explicit_phase", [False, True])
@@ -267,22 +287,7 @@ def test_i1_i2_i5_diagnose_without_cafe_state_changes(
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("provider", ["gemini", "cursor-agent", "copilot"])
-def test_i6_unsupported_provider_preserves_state_and_never_launches(
-    diagnostic_workspace, native_io, provider
-):
-    repo, _, _ = diagnostic_workspace
-    configure_provider(repo, provider)
-    before = inventory(repo.parent)
-    result = CliRunner().invoke(cli.app, ["chat", "analyst", "--read-only", "-p", "inspect"])
-    assert result.exit_code != 0
-    assert provider in result.output and "run_one_shot" in result.output
-    assert native_io[0] == []
-    assert inventory(repo.parent) == before
-
-
-@pytest.mark.integration
-@pytest.mark.parametrize("provider", ["codex", "claude"])
+@pytest.mark.parametrize("provider", ["codex", "claude", "gemini", "cursor-agent", "copilot"])
 @pytest.mark.parametrize("mode", [None, "-p"])
 @pytest.mark.parametrize("missing", [False, True])
 def test_i6_native_error_is_visible_without_writable_fallback(
@@ -300,7 +305,7 @@ def test_i6_native_error_is_visible_without_writable_fallback(
     assert inventory(repo.parent) == before
 
 
-@pytest.mark.parametrize("provider", ["codex", "claude"])
+@pytest.mark.parametrize("provider", ["codex", "claude", "gemini", "cursor-agent", "copilot"])
 @pytest.mark.parametrize("resumed", [False, True])
 @pytest.mark.parametrize("interactive", [False, True])
 def test_u5_final_transport_spawn_restricts_without_accounting_or_streaming_file(
@@ -336,7 +341,7 @@ def test_u5_final_transport_spawn_restricts_without_accounting_or_streaming_file
             on_response=responses.append,
             streaming_output_file=str(repo / "streaming.jsonl"),
         )
-        assert responses[0].response == "diagnostic response"
+        assert responses[0].response.strip() == "diagnostic response"
     assert len(native_io[0]) == 1
     command, kwargs = native_io[0][0]
     assert_native_options(command, provider)
@@ -414,12 +419,13 @@ def test_i9_public_nested_context_reads_existing_home_without_recovery(
 
 @pytest.mark.integration
 @pytest.mark.parametrize("unsafe", [None, "blackboard", "catalog", "session"])
-def test_i4_actual_module_startup_does_not_install_or_repair(diagnostic_workspace, unsafe):
+@pytest.mark.parametrize("provider", ["codex", "claude", "gemini", "cursor-agent", "copilot"])
+def test_i4_actual_module_startup_does_not_install_or_repair(diagnostic_workspace, unsafe, provider):
     import os
     import stat
 
     repo, issue, store = diagnostic_workspace
-    configure_provider(repo, "codex")
+    configure_provider(repo, provider)
     if unsafe == "blackboard":
         store.receipts_path.unlink()
     if unsafe == "catalog":
@@ -429,13 +435,20 @@ def test_i4_actual_module_startup_does_not_install_or_repair(diagnostic_workspac
         session_file = issue / "sessions/broken.json"
         session_file.parent.mkdir()
         session_file.write_text("invalid JSON")
-    binary = repo.parent / "bin/codex"
+    binary = repo.parent / "bin" / provider
     binary.parent.mkdir()
-    binary.write_text(
-        f"#!{sys.executable}\n"
-        + "import json\n"
-        + "for r in [{'type':'item.completed','item':{'type':'agent_message','text':'fixture diagnosis'}}, {'type':'turn.completed'}]: print(json.dumps(r))\n"
-    )
+    if provider == "codex":
+        records = [{"type": "item.completed", "item": {"type": "agent_message", "text": "fixture diagnosis"}},
+                   {"type": "turn.completed"}]
+    elif provider == "gemini":
+        records = [{"type": "message", "role": "assistant", "content": "fixture diagnosis"},
+                   {"type": "result", "status": "success"}]
+    else:
+        records = [{"type": "assistant", "message": {"content": [{"type": "text", "text": "fixture diagnosis"}]}},
+                   {"type": "result", "subtype": "success", "result": "fixture diagnosis"}]
+    body = ("print('fixture diagnosis')\n" if provider == "copilot"
+            else f"for r in {records!r}: print(json.dumps(r))\n")
+    binary.write_text(f"#!{sys.executable}\nimport json\n" + body)
     binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
     before = inventory(repo.parent)
     env = dict(
@@ -496,7 +509,7 @@ def test_i4_malformed_diagnostic_startup_preserves_real_state(diagnostic_workspa
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("provider", ["codex", "claude"])
+@pytest.mark.parametrize("provider", ["codex", "claude", "gemini", "cursor-agent", "copilot"])
 def test_i3_linked_worktree_shared_and_absent_context_remains_unchanged(
     diagnostic_workspace, native_io, provider, monkeypatch
 ):
@@ -539,8 +552,13 @@ def test_i3_linked_worktree_shared_and_absent_context_remains_unchanged(
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("provider", ["codex", "claude"])
-@pytest.mark.parametrize("reason", ["No conversation found", "Prompt is too long"])
+@pytest.mark.parametrize("provider,reason", [
+    (provider, reason)
+    for provider in ["codex", "claude", "gemini", "cursor-agent", "copilot"]
+    for reason in ["No conversation found", "Prompt is too long"]
+    # Plain-text Copilot has no invalid_request classification in ordinary chat.
+    if provider != "copilot" or reason != "Prompt is too long"
+])
 def test_i7_same_provider_recovery_keeps_options_without_persistence(
     diagnostic_workspace, native_io, provider, reason
 ):
@@ -566,7 +584,7 @@ def test_i7_same_provider_recovery_keeps_options_without_persistence(
 
 @pytest.mark.integration
 @pytest.mark.skipif(sys.platform == "win32", reason="Exercises the Unix stderr pre-read")
-@pytest.mark.parametrize("provider", ["codex", "claude"])
+@pytest.mark.parametrize("provider", ["codex", "claude", "gemini", "cursor-agent", "copilot"])
 @pytest.mark.parametrize("scenario", ["recover", "failure"])
 def test_i6_i7_unix_stderr_only_rejection_reaches_chat(
     diagnostic_workspace, tmp_path_factory, provider, scenario
@@ -601,6 +619,15 @@ if provider == 'codex':
         {'type': 'item.completed', 'item': {'type': 'agent_message', 'text': message}},
         {'type': 'turn.completed'},
     ]
+elif provider == 'gemini':
+    records = [
+        {'type': 'init', 'session_id': 'fresh-session'},
+        {'type': 'message', 'role': 'assistant', 'content': message},
+        {'type': 'result', 'status': 'success'},
+    ]
+elif provider == 'copilot':
+    print(message)
+    sys.exit(0)
 else:
     records = [
         {'type': 'system', 'subtype': 'init', 'session_id': 'fresh-session'},
@@ -657,7 +684,7 @@ for record in records:
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("provider", ["codex", "claude"])
+@pytest.mark.parametrize("provider", ["codex", "claude", "gemini", "cursor-agent", "copilot"])
 def test_i7_partial_native_failure_preserves_cafe_records(
     diagnostic_workspace, native_io, provider
 ):
@@ -674,7 +701,7 @@ def test_i7_partial_native_failure_preserves_cafe_records(
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("provider", ["codex", "claude"])
+@pytest.mark.parametrize("provider", ["codex", "claude", "gemini", "cursor-agent", "copilot"])
 def test_i8_writable_chat_persists_session_and_prepares_context(
     diagnostic_workspace, native_io, provider
 ):
@@ -693,6 +720,14 @@ def test_i8_writable_chat_persists_session_and_prepares_context(
     assert len(native_io[0]) == 1
     command = native_io[0][0][0]
     assert "--sandbox" not in command and "--tools" not in command
+    if provider == "gemini":
+        assert "--approval-mode" not in command
+        assert "!/.cafe" in (repo / ".geminiignore").read_text()
+    elif provider == "cursor-agent":
+        assert "--force" in command and "--mode" not in command
+    elif provider == "copilot":
+        assert "--allow-all-tools" in command
+        assert "--available-tools=view,glob,grep" not in command
     assert (repo.parent / "home/.cafe").exists()
     assert (
         SessionManager().load_session("Ada", AgentCLI(provider), "issue520", "inspect").session_id
@@ -702,9 +737,12 @@ def test_i8_writable_chat_persists_session_and_prepares_context(
 
 
 @pytest.mark.integration
-def test_i5_saved_configured_backup_keeps_current_model_authority(diagnostic_workspace, native_io):
+@pytest.mark.parametrize("provider", ["codex", "claude", "gemini", "cursor-agent", "copilot"])
+def test_i5_saved_configured_backup_keeps_current_model_authority(
+    diagnostic_workspace, native_io, provider
+):
     repo, _, _ = diagnostic_workspace
-    configure_provider(repo, "claude", True)
+    configure_provider(repo, provider, True)
     (repo / ".cafe/phases.yaml").write_text(
         yaml.safe_dump(
             {
@@ -712,8 +750,8 @@ def test_i5_saved_configured_backup_keeps_current_model_authority(diagnostic_wor
                     "name": "Ada",
                     "role": "analyst",
                     "clis": [
-                        {"cli": "codex", "model": "primary-model"},
-                        {"cli": "claude", "model": "selected-model"},
+                        {"cli": "claude" if provider == "codex" else "codex", "model": "primary-model"},
+                        {"cli": provider, "model": "selected-model"},
                     ],
                 }
             }
@@ -724,7 +762,51 @@ def test_i5_saved_configured_backup_keeps_current_model_authority(diagnostic_wor
         cli.app, ["chat", "analyst", "--read-only", "--phase", "inspect", "-p", "inspect"]
     )
     assert result.exit_code == 0, result.output
-    assert_native_options(native_io[0][0][0], "claude")
+    assert_native_options(native_io[0][0][0], provider)
     assert "stored-session" in native_io[0][0][0]
     assert "primary-model" not in native_io[0][0][0]
+    assert inventory(repo.parent) == before
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("ignore_state", ["absent", "existing", "linked"])
+@pytest.mark.parametrize("mode", [None, "--prompt", "-p"])
+def test_i4_gemini_ignore_is_not_prepared_in_read_only_chat(
+    diagnostic_workspace, native_io, ignore_state, mode
+):
+    repo, _, _ = diagnostic_workspace
+    configure_provider(repo, "gemini", True)
+    path = repo / ".geminiignore"
+    if ignore_state == "existing":
+        path.write_text("existing custom ignore\n")
+    elif ignore_state == "linked":
+        target = repo.parent / "shared-ignore"
+        target.write_text("shared custom ignore\n")
+        path.symlink_to(target)
+    before = inventory(repo.parent)
+    args = ["chat", "analyst", "--read-only", "--phase", "inspect"]
+    if mode:
+        args += [mode, "diagnose"]
+    result = CliRunner().invoke(cli.app, args)
+    assert result.exit_code == 0, result.output
+    assert_native_options(native_io[0][0][0], "gemini")
+    assert inventory(repo.parent) == before
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("provider", ["codex", "claude", "gemini", "cursor-agent", "copilot"])
+def test_i7_recovery_exhaustion_keeps_all_attempts_read_only(
+    diagnostic_workspace, native_io, provider
+):
+    repo, _, _ = diagnostic_workspace
+    configure_provider(repo, provider, True)
+    native_io[1].update(returncode=1, stderr="No conversation found")
+    before = inventory(repo.parent)
+    result = CliRunner().invoke(cli.app, ["chat", "analyst", "--read-only", "-p", "diagnose"])
+    assert result.exit_code != 0
+    # The existing session retry policy is bounded; every attempted native
+    # command retains the model and restriction, even after losing the session.
+    assert 1 < len(native_io[0]) <= 4
+    for command, _ in native_io[0]:
+        assert_native_options(command, provider)
     assert inventory(repo.parent) == before
