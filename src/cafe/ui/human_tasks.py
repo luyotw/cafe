@@ -1627,13 +1627,23 @@ def _fresh_session_recovery_payload(
     prior_session_id = iteration_data.get("session_id")
     if not isinstance(prior_cli, str) or not prior_cli.strip():
         raise ValueError("Fresh-session recovery requires the interrupted CLI identity.")
-    if not isinstance(prior_session_id, str) or not prior_session_id.strip():
+    continuation = iteration_data.get("session_continuation")
+    unobserved_new_session = (
+        prior_session_id is None
+        and isinstance(continuation, Mapping)
+        and continuation.get("policy") == "new"
+    )
+    if not unobserved_new_session and (
+        not isinstance(prior_session_id, str) or not prior_session_id.strip()
+    ):
         raise ValueError("Fresh-session recovery requires the interrupted session identity.")
 
-    previous: dict[str, str] = {
+    previous: dict[str, Any] = {
         "cli": prior_cli.strip(),
-        "session_id": prior_session_id.strip(),
+        "session_id": None if unobserved_new_session else prior_session_id.strip(),
     }
+    if unobserved_new_session:
+        previous["session_unobserved"] = True
     prior_model = iteration_data.get("model")
     if isinstance(prior_model, str) and prior_model.strip():
         previous["model"] = prior_model.strip()
